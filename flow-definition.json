@@ -1,0 +1,170 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Hour",
+          "interval": 1
+        }
+      }
+    },
+    "actions": {
+      "Initialize_AllTasks": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "AllTasks",
+              "type": "array",
+              "value": []
+            }
+          ]
+        },
+        "runAfter": {}
+      },
+      "List_Names": {
+        "type": "Compose",
+        "inputs": [
+          {
+            "name": "Work",
+            "category": "work"
+          },
+          {
+            "name": "Personal",
+            "category": "personal"
+          },
+          {
+            "name": "House",
+            "category": "house"
+          },
+          {
+            "name": "Kids",
+            "category": "kids"
+          },
+          {
+            "name": "Family",
+            "category": "family"
+          },
+          {
+            "name": "Health",
+            "category": "health"
+          },
+          {
+            "name": "Finance",
+            "category": "finance"
+          }
+        ],
+        "runAfter": {
+          "Initialize_AllTasks": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Loop_Each_List": {
+        "type": "Foreach",
+        "foreach": "@outputs('List_Names')",
+        "actions": {
+          "Get_Tasks_From_List": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['todo']['connectionId']"
+                }
+              },
+              "method": "get",
+              "path": "/v1.0/me/todo/lists/@{items('Loop_Each_List')?['name']}/tasks",
+              "queries": {
+                "$top": 200
+              }
+            },
+            "runAfter": {}
+          },
+          "Loop_Each_Task": {
+            "type": "Foreach",
+            "foreach": "@body('Get_Tasks_From_List')?['value']",
+            "actions": {
+              "Append_Task": {
+                "type": "AppendToArrayVariable",
+                "inputs": {
+                  "name": "AllTasks",
+                  "value": {
+                    "title": "@{items('Loop_Each_Task')?['title']}",
+                    "listName": "@{items('Loop_Each_List')?['name']}",
+                    "importance": "@{items('Loop_Each_Task')?['importance']}",
+                    "status": "@{items('Loop_Each_Task')?['status']}",
+                    "dueDateTime": "@{items('Loop_Each_Task')?['dueDateTime']?['dateTime']}",
+                    "body": "@{items('Loop_Each_Task')?['body']?['content']}",
+                    "createdDateTime": "@{items('Loop_Each_Task')?['createdDateTime']}",
+                    "isCompleted": "@equals(items('Loop_Each_Task')?['status'], 'completed')"
+                  }
+                },
+                "runAfter": {}
+              }
+            },
+            "runAfter": {
+              "Get_Tasks_From_List": [
+                "Succeeded"
+              ]
+            }
+          }
+        },
+        "runAfter": {
+          "List_Names": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Create_Sync_File": {
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['onedrive']['connectionId']"
+            }
+          },
+          "method": "put",
+          "path": "/v1.0/me/drive/root:/Personal/Productivity/Life Command Center/todo-sync.json:/content",
+          "body": "@variables('AllTasks')",
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "runAfter": {
+          "Loop_Each_List": [
+            "Succeeded"
+          ]
+        }
+      }
+    }
+  },
+  "connectionReferences": {
+    "todo": {
+      "api": {
+        "id": "/providers/Microsoft.PowerApps/apis/shared_todo"
+      },
+      "connection": {
+        "id": "CONFIGURE_AT_IMPORT"
+      },
+      "connectionName": "shared-todo"
+    },
+    "onedrive": {
+      "api": {
+        "id": "/providers/Microsoft.PowerApps/apis/shared_onedriveforbusiness"
+      },
+      "connection": {
+        "id": "CONFIGURE_AT_IMPORT"
+      },
+      "connectionName": "shared-onedriveforbusiness"
+    }
+  }
+}
