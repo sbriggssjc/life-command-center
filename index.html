@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Life Command Center</title>
+<meta name="theme-color" content="#1e293b" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Life Tasks" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<link rel="manifest" href="manifest.json" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f8fafc; color: #1e293b; min-height: 100vh;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);
+    -webkit-tap-highlight-color: transparent;
+  }
+  input, select, textarea, button { font-family: inherit; }
+  ::placeholder { color: rgba(255,255,255,0.4); }
+  .main-input::placeholder { color: rgba(255,255,255,0.4); }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 999; padding: 16px; }
+  .modal-box { background: white; border-radius: 14px; padding: 22px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.25); -webkit-overflow-scrolling: touch; }
+
+  /* Sync status indicator */
+  .sync-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999; font-size: 11px; font-weight: 600; }
+  .sync-badge.synced { background: rgba(34,197,94,0.15); color: #16a34a; }
+  .sync-badge.syncing { background: rgba(59,130,246,0.15); color: #3b82f6; }
+  .sync-badge.offline { background: rgba(239,68,68,0.15); color: #ef4444; }
+  .sync-badge.signed-out { background: rgba(148,163,184,0.15); color: #94a3b8; }
+
+  /* Toast notification */
+  .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #1e293b; color: white; padding: 10px 20px; border-radius: 10px; font-size: 13px; font-weight: 500; z-index: 1000; box-shadow: 0 4px 20px rgba(0,0,0,0.2); transition: opacity 0.3s; pointer-events: none; }
+
+  /* Calendar event blocks */
+  .cal-event { background: #dbeafe; border-left: 3px solid #3b82f6; border-radius: 6px; padding: 3px 6px; margin-bottom: 3px; font-size: 10px; line-height: 1.3; color: #1e40af; }
+
+  /* Pull to refresh indicator */
+  .pull-indicator { text-align: center; padding: 8px; font-size: 12px; color: #94a3b8; display: none; }
+
+  /* Mobile responsiveness */
+  @media (max-width: 600px) {
+    .week-grid { grid-template-columns: repeat(3, 1fr) !important; }
+    .stat-bar { gap: 6px !important; }
+    .stat-box { padding: 6px 8px !important; min-width: 55px !important; }
+    .stat-val { font-size: 16px !important; }
+    .header-actions { flex-direction: column; gap: 6px !important; }
+    .header-actions button { width: 100%; min-height: 44px; }
+    .modal-box { max-width: 95vw; padding: 16px; border-radius: 16px; }
+    .filter-bar { flex-direction: column; }
+    .filter-bar select, .filter-bar input { width: 100%; }
+    .task-row { padding: 10px 10px !important; }
+    .task-badges { gap: 3px !important; }
+  }
+  @media (max-width: 380px) {
+    .week-grid { grid-template-columns: repeat(2, 1fr) !important; }
+    .stat-bar { flex-wrap: wrap; }
+    .stat-box { flex: 1 1 45% !important; }
+    .view-tabs { gap: 3px !important; }
+    .view-tabs button { font-size: 11px !important; padding: 4px 8px !important; }
+  }
+  @media (orientation: landscape) and (max-height: 500px) {
+    header { padding: 10px 14px !important; }
+    .stat-bar { display: none !important; }
+    .modal-box { max-height: 85vh; }
+  }
+  /* Touch-friendly minimum sizes */
+  button, select { min-height: 36px; }
+  @media (pointer: coarse) {
+    button, select { min-height: 44px; }
+    .task-check { width: 24px !important; height: 24px !important; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<!-- MSAL.js for Microsoft authentication -->
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+
+<script>
+const { useState, useEffect, useMemo, useRef, useCallback, createElement: h } = React;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const todayStr = () => new Date().toISOString().split("T")[0];
+
+function getWeekDates(refDate) {
+  const d = new Date(refDate + "T12:00:00");
+  const day = d.getDay();
+  const mon = new Date(d);
+  mon.setDate(d.getDate() - ((day + 6) % 7));
+  return Array.from({ length: 7 }, (_, i) => {
+    const x = new Date(mon);
+    x.setDate(mon.getDate() + i);
+    return x.toISOString().split("T")[0];
+  });
+}
+
+const dayLabel = (d) => {
+  if (!d) return "";
+  const t = new Date(d + "T12:00:00");
+  const now = new Date();
+  const diff = Math.round((t - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  if (diff === -1) return "Yesterday";
+  if (diff > 1 && diff <= 7) return t.toLocaleDateString("en-US", { weekday: "short" });
+  return t.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
+
+const shortDay = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" });
+const shortDate = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+const formatTime = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+const PRIORITIES = [
+  { id: "urgent", label: "Urgent", color: "#dc2626", bg: "#fef2f2", icon: "\u{1F534}" },
+  { id: "high", label: "High", color: "#ea580c", bg: "#fff7ed", icon: "\u{1F7E0}" },
+  { id: "medium", label: "Medium", color: "#ca8a04", bg: "#fefce8", icon: "\u{1F7E1}" },
+  { id: "low", label: "Low", color: "#16a34a", bg: "#f0fdf4", icon: "\u{1F7E2}" },
+];
+
+const CATEGORIES = [
+  { id: "work", label: "Work", icon: "\u{1F4BC}", color: "#2563eb", msListName: "Work" },
+  { id: "personal", label: "Personal", icon: "\u{1F464}", color: "#7c3aed", msListName: "Personal" },
+  { id: "house", label: "House", icon: "\u{1F3E0}", color: "#d97706", msListName: "House Tasks" },
+  { id: "kids", label: "Kids", icon: "\u{1F9D2}", color: "#db2777", msListName: "Kids Tasks" },
+  { id: "family", label: "Family", icon: "\u2764\uFE0F", color: "#dc2626", msListName: "Family" },
+  { id: "health", label: "Health", icon: "\u{1F4AA}", color: "#059669", msListName: "Health & Fitness" },
+  { id: "finance", label: "Finance", icon: "\u{1F4B0}", color: "#4f46e5", msListName: "Finance" },
+];
+
+const TIME_HORIZONS = [
+  { id: "today", label: "Today" },
+  { id: "this_week", label: "This Week" },
+  { id: "this_month", label: "This Month" },
+  { id: "someday", label: "Someday" },
+];
+
+const RECURRENCE = [
+  { id: "none", label: "No repeat" },
+  { id: "daily", label: "Every day" },
+  { id: "weekdays", label: "Weekdays" },
+  { id: "weekly", label: "Every week" },
+  { id: "biweekly", label: "Every 2 weeks" },
+  { id: "monthly", label: "Every month" },
+];
+
+const SOURCES = [
+  { id: "manual", label: "Manual" },
+  { id: "email", label: "Email" },
+  { id: "calendar", label: "Calendar" },
+  { id: "text", label: "Text" },
+  { id: "call", label: "Phone Call" },
+  { id: "teams", label: "Teams" },
+  { id: "teamsnap", label: "TeamSnap" },
+  { id: "microsoft", label: "Microsoft" },
+  { id: "recurring", label: "Recurring" },
+];
+
+const DEFAULT_KIDS = ["Child 1", "Child 2", "Child 3"];
+
+const PRIORITY_MAP_TO_MS = { urgent: "high", high: "high", medium: "normal", low: "low" };
+const PRIORITY_MAP_FROM_MS = { high: "high", normal: "medium", low: "low" };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOCAL STORAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+const STORAGE_KEY = "life-command-center";
+const MS_CONFIG_KEY = "lcc-ms-config";
+const SYNC_QUEUE_KEY = "lcc-sync-queue";
+
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      return { tasks: data.tasks || [], kids: data.kids || DEFAULT_KIDS };
+    }
+  } catch(e) {}
+  return null;
+}
+
+function saveToStorage(tasks, kids) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, kids })); } catch(e) {}
+}
+
+function loadMsConfig() {
+  try {
+    const raw = localStorage.getItem(MS_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch(e) { return {}; }
+}
+
+function saveMsConfig(config) {
+  try { localStorage.setItem(MS_CONFIG_KEY, JSON.stringify(config)); } catch(e) {}
+}
+
+function loadSyncQueue() {
+  try {
+    const raw = localStorage.getItem(SYNC_QUEUE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) { return []; }
+}
+
+function saveSyncQueue(queue) {
+  try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue)); } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MSAL CONFIGURATION
+// ═══════════════════════════════════════════════════════════════════════════════
+// *** IMPORTANT: Replace YOUR_CLIENT_ID_HERE with your Azure AD App Registration Client ID ***
+const MSAL_CONFIG = {
+  auth: {
+    clientId: "YOUR_CLIENT_ID_HERE",
+    authority: "https://login.microsoftonline.com/common",
+    redirectUri: window.location.origin + window.location.pathname,
+  },
+  cache: {
+    cacheLocation: "localStorage",
+    storeAuthStateInCookie: false,
+  },
+};
+
+const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read"];
+const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+
+let msalInstance = null;
+try {
+  if (MSAL_CONFIG.auth.clientId !== "YOUR_CLIENT_ID_HERE") {
+    msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+  }
+} catch(e) {
+  console.warn("MSAL init failed:", e);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MICROSOFT GRAPH API HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+async function getAccessToken() {
+  if (!msalInstance) return null;
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) return null;
+  try {
+    const resp = await msalInstance.acquireTokenSilent({
+      scopes: GRAPH_SCOPES,
+      account: accounts[0],
+    });
+    return resp.accessToken;
+  } catch (e) {
+    // Silent token refresh failed, try popup
+    try {
+      const resp = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+      return resp.accessToken;
+    } catch (e2) {
+      console.error("Token acquisition failed:", e2);
+      return null;
+    }
+  }
+}
+
+async function graphFetch(path, options = {}) {
+  const token = await getAccessToken();
+  if (!token) throw new Error("Not authenticated");
+  const resp = await fetch(GRAPH_BASE + path, {
+    ...options,
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error("Graph API error " + resp.status + ": " + text);
+  }
+  if (resp.status === 204) return null;
+  return resp.json();
+}
+
+// ─── To Do List Operations ──────────────────────────────────────────────────
+async function fetchTodoLists() {
+  const data = await graphFetch("/me/todo/lists");
+  return data.value || [];
+}
+
+async function createTodoList(displayName) {
+  return graphFetch("/me/todo/lists", {
+    method: "POST",
+    body: JSON.stringify({ displayName }),
+  });
+}
+
+async function ensureCategoryLists() {
+  const existing = await fetchTodoLists();
+  const mapping = {};
+
+  for (const cat of CATEGORIES) {
+    let list = existing.find(l => l.displayName === cat.msListName);
+    if (!list) {
+      list = await createTodoList(cat.msListName);
+    }
+    mapping[cat.id] = list.id;
+  }
+
+  saveMsConfig({ ...loadMsConfig(), listMapping: mapping, lastMappingUpdate: new Date().toISOString() });
+  return mapping;
+}
+
+// ─── To Do Task Operations ──────────────────────────────────────────────────
+async function fetchTasksFromList(listId) {
+  // Fetch both incomplete and completed tasks
+  const [active, completed] = await Promise.all([
+    graphFetch("/me/todo/lists/" + listId + "/tasks?$top=200"),
+    graphFetch("/me/todo/lists/" + listId + "/tasks?$filter=status eq 'completed'&$top=100").catch(() => ({ value: [] })),
+  ]);
+  const all = [...(active.value || [])];
+  // Add completed that aren't already in active
+  const activeIds = new Set(all.map(t => t.id));
+  for (const t of (completed.value || [])) {
+    if (!activeIds.has(t.id)) all.push(t);
+  }
+  return all;
+}
+
+function parseAppMetadata(body) {
+  // Extract our metadata from the task body/notes
+  const text = body?.content || "";
+  const meta = {};
+  const metaMatch = text.match(/\[LCC-META\](.*?)\[\/LCC-META\]/s);
+  if (metaMatch) {
+    try { Object.assign(meta, JSON.parse(metaMatch[1])); } catch(e) {}
+  }
+  // Clean notes (everything before the metadata tag)
+  meta._cleanNotes = text.replace(/\s*\[LCC-META\].*?\[\/LCC-META\]\s*/s, "").trim();
+  return meta;
+}
+
+function buildTaskBody(task) {
+  const meta = {
+    appId: task.id,
+    priority: task.priority,
+    horizon: task.horizon,
+    kid: task.kid || "",
+    source: task.source || "manual",
+    recurrence: task.recurrence || "none",
+    created: task.created || todayStr(),
+  };
+  const notes = task.notes || "";
+  return notes + (notes ? "\n\n" : "") + "[LCC-META]" + JSON.stringify(meta) + "[/LCC-META]";
+}
+
+function msTaskToAppTask(msTask, category) {
+  const meta = parseAppMetadata(msTask.body);
+  const dueDate = msTask.dueDateTime?.dateTime ? msTask.dueDateTime.dateTime.split("T")[0] : "";
+
+  return {
+    id: meta.appId || ("ms-" + msTask.id),
+    msId: msTask.id,
+    title: msTask.title || "",
+    category: category,
+    priority: meta.priority || PRIORITY_MAP_FROM_MS[msTask.importance] || "medium",
+    horizon: meta.horizon || "today",
+    due: dueDate,
+    done: msTask.status === "completed",
+    notes: meta._cleanNotes || "",
+    source: meta.source || "microsoft",
+    recurrence: meta.recurrence || "none",
+    kid: meta.kid || "",
+    created: meta.created || todayStr(),
+    lastModified: msTask.lastModifiedDateTime || "",
+  };
+}
+
+async function createMsTask(task, listId) {
+  const body = {
+    title: task.title,
+    importance: PRIORITY_MAP_TO_MS[task.priority] || "normal",
+    status: task.done ? "completed" : "notStarted",
+    body: { content: buildTaskBody(task), contentType: "text" },
+  };
+  if (task.due) {
+    body.dueDateTime = { dateTime: task.due + "T00:00:00.0000000", timeZone: "UTC" };
+  }
+  const result = await graphFetch("/me/todo/lists/" + listId + "/tasks", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return result;
+}
+
+async function updateMsTask(msTaskId, task, listId) {
+  const body = {
+    title: task.title,
+    importance: PRIORITY_MAP_TO_MS[task.priority] || "normal",
+    status: task.done ? "completed" : "notStarted",
+    body: { content: buildTaskBody(task), contentType: "text" },
+  };
+  if (task.due) {
+    body.dueDateTime = { dateTime: task.due + "T00:00:00.0000000", timeZone: "UTC" };
+  } else {
+    body.dueDateTime = null;
+  }
+  return graphFetch("/me/todo/lists/" + listId + "/tasks/" + msTaskId, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+async function deleteMsTask(msTaskId, listId) {
+  return graphFetch("/me/todo/lists/" + listId + "/tasks/" + msTaskId, {
+    method: "DELETE",
+  });
+}
+
+// ─── Calendar Operations ────────────────────────────────────────────────────
+async function fetchCalendarEvents(startDate, endDate) {
+  const start = startDate + "T00:00:00.000Z";
+  const end = endDate + "T23:59:59.999Z";
+  const data = await graphFetch(
+    "/me/calendarView?startDateTime=" + encodeURIComponent(start) +
+    "&endDateTime=" + encodeURIComponent(end) +
+    "&$top=100&$select=subject,start,end,location,isAllDay,organizer"
+  );
+  return (data.value || []).map(ev => ({
+    id: ev.id,
+    title: ev.subject || "No title",
+    start: ev.start?.dateTime,
+    end: ev.end?.dateTime,
+    isAllDay: ev.isAllDay || false,
+    location: ev.location?.displayName || "",
+  }));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FULL SYNC ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+async function fullSync(currentTasks, setTasks) {
+  const config = loadMsConfig();
+  let listMapping = config.listMapping;
+  if (!listMapping) {
+    listMapping = await ensureCategoryLists();
+  }
+
+  const remoteTasks = [];
+  for (const cat of CATEGORIES) {
+    const listId = listMapping[cat.id];
+    if (!listId) continue;
+    try {
+      const msTasks = await fetchTasksFromList(listId);
+      for (const ms of msTasks) {
+        remoteTasks.push(msTaskToAppTask(ms, cat.id));
+      }
+    } catch(e) {
+      console.warn("Failed to fetch list " + cat.label + ":", e);
+    }
+  }
+
+  // Merge: remote tasks + local-only tasks
+  const mergedMap = new Map();
+
+  // First add all local tasks
+  for (const t of currentTasks) {
+    mergedMap.set(t.id, { ...t });
+  }
+
+  // Then merge remote tasks
+  for (const rt of remoteTasks) {
+    const existing = mergedMap.get(rt.id);
+    if (existing) {
+      // Update with remote data but keep local-only fields
+      mergedMap.set(rt.id, {
+        ...existing,
+        msId: rt.msId,
+        title: rt.title,
+        done: rt.done,
+        lastModified: rt.lastModified,
+      });
+    } else {
+      // New from Microsoft — add it
+      mergedMap.set(rt.id, rt);
+    }
+  }
+
+  // Push local tasks that don't have msId to Microsoft
+  const pushPromises = [];
+  for (const [id, task] of mergedMap) {
+    if (!task.msId && !task.id.startsWith("ms-")) {
+      const listId = listMapping[task.category];
+      if (listId) {
+        pushPromises.push(
+          createMsTask(task, listId).then(result => {
+            if (result) {
+              mergedMap.set(id, { ...mergedMap.get(id), msId: result.id });
+            }
+          }).catch(e => console.warn("Failed to push task:", e))
+        );
+      }
+    }
+  }
+  await Promise.all(pushPromises);
+
+  // Process offline queue
+  const queue = loadSyncQueue();
+  if (queue.length > 0) {
+    for (const action of queue) {
+      try {
+        if (action.type === "update" && action.msId) {
+          await updateMsTask(action.msId, action.task, listMapping[action.task.category]);
+        } else if (action.type === "delete" && action.msId) {
+          await deleteMsTask(action.msId, listMapping[action.category]);
+        }
+      } catch(e) {
+        console.warn("Failed to process queue item:", e);
+      }
+    }
+    saveSyncQueue([]);
+  }
+
+  const merged = Array.from(mergedMap.values());
+  saveMsConfig({ ...loadMsConfig(), listMapping, lastSync: new Date().toISOString() });
+  return merged;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SAMPLE DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+const makeSamples = () => {
+  const t = todayStr();
+  const week = getWeekDates(t);
+  return [
+    { id: uid(), title: "Review Q1 budget proposal", category: "work", priority: "urgent", horizon: "today", due: t, done: false, notes: "Meeting at 2pm \u2014 have slides ready", source: "email", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Pediatrician checkups \u2014 schedule all 3", category: "kids", priority: "high", horizon: "this_week", due: week[4], done: false, notes: "Annual physicals due", source: "manual", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Soccer practice carpool", category: "kids", priority: "medium", horizon: "today", due: t, done: false, notes: "Pick up at 5:30pm, bring snacks (our turn)", source: "teamsnap", recurrence: "weekly", kid: "Child 1", created: t },
+    { id: uid(), title: "Fix leaking kitchen faucet", category: "house", priority: "medium", horizon: "this_week", due: "", done: false, notes: "Called plumber \u2014 waiting callback", source: "call", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Anniversary dinner reservation", category: "family", priority: "high", horizon: "this_month", due: "", done: false, notes: "She mentioned wanting Italian", source: "manual", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Renew car insurance", category: "finance", priority: "high", horizon: "this_week", due: week[5], done: false, notes: "Policy expires end of month \u2014 compare quotes", source: "email", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Gym \u2014 leg day", category: "health", priority: "low", horizon: "today", due: t, done: false, notes: "", source: "recurring", recurrence: "weekdays", kid: "", created: t },
+    { id: uid(), title: "Submit expense report", category: "work", priority: "medium", horizon: "this_week", due: week[3], done: false, notes: "Travel receipts from conference", source: "email", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Math tutor session", category: "kids", priority: "medium", horizon: "this_week", due: week[2], done: false, notes: "4pm \u2014 Zoom link in email", source: "calendar", recurrence: "weekly", kid: "Child 2", created: t },
+    { id: uid(), title: "Plan spring break trip", category: "family", priority: "low", horizon: "this_month", due: "", done: false, notes: "Beach vs mountain \u2014 get family vote", source: "manual", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Replace smoke detector batteries", category: "house", priority: "medium", horizon: "someday", due: "", done: false, notes: "Upstairs hallway beeping", source: "manual", recurrence: "none", kid: "", created: t },
+    { id: uid(), title: "Baby swim class", category: "kids", priority: "medium", horizon: "this_week", due: week[6], done: false, notes: "10am at the community pool", source: "teamsnap", recurrence: "weekly", kid: "Child 3", created: t },
+  ];
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TINY COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+function Badge({ children, color, bg }) {
+  return h("span", { style: {
+    display: "inline-flex", alignItems: "center", gap: 3,
+    padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 600,
+    color: color || "#555", background: bg || "#f3f4f6", whiteSpace: "nowrap", lineHeight: 1.6,
+  }}, children);
+}
+
+function Pill({ active, onClick, children }) {
+  return h("button", { onClick, style: {
+    border: "none", borderRadius: 999, padding: "5px 14px", cursor: "pointer",
+    fontSize: 12.5, fontWeight: active ? 700 : 500,
+    background: active ? "#1e293b" : "#f1f5f9",
+    color: active ? "#fff" : "#64748b", transition: "all 0.15s",
+  }}, children);
+}
+
+function Toast({ message }) {
+  if (!message) return null;
+  return h("div", { className: "toast" }, message);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASK ROW
+// ═══════════════════════════════════════════════════════════════════════════════
+function TaskRow({ task, toggle, remove, onEdit }) {
+  const cat = CATEGORIES.find(c => c.id === task.category);
+  const pri = PRIORITIES.find(p => p.id === task.priority);
+  const isOverdue = !task.done && task.due && task.due < todayStr();
+  const isRecurring = task.recurrence && task.recurrence !== "none";
+  const isSynced = !!task.msId;
+
+  return h("div", { className: "task-row", style: {
+    display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
+    background: task.done ? "#f8fafc" : "white", borderRadius: 10, marginBottom: 5,
+    boxShadow: task.done ? "none" : "0 1px 3px rgba(0,0,0,0.05)",
+    border: isOverdue ? "1px solid #fecaca" : "1px solid #f1f5f9",
+    opacity: task.done ? 0.55 : 1, transition: "all 0.15s",
+  }},
+    h("button", { className: "task-check", onClick: () => toggle(task.id), style: {
+      width: 20, height: 20, borderRadius: 5, flexShrink: 0, marginTop: 2, cursor: "pointer",
+      border: "2px solid " + (task.done ? "#22c55e" : "#cbd5e1"),
+      background: task.done ? "#22c55e" : "white",
+      display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 11,
+    }}, task.done ? "\u2713" : null),
+
+    h("div", { style: { flex: 1, minWidth: 0, cursor: "pointer" }, onClick: onEdit },
+      h("div", { style: { fontSize: 13.5, fontWeight: 600, textDecoration: task.done ? "line-through" : "none", color: task.done ? "#94a3b8" : "#1e293b" }}, task.title),
+      h("div", { className: "task-badges", style: { display: "flex", gap: 5, flexWrap: "wrap", marginTop: 5 }},
+        h(Badge, { color: pri?.color, bg: pri?.bg }, pri?.icon + " " + pri?.label),
+        h(Badge, { color: cat?.color, bg: cat?.color + "15" }, cat?.icon + " " + cat?.label),
+        task.kid ? h(Badge, { color: "#db2777", bg: "#fdf2f8" }, task.kid) : null,
+        task.due ? h(Badge, { color: isOverdue ? "#dc2626" : "#64748b", bg: isOverdue ? "#fef2f2" : "#f1f5f9" }, (isOverdue ? "\u26A0\uFE0F " : "\u{1F4C5} ") + dayLabel(task.due)) : null,
+        isRecurring ? h(Badge, {}, "\u{1F501} " + (RECURRENCE.find(r => r.id === task.recurrence)?.label || "")) : null,
+        task.source && task.source !== "manual" ? h(Badge, {}, "\u{1F4E8} " + task.source) : null,
+        isSynced ? h(Badge, { color: "#16a34a", bg: "#f0fdf4" }, "\u2601\uFE0F Synced") : null,
+      ),
+      task.notes ? h("div", { style: { fontSize: 11.5, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}, task.notes) : null,
+    ),
+
+    h("button", { onClick: () => remove(task.id), title: "Delete", style: {
+      border: "none", background: "transparent", cursor: "pointer", color: "#cbd5e1", fontSize: 16,
+      borderRadius: 6, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+      minHeight: 28,
+    }}, "\u00D7"),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASK GROUP
+// ═══════════════════════════════════════════════════════════════════════════════
+function TaskGroup({ label, count, color, tasks, toggle, remove, edit }) {
+  return h("div", { style: { marginBottom: 22 }},
+    h("h3", { style: { fontSize: 14, fontWeight: 700, color: color || "#475569", margin: "0 0 8px", borderBottom: "2px solid " + (color || "#e2e8f0") + "33", paddingBottom: 6 }},
+      label, " ", h("span", { style: { fontWeight: 400, fontSize: 12, color: "#94a3b8" }}, "(" + count + ")")
+    ),
+    tasks.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => edit(t) }))
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASK MODAL
+// ═══════════════════════════════════════════════════════════════════════════════
+function TaskModal({ task, kids, onSave, onClose }) {
+  const [f, setF] = useState({
+    title: task?.title || "", category: task?.category || "personal",
+    priority: task?.priority || "medium", horizon: task?.horizon || "today",
+    due: task?.due || todayStr(), notes: task?.notes || "",
+    source: task?.source || "manual", recurrence: task?.recurrence || "none",
+    kid: task?.kid || "",
+  });
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const inp = { width: "100%", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 14, outline: "none", boxSizing: "border-box", background: "white", minHeight: 44 };
+  const lbl = { display: "block", fontSize: 11.5, fontWeight: 600, color: "#64748b", marginBottom: 3 };
+
+  const handleSave = () => {
+    if (!f.title.trim()) return;
+    onSave({
+      id: task?.id || uid(), ...f, title: f.title.trim(),
+      done: task?.done || false, created: task?.created || todayStr(),
+      msId: task?.msId || undefined,
+    });
+  };
+
+  return h("div", { className: "modal-overlay", onClick: onClose },
+    h("div", { className: "modal-box", onClick: e => e.stopPropagation() },
+      h("h2", { style: { margin: "0 0 18px", fontSize: 17, fontWeight: 700 }}, task ? "Edit Task" : "New Task"),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 12 }},
+        h("div", null, h("label", { style: lbl }, "What needs to be done? *"), h("input", { value: f.title, onChange: e => set("title", e.target.value), autoFocus: true, style: inp, placeholder: "e.g. Pick up prescriptions" })),
+        h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }},
+          h("div", null, h("label", { style: lbl }, "Category"), h("select", { value: f.category, onChange: e => set("category", e.target.value), style: inp }, CATEGORIES.map(c => h("option", { key: c.id, value: c.id }, c.icon + " " + c.label)))),
+          h("div", null, h("label", { style: lbl }, "Priority"), h("select", { value: f.priority, onChange: e => set("priority", e.target.value), style: inp }, PRIORITIES.map(p => h("option", { key: p.id, value: p.id }, p.icon + " " + p.label)))),
+        ),
+        h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }},
+          h("div", null, h("label", { style: lbl }, "Timeline"), h("select", { value: f.horizon, onChange: e => set("horizon", e.target.value), style: inp }, TIME_HORIZONS.map(t => h("option", { key: t.id, value: t.id }, t.label)))),
+          h("div", null, h("label", { style: lbl }, "Due Date"), h("input", { type: "date", value: f.due, onChange: e => set("due", e.target.value), style: inp })),
+        ),
+        h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }},
+          h("div", null, h("label", { style: lbl }, "Repeats"), h("select", { value: f.recurrence, onChange: e => set("recurrence", e.target.value), style: inp }, RECURRENCE.map(r => h("option", { key: r.id, value: r.id }, r.label)))),
+          h("div", null, h("label", { style: lbl }, "Source"), h("select", { value: f.source, onChange: e => set("source", e.target.value), style: inp }, SOURCES.map(s => h("option", { key: s.id, value: s.id }, s.label)))),
+        ),
+        f.category === "kids" ? h("div", null, h("label", { style: lbl }, "Which kid?"), h("select", { value: f.kid, onChange: e => set("kid", e.target.value), style: inp }, h("option", { value: "" }, "All / General"), kids.map(k => h("option", { key: k, value: k }, k)))) : null,
+        h("div", null, h("label", { style: lbl }, "Notes"), h("textarea", { value: f.notes, onChange: e => set("notes", e.target.value), rows: 3, style: { ...inp, resize: "vertical", minHeight: 80 }, placeholder: "Context, links, follow-up details\u2026" })),
+      ),
+      h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }},
+        h("button", { onClick: onClose, style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 8, padding: "9px 18px", cursor: "pointer", fontSize: 13, color: "#64748b", minHeight: 44 }}, "Cancel"),
+        h("button", { onClick: handleSave, style: { border: "none", background: "#1e293b", color: "white", borderRadius: 8, padding: "9px 22px", cursor: "pointer", fontSize: 13, fontWeight: 600, minHeight: 44 }}, task ? "Save" : "Add Task"),
+      ),
+    )
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════════════════════
+function App() {
+  const saved = useMemo(() => loadSaved(), []);
+  const [tasks, setTasks] = useState(saved ? saved.tasks : makeSamples);
+  const [kids, setKids] = useState(saved ? saved.kids : DEFAULT_KIDS);
+  const [view, setView] = useState("today");
+  const [filterCat, setFilterCat] = useState("all");
+  const [filterPri, setFilterPri] = useState("all");
+  const [showDone, setShowDone] = useState(false);
+  const [modalTask, setModalTask] = useState(null);
+  const [search, setSearch] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [quickAdd, setQuickAdd] = useState("");
+  const [authUser, setAuthUser] = useState(null);
+  const [syncStatus, setSyncStatus] = useState("signed-out"); // signed-out, syncing, synced, offline
+  const [toastMsg, setToastMsg] = useState("");
+  const [calEvents, setCalEvents] = useState([]);
+  const fileRef = useRef(null);
+  const toastTimer = useRef(null);
+
+  // Check auth state on mount
+  useEffect(() => {
+    if (msalInstance) {
+      const accounts = msalInstance.getAllAccounts();
+      if (accounts.length > 0) {
+        setAuthUser(accounts[0]);
+        setSyncStatus("synced");
+      }
+    }
+  }, []);
+
+  const showToast = useCallback((msg) => {
+    setToastMsg(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(""), 3000);
+  }, []);
+
+  // Auto-save to localStorage
+  const setTasksAndSave = useCallback((updater) => {
+    setTasks(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      setTimeout(() => saveToStorage(next, kids), 0);
+      return next;
+    });
+  }, [kids]);
+
+  const setKidsAndSave = useCallback((newKids) => {
+    setKids(newKids);
+    setTimeout(() => saveToStorage(tasks, newKids), 0);
+  }, [tasks]);
+
+  // ─── Microsoft Auth ────────────────────────────────────────────────────────
+  const handleSignIn = useCallback(async () => {
+    if (!msalInstance) {
+      showToast("Set your Client ID in index.html first");
+      return;
+    }
+    try {
+      const resp = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
+      setAuthUser(resp.account);
+      showToast("Signed in as " + resp.account.name);
+      // Trigger initial sync
+      setSyncStatus("syncing");
+      try {
+        const merged = await fullSync(tasks, setTasksAndSave);
+        setTasksAndSave(merged);
+        setSyncStatus("synced");
+        showToast("Synced " + merged.length + " tasks");
+      } catch(e) {
+        console.error("Sync error:", e);
+        setSyncStatus("offline");
+        showToast("Sync failed \u2014 working offline");
+      }
+    } catch(e) {
+      console.error("Sign in error:", e);
+      showToast("Sign in failed");
+    }
+  }, [tasks, setTasksAndSave, showToast]);
+
+  const handleSignOut = useCallback(async () => {
+    if (msalInstance) {
+      try { await msalInstance.logoutPopup(); } catch(e) {}
+    }
+    setAuthUser(null);
+    setSyncStatus("signed-out");
+    showToast("Signed out");
+  }, [showToast]);
+
+  const handleSync = useCallback(async () => {
+    if (!authUser) return;
+    setSyncStatus("syncing");
+    try {
+      const merged = await fullSync(tasks, setTasksAndSave);
+      setTasksAndSave(merged);
+      setSyncStatus("synced");
+      showToast("Synced successfully");
+    } catch(e) {
+      console.error("Sync error:", e);
+      setSyncStatus("offline");
+      showToast("Sync failed \u2014 working offline");
+    }
+  }, [authUser, tasks, setTasksAndSave, showToast]);
+
+  // ─── Fetch calendar events for week view ──────────────────────────────────
+  const weekDates = useMemo(() => {
+    const ref = new Date();
+    ref.setDate(ref.getDate() + weekOffset * 7);
+    return getWeekDates(ref.toISOString().split("T")[0]);
+  }, [weekOffset]);
+
+  useEffect(() => {
+    if (authUser && view === "week_cal") {
+      fetchCalendarEvents(weekDates[0], weekDates[6]).then(events => {
+        setCalEvents(events);
+      }).catch(e => {
+        console.warn("Calendar fetch error:", e);
+      });
+    }
+  }, [authUser, view, weekDates]);
+
+  // ─── Task Actions (with sync) ─────────────────────────────────────────────
+  const priWeight = { urgent: 0, high: 1, medium: 2, low: 3 };
+
+  const toggle = useCallback(async (id) => {
+    let toggled = null;
+    setTasksAndSave(p => p.map(t => {
+      if (t.id === id) {
+        toggled = { ...t, done: !t.done };
+        return toggled;
+      }
+      return t;
+    }));
+    // Sync toggle to Microsoft
+    setTimeout(async () => {
+      if (toggled && toggled.msId && authUser) {
+        const config = loadMsConfig();
+        const listId = config.listMapping?.[toggled.category];
+        if (listId) {
+          try {
+            await updateMsTask(toggled.msId, toggled, listId);
+          } catch(e) {
+            // Queue for later
+            const queue = loadSyncQueue();
+            queue.push({ type: "update", msId: toggled.msId, task: toggled });
+            saveSyncQueue(queue);
+          }
+        }
+      }
+    }, 0);
+  }, [setTasksAndSave, authUser]);
+
+  const remove = useCallback(async (id) => {
+    let removed = null;
+    setTasksAndSave(p => {
+      removed = p.find(t => t.id === id);
+      return p.filter(t => t.id !== id);
+    });
+    // Sync delete to Microsoft
+    setTimeout(async () => {
+      if (removed && removed.msId && authUser) {
+        const config = loadMsConfig();
+        const listId = config.listMapping?.[removed.category];
+        if (listId) {
+          try {
+            await deleteMsTask(removed.msId, listId);
+          } catch(e) {
+            const queue = loadSyncQueue();
+            queue.push({ type: "delete", msId: removed.msId, category: removed.category });
+            saveSyncQueue(queue);
+          }
+        }
+      }
+    }, 0);
+  }, [setTasksAndSave, authUser]);
+
+  const save = useCallback(async (task) => {
+    const isNew = !tasks.find(t => t.id === task.id);
+    setTasksAndSave(p => {
+      const idx = p.findIndex(t => t.id === task.id);
+      return idx >= 0 ? p.map(t => t.id === task.id ? task : t) : [...p, task];
+    });
+    setModalTask(null);
+
+    // Sync to Microsoft
+    if (authUser) {
+      const config = loadMsConfig();
+      const listId = config.listMapping?.[task.category];
+      if (listId) {
+        try {
+          if (isNew || !task.msId) {
+            const result = await createMsTask(task, listId);
+            if (result) {
+              setTasksAndSave(p => p.map(t => t.id === task.id ? { ...t, msId: result.id } : t));
+              showToast("Task synced to Microsoft To Do");
+            }
+          } else {
+            await updateMsTask(task.msId, task, listId);
+            showToast("Task updated in Microsoft To Do");
+          }
+        } catch(e) {
+          const queue = loadSyncQueue();
+          queue.push({ type: "update", msId: task.msId, task });
+          saveSyncQueue(queue);
+          showToast("Saved locally \u2014 will sync later");
+        }
+      }
+    }
+  }, [tasks, setTasksAndSave, authUser, showToast]);
+
+  const handleQuickAdd = useCallback(() => {
+    if (!quickAdd.trim()) return;
+    save({ id: uid(), title: quickAdd.trim(), category: "personal", priority: "medium", horizon: "today", due: todayStr(), done: false, notes: "", source: "manual", recurrence: "none", kid: "", created: todayStr() });
+    setQuickAdd("");
+  }, [quickAdd, save]);
+
+  // ─── Export/Import ─────────────────────────────────────────────────────────
+  const exportData = () => {
+    const blob = new Blob([JSON.stringify({ tasks, kids }, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "life-tasks-" + todayStr() + ".json";
+    a.click();
+  };
+  const importData = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (Array.isArray(data)) { setTasksAndSave(data); }
+        else if (data.tasks) { setTasksAndSave(data.tasks); if (data.kids) setKidsAndSave(data.kids); }
+        setSettingsOpen(false);
+        showToast("Data imported successfully");
+      } catch { alert("Invalid file format"); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  // ─── Filtered Data ─────────────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    let list = [...tasks];
+    if (!showDone) list = list.filter(t => !t.done);
+    if (filterCat !== "all") list = list.filter(t => t.category === filterCat);
+    if (filterPri !== "all") list = list.filter(t => t.priority === filterPri);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(t => t.title.toLowerCase().includes(q) || (t.notes || "").toLowerCase().includes(q) || (t.kid || "").toLowerCase().includes(q));
+    }
+    if (view === "today") list = list.filter(t => t.horizon === "today" || t.due === todayStr());
+    list.sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      if (priWeight[a.priority] !== priWeight[b.priority]) return priWeight[a.priority] - priWeight[b.priority];
+      if (a.due && b.due) return a.due.localeCompare(b.due);
+      return a.due ? -1 : b.due ? 1 : 0;
+    });
+    return list;
+  }, [tasks, view, filterCat, filterPri, showDone, search]);
+
+  const stats = useMemo(() => {
+    const t = todayStr();
+    return {
+      today: tasks.filter(x => !x.done && (x.horizon === "today" || x.due === t)).length,
+      week: tasks.filter(x => !x.done && x.horizon === "this_week").length,
+      overdue: tasks.filter(x => !x.done && x.due && x.due < t).length,
+      doneToday: tasks.filter(x => x.done).length,
+      total: tasks.filter(x => !x.done).length,
+    };
+  }, [tasks]);
+
+  const hdrBtn = (bg) => ({ background: bg, border: "none", color: "white", borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontWeight: 600, fontSize: 13, minHeight: 44 });
+  const selStyle = { border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "white" };
+
+  // ─── Calendar events grouped by date ──────────────────────────────────────
+  const calByDate = useMemo(() => {
+    const map = {};
+    for (const ev of calEvents) {
+      const date = ev.start ? ev.start.split("T")[0] : "";
+      if (!date) continue;
+      if (!map[date]) map[date] = [];
+      map[date].push(ev);
+    }
+    return map;
+  }, [calEvents]);
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═════════════════════════════════════════════════════════════════════════════
+  return h("div", null,
+    // ─── HEADER ───
+    h("header", { style: { background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)", color: "white", padding: "20px 16px 16px" }},
+      h("div", { style: { maxWidth: 960, margin: "0 auto" }},
+        // Title row
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }},
+          h("div", null,
+            h("h1", { style: { margin: 0, fontSize: 21, fontWeight: 800, letterSpacing: -0.5 }}, "Life Command Center"),
+            h("p", { style: { margin: "3px 0 0", fontSize: 12.5, opacity: 0.6 }}, new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })),
+          ),
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }},
+            // Sync status badge
+            h("span", { className: "sync-badge " + syncStatus },
+              syncStatus === "syncing" ? "\u{1F504} Syncing..." :
+              syncStatus === "synced" ? "\u2601\uFE0F Connected" :
+              syncStatus === "offline" ? "\u26A0\uFE0F Offline" :
+              "\u{1F512} Local Only"
+            ),
+            authUser
+              ? h("button", { onClick: handleSync, style: hdrBtn("rgba(255,255,255,0.12)"), title: "Sync now" }, "\u{1F504} Sync")
+              : null,
+          ),
+        ),
+
+        // Auth + action buttons
+        h("div", { className: "header-actions", style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }},
+          !authUser
+            ? h("button", { onClick: handleSignIn, style: hdrBtn("#0078d4") }, "\uD83D\uDD11 Sign in with Microsoft")
+            : h("button", { onClick: handleSignOut, style: hdrBtn("rgba(255,255,255,0.12)") }, "\u{1F464} " + (authUser.name || "User") + " \u2022 Sign Out"),
+          h("button", { onClick: () => setSettingsOpen(!settingsOpen), style: hdrBtn("rgba(255,255,255,0.12)") }, settingsOpen ? "\u2716 Close" : "\u2699\uFE0F Settings"),
+          h("button", { onClick: () => setModalTask({}), style: hdrBtn("#2563eb") }, "+ Add Task"),
+        ),
+
+        // Stats
+        h("div", { className: "stat-bar", style: { display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }},
+          [
+            { l: "Today", v: stats.today, c: "#3b82f6" },
+            { l: "This Week", v: stats.week, c: "#8b5cf6" },
+            { l: "Overdue", v: stats.overdue, c: "#ef4444" },
+            { l: "Completed", v: stats.doneToday, c: "#22c55e" },
+            { l: "Total Open", v: stats.total, c: "#f59e0b" },
+          ].map(s => h("div", { key: s.l, className: "stat-box", style: { background: "rgba(255,255,255,0.08)", borderRadius: 10, padding: "8px 14px", flex: "1 1 80px", textAlign: "center", minWidth: 75 }},
+            h("div", { className: "stat-val", style: { fontSize: 20, fontWeight: 800, color: s.c }}, s.v),
+            h("div", { style: { fontSize: 10.5, opacity: 0.6, marginTop: 1 }}, s.l),
+          ))
+        ),
+
+        // Quick Add
+        h("div", { style: { display: "flex", gap: 8, marginTop: 14 }},
+          h("input", { className: "main-input", value: quickAdd, onChange: e => setQuickAdd(e.target.value), onKeyDown: e => e.key === "Enter" && handleQuickAdd(), placeholder: "Quick add \u2014 type and press Enter", style: { flex: 1, border: "none", borderRadius: 8, padding: "10px 14px", fontSize: 14, background: "rgba(255,255,255,0.12)", color: "white", outline: "none", minHeight: 44 }}),
+          h("button", { onClick: handleQuickAdd, style: hdrBtn("#2563eb") }, "Add"),
+        ),
+      ),
+    ),
+
+    // ─── SETTINGS ───
+    settingsOpen ? h("div", { style: { maxWidth: 960, margin: "0 auto", padding: "16px 16px" }},
+      h("div", { style: { background: "white", borderRadius: 12, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }},
+        h("h3", { style: { margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}, "Settings & Data"),
+
+        // Microsoft connection info
+        h("div", { style: { marginBottom: 18, padding: "12px 14px", background: "#f0f9ff", borderRadius: 10, border: "1px solid #bae6fd" }},
+          h("div", { style: { fontSize: 12.5, fontWeight: 600, color: "#0369a1", marginBottom: 4 }}, "\u2601\uFE0F Microsoft Sync Status"),
+          authUser
+            ? h("div", { style: { fontSize: 12, color: "#475569" }},
+                "Connected as ", h("strong", null, authUser.name || authUser.username), " \u2022 ",
+                "Last sync: ", loadMsConfig().lastSync ? new Date(loadMsConfig().lastSync).toLocaleString() : "Never",
+              )
+            : h("div", { style: { fontSize: 12, color: "#64748b" }},
+                "Not connected. Sign in with Microsoft to sync tasks with To Do and see your Outlook calendar events.",
+              ),
+        ),
+
+        // Kids names
+        h("div", { style: { marginBottom: 18 }},
+          h("label", { style: { display: "block", fontSize: 11.5, fontWeight: 600, color: "#64748b", marginBottom: 3 }}, "Kids' Names"),
+          h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }},
+            kids.map((k, i) => h("div", { key: i, style: { display: "flex", gap: 4, alignItems: "center" }},
+              h("input", { value: k, onChange: e => { const n = [...kids]; n[i] = e.target.value; setKidsAndSave(n); }, style: { border: "1px solid #e2e8f0", borderRadius: 6, padding: "6px 10px", fontSize: 13, width: 120 }}),
+              kids.length > 1 ? h("button", { onClick: () => setKidsAndSave(kids.filter((_, j) => j !== i)), style: { border: "none", background: "#fef2f2", color: "#dc2626", borderRadius: 6, width: 28, height: 28, cursor: "pointer", fontSize: 14 }}, "\u00D7") : null,
+            )),
+            h("button", { onClick: () => setKidsAndSave([...kids, "Child " + (kids.length + 1)]), style: { border: "1px dashed #cbd5e1", background: "transparent", borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontSize: 12, color: "#64748b" }}, "+ Add Kid"),
+          ),
+        ),
+
+        // Import/Export
+        h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }},
+          h("button", { onClick: exportData, style: { background: "#e0e7ff", border: "none", borderRadius: 8, padding: "7px 14px", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: "#4338ca" }}, "\u{1F4E4} Export JSON"),
+          h("button", { onClick: () => fileRef.current?.click(), style: { background: "#e0e7ff", border: "none", borderRadius: 8, padding: "7px 14px", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: "#4338ca" }}, "\u{1F4E5} Import JSON"),
+          h("input", { ref: fileRef, type: "file", accept: ".json", onChange: importData, style: { display: "none" }}),
+          h("span", { style: { fontSize: 12, color: "#94a3b8" }}, "Data auto-saves to your browser."),
+        ),
+      ),
+    ) : null,
+
+    // ─── VIEW TABS + FILTERS ───
+    h("div", { style: { maxWidth: 960, margin: "16px auto 0", padding: "0 16px" }},
+      h("div", { className: "view-tabs", style: { display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }},
+        [
+          { id: "today", l: "\u2600\uFE0F Today (" + stats.today + ")" },
+          { id: "week_cal", l: "\u{1F4C5} Week" },
+          { id: "horizon", l: "\u{1F5D3}\uFE0F Timeline" },
+          { id: "category", l: "\u{1F4C2} Category" },
+          { id: "all", l: "\u{1F4CB} All" },
+        ].map(v => h(Pill, { key: v.id, active: view === v.id, onClick: () => setView(v.id) }, v.l))
+      ),
+      h("div", { className: "filter-bar", style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }},
+        h("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "\u{1F50D} Search tasks\u2026", style: { flex: "1 1 160px", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 14, outline: "none", minHeight: 44 }}),
+        h("select", { value: filterCat, onChange: e => setFilterCat(e.target.value), style: selStyle },
+          h("option", { value: "all" }, "All Categories"),
+          CATEGORIES.map(c => h("option", { key: c.id, value: c.id }, c.icon + " " + c.label)),
+        ),
+        h("select", { value: filterPri, onChange: e => setFilterPri(e.target.value), style: selStyle },
+          h("option", { value: "all" }, "All Priorities"),
+          PRIORITIES.map(p => h("option", { key: p.id, value: p.id }, p.icon + " " + p.label)),
+        ),
+        h("label", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12.5, color: "#64748b", cursor: "pointer" }},
+          h("input", { type: "checkbox", checked: showDone, onChange: () => setShowDone(!showDone) }), "Done"
+        ),
+      ),
+    ),
+
+    // ─── CONTENT ───
+    h("div", { style: { maxWidth: 960, margin: "0 auto", padding: "0 16px 100px" }},
+
+      // Week Calendar
+      view === "week_cal" ? h("div", null,
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }},
+          h("button", { onClick: () => setWeekOffset(weekOffset - 1), style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 12.5, color: "#475569", minHeight: 44 }}, "\u2190 Prev"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, textAlign: "center" }},
+            shortDate(weekDates[0]) + " \u2014 " + shortDate(weekDates[6]),
+            weekOffset !== 0 ? h("button", { onClick: () => setWeekOffset(0), style: { border: "none", background: "#e0e7ff", borderRadius: 6, padding: "2px 10px", marginLeft: 8, cursor: "pointer", fontSize: 11, color: "#4338ca" }}, "Today") : null,
+          ),
+          h("button", { onClick: () => setWeekOffset(weekOffset + 1), style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 12.5, color: "#475569", minHeight: 44 }}, "Next \u2192"),
+        ),
+        h("div", { className: "week-grid", style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }},
+          weekDates.map(date => {
+            const isToday = date === todayStr();
+            const dayTasks = tasks.filter(t => !t.done && t.due === date).sort((a, b) => priWeight[a.priority] - priWeight[b.priority]);
+            const dayEvents = calByDate[date] || [];
+            return h("div", { key: date, style: { background: isToday ? "#eff6ff" : "white", borderRadius: 10, border: isToday ? "2px solid #3b82f6" : "1px solid #e2e8f0", padding: 8, minHeight: 140 }},
+              h("div", { style: { fontSize: 11, fontWeight: 700, color: isToday ? "#2563eb" : "#64748b", marginBottom: 6, textAlign: "center" }},
+                shortDay(date), h("br"), h("span", { style: { fontSize: 16 }}, new Date(date + "T12:00:00").getDate()),
+              ),
+              // Calendar events
+              dayEvents.map(ev => h("div", { key: ev.id, className: "cal-event" },
+                h("div", { style: { fontWeight: 600 }}, ev.isAllDay ? "All day" : formatTime(ev.start)),
+                h("div", null, ev.title),
+              )),
+              // Tasks
+              dayTasks.length === 0 && dayEvents.length === 0 ? h("div", { style: { fontSize: 10, color: "#cbd5e1", textAlign: "center", marginTop: 12 }}, "\u2014") : null,
+              dayTasks.map(t => {
+                const pri = PRIORITIES.find(p => p.id === t.priority);
+                const cat = CATEGORIES.find(c => c.id === t.category);
+                return h("div", { key: t.id, onClick: () => setModalTask(t), style: { background: pri.bg, borderLeft: "3px solid " + pri.color, borderRadius: 6, padding: "4px 6px", marginBottom: 4, cursor: "pointer", fontSize: 10.5, lineHeight: 1.35 }},
+                  h("div", { style: { fontWeight: 600, color: "#1e293b" }}, t.title),
+                  h("div", { style: { color: "#94a3b8", marginTop: 2 }},
+                    cat?.icon,
+                    t.kid ? h("span", { style: { color: "#db2777", marginLeft: 4 }}, t.kid) : null,
+                    t.recurrence !== "none" ? " \u{1F501}" : null,
+                    t.msId ? " \u2601\uFE0F" : null,
+                  ),
+                );
+              }),
+            );
+          }),
+        ),
+      ) : null,
+
+      // Horizon view
+      view === "horizon" ? TIME_HORIZONS.map(ho => {
+        const group = filtered.filter(t => t.horizon === ho.id);
+        return group.length ? h(TaskGroup, { key: ho.id, label: ho.label, count: group.length, tasks: group, toggle, remove, edit: setModalTask }) : null;
+      }) : null,
+
+      // Category view
+      view === "category" ? CATEGORIES.map(c => {
+        const group = filtered.filter(t => t.category === c.id);
+        return group.length ? h(TaskGroup, { key: c.id, label: c.icon + " " + c.label, count: group.length, color: c.color, tasks: group, toggle, remove, edit: setModalTask }) : null;
+      }) : null,
+
+      // Today / All flat view
+      (view === "today" || view === "all") ? (
+        filtered.length ? filtered.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => setModalTask(t) }))
+        : h("div", { style: { textAlign: "center", padding: 60, color: "#94a3b8" }},
+            h("div", { style: { fontSize: 36, marginBottom: 10 }}, view === "today" ? "\u2728" : "\u{1F50D}"),
+            h("div", { style: { fontSize: 15, fontWeight: 600 }}, view === "today" ? "All clear for today!" : "No tasks match your filters"),
+            h("div", { style: { fontSize: 12, marginTop: 4 }}, "Add a task or adjust your filters"),
+          )
+      ) : null,
+    ),
+
+    // Modal
+    modalTask !== null ? h(TaskModal, { task: modalTask.id ? modalTask : null, kids, onSave: save, onClose: () => setModalTask(null) }) : null,
+
+    // Toast
+    h(Toast, { message: toastMsg }),
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("app")).render(h(App));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVICE WORKER REGISTRATION
+// ═══════════════════════════════════════════════════════════════════════════════
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(err => {
+      console.warn("SW registration failed:", err);
+    });
+  });
+}
+</script>
+</body>
+</html>
