@@ -8,7 +8,7 @@ const CACHE_ASSETS = [
   "./manifest.json",
   "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
-  "https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js",
+  "https://alcdn.msauth.net/browser/2.39.0/js/msal-browser.min.js",
 ];
 
 // Install — cache essential assets
