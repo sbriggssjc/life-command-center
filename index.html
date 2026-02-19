@@ -243,7 +243,7 @@ const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 let msalInstance = null;
 try {
-  if (MSAL_CONFIG.auth.clientId !== "YOUR_CLIENT_ID_HERE") {
+  if (MSAL_CONFIG.auth.clientId !== "06f5e61a-87c3-4c2f-a00e-4663677cb0be") {
     msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
   }
 } catch(e) {
