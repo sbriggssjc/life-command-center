@@ -853,17 +853,6 @@ function App() {
   const calSyncRef = useRef(null);
   const toastTimer = useRef(null);
 
-  // Check auth state on mount
-  useEffect(() => {
-    if (msalInstance) {
-      const accounts = msalInstance.getAllAccounts();
-      if (accounts.length > 0) {
-        setAuthUser(accounts[0]);
-        setSyncStatus("synced");
-      }
-    }
-  }, []);
-
   const showToast = useCallback((msg) => {
     setToastMsg(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -885,25 +874,35 @@ function App() {
   }, [tasks]);
 
   // ─── Microsoft Auth (redirect flow for PWA compatibility) ─────────────────
-  // Handle returning from redirect sign-in
+  // Wait for handleRedirectPromise, THEN check for accounts
   useEffect(() => {
-    if (!msalInstance || !msalRedirectResult) return;
-    msalRedirectResult.then(resp => {
-      if (resp && resp.account) {
-        setAuthUser(resp.account);
-        showToast("Signed in as " + resp.account.name);
-        setSyncStatus("syncing");
-        fullSync(tasks, setTasksAndSave).then(merged => {
-          setTasksAndSave(merged);
+    if (!msalInstance) return;
+    const init = async () => {
+      try {
+        // First, handle any redirect response (returns null if not returning from redirect)
+        const resp = msalRedirectResult ? await msalRedirectResult : null;
+        if (resp && resp.account) {
+          setAuthUser(resp.account);
           setSyncStatus("synced");
-          showToast("Synced " + merged.length + " tasks");
-        }).catch(e => {
-          console.error("Sync error:", e);
-          setSyncStatus("offline");
-          showToast("Sync failed — working offline");
-        });
+          return;
+        }
+        // If not returning from redirect, check for existing cached accounts
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length > 0) {
+          setAuthUser(accounts[0]);
+          setSyncStatus("synced");
+        }
+      } catch(e) {
+        console.warn("MSAL init:", e);
+        // Still check for cached accounts on error
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length > 0) {
+          setAuthUser(accounts[0]);
+          setSyncStatus("synced");
+        }
       }
-    });
+    };
+    init();
   }, []);
 
   const handleSignIn = useCallback(async () => {
