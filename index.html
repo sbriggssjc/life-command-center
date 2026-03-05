@@ -41,14 +41,30 @@
   /* Pull to refresh indicator */
   .pull-indicator { text-align: center; padding: 8px; font-size: 12px; color: #94a3b8; display: none; }
 
+  /* Mobile day strip for week calendar */
+  .day-strip { display: flex; overflow-x: auto; gap: 0; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: 0 4px; }
+  .day-strip::-webkit-scrollbar { display: none; }
+  .day-strip-item { flex: 0 0 auto; width: calc(100% / 7); min-width: 48px; text-align: center; padding: 8px 2px; cursor: pointer; border-radius: 10px; transition: background 0.15s; position: relative; }
+  .day-strip-item.active { background: #2563eb; color: white; }
+  .day-strip-item.today:not(.active) { background: #eff6ff; }
+  .day-strip-day { font-size: 10px; font-weight: 600; text-transform: uppercase; opacity: 0.7; }
+  .day-strip-num { font-size: 18px; font-weight: 800; line-height: 1.3; }
+  .day-strip-dot { width: 5px; height: 5px; border-radius: 50%; background: #3b82f6; margin: 2px auto 0; }
+  .day-strip-item.active .day-strip-dot { background: white; }
+  .day-strip-item.active .day-strip-day { opacity: 1; }
+
+  /* Mobile agenda card */
+  .mobile-agenda-card { background: white; border-radius: 12px; padding: 14px; margin-bottom: 8px; border: 1px solid #e2e8f0; }
+  .mobile-agenda-empty { text-align: center; padding: 40px 20px; color: #94a3b8; }
+
   /* Mobile responsiveness */
   @media (max-width: 600px) {
-    .week-grid { grid-template-columns: repeat(3, 1fr) !important; }
-    .stat-bar { gap: 6px !important; }
-    .stat-box { padding: 6px 8px !important; min-width: 55px !important; }
+    .stat-bar { display: flex !important; gap: 0 !important; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; margin: 10px -16px 0 !important; padding: 0 16px; }
+    .stat-bar::-webkit-scrollbar { display: none; }
+    .stat-box { padding: 6px 10px !important; min-width: 70px !important; flex: 0 0 auto !important; }
     .stat-val { font-size: 16px !important; }
-    .header-actions { flex-direction: row; flex-wrap: wrap; gap: 6px !important; }
-    .header-actions button { flex: 1 1 auto; min-height: 44px; font-size: 12px !important; padding: 8px 10px !important; }
+    .header-actions { gap: 6px !important; }
+    .header-actions button { min-height: 44px; font-size: 12px !important; padding: 8px 10px !important; }
     .modal-box { max-width: 95vw; padding: 16px; border-radius: 16px; }
     .filter-bar { flex-direction: column; }
     .filter-bar select, .filter-bar input { width: 100%; }
@@ -57,15 +73,17 @@
     .today-cal-event { flex-direction: column !important; align-items: flex-start !important; }
     .today-cal-time { margin-left: 0 !important; margin-top: 4px; }
     .sync-badge { font-size: 10px !important; }
+    .view-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; flex-wrap: nowrap !important; margin: 0 -16px; padding: 0 16px; }
+    .view-tabs::-webkit-scrollbar { display: none; }
+    .view-tabs button { flex: 0 0 auto; white-space: nowrap; }
+    header h1 { font-size: 18px !important; }
+    .mobile-header-compact .header-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .mobile-header-compact .header-actions button { width: 100%; }
   }
   @media (max-width: 380px) {
-    .week-grid { grid-template-columns: repeat(2, 1fr) !important; }
-    .stat-bar { flex-wrap: wrap; }
-    .stat-box { flex: 1 1 45% !important; }
-    .view-tabs { gap: 3px !important; }
+    .stat-box { min-width: 62px !important; }
     .view-tabs button { font-size: 11px !important; padding: 6px 8px !important; }
     .header-actions button { font-size: 11px !important; padding: 6px 8px !important; }
-    h1 { font-size: 18px !important; }
   }
   @media (orientation: landscape) and (max-height: 500px) {
     header { padding: 10px 14px !important; }
@@ -850,6 +868,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
   const [dayOffset, setDayOffset] = useState(0);
+  const [selectedDay, setSelectedDay] = useState(todayStr());
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 600);
   const [quickAdd, setQuickAdd] = useState("");
   const [authUser, setAuthUser] = useState(null);
   const [syncStatus, setSyncStatus] = useState("signed-out"); // signed-out, syncing, synced, offline
@@ -861,6 +881,22 @@ function App() {
   const syncRef = useRef(null);
   const calSyncRef = useRef(null);
   const toastTimer = useRef(null);
+
+  // Track mobile viewport
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 600px)");
+    const handler = (e) => setIsMobile(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+
+  // Keep selectedDay in sync when weekOffset changes
+  useEffect(() => {
+    const ref = new Date();
+    ref.setDate(ref.getDate() + weekOffset * 7);
+    const dates = getWeekDates(ref.toISOString().split("T")[0]);
+    if (!dates.includes(selectedDay)) setSelectedDay(dates[0]);
+  }, [weekOffset]);
 
   const showToast = useCallback((msg) => {
     setToastMsg(msg);
@@ -1301,7 +1337,7 @@ function App() {
   // ═════════════════════════════════════════════════════════════════════════════
   return h("div", null,
     // ─── HEADER ───
-    h("header", { style: { background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)", color: "white", padding: "20px 16px 16px" }},
+    h("header", { className: isMobile ? "mobile-header-compact" : "", style: { background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)", color: "white", padding: isMobile ? "14px 12px 12px" : "20px 16px 16px" }},
       h("div", { style: { maxWidth: 960, margin: "0 auto" }},
         // Title row
         h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }},
@@ -1489,10 +1525,11 @@ function App() {
     ),
 
     // ─── CONTENT ───
-    h("div", { style: { maxWidth: 960, margin: "0 auto", padding: "0 16px 100px" }},
+    h("div", { style: { maxWidth: 960, margin: "0 auto", padding: isMobile ? "0 10px 100px" : "0 16px 100px" }},
 
       // Week Calendar
       view === "week_cal" ? h("div", null,
+        // Navigation
         h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }},
           h("button", { onClick: () => setWeekOffset(weekOffset - 1), style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 12.5, color: "#475569", minHeight: 44 }}, "\u2190 Prev"),
           h("div", { style: { fontWeight: 700, fontSize: 14, textAlign: "center" }},
@@ -1501,7 +1538,81 @@ function App() {
           ),
           h("button", { onClick: () => setWeekOffset(weekOffset + 1), style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 12.5, color: "#475569", minHeight: 44 }}, "Next \u2192"),
         ),
-        h("div", { className: "week-grid", style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }},
+
+        // ── MOBILE: Day strip + vertical agenda ──
+        isMobile ? h("div", null,
+          // Horizontal day strip
+          h("div", { className: "day-strip", style: { background: "white", borderRadius: 12, border: "1px solid #e2e8f0", padding: "6px 4px", marginBottom: 12 }},
+            weekDates.map(date => {
+              const isToday = date === todayStr();
+              const isActive = date === selectedDay;
+              const hasItems = (calByDate[date] || []).length > 0 || tasks.some(t => !t.done && t.due === date);
+              return h("div", {
+                key: date,
+                className: "day-strip-item" + (isActive ? " active" : "") + (isToday ? " today" : ""),
+                onClick: () => setSelectedDay(date),
+              },
+                h("div", { className: "day-strip-day" }, shortDay(date)),
+                h("div", { className: "day-strip-num" }, new Date(date + "T12:00:00").getDate()),
+                hasItems ? h("div", { className: "day-strip-dot" }) : null,
+              );
+            }),
+          ),
+          // Selected day heading
+          h("div", { style: { fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }},
+            new Date(selectedDay + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }),
+            selectedDay === todayStr() ? h("span", { style: { background: "#dbeafe", color: "#2563eb", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99 }}, "TODAY") : null,
+          ),
+          // Calendar events for selected day
+          ((calByDate[selectedDay] || []).length > 0) ? h("div", { style: { marginBottom: 10 }},
+            h("div", { style: { fontSize: 11, fontWeight: 600, color: "#3b82f6", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}, "\u{1F4C5} Events"),
+            (calByDate[selectedDay] || []).map(ev => h("div", { key: ev.id, className: "mobile-agenda-card", style: { borderLeft: "3px solid #3b82f6" }},
+              h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" }},
+                h("div", null,
+                  h("div", { style: { fontWeight: 600, fontSize: 14, color: "#1e293b" }}, ev.title),
+                  ev.location ? h("div", { style: { fontSize: 12, color: "#64748b", marginTop: 2 }}, "\u{1F4CD} " + (typeof ev.location === "string" ? ev.location : ev.location.displayName || "")) : null,
+                ),
+                h("div", { style: { fontSize: 12, fontWeight: 600, color: "#2563eb", whiteSpace: "nowrap", marginLeft: 8 }}, ev.isAllDay ? "All day" : formatTime(ev.start) + " – " + formatTime(ev.end)),
+              ),
+            )),
+          ) : null,
+          // Tasks for selected day
+          (() => {
+            const dayTasks = tasks.filter(t => !t.done && t.due === selectedDay).sort((a, b) => priWeight[a.priority] - priWeight[b.priority]);
+            if (dayTasks.length === 0 && !(calByDate[selectedDay] || []).length) {
+              return h("div", { className: "mobile-agenda-empty" },
+                h("div", { style: { fontSize: 28, marginBottom: 8 }}, "\u2728"),
+                h("div", { style: { fontSize: 14, fontWeight: 600 }}, "Nothing scheduled"),
+                h("div", { style: { fontSize: 12, marginTop: 4 }}, "Tap + Add Task to plan this day"),
+              );
+            }
+            if (!dayTasks.length) return null;
+            return h("div", null,
+              h("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}, "\u2705 Tasks (" + dayTasks.length + ")"),
+              dayTasks.map(t => {
+                const pri = PRIORITIES.find(p => p.id === t.priority);
+                const cat = CATEGORIES.find(c => c.id === t.category);
+                return h("div", { key: t.id, onClick: () => setModalTask(t), className: "mobile-agenda-card", style: { borderLeft: "3px solid " + pri.color, cursor: "pointer" }},
+                  h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" }},
+                    h("div", null,
+                      h("div", { style: { fontWeight: 600, fontSize: 14, color: "#1e293b" }}, t.title),
+                      h("div", { style: { display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }},
+                        h("span", { style: { fontSize: 11, background: pri.bg, color: pri.color, padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}, pri.icon + " " + pri.label),
+                        cat ? h("span", { style: { fontSize: 11, color: "#64748b" }}, cat.icon + " " + cat.label) : null,
+                        t.kid ? h("span", { style: { fontSize: 11, color: "#db2777" }}, t.kid) : null,
+                      ),
+                    ),
+                    h("button", { onClick: (e) => { e.stopPropagation(); toggle(t.id); }, style: { border: "2px solid #e2e8f0", background: "white", borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 14, flexShrink: 0 }}, "\u2713"),
+                  ),
+                  t.notes ? h("div", { style: { fontSize: 12, color: "#94a3b8", marginTop: 6, lineHeight: 1.4 }}, t.notes) : null,
+                );
+              }),
+            );
+          })(),
+        )
+
+        // ── DESKTOP: 7-column grid ──
+        : h("div", { className: "week-grid", style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }},
           weekDates.map(date => {
             const isToday = date === todayStr();
             const dayTasks = tasks.filter(t => !t.done && t.due === date).sort((a, b) => priWeight[a.priority] - priWeight[b.priority]);
@@ -1510,12 +1621,10 @@ function App() {
               h("div", { style: { fontSize: 11, fontWeight: 700, color: isToday ? "#2563eb" : "#64748b", marginBottom: 6, textAlign: "center" }},
                 shortDay(date), h("br"), h("span", { style: { fontSize: 16 }}, new Date(date + "T12:00:00").getDate()),
               ),
-              // Calendar events
               dayEvents.map(ev => h("div", { key: ev.id, className: "cal-event" },
                 h("div", { style: { fontWeight: 600 }}, ev.isAllDay ? "All day" : formatTime(ev.start)),
                 h("div", null, ev.title),
               )),
-              // Tasks
               dayTasks.length === 0 && dayEvents.length === 0 ? h("div", { style: { fontSize: 10, color: "#cbd5e1", textAlign: "center", marginTop: 12 }}, "\u2014") : null,
               dayTasks.map(t => {
                 const pri = PRIORITIES.find(p => p.id === t.priority);
