@@ -300,6 +300,10 @@ function mergeToDoTasks(existingTasks, todoItems) {
     const isDone = item.status ? mapToDoStatus(item.status) : (item.isCompleted || false);
     const importance = item.importance || "normal";
     const body = item.body?.content || item.body || item.notes || "";
+    // Detect email-linked tasks
+    const emailIdMatch = body.match(/\[EmailID:([^\]]+)\]/);
+    const emailLinkMatch = body.match(/\[EmailLink:(https?:\/\/[^\]]+)\]/);
+    const isFromEmail = !!emailIdMatch;
 
     // Determine horizon based on due date
     let horizon = "this_week";
@@ -319,7 +323,10 @@ function mergeToDoTasks(existingTasks, todoItems) {
       due,
       done: isDone,
       notes: body,
-      source: "email", // Most To Do tasks come from flagged emails
+      body: body,
+      source: isFromEmail ? "flagged-email" : "microsoft",
+      emailId: emailIdMatch ? emailIdMatch[1] : "",
+      emailLink: emailLinkMatch ? emailLinkMatch[1] : "",
       recurrence: "none",
       kid: "",
       created: item.createdDateTime ? item.createdDateTime.split("T")[0] : todayStr(),
@@ -530,6 +537,11 @@ function msTaskToAppTask(msTask, category) {
   const meta = parseAppMetadata(msTask.body);
   const dueDate = msTask.dueDateTime?.dateTime ? msTask.dueDateTime.dateTime.split("T")[0] : "";
 
+  // Detect if this task came from a flagged email
+  const bodyText = meta._cleanNotes || "";
+  const emailIdMatch = bodyText.match(/\[EmailID:([^\]]+)\]/);
+  const emailLinkMatch = bodyText.match(/\[EmailLink:(https?:\/\/[^\]]+)\]/);
+
   return {
     id: meta.appId || ("ms-" + msTask.id),
     msId: msTask.id,
@@ -540,7 +552,10 @@ function msTaskToAppTask(msTask, category) {
     due: dueDate,
     done: msTask.status === "completed",
     notes: meta._cleanNotes || "",
-    source: meta.source || "microsoft",
+    body: meta._cleanNotes || "",
+    source: emailIdMatch ? "flagged-email" : (meta.source || "microsoft"),
+    emailId: emailIdMatch ? emailIdMatch[1] : "",
+    emailLink: emailLinkMatch ? emailLinkMatch[1] : "",
     recurrence: meta.recurrence || "none",
     kid: meta.kid || "",
     created: meta.created || todayStr(),
@@ -754,6 +769,11 @@ function TaskRow({ task, toggle, remove, onEdit }) {
   const isOverdue = !task.done && task.due && task.due < todayStr();
   const isRecurring = task.recurrence && task.recurrence !== "none";
   const isSynced = !!task.msId;
+  // Detect email-linked tasks
+  const emailLink = task.emailLink || (() => {
+    const m = (task.body || task.notes || "").match(/\[EmailLink:(https?:\/\/[^\]]+)\]/);
+    return m ? m[1] : null;
+  })();
 
   return h("div", { className: "task-row", style: {
     display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
@@ -777,8 +797,12 @@ function TaskRow({ task, toggle, remove, onEdit }) {
         task.kid ? h(Badge, { color: "#db2777", bg: "#fdf2f8" }, task.kid) : null,
         task.due ? h(Badge, { color: isOverdue ? "#dc2626" : "#64748b", bg: isOverdue ? "#fef2f2" : "#f1f5f9" }, (isOverdue ? "\u26A0\uFE0F " : "\u{1F4C5} ") + dayLabel(task.due)) : null,
         isRecurring ? h(Badge, {}, "\u{1F501} " + (RECURRENCE.find(r => r.id === task.recurrence)?.label || "")) : null,
+        task.source === "flagged-email" ? h(Badge, { color: "#0078d4", bg: "#e8f4fd" }, "\u{1F3F3}\uFE0F Flagged Email") :
         task.source && task.source !== "manual" ? h(Badge, {}, "\u{1F4E8} " + task.source) : null,
         isSynced ? h(Badge, { color: "#16a34a", bg: "#f0fdf4" }, "\u2601\uFE0F Synced") : null,
+        emailLink ? h("a", { href: emailLink, target: "_blank", rel: "noopener", onClick: (e) => e.stopPropagation(), style: { textDecoration: "none" }},
+          h(Badge, { color: "#0078d4", bg: "#e8f4fd" }, "\u2709\uFE0F Open Email")
+        ) : null,
       ),
       task.notes ? h("div", { style: { fontSize: 11.5, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}, task.notes) : null,
     ),
