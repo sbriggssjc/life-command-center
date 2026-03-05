@@ -158,7 +158,8 @@ async function clearSyncHandle(key = IDB_KEY) {
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-const todayStr = () => new Date().toISOString().split("T")[0];
+const todayStr = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); };
+const toLocalDate = (iso) => { try { const d = new Date(iso); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); } catch { return ""; } };
 
 function getWeekDates(refDate) {
   const d = new Date(refDate + "T12:00:00");
@@ -168,7 +169,7 @@ function getWeekDates(refDate) {
   return Array.from({ length: 7 }, (_, i) => {
     const x = new Date(mon);
     x.setDate(mon.getDate() + i);
-    return x.toISOString().split("T")[0];
+    return x.getFullYear() + "-" + String(x.getMonth()+1).padStart(2,"0") + "-" + String(x.getDate()).padStart(2,"0");
   });
 }
 
@@ -435,11 +436,13 @@ async function getAccessToken() {
 async function graphFetch(path, options = {}) {
   const token = await getAccessToken();
   if (!token) throw new Error("Not authenticated");
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
   const resp = await fetch(GRAPH_BASE + path, {
     ...options,
     headers: {
       Authorization: "Bearer " + token,
       "Content-Type": "application/json",
+      "Prefer": 'outlook.timezone="' + tz + '"',
       ...(options.headers || {}),
     },
   });
@@ -894,7 +897,7 @@ function App() {
   useEffect(() => {
     const ref = new Date();
     ref.setDate(ref.getDate() + weekOffset * 7);
-    const dates = getWeekDates(ref.toISOString().split("T")[0]);
+    const dates = getWeekDates(toLocalDate(ref));
     if (!dates.includes(selectedDay)) setSelectedDay(dates[0]);
   }, [weekOffset]);
 
@@ -929,7 +932,7 @@ function App() {
       setSyncStatus("synced");
       // Also fetch calendar events for this week
       const ref = new Date();
-      const wd = getWeekDates(ref.toISOString().split("T")[0]);
+      const wd = getWeekDates(toLocalDate(ref));
       try {
         const events = await fetchCalendarEvents(wd[0], wd[6]);
         setCalendarEvents(prev => {
@@ -1002,7 +1005,7 @@ function App() {
         const today = todayStr();
         const twoWeeksOut = new Date();
         twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
-        const endDate = twoWeeksOut.toISOString().split("T")[0];
+        const endDate = toLocalDate(twoWeeksOut);
         const events = await fetchCalendarEvents(today, endDate);
         setCalendarEvents(prev => {
           const existingIds = new Set(prev.map(e => e.id));
@@ -1122,7 +1125,7 @@ function App() {
         const today = todayStr();
         const twoWeeksOut = new Date();
         twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
-        const endDate = twoWeeksOut.toISOString().split("T")[0];
+        const endDate = toLocalDate(twoWeeksOut);
         const events = await fetchCalendarEvents(today, endDate);
         setCalendarEvents(prev => {
           const existingIds = new Set(prev.map(e => e.id));
@@ -1177,7 +1180,7 @@ function App() {
   const weekDates = useMemo(() => {
     const ref = new Date();
     ref.setDate(ref.getDate() + weekOffset * 7);
-    return getWeekDates(ref.toISOString().split("T")[0]);
+    return getWeekDates(toLocalDate(ref));
   }, [weekOffset]);
 
   useEffect(() => {
@@ -1348,7 +1351,7 @@ function App() {
   const calByDate = useMemo(() => {
     const map = {};
     for (const ev of calendarEvents) {
-      const date = ev.start ? ev.start.split("T")[0] : "";
+      const date = ev.start ? toLocalDate(ev.start) : "";
       if (!date) continue;
       if (!map[date]) map[date] = [];
       map[date].push(ev);
