@@ -993,7 +993,7 @@ function App() {
     e.target.value = "";
   };
 
-  // Auto-sync on app load — reads from saved file handles
+  // Auto-sync on app load — reads from saved file handles (no prompts)
   useEffect(() => {
     (async () => {
       try {
@@ -1003,18 +1003,13 @@ function App() {
         if (perm === "granted") {
           const file = await handle.getFile();
           processSyncData(await file.text(), "auto");
-        } else {
-          const req = await handle.requestPermission({ mode: "read" });
-          if (req === "granted") {
-            const file = await handle.getFile();
-            processSyncData(await file.text(), "auto");
-          }
         }
+        // Don't requestPermission on auto-load — avoids unexpected browser prompts
       } catch(err) { /* Silently fail */ }
     })();
   }, [processSyncData]);
 
-  // Auto-sync calendar on app load
+  // Auto-sync calendar on app load (no prompts)
   useEffect(() => {
     (async () => {
       try {
@@ -1024,13 +1019,8 @@ function App() {
         if (perm === "granted") {
           const file = await handle.getFile();
           processCalendarData(await file.text(), "auto");
-        } else {
-          const req = await handle.requestPermission({ mode: "read" });
-          if (req === "granted") {
-            const file = await handle.getFile();
-            processCalendarData(await file.text(), "auto");
-          }
         }
+        // Don't requestPermission on auto-load — avoids unexpected browser prompts
       } catch(err) {}
     })();
   }, [processCalendarData]);
@@ -1246,7 +1236,7 @@ function App() {
   const hdrBtn = (bg) => ({ background: bg, border: "none", color: "white", borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontWeight: 600, fontSize: 13, minHeight: 44 });
   const selStyle = { border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "white" };
 
-  // ─── Calendar events grouped by date ──────────────────────────────────────
+  // ─── Calendar events grouped by date (sorted chronologically) ─────────────
   const calByDate = useMemo(() => {
     const map = {};
     for (const ev of calendarEvents) {
@@ -1254,6 +1244,14 @@ function App() {
       if (!date) continue;
       if (!map[date]) map[date] = [];
       map[date].push(ev);
+    }
+    // Sort events within each day chronologically
+    for (const date of Object.keys(map)) {
+      map[date].sort((a, b) => {
+        if (a.isAllDay && !b.isAllDay) return -1;
+        if (!a.isAllDay && b.isAllDay) return 1;
+        return (a.start || "").localeCompare(b.start || "");
+      });
     }
     return map;
   }, [calendarEvents]);
@@ -1510,13 +1508,31 @@ function App() {
       }) : null,
 
       // Today / All flat view
-      (view === "today" || view === "all") ? (
+      (view === "today" || view === "all") ? h("div", null,
+        // Calendar events for today
+        view === "today" ? (() => {
+          const today = todayStr();
+          const todayEvts = (calByDate[today] || []);
+          if (!todayEvts.length) return null;
+          const fmtT = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
+          return h("div", { style: { marginBottom: 16 }},
+            h("div", { style: { fontSize: 13, fontWeight: 700, color: "#1e40af", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}, "\uD83D\uDCC5 Today's Calendar"),
+            todayEvts.map((ev, i) => h("div", { key: ev.id || i, style: { background: "#dbeafe", borderLeft: "3px solid #3b82f6", borderRadius: 8, padding: "8px 12px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }},
+              h("div", null,
+                h("div", { style: { fontWeight: 600, fontSize: 13, color: "#1e293b" }}, ev.title),
+                ev.location ? h("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 }}, "\uD83D\uDCCD " + (typeof ev.location === "string" ? ev.location : ev.location.displayName || "")) : null,
+              ),
+              h("div", { style: { fontSize: 12, fontWeight: 600, color: "#2563eb", whiteSpace: "nowrap", marginLeft: 12 }}, ev.isAllDay ? "All day" : fmtT(ev.start) + " – " + fmtT(ev.end)),
+            ))
+          );
+        })() : null,
+        // Tasks
         filtered.length ? filtered.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => setModalTask(t) }))
         : h("div", { style: { textAlign: "center", padding: 60, color: "#94a3b8" }},
             h("div", { style: { fontSize: 36, marginBottom: 10 }}, view === "today" ? "\u2728" : "\u{1F50D}"),
             h("div", { style: { fontSize: 15, fontWeight: 600 }}, view === "today" ? "All clear for today!" : "No tasks match your filters"),
             h("div", { style: { fontSize: 12, marginTop: 4 }}, "Add a task or adjust your filters"),
-          )
+          ),
       ) : null,
     ),
 
