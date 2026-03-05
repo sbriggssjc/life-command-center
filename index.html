@@ -1477,18 +1477,19 @@ function App() {
         h("div", { style: { marginBottom: 18, padding: 16, background: "#eff6ff", borderRadius: 10, border: "1px solid #bfdbfe" }},
           h("div", { style: { fontWeight: 700, fontSize: 13, color: "#1e40af", marginBottom: 6 }}, "\u{1F504} Sync from Microsoft To Do"),
           h("div", { style: { fontSize: 12, color: "#3b82f6", marginBottom: 10, lineHeight: 1.5 }}, "Link your todo-sync.json file once and it auto-syncs every time you open the app. Power Automate refreshes the file hourly."),
+          h("button", { onClick: async () => {
+            if (window.showOpenFilePicker) {
+              try {
+                const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
+                await saveSyncHandle(handle);
+                const file = await handle.getFile();
+                processSyncData(await file.text(), "manual");
+                return;
+              } catch(err) { /* cancelled */ }
+            } else { syncRef.current?.click(); }
+          }, style: { background: "#2563eb", border: "none", borderRadius: 8, padding: "10px 18px", cursor: "pointer", fontSize: 14, fontWeight: 700, color: "white", width: "100%", minHeight: 48, marginBottom: 8 }}, window.showOpenFilePicker ? "\u{1F517} Link To Do Sync File" : "\u{1F4C2} Select To Do Sync File"),
+          h("input", { ref: syncRef, type: "file", accept: ".json", onChange: syncFromToDo, style: { display: "none" }}),
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }},
-            window.showOpenFilePicker
-              ? h("button", { onClick: async () => {
-                  try {
-                    const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
-                    await saveSyncHandle(handle);
-                    const file = await handle.getFile();
-                    processSyncData(await file.text(), "manual");
-                  } catch(err) { /* cancelled */ }
-                }, style: { background: "#2563eb", border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "white" }}, "\u{1F517} Link To Do Sync File")
-              : h("button", { onClick: () => syncRef.current?.click(), style: { background: "#2563eb", border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "white" }}, "\u{1F4C2} Select To Do Sync File"),
-            h("input", { ref: syncRef, type: "file", accept: ".json", onChange: syncFromToDo, style: { display: "none" }}),
             h("button", { onClick: async () => { await clearSyncHandle(); setSyncResult({ added: 0, skipped: 0, unlinked: true }); setTimeout(() => setSyncResult(null), 4000); }, style: { background: "transparent", border: "1px solid #cbd5e1", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 12, color: "#64748b" }}, "Unlink"),
             syncResult ? h("span", { style: { fontSize: 12, color: syncResult.unlinked ? "#dc2626" : "#059669", fontWeight: 600 }},
               syncResult.unlinked ? "\u274C File unlinked" : (syncResult.auto ? "\u26A1 " : "\u2705 ") + syncResult.added + " new tasks added, " + syncResult.skipped + " duplicates skipped" + (syncResult.auto ? " (auto-sync)" : "")
@@ -1500,25 +1501,26 @@ function App() {
         h("div", { style: { marginBottom: 18, padding: 16, background: "#fffbeb", borderRadius: 10, border: "1px solid #fde68a" }},
           h("div", { style: { fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}, "\u{1F4C5} Sync from Outlook Calendar"),
           h("div", { style: { fontSize: 12, color: "#b45309", marginBottom: 10, lineHeight: 1.5 }}, "Link your calendar-sync.json file to see upcoming events. Power Automate refreshes this hourly."),
+          h("button", { onClick: async () => {
+            if (window.showOpenFilePicker) {
+              try {
+                const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
+                await saveSyncHandle(handle, IDB_KEY_CALENDAR);
+                const file = await handle.getFile();
+                processCalendarData(await file.text(), "manual");
+                return;
+              } catch(err) {}
+            } else { calSyncRef.current?.click(); }
+          }, style: { background: "#d97706", border: "none", borderRadius: 8, padding: "10px 18px", cursor: "pointer", fontSize: 14, fontWeight: 700, color: "white", width: "100%", minHeight: 48, marginBottom: 8 }}, window.showOpenFilePicker ? "\u{1F517} Link Calendar Sync File" : "\u{1F4C2} Select Calendar File"),
+          h("input", { ref: calSyncRef, type: "file", accept: ".json", onChange: (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => processCalendarData(ev.target.result, "manual");
+            reader.readAsText(file);
+            e.target.value = "";
+          }, style: { display: "none" }}),
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }},
-            window.showOpenFilePicker
-              ? h("button", { onClick: async () => {
-                  try {
-                    const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
-                    await saveSyncHandle(handle, IDB_KEY_CALENDAR);
-                    const file = await handle.getFile();
-                    processCalendarData(await file.text(), "manual");
-                  } catch(err) {}
-                }, style: { background: "#d97706", border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "white" }}, "\u{1F517} Link Calendar Sync File")
-              : h("button", { onClick: () => calSyncRef.current?.click(), style: { background: "#d97706", border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "white" }}, "\u{1F4C2} Select Calendar File"),
-            h("input", { ref: calSyncRef, type: "file", accept: ".json", onChange: (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              const reader = new FileReader();
-              reader.onload = (ev) => processCalendarData(ev.target.result, "manual");
-              reader.readAsText(file);
-              e.target.value = "";
-            }, style: { display: "none" }}),
             h("button", { onClick: async () => { await clearSyncHandle(IDB_KEY_CALENDAR); setCalendarEvents([]); setCalSyncResult({ count: 0, unlinked: true }); setTimeout(() => setCalSyncResult(null), 4000); }, style: { background: "transparent", border: "1px solid #cbd5e1", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 12, color: "#64748b" }}, "Unlink"),
             calSyncResult ? h("span", { style: { fontSize: 12, color: calSyncResult.unlinked ? "#dc2626" : "#059669", fontWeight: 600 }},
               calSyncResult.unlinked ? "\u274C Calendar unlinked" : (calSyncResult.auto ? "\u26A1 " : "\u2705 ") + calSyncResult.count + " events loaded" + (calSyncResult.auto ? " (auto-sync)" : "")
