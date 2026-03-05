@@ -993,34 +993,34 @@ function App() {
     e.target.value = "";
   };
 
-  // Auto-sync on app load — reads from saved file handles (no prompts)
+  // Auto-sync on app load — reads from saved file handles
   useEffect(() => {
     (async () => {
       try {
         const handle = await getSyncHandle();
         if (!handle) return;
-        const perm = await handle.queryPermission({ mode: "read" });
+        let perm = await handle.queryPermission({ mode: "read" });
+        if (perm !== "granted") perm = await handle.requestPermission({ mode: "read" });
         if (perm === "granted") {
           const file = await handle.getFile();
           processSyncData(await file.text(), "auto");
         }
-        // Don't requestPermission on auto-load — avoids unexpected browser prompts
       } catch(err) { /* Silently fail */ }
     })();
   }, [processSyncData]);
 
-  // Auto-sync calendar on app load (no prompts)
+  // Auto-sync calendar on app load
   useEffect(() => {
     (async () => {
       try {
         const handle = await getSyncHandle(IDB_KEY_CALENDAR);
         if (!handle) return;
-        const perm = await handle.queryPermission({ mode: "read" });
+        let perm = await handle.queryPermission({ mode: "read" });
+        if (perm !== "granted") perm = await handle.requestPermission({ mode: "read" });
         if (perm === "granted") {
           const file = await handle.getFile();
           processCalendarData(await file.text(), "auto");
         }
-        // Don't requestPermission on auto-load — avoids unexpected browser prompts
       } catch(err) {}
     })();
   }, [processCalendarData]);
