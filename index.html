@@ -366,16 +366,14 @@ const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read"];
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 let msalInstance = null;
-let msalReady = false;
+let msalRedirectResult = null;
 try {
   if (MSAL_CONFIG.auth.clientId !== "YOUR_CLIENT_ID_HERE") {
     msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
-    // Handle the auth redirect in popup windows — this lets MSAL close the popup
-    msalInstance.handleRedirectPromise().then(() => {
-      msalReady = true;
-    }).catch(e => {
+    // Handle returning from redirect sign-in
+    msalRedirectResult = msalInstance.handleRedirectPromise().catch(e => {
       console.warn("MSAL redirect handling:", e);
-      msalReady = true;
+      return null;
     });
   }
 } catch(e) {
@@ -886,37 +884,44 @@ function App() {
     setTimeout(() => saveToStorage(tasks, newKids), 0);
   }, [tasks]);
 
-  // ─── Microsoft Auth ────────────────────────────────────────────────────────
+  // ─── Microsoft Auth (redirect flow for PWA compatibility) ─────────────────
+  // Handle returning from redirect sign-in
+  useEffect(() => {
+    if (!msalInstance || !msalRedirectResult) return;
+    msalRedirectResult.then(resp => {
+      if (resp && resp.account) {
+        setAuthUser(resp.account);
+        showToast("Signed in as " + resp.account.name);
+        setSyncStatus("syncing");
+        fullSync(tasks, setTasksAndSave).then(merged => {
+          setTasksAndSave(merged);
+          setSyncStatus("synced");
+          showToast("Synced " + merged.length + " tasks");
+        }).catch(e => {
+          console.error("Sync error:", e);
+          setSyncStatus("offline");
+          showToast("Sync failed — working offline");
+        });
+      }
+    });
+  }, []);
+
   const handleSignIn = useCallback(async () => {
     if (!msalInstance) {
       showToast("Set your Client ID in index.html first");
       return;
     }
     try {
-      const resp = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
-      setAuthUser(resp.account);
-      showToast("Signed in as " + resp.account.name);
-      // Trigger initial sync
-      setSyncStatus("syncing");
-      try {
-        const merged = await fullSync(tasks, setTasksAndSave);
-        setTasksAndSave(merged);
-        setSyncStatus("synced");
-        showToast("Synced " + merged.length + " tasks");
-      } catch(e) {
-        console.error("Sync error:", e);
-        setSyncStatus("offline");
-        showToast("Sync failed \u2014 working offline");
-      }
+      await msalInstance.loginRedirect({ scopes: GRAPH_SCOPES });
     } catch(e) {
       console.error("Sign in error:", e);
       showToast("Sign in failed");
     }
-  }, [tasks, setTasksAndSave, showToast]);
+  }, [showToast]);
 
   const handleSignOut = useCallback(async () => {
     if (msalInstance) {
-      try { await msalInstance.logoutPopup(); } catch(e) {}
+      try { await msalInstance.logoutRedirect({ postLogoutRedirectUri: MSAL_CONFIG.auth.redirectUri }); } catch(e) {}
     }
     setAuthUser(null);
     setSyncStatus("signed-out");
