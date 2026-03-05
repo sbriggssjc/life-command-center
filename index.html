@@ -366,9 +366,17 @@ const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read"];
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 let msalInstance = null;
+let msalReady = false;
 try {
   if (MSAL_CONFIG.auth.clientId !== "YOUR_CLIENT_ID_HERE") {
     msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+    // Handle the auth redirect in popup windows — this lets MSAL close the popup
+    msalInstance.handleRedirectPromise().then(() => {
+      msalReady = true;
+    }).catch(e => {
+      console.warn("MSAL redirect handling:", e);
+      msalReady = true;
+    });
   }
 } catch(e) {
   console.warn("MSAL init failed:", e);
