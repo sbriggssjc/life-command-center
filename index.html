@@ -1600,6 +1600,105 @@ function App() {
     // ─── CONTENT ───
     h("div", { style: { maxWidth: 960, margin: "0 auto", padding: isMobile ? "0 10px 100px" : "0 16px 100px" }},
 
+      // ── ALWAYS-VISIBLE DAY TIMELINE (all views) ──
+      (() => {
+        const today = todayStr();
+        const todayEvts = (calByDate[today] || []);
+        if (!todayEvts.length) return null;
+        const fmtT = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
+        const fmtHr = (h24) => { const ampm = h24 >= 12 ? "PM" : "AM"; const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24; return h12 + " " + ampm; };
+
+        const allDayEvts = todayEvts.filter(ev => ev.isAllDay);
+        const timedEvts = todayEvts.filter(ev => !ev.isAllDay && ev.start);
+        const now = new Date();
+        const nowHr = now.getHours() + now.getMinutes() / 60;
+
+        let dayStartHr = 8, dayEndHr = 18;
+        if (timedEvts.length) {
+          const evStartHrs = timedEvts.map(ev => new Date(ev.start).getHours());
+          const evEndHrs = timedEvts.map(ev => { const d = new Date(ev.end); return d.getHours() + (d.getMinutes() > 0 ? 1 : 0); });
+          dayStartHr = Math.min(Math.floor(nowHr), ...evStartHrs, 7);
+          dayEndHr = Math.max(Math.ceil(nowHr) + 1, ...evEndHrs, 18);
+        }
+        dayStartHr = Math.max(0, dayStartHr);
+        dayEndHr = Math.min(24, dayEndHr);
+        const totalHrs = dayEndHr - dayStartHr;
+        const hrHeight = isMobile ? 48 : 52;
+
+        const evPos = (ev) => {
+          const s = new Date(ev.start);
+          const e = new Date(ev.end);
+          const startOff = (s.getHours() + s.getMinutes() / 60) - dayStartHr;
+          const dur = (e - s) / 3600000;
+          return { top: Math.max(0, startOff) * hrHeight, height: Math.max(dur, 0.25) * hrHeight };
+        };
+
+        const nowPos = (nowHr - dayStartHr) * hrHeight;
+        const showNow = nowHr >= dayStartHr && nowHr <= dayEndHr;
+
+        const sortedTimed = [...timedEvts].sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+
+        // Build free slots
+        const slots = [];
+        let cursor = dayStartHr;
+        sortedTimed.forEach(ev => {
+          const s = new Date(ev.start);
+          const e = new Date(ev.end);
+          const evStart = s.getHours() + s.getMinutes() / 60;
+          const evEnd = e.getHours() + e.getMinutes() / 60;
+          if (evStart > cursor + 0.25) slots.push({ type: "free", startHr: cursor, endHr: evStart });
+          cursor = Math.max(cursor, evEnd);
+        });
+        if (cursor < dayEndHr - 0.25) slots.push({ type: "free", startHr: cursor, endHr: dayEndHr });
+
+        return h("div", { style: { marginBottom: 16 }},
+          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#1e40af", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }},
+            h("span", null, "\uD83D\uDCC5 Today's Schedule"),
+            h("span", { style: { fontSize: 11, fontWeight: 500, color: "#64748b" }}, fmtHr(dayStartHr) + " \u2013 " + fmtHr(dayEndHr)),
+          ),
+
+          // All-day events
+          allDayEvts.length ? h("div", { style: { marginBottom: 8 }},
+            allDayEvts.map((ev, i) => h("div", { key: "ad" + i, style: { background: "#e0e7ff", borderRadius: 8, padding: "6px 12px", marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#4338ca", display: "flex", alignItems: "center", gap: 6 }},
+              h("span", null, "\u2605"), h("span", null, ev.title), h("span", { style: { fontSize: 10, opacity: 0.7 }}, "All day"),
+            ))
+          ) : null,
+
+          // Timeline
+          h("div", { style: { position: "relative", background: "white", borderRadius: 12, border: "1px solid #e2e8f0", overflow: "hidden" }},
+            // Hour grid lines
+            Array.from({ length: totalHrs + 1 }, (_, i) => h("div", { key: "hr" + i, style: { position: "absolute", top: i * hrHeight, left: 0, right: 0, height: 1, background: i === 0 || i === totalHrs ? "transparent" : "#f1f5f9" }})),
+            // Hour labels
+            Array.from({ length: totalHrs }, (_, i) => h("div", { key: "lbl" + i, style: { position: "absolute", top: i * hrHeight + 2, left: 6, fontSize: 10, color: "#94a3b8", fontWeight: 500, zIndex: 1 }}, fmtHr(dayStartHr + i))),
+            // Free gaps
+            slots.filter(s => (s.endHr - s.startHr) >= 0.5).map((s, i) => {
+              const top = (s.startHr - dayStartHr) * hrHeight;
+              const height = (s.endHr - s.startHr) * hrHeight;
+              return h("div", { key: "free" + i, style: { position: "absolute", top, left: 50, right: 8, height: Math.max(height, 20), background: "#f0fdf4", borderRadius: 6, border: "1px dashed #bbf7d0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#86efac", fontWeight: 600 }}, height >= 30 ? "\u2713 Free" : null);
+            }),
+            // Event blocks
+            sortedTimed.map((ev, i) => {
+              const pos = evPos(ev);
+              const isPast = new Date(ev.end) < now;
+              return h("div", { key: ev.id || i, style: { position: "absolute", top: pos.top, left: 50, right: 8, height: Math.max(pos.height - 2, 24), minHeight: 24, background: isPast ? "#f1f5f9" : "#dbeafe", borderLeft: "3px solid " + (isPast ? "#94a3b8" : "#3b82f6"), borderRadius: 6, padding: "4px 8px", overflow: "hidden", opacity: isPast ? 0.6 : 1 }},
+                h("div", { style: { fontWeight: 600, fontSize: 12, color: isPast ? "#64748b" : "#1e293b", lineHeight: 1.3 }}, ev.title),
+                pos.height > 28 ? h("div", { style: { fontSize: 10, color: isPast ? "#94a3b8" : "#2563eb", marginTop: 1 }},
+                  fmtT(ev.start) + " \u2013 " + fmtT(ev.end),
+                  ev.location ? " \u2022 \uD83D\uDCCD " + (typeof ev.location === "string" ? ev.location : ev.location.displayName || "") : "",
+                ) : null,
+              );
+            }),
+            // Now indicator
+            showNow ? h("div", { style: { position: "absolute", top: nowPos, left: 0, right: 0, height: 2, background: "#ef4444", zIndex: 5 }},
+              h("div", { style: { position: "absolute", left: 2, top: -5, width: 10, height: 10, borderRadius: "50%", background: "#ef4444" }}),
+              h("div", { style: { position: "absolute", right: 6, top: -8, fontSize: 9, fontWeight: 700, color: "#ef4444", background: "white", padding: "0 3px", borderRadius: 3 }}, "NOW"),
+            ) : null,
+            // Spacer
+            h("div", { style: { height: totalHrs * hrHeight }}),
+          ),
+        );
+      })(),
+
       // Week Calendar
       view === "week_cal" ? h("div", null,
         // Navigation
@@ -1731,138 +1830,6 @@ function App() {
 
       // Today / All flat view
       (view === "today" || view === "all") ? h("div", null,
-        // Calendar events for today
-        view === "today" ? (() => {
-          const today = todayStr();
-          const todayEvts = (calByDate[today] || []);
-          if (!todayEvts.length) return null;
-          const fmtT = (iso) => { try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
-          const fmtHr = (h24) => { const ampm = h24 >= 12 ? "PM" : "AM"; const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24; return h12 + " " + ampm; };
-
-          // Separate all-day vs timed events
-          const allDayEvts = todayEvts.filter(ev => ev.isAllDay);
-          const timedEvts = todayEvts.filter(ev => !ev.isAllDay && ev.start);
-
-          // Calculate day boundaries from events (or default 8 AM – 6 PM)
-          let dayStartHr = 8, dayEndHr = 18;
-          const now = new Date();
-          const nowHr = now.getHours() + now.getMinutes() / 60;
-          if (timedEvts.length) {
-            const evStartHrs = timedEvts.map(ev => { const d = new Date(ev.start); return d.getHours(); });
-            const evEndHrs = timedEvts.map(ev => { const d = new Date(ev.end); return d.getHours() + (d.getMinutes() > 0 ? 1 : 0); });
-            dayStartHr = Math.min(Math.floor(nowHr), ...evStartHrs, 7);
-            dayEndHr = Math.max(Math.ceil(nowHr) + 1, ...evEndHrs, 18);
-          }
-          dayStartHr = Math.max(0, dayStartHr);
-          dayEndHr = Math.min(24, dayEndHr);
-          const totalHrs = dayEndHr - dayStartHr;
-          const hrHeight = 52; // px per hour
-
-          // Position an event on the timeline
-          const evPos = (ev) => {
-            const s = new Date(ev.start);
-            const e = new Date(ev.end);
-            const startOff = (s.getHours() + s.getMinutes() / 60) - dayStartHr;
-            const dur = (e - s) / 3600000;
-            return { top: Math.max(0, startOff) * hrHeight, height: Math.max(dur, 0.25) * hrHeight };
-          };
-
-          // Current time position
-          const nowPos = (nowHr - dayStartHr) * hrHeight;
-          const showNow = nowHr >= dayStartHr && nowHr <= dayEndHr;
-
-          // Build free/busy slots for gap display
-          const slots = [];
-          const sortedTimed = [...timedEvts].sort((a, b) => (a.start || "").localeCompare(b.start || ""));
-          let cursor = dayStartHr;
-          sortedTimed.forEach(ev => {
-            const s = new Date(ev.start);
-            const e = new Date(ev.end);
-            const evStart = s.getHours() + s.getMinutes() / 60;
-            const evEnd = e.getHours() + e.getMinutes() / 60;
-            if (evStart > cursor + 0.25) {
-              slots.push({ type: "free", startHr: cursor, endHr: evStart });
-            }
-            slots.push({ type: "event", ev, startHr: evStart, endHr: evEnd });
-            cursor = Math.max(cursor, evEnd);
-          });
-          if (cursor < dayEndHr - 0.25) {
-            slots.push({ type: "free", startHr: cursor, endHr: dayEndHr });
-          }
-
-          return h("div", { style: { marginBottom: 16 }},
-            h("div", { style: { fontSize: 13, fontWeight: 700, color: "#1e40af", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }},
-              h("span", null, "\uD83D\uDCC5 Today's Schedule"),
-              h("span", { style: { fontSize: 11, fontWeight: 500, color: "#64748b" }}, fmtHr(dayStartHr) + " – " + fmtHr(dayEndHr)),
-            ),
-
-            // All-day events
-            allDayEvts.length ? h("div", { style: { marginBottom: 8 }},
-              allDayEvts.map((ev, i) => h("div", { key: "ad" + i, style: { background: "#e0e7ff", borderRadius: 8, padding: "6px 12px", marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#4338ca", display: "flex", alignItems: "center", gap: 6 }},
-                h("span", null, "\u2605"),
-                h("span", null, ev.title),
-                h("span", { style: { fontSize: 10, opacity: 0.7 }}, "All day"),
-              ))
-            ) : null,
-
-            // Timeline
-            h("div", { style: { position: "relative", background: "white", borderRadius: 12, border: "1px solid #e2e8f0", overflow: "hidden" }},
-              // Hour grid lines
-              Array.from({ length: totalHrs + 1 }, (_, i) => h("div", { key: "hr" + i, style: {
-                position: "absolute", top: i * hrHeight, left: 0, right: 0, height: 1,
-                background: i === 0 || i === totalHrs ? "transparent" : "#f1f5f9",
-              }})),
-
-              // Hour labels
-              Array.from({ length: totalHrs }, (_, i) => h("div", { key: "lbl" + i, style: {
-                position: "absolute", top: i * hrHeight + 2, left: 6, fontSize: 10, color: "#94a3b8", fontWeight: 500, zIndex: 1,
-              }}, fmtHr(dayStartHr + i))),
-
-              // Free gaps (green subtle)
-              slots.filter(s => s.type === "free" && (s.endHr - s.startHr) >= 0.5).map((s, i) => {
-                const top = (s.startHr - dayStartHr) * hrHeight;
-                const height = (s.endHr - s.startHr) * hrHeight;
-                return h("div", { key: "free" + i, style: {
-                  position: "absolute", top, left: 50, right: 8, height: Math.max(height, 20),
-                  background: "#f0fdf4", borderRadius: 6, border: "1px dashed #bbf7d0",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 10, color: "#86efac", fontWeight: 600,
-                }}, height >= 30 ? "\u2713 Free" : null);
-              }),
-
-              // Event blocks
-              sortedTimed.map((ev, i) => {
-                const pos = evPos(ev);
-                const isPast = new Date(ev.end) < now;
-                return h("div", { key: ev.id || i, style: {
-                  position: "absolute", top: pos.top, left: 50, right: 8,
-                  height: Math.max(pos.height - 2, 24), minHeight: 24,
-                  background: isPast ? "#f1f5f9" : "#dbeafe", borderLeft: "3px solid " + (isPast ? "#94a3b8" : "#3b82f6"),
-                  borderRadius: 6, padding: "4px 8px", overflow: "hidden",
-                  opacity: isPast ? 0.6 : 1,
-                }},
-                  h("div", { style: { fontWeight: 600, fontSize: 12, color: isPast ? "#64748b" : "#1e293b", lineHeight: 1.3 }}, ev.title),
-                  pos.height > 28 ? h("div", { style: { fontSize: 10, color: isPast ? "#94a3b8" : "#2563eb", marginTop: 1 }},
-                    fmtT(ev.start) + " – " + fmtT(ev.end),
-                    ev.location ? " \u2022 \uD83D\uDCCD " + (typeof ev.location === "string" ? ev.location : ev.location.displayName || "") : "",
-                  ) : null,
-                );
-              }),
-
-              // Now indicator
-              showNow ? h("div", { style: {
-                position: "absolute", top: nowPos, left: 0, right: 0, height: 2,
-                background: "#ef4444", zIndex: 5,
-              }},
-                h("div", { style: { position: "absolute", left: 2, top: -5, width: 10, height: 10, borderRadius: "50%", background: "#ef4444" }}),
-                h("div", { style: { position: "absolute", right: 6, top: -8, fontSize: 9, fontWeight: 700, color: "#ef4444", background: "white", padding: "0 3px", borderRadius: 3 }}, "NOW"),
-              ) : null,
-
-              // Spacer for total height
-              h("div", { style: { height: totalHrs * hrHeight }}),
-            ),
-          );
-        })() : null,
         // Tasks
         filtered.length ? filtered.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => setModalTask(t) }))
         : h("div", { style: { textAlign: "center", padding: 60, color: "#94a3b8" }},
