@@ -47,20 +47,25 @@
     .stat-bar { gap: 6px !important; }
     .stat-box { padding: 6px 8px !important; min-width: 55px !important; }
     .stat-val { font-size: 16px !important; }
-    .header-actions { flex-direction: column; gap: 6px !important; }
-    .header-actions button { width: 100%; min-height: 44px; }
+    .header-actions { flex-direction: row; flex-wrap: wrap; gap: 6px !important; }
+    .header-actions button { flex: 1 1 auto; min-height: 44px; font-size: 12px !important; padding: 8px 10px !important; }
     .modal-box { max-width: 95vw; padding: 16px; border-radius: 16px; }
     .filter-bar { flex-direction: column; }
     .filter-bar select, .filter-bar input { width: 100%; }
     .task-row { padding: 10px 10px !important; }
     .task-badges { gap: 3px !important; }
+    .today-cal-event { flex-direction: column !important; align-items: flex-start !important; }
+    .today-cal-time { margin-left: 0 !important; margin-top: 4px; }
+    .sync-badge { font-size: 10px !important; }
   }
   @media (max-width: 380px) {
     .week-grid { grid-template-columns: repeat(2, 1fr) !important; }
     .stat-bar { flex-wrap: wrap; }
     .stat-box { flex: 1 1 45% !important; }
     .view-tabs { gap: 3px !important; }
-    .view-tabs button { font-size: 11px !important; padding: 4px 8px !important; }
+    .view-tabs button { font-size: 11px !important; padding: 6px 8px !important; }
+    .header-actions button { font-size: 11px !important; padding: 6px 8px !important; }
+    h1 { font-size: 18px !important; }
   }
   @media (orientation: landscape) and (max-height: 500px) {
     header { padding: 10px 14px !important; }
@@ -72,6 +77,10 @@
   @media (pointer: coarse) {
     button, select { min-height: 44px; }
     .task-check { width: 24px !important; height: 24px !important; }
+  }
+  /* iOS PWA standalone mode fixes */
+  @media (display-mode: standalone) {
+    body { padding-top: max(env(safe-area-inset-top), 20px); }
   }
 </style>
 </head>
@@ -874,31 +883,50 @@ function App() {
   }, [tasks]);
 
   // ─── Microsoft Auth (redirect flow for PWA compatibility) ─────────────────
+  // Helper: after sign-in, sync tasks AND fetch calendar
+  const runPostSignInSync = useCallback(async (account) => {
+    setAuthUser(account);
+    setSyncStatus("syncing");
+    try {
+      const merged = await fullSync(tasks, setTasksAndSave);
+      setTasksAndSave(merged);
+      setSyncStatus("synced");
+      // Also fetch calendar events for this week
+      const ref = new Date();
+      const wd = getWeekDates(ref.toISOString().split("T")[0]);
+      try {
+        const events = await fetchCalendarEvents(wd[0], wd[6]);
+        setCalendarEvents(prev => {
+          const newEvts = events.filter(e => !prev.find(pe => pe.id === e.id));
+          return [...prev, ...newEvts];
+        });
+      } catch(ce) { console.warn("Calendar fetch:", ce); }
+    } catch(e) {
+      console.error("Sync error:", e);
+      setSyncStatus("offline");
+    }
+  }, [tasks, setTasksAndSave]);
+
   // Wait for handleRedirectPromise, THEN check for accounts
   useEffect(() => {
     if (!msalInstance) return;
     const init = async () => {
       try {
-        // First, handle any redirect response (returns null if not returning from redirect)
         const resp = msalRedirectResult ? await msalRedirectResult : null;
         if (resp && resp.account) {
-          setAuthUser(resp.account);
-          setSyncStatus("synced");
+          runPostSignInSync(resp.account);
           return;
         }
-        // If not returning from redirect, check for existing cached accounts
+        // Check for existing cached accounts
         const accounts = msalInstance.getAllAccounts();
         if (accounts.length > 0) {
-          setAuthUser(accounts[0]);
-          setSyncStatus("synced");
+          runPostSignInSync(accounts[0]);
         }
       } catch(e) {
         console.warn("MSAL init:", e);
-        // Still check for cached accounts on error
         const accounts = msalInstance.getAllAccounts();
         if (accounts.length > 0) {
-          setAuthUser(accounts[0]);
-          setSyncStatus("synced");
+          runPostSignInSync(accounts[0]);
         }
       }
     };
