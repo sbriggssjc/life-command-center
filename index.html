@@ -1368,6 +1368,37 @@ function App() {
           h("button", { onClick: () => setModalTask({}), style: hdrBtn("#2563eb") }, "+ Add Task"),
         ),
 
+        // Mobile quick-action row — sync/import/export always visible
+        isMobile ? h("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }},
+          authUser ? h("button", { onClick: handleSync, style: { ...hdrBtn("rgba(59,130,246,0.25)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Sync Microsoft To Do" }, "\u{1F504} Sync") : null,
+          h("button", { onClick: async () => {
+            if (window.showOpenFilePicker) {
+              try {
+                const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }], startIn: "documents" });
+                await saveSyncHandle(handle);
+                const f = await handle.getFile();
+                processSyncData(await f.text(), "manual");
+                return;
+              } catch(err) { /* cancelled or not supported */ }
+            }
+            syncRef.current?.click();
+          }, style: { ...hdrBtn("rgba(37,99,235,0.2)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Import To Do JSON" }, "\u{1F4CB} To Do"),
+          h("button", { onClick: async () => {
+            if (window.showOpenFilePicker) {
+              try {
+                const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }], startIn: "documents" });
+                await saveSyncHandle(handle, IDB_KEY_CALENDAR);
+                const f = await handle.getFile();
+                processCalendarData(await f.text(), "manual");
+                return;
+              } catch(err) { /* cancelled or not supported */ }
+            }
+            calSyncRef.current?.click();
+          }, style: { ...hdrBtn("rgba(217,119,6,0.25)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Import Calendar JSON" }, "\u{1F4C5} Calendar"),
+          h("button", { onClick: () => fileRef.current?.click(), style: { ...hdrBtn("rgba(67,56,202,0.2)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Import data backup" }, "\u{1F4E5} Import"),
+          h("button", { onClick: exportData, style: { ...hdrBtn("rgba(67,56,202,0.2)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Export data backup" }, "\u{1F4E4} Export"),
+        ) : null,
+
         // Stats
         h("div", { className: "stat-bar", style: { display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }},
           [
@@ -1479,7 +1510,15 @@ function App() {
                     processCalendarData(await file.text(), "manual");
                   } catch(err) {}
                 }, style: { background: "#d97706", border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "white" }}, "\u{1F517} Link Calendar Sync File")
-              : null,
+              : h("button", { onClick: () => calSyncRef.current?.click(), style: { background: "#d97706", border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "white" }}, "\u{1F4C2} Select Calendar File"),
+            h("input", { ref: calSyncRef, type: "file", accept: ".json", onChange: (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = (ev) => processCalendarData(ev.target.result, "manual");
+              reader.readAsText(file);
+              e.target.value = "";
+            }, style: { display: "none" }}),
             h("button", { onClick: async () => { await clearSyncHandle(IDB_KEY_CALENDAR); setCalendarEvents([]); setCalSyncResult({ count: 0, unlinked: true }); setTimeout(() => setCalSyncResult(null), 4000); }, style: { background: "transparent", border: "1px solid #cbd5e1", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 12, color: "#64748b" }}, "Unlink"),
             calSyncResult ? h("span", { style: { fontSize: 12, color: calSyncResult.unlinked ? "#dc2626" : "#059669", fontWeight: 600 }},
               calSyncResult.unlinked ? "\u274C Calendar unlinked" : (calSyncResult.auto ? "\u26A1 " : "\u2705 ") + calSyncResult.count + " events loaded" + (calSyncResult.auto ? " (auto-sync)" : "")
