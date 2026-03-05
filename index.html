@@ -997,6 +997,19 @@ function App() {
     try {
       const merged = await fullSync(tasks, setTasksAndSave);
       setTasksAndSave(merged);
+      // Also refresh calendar events
+      try {
+        const today = todayStr();
+        const twoWeeksOut = new Date();
+        twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
+        const endDate = twoWeeksOut.toISOString().split("T")[0];
+        const events = await fetchCalendarEvents(today, endDate);
+        setCalendarEvents(prev => {
+          const existingIds = new Set(prev.map(e => e.id));
+          const newEvts = events.filter(e => !existingIds.has(e.id));
+          return newEvts.length ? [...prev, ...newEvts] : prev;
+        });
+      } catch(ce) { console.warn("Calendar fetch during sync:", ce); }
       setSyncStatus("synced");
       showToast("Synced successfully");
     } catch(e) {
@@ -1100,6 +1113,25 @@ function App() {
       } catch(err) {}
     })();
   }, [processCalendarData]);
+
+  // Fetch calendar from Graph API on app load (covers mobile where file handles don't work)
+  useEffect(() => {
+    if (!authUser) return;
+    (async () => {
+      try {
+        const today = todayStr();
+        const twoWeeksOut = new Date();
+        twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
+        const endDate = twoWeeksOut.toISOString().split("T")[0];
+        const events = await fetchCalendarEvents(today, endDate);
+        setCalendarEvents(prev => {
+          const existingIds = new Set(prev.map(e => e.id));
+          const newEvts = events.filter(e => !existingIds.has(e.id));
+          return newEvts.length ? [...prev, ...newEvts] : prev;
+        });
+      } catch(e) { console.warn("Graph calendar auto-fetch:", e); }
+    })();
+  }, [authUser]);
 
   // Browser Notifications
   useEffect(() => {
