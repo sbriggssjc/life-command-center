@@ -344,6 +344,14 @@ function mergeToDoTasks(existingTasks, todoItems) {
 const STORAGE_KEY = "life-command-center";
 const MS_CONFIG_KEY = "lcc-ms-config";
 const SYNC_QUEUE_KEY = "lcc-sync-queue";
+const CAL_EVENTS_KEY = "lcc-calendar-events";
+
+function loadCalendarEvents() {
+  try { const s = localStorage.getItem(CAL_EVENTS_KEY); return s ? JSON.parse(s) : []; } catch { return []; }
+}
+function saveCalendarEvents(events) {
+  try { localStorage.setItem(CAL_EVENTS_KEY, JSON.stringify(events)); } catch {}
+}
 
 function loadSaved() {
   try {
@@ -901,13 +909,16 @@ function App() {
   const [authUser, setAuthUser] = useState(null);
   const [syncStatus, setSyncStatus] = useState("signed-out"); // signed-out, syncing, synced, offline
   const [toastMsg, setToastMsg] = useState("");
-  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [calendarEvents, setCalendarEvents] = useState(() => loadCalendarEvents());
   const [syncResult, setSyncResult] = useState(null); // { added, skipped } or null
   const [calSyncResult, setCalSyncResult] = useState(null);
   const fileRef = useRef(null);
   const syncRef = useRef(null);
   const calSyncRef = useRef(null);
   const toastTimer = useRef(null);
+
+  // Persist calendar events to localStorage (survives page reload on mobile)
+  useEffect(() => { if (calendarEvents.length) saveCalendarEvents(calendarEvents); }, [calendarEvents]);
 
   // Track mobile viewport
   useEffect(() => {
@@ -1580,7 +1591,7 @@ function App() {
             e.target.value = "";
           }, style: { display: "none" }}),
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }},
-            h("button", { onClick: async () => { await clearSyncHandle(IDB_KEY_CALENDAR); setCalendarEvents([]); setCalSyncResult({ count: 0, unlinked: true }); setTimeout(() => setCalSyncResult(null), 4000); }, style: { background: "transparent", border: "1px solid #cbd5e1", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 12, color: "#64748b" }}, "Unlink"),
+            h("button", { onClick: async () => { await clearSyncHandle(IDB_KEY_CALENDAR); setCalendarEvents([]); saveCalendarEvents([]); setCalSyncResult({ count: 0, unlinked: true }); setTimeout(() => setCalSyncResult(null), 4000); }, style: { background: "transparent", border: "1px solid #cbd5e1", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 12, color: "#64748b" }}, "Unlink"),
             calSyncResult ? h("span", { style: { fontSize: 12, color: calSyncResult.unlinked ? "#dc2626" : "#059669", fontWeight: 600 }},
               calSyncResult.unlinked ? "\u274C Calendar unlinked" : (calSyncResult.auto ? "\u26A1 " : "\u2705 ") + calSyncResult.count + " events loaded" + (calSyncResult.auto ? " (auto-sync)" : "")
             ) : null,
