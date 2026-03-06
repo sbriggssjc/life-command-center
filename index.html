@@ -345,12 +345,64 @@ const STORAGE_KEY = "life-command-center";
 const MS_CONFIG_KEY = "lcc-ms-config";
 const SYNC_QUEUE_KEY = "lcc-sync-queue";
 const CAL_EVENTS_KEY = "lcc-calendar-events";
+const IDB_CAL_KEY = "calendarEventsCache";
+const CAL_TIMESTAMP_KEY = "lcc-calendar-ts";
 
 function loadCalendarEvents() {
   try { const s = localStorage.getItem(CAL_EVENTS_KEY); return s ? JSON.parse(s) : []; } catch { return []; }
 }
 function saveCalendarEvents(events) {
   try { localStorage.setItem(CAL_EVENTS_KEY, JSON.stringify(events)); } catch {}
+  // Also save to IndexedDB for better iOS persistence
+  try { saveCalendarToIDB(events); } catch {}
+}
+
+async function saveCalendarToIDB(events) {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put({ events, ts: Date.now() }, IDB_CAL_KEY);
+    return new Promise(r => { tx.oncomplete = r; tx.onerror = r; });
+  } catch {}
+}
+
+async function loadCalendarFromIDB() {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const req = tx.objectStore(IDB_STORE).get(IDB_CAL_KEY);
+    return new Promise(r => { req.onsuccess = () => r(req.result || null); req.onerror = () => r(null); });
+  } catch { return null; }
+}
+
+// Try silent Graph API calendar fetch without waiting for authUser state
+async function trySilentCalendarFetch() {
+  if (!msalInstance) return null;
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) return null;
+  try {
+    const resp = await msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: accounts[0] });
+    if (!resp?.accessToken) return null;
+    const today = todayStr();
+    const twoWeeksOut = new Date();
+    twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
+    const endDate = toLocalDate(twoWeeksOut);
+    const start = today + "T00:00:00.000Z";
+    const end = endDate + "T23:59:59.999Z";
+    const url = GRAPH_BASE + "/me/calendarView?startDateTime=" + encodeURIComponent(start) +
+      "&endDateTime=" + encodeURIComponent(end) + "&$top=100&$select=subject,start,end,location,isAllDay,organizer";
+    const r = await fetch(url, { headers: { Authorization: "Bearer " + resp.accessToken } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    return (data.value || []).map(ev => ({
+      id: ev.id,
+      title: ev.subject || "No title",
+      start: ev.start?.dateTime,
+      end: ev.end?.dateTime,
+      isAllDay: ev.isAllDay || false,
+      location: ev.location?.displayName || "",
+    }));
+  } catch(e) { console.warn("Silent calendar fetch:", e); return null; }
 }
 
 function loadSaved() {
@@ -917,8 +969,23 @@ function App() {
   const calSyncRef = useRef(null);
   const toastTimer = useRef(null);
 
-  // Persist calendar events to localStorage (survives page reload on mobile)
+  // Persist calendar events to localStorage + IndexedDB (survives page reload on mobile)
   useEffect(() => { if (calendarEvents.length) saveCalendarEvents(calendarEvents); }, [calendarEvents]);
+
+  // On load: restore calendar from IndexedDB if localStorage was cleared (iOS PWA fix)
+  useEffect(() => {
+    if (calendarEvents.length > 0) return; // Already have data from localStorage
+    (async () => {
+      try {
+        const cached = await loadCalendarFromIDB();
+        if (cached && cached.events && cached.events.length > 0) {
+          setCalendarEvents(cached.events);
+          setCalSyncResult({ count: cached.events.length, auto: true });
+          setTimeout(() => setCalSyncResult(null), 5000);
+        }
+      } catch {}
+    })();
+  }, []);
 
   // Track mobile viewport
   useEffect(() => {
@@ -1153,6 +1220,7 @@ function App() {
   }, [processCalendarData]);
 
   // Fetch calendar from Graph API on app load (covers mobile where file handles don't work)
+  // Fires when authUser changes OR on initial load via silent token acquisition
   useEffect(() => {
     if (!authUser) return;
     (async () => {
@@ -1170,6 +1238,24 @@ function App() {
       } catch(e) { console.warn("Graph calendar auto-fetch:", e); }
     })();
   }, [authUser]);
+
+  // Aggressive silent calendar fetch on load — works even if authUser state hasn't been set yet
+  // This is the key fix for iPhone: tries to get a silent token and fetch calendar immediately
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      // Only run if we don't already have fresh calendar data
+      if (calendarEvents.length > 0) return;
+      try {
+        const events = await trySilentCalendarFetch();
+        if (events && events.length > 0) {
+          setCalendarEvents(events);
+          setCalSyncResult({ count: events.length, auto: true });
+          setTimeout(() => setCalSyncResult(null), 5000);
+        }
+      } catch {}
+    }, 1500); // Small delay to let MSAL init complete
+    return () => clearTimeout(timer);
+  }, []);
 
   // Browser Notifications
   useEffect(() => {
@@ -1454,6 +1540,20 @@ function App() {
             syncRef.current?.click();
           }, style: { ...hdrBtn("rgba(37,99,235,0.2)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Import To Do JSON" }, "\u{1F4CB} To Do"),
           h("button", { onClick: async () => {
+            // On mobile with MS sign-in, just trigger a calendar refresh
+            if (authUser) {
+              try {
+                const today = todayStr();
+                const twoWeeksOut = new Date();
+                twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
+                const endDate = toLocalDate(twoWeeksOut);
+                const events = await fetchCalendarEvents(today, endDate);
+                setCalendarEvents(events);
+                showToast("\u{1F4C5} " + events.length + " calendar events loaded");
+              } catch(e) { showToast("Calendar refresh failed"); }
+              return;
+            }
+            // On desktop, use file picker
             if (window.showOpenFilePicker) {
               try {
                 const [handle] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }], startIn: "documents" });
@@ -1463,8 +1563,13 @@ function App() {
                 return;
               } catch(err) { /* cancelled or not supported */ }
             }
+            // On mobile without sign-in, prompt to sign in
+            if (!window.showOpenFilePicker && !authUser) {
+              showToast("Sign in with Microsoft to auto-sync calendar");
+              return;
+            }
             calSyncRef.current?.click();
-          }, style: { ...hdrBtn("rgba(217,119,6,0.25)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Import Calendar JSON" }, "\u{1F4C5} Calendar"),
+          }, style: { ...hdrBtn("rgba(217,119,6,0.25)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: authUser ? "Refresh Calendar" : "Import Calendar JSON" }, authUser ? "\u{1F4C5} Refresh Cal" : "\u{1F4C5} Calendar"),
           h("button", { onClick: () => fileRef.current?.click(), style: { ...hdrBtn("rgba(67,56,202,0.2)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Import data backup" }, "\u{1F4E5} Import"),
           h("button", { onClick: exportData, style: { ...hdrBtn("rgba(67,56,202,0.2)"), flex: "1 1 0", fontSize: 11, padding: "7px 6px" }, title: "Export data backup" }, "\u{1F4E4} Export"),
         ) : null,
@@ -1569,8 +1674,11 @@ function App() {
 
         // Calendar Sync
         h("div", { style: { marginBottom: 18, padding: 16, background: "#fffbeb", borderRadius: 10, border: "1px solid #fde68a" }},
-          h("div", { style: { fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}, "\u{1F4C5} Sync from Outlook Calendar"),
-          h("div", { style: { fontSize: 12, color: "#b45309", marginBottom: 10, lineHeight: 1.5 }}, "Link your calendar-sync.json file to see upcoming events. Power Automate refreshes this hourly."),
+          h("div", { style: { fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}, "\u{1F4C5} Outlook Calendar"),
+          authUser
+            ? h("div", { style: { fontSize: 12, color: "#059669", marginBottom: 10, lineHeight: 1.5, fontWeight: 600 }}, "\u2705 Calendar auto-syncs from Outlook via Microsoft sign-in. " + calendarEvents.length + " events loaded.")
+            : h("div", { style: { fontSize: 12, color: "#b45309", marginBottom: 10, lineHeight: 1.5 }}, "Sign in with Microsoft above to auto-sync calendar events. On iPhone, calendar loads automatically when signed in \u2014 no file upload needed."),
+          !authUser ? h("div", { style: { fontSize: 12, color: "#b45309", marginBottom: 10, lineHeight: 1.5, borderTop: "1px solid #fde68a", paddingTop: 8 }}, "Or link a calendar-sync.json file (desktop only):") : null,
           h("button", { onClick: async () => {
             if (window.showOpenFilePicker) {
               try {
