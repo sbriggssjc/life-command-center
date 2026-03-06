@@ -1047,9 +1047,9 @@ function PropertyIntelPanel({ task }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [expanded, setExpanded] = useState(true); // auto-expand
+  const [expanded, setExpanded] = useState(true);
+  const [activeTab, setActiveTab] = useState("briefing");
 
-  // Detect property from smart tags OR directly from title pattern
   const sfTag = task?.smartTags?.find(t => t.type === "sf_property");
   const titleMatch = !sfTag && task?.title ? task.title.match(/^(.+?)\s+-\s+([A-Za-z\s.]+),\s+([A-Z]{2})$/) : null;
   const propName = sfTag ? sfTag.value : titleMatch ? titleMatch[1].trim() : null;
@@ -1074,8 +1074,352 @@ function PropertyIntelPanel({ task }) {
 
   useEffect(() => { if (expanded && !data && !loading) fetchEnrichment(); }, [expanded]);
 
-  const sec = (label, icon) => h("div", { style: { fontWeight: 700, fontSize: 12, color: "#475569", marginTop: 12, marginBottom: 4, display: "flex", alignItems: "center", gap: 4 } }, icon + " " + label);
-  const row = (k, v) => v ? h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, padding: "2px 0", color: "#334155" } }, h("span", { style: { color: "#64748b" } }, k), h("span", { style: { fontWeight: 500 } }, String(v))) : null;
+  const sec = (label, icon) => h("div", { style: { fontWeight: 700, fontSize: 12, color: "#475569", marginTop: 14, marginBottom: 6, display: "flex", alignItems: "center", gap: 4, borderBottom: "1px solid #e2e8f0", paddingBottom: 4 } }, icon + " " + label);
+  const row = (k, v) => v != null && v !== "" ? h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, padding: "2px 0", color: "#334155" } }, h("span", { style: { color: "#64748b", minWidth: 110, flexShrink: 0 } }, k), h("span", { style: { fontWeight: 500, textAlign: "right" } }, String(v))) : null;
+  const badge = (text, bg, fg) => h("span", { style: { display: "inline-block", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: bg, color: fg, marginRight: 4 } }, text);
+  const card = (children, bgColor) => h("div", { style: { background: bgColor || "#f8fafc", borderRadius: 6, padding: 8, marginBottom: 6, border: "1px solid " + (bgColor === "#fefce8" ? "#fef08a" : bgColor === "#f0fdf4" ? "#dcfce7" : "#f1f5f9") } }, children);
+  const fmtPrice = (v) => v ? "$" + Number(v).toLocaleString() : null;
+  const fmtDate = (v) => v ? new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null;
+
+  const tabs = [
+    { id: "briefing", label: "Briefing", icon: "\uD83C\uDFAF" },
+    { id: "owner", label: "Owner", icon: "\uD83D\uDC64" },
+    { id: "leases", label: "Leases", icon: "\uD83D\uDCC4" },
+    { id: "sales", label: "Sales", icon: "\uD83D\uDCB0" },
+    { id: "market", label: "Market", icon: "\uD83D\uDCC8" },
+  ];
+
+  const tabBar = h("div", { style: { display: "flex", gap: 2, marginBottom: 10, borderBottom: "1px solid #e2e8f0", paddingBottom: 0 } },
+    tabs.map(t => h("button", {
+      key: t.id,
+      onClick: () => setActiveTab(t.id),
+      style: { padding: "6px 10px", fontSize: 11, fontWeight: activeTab === t.id ? 700 : 400, color: activeTab === t.id ? "#4338ca" : "#64748b", background: "none", border: "none", borderBottom: activeTab === t.id ? "2px solid #4338ca" : "2px solid transparent", cursor: "pointer", marginBottom: -1 }
+    }, t.icon + " " + t.label))
+  );
+
+  // ---- TAB: Briefing (pre-call summary) ----
+  const renderBriefing = () => {
+    const p = data.dialysis_property || data.government_property;
+    const owner = data.true_owner;
+    const contacts = [...(data.owner_contacts || data.contacts || []), ...(data.government_contacts || [])];
+    const topLease = (data.leases || [])[0];
+    const topSale = (data.sales_transactions || [])[0];
+    const target = data.investment_target;
+    return h("div", null,
+      // Property header
+      p ? card(h("div", null,
+        h("div", { style: { fontWeight: 700, fontSize: 13, color: "#1e293b", marginBottom: 4 } }, p.tenant || p.building_name || p.address),
+        h("div", { style: { fontSize: 11, color: "#64748b" } }, (p.address || "") + " \u2022 " + (p.city || "") + ", " + (p.state || "") + " " + (p.zip_code || "")),
+        h("div", { style: { display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" } },
+          p.building_size ? badge(Number(p.building_size).toLocaleString() + " SF", "#dbeafe", "#1e40af") : null,
+          p.year_built ? badge("Built " + p.year_built, "#e0e7ff", "#4338ca") : null,
+          p.sf_leased ? badge(Number(p.sf_leased).toLocaleString() + " SF Leased", "#dbeafe", "#1e40af") : null,
+          data.dialysis_property ? badge("Dialysis DB", "#fef3c7", "#92400e") : null,
+          data.government_property ? badge("Gov DB", "#d1fae5", "#065f46") : null,
+        ),
+      )) : h("div", { style: { color: "#94a3b8", padding: 8 } }, "No property data found"),
+
+      // Owner quick look
+      owner ? h("div", null,
+        sec("Owner Profile", "\uD83D\uDC64"),
+        card(h("div", null,
+          h("div", { style: { fontWeight: 700, fontSize: 13, color: "#1e293b" } }, owner.name),
+          h("div", { style: { display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" } },
+            owner.owner_type ? badge(owner.owner_type, "#f3e8ff", "#7c3aed") : null,
+            owner.likely_to_sell ? badge("LIKELY SELLER", "#fef2f2", "#dc2626") : null,
+            owner.is_repeat_buyer ? badge("REPEAT BUYER", "#dcfce7", "#16a34a") : null,
+            owner.recent_seller ? badge("RECENT SELLER", "#fff7ed", "#ea580c") : null,
+            owner.is_developer ? badge("DEVELOPER", "#e0e7ff", "#4338ca") : null,
+            owner.is_prospect ? badge("PROSPECT", "#dbeafe", "#1d4ed8") : null,
+          ),
+          h("div", { style: { display: "flex", gap: 16, marginTop: 8, fontSize: 11 } },
+            h("div", null, h("div", { style: { color: "#64748b" } }, "Currently Owns"), h("div", { style: { fontWeight: 700, fontSize: 15, color: "#1e293b" } }, owner.current_ownership_count || owner.current_property_count || 0)),
+            h("div", null, h("div", { style: { color: "#64748b" } }, "Acquisitions"), h("div", { style: { fontWeight: 700, fontSize: 15, color: "#16a34a" } }, owner.acquisition_count || 0)),
+            h("div", null, h("div", { style: { color: "#64748b" } }, "Dispositions"), h("div", { style: { fontWeight: 700, fontSize: 15, color: "#dc2626" } }, owner.disposition_count || 0)),
+            owner.avg_hold_duration_months ? h("div", null, h("div", { style: { color: "#64748b" } }, "Avg Hold"), h("div", { style: { fontWeight: 700, fontSize: 15 } }, Math.round(owner.avg_hold_duration_months) + " mo")) : null,
+          ),
+          owner.ownership_pattern ? h("div", { style: { fontSize: 11, color: "#64748b", marginTop: 6 } }, "Pattern: " + owner.ownership_pattern) : null,
+          owner.state_focus ? h("div", { style: { fontSize: 11, color: "#64748b" } }, "State focus: " + (Array.isArray(owner.state_focus) ? owner.state_focus.join(", ") : owner.state_focus)) : null,
+          owner.tenant_focus ? h("div", { style: { fontSize: 11, color: "#64748b" } }, "Tenant focus: " + (Array.isArray(owner.tenant_focus) ? owner.tenant_focus.join(", ") : owner.tenant_focus)) : null,
+          owner.disposition_strategy ? h("div", { style: { fontSize: 11, color: "#64748b" } }, "Disposition strategy: " + owner.disposition_strategy) : null,
+          owner.latest_note_summary ? h("div", { style: { fontSize: 11, color: "#475569", marginTop: 6, fontStyle: "italic", background: "#fefce8", padding: "4px 6px", borderRadius: 4 } }, "\uD83D\uDCDD " + owner.latest_note_summary) : null,
+        ))
+      ) : null,
+
+      // Key contacts
+      contacts.length > 0 ? h("div", null,
+        sec("Key Contacts", "\uD83D\uDCDE"),
+        contacts.slice(0, 5).map((c, i) => card(h("div", { key: i },
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+            h("div", null,
+              h("span", { style: { fontWeight: 700, fontSize: 12 } }, c.contact_name || ((c.first_name || "") + " " + (c.last_name || "")).trim()),
+              c.title ? h("span", { style: { color: "#64748b", fontSize: 11, marginLeft: 6 } }, c.title) : null,
+              c.role ? h("span", { style: { color: "#64748b", fontSize: 11, marginLeft: 4 } }, "(" + c.role + ")") : null,
+            ),
+            c.is_repeat_buyer ? badge("Repeat", "#dcfce7", "#16a34a") : null,
+          ),
+          h("div", { style: { display: "flex", gap: 12, marginTop: 4, fontSize: 11 } },
+            c.contact_phone ? h("span", { style: { color: "#1d4ed8" } }, "\uD83D\uDCDE " + c.contact_phone) : null,
+            c.contact_email ? h("span", { style: { color: "#1d4ed8" } }, "\u2709\uFE0F " + c.contact_email) : null,
+          ),
+          (c.company || c.buy_count || c.avg_deal_size) ? h("div", { style: { display: "flex", gap: 12, marginTop: 3, fontSize: 11, color: "#64748b" } },
+            c.company ? h("span", null, c.company) : null,
+            c.buy_count ? h("span", null, c.buy_count + " purchases") : null,
+            c.avg_deal_size ? h("span", null, "Avg deal: " + fmtPrice(c.avg_deal_size)) : null,
+          ) : null,
+          c.latest_note_summary ? h("div", { style: { fontSize: 11, color: "#475569", marginTop: 4, fontStyle: "italic", background: "#fefce8", padding: "3px 6px", borderRadius: 4 } }, "\uD83D\uDCDD " + c.latest_note_summary) : null,
+        )))
+      ) : null,
+
+      // Quick lease + sale snapshot
+      (topLease || topSale) ? h("div", null,
+        sec("Quick Snapshot", "\u26A1"),
+        topLease ? card(h("div", null,
+          row("Current Tenant", topLease.tenant),
+          row("Lease Expires", fmtDate(topLease.lease_expiration)),
+          topLease.lease_expiration_risk ? h("div", { style: { marginTop: 2 } }, badge("Risk: " + topLease.lease_expiration_risk, topLease.lease_expiration_risk === "high" ? "#fef2f2" : "#fefce8", topLease.lease_expiration_risk === "high" ? "#dc2626" : "#a16207")) : null,
+          row("Rent", topLease.rent ? fmtPrice(topLease.rent) + "/yr" : null),
+          row("Rent/SF", topLease.rent_per_sf ? "$" + Number(topLease.rent_per_sf).toFixed(2) : null),
+          row("Cap Rate", topLease.current_cap_rate || topLease.cap_rate ? (Number(topLease.current_cap_rate || topLease.cap_rate) * (Number(topLease.current_cap_rate || topLease.cap_rate) < 1 ? 100 : 1)).toFixed(2) + "%" : null),
+          row("Escalation", topLease.escalation_direction),
+        )) : null,
+        topSale ? card(h("div", null,
+          row("Last Sale", fmtDate(topSale.sale_date)),
+          row("Sale Price", fmtPrice(topSale.sold_price)),
+          row("Cap Rate", topSale.cap_rate ? Number(topSale.cap_rate).toFixed(2) + "%" : null),
+          row("Buyer", topSale.buyer_name),
+          row("Seller", topSale.seller_name),
+        )) : null,
+      ) : null,
+
+      // Investment target flags
+      target ? h("div", null,
+        sec("Investment Target", "\uD83C\uDFAF"),
+        h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } },
+          badge("Score: " + (target.target_score || 0), "#e0e7ff", "#4338ca"),
+          target.high_revenue_flag ? badge("High Revenue", "#dcfce7", "#16a34a") : null,
+          target.high_profit_flag ? badge("High Profit", "#dcfce7", "#16a34a") : null,
+          target.growth_flag ? badge("Growth", "#dbeafe", "#1d4ed8") : null,
+          target.expansion_flag ? badge("Expansion", "#fef3c7", "#92400e") : null,
+          target.developer_flag ? badge("Developer", "#f3e8ff", "#7c3aed") : null,
+        ),
+      ) : null,
+    );
+  };
+
+  // ---- TAB: Owner Portfolio ----
+  const renderOwner = () => {
+    const owner = data.true_owner;
+    const portfolio = data.owner_portfolio;
+    const recOwners = data.recorded_owners || [];
+    if (!owner && !portfolio && recOwners.length === 0) return h("div", { style: { color: "#94a3b8", padding: 12 } }, "No owner data available");
+    return h("div", null,
+      // Full owner details
+      owner ? h("div", null,
+        sec("True Owner Details", "\uD83C\uDFE0"),
+        card(h("div", null,
+          row("Name", owner.name),
+          row("Type", owner.owner_type),
+          row("Priority", owner.priority_level),
+          row("Address", [owner.notice_address_1, owner.notice_address_2].filter(Boolean).join(", ")),
+          row("City/State", owner.city && owner.state ? owner.city + ", " + owner.state : null),
+          row("Contact 1", owner.contact_1_name),
+          row("Contact 2", owner.contact_2_name),
+          row("Last Acquisition", fmtDate(owner.last_acquisition_date)),
+          row("Last Sale", fmtDate(owner.last_sale_date)),
+          row("CRM Opportunities", owner.crm_opportunity_count),
+          row("Salesforce ID", owner.salesforce_id),
+        )),
+      ) : null,
+
+      // Recorded owners (entities)
+      recOwners.length > 0 ? h("div", null,
+        sec("Recorded Entities", "\uD83D\uDCC3"),
+        recOwners.map((r, i) => card(h("div", { key: i },
+          row("Entity Name", r.name),
+          row("Address", r.address),
+          row("City/State", r.city && r.state ? r.city + ", " + r.state : null),
+          row("State of Inc.", r.state_of_incorporation),
+          row("Registered Agent", r.registered_agent_name),
+          row("Agent Address", r.registered_agent_address),
+        )))
+      ) : null,
+
+      // Portfolio - other properties
+      portfolio && portfolio.properties && portfolio.properties.length > 0 ? h("div", null,
+        sec("Owner Portfolio (" + portfolio.properties.length + " properties)", "\uD83D\uDCCA"),
+        portfolio.properties.map((p, i) => {
+          const owRec = (portfolio.ownership_records || []).find(o => o.property_id === p.property_id);
+          return card(h("div", { key: i },
+            h("div", { style: { fontWeight: 600, fontSize: 12 } }, p.tenant || p.building_name || p.address),
+            h("div", { style: { fontSize: 11, color: "#64748b" } }, (p.city || "") + ", " + (p.state || "") + (p.building_size ? " \u2022 " + Number(p.building_size).toLocaleString() + " SF" : "")),
+            owRec ? h("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 } },
+              owRec.sold_price ? "Sold: " + fmtPrice(owRec.sold_price) : null,
+              owRec.cap_rate ? " \u2022 Cap: " + Number(owRec.cap_rate).toFixed(2) + "%" : null,
+              owRec.ownership_start ? " \u2022 Since: " + fmtDate(owRec.ownership_start) : owRec.start_date ? " \u2022 Since: " + fmtDate(owRec.start_date) : null,
+            ) : null,
+          ));
+        })
+      ) : null,
+    );
+  };
+
+  // ---- TAB: Leases ----
+  const renderLeases = () => {
+    const leases = data.leases || [];
+    const gsaLeases = data.gsa_leases || [];
+    if (leases.length === 0 && gsaLeases.length === 0) return h("div", { style: { color: "#94a3b8", padding: 12 } }, "No lease data available");
+    return h("div", null,
+      leases.length > 0 ? h("div", null,
+        sec("Dialysis Leases (" + leases.length + ")", "\uD83D\uDCC4"),
+        leases.map((l, i) => card(h("div", { key: i },
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
+            h("span", { style: { fontWeight: 700, fontSize: 12 } }, l.tenant || "Lease #" + (i + 1)),
+            l.is_active ? badge("Active", "#dcfce7", "#16a34a") : l.status ? badge(l.status, "#f1f5f9", "#475569") : null,
+          ),
+          row("Lease Start", fmtDate(l.lease_start)),
+          row("Lease Expiration", fmtDate(l.lease_expiration)),
+          l.lease_expiration_risk ? h("div", { style: { margin: "2px 0" } }, row("Expiration Risk", l.lease_expiration_risk)) : null,
+          row("Rent", l.rent ? fmtPrice(l.rent) + "/yr" : null),
+          row("Rent/SF", l.rent_per_sf ? "$" + Number(l.rent_per_sf).toFixed(2) : null),
+          row("Leased Area", l.leased_area || l.sqft ? Number(l.leased_area || l.sqft).toLocaleString() + " SF" : null),
+          row("Cap Rate", l.current_cap_rate || l.cap_rate ? (Number(l.current_cap_rate || l.cap_rate)).toFixed(2) + "%" : null),
+          row("Escalation", l.escalation_direction),
+          row("Expense Structure", l.expense_structure),
+          row("Guarantor", l.guarantor),
+          row("Operator", l.operator),
+          row("Renewal Options", l.renewal_option_text || l.renewal_options),
+          row("Extension", l.extension_option),
+          (l.roof_responsibility || l.hvac_responsibility) ? h("div", { style: { marginTop: 4, fontSize: 11, color: "#64748b" } },
+            "Responsibilities: ",
+            [l.roof_responsibility ? "Roof:" + l.roof_responsibility : null, l.hvac_responsibility ? "HVAC:" + l.hvac_responsibility : null, l.structure_responsibility ? "Structure:" + l.structure_responsibility : null, l.parking_responsibility ? "Parking:" + l.parking_responsibility : null].filter(Boolean).join(" \u2022 ")
+          ) : null,
+          l.repositioning_suggestion ? h("div", { style: { fontSize: 11, color: "#7c3aed", marginTop: 4, fontStyle: "italic" } }, "\uD83D\uDCA1 " + l.repositioning_suggestion) : null,
+        )))
+      ) : null,
+
+      gsaLeases.length > 0 ? h("div", null,
+        sec("GSA Leases (" + gsaLeases.length + ")", "\uD83C\uDFDB\uFE0F"),
+        gsaLeases.map((g, i) => card(h("div", { key: i },
+          row("Agency", g.agency || g.tenant_agency),
+          row("Lease #", g.lease_number),
+          row("Expiration", fmtDate(g.lease_expiration_date || g.expiration_date)),
+          row("Annual Rent", g.annual_rent ? fmtPrice(g.annual_rent) : null),
+          row("SF Leased", g.sf_leased ? Number(g.sf_leased).toLocaleString() : null),
+        ), "#f0fdf4"))
+      ) : null,
+    );
+  };
+
+  // ---- TAB: Sales ----
+  const renderSales = () => {
+    const sales = data.sales_transactions || [];
+    const ownershipHist = data.ownership_history || [];
+    const listings = data.available_listings || [];
+    return h("div", null,
+      sales.length > 0 ? h("div", null,
+        sec("Sales Transactions (" + sales.length + ")", "\uD83D\uDCB0"),
+        sales.map((s, i) => card(h("div", { key: i },
+          h("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 4 } },
+            h("span", { style: { fontWeight: 700, fontSize: 12 } }, fmtDate(s.sale_date) || "Unknown date"),
+            s.sold_price ? h("span", { style: { fontWeight: 700, fontSize: 13, color: "#16a34a" } }, fmtPrice(s.sold_price)) : null,
+          ),
+          row("Buyer", s.buyer_name),
+          row("Buyer Type", s.buyer_type),
+          row("Seller", s.seller_name),
+          row("Cap Rate", s.cap_rate ? Number(s.cap_rate).toFixed(2) + "%" : null),
+          row("Cap Rate Method", s.cap_rate_method),
+          s.notes ? h("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4, fontStyle: "italic" } }, s.notes) : null,
+        )))
+      ) : h("div", { style: { color: "#94a3b8", padding: 12 } }, "No sales transactions"),
+
+      ownershipHist.length > 0 ? h("div", null,
+        sec("Ownership History (" + ownershipHist.length + ")", "\uD83D\uDD04"),
+        ownershipHist.map((o, i) => card(h("div", { key: i },
+          row("Period", (fmtDate(o.ownership_start || o.start_date) || "?") + " \u2192 " + (fmtDate(o.ownership_end || o.end_date) || "Present")),
+          row("Type", o.ownership_type || o.owner_type),
+          row("Sold Price", fmtPrice(o.sold_price)),
+          row("Cap Rate", o.cap_rate ? Number(o.cap_rate).toFixed(2) + "%" : null),
+          row("Rent", o.rent ? fmtPrice(o.rent) + "/yr" : null),
+          o.notes ? h("div", { style: { fontSize: 11, color: "#64748b", fontStyle: "italic" } }, o.notes) : null,
+        )))
+      ) : null,
+
+      listings.length > 0 ? h("div", null,
+        sec("Listings", "\uD83D\uDCE3"),
+        listings.map((l, i) => card(h("div", { key: i },
+          h("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 4 } },
+            h("span", { style: { fontWeight: 600, fontSize: 12 } }, l.listing_broker || "Unknown broker"),
+            l.is_active ? badge("Active", "#dcfce7", "#16a34a") : badge(l.status || "Off-market", "#fee2e2", "#991b1b"),
+          ),
+          row("List Date", fmtDate(l.listing_date)),
+          row("Initial Price", fmtPrice(l.initial_price)),
+          row("Current Price", fmtPrice(l.last_price)),
+          row("Price/SF", l.price_per_sf ? "$" + Number(l.price_per_sf).toFixed(2) : null),
+          row("Cap Rate", l.cap_rate || l.current_cap_rate ? Number(l.cap_rate || l.current_cap_rate).toFixed(2) + "%" : null),
+          row("Seller", l.seller_name),
+          l.broker_email ? row("Broker Email", l.broker_email) : null,
+          l.listing_url ? h("a", { href: l.listing_url, target: "_blank", rel: "noopener", style: { fontSize: 11, color: "#3b82f6" } }, "View listing \u2192") : null,
+        )))
+      ) : null,
+    );
+  };
+
+  // ---- TAB: Market ----
+  const renderMarket = () => {
+    const capHist = data.cap_rate_history || [];
+    const clinics = data.nearby_clinics || [];
+    const invScores = data.investment_scores;
+    const govProps = data.government_city_properties || [];
+    const cityProps = data.dialysis_city_properties || [];
+    return h("div", null,
+      capHist.length > 0 ? h("div", null,
+        sec("Cap Rate History (" + capHist.length + " events)", "\uD83D\uDCC9"),
+        capHist.map((c, i) => card(h("div", { key: i },
+          row("Date", fmtDate(c.event_date)),
+          row("Event", c.event_type),
+          row("Cap Rate", c.cap_rate ? Number(c.cap_rate).toFixed(2) + "%" : null),
+          row("Initial Cap Rate", c.initial_cap_rate ? Number(c.initial_cap_rate).toFixed(2) + "%" : null),
+          row("Rent", c.rent_at_event ? fmtPrice(c.rent_at_event) : null),
+          row("Price", c.price_at_event ? fmtPrice(c.price_at_event) : null),
+        )))
+      ) : null,
+
+      invScores ? h("div", null,
+        sec("Investment Scores", "\uD83C\uDFC6"),
+        card(h("div", null,
+          row("Overall Score", invScores.overall_score || invScores.total_score),
+          row("Market Score", invScores.market_score),
+          row("Lease Score", invScores.lease_score),
+          row("Location Score", invScores.location_score),
+        ))
+      ) : null,
+
+      clinics.length > 0 ? h("div", null,
+        sec("Nearby Medicare Clinics (" + clinics.length + ")", "\uD83C\uDFE5"),
+        clinics.map((c, i) => h("div", { key: i, style: { padding: "3px 0", fontSize: 11, display: "flex", justifyContent: "space-between" } },
+          h("span", { style: { fontWeight: 500 } }, c.clinic_name),
+          h("span", { style: { color: "#64748b" } }, c.chain_organization || c.ownership_type || ""),
+        ))
+      ) : null,
+
+      cityProps.length > 0 ? h("div", null,
+        sec("Other Dialysis Properties in Area (" + cityProps.length + ")", "\uD83C\uDFE2"),
+        cityProps.map((p, i) => h("div", { key: i, style: { padding: "3px 0", fontSize: 11 } },
+          h("span", { style: { fontWeight: 500 } }, p.tenant || p.building_name),
+          h("span", { style: { color: "#64748b", marginLeft: 6 } }, p.address),
+        ))
+      ) : null,
+
+      govProps.length > 0 ? h("div", null,
+        sec("Government Properties in Area (" + govProps.length + ")", "\uD83C\uDFDB\uFE0F"),
+        govProps.map((p, i) => h("div", { key: i, style: { padding: "3px 0", fontSize: 11 } },
+          h("span", { style: { fontWeight: 500 } }, p.address),
+          h("span", { style: { color: "#64748b", marginLeft: 6 } }, (p.agency_full_name || p.agency || "") + (p.sf_leased ? " \u2022 " + Number(p.sf_leased).toLocaleString() + " SF" : "")),
+        ))
+      ) : null,
+    );
+  };
 
   return h("div", { style: { marginTop: 14, border: "1px solid #e0e7ff", borderRadius: 10, overflow: "hidden" } },
     h("div", {
@@ -1084,104 +1428,21 @@ function PropertyIntelPanel({ task }) {
     },
       h("span", { style: { fontSize: 11, color: "#6366f1", transition: "transform 0.2s", transform: expanded ? "rotate(0deg)" : "rotate(-90deg)", display: "inline-block" } }, "\u25BC"),
       h("span", { style: { fontSize: 13 } }, "\uD83C\uDFE2"),
-      h("span", { style: { fontWeight: 600, fontSize: 13, color: "#4338ca" } }, "Property Intelligence"),
+      h("span", { style: { fontWeight: 600, fontSize: 13, color: "#4338ca" } }, "Pre-Call Briefing"),
       h("span", { style: { fontSize: 11, color: "#818cf8" } }, propName + (propCity ? ", " + propCity : "")),
     ),
-    expanded ? h("div", { style: { padding: "10px 14px", background: "white", fontSize: 12 } },
+    expanded ? h("div", { style: { padding: "10px 14px", background: "white", fontSize: 12, maxHeight: 500, overflowY: "auto" } },
       loading ? h("div", { style: { padding: 16, textAlign: "center", color: "#94a3b8" } },
         h("div", { style: { fontSize: 18, marginBottom: 6 } }, "\u23F3"),
-        "Loading property data\u2026"
+        "Loading property intelligence\u2026"
       ) : error ? h("div", { style: { padding: 12, background: "#fef2f2", borderRadius: 8, color: "#dc2626", fontSize: 12 } }, "\u26A0\uFE0F " + error) :
       data ? h("div", null,
-        // Property summary from either DB
-        data.dialysis_property || data.government_property ? (() => {
-          const p = data.dialysis_property || data.government_property;
-          return h("div", null,
-            sec("Property Summary", "\uD83D\uDCCB"),
-            row("Address", p.address),
-            row("City / State", (p.city || "") + ", " + (p.state || "") + " " + (p.zip || "")),
-            row("Square Footage", p.square_footage ? Number(p.square_footage).toLocaleString() + " SF" : null),
-            row("Year Built", p.year_built),
-            row("Source", data.dialysis_property && data.government_property ? "Both DBs" : data.dialysis_property ? "Dialysis DB" : "Government DB"),
-          );
-        })() : h("div", { style: { color: "#94a3b8", padding: 8 } }, "No property data found in databases"),
-
-        // Leases
-        data.leases && data.leases.length > 0 ? h("div", null,
-          sec("Lease Intel", "\uD83D\uDCC4"),
-          data.leases.slice(0, 2).map((l, i) => h("div", { key: i, style: { background: "#f8fafc", borderRadius: 6, padding: 8, marginBottom: 4, border: "1px solid #f1f5f9" } },
-            row("Tenant", l.tenant_name || l.lessee_name),
-            row("Lease Start", l.lease_start_date),
-            row("Lease End", l.lease_end_date || l.lease_expiration),
-            row("Rent/SF", l.rent_per_sf ? "$" + Number(l.rent_per_sf).toFixed(2) : null),
-            row("Annual Rent", l.annual_rent ? "$" + Number(l.annual_rent).toLocaleString() : null),
-          ))
-        ) : null,
-
-        // GSA Leases
-        data.gsa_leases && data.gsa_leases.length > 0 ? h("div", null,
-          sec("GSA Lease Data", "\uD83C\uDFDB\uFE0F"),
-          data.gsa_leases.slice(0, 2).map((g, i) => h("div", { key: i, style: { background: "#f0fdf4", borderRadius: 6, padding: 8, marginBottom: 4, border: "1px solid #dcfce7" } },
-            row("Agency", g.agency || g.tenant_agency),
-            row("Lease #", g.lease_number),
-            row("Expiration", g.lease_expiration_date || g.expiration_date),
-            row("Annual Rent", g.annual_rent ? "$" + Number(g.annual_rent).toLocaleString() : null),
-          ))
-        ) : null,
-
-        // Investment Scores
-        data.investment_scores ? h("div", null,
-          sec("Investment Analysis", "\uD83D\uDCC8"),
-          row("Overall Score", data.investment_scores.overall_score || data.investment_scores.total_score),
-          row("Market Score", data.investment_scores.market_score),
-          row("Lease Score", data.investment_scores.lease_score),
-          row("Location Score", data.investment_scores.location_score),
-        ) : null,
-
-        // Investment target
-        data.investment_target ? h("div", null,
-          sec("Investment Target", "\uD83C\uDFAF"),
-          row("Score", data.investment_target.score || data.investment_target.total_score),
-          row("Status", data.investment_target.status),
-          row("Notes", data.investment_target.notes),
-        ) : null,
-
-        // Contacts
-        (data.contacts && data.contacts.length > 0) || (data.government_contacts && data.government_contacts.length > 0) ? h("div", null,
-          sec("Contacts", "\uD83D\uDC64"),
-          [...(data.contacts || []), ...(data.government_contacts || [])].slice(0, 4).map((c, i) => h("div", { key: i, style: { padding: "3px 0" } },
-            h("span", { style: { fontWeight: 600 } }, (c.first_name || "") + " " + (c.last_name || c.name || "")),
-            c.email ? h("span", { style: { color: "#3b82f6", marginLeft: 6 } }, c.email) : null,
-            c.phone ? h("span", { style: { color: "#64748b", marginLeft: 6 } }, c.phone) : null,
-          ))
-        ) : null,
-
-        // True owner
-        data.true_owner ? h("div", null,
-          sec("True Owner", "\uD83C\uDFE0"),
-          row("Name", data.true_owner.owner_name || data.true_owner.name),
-          row("Type", data.true_owner.entity_type),
-          row("State", data.true_owner.state_of_formation || data.true_owner.state),
-        ) : null,
-
-        // Sales history
-        data.sales_transactions && data.sales_transactions.length > 0 ? h("div", null,
-          sec("Sales History", "\uD83D\uDCB0"),
-          data.sales_transactions.slice(0, 3).map((s, i) => h("div", { key: i, style: { padding: "3px 0" } },
-            row("Date", s.sale_date || s.date),
-            row("Price", s.sale_price ? "$" + Number(s.sale_price).toLocaleString() : null),
-            row("Buyer", s.buyer_name || s.grantee),
-          ))
-        ) : null,
-
-        // Nearby clinics
-        data.nearby_clinics && data.nearby_clinics.length > 0 ? h("div", null,
-          sec("Nearby Medicare Clinics", "\u{1F3E5}"),
-          data.nearby_clinics.map((c, i) => h("div", { key: i, style: { padding: "2px 0", fontSize: 11 } },
-            h("span", { style: { fontWeight: 500 } }, c.clinic_name),
-            c.chain_organization ? h("span", { style: { color: "#64748b", marginLeft: 4 } }, "(" + c.chain_organization + ")") : null,
-          ))
-        ) : null,
+        tabBar,
+        activeTab === "briefing" ? renderBriefing() : null,
+        activeTab === "owner" ? renderOwner() : null,
+        activeTab === "leases" ? renderLeases() : null,
+        activeTab === "sales" ? renderSales() : null,
+        activeTab === "market" ? renderMarket() : null,
       ) : null,
     ) : null,
   );

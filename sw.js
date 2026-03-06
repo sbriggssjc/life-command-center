@@ -1,7 +1,7 @@
 // Life Command Center — Service Worker
 // Cache-first for app assets, network-first for Microsoft Graph API
 
-const CACHE_VERSION = "lcc-v4";
+const CACHE_VERSION = "lcc-v5";
 const CACHE_ASSETS = [
   "./",
   "./index.html",
