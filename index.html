@@ -1047,24 +1047,30 @@ function PropertyIntelPanel({ task }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true); // auto-expand
 
+  // Detect property from smart tags OR directly from title pattern
   const sfTag = task?.smartTags?.find(t => t.type === "sf_property");
-  if (!sfTag) return null;
+  const titleMatch = !sfTag && task?.title ? task.title.match(/^(.+?)\s+-\s+([A-Za-z\s.]+),\s+([A-Z]{2})$/) : null;
+  const propName = sfTag ? sfTag.value : titleMatch ? titleMatch[1].trim() : null;
+  const propCity = sfTag ? sfTag.city : titleMatch ? titleMatch[2].trim() : null;
+  const propState = sfTag ? sfTag.state : titleMatch ? titleMatch[3] : null;
+
+  if (!propName) return null;
   if (!getAIBaseURL()) return null;
 
   const fetchEnrichment = useCallback(async () => {
-    const cacheKey = getEnrichCacheKey(sfTag.value, sfTag.city, sfTag.state);
+    const cacheKey = getEnrichCacheKey(propName, propCity, propState);
     const cached = getCachedEnrichment(cacheKey);
     if (cached) { setData(cached); return; }
     setLoading(true); setError(null);
     try {
-      const result = await aiCall("/enrich", { property_name: sfTag.value, city: sfTag.city, state: sfTag.state });
+      const result = await aiCall("/enrich", { property_name: propName, city: propCity, state: propState });
       setData(result);
       setCachedEnrichment(cacheKey, result);
     } catch (e) { setError(e.message); }
     setLoading(false);
-  }, [sfTag.value, sfTag.city, sfTag.state]);
+  }, [propName, propCity, propState]);
 
   useEffect(() => { if (expanded && !data && !loading) fetchEnrichment(); }, [expanded]);
 
@@ -1079,7 +1085,7 @@ function PropertyIntelPanel({ task }) {
       h("span", { style: { fontSize: 11, color: "#6366f1", transition: "transform 0.2s", transform: expanded ? "rotate(0deg)" : "rotate(-90deg)", display: "inline-block" } }, "\u25BC"),
       h("span", { style: { fontSize: 13 } }, "\uD83C\uDFE2"),
       h("span", { style: { fontWeight: 600, fontSize: 13, color: "#4338ca" } }, "Property Intelligence"),
-      h("span", { style: { fontSize: 11, color: "#818cf8" } }, sfTag.value + (sfTag.city ? ", " + sfTag.city : "")),
+      h("span", { style: { fontSize: 11, color: "#818cf8" } }, propName + (propCity ? ", " + propCity : "")),
     ),
     expanded ? h("div", { style: { padding: "10px 14px", background: "white", fontSize: 12 } },
       loading ? h("div", { style: { padding: 16, textAlign: "center", color: "#94a3b8" } },
