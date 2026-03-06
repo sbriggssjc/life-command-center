@@ -1401,6 +1401,10 @@ function App() {
   const [syncResult, setSyncResult] = useState(null); // { added, skipped } or null
   const [calSyncResult, setCalSyncResult] = useState(null);
   const [copilotOpen, setCopilotOpen] = useState(false);
+  const [aiConfig, setAiConfig] = useState(() => loadAIConfig());
+  const updateAIConfig = useCallback((patch) => {
+    setAiConfig(prev => { const next = { ...prev, ...patch }; saveAIConfig(next); return next; });
+  }, []);
   const fileRef = useRef(null);
   const syncRef = useRef(null);
   const calSyncRef = useRef(null);
@@ -2175,16 +2179,16 @@ function App() {
           h("div", { style: { marginBottom: 10 }},
             h("label", { style: { display: "block", fontSize: 11.5, fontWeight: 600, color: "#64748b", marginBottom: 3 }}, "Supabase Project URL"),
             h("input", {
-              value: loadAIConfig().supabaseUrl || "", placeholder: "https://your-project.supabase.co",
-              onChange: e => saveAIConfig({ ...loadAIConfig(), supabaseUrl: e.target.value }),
+              value: aiConfig.supabaseUrl || "", placeholder: "https://your-project.supabase.co",
+              onChange: e => updateAIConfig({ supabaseUrl: e.target.value }),
               style: { width: "100%", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, outline: "none", boxSizing: "border-box" },
             }),
           ),
           h("div", { style: { marginBottom: 10 }},
             h("label", { style: { display: "block", fontSize: 11.5, fontWeight: 600, color: "#64748b", marginBottom: 3 }}, "Supabase Anon Key"),
             h("input", {
-              value: loadAIConfig().anonKey || "", placeholder: "eyJhbGciOiJIUzI1NiIs...",
-              onChange: e => saveAIConfig({ ...loadAIConfig(), anonKey: e.target.value }),
+              value: aiConfig.anonKey || "", placeholder: "eyJhbGciOiJIUzI1NiIs...",
+              onChange: e => updateAIConfig({ anonKey: e.target.value }),
               style: { width: "100%", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "monospace" },
               type: "password",
             }),
