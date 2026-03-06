@@ -1,7 +1,7 @@
 // Life Command Center — Service Worker
 // Cache-first for app assets, network-first for Microsoft Graph API
 
-const CACHE_VERSION = "lcc-v2";
+const CACHE_VERSION = "lcc-v4";
 const CACHE_ASSETS = [
   "./",
   "./index.html",
@@ -47,12 +47,13 @@ self.addEventListener("fetch", (event) => {
   // Skip non-GET requests (POST, PATCH, DELETE for Graph API)
   if (event.request.method !== "GET") return;
 
-  // Network-first for Microsoft Graph API and MSAL auth endpoints
+  // Network-first for Microsoft Graph API, MSAL auth, and Supabase API
   if (
     url.hostname === "graph.microsoft.com" ||
     url.hostname === "login.microsoftonline.com" ||
     url.hostname === "login.windows.net" ||
-    url.hostname === "login.microsoft.com"
+    url.hostname === "login.microsoft.com" ||
+    url.hostname.endsWith(".supabase.co")
   ) {
     event.respondWith(
       fetch(event.request).catch(() => {
