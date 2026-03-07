@@ -306,7 +306,7 @@ const SMART_GROUPS = {
 // ─── BD ROUTING ENGINE (Client-Side) ─────────────────────────────────────────
 // Pattern matching for routing tasks into BD categories
 const BD_ROUTING_PATTERNS = {
-  government: /government|gsa|\bva\b|usps|usda|\bssa\b|\birs\b|f&ws|federal|agency|veterans|us\s*(bankruptcy|courthouse|post\s*office)|bureau|cboc|opm|hud/i,
+  government: /government|gsa|\bva\b|usps|usda|\bssa\b|\birs\b|\bdea\b|\bfbi\b|\batf\b|\bice\b|\bcbp\b|\bblm\b|\bnps\b|\bfws\b|f&ws|\bfs\b|fema|federal|agency|veterans|us\s*(bankruptcy|courthouse|post\s*office|marshal|forest)|bureau|cboc|opm|hud|corps\s*of\s*engineers|customs|border|postal|military|army|navy|air\s*force|coast\s*guard|nasa|noaa|doe\b|dot\b|epa\b|fda\b|faa\b|tsa\b|sec\b/i,
   dialysis: /medical\s*(buyer|developer|owner)|dialysis|fmc|davita|fresenius|renal|kidney|\basc\b|surgery\s*center|ambulatory|endoscopy|gastroenterology|neurospine|ortho|eye\s*center|pain\s*(management|center)|imaging|radiology|urgent\s*care|med\s*(office|center)|mob\b/i,
   blue_suit: /net\s*lease\s*(portfolio|developer|buyer)|portfolio\s*(buyer|owner)|blue\s*suit|investor\s*(group|fund)/i,
   listing_followup: /follow\s*up|callback|emailed|website|om\s*download|offering\s*memorandum|brochure|inquiry/i,
