@@ -415,7 +415,11 @@ const TODO_LIST_MAP = {
   "flagged email": "work", "flagged emails": "work",
   "marketing": "work",
   "salesforce tasks": "work",
+  "sf tasks": "work",
   "yardwork": "house",
+  // Microsoft To Do default lists
+  "to do": "personal",
+  "my tasks": "personal",
 };
 
 function mapToDoImportance(importance) {
@@ -707,16 +711,33 @@ async function ensureCategoryLists() {
 }
 
 // ─── To Do Task Operations ──────────────────────────────────────────────────
+async function fetchAllPages(path) {
+  // Paginate through all @odata.nextLink pages
+  const all = [];
+  let url = path;
+  let pages = 0;
+  const MAX_PAGES = 20; // Safety limit: 20 pages × 200 = up to 4,000 tasks
+  while (url && pages < MAX_PAGES) {
+    const data = url.startsWith("http")
+      ? await fetch(url, { headers: { Authorization: "Bearer " + (await getAccessToken()), "Content-Type": "application/json" }}).then(r => r.json())
+      : await graphFetch(url);
+    all.push(...(data.value || []));
+    url = data["@odata.nextLink"] || null;
+    pages++;
+  }
+  return all;
+}
+
 async function fetchTasksFromList(listId) {
-  // Fetch both incomplete and completed tasks
+  // Fetch both incomplete and completed tasks with full pagination
   const [active, completed] = await Promise.all([
-    graphFetch("/me/todo/lists/" + listId + "/tasks?$top=200"),
-    graphFetch("/me/todo/lists/" + listId + "/tasks?$filter=status eq 'completed'&$top=100").catch(() => ({ value: [] })),
+    fetchAllPages("/me/todo/lists/" + listId + "/tasks?$top=200"),
+    fetchAllPages("/me/todo/lists/" + listId + "/tasks?$filter=status eq 'completed'&$top=200").catch(() => []),
   ]);
-  const all = [...(active.value || [])];
+  const all = [...active];
   // Add completed that aren't already in active
   const activeIds = new Set(all.map(t => t.id));
-  for (const t of (completed.value || [])) {
+  for (const t of completed) {
     if (!activeIds.has(t.id)) all.push(t);
   }
   return all;
@@ -856,10 +877,18 @@ async function fullSync(currentTasks, setTasks) {
     listMapping = await ensureCategoryLists();
   }
 
+  // Also discover all To Do lists to catch Salesforce Tasks, Business Development, etc.
+  let allToDoLists = [];
+  try { allToDoLists = await fetchTodoLists(); } catch(e) { console.warn("Failed to fetch all lists:", e); }
+
   const remoteTasks = [];
+  const fetchedListIds = new Set();
+
+  // First: fetch from our primary CATEGORIES lists
   for (const cat of CATEGORIES) {
     const listId = listMapping[cat.id];
     if (!listId) continue;
+    fetchedListIds.add(listId);
     try {
       const msTasks = await fetchTasksFromList(listId);
       for (const ms of msTasks) {
@@ -867,6 +896,24 @@ async function fullSync(currentTasks, setTasks) {
       }
     } catch(e) {
       console.warn("Failed to fetch list " + cat.label + ":", e);
+    }
+  }
+
+  // Second: fetch from additional lists that map to categories via TODO_LIST_MAP
+  // This catches "Salesforce Tasks", "Business Development", "Flagged Emails", etc.
+  for (const tdList of allToDoLists) {
+    if (fetchedListIds.has(tdList.id)) continue; // Already fetched above
+    const mappedCat = TODO_LIST_MAP[(tdList.displayName || "").toLowerCase().trim()];
+    if (!mappedCat) continue; // Unknown list, skip
+    fetchedListIds.add(tdList.id);
+    try {
+      const msTasks = await fetchTasksFromList(tdList.id);
+      console.log("Extra list sync: " + tdList.displayName + " → " + mappedCat + " (" + msTasks.length + " tasks)");
+      for (const ms of msTasks) {
+        remoteTasks.push(msTaskToAppTask(ms, mappedCat));
+      }
+    } catch(e) {
+      console.warn("Failed to fetch extra list " + tdList.displayName + ":", e);
     }
   }
 
