@@ -679,14 +679,9 @@ async function getAccessToken() {
       _tokenExpiry = Date.now() + 5 * 60 * 1000;
       return resp.accessToken;
     } catch (e) {
-      console.warn("Silent token failed, will try redirect:", e.errorCode || e.message);
-      // Popup is blocked on most browsers — use redirect instead
-      // This will navigate away and come back, but only as last resort
-      try {
-        await msalInstance.acquireTokenRedirect({ scopes: GRAPH_SCOPES });
-      } catch (e2) {
-        console.error("Token redirect failed:", e2);
-      }
+      console.warn("Silent token failed:", e.errorCode || e.message);
+      // Don't redirect automatically — return null and let UI prompt re-sign-in
+      // acquireTokenRedirect navigates away which is terrible UX for background sync
       return null;
     } finally {
       _tokenAcquirePromise = null;
