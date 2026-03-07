@@ -303,6 +303,57 @@ const SMART_GROUPS = {
   ],
 };
 
+// ─── BD ROUTING ENGINE (Client-Side) ─────────────────────────────────────────
+// Pattern matching for routing tasks into BD categories
+const BD_ROUTING_PATTERNS = {
+  dialysis: /medical\s*(buyer|developer|owner)|dialysis|fmc|davita|fresenius|renal|kidney/i,
+  government: /government|gsa|va\s*(developer|owner|portfolio)|federal|agency|veterans\s*affairs/i,
+  blue_suit: /net\s*lease\s*(portfolio|developer|buyer)|portfolio\s*(buyer|owner)|blue\s*suit|investor\s*(group|fund)/i,
+  listing_followup: /follow\s*up|callback|emailed|website|om\s*download|offering\s*memorandum|brochure|inquiry/i,
+};
+
+const BD_CATEGORY_META = {
+  dialysis: { label: "Dialysis Area Ownership", icon: "\uD83C\uDFE5", color: "#2563eb", shortLabel: "Dialysis" },
+  government: { label: "Government Area Ownership", icon: "\uD83C\uDFDB\uFE0F", color: "#7c3aed", shortLabel: "Government" },
+  blue_suit: { label: "Blue Suit Ownership", icon: "\uD83D\uDC54", color: "#0891b2", shortLabel: "Blue Suit" },
+  listing_followup: { label: "Listing Follow-up", icon: "\uD83D\uDCE5", color: "#ea580c", shortLabel: "Listings" },
+};
+
+function routeTaskToBD(task) {
+  const title = (task.title || "").trim();
+  const notes = (task.notes || task.body || "").trim();
+  const combined = title + " " + notes;
+
+  // Only route work tasks
+  if (task.category !== "work") return null;
+
+  // Priority 1: Check title against patterns
+  for (const [cat, rx] of Object.entries(BD_ROUTING_PATTERNS)) {
+    if (rx.test(title)) return { category: cat, confidence: 0.90, source: "title" };
+  }
+
+  // Priority 2: Check notes/body against patterns
+  for (const [cat, rx] of Object.entries(BD_ROUTING_PATTERNS)) {
+    if (rx.test(notes)) return { category: cat, confidence: 0.75, source: "notes" };
+  }
+
+  // Priority 3: SF property tasks with no other match — default to dialysis (primary territory)
+  const sfTag = task.smartTags?.find(t => t.type === "sf_property");
+  if (sfTag) return { category: "dialysis", confidence: 0.60, source: "sf_property_default" };
+
+  return null;
+}
+
+// BD progress persistence
+const BD_PROGRESS_KEY = "lcc-bd-progress";
+function loadBDProgress() { try { return JSON.parse(sessionStorage.getItem(BD_PROGRESS_KEY) || "null"); } catch { return null; } }
+function saveBDProgress(p) { try { sessionStorage.setItem(BD_PROGRESS_KEY, JSON.stringify(p)); } catch {} }
+
+// BD config cache
+const BD_CONFIG_KEY = "lcc-bd-config";
+function loadBDConfig() { try { return JSON.parse(localStorage.getItem(BD_CONFIG_KEY) || "null"); } catch { return null; } }
+function saveBDConfig(c) { try { localStorage.setItem(BD_CONFIG_KEY, JSON.stringify(c)); } catch {} }
+
 // Collapse state persistence
 const GROUP_COLLAPSE_KEY = "lcc-group-collapse";
 function loadGroupCollapseState() { try { return JSON.parse(localStorage.getItem(GROUP_COLLAPSE_KEY) || "{}"); } catch { return {}; } }
@@ -562,7 +613,7 @@ const MSAL_CONFIG = {
   },
 };
 
-const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read"];
+const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read", "Mail.Send"];
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 let msalInstance = null;
@@ -1037,6 +1088,178 @@ function SmartTaskGroup({ groupDef, tasks, toggle, remove, edit, collapseState, 
       isCollapsed && showCollapse ? h("span", { style: { fontSize: 11, color: "#cbd5e1", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 250 } }, preview) : null,
     ),
     !isCollapsed ? tasks.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => edit(t) })) : null,
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BD DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+function BDProgressCard({ cat, target, completed, color, icon, label, shortLabel, active, onClick }) {
+  const pct = target > 0 ? Math.min(Math.round((completed / target) * 100), 100) : 0;
+  const isDone = completed >= target;
+  return h("div", {
+    onClick,
+    style: {
+      flex: "1 1 120px", minWidth: 110, background: active ? color + "12" : "white",
+      border: active ? "2px solid " + color : "1px solid #e2e8f0",
+      borderRadius: 12, padding: "12px 10px", cursor: "pointer", transition: "all 0.15s",
+      textAlign: "center", position: "relative", overflow: "hidden",
+    },
+  },
+    // Progress bar background
+    h("div", { style: { position: "absolute", bottom: 0, left: 0, width: pct + "%", height: 3, background: color, borderRadius: "0 0 12px 12px", transition: "width 0.5s ease" } }),
+    h("div", { style: { fontSize: 20, marginBottom: 2 } }, icon),
+    h("div", { style: { fontSize: 11, fontWeight: 700, color: "#334155", lineHeight: 1.2 } }, shortLabel),
+    h("div", { style: { fontSize: 22, fontWeight: 800, color: isDone ? "#16a34a" : color, marginTop: 4 } }, completed + "/" + target),
+    h("div", { style: { fontSize: 10, color: isDone ? "#16a34a" : "#94a3b8", fontWeight: 600, marginTop: 2 } },
+      isDone ? "\u2705 Complete" : pct + "%"
+    ),
+  );
+}
+
+function BDTaskRow({ task, bdCategory, onBrief, onEmail, onLog, onDone, onEdit }) {
+  const meta = BD_CATEGORY_META[bdCategory] || {};
+  const sfTag = task.smartTags?.find(t => t.type === "sf_property");
+  const isOverdue = !task.done && task.due && task.due < todayStr();
+
+  return h("div", {
+    style: {
+      display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 12px",
+      background: "white", borderRadius: 10, marginBottom: 4,
+      border: isOverdue ? "1px solid #fecaca" : "1px solid #f1f5f9",
+      boxShadow: "0 1px 2px rgba(0,0,0,0.04)", transition: "all 0.15s",
+    },
+  },
+    // Colored indicator dot
+    h("div", { style: { width: 8, height: 8, borderRadius: "50%", background: meta.color || "#94a3b8", marginTop: 6, flexShrink: 0 } }),
+    // Content
+    h("div", { style: { flex: 1, minWidth: 0, cursor: "pointer" }, onClick: onEdit },
+      h("div", { style: { fontSize: 13, fontWeight: 600, color: "#1e293b", lineHeight: 1.3 } }, task.title),
+      h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4, alignItems: "center" } },
+        sfTag ? h("span", { style: { fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "#eef2ff", color: "#6366f1", fontWeight: 500 } }, "\uD83C\uDFE2 " + sfTag.value + (sfTag.state ? ", " + sfTag.state : "")) : null,
+        task.due ? h("span", { style: { fontSize: 10, color: isOverdue ? "#dc2626" : "#64748b" } }, (isOverdue ? "\u26A0\uFE0F " : "\uD83D\uDCC5 ") + dayLabel(task.due)) : null,
+        task.source === "flagged-email" ? h("span", { style: { fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "#e8f4fd", color: "#0078d4", fontWeight: 500 } }, "\u2709\uFE0F Email") : null,
+      ),
+    ),
+    // Quick action buttons
+    h("div", { style: { display: "flex", gap: 3, flexShrink: 0, alignItems: "center" } },
+      sfTag ? h("button", { onClick: onBrief, title: "Property Brief", style: { border: "none", background: "#eef2ff", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" } }, "\uD83D\uDCCB") : null,
+      h("button", { onClick: onEmail, title: "Draft Email", style: { border: "none", background: "#f0fdf4", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2709\uFE0F"),
+      h("button", { onClick: onLog, title: "Log to SF", style: { border: "none", background: "#fefce8", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" } }, "\uD83D\uDCE4"),
+      h("button", { onClick: onDone, title: "Mark Complete", style: { border: "none", background: "#dcfce7", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2713"),
+    ),
+  );
+}
+
+function BDDashboard({ tasks, bdConfig, bdProgress, bdFilter, setBdFilter, onEditTask, onToggle, showToast, onBrief, onLogSF }) {
+  // Route all work tasks into BD categories
+  const routedTasks = useMemo(() => {
+    const result = { dialysis: [], government: [], blue_suit: [], listing_followup: [], unrouted: [] };
+    const workTasks = tasks.filter(t => t.category === "work" && !t.done);
+    for (const t of workTasks) {
+      const route = routeTaskToBD(t);
+      if (route && result[route.category]) {
+        result[route.category].push({ ...t, _bdRoute: route });
+      } else {
+        result.unrouted.push(t);
+      }
+    }
+    return result;
+  }, [tasks]);
+
+  // Default config if not loaded from API yet
+  const config = bdConfig || { dialysis: 8, government: 4, blue_suit: 3, listing_followup: 2 };
+  const progress = bdProgress || { dialysis: 0, government: 0, blue_suit: 0, listing_followup: 0 };
+
+  const categories = ["dialysis", "government", "blue_suit", "listing_followup"];
+  const totalTarget = categories.reduce((s, c) => s + (config[c] || 0), 0);
+  const totalCompleted = categories.reduce((s, c) => s + (progress[c] || 0), 0);
+
+  // Determine which tasks to show
+  const displayTasks = bdFilter === "all"
+    ? categories.flatMap(c => routedTasks[c].map(t => ({ ...t, _bdCat: t._bdRoute?.category || c })))
+    : (routedTasks[bdFilter] || []).map(t => ({ ...t, _bdCat: bdFilter }));
+
+  // Sort: overdue first, then by due date
+  displayTasks.sort((a, b) => {
+    const today = todayStr();
+    const aOver = a.due && a.due < today ? 0 : 1;
+    const bOver = b.due && b.due < today ? 0 : 1;
+    if (aOver !== bOver) return aOver - bOver;
+    if (a.due && b.due) return a.due.localeCompare(b.due);
+    return a.due ? -1 : b.due ? 1 : 0;
+  });
+
+  return h("div", null,
+    // Daily Progress Header
+    h("div", { style: { marginBottom: 16 } },
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
+        h("div", { style: { fontSize: 15, fontWeight: 800, color: "#1e293b" } }, "\uD83C\uDFAF BD Execution — " + new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })),
+        h("div", { style: { fontSize: 13, fontWeight: 700, color: totalCompleted >= totalTarget ? "#16a34a" : "#64748b" } },
+          totalCompleted + "/" + totalTarget + " total",
+        ),
+      ),
+      // Progress cards
+      h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+        categories.map(cat => {
+          const m = BD_CATEGORY_META[cat];
+          return h(BDProgressCard, {
+            key: cat, cat, target: config[cat] || 0, completed: progress[cat] || 0,
+            color: m.color, icon: m.icon, label: m.label, shortLabel: m.shortLabel,
+            active: bdFilter === cat,
+            onClick: () => setBdFilter(bdFilter === cat ? "all" : cat),
+          });
+        }),
+      ),
+    ),
+
+    // Queue count + filter indicator
+    h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+      h("div", { style: { fontSize: 13, fontWeight: 700, color: "#475569" } },
+        bdFilter === "all" ? "\uD83D\uDCCB All BD Tasks" : (BD_CATEGORY_META[bdFilter]?.icon || "") + " " + (BD_CATEGORY_META[bdFilter]?.label || ""),
+        " ", h("span", { style: { fontWeight: 400, fontSize: 12, color: "#94a3b8" } }, "(" + displayTasks.length + ")"),
+      ),
+      bdFilter !== "all" ? h("button", {
+        onClick: () => setBdFilter("all"),
+        style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, color: "#64748b" },
+      }, "\u2716 Clear Filter") : null,
+    ),
+
+    // Task Queue
+    displayTasks.length > 0
+      ? displayTasks.map(t => h(BDTaskRow, {
+          key: t.id,
+          task: t,
+          bdCategory: t._bdCat,
+          onBrief: () => onBrief(t),
+          onEmail: () => { onEditTask(t); showToast("Open task → use Email tab"); },
+          onLog: () => { onEditTask(t); showToast("Open task → use Log to SF"); },
+          onDone: () => onToggle(t.id),
+          onEdit: () => onEditTask(t),
+        }))
+      : h("div", { style: { textAlign: "center", padding: 40, color: "#94a3b8" } },
+          h("div", { style: { fontSize: 32, marginBottom: 8 } }, "\uD83C\uDF1F"),
+          h("div", { style: { fontSize: 14, fontWeight: 600 } }, bdFilter === "all" ? "No BD tasks in queue" : "No " + (BD_CATEGORY_META[bdFilter]?.shortLabel || "") + " tasks"),
+          h("div", { style: { fontSize: 12, marginTop: 4 } }, "Tasks from Microsoft To Do will appear here when synced"),
+        ),
+
+    // Unrouted tasks (only in "all" view)
+    bdFilter === "all" && routedTasks.unrouted.length > 0 ? h("div", { style: { marginTop: 16 } },
+      h("div", { style: { fontSize: 12, fontWeight: 700, color: "#94a3b8", marginBottom: 6, borderTop: "1px solid #f1f5f9", paddingTop: 10 } },
+        "\uD83D\uDCCB Uncategorized Work Tasks (" + routedTasks.unrouted.length + ")",
+      ),
+      routedTasks.unrouted.slice(0, 10).map(t => h(BDTaskRow, {
+        key: t.id,
+        task: t,
+        bdCategory: "unrouted",
+        onBrief: () => onBrief(t),
+        onEmail: () => { onEditTask(t); showToast("Open task → use Email tab"); },
+        onLog: () => { onEditTask(t); showToast("Open task → use Log to SF"); },
+        onDone: () => onToggle(t.id),
+        onEdit: () => onEditTask(t),
+      })),
+      routedTasks.unrouted.length > 10 ? h("div", { style: { fontSize: 11, color: "#94a3b8", textAlign: "center", padding: 8 } }, "+" + (routedTasks.unrouted.length - 10) + " more...") : null,
+    ) : null,
   );
 }
 
@@ -1600,12 +1823,18 @@ function LogToSFPanel({ task }) {
   const [logging, setLogging] = useState(false);
   const [logResult, setLogResult] = useState(null);
   const [warning, setWarning] = useState(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const searchTimer = useRef(null);
 
   const sfTag = task?.smartTags?.find(t => t.type === "sf_property");
+  if (!getAIBaseURL()) return h("div", { style: { marginTop: 14, borderTop: "1px solid #e2e8f0", paddingTop: 10 } },
+    h("div", { style: { display: "flex", alignItems: "center", gap: 6, opacity: 0.5 } },
+      h("span", { style: { fontSize: 14 } }, "\uD83D\uDCE4"),
+      h("span", { style: { fontWeight: 700, fontSize: 12.5, color: "#1e293b" } }, "Log to Salesforce"),
+      h("span", { style: { fontSize: 10, color: "#94a3b8", marginLeft: "auto" } }, "Configure AI in Settings"),
+    ),
+  );
   if (!sfTag) return null;
-  if (!getAIBaseURL()) return null;
 
   const actTypes = ["Client Outreach", "Market Update", "Follow-up", "Introduction Call", "Property Discussion", "Email Correspondence"];
   const sty = { fontSize: 12, color: "#334155" };
@@ -1755,9 +1984,254 @@ function LogToSFPanel({ task }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// RESCHEDULE DIALOG
+// ═══════════════════════════════════════════════════════════════════════════════
+function RescheduleDialog({ task, bdCategory, onSchedule, onSkip }) {
+  const [suggestedDate, setSuggestedDate] = useState("");
+  const [customDate, setCustomDate] = useState("");
+  const [reasoning, setReasoning] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [useCustom, setUseCustom] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await aiCall("/bd/auto-reschedule", {
+          bd_category: bdCategory || "dialysis",
+          activity_type: "completed",
+          completion_date: todayStr(),
+        });
+        setSuggestedDate(data.suggested_date || "");
+        setCustomDate(data.suggested_date || "");
+        setReasoning(data.reasoning || "");
+      } catch (e) {
+        // Fallback: 14 days out
+        const d = new Date();
+        d.setDate(d.getDate() + 14);
+        const fallback = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+        setSuggestedDate(fallback);
+        setCustomDate(fallback);
+        setReasoning("Default 14-day follow-up");
+      }
+      setLoading(false);
+    })();
+  }, [bdCategory]);
+
+  const scheduleDate = useCustom ? customDate : suggestedDate;
+
+  const handleSchedule = async () => {
+    setCreating(true);
+    onSchedule(task, scheduleDate);
+  };
+
+  if (loading) return h("div", { className: "modal-overlay" },
+    h("div", { className: "modal-box", style: { maxWidth: 380, textAlign: "center", padding: 30 } },
+      h("div", { style: { fontSize: 28, marginBottom: 8 } }, "\uD83D\uDD04"),
+      h("div", { style: { fontSize: 14, color: "#64748b" } }, "Calculating follow-up\u2026"),
+    )
+  );
+
+  return h("div", { className: "modal-overlay", onClick: onSkip },
+    h("div", { className: "modal-box", style: { maxWidth: 400 }, onClick: e => e.stopPropagation() },
+      h("div", { style: { textAlign: "center", marginBottom: 16 } },
+        h("div", { style: { fontSize: 28, marginBottom: 4 } }, "\u2705"),
+        h("div", { style: { fontSize: 16, fontWeight: 700, color: "#1e293b" } }, "Task Completed!"),
+        h("div", { style: { fontSize: 12, color: "#64748b", marginTop: 4 } }, task.title),
+      ),
+      h("div", { style: { background: "#f0fdf4", borderRadius: 8, padding: 12, marginBottom: 14, border: "1px solid #dcfce7" } },
+        h("div", { style: { fontSize: 12, fontWeight: 700, color: "#166534", marginBottom: 4 } }, "\uD83D\uDCC5 Suggested Follow-up"),
+        h("div", { style: { fontSize: 18, fontWeight: 800, color: "#1e293b" } }, new Date(suggestedDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })),
+        h("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 } }, reasoning),
+      ),
+      // Custom date option
+      h("div", { style: { marginBottom: 14 } },
+        h("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569", cursor: "pointer", marginBottom: 6 } },
+          h("input", { type: "checkbox", checked: useCustom, onChange: () => setUseCustom(!useCustom) }), "Use custom date"
+        ),
+        useCustom ? h("input", { type: "date", value: customDate, onChange: e => setCustomDate(e.target.value), style: { width: "100%", border: "1px solid #e2e8f0", borderRadius: 6, padding: "8px 10px", fontSize: 13, outline: "none", minHeight: 36 } }) : null,
+      ),
+      // Action buttons
+      h("div", { style: { display: "flex", gap: 8 } },
+        h("button", { onClick: onSkip, style: { flex: 1, padding: "10px 0", fontSize: 13, border: "1px solid #e2e8f0", background: "white", borderRadius: 8, cursor: "pointer", color: "#64748b", minHeight: 44 } }, "Skip"),
+        h("button", {
+          onClick: handleSchedule,
+          disabled: creating,
+          style: { flex: 2, padding: "10px 0", fontSize: 13, fontWeight: 700, border: "none", background: "#2563eb", color: "white", borderRadius: 8, cursor: "pointer", opacity: creating ? 0.6 : 1, minHeight: 44 },
+        }, creating ? "Creating\u2026" : "\uD83D\uDCC5 Schedule Follow-up"),
+      ),
+    )
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMAIL COMPOSER PANEL
+// ═══════════════════════════════════════════════════════════════════════════════
+function EmailComposerPanel({ task, authUser, showToast }) {
+  const [expanded, setExpanded] = useState(true);
+  const [templateType, setTemplateType] = useState("cold_outreach");
+  const [toEmail, setToEmail] = useState("");
+  const [subject, setSubject] = useState("");
+  const [bodyHtml, setBodyHtml] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [generated, setGenerated] = useState(false);
+
+  const sfTag = task?.smartTags?.find(t => t.type === "sf_property");
+  if (!getAIBaseURL()) return h("div", { style: { marginTop: 14, borderTop: "1px solid #e2e8f0", paddingTop: 10 } },
+    h("div", { style: { display: "flex", alignItems: "center", gap: 6, opacity: 0.5 } },
+      h("span", { style: { fontSize: 14 } }, "\u2709\uFE0F"),
+      h("span", { style: { fontWeight: 700, fontSize: 12.5, color: "#1e293b" } }, "Email Composer"),
+      h("span", { style: { fontSize: 10, color: "#94a3b8", marginLeft: "auto" } }, "Configure AI in Settings"),
+    ),
+  );
+  if (!sfTag) return null;
+
+  const templateTypes = [
+    { id: "cold_outreach", label: "Cold Outreach" },
+    { id: "website_followup", label: "Website Follow-up" },
+    { id: "om_download", label: "OM Download Follow-up" },
+    { id: "post_call", label: "Post-Call Summary" },
+  ];
+
+  const inp = { width: "100%", border: "1px solid #e2e8f0", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, outline: "none", boxSizing: "border-box", background: "white", minHeight: 36 };
+  const lbl = { display: "block", fontSize: 10.5, fontWeight: 600, color: "#64748b", marginBottom: 2 };
+
+  const generateEmail = async () => {
+    setLoading(true);
+    try {
+      const data = await aiCall("/bd/generate-email", {
+        template_type: templateType,
+        contact_name: "",
+        company_name: sfTag.value || "",
+        property_name: sfTag.value || "",
+        city_state: (sfTag.city || "") + (sfTag.state ? ", " + sfTag.state : ""),
+        custom_context: task.title + (task.notes ? " — " + task.notes : ""),
+      });
+      setSubject(data.subject || "");
+      setBodyHtml(data.html_body || data.plain_text || "");
+      setGenerated(true);
+    } catch (e) {
+      showToast("Email generation failed: " + e.message);
+    }
+    setLoading(false);
+  };
+
+  const sendEmail = async () => {
+    if (!toEmail || !subject) { showToast("Email and subject required"); return; }
+    if (!authUser) { showToast("Sign in with Microsoft to send email"); return; }
+    setSending(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not authenticated");
+      const mailPayload = {
+        message: {
+          subject: subject,
+          body: { contentType: "HTML", content: bodyHtml },
+          toRecipients: [{ emailAddress: { address: toEmail } }],
+        },
+        saveToSentItems: true,
+      };
+      const resp = await fetch(GRAPH_BASE + "/me/sendMail", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify(mailPayload),
+      });
+      if (!resp.ok && resp.status !== 202) {
+        const errText = await resp.text().catch(() => "");
+        throw new Error("Send failed: " + resp.status + " " + errText);
+      }
+      showToast("\u2709\uFE0F Email sent to " + toEmail);
+      // Log to BD execution
+      try {
+        await aiCall("/bd/log-completion", {
+          task_title: task.title,
+          bd_category: routeTaskToBD(task)?.category || "unknown",
+          action_type: "email_sent",
+          details: { to: toEmail, subject, template: templateType },
+        });
+      } catch (_) {}
+    } catch (e) {
+      showToast("Send failed: " + e.message);
+    }
+    setSending(false);
+  };
+
+  const openInOutlook = () => {
+    const mailtoUrl = "mailto:" + encodeURIComponent(toEmail) + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(bodyHtml.replace(/<[^>]*>/g, ""));
+    window.open(mailtoUrl, "_blank");
+    // Log as drafted
+    try {
+      aiCall("/bd/log-completion", {
+        task_title: task.title,
+        bd_category: routeTaskToBD(task)?.category || "unknown",
+        action_type: "email_drafted",
+        details: { to: toEmail, subject, template: templateType },
+      });
+    } catch (_) {}
+  };
+
+  return h("div", { style: { marginTop: 14, borderTop: "1px solid #e2e8f0", paddingTop: 10 } },
+    h("div", { onClick: () => setExpanded(!expanded), style: { cursor: "pointer", display: "flex", alignItems: "center", gap: 6, marginBottom: expanded ? 10 : 0 } },
+      h("span", { style: { fontSize: 14 } }, "\u2709\uFE0F"),
+      h("span", { style: { fontWeight: 700, fontSize: 12.5, color: "#1e293b" } }, "Email Composer"),
+      h("span", { style: { fontSize: 10, color: "#94a3b8", marginLeft: "auto" } }, expanded ? "\u25B2" : "\u25BC"),
+    ),
+    expanded ? h("div", null,
+      // Template selector
+      h("div", { style: { marginBottom: 8 } },
+        h("label", { style: lbl }, "Template"),
+        h("select", { value: templateType, onChange: e => setTemplateType(e.target.value), style: inp },
+          templateTypes.map(t => h("option", { key: t.id, value: t.id }, t.label)),
+        ),
+      ),
+      // Generate button
+      !generated ? h("button", {
+        onClick: generateEmail,
+        disabled: loading,
+        style: { width: "100%", padding: "8px 0", fontSize: 12.5, fontWeight: 700, border: "none", borderRadius: 6, cursor: "pointer", color: "white", background: "#6366f1", opacity: loading ? 0.6 : 1, marginBottom: 10, minHeight: 36 },
+      }, loading ? "Generating\u2026" : "\uD83E\uDD16 Generate Email from Template") : null,
+      // Email form (shown after generation)
+      generated ? h("div", null,
+        h("div", { style: { marginBottom: 8 } },
+          h("label", { style: lbl }, "To"),
+          h("input", { value: toEmail, onChange: e => setToEmail(e.target.value), placeholder: "recipient@example.com", style: inp }),
+        ),
+        h("div", { style: { marginBottom: 8 } },
+          h("label", { style: lbl }, "Subject"),
+          h("input", { value: subject, onChange: e => setSubject(e.target.value), style: inp }),
+        ),
+        h("div", { style: { marginBottom: 8 } },
+          h("label", { style: lbl }, "Body"),
+          h("textarea", { value: bodyHtml.replace(/<[^>]*>/g, ""), onChange: e => setBodyHtml(e.target.value), rows: 6, style: { ...inp, resize: "vertical", minHeight: 120, fontSize: 12, lineHeight: 1.5 } }),
+        ),
+        // Re-generate
+        h("button", {
+          onClick: generateEmail,
+          disabled: loading,
+          style: { width: "100%", padding: "6px 0", fontSize: 11, fontWeight: 600, border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", color: "#6366f1", background: "white", marginBottom: 8, minHeight: 32 },
+        }, loading ? "Regenerating\u2026" : "\uD83D\uDD04 Regenerate"),
+        // Action buttons
+        h("div", { style: { display: "flex", gap: 6 } },
+          h("button", {
+            onClick: sendEmail,
+            disabled: sending || !toEmail,
+            style: { flex: 1, padding: "8px 0", fontSize: 12.5, fontWeight: 700, border: "none", borderRadius: 6, cursor: "pointer", color: "white", background: (!toEmail) ? "#cbd5e1" : "#2563eb", opacity: sending ? 0.6 : 1, minHeight: 36 },
+          }, sending ? "Sending\u2026" : "\uD83D\uDCE8 Send Email"),
+          h("button", {
+            onClick: openInOutlook,
+            style: { flex: 1, padding: "8px 0", fontSize: 12.5, fontWeight: 700, border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", color: "#475569", background: "white", minHeight: 36 },
+          }, "\uD83D\uDCE7 Open in Outlook"),
+        ),
+      ) : null,
+    ) : null,
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TASK MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
-function TaskModal({ task, kids, onSave, onClose }) {
+function TaskModal({ task, kids, onSave, onClose, authUser, showToast }) {
   const [f, setF] = useState({
     title: task?.title || "", category: task?.category || "personal",
     priority: task?.priority || "medium", horizon: task?.horizon || "today",
@@ -1802,6 +2276,8 @@ function TaskModal({ task, kids, onSave, onClose }) {
       task ? h(PropertyIntelPanel, { task }) : null,
       // Log to Salesforce Panel (only for tasks with sf_property smart tag)
       task ? h(LogToSFPanel, { task }) : null,
+      // Email Composer Panel (only for tasks with sf_property smart tag)
+      task ? h(EmailComposerPanel, { task, authUser, showToast: showToast || (() => {}) }) : null,
       h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }},
         h("button", { onClick: onClose, style: { border: "1px solid #e2e8f0", background: "white", borderRadius: 8, padding: "9px 18px", cursor: "pointer", fontSize: 13, color: "#64748b", minHeight: 44 }}, "Cancel"),
         h("button", { onClick: handleSave, style: { border: "none", background: "#1e293b", color: "white", borderRadius: 8, padding: "9px 22px", cursor: "pointer", fontSize: 13, fontWeight: 600, minHeight: 44 }}, task ? "Save" : "Add Task"),
@@ -1838,6 +2314,11 @@ function App() {
   const [syncResult, setSyncResult] = useState(null); // { added, skipped } or null
   const [calSyncResult, setCalSyncResult] = useState(null);
   const [copilotOpen, setCopilotOpen] = useState(false);
+  const [bdFilter, setBdFilter] = useState("all");
+  const [bdConfig, setBdConfig] = useState(() => loadBDConfig());
+  const [bdProgress, setBdProgress] = useState(() => loadBDProgress());
+  const [rescheduleTask, setRescheduleTask] = useState(null);
+  const [rescheduleBdCat, setRescheduleBdCat] = useState(null);
   const [aiConfig, setAiConfig] = useState(() => loadAIConfig());
   const updateAIConfig = useCallback((patch) => {
     setAiConfig(prev => { const next = { ...prev, ...patch }; saveAIConfig(next); return next; });
@@ -1886,6 +2367,73 @@ function App() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(""), 3000);
   }, []);
+
+  // ─── BD Config + Progress Fetch ─────────────────────────────────────────────
+  const fetchBDData = useCallback(async () => {
+    const base = getAIBaseURL();
+    if (!base) return;
+    const config = loadAIConfig();
+    const headers = { "Content-Type": "application/json", "apikey": config.anonKey || "", "Authorization": "Bearer " + (config.anonKey || "") };
+    try {
+      const [cfgResp, progResp] = await Promise.all([
+        fetch(base + "/bd/config", { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(base + "/bd/daily-progress", { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+      ]);
+      if (cfgResp?.categories) {
+        const cfgMap = {};
+        cfgResp.categories.forEach(c => { cfgMap[c.category] = c.daily_target; });
+        setBdConfig(cfgMap);
+        saveBDConfig(cfgMap);
+      }
+      if (progResp?.categories) {
+        const progMap = {};
+        progResp.categories.forEach(c => { progMap[c.name] = c.completed; });
+        setBdProgress(progMap);
+        saveBDProgress(progMap);
+      }
+    } catch (e) { console.warn("BD data fetch:", e); }
+  }, []);
+
+  // Fetch BD data on mount if AI configured
+  useEffect(() => { if (getAIBaseURL()) fetchBDData(); }, []);
+
+  // BD log completion helper
+  const logBDCompletion = useCallback(async (task, bdCategory) => {
+    try {
+      await aiCall("/bd/log-completion", {
+        task_title: task.title,
+        bd_category: bdCategory,
+        action_type: "completed",
+        details: { task_id: task.id, due: task.due },
+      });
+      // Refresh progress
+      fetchBDData();
+    } catch (e) { console.warn("BD log:", e); }
+  }, [fetchBDData]);
+
+  // Handle reschedule: create follow-up task in Microsoft To Do
+  const handleReschedule = useCallback(async (task, followUpDate) => {
+    try {
+      const config = loadMsConfig();
+      const listId = config.listMapping?.["work"];
+      if (!listId) { showToast("No Work list mapped — cannot create follow-up"); setRescheduleTask(null); return; }
+      const followUpTitle = "Follow-up: " + task.title.replace(/^Follow-up:\s*/i, "");
+      const body = {
+        title: followUpTitle,
+        importance: "normal",
+        status: "notStarted",
+        body: { content: "Auto-scheduled follow-up from LCC BD Engine", contentType: "text" },
+        dueDateTime: { dateTime: followUpDate + "T00:00:00.0000000", timeZone: "UTC" },
+      };
+      await graphFetch("/me/todo/lists/" + listId + "/tasks", { method: "POST", body: JSON.stringify(body) });
+      showToast("Follow-up scheduled for " + new Date(followUpDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    } catch (e) {
+      console.error("Reschedule error:", e);
+      showToast("Could not create follow-up task");
+    }
+    setRescheduleTask(null);
+    setRescheduleBdCat(null);
+  }, [showToast]);
 
   // Auto-save to localStorage
   const setTasksAndSave = useCallback((updater) => {
@@ -2644,6 +3192,55 @@ function App() {
           ),
         ),
 
+        // BD Execution Engine Settings
+        getAIBaseURL() ? h("div", { style: { marginBottom: 18, padding: 16, background: "#ecfdf5", borderRadius: 10, border: "1px solid #a7f3d0" }},
+          h("div", { style: { fontWeight: 700, fontSize: 13, color: "#065f46", marginBottom: 10 }}, "\uD83C\uDFAF BD Execution Engine"),
+
+          // Daily Targets
+          h("div", { style: { fontSize: 12, fontWeight: 600, color: "#047857", marginBottom: 6 }}, "Daily Targets"),
+          h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }},
+            Object.entries(BD_CATEGORY_META).map(([key, meta]) =>
+              h("div", { key, style: { display: "flex", alignItems: "center", gap: 6, background: "white", borderRadius: 8, padding: "6px 10px", border: "1px solid #d1fae5" }},
+                h("span", { style: { fontSize: 16 } }, meta.icon),
+                h("span", { style: { fontSize: 12, fontWeight: 600, color: "#1e293b", flex: 1 } }, meta.shortLabel),
+                h("input", {
+                  type: "number", min: 0, max: 50,
+                  value: (bdConfig.categories && bdConfig.categories[key]?.daily_target) || (key === "dialysis" ? 8 : key === "government" ? 4 : key === "blue_suit" ? 3 : 2),
+                  onChange: async (e) => {
+                    const val = parseInt(e.target.value) || 0;
+                    const newCfg = { ...bdConfig, categories: { ...bdConfig.categories, [key]: { ...(bdConfig.categories?.[key] || {}), daily_target: val } } };
+                    setBdConfig(newCfg);
+                    saveBDConfig(newCfg);
+                    // Update server if AI configured
+                    try { await aiCall("/bd/config", { category: key, daily_target: val }); } catch(e) {}
+                  },
+                  style: { width: 52, border: "1px solid #d1fae5", borderRadius: 6, padding: "4px 6px", fontSize: 13, fontWeight: 700, textAlign: "center", outline: "none" },
+                }),
+              )
+            ),
+          ),
+
+          // Email Template Management
+          h("div", { style: { fontSize: 12, fontWeight: 600, color: "#047857", marginBottom: 6 }}, "Email Templates"),
+          h("div", { style: { fontSize: 11, color: "#64748b", marginBottom: 8, lineHeight: 1.4 }}, "Templates use placeholders: {{contact_name}}, {{company_name}}, {{property_name}}, {{city_state}}"),
+          h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" }},
+            ["cold_outreach", "website_followup", "om_download", "post_call"].map(tpl =>
+              h("button", {
+                key: tpl,
+                onClick: async () => {
+                  try {
+                    const res = await aiCall("/bd/generate-email", { template_type: tpl, contact_name: "{{contact_name}}", company_name: "{{company_name}}", property_name: "{{property_name}}", city_state: "{{city_state}}" });
+                    const preview = (res.subject || "No subject") + "\n\n" + (res.plain_text || res.html_body || "No body");
+                    showToast("Template preview copied!");
+                    navigator.clipboard?.writeText(preview);
+                  } catch(e) { showToast("Could not load template: " + e.message); }
+                },
+                style: { background: "white", border: "1px solid #a7f3d0", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#065f46" },
+              }, tpl.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()))
+            ),
+          ),
+        ) : null,
+
         // Import/Export
         h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }},
           h("button", { onClick: exportData, style: { background: "#e0e7ff", border: "none", borderRadius: 8, padding: "7px 14px", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: "#4338ca" }}, "\u{1F4E4} Export JSON"),
@@ -2663,6 +3260,7 @@ function App() {
           { id: "horizon", l: "\u{1F5D3}\uFE0F Timeline" },
           { id: "category", l: "\u{1F4C2} Category" },
           { id: "smart", l: "\u{1F9E0} Smart" },
+          { id: "bd", l: "\uD83C\uDFAF BD" },
           { id: "all", l: "\u{1F4CB} All" },
         ].map(v => h(Pill, { key: v.id, active: view === v.id, onClick: () => setView(v.id) }, v.l))
       ),
@@ -2949,20 +3547,104 @@ function App() {
         );
       }) : null,
 
-      // Today / All flat view
-      (view === "today" || view === "all") ? h("div", null,
-        // Tasks
-        filtered.length ? filtered.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => setModalTask(t) }))
-        : h("div", { style: { textAlign: "center", padding: 60, color: "#94a3b8" }},
-            h("div", { style: { fontSize: 36, marginBottom: 10 }}, view === "today" ? "\u2728" : "\u{1F50D}"),
-            h("div", { style: { fontSize: 15, fontWeight: 600 }}, view === "today" ? "All clear for today!" : "No tasks match your filters"),
-            h("div", { style: { fontSize: 12, marginTop: 4 }}, "Add a task or adjust your filters"),
-          ),
-      ) : null,
+      // BD Dashboard view
+      view === "bd" ? h(BDDashboard, {
+        tasks,
+        bdConfig,
+        bdProgress,
+        bdFilter,
+        setBdFilter,
+        onEditTask: setModalTask,
+        onToggle: (id) => {
+          const task = tasks.find(t => t.id === id);
+          if (task) {
+            const route = routeTaskToBD(task);
+            toggle(id);
+            if (route && getAIBaseURL()) {
+              logBDCompletion(task, route.category);
+              // Show reschedule dialog for incomplete→complete transitions
+              if (!task.done) {
+                setRescheduleTask(task);
+                setRescheduleBdCat(route.category);
+              }
+            }
+          }
+        },
+        showToast,
+        onBrief: (t) => { setModalTask(t); },
+        onLogSF: (t) => { setModalTask(t); },
+      }) : null,
+
+      // Today / All view — grouped by BD category for work tasks
+      (view === "today" || view === "all") ? (() => {
+        if (!filtered.length) return h("div", { style: { textAlign: "center", padding: 60, color: "#94a3b8" }},
+          h("div", { style: { fontSize: 36, marginBottom: 10 }}, view === "today" ? "\u2728" : "\u{1F50D}"),
+          h("div", { style: { fontSize: 15, fontWeight: 600 }}, view === "today" ? "All clear for today!" : "No tasks match your filters"),
+          h("div", { style: { fontSize: 12, marginTop: 4 }}, "Add a task or adjust your filters"),
+        );
+        // Group work tasks by BD category, keep personal/family separate
+        const groups = { dialysis: [], government: [], blue_suit: [], listing_followup: [], other_work: [], personal: [] };
+        filtered.forEach(t => {
+          if (t.category !== "work") { groups.personal.push(t); return; }
+          const route = routeTaskToBD(t);
+          if (route && route.confidence >= 0.6) { groups[route.category].push(t); }
+          else { groups.other_work.push(t); }
+        });
+        const hdrStyle = (color) => ({ fontSize: 14, fontWeight: 700, color: color || "#475569", margin: "0 0 8px", borderBottom: "2px solid " + (color || "#e2e8f0") + "33", paddingBottom: 6 });
+        const sections = [];
+        // BD category groups — use BDTaskRow with quick-action buttons
+        Object.entries(BD_CATEGORY_META).forEach(([key, meta]) => {
+          if (groups[key].length > 0) {
+            sections.push(h("div", { key, style: { marginBottom: 22 } },
+              h("h3", { style: hdrStyle(meta.color) },
+                meta.icon + " " + meta.label, " ", h("span", { style: { fontWeight: 400, fontSize: 12, color: "#94a3b8" } }, "(" + groups[key].length + ")"),
+              ),
+              groups[key].map(t => h(BDTaskRow, {
+                key: t.id, task: t, bdCategory: key,
+                onBrief: () => setModalTask(t),
+                onEmail: () => setModalTask(t),
+                onLog: () => setModalTask(t),
+                onDone: () => {
+                  const route = routeTaskToBD(t);
+                  toggle(t.id);
+                  if (route && getAIBaseURL()) {
+                    logBDCompletion(t, route.category);
+                    if (!t.done) { setRescheduleTask(t); setRescheduleBdCat(route.category); }
+                  }
+                },
+                onEdit: () => setModalTask(t),
+              })),
+            ));
+          }
+        });
+        // Other work tasks — basic TaskRow
+        if (groups.other_work.length > 0) {
+          sections.push(h(TaskGroup, {
+            key: "other_work", label: "\uD83D\uDCBC Other Work", count: groups.other_work.length,
+            color: "#64748b", tasks: groups.other_work, toggle, remove, edit: setModalTask,
+          }));
+        }
+        // Personal tasks — basic TaskRow
+        if (groups.personal.length > 0) {
+          sections.push(h(TaskGroup, {
+            key: "personal", label: "\uD83C\uDFE0 Personal & Family", count: groups.personal.length,
+            color: "#16a34a", tasks: groups.personal, toggle, remove, edit: setModalTask,
+          }));
+        }
+        return h("div", null, ...sections);
+      })() : null,
     ),
 
     // Modal
-    modalTask !== null ? h(TaskModal, { task: modalTask.id ? modalTask : null, kids, onSave: save, onClose: () => setModalTask(null) }) : null,
+    modalTask !== null ? h(TaskModal, { task: modalTask.id ? modalTask : null, kids, onSave: save, onClose: () => setModalTask(null), authUser, showToast }) : null,
+
+    // Reschedule Dialog (after BD task completion)
+    rescheduleTask ? h(RescheduleDialog, {
+      task: rescheduleTask,
+      bdCategory: rescheduleBdCat,
+      onSchedule: handleReschedule,
+      onSkip: () => { setRescheduleTask(null); setRescheduleBdCat(null); },
+    }) : null,
 
     // AI Chat Copilot Sidebar
     h(AIChatCopilot, { open: copilotOpen, onClose: () => setCopilotOpen(false), currentTask: modalTask && modalTask.id ? modalTask : null }),
