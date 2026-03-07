@@ -1059,6 +1059,57 @@ function TaskGroup({ label, count, color, tasks, toggle, remove, edit }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PAST DUE SECTION — collapsible section for overdue tasks
+// ═══════════════════════════════════════════════════════════════════════════════
+function PastDueSection({ tasks, toggle, remove, edit }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const today = todayStr();
+
+  // Sort past-due tasks: most recently overdue first
+  const sorted = [...tasks].sort((a, b) => (b.due || "").localeCompare(a.due || ""));
+
+  // Group by how overdue they are
+  const thisWeek = sorted.filter(t => {
+    const diff = Math.floor((new Date(today) - new Date(t.due)) / 86400000);
+    return diff <= 7;
+  });
+  const older = sorted.filter(t => {
+    const diff = Math.floor((new Date(today) - new Date(t.due)) / 86400000);
+    return diff > 7;
+  });
+
+  return h("div", { style: { marginBottom: 22, background: "#fef2f2", borderRadius: 12, border: "1px solid #fecaca", overflow: "hidden" }},
+    // Header — always visible, clickable to toggle
+    h("div", {
+      onClick: () => setCollapsed(!collapsed),
+      style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", cursor: "pointer", userSelect: "none" }
+    },
+      h("div", { style: { display: "flex", alignItems: "center", gap: 8 }},
+        h("span", { style: { fontSize: 11, color: "#dc2626", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" } }, "\u25BC"),
+        h("span", { style: { fontSize: 16 }}, "\u26A0\uFE0F"),
+        h("span", { style: { fontSize: 14, fontWeight: 700, color: "#dc2626" }}, "Past Due"),
+        h("span", { style: { fontSize: 12, fontWeight: 500, color: "#ef4444", background: "#fee2e2", padding: "2px 8px", borderRadius: 999 }}, tasks.length + " task" + (tasks.length !== 1 ? "s" : "")),
+      ),
+      // Quick summary when collapsed
+      collapsed ? h("div", { style: { fontSize: 11, color: "#94a3b8", maxWidth: "50%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }},
+        sorted.slice(0, 2).map(t => t.title.split(" - ")[0] || t.title.slice(0, 20)).join(", ") + (sorted.length > 2 ? "..." : ""),
+      ) : null,
+    ),
+    // Task list — shown when expanded
+    !collapsed ? h("div", { style: { padding: "0 12px 12px" }},
+      thisWeek.length > 0 ? h("div", { style: { marginBottom: older.length ? 12 : 0 }},
+        h("div", { style: { fontSize: 11, fontWeight: 600, color: "#b91c1c", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6, paddingLeft: 4 }}, "Past 7 Days"),
+        thisWeek.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => edit(t) })),
+      ) : null,
+      older.length > 0 ? h("div", null,
+        h("div", { style: { fontSize: 11, fontWeight: 600, color: "#b91c1c", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6, paddingLeft: 4 }}, "Older"),
+        older.map(t => h(TaskRow, { key: t.id, task: t, toggle, remove, onEdit: () => edit(t) })),
+      ) : null,
+    ) : null,
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SMART TASK GROUP (collapsible sub-groups)
 // ═══════════════════════════════════════════════════════════════════════════════
 function SmartTaskGroup({ groupDef, tasks, toggle, remove, edit, collapseState, onToggleCollapse }) {
@@ -2894,7 +2945,7 @@ function App() {
       const q = search.toLowerCase();
       list = list.filter(t => t.title.toLowerCase().includes(q) || (t.notes || "").toLowerCase().includes(q) || (t.kid || "").toLowerCase().includes(q));
     }
-    if (view === "today") list = list.filter(t => t.horizon === "today" || t.due === todayStr());
+    if (view === "today") list = list.filter(t => t.horizon === "today" || t.due === todayStr() || (!t.done && t.due && t.due < todayStr()));
     list.sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
       if (priWeight[a.priority] !== priWeight[b.priority]) return priWeight[a.priority] - priWeight[b.priority];
@@ -2906,10 +2957,11 @@ function App() {
 
   const stats = useMemo(() => {
     const t = todayStr();
+    const isOverdue = (x) => !x.done && x.due && x.due < t;
     return {
-      today: tasks.filter(x => !x.done && (x.horizon === "today" || x.due === t)).length,
+      today: tasks.filter(x => !x.done && !isOverdue(x) && (x.horizon === "today" || x.due === t)).length,
       week: tasks.filter(x => !x.done && x.horizon === "this_week").length,
-      overdue: tasks.filter(x => !x.done && x.due && x.due < t).length,
+      overdue: tasks.filter(isOverdue).length,
       doneToday: tasks.filter(x => x.done).length,
       total: tasks.filter(x => !x.done).length,
     };
@@ -3582,9 +3634,13 @@ function App() {
           h("div", { style: { fontSize: 15, fontWeight: 600 }}, view === "today" ? "All clear for today!" : "No tasks match your filters"),
           h("div", { style: { fontSize: 12, marginTop: 4 }}, "Add a task or adjust your filters"),
         );
+        // Separate past-due tasks from current tasks (Today view only)
+        const today = todayStr();
+        const pastDueTasks = view === "today" ? filtered.filter(t => !t.done && t.due && t.due < today) : [];
+        const currentTasks = view === "today" ? filtered.filter(t => !((!t.done) && t.due && t.due < today)) : filtered;
         // Group work tasks by BD category, keep personal/family separate
         const groups = { dialysis: [], government: [], blue_suit: [], listing_followup: [], other_work: [], personal: [] };
-        filtered.forEach(t => {
+        currentTasks.forEach(t => {
           if (t.category !== "work") { groups.personal.push(t); return; }
           const route = routeTaskToBD(t);
           if (route && route.confidence >= 0.6) { groups[route.category].push(t); }
@@ -3592,6 +3648,14 @@ function App() {
         });
         const hdrStyle = (color) => ({ fontSize: 14, fontWeight: 700, color: color || "#475569", margin: "0 0 8px", borderBottom: "2px solid " + (color || "#e2e8f0") + "33", paddingBottom: 6 });
         const sections = [];
+        // Past Due section — collapsible, shown at the top
+        if (pastDueTasks.length > 0) {
+          sections.push(h(PastDueSection, {
+            key: "past-due",
+            tasks: pastDueTasks,
+            toggle, remove, edit: setModalTask,
+          }));
+        }
         // BD category groups — use BDTaskRow with quick-action buttons
         Object.entries(BD_CATEGORY_META).forEach(([key, meta]) => {
           if (groups[key].length > 0) {
