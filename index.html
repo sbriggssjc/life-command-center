@@ -638,26 +638,48 @@ try {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MICROSOFT GRAPH API HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
+// Token cache to prevent concurrent acquireTokenPopup calls (MSAL only allows one at a time)
+let _cachedToken = null;
+let _tokenExpiry = 0;
+let _tokenAcquirePromise = null;
+
 async function getAccessToken() {
   if (!msalInstance) return null;
   const accounts = msalInstance.getAllAccounts();
   if (accounts.length === 0) return null;
-  try {
-    const resp = await msalInstance.acquireTokenSilent({
-      scopes: GRAPH_SCOPES,
-      account: accounts[0],
-    });
-    return resp.accessToken;
-  } catch (e) {
-    // Silent token refresh failed, try popup
+
+  // Return cached token if still valid (5 min TTL)
+  if (_cachedToken && Date.now() < _tokenExpiry) return _cachedToken;
+
+  // If a token request is already in flight, wait for it (prevents concurrent popups)
+  if (_tokenAcquirePromise) return _tokenAcquirePromise;
+
+  _tokenAcquirePromise = (async () => {
     try {
-      const resp = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+      const resp = await msalInstance.acquireTokenSilent({
+        scopes: GRAPH_SCOPES,
+        account: accounts[0],
+      });
+      _cachedToken = resp.accessToken;
+      _tokenExpiry = Date.now() + 5 * 60 * 1000;
       return resp.accessToken;
-    } catch (e2) {
-      console.error("Token acquisition failed:", e2);
-      return null;
+    } catch (e) {
+      // Silent failed — try popup ONCE (serialized)
+      try {
+        const resp = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+        _cachedToken = resp.accessToken;
+        _tokenExpiry = Date.now() + 5 * 60 * 1000;
+        return resp.accessToken;
+      } catch (e2) {
+        console.error("Token acquisition failed:", e2);
+        return null;
+      }
+    } finally {
+      _tokenAcquirePromise = null;
     }
-  }
+  })();
+
+  return _tokenAcquirePromise;
 }
 
 async function graphFetch(path, options = {}) {
