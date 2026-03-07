@@ -638,20 +638,35 @@ try {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MICROSOFT GRAPH API HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
-// Token cache to prevent concurrent acquireTokenPopup calls (MSAL only allows one at a time)
+// Token cache + request deduplication + redirect gate
 let _cachedToken = null;
 let _tokenExpiry = 0;
 let _tokenAcquirePromise = null;
+let _msalReady = false;
+
+// Gate: wait for handleRedirectPromise to complete before any token calls
+async function ensureMsalReady() {
+  if (_msalReady) return;
+  if (msalRedirectResult) {
+    try { await msalRedirectResult; } catch(e) { /* already handled */ }
+  }
+  _msalReady = true;
+}
 
 async function getAccessToken() {
   if (!msalInstance) return null;
+
+  // CRITICAL: wait for handleRedirectPromise to finish first
+  // This prevents block_iframe_reload errors from acquireTokenSilent
+  await ensureMsalReady();
+
   const accounts = msalInstance.getAllAccounts();
   if (accounts.length === 0) return null;
 
   // Return cached token if still valid (5 min TTL)
   if (_cachedToken && Date.now() < _tokenExpiry) return _cachedToken;
 
-  // If a token request is already in flight, wait for it (prevents concurrent popups)
+  // If a token request is already in flight, wait for it
   if (_tokenAcquirePromise) return _tokenAcquirePromise;
 
   _tokenAcquirePromise = (async () => {
@@ -664,16 +679,15 @@ async function getAccessToken() {
       _tokenExpiry = Date.now() + 5 * 60 * 1000;
       return resp.accessToken;
     } catch (e) {
-      // Silent failed — try popup ONCE (serialized)
+      console.warn("Silent token failed, will try redirect:", e.errorCode || e.message);
+      // Popup is blocked on most browsers — use redirect instead
+      // This will navigate away and come back, but only as last resort
       try {
-        const resp = await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES });
-        _cachedToken = resp.accessToken;
-        _tokenExpiry = Date.now() + 5 * 60 * 1000;
-        return resp.accessToken;
+        await msalInstance.acquireTokenRedirect({ scopes: GRAPH_SCOPES });
       } catch (e2) {
-        console.error("Token acquisition failed:", e2);
-        return null;
+        console.error("Token redirect failed:", e2);
       }
+      return null;
     } finally {
       _tokenAcquirePromise = null;
     }
