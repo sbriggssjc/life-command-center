@@ -306,8 +306,8 @@ const SMART_GROUPS = {
 // ─── BD ROUTING ENGINE (Client-Side) ─────────────────────────────────────────
 // Pattern matching for routing tasks into BD categories
 const BD_ROUTING_PATTERNS = {
-  dialysis: /medical\s*(buyer|developer|owner)|dialysis|fmc|davita|fresenius|renal|kidney/i,
-  government: /government|gsa|va\s*(developer|owner|portfolio)|federal|agency|veterans\s*affairs/i,
+  government: /government|gsa|\bva\b|usps|usda|\bssa\b|\birs\b|f&ws|federal|agency|veterans|us\s*(bankruptcy|courthouse|post\s*office)|bureau|cboc|opm|hud/i,
+  dialysis: /medical\s*(buyer|developer|owner)|dialysis|fmc|davita|fresenius|renal|kidney|\basc\b|surgery\s*center|ambulatory|endoscopy|gastroenterology|neurospine|ortho|eye\s*center|pain\s*(management|center)|imaging|radiology|urgent\s*care|med\s*(office|center)|mob\b/i,
   blue_suit: /net\s*lease\s*(portfolio|developer|buyer)|portfolio\s*(buyer|owner)|blue\s*suit|investor\s*(group|fund)/i,
   listing_followup: /follow\s*up|callback|emailed|website|om\s*download|offering\s*memorandum|brochure|inquiry/i,
 };
