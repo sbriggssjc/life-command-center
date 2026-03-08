@@ -390,6 +390,107 @@ async function aiCall(route, body) {
   return resp.json();
 }
 
+// AI GET helper — for GET endpoints with query params
+async function aiGet(route) {
+  const config = loadAIConfig();
+  const base = getAIBaseURL();
+  if (!base) throw new Error("AI not configured — set Supabase URL in Settings");
+  const headers = { "Content-Type": "application/json", "apikey": config.anonKey || "", "Authorization": "Bearer " + (config.anonKey || "") };
+  const resp = await fetch(base + route, { method: "GET", headers });
+  if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.error || "API error " + resp.status); }
+  return resp.json();
+}
+
+// ─── Supabase Direct Task Fetchers ────────────────────────────────────────────
+// Convert a Supabase SF Task record → LCC app task format
+function sfTaskToAppTask(sfTask) {
+  const dueDate = sfTask.activity_date || "";
+  const task = {
+    id: "sf-" + sfTask.id,
+    msId: null,
+    title: sfTask.subject || "SF Task",
+    category: "work",
+    priority: (sfTask.priority === "High") ? "high" : (sfTask.priority === "Low") ? "low" : "medium",
+    horizon: "today",
+    due: dueDate,
+    done: (sfTask.status === "Completed"),
+    notes: sfTask.description || "",
+    body: sfTask.description || "",
+    source: "salesforce",
+    emailId: "",
+    emailLink: "",
+    recurrence: "none",
+    kid: "",
+    created: sfTask.created_date ? sfTask.created_date.split("T")[0] : todayStr(),
+    lastModified: sfTask.last_modified_date || "",
+    smartTags: [],
+    smartGroup: null,
+    sf_who_id: sfTask.who_id || "",
+    sf_who_name: sfTask.who_name || "",
+    sf_what_id: sfTask.what_id || "",
+    sf_what_name: sfTask.what_name || "",
+  };
+  applySmartTags(task);
+  return task;
+}
+
+// Convert a Supabase Flagged Email record → LCC app task format
+function flaggedEmailToAppTask(email) {
+  const dueDate = email.flag_due_date || (email.received_date ? email.received_date.split("T")[0] : "");
+  const task = {
+    id: "email-" + email.id,
+    msId: null,
+    title: email.subject || "Flagged Email",
+    category: "work",
+    priority: (email.importance === "high") ? "high" : "medium",
+    horizon: "today",
+    due: dueDate,
+    done: (email.flag_status === "complete"),
+    notes: (email.sender_name ? "From: " + email.sender_name + " <" + (email.sender_email || "") + ">" : "") + (email.preview ? "\n" + email.preview : ""),
+    body: email.preview || "",
+    source: "flagged-email",
+    emailId: email.id,
+    emailLink: email.web_link || "",
+    recurrence: "none",
+    kid: "",
+    created: email.received_date ? email.received_date.split("T")[0] : todayStr(),
+    lastModified: email.received_date || "",
+    smartTags: [],
+    smartGroup: null,
+    senderName: email.sender_name || "",
+    senderEmail: email.sender_email || "",
+    hasAttachments: email.has_attachments || false,
+  };
+  applySmartTags(task);
+  return task;
+}
+
+// Fetch SF Tasks + Flagged Emails from Supabase (bypasses To Do bottleneck)
+async function fetchSupabaseTasks() {
+  const results = { sfTasks: [], flaggedEmails: [], errors: [] };
+  try {
+    const sfResp = await aiGet("/sync/sf-tasks?limit=5000");
+    if (sfResp.tasks) {
+      results.sfTasks = sfResp.tasks.map(sfTaskToAppTask);
+      console.log("Supabase SF Tasks: " + sfResp.tasks.length + " fetched (" + sfResp.total_for_owner + " total for owner)");
+    }
+  } catch (e) {
+    console.warn("Failed to fetch Supabase SF tasks:", e.message);
+    results.errors.push("SF Tasks: " + e.message);
+  }
+  try {
+    const emailResp = await aiGet("/sync/flagged-emails?limit=5000");
+    if (emailResp.emails) {
+      results.flaggedEmails = emailResp.emails.map(flaggedEmailToAppTask);
+      console.log("Supabase Flagged Emails: " + emailResp.emails.length + " fetched (" + emailResp.total + " total)");
+    }
+  } catch (e) {
+    console.warn("Failed to fetch Supabase flagged emails:", e.message);
+    results.errors.push("Flagged Emails: " + e.message);
+  }
+  return results;
+}
+
 // Apply smart tags to a task (mutates & returns)
 function applySmartTags(task) {
   if (task.smartTags && task.smartTags.length > 0) return task; // already tagged
@@ -977,7 +1078,7 @@ async function fullSync(currentTasks, setTasks) {
   // Push local tasks that don't have msId to Microsoft
   const pushPromises = [];
   for (const [id, task] of mergedMap) {
-    if (!task.msId && !task.id.startsWith("ms-")) {
+    if (!task.msId && !task.id.startsWith("ms-") && !task.id.startsWith("sf-") && !task.id.startsWith("email-")) {
       const listId = listMapping[task.category];
       if (listId) {
         pushPromises.push(
@@ -1007,6 +1108,54 @@ async function fullSync(currentTasks, setTasks) {
       }
     }
     saveSyncQueue([]);
+  }
+
+  // ─── Supabase Direct Pipeline (bypasses To Do bottleneck) ────────────────
+  // Fetch SF Tasks + Flagged Emails directly from Supabase
+  try {
+    const aiConfig = loadAIConfig();
+    if (aiConfig && aiConfig.supabaseUrl && aiConfig.anonKey) {
+      const sbData = await fetchSupabaseTasks();
+      let sbAdded = 0;
+      // Merge Supabase SF Tasks — these use "sf-{id}" keys so no collision with ms-{id}
+      for (const sbt of sbData.sfTasks) {
+        if (!mergedMap.has(sbt.id)) {
+          // Check for duplicate by title match against existing To Do tasks
+          const titleLower = sbt.title.toLowerCase().trim();
+          let isDuplicate = false;
+          for (const [, existing] of mergedMap) {
+            if (existing.title.toLowerCase().trim() === titleLower && existing.source !== "salesforce") {
+              isDuplicate = true;
+              break;
+            }
+          }
+          if (!isDuplicate) {
+            mergedMap.set(sbt.id, sbt);
+            sbAdded++;
+          }
+        }
+      }
+      // Merge Supabase Flagged Emails — these use "email-{id}" keys
+      for (const em of sbData.flaggedEmails) {
+        if (!mergedMap.has(em.id)) {
+          const titleLower = em.title.toLowerCase().trim();
+          let isDuplicate = false;
+          for (const [, existing] of mergedMap) {
+            if (existing.title.toLowerCase().trim() === titleLower && existing.source === "flagged-email") {
+              isDuplicate = true;
+              break;
+            }
+          }
+          if (!isDuplicate) {
+            mergedMap.set(em.id, em);
+            sbAdded++;
+          }
+        }
+      }
+      console.log("Supabase merge: added " + sbAdded + " tasks (" + sbData.sfTasks.length + " SF + " + sbData.flaggedEmails.length + " emails fetched)");
+    }
+  } catch (e) {
+    console.warn("Supabase direct fetch failed (non-blocking):", e);
   }
 
   const merged = Array.from(mergedMap.values());
