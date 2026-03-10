@@ -284,20 +284,41 @@ function detectSmartTags(task) {
     tags.push({ type: "rhythm", value: "daily_touchpoint", confidence: 0.85 });
   }
 
+  // Pattern 5: SF Task categorization by what_type (Opportunity = Seller Prospect)
+  if (task.sf_what_type === "Opportunity") {
+    tags.push({ type: "sf_category", value: "seller_prospect", confidence: 1.0 });
+  } else if (task.source === "salesforce" && task.sf_what_type !== "Opportunity") {
+    tags.push({ type: "sf_category", value: "listing_followup", confidence: 0.8 });
+  }
+
+  // Pattern 6: SF Task type (from Salesforce Type field)
+  if (task.sf_task_type) {
+    tags.push({ type: "sf_task_type", value: task.sf_task_type.toLowerCase(), confidence: 1.0 });
+  }
+
   return tags;
 }
 
 function determineSmartGroup(task, tags) {
   if (!tags || tags.length === 0) return "other";
+  // SF task categorization: Seller Prospect vs Listing Follow-up
+  const sfCatTag = tags.find(t => t.type === "sf_category");
+  if (sfCatTag) {
+    if (sfCatTag.value === "seller_prospect") return "seller_prospects";
+    if (sfCatTag.value === "listing_followup" && tags.some(t => t.type === "sf_property")) return "sf_properties";
+  }
   if (tags.some(t => t.type === "sf_property")) return "sf_properties";
   if (task.source === "flagged-email" || tags.some(t => t.type === "source_tag" && t.value === "email")) return "email_tasks";
+  if (task.source === "salesforce") return "sf_tasks";
   return "other";
 }
 
 // Smart group definitions per category
 const SMART_GROUPS = {
   work: [
+    { id: "seller_prospects", label: "Seller Prospects", icon: "\uD83C\uDFAF", defaultCollapsed: false, threshold: 1 },
     { id: "sf_properties", label: "Salesforce Properties", icon: "\u{1F3E2}", defaultCollapsed: true, threshold: 3 },
+    { id: "sf_tasks", label: "SF Tasks", icon: "\u2601\uFE0F", defaultCollapsed: true, threshold: 1 },
     { id: "email_tasks", label: "Email Follow-ups", icon: "\u{1F4E7}", defaultCollapsed: false, threshold: 1 },
     { id: "other", label: "Other Work", icon: "\u{1F4CB}", defaultCollapsed: false, threshold: 0, catchAll: true },
   ],
@@ -341,6 +362,11 @@ function routeTaskToBD(task) {
   const sfTag = task.smartTags?.find(t => t.type === "sf_property");
   if (sfTag) return { category: "dialysis", confidence: 0.60, source: "sf_property_default" };
 
+  // Priority 4: SF tasks linked to Opportunities are seller prospects — route by subject
+  if (task.sf_what_type === "Opportunity") {
+    return { category: "listing_followup", confidence: 0.70, source: "opportunity_link" };
+  }
+
   return null;
 }
 
@@ -364,6 +390,29 @@ const AI_CONFIG_KEY = "lcc-ai-config";
 function loadAIConfig() { try { return JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || "{}"); } catch { return {}; } }
 function saveAIConfig(c) { try { localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(c)); } catch {} }
 function getAIBaseURL() { const c = loadAIConfig(); return c.supabaseUrl ? c.supabaseUrl.replace(/\/$/, "") + "/functions/v1/ai-copilot" : ""; }
+function getSFInstanceUrl() { const c = loadAIConfig(); return c.sfInstanceUrl || ""; }
+
+// Deep link URL builders
+function buildOutlookDeepLink(emailId) {
+  if (!emailId) return "";
+  return "https://outlook.office365.com/owa/?ItemID=" + encodeURIComponent(emailId) + "&exvsurl=1&viewmodel=ReadMessageItem";
+}
+function buildSalesforceDeepLink(sfTaskId) {
+  if (!sfTaskId) return "";
+  const instance = getSFInstanceUrl();
+  if (!instance) return "";
+  const cleanInstance = instance.replace(/\/$/, "").replace(/^https?:\/\//, "");
+  return "https://" + cleanInstance + "/lightning/r/Task/" + sfTaskId + "/view";
+}
+function getTaskDeepLink(task) {
+  if (task.source === "flagged-email" && task.emailId) return { url: buildOutlookDeepLink(task.emailId), label: "Open in Outlook", icon: "\u2709\uFE0F", color: "#0078d4", bg: "#e8f4fd" };
+  if (task.source === "salesforce" && task.id && task.id.startsWith("sf-")) {
+    const sfId = task.id.replace(/^sf-/, "");
+    const url = buildSalesforceDeepLink(sfId);
+    if (url) return { url, label: "Open in Salesforce", icon: "\u2601\uFE0F", color: "#00a1e0", bg: "#e6f7ff" };
+  }
+  return null;
+}
 
 // AI Chat history
 const AI_CHAT_KEY = "lcc-ai-chat";
@@ -429,6 +478,8 @@ function sfTaskToAppTask(sfTask) {
     sf_who_name: sfTask.who_name || "",
     sf_what_id: sfTask.what_id || "",
     sf_what_name: sfTask.what_name || "",
+    sf_what_type: sfTask.what_type || "",
+    sf_task_type: sfTask.task_type || "",
   };
   applySmartTags(task);
   return task;
@@ -469,7 +520,7 @@ function flaggedEmailToAppTask(email) {
 async function fetchSupabaseTasks() {
   const results = { sfTasks: [], flaggedEmails: [], errors: [] };
   try {
-    const sfResp = await aiGet("/sync/sf-tasks?limit=5000");
+    const sfResp = await aiGet("/sync/sf-tasks?mode=display&limit=500");
     if (sfResp.tasks) {
       results.sfTasks = sfResp.tasks.map(sfTaskToAppTask);
       console.log("Supabase SF Tasks: " + sfResp.tasks.length + " fetched (" + sfResp.total_for_owner + " total for owner)");
@@ -666,6 +717,43 @@ async function trySilentCalendarFetch() {
   } catch(e) { console.warn("Silent calendar fetch:", e); return null; }
 }
 
+// Direct Graph API fetch for ALL flagged emails (bypasses PA flow KQL search limitation)
+async function trySilentFlaggedEmailFetch() {
+  if (!msalInstance) return null;
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) return null;
+  try {
+    const resp = await msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: accounts[0] });
+    if (!resp?.accessToken) return null;
+    const allEmails = [];
+    // Use OData $filter (exhaustive) instead of $search (KQL, relevance-limited)
+    let url = GRAPH_BASE + "/me/mailFolders/inbox/messages?$filter=flag/flagStatus eq 'flagged'&$top=250&$select=id,subject,from,toRecipients,receivedDateTime,hasAttachments,importance,bodyPreview,conversationId,isRead,categories,internetMessageId,flag&$orderby=receivedDateTime desc";
+    while (url && allEmails.length < 5000) {
+      const r = await fetch(url, { headers: { Authorization: "Bearer " + resp.accessToken } });
+      if (!r.ok) { console.warn("Flagged email fetch failed:", r.status); break; }
+      const data = await r.json();
+      const batch = (data.value || []).map(m => ({
+        id: m.id,
+        subject: m.subject || "",
+        sender_name: m.from?.emailAddress?.name || "",
+        sender_email: m.from?.emailAddress?.address || "",
+        received_date: m.receivedDateTime || "",
+        flag_status: m.flag?.flagStatus || "flagged",
+        flag_due_date: m.flag?.dueDateTime?.dateTime?.split("T")[0] || "",
+        importance: m.importance || "normal",
+        has_attachments: m.hasAttachments || false,
+        preview: m.bodyPreview || "",
+        categories: m.categories || [],
+        web_link: null,
+      }));
+      allEmails.push(...batch);
+      url = data["@odata.nextLink"] || null; // Follow pagination
+    }
+    console.log("Graph API flagged emails: " + allEmails.length + " fetched directly");
+    return allEmails;
+  } catch(e) { console.warn("Silent flagged email fetch:", e); return null; }
+}
+
 function loadSaved() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -718,7 +806,7 @@ const MSAL_CONFIG = {
   },
 };
 
-const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read", "Mail.Send"];
+const GRAPH_SCOPES = ["Tasks.ReadWrite", "Calendars.Read", "Mail.Send", "Mail.Read"];
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 let msalInstance = null;
@@ -1118,21 +1206,12 @@ async function fullSync(currentTasks, setTasks) {
       const sbData = await fetchSupabaseTasks();
       let sbAdded = 0;
       // Merge Supabase SF Tasks — these use "sf-{id}" keys so no collision with ms-{id}
+      // NOTE: No title-based dedup for SF tasks — many share generic subjects like "Call"
+      // (4,800+ tasks can be titled "Call"). Each has a unique sf-{id} key which is sufficient.
       for (const sbt of sbData.sfTasks) {
         if (!mergedMap.has(sbt.id)) {
-          // Check for duplicate by title match against existing To Do tasks
-          const titleLower = sbt.title.toLowerCase().trim();
-          let isDuplicate = false;
-          for (const [, existing] of mergedMap) {
-            if (existing.title.toLowerCase().trim() === titleLower && existing.source !== "salesforce") {
-              isDuplicate = true;
-              break;
-            }
-          }
-          if (!isDuplicate) {
-            mergedMap.set(sbt.id, sbt);
-            sbAdded++;
-          }
+          mergedMap.set(sbt.id, sbt);
+          sbAdded++;
         }
       }
       // Merge Supabase Flagged Emails — these use "email-{id}" keys
@@ -1156,6 +1235,25 @@ async function fullSync(currentTasks, setTasks) {
     }
   } catch (e) {
     console.warn("Supabase direct fetch failed (non-blocking):", e);
+  }
+
+  // ─── Direct Graph API Flagged Email Fetch (bypasses PA flow limitation) ──
+  // PA flow uses KQL $search which is relevance-limited; Graph API $filter is exhaustive
+  try {
+    const graphEmails = await trySilentFlaggedEmailFetch();
+    if (graphEmails && graphEmails.length > 0) {
+      let graphAdded = 0;
+      for (const ge of graphEmails) {
+        const appTask = flaggedEmailToAppTask(ge);
+        if (!mergedMap.has(appTask.id)) {
+          mergedMap.set(appTask.id, appTask);
+          graphAdded++;
+        }
+      }
+      console.log("Graph API flagged emails: " + graphAdded + " new added (" + graphEmails.length + " total from Graph, " + (graphEmails.length - graphAdded) + " already in Supabase)");
+    }
+  } catch (e) {
+    console.warn("Graph API flagged email fetch failed (non-blocking):", e);
   }
 
   const merged = Array.from(mergedMap.values());
@@ -1224,6 +1322,8 @@ function TaskRow({ task, toggle, remove, onEdit }) {
     const m = (task.body || task.notes || "").match(/\[EmailLink:(https?:\/\/[^\]]+)\]/);
     return m ? m[1] : null;
   })();
+  // Deep link to source (Outlook email or Salesforce task)
+  const deepLink = getTaskDeepLink(task);
 
   return h("div", { className: "task-row", style: {
     display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
@@ -1252,6 +1352,10 @@ function TaskRow({ task, toggle, remove, onEdit }) {
         isSynced ? h(Badge, { color: "#16a34a", bg: "#f0fdf4" }, "\u2601\uFE0F Synced") : null,
         emailLink ? h("a", { href: emailLink, target: "_blank", rel: "noopener", onClick: (e) => e.stopPropagation(), style: { textDecoration: "none" }},
           h(Badge, { color: "#0078d4", bg: "#e8f4fd" }, "\u2709\uFE0F Open Email")
+        ) : null,
+        // Deep link to source (Outlook / Salesforce)
+        !emailLink && deepLink ? h("a", { href: deepLink.url, target: "_blank", rel: "noopener", onClick: (e) => e.stopPropagation(), style: { textDecoration: "none" }},
+          h(Badge, { color: deepLink.color, bg: deepLink.bg }, deepLink.icon + " " + deepLink.label)
         ) : null,
         // Smart tags
         ...(task.smartTags || []).filter(t => t.confidence >= 0.8).map((tag, i) => {
@@ -1399,6 +1503,7 @@ function BDTaskRow({ task, bdCategory, onBrief, onEmail, onLog, onDone, onEdit }
   const meta = BD_CATEGORY_META[bdCategory] || {};
   const sfTag = task.smartTags?.find(t => t.type === "sf_property");
   const isOverdue = !task.done && task.due && task.due < todayStr();
+  const deepLink = getTaskDeepLink(task);
 
   return h("div", {
     style: {
@@ -1421,6 +1526,7 @@ function BDTaskRow({ task, bdCategory, onBrief, onEmail, onLog, onDone, onEdit }
     ),
     // Quick action buttons
     h("div", { style: { display: "flex", gap: 3, flexShrink: 0, alignItems: "center" } },
+      deepLink ? h("a", { href: deepLink.url, target: "_blank", rel: "noopener", title: deepLink.label, onClick: e => e.stopPropagation(), style: { border: "none", background: deepLink.bg, borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" } }, deepLink.icon) : null,
       sfTag ? h("button", { onClick: onBrief, title: "Property Brief", style: { border: "none", background: "#eef2ff", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" } }, "\uD83D\uDCCB") : null,
       h("button", { onClick: onEmail, title: "Draft Email", style: { border: "none", background: "#f0fdf4", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2709\uFE0F"),
       h("button", { onClick: onLog, title: "Log to SF", style: { border: "none", background: "#fefce8", borderRadius: 6, width: 30, height: 30, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" } }, "\uD83D\uDCE4"),
@@ -2533,6 +2639,19 @@ function TaskModal({ task, kids, onSave, onClose, authUser, showToast }) {
   return h("div", { className: "modal-overlay", onClick: onClose },
     h("div", { className: "modal-box", onClick: e => e.stopPropagation() },
       h("h2", { style: { margin: "0 0 18px", fontSize: 17, fontWeight: 700 }}, task ? "Edit Task" : "New Task"),
+      // Deep link banner — open source email/SF task
+      task && (() => {
+        const dl = getTaskDeepLink(task);
+        return dl ? h("a", { href: dl.url, target: "_blank", rel: "noopener", style: {
+          display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", marginBottom: 14,
+          background: dl.bg, border: "1px solid " + dl.color + "30", borderRadius: 10,
+          textDecoration: "none", color: dl.color, fontSize: 13, fontWeight: 600, transition: "all 0.15s",
+        }},
+          h("span", { style: { fontSize: 18 } }, dl.icon),
+          h("span", null, dl.label),
+          h("span", { style: { marginLeft: "auto", fontSize: 11, opacity: 0.7 } }, "\u2197\uFE0F"),
+        ) : null;
+      })(),
       h("div", { style: { display: "flex", flexDirection: "column", gap: 12 }},
         h("div", null, h("label", { style: lbl }, "What needs to be done? *"), h("input", { value: f.title, onChange: e => set("title", e.target.value), autoFocus: true, style: inp, placeholder: "e.g. Pick up prescriptions" })),
         h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }},
@@ -3456,6 +3575,15 @@ function App() {
               style: { width: "100%", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "monospace" },
               type: "password",
             }),
+          ),
+          h("div", { style: { marginBottom: 10 }},
+            h("label", { style: { display: "block", fontSize: 11.5, fontWeight: 600, color: "#64748b", marginBottom: 3 }}, "Salesforce Instance URL"),
+            h("input", {
+              value: aiConfig.sfInstanceUrl || "", placeholder: "northmarq.my.salesforce.com",
+              onChange: e => updateAIConfig({ sfInstanceUrl: e.target.value }),
+              style: { width: "100%", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", fontSize: 13, outline: "none", boxSizing: "border-box" },
+            }),
+            h("div", { style: { fontSize: 10.5, color: "#94a3b8", marginTop: 3 }}, "For deep links to SF tasks. Example: northmarq.my.salesforce.com"),
           ),
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }},
             h("button", {
