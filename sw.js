@@ -1,102 +1,70 @@
-// Life Command Center — Service Worker
-// Cache-first for app assets, network-first for Microsoft Graph API
-
-const CACHE_VERSION = "lcc-v5";
-const CACHE_ASSETS = [
-  "./",
-  "./index.html",
-  "./manifest.json",
-  "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
-  "https://alcdn.msauth.net/browser/2.39.0/js/msal-browser.min.js",
+const CACHE_NAME = 'lcc-v10';
+const STATIC_ASSETS = [
+  './',
+  './index.html',
+  './manifest.json'
 ];
 
-// Install — cache essential assets
-self.addEventListener("install", (event) => {
+// Install: cache static shell
+self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => {
-      return cache.addAll(CACHE_ASSETS).catch((err) => {
-        // If some CDN assets fail (e.g., offline), continue anyway
-        console.warn("Some assets failed to cache:", err);
-      });
-    })
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-// Activate — clean up old caches
-self.addEventListener("activate", (event) => {
+// Activate: clean old caches
+self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then((names) => {
-      return Promise.all(
-        names.map((name) => {
-          if (name !== CACHE_VERSION) {
-            return caches.delete(name);
-          }
-        })
-      );
-    })
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch — routing strategy
-self.addEventListener("fetch", (event) => {
+// Fetch: network-first for API calls, stale-while-revalidate for static
+self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Skip non-GET requests (POST, PATCH, DELETE for Graph API)
-  if (event.request.method !== "GET") return;
-
-  // Network-first for Microsoft Graph API, MSAL auth, and Supabase API
-  if (
-    url.hostname === "graph.microsoft.com" ||
-    url.hostname === "login.microsoftonline.com" ||
-    url.hostname === "login.windows.net" ||
-    url.hostname === "login.microsoft.com" ||
-    url.hostname.endsWith(".supabase.co")
-  ) {
+  // Network-first for API calls (Supabase, Open-Meteo, Treasury)
+  if (url.hostname.includes('supabase.co') ||
+      url.hostname.includes('open-meteo.com') ||
+      url.hostname.includes('fiscaldata.treasury.gov')) {
     event.respondWith(
-      fetch(event.request).catch(() => {
-        return caches.match(event.request);
+      fetch(event.request)
+        .then(response => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Cache-first for same-origin static assets
+  if (url.origin === self.location.origin) {
+    event.respondWith(
+      caches.match(event.request).then(cached => {
+        const fetchPromise = fetch(event.request).then(response => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
+          return response;
+        }).catch(() => cached);
+
+        return cached || fetchPromise;
       })
     );
     return;
   }
 
-  // Cache-first for everything else (app assets, CDN libraries)
+  // Default: network with cache fallback
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) {
-        // Return cached version, but update cache in background
-        event.waitUntil(
-          fetch(event.request).then((response) => {
-            if (response && response.status === 200) {
-              caches.open(CACHE_VERSION).then((cache) => {
-                cache.put(event.request, response);
-              });
-            }
-          }).catch(() => {})
-        );
-        return cached;
-      }
-
-      // Not in cache — fetch from network
-      return fetch(event.request).then((response) => {
-        if (!response || response.status !== 200) {
-          return response;
-        }
-        // Cache the new resource
-        const responseClone = response.clone();
-        caches.open(CACHE_VERSION).then((cache) => {
-          cache.put(event.request, responseClone);
-        });
-        return response;
-      }).catch(() => {
-        // Offline fallback for HTML pages
-        if (event.request.headers.get("accept")?.includes("text/html")) {
-          return caches.match("./index.html");
-        }
-      });
-    })
+    fetch(event.request).catch(() => caches.match(event.request))
   );
 });
