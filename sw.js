@@ -1,7 +1,8 @@
-const CACHE_NAME = 'lcc-v10';
+const CACHE_NAME = 'lcc-v12';
 const STATIC_ASSETS = [
   './',
   './index.html',
+  './gov.js',
   './manifest.json'
 ];
 
@@ -30,7 +31,8 @@ self.addEventListener('fetch', event => {
   // Network-first for API calls (Supabase, Open-Meteo, Treasury)
   if (url.hostname.includes('supabase.co') ||
       url.hostname.includes('open-meteo.com') ||
-      url.hostname.includes('fiscaldata.treasury.gov')) {
+      url.hostname.includes('fiscaldata.treasury.gov') ||
+      url.hostname.includes('cdnjs.cloudflare.com')) {
     event.respondWith(
       fetch(event.request)
         .then(response => {

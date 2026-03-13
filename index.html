@@ -8,6 +8,8 @@
 <meta name="theme-color" content="#0f1117">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <title>Life Command Center</title>
 <style>
 :root {
@@ -16,6 +18,8 @@
   --accent: #6c8cff; --accent2: #4a6adf; --green: #34d399; --yellow: #fbbf24;
   --red: #f87171; --orange: #fb923c; --purple: #a78bfa; --cyan: #22d3ee; --pink: #f472b6;
   --radius: 12px; --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Government tab color mappings */
+  --gov-green: #10b981; --gov-amber: #f59e0b; --gov-red: #ef4444; --gov-purple: #8b5cf6; --gov-cyan: #06b6d4;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; min-height: 100dvh; overflow: hidden; }
@@ -23,6 +27,7 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 button { font-family: inherit; cursor: pointer; }
 input, select { font-family: inherit; }
+.mono { font-family:'JetBrains Mono',monospace; }
 
 /* App shell */
 .app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; padding-top: var(--safe-top); }
@@ -208,7 +213,192 @@ input, select { font-family: inherit; }
 .cat-metric-val { font-size: 20px; font-weight: 700; }
 .cat-metric-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
 
-/* Responsive: larger screens get a sidebar layout */
+/* Government Tab Styles */
+.gov-inner-tabs { display: flex; gap: 0; background: var(--s1); border-bottom: 1px solid var(--border); padding: 0 16px; overflow-x: auto; flex-shrink: 0; margin-bottom: 12px; }
+.gov-inner-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text2); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; background: none; border: none; }
+.gov-inner-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.gov-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.gov-metric-card { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; position: relative; overflow: hidden; }
+.gov-metric-card .gov-metric-bar { position: absolute; top: 0; left: 0; width: 4px; height: 100%; }
+.gov-metric-label { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px; }
+.gov-metric-value { color: var(--text); font-size: 28px; font-weight: 700; }
+.gov-metric-sub { color: var(--text2); font-size: 13px; margin-top: 4px; }
+
+.gov-chart-card { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.gov-chart-title { color: var(--text2); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 16px; }
+.gov-chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+
+.gov-table-card { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; overflow-x: auto; }
+.gov-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.gov-table th { text-align: left; padding: 12px; color: var(--text2); font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.gov-table td { padding: 12px; color: var(--text); border-bottom: 1px solid var(--border); }
+.gov-table td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.gov-table td.right { text-align: right; }
+
+.gov-progress { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.gov-progress-bar { flex: 1; height: 8px; background: var(--s2); border-radius: 4px; overflow: hidden; }
+.gov-progress-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s ease; }
+.gov-progress-label { font-size: 12px; color: var(--text2); min-width: 60px; text-align: right; }
+
+.gov-research-wrap { display: grid; grid-template-columns: 1fr 460px; gap: 16px; }
+.gov-research-context { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.gov-research-form { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+
+.gov-ctx-row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: flex-start; }
+.gov-ctx-label { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+.gov-ctx-value { color: var(--text); font-size: 13px; font-family: 'JetBrains Mono', monospace; word-break: break-word; }
+.gov-ctx-value.highlight { color: var(--accent); font-weight: 600; }
+
+.gov-form-group { margin-bottom: 12px; }
+.gov-form-group label { display: block; color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 6px; }
+.gov-form-group input, .gov-form-group select, .gov-form-group textarea {
+  width: 100%; padding: 10px; background: var(--s2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; outline: none; font-family: inherit;
+}
+.gov-form-group input:focus, .gov-form-group select:focus, .gov-form-group textarea:focus {
+  border-color: var(--accent); background: var(--s3);
+}
+.gov-form-group textarea { resize: vertical; min-height: 80px; }
+
+.gov-owner-chain { background: var(--s2); border-left: 3px solid var(--accent); border-radius: 6px; padding: 12px; margin-bottom: 12px; font-size: 12px; }
+.gov-owner-step { padding: 4px 0; color: var(--text2); }
+.gov-owner-step.new-owner { color: var(--green); font-weight: 600; }
+.gov-owner-step.spe { color: var(--orange); font-weight: 600; }
+
+.gov-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.gov-dot.green { background: var(--gov-green); }
+.gov-dot.amber { background: var(--gov-amber); }
+.gov-dot.red { background: var(--gov-red); }
+.gov-dot.blue { background: var(--accent); }
+.gov-dot.cyan { background: var(--gov-cyan); }
+.gov-dot.dim { background: var(--text2); }
+
+.gov-legend { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 12px; }
+.gov-legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.gov-legend-swatch { width: 8px; height: 8px; border-radius: 2px; }
+
+.gov-autocomplete { position: relative; }
+.gov-autocomplete-list { position: absolute; top: 100%; left: 0; right: 0; background: var(--s2); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; max-height: 200px; overflow-y: auto; z-index: 100; display: none; }
+.gov-autocomplete-list.show { display: block; }
+.gov-autocomplete-item { padding: 10px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text2); }
+.gov-autocomplete-item:hover { background: var(--s3); color: var(--text); }
+.gov-autocomplete-item.selected { background: var(--accent2); color: #fff; }
+
+.gov-connection-form { background: var(--s2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.gov-connection-form h3 { font-size: 16px; margin-bottom: 12px; }
+.gov-connection-form p { font-size: 13px; color: var(--text2); margin-bottom: 16px; line-height: 1.5; }
+
+.gov-btn { padding: 10px 16px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.gov-btn:hover { opacity: 0.9; }
+.gov-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.gov-btn.secondary { background: var(--s2); color: var(--text); border: 1px solid var(--border); }
+.gov-btn.secondary:hover { border-color: var(--accent); }
+
+.gov-action-buttons { display: flex; gap: 8px; margin-top: 12px; }
+.gov-action-buttons button { flex: 1; }
+
+/* Gov.js module class mappings (unprefixed aliases used by gov.js) */
+.metric-card { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; position: relative; overflow: hidden; }
+.metric-label { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px; }
+.metric-value { color: var(--text); font-size: 28px; font-weight: 700; }
+.metric-sub { color: var(--text2); font-size: 13px; margin-top: 4px; }
+
+.table-empty { text-align: center; padding: 32px; color: var(--text2); font-size: 14px; }
+.table-wrapper { overflow-x: auto; border-radius: 8px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th { text-align: left; padding: 12px; color: var(--text2); font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.data-table td { padding: 12px; color: var(--text); border-bottom: 1px solid var(--border); }
+.data-table td code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.table-row:hover { background: var(--s2); }
+.truncate { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.status-dot.green { background: var(--gov-green); }
+.status-dot.amber { background: var(--gov-amber); }
+.status-dot.red { background: var(--gov-red); }
+.status-dot.blue { background: var(--accent); }
+.status-dot.cyan { background: var(--gov-cyan); }
+.status-dot.dim { background: var(--text2); }
+
+.chart-container { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.chart-container h3 { color: var(--text2); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 16px; }
+.chart-container.half { flex: 1; min-width: 0; }
+.charts-row { display: flex; gap: 16px; margin-bottom: 16px; }
+.table-section { margin-bottom: 16px; }
+.table-section h3 { color: var(--text2); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; }
+
+/* Research workbench styles */
+.research-workbench { position: relative; }
+.research-progress { background: var(--s2); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; position: relative; }
+.progress-bar { height: 8px; background: var(--accent); border-radius: 4px; transition: width 0.3s ease; }
+.progress-text { font-size: 12px; color: var(--text2); min-width: 60px; text-align: right; }
+
+.research-mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+.mode-btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--s2); color: var(--text2); font-size: 13px; cursor: pointer; }
+.mode-btn:hover { border-color: var(--accent); color: var(--text); }
+.mode-btn.active { background: var(--accent2); border-color: var(--accent); color: #fff; }
+
+.research-card { display: grid; grid-template-columns: 1fr 460px; gap: 16px; margin-bottom: 16px; }
+.research-context { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.research-form { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; max-height: 70vh; overflow-y: auto; }
+.context-block { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.context-block:last-child { border-bottom: none; }
+.context-label { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px; }
+.context-value { color: var(--text); font-size: 13px; font-family: 'JetBrains Mono', monospace; word-break: break-word; }
+.context-sub { color: var(--text2); font-size: 12px; margin-top: 2px; }
+
+.form-group { margin-bottom: 12px; position: relative; }
+.form-group label { display: block; color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 6px; }
+.form-group input, .form-group select, .form-group textarea {
+  width: 100%; padding: 10px; background: var(--s2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; outline: none; font-family: inherit;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  border-color: var(--accent); background: var(--s3);
+}
+.form-group textarea { resize: vertical; min-height: 80px; }
+
+.form-divider { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin: 16px 0 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+.ac-dropdown { position: absolute; left: 0; right: 0; background: var(--s2); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; max-height: 200px; overflow-y: auto; z-index: 100; display: none; }
+.ac-item { padding: 10px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text2); }
+.ac-item:hover { background: var(--s3); color: var(--text); }
+
+.quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; margin-bottom: 12px; }
+.research-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+.btn-primary { padding: 10px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn-primary:hover { opacity: 0.9; }
+.btn-secondary { padding: 10px 16px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; cursor: pointer; }
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+.btn-search { display: inline-block; padding: 6px 12px; background: var(--accent2); color: #fff; border-radius: 6px; font-size: 12px; font-weight: 600; text-decoration: none; }
+.btn-search:hover { background: var(--accent); text-decoration: none; }
+.btn-sos { display: inline-block; padding: 6px 12px; background: var(--s3); color: var(--text2); border-radius: 6px; font-size: 12px; font-weight: 500; text-decoration: none; }
+.btn-sos:hover { background: var(--accent2); color: #fff; text-decoration: none; }
+.btn-link { display: inline-block; padding: 6px 12px; background: var(--s2); color: var(--accent); border-radius: 6px; font-size: 12px; text-decoration: none; border: 1px solid var(--border); }
+.btn-link:hover { border-color: var(--accent); text-decoration: none; }
+.btn-link-green { display: inline-block; padding: 6px 12px; background: rgba(52,211,153,0.15); color: var(--green); border-radius: 6px; font-size: 12px; text-decoration: none; border: 1px solid rgba(52,211,153,0.3); }
+.btn-link-green:hover { background: rgba(52,211,153,0.25); text-decoration: none; }
+.county-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.sos-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.research-empty { text-align: center; padding: 60px 20px; }
+.empty-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+.empty-desc { font-size: 14px; color: var(--text2); margin-bottom: 20px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .gov-metrics { grid-template-columns: repeat(2, 1fr); }
+  .gov-chart-row { grid-template-columns: 1fr; }
+  .gov-research-wrap { grid-template-columns: 1fr; }
+  .research-card { grid-template-columns: 1fr; }
+  .charts-row { flex-direction: column; }
+  .detail-panel { max-width: 100%; }
+}
+
 @media (min-width: 768px) {
   .home-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
   .widget-grid { grid-template-columns: repeat(4, 1fr); }
@@ -227,11 +417,20 @@ input, select { font-family: inherit; }
     </div>
   </div>
 
-  <!-- Sub-tabs (shown for Business) -->
+  <!-- Sub-tabs for Business page -->
   <div class="sub-tabs" id="bizSubTabs" style="display:none">
     <button class="sub-tab active" data-biz="dialysis">Dialysis <span class="badge" id="bizBadgeDia">-</span></button>
     <button class="sub-tab" data-biz="government">Government <span class="badge" id="bizBadgeGov">-</span></button>
     <button class="sub-tab" data-biz="other">All Other <span class="badge" id="bizBadgeOther">-</span></button>
+  </div>
+
+  <!-- Government inner tabs (shown when Government sub-tab is active) -->
+  <div class="gov-inner-tabs" id="govInnerTabs" style="display:none">
+    <button class="gov-inner-tab active" data-gov-tab="overview">Overview</button>
+    <button class="gov-inner-tab" data-gov-tab="ownership">Ownership</button>
+    <button class="gov-inner-tab" data-gov-tab="pipeline">Pipeline</button>
+    <button class="gov-inner-tab" data-gov-tab="listings">Listings</button>
+    <button class="gov-inner-tab" data-gov-tab="research">Research</button>
   </div>
 
   <div class="pages" id="pages">
@@ -305,7 +504,7 @@ input, select { font-family: inherit; }
 
     <!-- BUSINESS -->
     <div class="page" id="pageBiz">
-      <div class="page-inner">
+      <div class="page-inner" id="bizPageInner">
         <div id="bizContent"><div class="loading"><span class="spinner"></span></div></div>
       </div>
     </div>
@@ -380,16 +579,15 @@ input, select { font-family: inherit; }
 
 <script>
 // ============================================================
-// CONFIG
+// CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=36.15&longitude=-95.99&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Chicago&forecast_days=1';
 const TREASURY_API_URL = '/api/treasury';
+const GOV_SUPABASE_URL = 'https://scknotsqkcheojiaewwh.supabase.co';
 const PAGE_SIZE = 40;
 
-// ============================================================
-// STATE
-// ============================================================
+// State
 let activities = [];
 let emails = [];
 let calEvents = [];
@@ -397,38 +595,84 @@ let currentBizTab = 'dialysis';
 let bizSearch = '';
 let bizPage = 0;
 let logCallData = {};
+let govApiKey = localStorage.getItem('govApiKey') || '';
+let govConnected = !!govApiKey;
+let currentGovTab = 'overview';
+let govData = {
+  properties: [],
+  salesComps: [],
+  leads: [],
+  contacts: [],
+  listings: [],
+  ownership: [],
+  gsaEvents: [],
+  gsaSnapshots: [],
+  frppRecords: [],
+  countyAuth: [],
+  loans: []
+};
 
-// ============================================================
-// NAV
-// ============================================================
-document.querySelectorAll('.bnav').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(btn.dataset.page).classList.add('active');
-    // Show/hide biz sub-tabs
-    document.getElementById('bizSubTabs').style.display = btn.dataset.page === 'pageBiz' ? 'flex' : 'none';
-    if (btn.dataset.page === 'pageBiz') renderBizContent();
-    if (btn.dataset.page === 'pageCal') renderCalendarFull();
-  });
-});
-
-document.getElementById('bizSubTabs').addEventListener('click', (e) => {
-  const tab = e.target.closest('.sub-tab');
-  if (!tab) return;
-  document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
-  currentBizTab = tab.dataset.biz;
-  bizPage = 0;
-  bizSearch = '';
-  renderBizContent();
-});
+// SOS URLs for all 50 states
+const SOS_URLS = {
+  AL:"https://www.sos.alabama.gov/government-records/business-entity-records",
+  AK:"https://www.commerce.alaska.gov/cbp/main/search/entities",
+  AZ:"https://ecorp.azcc.gov/EntitySearch/Index",
+  AR:"https://www.sos.arkansas.gov/corps/search_all.php",
+  CA:"https://bizfileonline.sos.ca.gov/search/business",
+  CO:"https://www.sos.state.co.us/biz/BusinessEntityCriteriaExt.do",
+  CT:"https://service.ct.gov/business/s/onlinebusinesssearch",
+  DE:"https://icis.corp.delaware.gov/ecorp/entitysearch/namesearch.aspx",
+  DC:"https://corponline.dcra.dc.gov/Home.aspx",
+  FL:"https://search.sunbiz.org/Inquiry/CorporationSearch/ByName",
+  GA:"https://ecorp.sos.ga.gov/BusinessSearch",
+  HI:"https://hbe.ehawaii.gov/documents/search.html",
+  ID:"https://sosbiz.idaho.gov/search/business",
+  IL:"https://www.ilsos.gov/corporatellc/CorporateLlcController",
+  IN:"https://bsd.sos.in.gov/PublicBusinessSearch",
+  IA:"https://sos.iowa.gov/search/business/(S(default))/search.aspx",
+  KS:"https://www.kansas.gov/bess/flow/main?execution=e1s1",
+  KY:"https://web.sos.ky.gov/bussearchnprofile/(S(default))/search.aspx",
+  LA:"https://coraweb.sos.la.gov/CommercialSearch/CommercialSearch.aspx",
+  ME:"https://icrs.informe.org/nei-sos-icrs/ICRS?MainPage=x",
+  MD:"https://egov.maryland.gov/BusinessExpress/EntitySearch",
+  MA:"https://corp.sec.state.ma.us/corpweb/CorpSearch/CorpSearch.aspx",
+  MI:"https://cofs.lara.state.mi.us/CorpWeb/CorpSearch/CorpSearch.aspx",
+  MN:"https://mblsportal.sos.state.mn.us/Business/Search",
+  MS:"https://corp.sos.ms.gov/corp/portal/c/page/corpBusinessIdSearch/portal.aspx",
+  MO:"https://bsd.sos.mo.gov/BusinessEntity/BESearch.aspx",
+  MT:"https://biz.sosmt.gov/search",
+  NE:"https://www.nebraska.gov/sos/corp/corpsearch.cgi",
+  NV:"https://esos.nv.gov/EntitySearch/OnlineEntitySearch",
+  NH:"https://quickstart.sos.nh.gov/online/BusinessInquire",
+  NJ:"https://www.njportal.com/DOR/BusinessNameSearch",
+  NM:"https://portal.sos.state.nm.us/BFS/online/CorporationBusinessSearch",
+  NY:"https://appext20.dos.ny.gov/corp_public/CORPSEARCH.ENTITY_SEARCH_ENTRY",
+  NC:"https://www.sosnc.gov/online_services/search/by_title/_Business_Registration",
+  ND:"https://firststop.sos.nd.gov/search/business",
+  OH:"https://businesssearch.ohiosos.gov/",
+  OK:"https://www.sos.ok.gov/corp/corpInquiryFind.aspx",
+  OR:"https://sos.oregon.gov/business/pages/find.aspx",
+  PA:"https://www.corporations.pa.gov/search/corpsearch",
+  RI:"http://business.sos.ri.gov/CorpWeb/CorpSearch/CorpSearch.aspx",
+  SC:"https://businessfilings.sc.gov/BusinessFiling/Entity/Search",
+  SD:"https://sosenterprise.sd.gov/BusinessServices/Business/FilingSearch.aspx",
+  TN:"https://tnbear.tn.gov/Ecommerce/FilingSearch.aspx",
+  TX:"https://mycpa.cpa.state.tx.us/coa/",
+  UT:"https://secure.utah.gov/bes/index.html",
+  VT:"https://bizfilings.vermont.gov/online/BusinessInquire",
+  VA:"https://cis.scc.virginia.gov/EntitySearch/Index",
+  WA:"https://ccfs.sos.wa.gov/#/",
+  WV:"https://apps.wv.gov/SOS/BusinessEntity/",
+  WI:"https://www.wdfi.org/apps/CorpSearch/Search.aspx",
+  WY:"https://wyobiz.wyo.gov/Business/FilingSearch.aspx",
+};
 
 // ============================================================
 // HELPERS
 // ============================================================
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function q(selector) { return document.querySelector(selector); }
 
 function formatDate(d) {
   if (!d) return '—';
@@ -443,6 +687,16 @@ function formatTime(d) {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
+function fmt(n) {
+  if (n == null) return "—";
+  if (n >= 1e9) return "$" + (n/1e9).toFixed(1) + "B";
+  if (n >= 1e6) return "$" + (n/1e6).toFixed(1) + "M";
+  if (n >= 1e3) return "$" + (n/1e3).toFixed(0) + "K";
+  return "$" + Math.round(n);
+}
+function fmtN(n) { return n != null ? n.toLocaleString() : "—"; }
+function pct(n) { return n != null ? (n*100).toFixed(1)+"%" : "—"; }
+
 function catClass(cat) {
   if (!cat) return 'cat-gen'; const c = cat.toLowerCase();
   if (c.includes('government')) return 'cat-gov';
@@ -455,6 +709,13 @@ function catClass(cat) {
   if (c.includes('net lease') || c.includes('portfolio')) return 'cat-nl';
   if (c.includes('priority')) return 'cat-pri';
   return 'cat-gen';
+}
+
+function dotClass(status) {
+  const m = {live:"gov-dot green",dead:"gov-dot red",redirect:"gov-dot amber",hot:"gov-dot red",warm:"gov-dot amber",cold:"gov-dot blue",
+    matched:"gov-dot green",pending:"gov-dot amber",verified:"gov-dot cyan",active:"gov-dot green",under_contract:"gov-dot amber",
+    new:"gov-dot blue",queued:"gov-dot blue",in_progress:"gov-dot amber"};
+  return m[status]||"gov-dot dim";
 }
 
 function showToast(msg, type = '') {
@@ -471,7 +732,327 @@ function getGreeting() {
 }
 
 // ============================================================
-// DATA LOADING
+// GOVERNMENT DASHBOARD (loaded from gov.js)
+// ============================================================
+// All government-specific functions are in gov.js
+
+// (Government functions are in gov.js - loaded below)
+
+// GOVERNMENT FUNCTIONS BELOW ARE IN gov.js
+// Placeholder functions (overridden by gov.js)
+function metricHTML(l,v,s,c){return '';}
+function govQuery(t,s,p){return {data:[],count:0};}
+function loadGovData(){renderGovTab();}
+function renderGovOverview(){return '<div style="color:var(--text2)">Loading gov.js...</div>';}
+function renderGovOwnership(){return renderGovOverview();}
+function renderGovPipeline(){return renderGovOverview();}
+function renderGovListings(){return renderGovOverview();}
+function renderGovResearch(){return renderGovOverview();}
+function renderGovTab(){
+  const el=document.getElementById('bizPageInner');
+  if(!el)return;
+  let h='';
+  switch(currentGovTab){
+    case 'overview':h=renderGovOverview();break;
+    case 'ownership':h=renderGovOwnership();break;
+    case 'pipeline':h=renderGovPipeline();break;
+    case 'listings':h=renderGovListings();break;
+    case 'research':h=renderGovResearch();break;
+  }
+  el.innerHTML=h;
+}
+// showGovConnectionForm and connectGovDatabase are in NAV section below
+// ============================================================
+// NAV & BIZ TAB HANDLING
+// ============================================================
+document.querySelectorAll('.bnav').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(btn.dataset.page).classList.add('active');
+    document.getElementById('bizSubTabs').style.display = btn.dataset.page === 'pageBiz' ? 'flex' : 'none';
+    document.getElementById('govInnerTabs').style.display = 'none';
+    if (btn.dataset.page === 'pageBiz') renderBizContent();
+    if (btn.dataset.page === 'pageCal') renderCalendarFull();
+  });
+});
+
+document.getElementById('bizSubTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.sub-tab');
+  if (!tab) return;
+  document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  currentBizTab = tab.dataset.biz;
+  bizPage = 0;
+  bizSearch = '';
+  
+  document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
+  
+  if (currentBizTab === 'government') {
+    if (!govConnected) showGovConnectionForm();
+    else {
+      currentGovTab = 'overview';
+      q('.gov-inner-tab.active').classList.remove('active');
+      q('[data-gov-tab="overview"]').classList.add('active');
+      loadGovData();
+    }
+  } else {
+    renderBizContent();
+  }
+});
+
+document.getElementById('govInnerTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.gov-inner-tab');
+  if (!tab) return;
+  document.querySelectorAll('.gov-inner-tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  currentGovTab = tab.dataset.govTab;
+  renderGovTab();
+});
+
+function showGovConnectionForm() {
+  const pageInner = q('#bizPageInner');
+  let html = '<div class="gov-connection-form">';
+  html += '<h3>Connect Government Database</h3>';
+  html += '<p>Enter your Supabase service role key to access the Government database.</p>';
+  html += '<div class="gov-form-group">';
+  html += '<label>Service Role Key</label>';
+  html += '<input type="password" id="govKeyInput" placeholder="Enter your Supabase service role key" style="font-family: monospace; font-size: 12px;">';
+  html += '</div>';
+  html += '<div class="gov-action-buttons">';
+  html += '<button class="gov-btn" onclick="connectGovDatabase()">Connect</button>';
+  html += '<button class="gov-btn secondary" onclick="renderBizContent()">Cancel</button>';
+  html += '</div>';
+  html += '</div>';
+  pageInner.innerHTML = html;
+  q('#govKeyInput').focus();
+}
+
+function connectGovDatabase() {
+  const key = q('#govKeyInput').value.trim();
+  if (!key) {
+    showToast('Please enter a service role key', 'error');
+    return;
+  }
+  govApiKey = key;
+  govConnected = true;
+  localStorage.setItem('govApiKey', key);
+  currentGovTab = 'overview';
+  loadGovData();
+}
+
+// ============================================================
+// BUSINESS PAGE (DIALYSIS / OTHER)
+// ============================================================
+function filterBizActivities() {
+  return activities.filter(a => {
+    const c = (a.computed_category || '').toLowerCase();
+    if (currentBizTab === 'dialysis') return c.includes('dialysis') || c.includes('medical') || c.includes('healthcare');
+    if (currentBizTab === 'government') return false;
+    return !c.includes('dialysis') && !c.includes('medical') && !c.includes('healthcare') && !c.includes('government');
+  }).filter(a => {
+    if (!bizSearch) return true;
+    const s = bizSearch.toLowerCase();
+    return [a.subject, a.company_name, a.contact_name, a.company_city_state, a.nm_notes].filter(Boolean).join(' ').toLowerCase().includes(s);
+  });
+}
+
+function updateBizBadges() {
+  let dia = 0, gov = 0, other = 0;
+  for (const a of activities) {
+    const c = (a.computed_category || '').toLowerCase();
+    if (c.includes('dialysis') || c.includes('medical') || c.includes('healthcare')) dia++;
+    else if (c.includes('government')) gov++;
+    else other++;
+  }
+  document.getElementById('bizBadgeDia').textContent = dia || '—';
+  document.getElementById('bizBadgeGov').textContent = gov || '—';
+  document.getElementById('bizBadgeOther').textContent = other || '—';
+}
+
+function renderBizContent() {
+  const filtered = filterBizActivities();
+  const start = bizPage * PAGE_SIZE;
+  const pageItems = filtered.slice(start, start + PAGE_SIZE);
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+
+  const subCats = {};
+  filtered.forEach(a => { const c = a.computed_category || 'General'; subCats[c] = (subCats[c] || 0) + 1; });
+
+  let html = '';
+  html += `<div class="widget-grid"><div class="stat-card"><div class="stat-label">Total</div><div class="stat-value">${filtered.length.toLocaleString()}</div></div>`;
+  const catEntries = Object.entries(subCats).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  for (const [cat, ct] of catEntries) {
+    html += `<div class="stat-card"><div class="stat-label">${esc(cat)}</div><div class="stat-value">${ct}</div></div>`;
+  }
+  html += '</div>';
+
+  if (Object.keys(subCats).length > 1) {
+    html += '<div class="pills">';
+    for (const [cat, ct] of Object.entries(subCats).sort((a, b) => b[1] - a[1])) {
+      html += `<span class="pill" onclick="toggleBizCatFilter(this,'${esc(cat)}')">${esc(cat)}<span class="pill-ct">${ct}</span></span>`;
+    }
+    html += '</div>';
+  }
+
+  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search activities..." value="${esc(bizSearch)}" oninput="debounceBizSearch(this.value)"></div>`;
+
+  if (pageItems.length === 0) {
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No activities match your filters.</div>';
+  } else {
+    for (const a of pageItems) {
+      const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
+      html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
+        <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
+        <div class="act-meta">
+          <span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span>
+          <span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category || 'General')}</span>
+        </div>
+        <div class="act-actions">
+          <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||a.subject||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>
+          ${sfBtn}
+        </div>
+      </div>`;
+    }
+  }
+
+  if (totalPages > 1) {
+    html += `<div class="pager"><button onclick="bizPage--;renderBizContent()" ${bizPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${bizPage+1} of ${totalPages}</span><button onclick="bizPage++;renderBizContent()" ${bizPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
+  }
+
+  document.getElementById('bizContent').innerHTML = html;
+}
+
+let bizSearchTimeout;
+function debounceBizSearch(val) {
+  clearTimeout(bizSearchTimeout);
+  bizSearchTimeout = setTimeout(() => { bizSearch = val; bizPage = 0; renderBizContent(); }, 250);
+}
+
+function toggleBizCatFilter(el, cat) {
+  const wasActive = el.classList.contains('active');
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  if (!wasActive) {
+    el.classList.add('active');
+    const filtered = filterBizActivities().filter(a => (a.computed_category || 'General') === cat);
+    renderBizSubset(filtered);
+    return;
+  }
+  renderBizContent();
+}
+
+function renderBizSubset(subset) {
+  const start = 0;
+  const pageItems = subset.slice(start, PAGE_SIZE);
+  let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">${subset.length} results · <a href="#" onclick="event.preventDefault();renderBizContent()">Clear filter</a></div>`;
+  for (const a of pageItems) {
+    const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
+    html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
+      <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
+      <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category)}</span></div>
+      <div class="act-actions">
+        <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>
+        ${sfBtn}
+      </div>
+    </div>`;
+  }
+  document.getElementById('bizContent').innerHTML = html;
+}
+
+// ============================================================
+// DETAIL PANEL
+// ============================================================
+function showDetail(a) {
+  const p = document.getElementById('detailPanel');
+  let html = `<button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  html += `<div class="detail-title">${esc(a.subject || '(No subject)')}</div>`;
+  html += `<div style="margin-bottom:16px"><span class="act-cat ${catClass(a.computed_category)}" style="font-size:13px;padding:4px 12px">${esc(a.computed_category || 'General')}</span></div>`;
+  html += '<div class="detail-grid">';
+  html += `<div class="detail-row"><div class="detail-lbl">Company</div><div class="detail-val">${esc(a.company_name || '—')}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">${esc(a.company_city_state || a.company_address || '—')}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Contact</div><div class="detail-val">${esc(a.contact_name || '—')}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Email</div><div class="detail-val">${a.email ? `<a href="mailto:${esc(a.email)}">${esc(a.email)}</a>` : '—'}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Phone</div><div class="detail-val">${a.phone ? `<a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : '—'}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">${a.activity_date || '—'}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val">${esc(a.status || '—')}</div></div>`;
+  html += `<div class="detail-row"><div class="detail-lbl">Type</div><div class="detail-val">${esc(a.nm_type || a.task_subtype || '—')}</div></div>`;
+  html += '</div>';
+  if (a.nm_notes) {
+    html += `<div class="detail-row"><div class="detail-lbl">Notes</div><div class="detail-notes">${esc(a.nm_notes)}</div></div>`;
+  }
+  html += '<div class="detail-actions">';
+  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>`;
+  if (a.sf_link) html += `<a href="${a.sf_link}" target="_blank" class="act-btn">&#x2197; Salesforce</a>`;
+  if (a.phone) html += `<a href="tel:${esc(a.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
+  if (a.email) html += `<a href="mailto:${esc(a.email)}" class="act-btn">&#x2709; Email</a>`;
+  html += '</div>';
+
+  p.innerHTML = html;
+  p.style.display = 'block';
+  document.getElementById('detailOverlay').classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').style.display = 'none';
+  document.getElementById('detailOverlay').classList.remove('open');
+}
+
+// ============================================================
+// LOG CALL
+// ============================================================
+function openLogCall(data) {
+  logCallData = data;
+  document.getElementById('logCallDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('logCallContext').textContent = `Logging activity for: ${data.name || 'Unknown'}`;
+  document.getElementById('logCallSubmit').disabled = false;
+  document.getElementById('logCallSubmit').textContent = 'Log Activity';
+  document.getElementById('logCallModal').classList.add('open');
+}
+
+function closeLogCall() {
+  document.getElementById('logCallModal').classList.remove('open');
+}
+
+async function submitLogCall() {
+  const btn = document.getElementById('logCallSubmit');
+  btn.disabled = true; btn.textContent = 'Logging...';
+  const payload = {
+    sf_contact_id: logCallData.sf_contact_id || undefined,
+    sf_company_id: logCallData.sf_company_id || undefined,
+    activity_type: document.getElementById('logCallType').value,
+    activity_date: document.getElementById('logCallDate').value,
+    force: true,
+  };
+  if (!payload.sf_contact_id && !payload.sf_company_id) {
+    showToast('No SF contact or company ID available for this activity.', 'error');
+    btn.disabled = false; btn.textContent = 'Log Activity';
+    return;
+  }
+  try {
+    const res = await fetch(`${API}/sync/log-to-sf`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Activity logged to Salesforce!', 'success');
+      closeLogCall();
+    } else if (data.warning) {
+      showToast(`Warning: ${data.message || 'Recent activity detected'}`, 'error');
+      btn.disabled = false; btn.textContent = 'Log Activity';
+    } else {
+      showToast(`Error: ${data.error || 'Unknown error'}`, 'error');
+      btn.disabled = false; btn.textContent = 'Log Activity';
+    }
+  } catch (e) {
+    showToast(`Network error: ${e.message}`, 'error');
+    btn.disabled = false; btn.textContent = 'Log Activity';
+  }
+}
+
+// ============================================================
+// HOME PAGE DATA LOADING & RENDERING
 // ============================================================
 async function loadActivities() {
   try {
@@ -562,16 +1143,12 @@ async function loadMarket() {
   } catch (e) { console.error('Market load error:', e); }
 }
 
-// ============================================================
-// HOME RENDERERS
-// ============================================================
 function renderHomeStats() {
   document.getElementById('statActivities').textContent = activities.length.toLocaleString();
   document.getElementById('statEmails').textContent = emails.length.toLocaleString();
   const today = new Date().toDateString();
   const todayEvents = calEvents.filter(e => new Date(e.start_time).toDateString() === today);
   document.getElementById('statEvents').textContent = todayEvents.length;
-  // Due this week: activities with activity_date in next 7 days
   const now = Date.now(); const week = 7 * 86400000;
   const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
   document.getElementById('statDue').textContent = due.length;
@@ -582,11 +1159,9 @@ function renderTodaySchedule() {
   const todayEvts = calEvents.filter(e => new Date(e.start_time).toDateString() === today);
   if (todayEvts.length === 0) return '<div style="color:var(--text2);font-size:14px;padding:8px 0">No events scheduled today.</div>';
 
-  // Separate all-day vs timed events
   const allDay = todayEvts.filter(e => e.is_all_day);
   const timed = todayEvts.filter(e => !e.is_all_day);
 
-  // Determine hour range: from earliest event (or 6am) to latest event end (or 6pm), minimum 6am-6pm
   let startHr = 6, endHr = 18;
   for (const ev of timed) {
     const sh = new Date(ev.start_time).getHours();
@@ -594,17 +1169,15 @@ function renderTodaySchedule() {
     if (sh < startHr) startHr = sh;
     if (eh > endHr) endHr = eh;
   }
-  // Extend to show current time if within a reasonable window
   const nowHr = new Date().getHours();
   if (nowHr >= startHr - 1 && nowHr <= endHr + 2) {
     if (nowHr < startHr) startHr = nowHr;
     if (nowHr >= endHr) endHr = nowHr + 1;
   }
-  const hrHeight = 48; // pixels per hour
+  const hrHeight = 48;
   const totalHours = endHr - startHr;
 
   let html = '';
-  // All-day events bar
   if (allDay.length > 0) {
     html += '<div class="sched-alldays">';
     for (const ev of allDay) {
@@ -613,16 +1186,13 @@ function renderTodaySchedule() {
     html += '</div>';
   }
 
-  // Time grid
   html += `<div class="sched-hours" style="height:${totalHours * hrHeight}px">`;
-  // Hour labels & lines
   for (let h = startHr; h < endHr; h++) {
     const top = (h - startHr) * hrHeight;
     const label = h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
     html += `<div class="sched-hour" style="top:${top}px;position:absolute;left:0;right:0;height:${hrHeight}px;border-bottom:1px solid var(--border)"><span class="sched-hour-label">${label}</span></div>`;
   }
 
-  // Now marker
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const startMin = startHr * 60;
@@ -632,7 +1202,6 @@ function renderTodaySchedule() {
     html += `<div class="sched-now" style="top:${nowTop}px"></div>`;
   }
 
-  // Events
   for (const ev of timed) {
     const evStart = new Date(ev.start_time);
     const evEnd = new Date(ev.end_time);
@@ -652,7 +1221,6 @@ function renderTodaySchedule() {
 }
 
 function renderPriorityTasks() {
-  // Show most recent activities (highest priority first, then most recent)
   const priority = activities.filter(a => (a.computed_category || '').includes('Priority'));
   const recent = activities.slice(0, 10);
   const items = priority.length > 0 ? priority.slice(0, 5) : recent.slice(0, 5);
@@ -669,7 +1237,6 @@ function renderPriorityTasks() {
 
 function renderCategoryMetrics() {
   if (activities.length === 0) return '<div style="color:var(--text2);font-size:13px">Loading...</div>';
-  // Count by business sub-category
   const dialysis = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius'); });
   const govt = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal'); });
   const other = activities.filter(a => {
@@ -678,7 +1245,6 @@ function renderCategoryMetrics() {
     const isGov = c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal');
     return !isDia && !isGov;
   });
-  // Due soon (next 7 days)
   const now = Date.now(); const week = 7 * 86400000;
   const dueSoon = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
 
@@ -709,7 +1275,6 @@ function renderRecentEmails() {
 // ============================================================
 function renderCalendarFull() {
   if (calEvents.length === 0) { document.getElementById('calendarFull').innerHTML = '<div style="color:var(--text2)">No events loaded.</div>'; return; }
-  // Group by day
   const byDay = {};
   for (const ev of calEvents) {
     const d = new Date(ev.start_time).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -731,225 +1296,6 @@ function renderCalendarFull() {
 }
 
 // ============================================================
-// BUSINESS PAGE
-// ============================================================
-function filterBizActivities() {
-  return activities.filter(a => {
-    const c = (a.computed_category || '').toLowerCase();
-    if (currentBizTab === 'dialysis') return c.includes('dialysis') || c.includes('medical') || c.includes('healthcare');
-    if (currentBizTab === 'government') return c.includes('government');
-    // "other" = everything not dialysis/medical and not government
-    return !c.includes('dialysis') && !c.includes('medical') && !c.includes('healthcare') && !c.includes('government');
-  }).filter(a => {
-    if (!bizSearch) return true;
-    const s = bizSearch.toLowerCase();
-    return [a.subject, a.company_name, a.contact_name, a.company_city_state, a.nm_notes].filter(Boolean).join(' ').toLowerCase().includes(s);
-  });
-}
-
-function updateBizBadges() {
-  let dia = 0, gov = 0, other = 0;
-  for (const a of activities) {
-    const c = (a.computed_category || '').toLowerCase();
-    if (c.includes('dialysis') || c.includes('medical') || c.includes('healthcare')) dia++;
-    else if (c.includes('government')) gov++;
-    else other++;
-  }
-  document.getElementById('bizBadgeDia').textContent = dia || '—';
-  document.getElementById('bizBadgeGov').textContent = gov || '—';
-  document.getElementById('bizBadgeOther').textContent = other || '—';
-}
-
-function renderBizContent() {
-  const filtered = filterBizActivities();
-  const start = bizPage * PAGE_SIZE;
-  const pageItems = filtered.slice(start, start + PAGE_SIZE);
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-
-  // Sub-category pills
-  const subCats = {};
-  filtered.forEach(a => { const c = a.computed_category || 'General'; subCats[c] = (subCats[c] || 0) + 1; });
-
-  let html = '';
-
-  // Stats
-  html += `<div class="widget-grid"><div class="stat-card"><div class="stat-label">Total</div><div class="stat-value">${filtered.length.toLocaleString()}</div></div>`;
-  const catEntries = Object.entries(subCats).sort((a, b) => b[1] - a[1]).slice(0, 3);
-  for (const [cat, ct] of catEntries) {
-    html += `<div class="stat-card"><div class="stat-label">${esc(cat)}</div><div class="stat-value">${ct}</div></div>`;
-  }
-  html += '</div>';
-
-  // Category pills
-  if (Object.keys(subCats).length > 1) {
-    html += '<div class="pills">';
-    for (const [cat, ct] of Object.entries(subCats).sort((a, b) => b[1] - a[1])) {
-      html += `<span class="pill" onclick="toggleBizCatFilter(this,'${esc(cat)}')">${esc(cat)}<span class="pill-ct">${ct}</span></span>`;
-    }
-    html += '</div>';
-  }
-
-  // Search
-  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search activities..." value="${esc(bizSearch)}" oninput="debounceBizSearch(this.value)"></div>`;
-
-  // Activity list
-  if (pageItems.length === 0) {
-    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No activities match your filters.</div>';
-  } else {
-    for (const a of pageItems) {
-      const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
-      html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
-        <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
-        <div class="act-meta">
-          <span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span>
-          <span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category || 'General')}</span>
-        </div>
-        <div class="act-actions">
-          <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||a.subject||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>
-          ${sfBtn}
-        </div>
-      </div>`;
-    }
-  }
-
-  // Pagination
-  if (totalPages > 1) {
-    html += `<div class="pager"><button onclick="bizPage--;renderBizContent()" ${bizPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${bizPage+1} of ${totalPages}</span><button onclick="bizPage++;renderBizContent()" ${bizPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
-  }
-
-  document.getElementById('bizContent').innerHTML = html;
-}
-
-let bizSearchTimeout;
-function debounceBizSearch(val) {
-  clearTimeout(bizSearchTimeout);
-  bizSearchTimeout = setTimeout(() => { bizSearch = val; bizPage = 0; renderBizContent(); }, 250);
-}
-
-function toggleBizCatFilter(el, cat) {
-  const wasActive = el.classList.contains('active');
-  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
-  if (!wasActive) {
-    el.classList.add('active');
-    // Temporarily override filter
-    const filtered = filterBizActivities().filter(a => (a.computed_category || 'General') === cat);
-    renderBizSubset(filtered);
-    return;
-  }
-  renderBizContent();
-}
-
-function renderBizSubset(subset) {
-  const start = 0;
-  const pageItems = subset.slice(start, PAGE_SIZE);
-  let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">${subset.length} results · <a href="#" onclick="event.preventDefault();renderBizContent()">Clear filter</a></div>`;
-  for (const a of pageItems) {
-    const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
-    html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
-      <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
-      <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category)}</span></div>
-      <div class="act-actions">
-        <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>
-        ${sfBtn}
-      </div>
-    </div>`;
-  }
-  document.getElementById('bizContent').innerHTML = html;
-}
-
-// ============================================================
-// DETAIL PANEL
-// ============================================================
-function showDetail(a) {
-  const p = document.getElementById('detailPanel');
-  let html = `<button class="detail-close" onclick="closeDetail()">&times;</button>`;
-  html += `<div class="detail-title">${esc(a.subject || '(No subject)')}</div>`;
-  html += `<div style="margin-bottom:16px"><span class="act-cat ${catClass(a.computed_category)}" style="font-size:13px;padding:4px 12px">${esc(a.computed_category || 'General')}</span></div>`;
-  html += '<div class="detail-grid">';
-  html += `<div class="detail-row"><div class="detail-lbl">Company</div><div class="detail-val">${esc(a.company_name || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">${esc(a.company_city_state || a.company_address || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Contact</div><div class="detail-val">${esc(a.contact_name || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Email</div><div class="detail-val">${a.email ? `<a href="mailto:${esc(a.email)}">${esc(a.email)}</a>` : '—'}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Phone</div><div class="detail-val">${a.phone ? `<a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : '—'}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">${a.activity_date || '—'}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val">${esc(a.status || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Type</div><div class="detail-val">${esc(a.nm_type || a.task_subtype || '—')}</div></div>`;
-  html += '</div>';
-  if (a.nm_notes) {
-    html += `<div class="detail-row"><div class="detail-lbl">Notes</div><div class="detail-notes">${esc(a.nm_notes)}</div></div>`;
-  }
-  html += '<div class="detail-actions">';
-  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>`;
-  if (a.sf_link) html += `<a href="${a.sf_link}" target="_blank" class="act-btn">&#x2197; Salesforce</a>`;
-  if (a.phone) html += `<a href="tel:${esc(a.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
-  if (a.email) html += `<a href="mailto:${esc(a.email)}" class="act-btn">&#x2709; Email</a>`;
-  html += '</div>';
-
-  p.innerHTML = html;
-  p.style.display = 'block';
-  document.getElementById('detailOverlay').classList.add('open');
-}
-
-function closeDetail() {
-  document.getElementById('detailPanel').style.display = 'none';
-  document.getElementById('detailOverlay').classList.remove('open');
-}
-
-// ============================================================
-// LOG CALL
-// ============================================================
-function openLogCall(data) {
-  logCallData = data;
-  document.getElementById('logCallDate').value = new Date().toISOString().split('T')[0];
-  document.getElementById('logCallContext').textContent = `Logging activity for: ${data.name || 'Unknown'}`;
-  document.getElementById('logCallSubmit').disabled = false;
-  document.getElementById('logCallSubmit').textContent = 'Log Activity';
-  document.getElementById('logCallModal').classList.add('open');
-}
-
-function closeLogCall() {
-  document.getElementById('logCallModal').classList.remove('open');
-}
-
-async function submitLogCall() {
-  const btn = document.getElementById('logCallSubmit');
-  btn.disabled = true; btn.textContent = 'Logging...';
-  const payload = {
-    sf_contact_id: logCallData.sf_contact_id || undefined,
-    sf_company_id: logCallData.sf_company_id || undefined,
-    activity_type: document.getElementById('logCallType').value,
-    activity_date: document.getElementById('logCallDate').value,
-    force: true,
-  };
-  // Need at least one ID
-  if (!payload.sf_contact_id && !payload.sf_company_id) {
-    showToast('No SF contact or company ID available for this activity.', 'error');
-    btn.disabled = false; btn.textContent = 'Log Activity';
-    return;
-  }
-  try {
-    const res = await fetch(`${API}/sync/log-to-sf`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (data.success) {
-      showToast('Activity logged to Salesforce!', 'success');
-      closeLogCall();
-    } else if (data.warning) {
-      showToast(`Warning: ${data.message || 'Recent activity detected'}`, 'error');
-      btn.disabled = false; btn.textContent = 'Log Activity';
-    } else {
-      showToast(`Error: ${data.error || 'Unknown error'}`, 'error');
-      btn.disabled = false; btn.textContent = 'Log Activity';
-    }
-  } catch (e) {
-    showToast(`Network error: ${e.message}`, 'error');
-    btn.disabled = false; btn.textContent = 'Log Activity';
-  }
-}
-
-// ============================================================
 // KEYBOARD
 // ============================================================
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); closeLogCall(); } });
@@ -960,13 +1306,12 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDet
 document.getElementById('greeting').textContent = getGreeting();
 document.getElementById('greetingDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 
-// Load all data
 Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket()]);
 
-// Register service worker
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 </script>
+<script src="gov.js"></script>
 </body>
 </html>
