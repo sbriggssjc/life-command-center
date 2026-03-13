@@ -187,10 +187,32 @@ input, select { font-family: inherit; }
 .pager button:disabled { opacity: 0.3; cursor: default; }
 .pager span { font-size: 13px; color: var(--text2); }
 
+/* Time-block schedule */
+.schedule-timeline { position: relative; }
+.sched-hours { position: relative; border-left: 2px solid var(--border); margin-left: 56px; }
+.sched-hour { position: relative; height: 48px; border-bottom: 1px solid var(--border); }
+.sched-hour-label { position: absolute; left: -58px; top: -7px; font-size: 11px; color: var(--text3); width: 48px; text-align: right; }
+.sched-event { position: absolute; left: 8px; right: 8px; background: var(--accent2); border-radius: 6px; padding: 4px 8px; font-size: 12px; overflow: hidden; border-left: 3px solid var(--accent); z-index: 2; cursor: default; }
+.sched-event .sched-ev-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; }
+.sched-event .sched-ev-time { font-size: 10px; color: rgba(255,255,255,0.7); }
+.sched-event.allday { position: relative; left: 0; right: 0; margin-bottom: 4px; background: var(--s3); border-left-color: var(--green); }
+.sched-event.allday .sched-ev-title { color: var(--green); }
+.sched-now { position: absolute; left: -6px; right: 0; height: 2px; background: var(--red); z-index: 5; }
+.sched-now::before { content: ''; position: absolute; left: -4px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+.sched-free { position: absolute; left: 8px; right: 8px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--text3); border: 1px dashed var(--border); border-radius: 6px; z-index: 1; }
+.sched-alldays { margin-bottom: 8px; margin-left: 58px; }
+
+/* Category metric mini cards */
+.cat-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.cat-metric { background: var(--s2); border-radius: 8px; padding: 10px; text-align: center; }
+.cat-metric-val { font-size: 20px; font-weight: 700; }
+.cat-metric-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
+
 /* Responsive: larger screens get a sidebar layout */
 @media (min-width: 768px) {
   .home-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
   .widget-grid { grid-template-columns: repeat(4, 1fr); }
+  .cat-metrics { grid-template-columns: repeat(4, 1fr); }
 }
 </style>
 </head>
@@ -230,7 +252,7 @@ input, select { font-family: inherit; }
 
             <!-- Weather -->
             <div class="widget" id="weatherWidget">
-              <div class="widget-title">Weather — San Jose, CA</div>
+              <div class="widget-title">Weather — Tulsa, OK</div>
               <div class="weather-row">
                 <div class="weather-temp" id="wxTemp">--°</div>
                 <div class="weather-details" id="wxDetails">Loading...</div>
@@ -241,16 +263,20 @@ input, select { font-family: inherit; }
             <div class="widget" id="marketWidget">
               <div class="widget-title">Markets</div>
               <div class="market-row" id="marketData">
-                <div class="market-item"><div class="market-label">10Y Treasury</div><div class="market-val" id="mktTreasury">--</div><div class="market-chg" id="mktTreasuryChg">--</div></div>
-                <div class="market-item"><div class="market-label">S&P 500</div><div class="market-val" id="mktSP">--</div><div class="market-chg" id="mktSPChg">--</div></div>
-                <div class="market-item"><div class="market-label">30Y Mortgage</div><div class="market-val" id="mktMortgage">--</div><div class="market-chg" id="mktMortgageChg">--</div></div>
+                <div class="market-item"><div class="market-label">10Y Treasury Yield</div><div class="market-val" id="mktTreasury">--</div><div class="market-chg" id="mktTreasuryChg">--</div></div>
               </div>
             </div>
 
-            <!-- Today's Schedule -->
+            <!-- Business Metrics -->
+            <div class="widget">
+              <div class="widget-title">Activity Breakdown</div>
+              <div id="categoryMetrics"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
+
+            <!-- Today's Schedule - Time Block Calendar -->
             <div class="widget">
               <div class="widget-title">Today's Schedule</div>
-              <div id="todaySchedule"><div class="loading"><span class="spinner"></span></div></div>
+              <div id="todaySchedule" class="schedule-timeline"><div class="loading"><span class="spinner"></span></div></div>
             </div>
           </div>
           <div class="home-sidebar">
@@ -357,8 +383,8 @@ input, select { font-family: inherit; }
 // CONFIG
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
-const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=37.34&longitude=-121.89&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Los_Angeles&forecast_days=1';
-const TREASURY_API = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/avg_interest_rates?filter=security_desc:eq:Treasury Notes,record_date:gte:2025-01-01&sort=-record_date&page[size]=2&fields=record_date,avg_interest_rate_amt,security_desc';
+const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=36.15&longitude=-95.99&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Chicago&forecast_days=1';
+const TREASURY_CSV = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/' + new Date().getFullYear() + '?type=daily_treasury_yield_curve&field_tdr_date_value=' + new Date().getFullYear() + '&page&_format=csv';
 const PAGE_SIZE = 40;
 
 // ============================================================
@@ -438,7 +464,7 @@ function showToast(msg, type = '') {
 }
 
 function getGreeting() {
-  const h = new Date().getHours();
+  const h = parseInt(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Chicago' }));
   if (h < 12) return 'Good morning, Scott';
   if (h < 17) return 'Good afternoon, Scott';
   return 'Good evening, Scott';
@@ -455,6 +481,7 @@ async function loadActivities() {
     updateBizBadges();
     renderHomeStats();
     document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
+    document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
   } catch (e) { console.error('Activities load error:', e); }
 }
 
@@ -521,27 +548,32 @@ function weatherDesc(code) {
 
 async function loadMarket() {
   try {
-    const res = await fetch(TREASURY_API);
-    const d = await res.json();
-    const records = d.data || [];
-    if (records.length > 0) {
-      const rate = parseFloat(records[0].avg_interest_rate_amt);
-      document.getElementById('mktTreasury').textContent = rate.toFixed(2) + '%';
-      if (records.length > 1) {
-        const prev = parseFloat(records[1].avg_interest_rate_amt);
+    const res = await fetch(TREASURY_CSV);
+    const text = await res.text();
+    const lines = text.trim().split('\n').filter(l => l.trim());
+    if (lines.length < 2) return;
+    const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+    const tenIdx = headers.findIndex(h => h === '10 Yr');
+    if (tenIdx < 0) return;
+    // Last line is most recent data
+    const lastRow = lines[lines.length - 1].split(',').map(v => v.replace(/"/g, '').trim());
+    const rate = parseFloat(lastRow[tenIdx]);
+    if (isNaN(rate)) return;
+    document.getElementById('mktTreasury').textContent = rate.toFixed(2) + '%';
+    // Previous day for change
+    if (lines.length > 2) {
+      const prevRow = lines[lines.length - 2].split(',').map(v => v.replace(/"/g, '').trim());
+      const prev = parseFloat(prevRow[tenIdx]);
+      if (!isNaN(prev)) {
         const chg = rate - prev;
-        document.getElementById('mktTreasuryChg').textContent = (chg >= 0 ? '+' : '') + chg.toFixed(3) + '%';
+        document.getElementById('mktTreasuryChg').textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
         document.getElementById('mktTreasuryChg').className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
       }
     }
-  } catch (_) {}
-  // S&P 500 and mortgage - we'll show placeholder since no free API without key
-  document.getElementById('mktSP').textContent = '—';
-  document.getElementById('mktSPChg').textContent = 'No free API';
-  document.getElementById('mktSPChg').className = 'market-chg';
-  document.getElementById('mktMortgage').textContent = '—';
-  document.getElementById('mktMortgageChg').textContent = 'No free API';
-  document.getElementById('mktMortgageChg').className = 'market-chg';
+    // Show date
+    const dateStr = lastRow[0];
+    document.getElementById('mktTreasuryChg').textContent += ' (as of ' + dateStr + ')';
+  } catch (e) { console.error('Market load error:', e); }
 }
 
 // ============================================================
@@ -563,11 +595,73 @@ function renderTodaySchedule() {
   const today = new Date().toDateString();
   const todayEvts = calEvents.filter(e => new Date(e.start_time).toDateString() === today);
   if (todayEvts.length === 0) return '<div style="color:var(--text2);font-size:14px;padding:8px 0">No events scheduled today.</div>';
-  let html = '';
-  for (const ev of todayEvts) {
-    const time = ev.is_all_day ? '<span class="cal-allday">All Day</span>' : formatTime(ev.start_time);
-    html += `<div class="cal-item"><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}</div></div>`;
+
+  // Separate all-day vs timed events
+  const allDay = todayEvts.filter(e => e.is_all_day);
+  const timed = todayEvts.filter(e => !e.is_all_day);
+
+  // Determine hour range: from earliest event (or 6am) to latest event end (or 6pm), minimum 6am-6pm
+  let startHr = 6, endHr = 18;
+  for (const ev of timed) {
+    const sh = new Date(ev.start_time).getHours();
+    const eh = new Date(ev.end_time).getHours() + (new Date(ev.end_time).getMinutes() > 0 ? 1 : 0);
+    if (sh < startHr) startHr = sh;
+    if (eh > endHr) endHr = eh;
   }
+  // Extend to show current time if within a reasonable window
+  const nowHr = new Date().getHours();
+  if (nowHr >= startHr - 1 && nowHr <= endHr + 2) {
+    if (nowHr < startHr) startHr = nowHr;
+    if (nowHr >= endHr) endHr = nowHr + 1;
+  }
+  const hrHeight = 48; // pixels per hour
+  const totalHours = endHr - startHr;
+
+  let html = '';
+  // All-day events bar
+  if (allDay.length > 0) {
+    html += '<div class="sched-alldays">';
+    for (const ev of allDay) {
+      html += `<div class="sched-event allday"><div class="sched-ev-title">${esc(ev.subject || '(No title)')}</div></div>`;
+    }
+    html += '</div>';
+  }
+
+  // Time grid
+  html += `<div class="sched-hours" style="height:${totalHours * hrHeight}px">`;
+  // Hour labels & lines
+  for (let h = startHr; h < endHr; h++) {
+    const top = (h - startHr) * hrHeight;
+    const label = h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
+    html += `<div class="sched-hour" style="top:${top}px;position:absolute;left:0;right:0;height:${hrHeight}px;border-bottom:1px solid var(--border)"><span class="sched-hour-label">${label}</span></div>`;
+  }
+
+  // Now marker
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const startMin = startHr * 60;
+  const endMin = endHr * 60;
+  if (nowMin >= startMin && nowMin <= endMin) {
+    const nowTop = ((nowMin - startMin) / 60) * hrHeight;
+    html += `<div class="sched-now" style="top:${nowTop}px"></div>`;
+  }
+
+  // Events
+  for (const ev of timed) {
+    const evStart = new Date(ev.start_time);
+    const evEnd = new Date(ev.end_time);
+    const evStartMin = evStart.getHours() * 60 + evStart.getMinutes();
+    const evEndMin = evEnd.getHours() * 60 + evEnd.getMinutes();
+    const top = ((evStartMin - startMin) / 60) * hrHeight;
+    const height = Math.max(((evEndMin - evStartMin) / 60) * hrHeight, 22);
+    const timeLabel = formatTime(ev.start_time) + ' - ' + formatTime(ev.end_time);
+    html += `<div class="sched-event" style="top:${top}px;height:${height}px">`;
+    html += `<div class="sched-ev-title">${esc(ev.subject || '(No title)')}</div>`;
+    if (height > 28) html += `<div class="sched-ev-time">${timeLabel}</div>`;
+    html += '</div>';
+  }
+
+  html += '</div>';
   return html;
 }
 
@@ -584,6 +678,30 @@ function renderPriorityTasks() {
       <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category || 'General')}</span></div>
     </div>`;
   }
+  return html;
+}
+
+function renderCategoryMetrics() {
+  if (activities.length === 0) return '<div style="color:var(--text2);font-size:13px">Loading...</div>';
+  // Count by business sub-category
+  const dialysis = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius'); });
+  const govt = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal'); });
+  const other = activities.filter(a => {
+    const c = (a.computed_category || '').toLowerCase();
+    const isDia = c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius');
+    const isGov = c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal');
+    return !isDia && !isGov;
+  });
+  // Due soon (next 7 days)
+  const now = Date.now(); const week = 7 * 86400000;
+  const dueSoon = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
+
+  let html = '<div class="cat-metrics">';
+  html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--purple)">${dialysis.length}</div><div class="cat-metric-lbl">Dialysis</div></div>`;
+  html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--cyan)">${govt.length}</div><div class="cat-metric-lbl">Government</div></div>`;
+  html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--orange)">${other.length}</div><div class="cat-metric-lbl">All Other</div></div>`;
+  html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--yellow)">${dueSoon.length}</div><div class="cat-metric-lbl">Due 7 Days</div></div>`;
+  html += '</div>';
   return html;
 }
 
@@ -854,8 +972,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDet
 // INIT
 // ============================================================
 document.getElementById('greeting').textContent = getGreeting();
-const now = new Date();
-document.getElementById('greetingDate').textContent = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+document.getElementById('greetingDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 
 // Load all data
 Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket()]);
