@@ -384,7 +384,7 @@ input, select { font-family: inherit; }
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=36.15&longitude=-95.99&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Chicago&forecast_days=1';
-const TREASURY_CSV = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/' + new Date().getFullYear() + '?type=daily_treasury_yield_curve&field_tdr_date_value=' + new Date().getFullYear() + '&page&_format=csv';
+const TREASURY_API_URL = '/api/treasury';
 const PAGE_SIZE = 40;
 
 // ============================================================
@@ -548,31 +548,17 @@ function weatherDesc(code) {
 
 async function loadMarket() {
   try {
-    const res = await fetch(TREASURY_CSV);
-    const text = await res.text();
-    const lines = text.trim().split('\n').filter(l => l.trim());
-    if (lines.length < 2) return;
-    const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
-    const tenIdx = headers.findIndex(h => h === '10 Yr');
-    if (tenIdx < 0) return;
-    // Last line is most recent data
-    const lastRow = lines[lines.length - 1].split(',').map(v => v.replace(/"/g, '').trim());
-    const rate = parseFloat(lastRow[tenIdx]);
-    if (isNaN(rate)) return;
-    document.getElementById('mktTreasury').textContent = rate.toFixed(2) + '%';
-    // Previous day for change
-    if (lines.length > 2) {
-      const prevRow = lines[lines.length - 2].split(',').map(v => v.replace(/"/g, '').trim());
-      const prev = parseFloat(prevRow[tenIdx]);
-      if (!isNaN(prev)) {
-        const chg = rate - prev;
-        document.getElementById('mktTreasuryChg').textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
-        document.getElementById('mktTreasuryChg').className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
+    const res = await fetch(TREASURY_API_URL);
+    const d = await res.json();
+    if (d.ten_yr) {
+      document.getElementById('mktTreasury').textContent = d.ten_yr.toFixed(2) + '%';
+      if (d.prev_ten_yr) {
+        const chg = d.ten_yr - d.prev_ten_yr;
+        const chgEl = document.getElementById('mktTreasuryChg');
+        chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% (as of ' + d.date + ')';
+        chgEl.className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
       }
     }
-    // Show date
-    const dateStr = lastRow[0];
-    document.getElementById('mktTreasuryChg').textContent += ' (as of ' + dateStr + ')';
   } catch (e) { console.error('Market load error:', e); }
 }
 
