@@ -15,6 +15,13 @@ let diaPropertyFilter = { review_type: null, state: null };
 let diaLeaseFilter = { priority: null };
 let diaChangeFilter = 'all'; // 'all' | 'added' | 'removed' | 'persistent'
 let diaNpiFilter = null; // filter by signal_type
+let diaSalesView = 'comps'; // 'comps' | 'available'
+let diaSalesComps = null;   // lazy-loaded from v_sales_comps
+let diaAvailListings = null; // lazy-loaded from v_available_listings
+let diaSalesLoading = false;
+let diaSalesSearch = '';
+let diaSalesPage = 0;
+const DIA_SALES_PAGE_SIZE = 50;
 
 // ============================================================================
 // QUERY FUNCTION
@@ -224,8 +231,8 @@ function renderDiaTab() {
       inner.innerHTML = renderDiaNpi();
       break;
     case 'sales':
-      inner.innerHTML = renderDiaSales();
-      break;
+      renderDiaSales(); // async — renders directly to DOM
+      return;
     case 'players':
       inner.innerHTML = renderDiaPlayers();
       break;
@@ -1456,64 +1463,249 @@ window.loadDiaData = loadDiaData;
 // DIALYSIS SALES (Facility Transfers / Market Activity)
 // ============================================================================
 
-function renderDiaSales() {
-  const changes = diaData.inventoryChanges || [];
-  // "Sales" in dialysis = facility additions/removals (ownership transfers, new openings, closures)
-  const added = changes.filter(r => r.change_type === 'added');
-  const removed = changes.filter(r => r.change_type === 'removed');
+async function renderDiaSales() {
+  // Lazy-load sales comps and available listings data on first visit
+  if (diaSalesView === 'comps' && diaSalesComps === null && !diaSalesLoading) {
+    diaSalesLoading = true;
+    const inner = q('#bizPageInner');
+    if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales comps...</p></div>';
+    try {
+      const raw = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 2000 });
+      diaSalesComps = raw || [];
+    } catch (e) { console.error('Sales comps load error:', e); diaSalesComps = []; }
+    diaSalesLoading = false;
+  }
+  if (diaSalesView === 'available' && diaAvailListings === null && !diaSalesLoading) {
+    diaSalesLoading = true;
+    const inner = q('#bizPageInner');
+    if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading available listings...</p></div>';
+    try {
+      const raw = await diaQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 3000 });
+      diaAvailListings = raw || [];
+    } catch (e) { console.error('Available listings load error:', e); diaAvailListings = []; }
+    diaSalesLoading = false;
+  }
+
+  const isComps = diaSalesView === 'comps';
+  const data = isComps ? (diaSalesComps || []) : (diaAvailListings || []);
+
+  // Apply search filter
+  let filtered = data;
+  if (diaSalesSearch) {
+    const sq = diaSalesSearch.toLowerCase();
+    filtered = data.filter(r =>
+      (r.tenant_operator || '').toLowerCase().includes(sq) ||
+      (r.address || '').toLowerCase().includes(sq) ||
+      (r.city || '').toLowerCase().includes(sq) ||
+      (r.state || '').toLowerCase().includes(sq) ||
+      (r.seller || '').toLowerCase().includes(sq) ||
+      (r.listing_broker || '').toLowerCase().includes(sq) ||
+      (isComps ? (r.buyer || '').toLowerCase().includes(sq) || (r.procuring_broker || '').toLowerCase().includes(sq) : false)
+    );
+  }
+
+  const totalPages = Math.ceil(filtered.length / DIA_SALES_PAGE_SIZE);
+  const pageRows = filtered.slice(diaSalesPage * DIA_SALES_PAGE_SIZE, (diaSalesPage + 1) * DIA_SALES_PAGE_SIZE);
 
   let html = '<div class="biz-section">';
 
+  // Sub-tab toggle: Sales Comps | Available
+  html += '<div class="pills" style="margin-bottom: 16px;">';
+  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-sales-view="comps">Sales Comps (' + fmtN((diaSalesComps || []).length) + ')</button>';
+  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-sales-view="available">Available (' + fmtN((diaAvailListings || []).length) + ')</button>';
+  html += '</div>';
+
   // Metrics
   html += '<div class="gov-metrics">';
-  html += metricHTML('New Facilities', fmtN(added.length), 'opened this period', 'green');
-  html += metricHTML('Closed Facilities', fmtN(removed.length), 'removed this period', 'red');
-  const avgPatientsAdded = added.length > 0 ? Math.round(added.reduce((s, r) => s + (r.latest_total_patients || 0), 0) / added.length) : 0;
-  html += metricHTML('Avg Patients (New)', fmtN(avgPatientsAdded), 'per new facility', 'blue');
-  const bigMoves = changes.filter(r => Math.abs(r.delta_patients || 0) > 50).length;
-  html += metricHTML('Major Moves', fmtN(bigMoves), '>50 patient swing', 'yellow');
+  if (isComps) {
+    const withPrice = data.filter(r => r.price > 0);
+    const avgCap = data.filter(r => r.cap_rate > 0);
+    const avgCapVal = avgCap.length > 0 ? (avgCap.reduce((s, r) => s + parseFloat(r.cap_rate), 0) / avgCap.length * 100).toFixed(2) + '%' : '—';
+    const avgPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s, r) => s + parseFloat(r.price), 0) / withPrice.length)) : '—';
+    html += metricHTML('Total Sales', fmtN(data.length), 'dialysis comps', 'blue');
+    html += metricHTML('Avg Cap Rate', avgCapVal, avgCap.length + ' with cap data', 'green');
+    html += metricHTML('Avg Sale Price', avgPrice, withPrice.length + ' with price data', 'purple');
+    const thisYear = data.filter(r => r.sold_date && r.sold_date >= new Date().getFullYear() + '-01-01').length;
+    html += metricHTML('This Year', fmtN(thisYear), 'sales YTD', 'yellow');
+  } else {
+    const withPrice = data.filter(r => r.ask_price > 0);
+    const avgCap = data.filter(r => r.ask_cap > 0);
+    const avgCapVal = avgCap.length > 0 ? (avgCap.reduce((s, r) => s + parseFloat(r.ask_cap), 0) / avgCap.length * 100).toFixed(2) + '%' : '—';
+    const avgAsk = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s, r) => s + parseFloat(r.ask_price), 0) / withPrice.length)) : '—';
+    html += metricHTML('Active Listings', fmtN(data.length), 'on market', 'blue');
+    html += metricHTML('Avg Ask Cap', avgCapVal, avgCap.length + ' with cap data', 'green');
+    html += metricHTML('Avg Ask Price', avgAsk, withPrice.length + ' priced', 'purple');
+    const avgDom = data.filter(r => r.dom > 0);
+    const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s, r) => s + r.dom, 0) / avgDom.length) : '—';
+    html += metricHTML('Avg DOM', avgDomVal, avgDom.length + ' with dates', 'yellow');
+  }
   html += '</div>';
 
-  // Comps-style table
-  html += '<h3 class="gov-chart-title" style="margin-top: 20px;">Recent Market Activity</h3>';
-  html += '<div class="table-wrapper"><div class="data-table">';
-  html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
-  html += '<div style="flex: 2;">Facility</div>';
-  html += '<div style="flex: 1;">City, State</div>';
-  html += '<div style="flex: 1;">Operator</div>';
-  html += '<div style="flex: 1;">Type</div>';
-  html += '<div style="flex: 1; text-align: right;">Patients</div>';
-  html += '<div style="flex: 1; text-align: right;">Delta</div>';
-  html += '<div style="flex: 1; text-align: right;">% Change</div>';
-  html += '<div style="flex: 1;">CCN</div>';
+  // Search bar
+  html += '<div style="margin: 16px 0; display: flex; gap: 8px; align-items: center;">';
+  html += '<input type="text" id="diaSalesSearchInput" placeholder="Search tenant, address, city, broker..." value="' + esc(diaSalesSearch) + '" style="flex:1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--s2); color: var(--text); font-size: 13px;" />';
+  html += '<span style="font-size: 12px; color: var(--text3);">' + fmtN(filtered.length) + ' results</span>';
   html += '</div>';
 
-  // Sort by abs delta descending for most impactful first
-  const sorted = [...changes].sort((a, b) => Math.abs(b.delta_patients || 0) - Math.abs(a.delta_patients || 0));
+  // Scrollable table
+  html += '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 10px;">';
+  html += '<table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">';
 
-  sorted.slice(0, 200).forEach(r => {
-    const typeColor = r.change_type === 'added' ? '#34d399' : r.change_type === 'removed' ? '#f87171' : 'var(--text2)';
-    const deltaColor = r.delta_patients > 0 ? '#34d399' : r.delta_patients < 0 ? '#f87171' : 'var(--text3)';
+  // Header
+  html += '<thead><tr style="background: var(--s2); position: sticky; top: 0; z-index: 1;">';
+  const th = (label, w) => '<th style="padding: 10px 8px; text-align: left; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px;">' + label + '</th>';
+  const thr = (label, w) => '<th style="padding: 10px 8px; text-align: right; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px;">' + label + '</th>';
 
-    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
-    html += '<div style="flex: 2;" class="truncate">' + esc(r.facility_name || '—') + '</div>';
-    html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
-    html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
-    html += '<div style="flex: 1; color: ' + typeColor + ';">' + esc(r.change_type || '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + (r.delta_patients != null ? (r.delta_patients > 0 ? '+' : '') + fmtN(r.delta_patients) : '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + (r.pct_change != null ? pct(r.pct_change) : '—') + '</div>';
-    html += '<div style="flex: 1; color: var(--text2);">' + esc(r.ccn || '—') + '</div>';
-    html += '</div>';
+  if (isComps) {
+    html += th('Tenant/Operator', 160);
+    html += th('Address', 140);
+    html += th('City', 90);
+    html += th('State', 40);
+    html += thr('Land', 55);
+    html += thr('Built', 45);
+    html += thr('RBA', 60);
+    html += thr('Rent', 75);
+    html += thr('Rent/SF', 60);
+    html += th('Expiration', 85);
+    html += thr('Term Rem', 65);
+    html += th('Expenses', 70);
+    html += th('Bumps', 90);
+    html += thr('Price', 85);
+    html += thr('Price/SF', 65);
+    html += thr('Cap', 55);
+    html += th('Sold Date', 80);
+    html += th('Seller', 110);
+    html += th('Listing Broker', 100);
+    html += th('Buyer', 110);
+    html += th('Procuring Broker', 110);
+    html += thr('Bid-Ask', 55);
+    html += thr('DOM', 45);
+  } else {
+    html += th('Tenant/Operator', 160);
+    html += th('Address', 140);
+    html += th('City', 90);
+    html += th('State', 40);
+    html += thr('Land', 55);
+    html += thr('Built', 45);
+    html += thr('RBA', 60);
+    html += thr('Rent', 75);
+    html += thr('Rent/SF', 60);
+    html += th('Expiration', 85);
+    html += thr('Term Rem', 65);
+    html += th('Expenses', 70);
+    html += th('Bumps', 90);
+    html += thr('Ask Price', 85);
+    html += thr('Price/SF', 65);
+    html += thr('Ask Cap', 55);
+    html += th('Seller', 110);
+    html += th('Listing Broker', 100);
+    html += thr('DOM', 45);
+  }
+  html += '</tr></thead>';
+
+  // Body
+  html += '<tbody>';
+  const td = (val, trunc) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;' + (trunc ? ' max-width: 180px; overflow: hidden; text-overflow: ellipsis;' : '') + '">' + esc(val || '—') + '</td>';
+  const tdr = (val) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; text-align: right; font-family: \'JetBrains Mono\', monospace; font-size: 11px;">' + (val || '—') + '</td>';
+  const fmtMoney = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+  const fmtCap = (v) => v != null && v > 0 ? (v < 1 ? (v * 100).toFixed(2) : parseFloat(v).toFixed(2)) + '%' : '—';
+  const fmtPSF = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+  const fmtAcres = (v) => v != null && v > 0 ? parseFloat(v).toFixed(2) + ' ac' : '—';
+  const fmtSF = (v) => v != null && v > 0 ? Number(Math.round(v)).toLocaleString('en-US') + ' SF' : '—';
+  const fmtTerm = (v) => v != null ? parseFloat(v).toFixed(1) + ' yr' : '—';
+  const fmtDate = (v) => v || '—';
+
+  pageRows.forEach(r => {
+    const rowData = JSON.stringify({ property_id: r.property_id, clinic_id: r.clinic_id, tenant_operator: r.tenant_operator, address: r.address, city: r.city, state: r.state }).replace(/'/g, '&#39;');
+    html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "dia-clinic")\' style="cursor: pointer;">';
+    html += td(r.tenant_operator, true);
+    html += td(r.address, true);
+    html += td(r.city);
+    html += td(r.state);
+    html += tdr(fmtAcres(r.land_area));
+    html += tdr(r.year_built || '—');
+    html += tdr(fmtSF(r.rba));
+    html += tdr(fmtMoney(r.rent));
+    html += tdr(fmtPSF(r.rent_per_sf));
+    html += td(fmtDate(r.lease_expiration));
+    html += tdr(fmtTerm(r.term_remaining_yrs));
+    html += td(r.expenses);
+    html += td(r.bumps, true);
+    if (isComps) {
+      html += tdr(fmtMoney(r.price));
+      html += tdr(fmtPSF(r.price_per_sf));
+      html += tdr(fmtCap(r.cap_rate));
+      html += td(fmtDate(r.sold_date));
+      html += td(r.seller, true);
+      html += td(r.listing_broker, true);
+      html += td(r.buyer, true);
+      html += td(r.procuring_broker, true);
+      html += tdr(r.bid_ask_spread != null ? r.bid_ask_spread + '%' : '—');
+      html += tdr(r.dom != null ? r.dom + 'd' : '—');
+    } else {
+      html += tdr(fmtMoney(r.ask_price));
+      html += tdr(fmtPSF(r.price_per_sf));
+      html += tdr(fmtCap(r.ask_cap));
+      html += td(r.seller, true);
+      html += td(r.listing_broker, true);
+      html += tdr(r.dom != null ? r.dom + 'd' : '—');
+    }
+    html += '</tr>';
   });
 
-  if (changes.length === 0) {
-    html += '<div class="table-empty">No market activity data loaded</div>';
+  if (pageRows.length === 0) {
+    const colSpan = isComps ? 23 : 19;
+    html += '<tr><td colspan="' + colSpan + '" style="text-align: center; padding: 32px; color: var(--text3);">No ' + (isComps ? 'sales comps' : 'available listings') + ' to display</td></tr>';
+  }
+  html += '</tbody></table></div>';
+
+  // Pagination
+  if (totalPages > 1) {
+    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 13px; color: var(--text2);">';
+    html += '<span>Page ' + (diaSalesPage + 1) + ' of ' + totalPages + ' (' + fmtN(filtered.length) + ' total)</span>';
+    html += '<div style="display: flex; gap: 6px;">';
+    html += '<button class="pill' + (diaSalesPage === 0 ? '' : ' active') + '" data-sales-page="prev"' + (diaSalesPage === 0 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>&laquo; Prev</button>';
+    html += '<button class="pill' + (diaSalesPage >= totalPages - 1 ? '' : ' active') + '" data-sales-page="next"' + (diaSalesPage >= totalPages - 1 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>Next &raquo;</button>';
+    html += '</div></div>';
   }
 
-  html += '</div></div>';
   html += '</div>';
-  return html;
+
+  // Render to DOM
+  const inner = q('#bizPageInner');
+  if (inner) inner.innerHTML = html;
+
+  // Bind events
+  document.querySelectorAll('[data-sales-view]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      diaSalesView = e.target.dataset.salesView;
+      diaSalesPage = 0;
+      diaSalesSearch = '';
+      renderDiaSales();
+    });
+  });
+  document.querySelectorAll('[data-sales-page]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      if (e.target.dataset.salesPage === 'prev' && diaSalesPage > 0) diaSalesPage--;
+      else if (e.target.dataset.salesPage === 'next') diaSalesPage++;
+      renderDiaSales();
+    });
+  });
+  const searchInput = document.getElementById('diaSalesSearchInput');
+  if (searchInput) {
+    let debounce;
+    searchInput.addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        diaSalesSearch = e.target.value.trim();
+        diaSalesPage = 0;
+        renderDiaSales();
+      }, 300);
+    });
+    searchInput.focus();
+    // Keep cursor at end of input
+    searchInput.selectionStart = searchInput.selectionEnd = searchInput.value.length;
+  }
 }
 
 // ============================================================================
