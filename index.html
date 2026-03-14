@@ -1361,25 +1361,34 @@ window._detailSource = null;
 window._detailTab = 'Overview';
 
 function showDetail(record, source = 'activity') {
+  // Route gov/dia property sources to unified detail page
+  if (source === 'gov-ownership' || source === 'gov-lead' || source === 'gov-listing' ||
+      source === 'dia-clinic') {
+    if (typeof showUnifiedDetail === 'function') {
+      showUnifiedDetail(record, source);
+      return;
+    }
+  }
+
   window._detailRecord = record;
   window._detailSource = source;
   window._detailTab = 'Overview';
-  
+
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
-  
+
   // Render header
   const header = renderDetailHeader(record, source);
   document.getElementById('detailHeader').innerHTML = header;
-  
+
   // Render tabs
   const tabs = renderDetailTabs(source);
   document.getElementById('detailTabs').innerHTML = tabs;
-  
+
   // Render initial body
   const body = renderDetailBody(record, source, window._detailTab);
   document.getElementById('detailBody').innerHTML = body;
-  
+
   panel.style.display = 'block';
   overlay.classList.add('open');
 }
@@ -1873,5 +1882,6 @@ if ('serviceWorker' in navigator) {
 </script>
 <script src="gov.js"></script>
 <script src="dialysis.js"></script>
+<script src="detail.js"></script>
 </body>
 </html>
