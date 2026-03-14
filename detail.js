@@ -25,6 +25,7 @@ async function openUnifiedDetail(db, ids, fallback) {
   // Render loading header from fallback record
   const title = fallback.page_title ||
     fallback.facility_name ||
+    fallback.tenant_operator ||
     fallback.address ||
     fallback.tenant_agency ||
     fallback.lessor_name ||
@@ -121,13 +122,14 @@ async function openUnifiedDetail(db, ids, fallback) {
 
     _udCache = { db, ids, property, leases, ownership, chain, rankings, fallback };
 
-    // Update header with real page_title
-    if (property && property.page_title) {
+    // Update header with real data (page_title or fallback to tenant/address)
+    if (property) {
+      const realTitle = property.page_title || property.facility_name || fallback.tenant_operator || property.address || fallback.address || '(Unknown)';
       const loc2 = (property.city || '') + (property.state ? ', ' + property.state : '');
       document.getElementById('detailHeader').innerHTML = `
         <div class="detail-header-info">
           <div style="flex:1">
-            <div class="detail-title">${esc(property.page_title)}</div>
+            <div class="detail-title">${esc(realTitle)}</div>
             <div class="detail-subtitle">${esc(loc2)}${property.county ? ' · ' + esc(property.county) + ' County' : ''}</div>
             ${_udKeyFields(db, property, ownership)}
           </div>
