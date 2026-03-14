@@ -1261,7 +1261,7 @@ async function loadMarketing() {
   if (!mktLoaded) {
     el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading marketing pipeline...</p></div>';
     try {
-      const raw = await diaQuery('v_marketing_pipeline', '*', { order: 'due_date.desc.nulls_last', limit: 2000 });
+      const raw = await diaQuery('v_marketing_pipeline', '*', { order: 'due_date.desc.nullslast', limit: 2000 });
       mktData = raw || [];
       mktLoaded = true;
       const badge = document.getElementById('bizBadgeMkt');

@@ -72,7 +72,7 @@ async function openUnifiedDetail(db, ids, fallback) {
     const promises = [
       qFn('v_property_detail', '*', { filter: mainFilter, limit: 1 }),
       qFn('v_lease_detail', '*', { filter: mainFilter, limit: 5 }),
-      qFn('v_ownership_current', '*', { filter: propFilter || mainFilter, limit: 1 }),
+      propFilter ? qFn('v_ownership_current', '*', { filter: propFilter, limit: 1 }) : Promise.resolve({ data: [], count: 0 }),
     ];
 
     // Ownership chain — Gov uses lease_number, Dia uses property_id
