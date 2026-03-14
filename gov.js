@@ -1585,8 +1585,8 @@ function renderGovTab() {
       html = renderGovListings();
       break;
     case 'sales':
-      html = renderGovSales();
-      break;
+      renderGovSales(); // async — renders directly to DOM
+      return;
     case 'players':
       html = renderGovPlayers();
       break;
@@ -2167,72 +2167,333 @@ function saveGovDetailLead(leadId) {
 }
 
 // ============================================================================
-// GOVERNMENT SALES (Comps Sheet)
+// GOVERNMENT SALES (Comps + Available)
 // ============================================================================
 
-let govSalesSort = 'sale_date';
-let govSalesDir = 'desc';
+let govSalesView = 'comps'; // 'comps' | 'available'
+let govSalesComps = null;   // lazy-loaded from v_sales_comps
+let govAvailListings = null; // lazy-loaded from v_available_listings
+let govSalesLoading = false;
+let govSalesSearch = '';
+let govSalesPage = 0;
+const GOV_SALES_PAGE_SIZE = 50;
 
-function renderGovSales() {
-  const sales = govData.salesComps || [];
+async function renderGovSales() {
+  const inner = document.getElementById('bizPageInner');
+  if (!inner) return;
+
+  const isComps = govSalesView === 'comps';
+
+  // Lazy-load data on first render
+  if (isComps && govSalesComps === null && !govSalesLoading) {
+    govSalesLoading = true;
+    inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales comps...</p></div>';
+    try {
+      let all = [], offset = 0;
+      while (true) {
+        const res = await govQuery('v_sales_comps', '*', { order: 'sale_date.desc.nullslast', limit: 1000, offset });
+        const rows = res.data || [];
+        all = all.concat(rows);
+        if (rows.length < 1000) break;
+        offset += 1000;
+      }
+      govSalesComps = all;
+    } catch (e) { console.error('Gov sales comps load error:', e); govSalesComps = []; }
+    govSalesLoading = false;
+  }
+  if (!isComps && govAvailListings === null && !govSalesLoading) {
+    govSalesLoading = true;
+    inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading available listings...</p></div>';
+    try {
+      const res = await govQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000 });
+      govAvailListings = res.data || [];
+    } catch (e) { console.error('Gov available load error:', e); govAvailListings = []; }
+    govSalesLoading = false;
+  }
+
+  const data = isComps ? (govSalesComps || []) : (govAvailListings || []);
+
+  // Normalize for unified rendering
+  const normalized = data.map(r => {
+    if (isComps) {
+      return {
+        property_id: r.property_id,
+        lease_number: r.lease_number,
+        agency: r.agency || r.agency_full || '',
+        address: r.address,
+        city: r.city,
+        state: r.state,
+        land_acres: r.land_acres,
+        year_built: r.year_built,
+        rba: r.rba,
+        noi: r.noi ? parseFloat(r.noi) : null,
+        noi_psf: r.noi_psf ? parseFloat(r.noi_psf) : null,
+        lease_expiration: r.lease_expiration,
+        firm_term_remaining: r.firm_term_remaining != null ? parseFloat(r.firm_term_remaining) : null,
+        term_remaining: r.term_remaining != null ? parseFloat(r.term_remaining) : null,
+        expenses: r.expenses,
+        bumps: r.bumps,
+        price: r.sold_price ? parseFloat(r.sold_price) : null,
+        price_psf: r.sold_price_psf ? parseFloat(r.sold_price_psf) : null,
+        cap_rate: r.sold_cap_rate ? parseFloat(r.sold_cap_rate) : null,
+        sold_date: r.sale_date,
+        seller: r.seller,
+        listing_broker: r.listing_broker,
+        buyer: r.buyer,
+        procuring_broker: r.purchasing_broker,
+        bid_ask_spread: r.bid_ask_spread != null ? parseFloat(r.bid_ask_spread) : null,
+        dom: r.days_on_market != null ? parseInt(r.days_on_market) : null
+      };
+    } else {
+      return {
+        property_id: r.property_id,
+        lease_number: r.lease_number,
+        agency: r.agency || r.agency_full || '',
+        address: r.address,
+        city: r.city,
+        state: r.state,
+        land_acres: r.land_acres,
+        year_built: r.year_built,
+        rba: r.rba,
+        noi: r.noi ? parseFloat(r.noi) : null,
+        noi_psf: r.noi_psf ? parseFloat(r.noi_psf) : null,
+        lease_expiration: r.lease_expiration,
+        firm_term_remaining: r.firm_term_remaining != null ? parseFloat(r.firm_term_remaining) : null,
+        term_remaining: r.term_remaining != null ? parseFloat(r.term_remaining) : null,
+        expenses: r.expenses,
+        bumps: r.bumps,
+        ask_price: r.asking_price ? parseFloat(r.asking_price) : null,
+        price_psf: r.asking_price_psf ? parseFloat(r.asking_price_psf) : null,
+        ask_cap: r.asking_cap_rate ? parseFloat(r.asking_cap_rate) : null,
+        seller: r.seller,
+        listing_broker: r.listing_broker,
+        dom: r.days_on_market != null ? parseInt(r.days_on_market) : null
+      };
+    }
+  });
+
+  // Filter by search
+  const q = govSalesSearch.toLowerCase();
+  const filtered = q ? normalized.filter(r =>
+    (r.agency || '').toLowerCase().includes(q) ||
+    (r.address || '').toLowerCase().includes(q) ||
+    (r.city || '').toLowerCase().includes(q) ||
+    (r.state || '').toLowerCase().includes(q) ||
+    (r.seller || '').toLowerCase().includes(q) ||
+    (r.buyer || '').toLowerCase().includes(q) ||
+    (r.listing_broker || '').toLowerCase().includes(q)
+  ) : normalized;
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / GOV_SALES_PAGE_SIZE));
+  if (govSalesPage >= totalPages) govSalesPage = totalPages - 1;
+  const pageRows = filtered.slice(govSalesPage * GOV_SALES_PAGE_SIZE, (govSalesPage + 1) * GOV_SALES_PAGE_SIZE);
+
+  // Cap rate helper (filter outliers 1-25%)
+  const avgCapRate = (arr, field) => {
+    const valid = arr.filter(r => { const v = r[field]; return v != null && v > 0.01 && v < 0.25; });
+    if (valid.length === 0) return { val: '—', n: 0 };
+    return { val: (valid.reduce((s, r) => s + r[field], 0) / valid.length * 100).toFixed(2) + '%', n: valid.length };
+  };
 
   let html = '<div class="biz-section">';
 
+  // Sub-tab toggle
+  html += '<div class="pills" style="margin-bottom: 16px;">';
+  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-gov-sales-view="comps">Sales Comps (' + fmtN((govSalesComps || []).length) + ')</button>';
+  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-gov-sales-view="available">Available (' + fmtN((govAvailListings || []).length) + ')</button>';
+  html += '</div>';
+
   // Metrics
   html += '<div class="gov-metrics">';
-  const totalSales = sales.length;
-  const totalVolume = sales.reduce((s, r) => s + (r.sold_price || 0), 0);
-  const avgCap = sales.filter(r => r.sold_cap_rate > 0).reduce((s, r, i, a) => s + r.sold_cap_rate / a.length, 0);
-  const avgPSF = sales.filter(r => r.sold_price_psf > 0).reduce((s, r, i, a) => s + r.sold_price_psf / a.length, 0);
-
-  html += metricHTML('Total Sales', totalSales >= 500 ? '500+' : fmtN(totalSales), 'transactions', 'blue');
-  html += metricHTML('Total Volume', fmt(totalVolume), 'sale price', 'green');
-  html += metricHTML('Avg Cap Rate', avgCap > 0 ? (avgCap * 100).toFixed(2) + '%' : '—', 'across all sales', 'yellow');
-  html += metricHTML('Avg $/SF', avgPSF > 0 ? '$' + avgPSF.toFixed(0) : '—', 'price per sqft', 'purple');
+  if (isComps) {
+    const withPrice = filtered.filter(r => r.price > 0);
+    const cap = avgCapRate(filtered, 'cap_rate');
+    const avgPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s, r) => s + r.price, 0) / withPrice.length)) : '—';
+    html += metricHTML('Total Sales', fmtN(filtered.length), 'gov comps', 'blue');
+    html += metricHTML('Avg Cap Rate', cap.val, cap.n + ' with cap data', 'green');
+    html += metricHTML('Avg Sale Price', avgPrice, withPrice.length + ' with price data', 'purple');
+    const thisYear = filtered.filter(r => r.sold_date && r.sold_date >= new Date().getFullYear() + '-01-01').length;
+    html += metricHTML('This Year', fmtN(thisYear), 'sales YTD', 'yellow');
+  } else {
+    const withPrice = filtered.filter(r => r.ask_price > 0);
+    const cap = avgCapRate(filtered, 'ask_cap');
+    const avgAsk = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s, r) => s + r.ask_price, 0) / withPrice.length)) : '—';
+    html += metricHTML('Active Listings', fmtN(filtered.length), 'on market', 'blue');
+    html += metricHTML('Avg Ask Cap', cap.val, cap.n + ' with cap data', 'green');
+    html += metricHTML('Avg Ask Price', avgAsk, withPrice.length + ' priced', 'purple');
+    const avgDom = filtered.filter(r => r.dom > 0);
+    const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s, r) => s + r.dom, 0) / avgDom.length) : '—';
+    html += metricHTML('Avg DOM', avgDomVal, avgDom.length + ' with dates', 'yellow');
+  }
   html += '</div>';
 
-  // Comps table
-  html += '<div class="table-wrapper"><div class="data-table">';
-  html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
-  html += '<div style="flex: 2;">Address</div>';
-  html += '<div style="flex: 1;">City, State</div>';
-  html += '<div style="flex: 1;">Tenant</div>';
-  html += '<div style="flex: 1; text-align: right;">Sale Price</div>';
-  html += '<div style="flex: 1; text-align: right;">Cap Rate</div>';
-  html += '<div style="flex: 1; text-align: right;">$/SF</div>';
-  html += '<div style="flex: 1; text-align: right;">SF</div>';
-  html += '<div style="flex: 1;">Date</div>';
-  html += '<div style="flex: 1;">Buyer</div>';
+  // Search bar
+  html += '<div style="margin: 16px 0; display: flex; gap: 8px; align-items: center;">';
+  html += '<input type="text" id="govSalesSearchInput" placeholder="Search agency, address, city, broker..." value="' + esc(govSalesSearch) + '" style="flex:1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--s2); color: var(--text); font-size: 13px;" />';
+  html += '<span style="font-size: 12px; color: var(--text3);">' + fmtN(filtered.length) + ' results</span>';
   html += '</div>';
 
-  const sorted = [...sales].sort((a, b) => {
-    const aVal = a[govSalesSort] || '';
-    const bVal = b[govSalesSort] || '';
-    if (govSalesDir === 'desc') return aVal > bVal ? -1 : 1;
-    return aVal > bVal ? 1 : -1;
+  // Scrollable table
+  html += '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 10px;">';
+  html += '<table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">';
+
+  // Header
+  html += '<thead><tr style="background: var(--s2); position: sticky; top: 0; z-index: 1;">';
+  const th = (label, w) => '<th style="padding: 10px 8px; text-align: left; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px;">' + label + '</th>';
+  const thr = (label, w) => '<th style="padding: 10px 8px; text-align: right; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px;">' + label + '</th>';
+
+  if (isComps) {
+    html += th('Agency', 160);
+    html += th('Address', 140);
+    html += th('City', 90);
+    html += th('State', 40);
+    html += thr('Land', 55);
+    html += thr('Built', 45);
+    html += thr('RBA', 60);
+    html += thr('NOI', 75);
+    html += thr('NOI/SF', 60);
+    html += th('Expiration', 85);
+    html += thr('Firm Term Rem', 80);
+    html += thr('Lease Term Rem', 80);
+    html += th('Expenses', 70);
+    html += th('Bumps', 90);
+    html += thr('Price', 85);
+    html += thr('Price/SF', 65);
+    html += thr('Cap', 55);
+    html += th('Sold Date', 80);
+    html += th('Seller', 110);
+    html += th('Listing Broker', 100);
+    html += th('Buyer', 110);
+    html += th('Procuring Broker', 110);
+    html += thr('Bid-Ask', 55);
+    html += thr('DOM', 45);
+  } else {
+    html += th('Agency', 160);
+    html += th('Address', 140);
+    html += th('City', 90);
+    html += th('State', 40);
+    html += thr('Land', 55);
+    html += thr('Built', 45);
+    html += thr('RBA', 60);
+    html += thr('NOI', 75);
+    html += thr('NOI/SF', 60);
+    html += th('Expiration', 85);
+    html += thr('Firm Term Rem', 80);
+    html += thr('Lease Term Rem', 80);
+    html += th('Expenses', 70);
+    html += th('Bumps', 90);
+    html += thr('Ask Price', 85);
+    html += thr('Price/SF', 65);
+    html += thr('Ask Cap', 55);
+    html += th('Seller', 110);
+    html += th('Listing Broker', 100);
+    html += thr('DOM', 45);
+  }
+  html += '</tr></thead>';
+
+  // Body
+  html += '<tbody>';
+  const td = (val, trunc) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;' + (trunc ? ' max-width: 180px; overflow: hidden; text-overflow: ellipsis;' : '') + '">' + esc(val || '—') + '</td>';
+  const tdr = (val) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; text-align: right; font-family: \'JetBrains Mono\', monospace; font-size: 11px;">' + (val || '—') + '</td>';
+  const fmtMoney = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+  const fmtCap = (v) => v != null && v > 0 ? (v < 1 ? (v * 100).toFixed(2) : parseFloat(v).toFixed(2)) + '%' : '—';
+  const fmtPSF = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+  const fmtAcres = (v) => v != null && v > 0 ? parseFloat(v).toFixed(2) + ' ac' : '—';
+  const fmtSF = (v) => v != null && v > 0 ? Number(Math.round(v)).toLocaleString('en-US') + ' SF' : '—';
+  const fmtTerm = (v) => v != null ? parseFloat(v).toFixed(1) + ' yr' : '—';
+  const fmtDate = (v) => v || '—';
+
+  pageRows.forEach(r => {
+    const rowData = JSON.stringify({ property_id: r.property_id, lease_number: r.lease_number, agency: r.agency, address: r.address, city: r.city, state: r.state }).replace(/'/g, '&#39;');
+    html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "gov-ownership")\' style="cursor: pointer;">';
+    html += td(r.agency, true);
+    html += td(r.address, true);
+    html += td(r.city);
+    html += td(r.state);
+    html += tdr(fmtAcres(r.land_acres));
+    html += tdr(r.year_built || '—');
+    html += tdr(fmtSF(r.rba));
+    html += tdr(fmtMoney(r.noi));
+    html += tdr(fmtPSF(r.noi_psf));
+    html += td(fmtDate(r.lease_expiration));
+    html += tdr(fmtTerm(r.firm_term_remaining));
+    html += tdr(fmtTerm(r.term_remaining));
+    html += td(r.expenses);
+    html += td(r.bumps, true);
+    if (isComps) {
+      html += tdr(fmtMoney(r.price));
+      html += tdr(fmtPSF(r.price_psf));
+      html += tdr(fmtCap(r.cap_rate));
+      html += td(fmtDate(r.sold_date));
+      html += td(r.seller, true);
+      html += td(r.listing_broker, true);
+      html += td(r.buyer, true);
+      html += td(r.procuring_broker, true);
+      html += tdr(r.bid_ask_spread != null ? r.bid_ask_spread + '%' : '—');
+      html += tdr(r.dom != null ? r.dom + 'd' : '—');
+    } else {
+      html += tdr(fmtMoney(r.ask_price));
+      html += tdr(fmtPSF(r.price_psf));
+      html += tdr(fmtCap(r.ask_cap));
+      html += td(r.seller, true);
+      html += td(r.listing_broker, true);
+      html += tdr(r.dom != null ? r.dom + 'd' : '—');
+    }
+    html += '</tr>';
   });
 
-  sorted.slice(0, 200).forEach(r => {
-    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
-    html += '<div style="flex: 2;" class="truncate">' + esc(norm(r.address) || '—') + '</div>';
-    html += '<div style="flex: 1;">' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
-    html += '<div style="flex: 1;" class="truncate">' + esc(norm(r.agency) || '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmt(r.sold_price) + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + (r.sold_cap_rate ? (r.sold_cap_rate * 100).toFixed(2) + '%' : '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + (r.sold_price_psf ? '$' + r.sold_price_psf.toFixed(0) : '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + fmtN(r.sf_leased || r.rba || 0) + '</div>';
-    html += '<div style="flex: 1; color: var(--text2);">' + esc(r.sale_date ? r.sale_date.substring(0, 10) : '—') + '</div>';
-    html += '<div style="flex: 1;" class="truncate">' + esc(norm(r.buyer) || '—') + '</div>';
-    html += '</div>';
-  });
+  if (pageRows.length === 0) {
+    const colSpan = isComps ? 24 : 20;
+    html += '<tr><td colspan="' + colSpan + '" style="text-align: center; padding: 32px; color: var(--text3);">No ' + (isComps ? 'sales comps' : 'available listings') + ' to display</td></tr>';
+  }
+  html += '</tbody></table></div>';
 
-  if (sales.length === 0) {
-    html += '<div class="table-empty">No sales transactions loaded</div>';
+  // Pagination
+  if (totalPages > 1) {
+    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 13px; color: var(--text2);">';
+    html += '<span>Page ' + (govSalesPage + 1) + ' of ' + totalPages + ' (' + fmtN(filtered.length) + ' total)</span>';
+    html += '<div style="display: flex; gap: 6px;">';
+    html += '<button class="pill' + (govSalesPage === 0 ? '' : ' active') + '" data-gov-sales-page="prev"' + (govSalesPage === 0 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>&laquo; Prev</button>';
+    html += '<button class="pill' + (govSalesPage >= totalPages - 1 ? '' : ' active') + '" data-gov-sales-page="next"' + (govSalesPage >= totalPages - 1 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>Next &raquo;</button>';
+    html += '</div></div>';
   }
 
-  html += '</div></div>';
   html += '</div>';
-  return html;
+
+  // Render to DOM
+  inner.innerHTML = html;
+
+  // Bind events
+  document.querySelectorAll('[data-gov-sales-view]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      govSalesView = e.target.dataset.govSalesView;
+      govSalesPage = 0;
+      govSalesSearch = '';
+      renderGovSales();
+    });
+  });
+  document.querySelectorAll('[data-gov-sales-page]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      if (e.target.dataset.govSalesPage === 'prev' && govSalesPage > 0) govSalesPage--;
+      else if (e.target.dataset.govSalesPage === 'next') govSalesPage++;
+      renderGovSales();
+    });
+  });
+  const searchInput = document.getElementById('govSalesSearchInput');
+  if (searchInput) {
+    let debounce;
+    searchInput.addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        govSalesSearch = e.target.value.trim();
+        govSalesPage = 0;
+        renderGovSales();
+      }, 300);
+    });
+    searchInput.focus();
+    searchInput.selectionStart = searchInput.selectionEnd = searchInput.value.length;
+  }
 }
 
 // ============================================================================

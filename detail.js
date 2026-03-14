@@ -26,6 +26,7 @@ async function openUnifiedDetail(db, ids, fallback) {
   const title = fallback.page_title ||
     fallback.facility_name ||
     fallback.tenant_operator ||
+    fallback.agency ||
     fallback.address ||
     fallback.tenant_agency ||
     fallback.lessor_name ||
@@ -124,7 +125,7 @@ async function openUnifiedDetail(db, ids, fallback) {
 
     // Update header with real data (page_title or fallback to tenant/address)
     if (property) {
-      const realTitle = property.page_title || property.facility_name || fallback.tenant_operator || property.address || fallback.address || '(Unknown)';
+      const realTitle = property.page_title || property.facility_name || fallback.tenant_operator || fallback.agency || property.address || fallback.address || '(Unknown)';
       const loc2 = (property.city || '') + (property.state ? ', ' + property.state : '');
       document.getElementById('detailHeader').innerHTML = `
         <div class="detail-header-info">
