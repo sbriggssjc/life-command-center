@@ -485,6 +485,7 @@ tr.clickable-row:hover td { background: var(--s2); }
   <div class="sub-tabs" id="bizSubTabs" style="display:none">
     <button class="sub-tab active" data-biz="dialysis">Dialysis <span class="badge" id="bizBadgeDia">-</span></button>
     <button class="sub-tab" data-biz="government">Government <span class="badge" id="bizBadgeGov">-</span></button>
+    <button class="sub-tab" data-biz="marketing">Marketing <span class="badge" id="bizBadgeMkt">-</span></button>
     <button class="sub-tab" data-biz="prospects">Prospects</button>
     <button class="sub-tab" data-biz="other">All Other <span class="badge" id="bizBadgeOther">-</span></button>
   </div>
@@ -979,7 +980,11 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
   document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
 
-  if (currentBizTab === 'prospects') {
+  if (currentBizTab === 'marketing') {
+    document.getElementById('govInnerTabs').style.display = 'none';
+    document.getElementById('diaInnerTabs').style.display = 'none';
+    loadMarketing();
+  } else if (currentBizTab === 'prospects') {
     const el = document.getElementById('bizPageInner');
     if (el) el.innerHTML = renderProspects();
     setTimeout(() => { if (typeof initProspectsSearch === 'function') initProspectsSearch(); }, 0);
@@ -1122,6 +1127,11 @@ function updateBizBadges() {
 
 function renderBizContent() {
   console.log('renderBizContent:', { currentBizTab, currentDiaTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded });
+  // If marketing tab, load deal tasks
+  if (currentBizTab === 'marketing') {
+    loadMarketing();
+    return;
+  }
   // If prospects tab, render cross-project view
   if (currentBizTab === 'prospects') {
     const el = document.getElementById('bizPageInner');
@@ -1229,6 +1239,182 @@ function renderBizSubset(subset) {
     </div>`;
   }
   document.getElementById('bizContent').innerHTML = html;
+}
+
+// ============================================================
+// MARKETING — Deal Tasks from Salesforce
+// ============================================================
+
+let mktDeals = [];
+let mktLoaded = false;
+let mktFilter = 'all'; // 'all' | 'upcoming' | 'overdue' | 'starred'
+let mktSearch = '';
+let mktPage = 0;
+const MKT_PAGE = 20;
+let mktSearchTimeout;
+
+async function loadMarketing() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+
+  if (!mktLoaded) {
+    el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading deal tasks...</p></div>';
+    try {
+      const raw = await diaQuery('v_marketing_deals', '*', { order: 'activity_date.desc.nulls_last', limit: 1000 });
+      mktDeals = raw || [];
+      mktLoaded = true;
+      // Update badge
+      const badge = document.getElementById('bizBadgeMkt');
+      if (badge) badge.textContent = mktDeals.length;
+    } catch (e) {
+      console.error('Marketing load error:', e);
+      el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading deal tasks.</div>';
+      return;
+    }
+  }
+
+  renderMarketing();
+}
+
+function renderMarketing() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+
+  const today = new Date().toISOString().split('T')[0];
+
+  // Filter
+  let filtered = mktDeals;
+  if (mktFilter === 'upcoming') {
+    filtered = filtered.filter(d => d.activity_date && d.activity_date >= today);
+  } else if (mktFilter === 'overdue') {
+    filtered = filtered.filter(d => d.activity_date && d.activity_date < today);
+  } else if (mktFilter === 'starred') {
+    filtered = filtered.filter(d => d.deal_name && d.deal_name.startsWith('****'));
+  }
+
+  if (mktSearch) {
+    const q = mktSearch.toLowerCase();
+    filtered = filtered.filter(d =>
+      (d.deal_display_name || '').toLowerCase().includes(q) ||
+      (d.contact_name || '').toLowerCase().includes(q) ||
+      (d.company_name || '').toLowerCase().includes(q) ||
+      (d.email || '').toLowerCase().includes(q)
+    );
+  }
+
+  // Stats
+  const totalDeals = new Set(mktDeals.map(d => d.deal_name)).size;
+  const overdue = mktDeals.filter(d => d.activity_date && d.activity_date < today).length;
+  const upcoming = mktDeals.filter(d => d.activity_date && d.activity_date >= today).length;
+  const starred = mktDeals.filter(d => d.deal_name && d.deal_name.startsWith('****')).length;
+
+  let html = '';
+
+  // Metrics row
+  html += '<div class="widget-grid">';
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Open Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${mktDeals.length} contacts</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='upcoming';mktPage=0;renderMarketing()"><div class="stat-label">Upcoming</div><div class="stat-value" style="color:var(--green)">${upcoming}</div><div class="stat-sub">Due today or later</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='starred';mktPage=0;renderMarketing()"><div class="stat-label">Starred</div><div class="stat-value" style="color:var(--yellow)">${starred}</div><div class="stat-sub">High priority</div></div>`;
+  html += '</div>';
+
+  // Filter pills
+  html += '<div class="pills" style="margin-bottom:8px">';
+  html += `<span class="pill ${mktFilter==='all'?'active':''}" onclick="mktFilter='all';mktPage=0;renderMarketing()">All</span>`;
+  html += `<span class="pill ${mktFilter==='upcoming'?'active':''}" onclick="mktFilter='upcoming';mktPage=0;renderMarketing()">Upcoming</span>`;
+  html += `<span class="pill ${mktFilter==='overdue'?'active':''}" onclick="mktFilter='overdue';mktPage=0;renderMarketing()">Overdue</span>`;
+  html += `<span class="pill ${mktFilter==='starred'?'active':''}" onclick="mktFilter='starred';mktPage=0;renderMarketing()">Starred</span>`;
+  html += '</div>';
+
+  // Search
+  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search deals, contacts, companies..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
+
+  // Paginated list
+  const start = mktPage * MKT_PAGE;
+  const pageItems = filtered.slice(start, start + MKT_PAGE);
+  const totalPages = Math.ceil(filtered.length / MKT_PAGE);
+
+  if (filtered.length === 0) {
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No deals match your filters.</div>';
+  }
+
+  // Group by deal for display
+  const groups = {};
+  pageItems.forEach(d => {
+    if (!groups[d.deal_name]) groups[d.deal_name] = [];
+    groups[d.deal_name].push(d);
+  });
+
+  Object.entries(groups).forEach(([dealName, contacts]) => {
+    const first = contacts[0];
+    const isOverdue = first.activity_date && first.activity_date < today;
+    const isStarred = dealName.startsWith('****');
+    const priorityBadge = first.deal_priority ? `<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:${first.deal_priority <= 3 ? 'var(--red)' : first.deal_priority <= 4 ? 'var(--yellow)' : 'var(--text3)'};color:#fff;font-size:11px;font-weight:700;margin-right:6px">${first.deal_priority}</span>` : '';
+    const dueBadge = isOverdue ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;margin-left:6px">OVERDUE</span>' : '';
+
+    html += `<div class="widget" style="padding:14px">`;
+    // Deal header
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">`;
+    html += `<div style="flex:1;min-width:0">`;
+    html += `<div style="font-size:15px;font-weight:600;display:flex;align-items:center">${priorityBadge}${isStarred ? '<span style="color:var(--yellow);margin-right:4px">&#9733;</span>' : ''}${esc(first.deal_display_name || dealName)}${dueBadge}</div>`;
+    html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">Due: ${esc(first.activity_date || '—')} · ${contacts.length} contact${contacts.length > 1 ? 's' : ''}</div>`;
+    html += '</div></div>';
+
+    // Contact rows
+    contacts.forEach(c => {
+      const logData = JSON.stringify({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''}).replace(/'/g,"&#39;");
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border)">`;
+      html += `<div style="flex:1;min-width:0">`;
+      html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')}</div>`;
+      html += `<div style="font-size:12px;color:var(--text2)">${esc(c.company_name || '')}`;
+      if (c.email) html += ` · <a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`;
+      html += `</div>`;
+      if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
+      html += '</div>';
+
+      // Action buttons
+      html += `<div style="display:flex;gap:6px;flex-shrink:0;margin-left:8px">`;
+      if (c.email) {
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(first.deal_display_name||dealName)}')">&#x2709;</button>`;
+      }
+      if (c.phone) {
+        html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()">&#x1F4DE;</a>`;
+      }
+      html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
+      html += '</div></div>';
+    });
+
+    html += '</div>';
+  });
+
+  // Pager
+  if (totalPages > 1) {
+    html += `<div class="pager"><button onclick="mktPage--;renderMarketing()" ${mktPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${mktPage+1} of ${totalPages} · ${filtered.length} results</span><button onclick="mktPage++;renderMarketing()" ${mktPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+function debounceMktSearch(val) {
+  clearTimeout(mktSearchTimeout);
+  mktSearchTimeout = setTimeout(() => { mktSearch = val; mktPage = 0; renderMarketing(); }, 250);
+}
+
+/** Open email template for a marketing deal contact */
+function openMktEmail(email, contactName, dealName) {
+  const subject = encodeURIComponent('Northmarq Investment Sales \u2014 ' + dealName);
+  const body = encodeURIComponent(
+    'Hi ' + (contactName.split(' ')[0] || 'there') + ',\n\n' +
+    'I hope this message finds you well. My name is Scott Briggs, and I am a Senior Vice President with Northmarq Investment Sales in Minneapolis.\n\n' +
+    'I am reaching out regarding ' + dealName + '. Our team has been actively working in this market and I wanted to introduce myself as a resource for any future capital markets needs you may have.\n\n' +
+    'I would welcome the opportunity to share some recent market activity and comparable transactions that may be relevant to your portfolio. Would you have a few minutes for a brief call this week?\n\n' +
+    'Best regards,\n' +
+    'Scott Briggs\n' +
+    'Senior Vice President\n' +
+    'Northmarq Investment Sales\n' +
+    '(612) 555-0100'
+  );
+  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
 }
 
 // ============================================================
