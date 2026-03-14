@@ -604,13 +604,10 @@ let currentBizTab = 'dialysis';
 let bizSearch = '';
 let bizPage = 0;
 let logCallData = {};
-let govApiKey = localStorage.getItem('govApiKey') || '';
-let govConnected = !!govApiKey;
-let diaApiKey = localStorage.getItem('diaApiKey') || '';
-let diaConnected = !!diaApiKey;
+let govConnected = false;
+let diaConnected = false;
 let currentGovTab = 'overview';
 let currentDiaTab = 'overview';
-const DIA_SUPABASE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co';
 let diaData = {
   freshness: {},
   inventorySummary: {},
@@ -835,11 +832,15 @@ document.querySelectorAll('.bnav').forEach(btn => {
       document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
       document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
       // Auto-load data on first navigation if connected
+      console.log('Business nav:', { currentBizTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded, currentDiaTab });
       if (currentBizTab === 'government' && govConnected && !govDataLoaded) {
+        console.log('→ calling loadGovData()');
         loadGovData();
       } else if (currentBizTab === 'dialysis' && diaConnected && !diaDataLoaded && currentDiaTab !== 'activity') {
+        console.log('→ calling loadDiaData()');
         loadDiaData();
       } else {
+        console.log('→ calling renderBizContent()');
         renderBizContent();
       }
     } else {
@@ -913,75 +914,56 @@ document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
 async function autoConnectCredentials() {
   try {
     const res = await fetch('/api/config');
-    if (!res.ok) return;
+    if (!res.ok) { console.warn('Config endpoint returned', res.status); return; }
     const cfg = await res.json();
-    if (cfg.gov && cfg.gov.key) {
-      govApiKey = cfg.gov.key;
+    console.log('Auto-connect config:', cfg);
+    // Keys stay server-side in proxy endpoints — we just track connection status
+    if (cfg.gov && cfg.gov.connected) {
       govConnected = true;
-      localStorage.setItem('govApiKey', cfg.gov.key);
     }
-    if (cfg.dia && cfg.dia.key) {
-      diaApiKey = cfg.dia.key;
+    if (cfg.dia && cfg.dia.connected) {
       diaConnected = true;
-      localStorage.setItem('diaApiKey', cfg.dia.key);
     }
+    console.log('Auto-connect result:', { govConnected, diaConnected });
   } catch(e) {
-    console.log('Auto-connect: config endpoint unavailable, using localStorage');
+    console.log('Auto-connect: config endpoint unavailable', e);
   }
 }
 
 function showGovConnectionForm() {
   const pageInner = q('#bizPageInner');
   let html = '<div class="gov-connection-form">';
-  html += '<h3>Connect Government Database</h3>';
-  html += '<p>Enter your Supabase service role key to access the Government database.</p>';
-  html += '<div class="gov-form-group">';
-  html += '<label>Service Role Key</label>';
-  html += '<input type="password" id="govKeyInput" placeholder="Enter your Supabase service role key" style="font-family: monospace; font-size: 12px;">';
-  html += '</div>';
+  html += '<h3>Government Database</h3>';
+  html += '<p>The Government database key is not configured on the server. Set <code>GOV_SUPABASE_KEY</code> in Vercel environment variables.</p>';
   html += '<div class="gov-action-buttons">';
-  html += '<button class="gov-btn" onclick="connectGovDatabase()">Connect</button>';
+  html += '<button class="gov-btn" onclick="govConnected=true;loadGovData()">Retry</button>';
   html += '<button class="gov-btn secondary" onclick="renderBizContent()">Cancel</button>';
   html += '</div>';
   html += '</div>';
   pageInner.innerHTML = html;
-  q('#govKeyInput').focus();
 }
 
 function showDiaConnectionForm() {
   const pageInner = q('#bizPageInner');
   let html = '<div class="gov-connection-form">';
-  html += '<h3>Connect Dialysis Database</h3>';
-  html += '<p>Enter your Supabase anon key to access the Dialysis research database.</p>';
-  html += '<div class="gov-form-group">';
-  html += '<label>Anon Key</label>';
-  html += '<input type="password" id="diaKeyInput" placeholder="Enter your Supabase anon key" style="font-family: monospace; font-size: 12px;">';
-  html += '</div>';
+  html += '<h3>Dialysis Database</h3>';
+  html += '<p>The Dialysis database key is not configured on the server. Set <code>DIA_SUPABASE_KEY</code> in Vercel environment variables.</p>';
   html += '<div class="gov-action-buttons">';
-  html += '<button class="gov-btn" onclick="connectDiaDatabase()">Connect</button>';
+  html += '<button class="gov-btn" onclick="diaConnected=true;loadDiaData()">Retry</button>';
   html += '<button class="gov-btn secondary" onclick="renderBizContent()">Cancel</button>';
   html += '</div>';
   html += '</div>';
   pageInner.innerHTML = html;
-  q('#diaKeyInput').focus();
 }
 
 function connectGovDatabase() {
-  const key = q('#govKeyInput').value.trim();
-  if (!key) { showToast('Please enter a service role key', 'error'); return; }
-  govApiKey = key;
   govConnected = true;
-  localStorage.setItem('govApiKey', key);
   currentGovTab = 'overview';
   loadGovData();
 }
 
 function connectDiaDatabase() {
-  const key = q('#diaKeyInput').value.trim();
-  if (!key) { showToast('Please enter an anon key', 'error'); return; }
-  diaApiKey = key;
   diaConnected = true;
-  localStorage.setItem('diaApiKey', key);
   currentDiaTab = 'overview';
   loadDiaData();
 }
@@ -1016,18 +998,19 @@ function updateBizBadges() {
 }
 
 function renderBizContent() {
+  console.log('renderBizContent:', { currentBizTab, currentDiaTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded });
   // If government tab, route to gov.js
   if (currentBizTab === 'government') {
-    if (!govConnected) { showGovConnectionForm(); return; }
-    if (!govDataLoaded) { loadGovData(); return; }
-    renderGovTab();
+    if (!govConnected) { console.log('→ showGovConnectionForm'); showGovConnectionForm(); return; }
+    if (!govDataLoaded) { console.log('→ loadGovData from renderBiz'); loadGovData(); return; }
+    console.log('→ renderGovTab'); renderGovTab();
     return;
   }
   // If dialysis tab with a data inner tab, route to dialysis.js
   if (currentBizTab === 'dialysis' && currentDiaTab !== 'activity') {
-    if (!diaConnected) { showDiaConnectionForm(); return; }
-    if (!diaDataLoaded) { loadDiaData(); return; }
-    renderDiaTab();
+    if (!diaConnected) { console.log('→ showDiaConnectionForm'); showDiaConnectionForm(); return; }
+    if (!diaDataLoaded) { console.log('→ loadDiaData from renderBiz'); loadDiaData(); return; }
+    console.log('→ renderDiaTab'); renderDiaTab();
     return;
   }
   const filtered = filterBizActivities();

@@ -26,65 +26,33 @@ let diaNpiFilter = null; // filter by signal_type
  * @param {string} select - columns to select (e.g., '*' or 'col1,col2')
  * @param {object} params - {filter, order, limit, offset}
  */
-function diaQuery(table, select, params = {}) {
-  return new Promise((resolve, reject) => {
-    const { filter, order, limit = 1000, offset = 0 } = params;
-    
-    let url = `${DIA_SUPABASE_URL}/rest/v1/${table}?select=${encodeURIComponent(select)}`;
-    
-    if (filter) {
-      // Parse filter: "column=value" format
-      const eqIdx = filter.indexOf('=');
-      if (eqIdx > -1) {
-        const col = filter.substring(0, eqIdx).trim();
-        const val = filter.substring(eqIdx + 1).trim();
-        url += `&${encodeURIComponent(col)}=eq.${encodeURIComponent(val)}`;
-      }
+async function diaQuery(table, select, params = {}) {
+  // Query via serverless proxy — keeps secret key server-side
+  const { filter, order, limit = 1000, offset = 0 } = params;
+
+  const url = new URL('/api/dia-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('select', select);
+  if (filter) url.searchParams.set('filter', filter);
+  if (order) url.searchParams.set('order', order);
+  if (limit !== undefined) url.searchParams.set('limit', limit);
+  if (offset !== undefined) url.searchParams.set('offset', offset);
+
+  try {
+    const response = await fetch(url.toString());
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error(`diaQuery ${table}: HTTP ${response.status}`, errBody);
+      return [];
     }
-    
-    if (order) {
-      url += `&order=${encodeURIComponent(order)}`;
-    }
-    
-    if (limit) {
-      url += `&limit=${limit}`;
-    }
-    
-    if (offset) {
-      url += `&offset=${offset}`;
-    }
-    
-    fetch(url, {
-      headers: {
-        'apikey': diaApiKey,
-        'Authorization': `Bearer ${diaApiKey}`,
-        'Content-Type': 'application/json'
-      }
-    })
-      .then(res => {
-        if (!res.ok) {
-          return res.text().then(t => {
-            console.error(`diaQuery ${table}: HTTP ${res.status}`, t);
-            resolve([]);
-          });
-        }
-        return res.json();
-      })
-      .then(data => {
-        if (data === undefined) return; // already resolved above
-        if (Array.isArray(data)) resolve(data);
-        else if (data && data.message) {
-          console.error(`diaQuery ${table}:`, data.message);
-          resolve([]);
-        } else {
-          resolve(data);
-        }
-      })
-      .catch(err => {
-        console.error('diaQuery error:', err);
-        resolve([]);
-      });
-  });
+
+    const result = await response.json();
+    return result.data || [];
+  } catch (err) {
+    console.error('diaQuery error:', err);
+    return [];
+  }
 }
 
 // ============================================================================
@@ -173,6 +141,18 @@ async function loadDiaData() {
     }
     
     diaDataLoaded = true;
+    console.log('DIA DATA LOADED:', {
+      freshness: diaData.freshness,
+      invSummaryKeys: Object.keys(diaData.inventorySummary),
+      inventoryChanges: diaData.inventoryChanges.length,
+      npiSummaryKeys: Object.keys(diaData.npiSummary),
+      npiSignals: diaData.npiSignals.length,
+      propertyQueue: diaData.propertyReviewQueue.length,
+      leaseBackfill: diaData.leaseBackfillRows.length,
+      outcomes: diaData.researchOutcomes.length,
+      recon: diaData.reconciliation
+    });
+    showToast(`Dialysis: ${diaData.freshness.total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals loaded`, 'success');
     renderDiaTab();
   } catch (err) {
     console.error('loadDiaData error:', err);
@@ -236,7 +216,7 @@ function renderDiaOverview() {
   const npiSignalCount = Object.values(diaData.npiSummary).reduce((s, r) => s + (r.signal_count || 0), 0);
   
   html += metricHTML('Total Clinics', fmtN(totalClinics), 'tracked nationwide', '');
-  html += metricHTML('Coverage %', pct(coveragePct), 'of clinics counted', '');
+  html += metricHTML('Coverage %', coveragePct.toFixed(1) + '%', 'of clinics counted', '');
   html += metricHTML('Changes This Month', fmtN(addedCount + removedCount), `${fmtN(addedCount)} added, ${fmtN(removedCount)} removed`, '');
   html += metricHTML('NPI Signals', fmtN(npiSignalCount), 'requiring attention', '');
   
@@ -942,24 +922,22 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
       selected_property_id: propId || null,
       assigned_at: new Date().toISOString()
     };
-    
-    const response = await fetch(
-      `${DIA_SUPABASE_URL}/rest/v1/research_queue_outcomes?clinic_id=eq.${clinicId}&queue_type=eq.${queueType}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'apikey': diaApiKey,
-          'Authorization': `Bearer ${diaApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      }
-    );
-    
+
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'research_queue_outcomes');
+    url.searchParams.set('filter', `clinic_id=eq.${clinicId}`);
+    url.searchParams.set('filter2', `queue_type=eq.${queueType}`);
+
+    const response = await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
     if (!response.ok) {
       throw new Error('Failed to save outcome');
     }
-    
+
     showToast('Outcome saved', 'success');
     loadDiaData();
   } catch (err) {

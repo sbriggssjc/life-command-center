@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v16';
+const CACHE_NAME = 'lcc-v17';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -25,15 +25,13 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Fetch: network-first for API calls, stale-while-revalidate for static
+// Fetch handler
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Network-first for API calls (Supabase, Open-Meteo, Treasury)
-  if (url.hostname.includes('supabase.co') ||
-      url.hostname.includes('open-meteo.com') ||
-      url.hostname.includes('fiscaldata.treasury.gov') ||
-      url.hostname.includes('cdnjs.cloudflare.com')) {
+  // Network-first for everything except manifest/icons (which rarely change)
+  // This ensures users always get the latest code after deploys
+  if (url.origin === self.location.origin) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
@@ -48,26 +46,16 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Cache-first for same-origin static assets
-  if (url.origin === self.location.origin) {
-    event.respondWith(
-      caches.match(event.request).then(cached => {
-        const fetchPromise = fetch(event.request).then(response => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          }
-          return response;
-        }).catch(() => cached);
-
-        return cached || fetchPromise;
-      })
-    );
-    return;
-  }
-
-  // Default: network with cache fallback
+  // External APIs: network with cache fallback
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request)
+      .then(response => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

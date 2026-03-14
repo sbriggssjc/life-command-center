@@ -31,55 +31,27 @@ const STATE_FULL = {
 // CORE API FUNCTION
 // ============================================================================
 
-async function govQuery(table, select, params) {
-  const url = new URL(`${GOV_SUPABASE_URL}/rest/v1/${table}`, 'https://localhost');
-  url.searchParams.append('select', select);
-  
-  if (params.filter) {
-    const eqIdx = params.filter.indexOf('=');
-    if (eqIdx > 0) {
-      const col = params.filter.substring(0, eqIdx);
-      const val = params.filter.substring(eqIdx + 1);
-      url.searchParams.append(col, val);
-    }
-  }
-  if (params.order) {
-    url.searchParams.append('order', params.order);
-  }
-  if (params.limit !== undefined) {
-    url.searchParams.append('limit', params.limit);
-  }
-  if (params.offset !== undefined) {
-    url.searchParams.append('offset', params.offset);
-  }
-  
-  const headers = {
-    'apikey': govApiKey,
-    'Authorization': `Bearer ${govApiKey}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'count=exact'
-  };
-  
+async function govQuery(table, select, params = {}) {
+  // Query via serverless proxy — keeps secret key server-side
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('select', select);
+  if (params.filter) url.searchParams.set('filter', params.filter);
+  if (params.order) url.searchParams.set('order', params.order);
+  if (params.limit !== undefined) url.searchParams.set('limit', params.limit);
+  if (params.offset !== undefined) url.searchParams.set('offset', params.offset);
+
   try {
-    const response = await fetch(url.toString(), { method: 'GET', headers });
-    
+    const response = await fetch(url.toString());
+
     if (!response.ok) {
-      console.error(`Query error: ${response.status}`, await response.text());
+      const errBody = await response.text();
+      console.error(`govQuery ${table}: HTTP ${response.status}`, errBody);
       return { data: [], count: 0 };
     }
-    
-    const data = await response.json();
-    let count = data.length || 0;
-    
-    const contentRange = response.headers.get('content-range');
-    if (contentRange) {
-      const match = contentRange.match(/\d+\/(\d+)/);
-      if (match) {
-        count = parseInt(match[1], 10);
-      }
-    }
-    
-    return { data: Array.isArray(data) ? data : [], count };
+
+    const result = await response.json();
+    return { data: result.data || [], count: result.count || 0 };
   } catch (err) {
     console.error('govQuery error:', err);
     return { data: [], count: 0 };
@@ -223,23 +195,34 @@ async function loadGovData() {
     );
     govData.loans = loansRes.data || [];
     
-    // Load properties count
+    // Load properties count (using Prefer: count=exact header + limit=0)
     const propsRes = await govQuery('properties',
-      'count()',
+      'property_id',
       { limit: 0 }
     );
     govData.properties = [{ count: propsRes.count || 0 }];
-    
+
     // Load sales comps count
     const salesRes = await govQuery('sales_transactions',
-      'count()',
+      'sale_id',
       { limit: 0 }
     );
     govData.salesComps = [{ count: salesRes.count || 0 }];
     
     govConnected = true;
     govDataLoaded = true;
-    showToast('Government data loaded', 'success');
+    console.log('GOV DATA LOADED:', {
+      properties: govData.properties,
+      salesComps: govData.salesComps,
+      leads: govData.leads.length,
+      contacts: govData.contacts.length,
+      ownership: govData.ownership.length,
+      listings: govData.listings.length,
+      gsaEvents: govData.gsaEvents.length,
+      frpp: govData.frppRecords.length,
+      county: govData.countyAuth.length
+    });
+    showToast(`Gov: ${govData.leads.length} leads, ${govData.ownership.length} ownership, ${govData.listings.length} listings loaded`, 'success');
     renderGovTab();
 
   } catch (err) {
