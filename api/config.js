@@ -14,14 +14,11 @@ export default function handler(req, res) {
   res.status(200).json({
     gov: {
       url: process.env.GOV_SUPABASE_URL || 'https://scknotsqkcheojiaewwh.supabase.co',
-      key: govKey,
-      set: govKey.length > 0
+      key: govKey
     },
     dia: {
       url: process.env.DIA_SUPABASE_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co',
-      key: diaKey,
-      set: diaKey.length > 0
-    },
-    env_keys: Object.keys(process.env).filter(k => k.includes('SUPABASE') || k.includes('GOV') || k.includes('DIA')).sort()
+      key: diaKey
+    }
   });
 }

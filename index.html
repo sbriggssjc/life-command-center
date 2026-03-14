@@ -906,12 +906,12 @@ async function autoConnectCredentials() {
     const res = await fetch('/api/config');
     if (!res.ok) return;
     const cfg = await res.json();
-    if (cfg.gov && cfg.gov.key && !govApiKey) {
+    if (cfg.gov && cfg.gov.key) {
       govApiKey = cfg.gov.key;
       govConnected = true;
       localStorage.setItem('govApiKey', cfg.gov.key);
     }
-    if (cfg.dia && cfg.dia.key && !diaApiKey) {
+    if (cfg.dia && cfg.dia.key) {
       diaApiKey = cfg.dia.key;
       diaConnected = true;
       localStorage.setItem('diaApiKey', cfg.dia.key);
