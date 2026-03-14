@@ -1242,12 +1242,13 @@ function renderBizSubset(subset) {
 }
 
 // ============================================================
-// MARKETING — Deal Tasks from Salesforce
+// MARKETING — Unified Pipeline (SF Deals + Inbound Leads)
 // ============================================================
 
-let mktDeals = [];
+let mktData = [];
 let mktLoaded = false;
-let mktFilter = 'all'; // 'all' | 'upcoming' | 'overdue' | 'starred'
+let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
+let mktFilter = 'all';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
 let mktSearch = '';
 let mktPage = 0;
 const MKT_PAGE = 20;
@@ -1258,17 +1259,16 @@ async function loadMarketing() {
   if (!el) return;
 
   if (!mktLoaded) {
-    el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading deal tasks...</p></div>';
+    el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading marketing pipeline...</p></div>';
     try {
-      const raw = await diaQuery('v_marketing_deals', '*', { order: 'activity_date.desc.nulls_last', limit: 1000 });
-      mktDeals = raw || [];
+      const raw = await diaQuery('v_marketing_pipeline', '*', { order: 'due_date.desc.nulls_last', limit: 2000 });
+      mktData = raw || [];
       mktLoaded = true;
-      // Update badge
       const badge = document.getElementById('bizBadgeMkt');
-      if (badge) badge.textContent = mktDeals.length;
+      if (badge) badge.textContent = mktData.length;
     } catch (e) {
       console.error('Marketing load error:', e);
-      el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading deal tasks.</div>';
+      el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading marketing pipeline.</div>';
       return;
     }
   }
@@ -1282,14 +1282,27 @@ function renderMarketing() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  // Filter
-  let filtered = mktDeals;
+  // Source filter
+  let filtered = mktData;
+  if (mktSource === 'sf_deal') {
+    filtered = filtered.filter(d => d.pipeline_source === 'sf_deal');
+  } else if (mktSource === 'leads') {
+    filtered = filtered.filter(d => d.pipeline_source !== 'sf_deal');
+  } else if (mktSource !== 'all') {
+    filtered = filtered.filter(d => d.pipeline_source === mktSource);
+  }
+
+  // Status/timing filter
   if (mktFilter === 'upcoming') {
-    filtered = filtered.filter(d => d.activity_date && d.activity_date >= today);
+    filtered = filtered.filter(d => d.due_date && d.due_date >= today);
   } else if (mktFilter === 'overdue') {
-    filtered = filtered.filter(d => d.activity_date && d.activity_date < today);
+    filtered = filtered.filter(d => d.due_date && d.due_date < today);
   } else if (mktFilter === 'starred') {
     filtered = filtered.filter(d => d.deal_name && d.deal_name.startsWith('****'));
+  } else if (mktFilter === 'new') {
+    filtered = filtered.filter(d => d.status === 'new' || d.status === 'Open');
+  } else if (mktFilter === 'unmatched') {
+    filtered = filtered.filter(d => d.sf_match_status === 'unmatched');
   }
 
   if (mktSearch) {
@@ -1302,32 +1315,47 @@ function renderMarketing() {
     );
   }
 
-  // Stats
-  const totalDeals = new Set(mktDeals.map(d => d.deal_name)).size;
-  const overdue = mktDeals.filter(d => d.activity_date && d.activity_date < today).length;
-  const upcoming = mktDeals.filter(d => d.activity_date && d.activity_date >= today).length;
-  const starred = mktDeals.filter(d => d.deal_name && d.deal_name.startsWith('****')).length;
+  // Stats from full dataset
+  const sfDeals = mktData.filter(d => d.pipeline_source === 'sf_deal');
+  const inboundLeads = mktData.filter(d => d.pipeline_source !== 'sf_deal');
+  const overdue = mktData.filter(d => d.due_date && d.due_date < today).length;
+  const unmatched = inboundLeads.filter(d => d.sf_match_status === 'unmatched').length;
+  const totalDeals = new Set(sfDeals.map(d => d.deal_name)).size;
 
   let html = '';
 
   // Metrics row
   html += '<div class="widget-grid">';
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Open Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${mktDeals.length} contacts</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='upcoming';mktPage=0;renderMarketing()"><div class="stat-label">Upcoming</div><div class="stat-value" style="color:var(--green)">${upcoming}</div><div class="stat-sub">Due today or later</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='starred';mktPage=0;renderMarketing()"><div class="stat-label">Starred</div><div class="stat-value" style="color:var(--yellow)">${starred}</div><div class="stat-sub">High priority</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='sf_deal';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">SF Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${sfDeals.length} contacts</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='leads';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Inbound Leads</div><div class="stat-value" style="color:var(--purple)">${inboundLeads.length}</div><div class="stat-sub">${unmatched ? unmatched + ' unmatched' : 'All matched'}</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Total Pipeline</div><div class="stat-value" style="color:var(--green)">${mktData.length}</div><div class="stat-sub">All sources</div></div>`;
   html += '</div>';
 
-  // Filter pills
+  // Source tabs
+  const srcCounts = {};
+  mktData.forEach(d => { srcCounts[d.pipeline_source] = (srcCounts[d.pipeline_source] || 0) + 1; });
+  html += '<div class="pills" style="margin-bottom:4px">';
+  html += `<span class="pill ${mktSource==='all'?'active':''}" onclick="mktSource='all';mktPage=0;renderMarketing()">All <span class="pill-ct">${mktData.length}</span></span>`;
+  html += `<span class="pill ${mktSource==='sf_deal'?'active':''}" onclick="mktSource='sf_deal';mktPage=0;renderMarketing()">SF Deals <span class="pill-ct">${srcCounts['sf_deal']||0}</span></span>`;
+  if (srcCounts['rcm']) html += `<span class="pill ${mktSource==='rcm'?'active':''}" onclick="mktSource='rcm';mktPage=0;renderMarketing()">RCM <span class="pill-ct">${srcCounts['rcm']}</span></span>`;
+  if (srcCounts['crexi']) html += `<span class="pill ${mktSource==='crexi'?'active':''}" onclick="mktSource='crexi';mktPage=0;renderMarketing()">CREXi <span class="pill-ct">${srcCounts['crexi']}</span></span>`;
+  if (srcCounts['loopnet']) html += `<span class="pill ${mktSource==='loopnet'?'active':''}" onclick="mktSource='loopnet';mktPage=0;renderMarketing()">LoopNet <span class="pill-ct">${srcCounts['loopnet']}</span></span>`;
+  if (srcCounts['website']) html += `<span class="pill ${mktSource==='website'?'active':''}" onclick="mktSource='website';mktPage=0;renderMarketing()">Website <span class="pill-ct">${srcCounts['website']}</span></span>`;
+  html += '</div>';
+
+  // Status filters
   html += '<div class="pills" style="margin-bottom:8px">';
   html += `<span class="pill ${mktFilter==='all'?'active':''}" onclick="mktFilter='all';mktPage=0;renderMarketing()">All</span>`;
+  html += `<span class="pill ${mktFilter==='new'?'active':''}" onclick="mktFilter='new';mktPage=0;renderMarketing()">New/Open</span>`;
   html += `<span class="pill ${mktFilter==='upcoming'?'active':''}" onclick="mktFilter='upcoming';mktPage=0;renderMarketing()">Upcoming</span>`;
   html += `<span class="pill ${mktFilter==='overdue'?'active':''}" onclick="mktFilter='overdue';mktPage=0;renderMarketing()">Overdue</span>`;
   html += `<span class="pill ${mktFilter==='starred'?'active':''}" onclick="mktFilter='starred';mktPage=0;renderMarketing()">Starred</span>`;
+  if (unmatched > 0) html += `<span class="pill ${mktFilter==='unmatched'?'active':''}" onclick="mktFilter='unmatched';mktPage=0;renderMarketing()">Unmatched <span class="pill-ct" style="background:var(--red);color:#fff">${unmatched}</span></span>`;
   html += '</div>';
 
   // Search
-  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search deals, contacts, companies..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
+  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search deals, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
 
   // Paginated list
   const start = mktPage * MKT_PAGE;
@@ -1335,29 +1363,35 @@ function renderMarketing() {
   const totalPages = Math.ceil(filtered.length / MKT_PAGE);
 
   if (filtered.length === 0) {
-    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No deals match your filters.</div>';
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No items match your filters.</div>';
   }
 
   // Group by deal for display
   const groups = {};
   pageItems.forEach(d => {
-    if (!groups[d.deal_name]) groups[d.deal_name] = [];
-    groups[d.deal_name].push(d);
+    const key = d.deal_name || d.item_id;
+    if (!groups[key]) groups[key] = { items: [], displayName: d.deal_display_name || d.deal_name || '(No deal name)', first: d };
+    groups[key].items.push(d);
   });
 
-  Object.entries(groups).forEach(([dealName, contacts]) => {
-    const first = contacts[0];
-    const isOverdue = first.activity_date && first.activity_date < today;
-    const isStarred = dealName.startsWith('****');
+  Object.values(groups).forEach(group => {
+    const first = group.first;
+    const contacts = group.items;
+    const isOverdue = first.due_date && first.due_date < today;
+    const isStarred = first.deal_name && first.deal_name.startsWith('****');
+    const isLead = first.pipeline_source !== 'sf_deal';
+
     const priorityBadge = first.deal_priority ? `<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:${first.deal_priority <= 3 ? 'var(--red)' : first.deal_priority <= 4 ? 'var(--yellow)' : 'var(--text3)'};color:#fff;font-size:11px;font-weight:700;margin-right:6px">${first.deal_priority}</span>` : '';
     const dueBadge = isOverdue ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;margin-left:6px">OVERDUE</span>' : '';
+    const sourceBadge = isLead ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--purple);color:#fff;margin-left:6px">${esc(first.pipeline_source.toUpperCase())}</span>` : '';
+    const matchBadge = isLead && first.sf_match_status === 'unmatched' ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--orange);color:#fff;margin-left:6px">UNMATCHED</span>' : '';
 
-    html += `<div class="widget" style="padding:14px">`;
+    html += `<div class="widget" style="padding:14px${isLead ? ';border-left:3px solid var(--purple)' : ''}">`;
     // Deal header
     html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">`;
     html += `<div style="flex:1;min-width:0">`;
-    html += `<div style="font-size:15px;font-weight:600;display:flex;align-items:center">${priorityBadge}${isStarred ? '<span style="color:var(--yellow);margin-right:4px">&#9733;</span>' : ''}${esc(first.deal_display_name || dealName)}${dueBadge}</div>`;
-    html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">Due: ${esc(first.activity_date || '—')} · ${contacts.length} contact${contacts.length > 1 ? 's' : ''}</div>`;
+    html += `<div style="font-size:15px;font-weight:600;display:flex;align-items:center;flex-wrap:wrap;gap:4px">${priorityBadge}${isStarred ? '<span style="color:var(--yellow);margin-right:4px">&#9733;</span>' : ''}${esc(group.displayName)}${dueBadge}${sourceBadge}${matchBadge}</div>`;
+    html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">Due: ${esc(first.due_date || '—')} · ${contacts.length} contact${contacts.length > 1 ? 's' : ''}${isLead && first.activity_type ? ' · ' + esc(cleanLabel(first.activity_type)) : ''}</div>`;
     html += '</div></div>';
 
     // Contact rows
@@ -1370,17 +1404,33 @@ function renderMarketing() {
       if (c.email) html += ` · <a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`;
       html += `</div>`;
       if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
+
+      // Lead-specific metadata
+      if (c.pipeline_source !== 'sf_deal') {
+        let meta = [];
+        if (c.sf_match_status) meta.push(c.sf_match_status === 'matched' ? '<span style="color:var(--green)">SF Matched</span>' : '<span style="color:var(--orange)">Unmatched</span>');
+        if (c.touchpoint_count) meta.push(c.touchpoint_count + ' touchpoint' + (c.touchpoint_count > 1 ? 's' : ''));
+        if (c.lead_source) meta.push('via ' + esc(c.lead_source));
+        if (meta.length) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${meta.join(' · ')}</div>`;
+      }
       html += '</div>';
 
       // Action buttons
       html += `<div style="display:flex;gap:6px;flex-shrink:0;margin-left:8px">`;
       if (c.email) {
-        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(first.deal_display_name||dealName)}')">&#x2709;</button>`;
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">&#x2709;</button>`;
       }
       if (c.phone) {
         html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()">&#x1F4DE;</a>`;
       }
       html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
+      // Lead management buttons
+      if (c.pipeline_source !== 'sf_deal' && c.sf_match_status === 'unmatched') {
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:#fff" onclick="event.stopPropagation();mktMatchLead('${esc(c.item_id)}')">Match</button>`;
+      }
+      if (c.pipeline_source !== 'sf_deal') {
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();mktUpdateStatus('${esc(c.item_id)}','contacted')">&#x2713;</button>`;
+      }
       html += '</div></div>';
     });
 
@@ -1398,6 +1448,59 @@ function renderMarketing() {
 function debounceMktSearch(val) {
   clearTimeout(mktSearchTimeout);
   mktSearchTimeout = setTimeout(() => { mktSearch = val; mktPage = 0; renderMarketing(); }, 250);
+}
+
+/** Trigger SF matching for an inbound lead */
+async function mktMatchLead(leadId) {
+  showToast('Matching against Salesforce...', 'success');
+  try {
+    const result = await diaQuery('rpc/match_marketing_lead_to_sf', '', { filter: `p_lead_id=${leadId}` });
+    // Since RPC calls work differently via REST, use direct SQL via edge function
+    // For now, trigger a re-query — the match function runs server-side
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'rpc/match_marketing_lead_to_sf');
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_lead_id: leadId })
+    });
+    const data = await res.json();
+    if (data && data.data && data.data[0]) {
+      const m = data.data[0];
+      if (m.match_method === 'no_match') {
+        showToast('No SF match found — flagged for manual review', 'error');
+      } else {
+        showToast(`Matched via ${m.match_method}!`, 'success');
+      }
+    }
+    // Refresh data
+    mktLoaded = false;
+    loadMarketing();
+  } catch (e) {
+    console.error('Match error:', e);
+    showToast('Error matching lead: ' + e.message, 'error');
+  }
+}
+
+/** Update lead status (contacted, qualified, etc.) */
+async function mktUpdateStatus(leadId, newStatus) {
+  try {
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'marketing_leads');
+    url.searchParams.set('filter', `lead_id=eq.${leadId}`);
+    await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus })
+    });
+    // Update local cache
+    const item = mktData.find(d => d.item_id === leadId);
+    if (item) item.status = newStatus;
+    showToast(`Status updated to "${newStatus}"`, 'success');
+    renderMarketing();
+  } catch (e) {
+    showToast('Error updating status', 'error');
+  }
 }
 
 /** Open email template for a marketing deal contact */
