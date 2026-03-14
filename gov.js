@@ -426,7 +426,7 @@ function ownershipTable(rows) {
     const status = r.research_status || 'pending';
     const statusDot = dotClass(status);
     
-    html += '<tr class="table-row">';
+    html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
     html += `<td><code>${esc(r.lease_number || '')}</code></td>`;
     html += `<td>${esc(r.city || '')}, ${esc(r.state || '')}</td>`;
     html += `<td class="truncate">${esc(r.prior_owner || '')}</td>`;
@@ -461,7 +461,7 @@ function leadsTable(rows) {
     const pipelineStatus = r.pipeline_status || 'new';
     const researchStatus = r.research_status || 'pending';
     
-    html += '<tr class="table-row">';
+    html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-lead")'>`;
     html += `<td><strong>${r.priority_score || 0}</strong></td>`;
     html += `<td><span style="color:${tempColor};">${r.lead_temperature || 'cool'}</span></td>`;
     html += `<td>${esc(r.city || '')}, ${esc(r.state || '')}</td>`;
@@ -492,7 +492,7 @@ function listingsTable(rows) {
     const status = r.listing_status || 'active';
     const urlStatus = r.url_status || 'unknown';
     
-    html += '<tr class="table-row">';
+    html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-listing")'>`;
     html += `<td class="truncate">${esc(r.address || '')}</td>`;
     html += `<td>${esc(r.city || '')}</td>`;
     html += `<td>${fmt(r.asking_price || 0)}</td>`;
@@ -1268,19 +1268,17 @@ async function saveLead(rec) {
 }
 
 async function patchRecord(table, idCol, idVal, data) {
-  const url = `${GOV_SUPABASE_URL}/rest/v1/${table}?${idCol}=eq.${idVal}`;
-  
-  const headers = {
-    'apikey': govApiKey,
-    'Authorization': `Bearer ${govApiKey}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=minimal'
-  };
+  // Use proxy endpoint instead of direct Supabase connection
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('filter', `${idCol}=eq.${idVal}`);
   
   try {
-    const response = await fetch(url, {
+    const response = await fetch(url.toString(), {
       method: 'PATCH',
-      headers,
+      headers: {
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify(data)
     });
     
@@ -1322,20 +1320,22 @@ async function saveLoanFields(rec) {
   if (existingLoan) {
     await patchRecord('loans', 'property_id', propertyId, loanData);
   } else {
-    // POST new loan
-    const url = `${GOV_SUPABASE_URL}/rest/v1/loans`;
-    const headers = {
-      'apikey': govApiKey,
-      'Authorization': `Bearer ${govApiKey}`,
-      'Content-Type': 'application/json'
-    };
+    // POST new loan using proxy endpoint
+    const url = new URL('/api/gov-query', window.location.origin);
+    url.searchParams.set('table', 'loans');
     
     try {
-      await fetch(url, {
+      const response = await fetch(url.toString(), {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify(loanData)
       });
+      
+      if (!response.ok) {
+        console.error('Error creating loan record:', response.status, await response.text());
+      }
     } catch (err) {
       console.error('Error creating loan record:', err);
     }
@@ -1599,3 +1599,570 @@ function renderGovTab() {
     renderGovCharts();
   }, 100);
 }
+
+
+// ============================================================================
+// DETAIL PANEL RENDERER
+// ============================================================================
+
+/**
+ * Main detail panel renderer - handles all three source types
+ * Called from index.html via showDetail(record, source)
+ */
+function renderGovDetailBody(record, source, tab) {
+  switch (source) {
+    case 'gov-ownership':
+      return renderOwnershipDetail(record, tab || 'Overview');
+    case 'gov-lead':
+      return renderLeadDetail(record, tab || 'Overview');
+    case 'gov-listing':
+      return renderListingDetail(record, tab || 'Overview');
+    default:
+      return '<div class="detail-empty">Unknown detail source</div>';
+  }
+}
+
+// ============================================================================
+// GOV-OWNERSHIP DETAIL PANEL
+// ============================================================================
+
+function renderOwnershipDetail(record, tab) {
+  let html = '';
+  
+  switch (tab) {
+    case 'Overview':
+      html = renderOwnershipOverview(record);
+      break;
+    case 'Lease':
+      html = renderOwnershipLease(record);
+      break;
+    case 'Ownership':
+      html = renderOwnershipOwnership(record);
+      break;
+    case 'Activity':
+      html = renderOwnershipActivity(record);
+      break;
+  }
+  
+  return html;
+}
+
+function renderOwnershipOverview(record) {
+  const value = fmt(record.estimated_value);
+  const salePrice = fmt(record.sale_price);
+  const capRate = record.cap_rate ? pct(record.cap_rate / 100) : '—';
+  const sqft = record.square_feet ? fmtN(record.square_feet) : '—';
+  const rent = fmt(record.annual_rent);
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Key Information</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Lease Number', esc(record.lease_number || '—'));
+  html += createDetailRow('Address', esc(record.address || '—'));
+  html += createDetailRow('City / State', 
+    esc((record.city || '') + (record.state ? ', ' + record.state : '') || '—'));
+  html += createDetailRow('Estimated Value', `<span class="detail-val money">${value}</span>`);
+  html += createDetailRow('Sale Price', `<span class="detail-val money">${salePrice}</span>`);
+  html += createDetailRow('Cap Rate', capRate);
+  html += createDetailRow('Square Feet', sqft);
+  html += createDetailRow('Annual Rent', `<span class="detail-val money">${rent}</span>`);
+  html += createDetailRow('Transfer Date', esc(record.transfer_date || '—'));
+  html += createDetailRow('Research Status', 
+    `<span class="detail-badge">${esc(record.research_status || 'Pending')}</span>`);
+  
+  html += '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-actions">';
+  html += '<button class="gov-btn" onclick="showToast(\'Edit status - coming soon\')">Edit Status</button>';
+  html += '<button class="gov-btn" onclick="showToast(\'View on map - coming soon\')">View on Map</button>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderOwnershipLease(record) {
+  // Find matching GSA snapshot by lease_number
+  const snapshot = govData.gsaSnapshots && govData.gsaSnapshots.find(
+    s => s.lease_number === record.lease_number
+  );
+  
+  if (!snapshot) {
+    return '<div class="detail-empty">No lease data available</div>';
+  }
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Lease Details</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Lease Effective', esc(snapshot.lease_effective || '—'));
+  html += createDetailRow('Lease Expiration', esc(snapshot.lease_expiration || '—'));
+  html += createDetailRow('RSF (Lease)', snapshot.lease_rsf ? fmtN(snapshot.lease_rsf) : '—');
+  html += createDetailRow('Lessor Name', esc(snapshot.lessor_name || '—'));
+  html += createDetailRow('Field Office', esc(snapshot.field_office_name || '—'));
+  html += createDetailRow('Annual Rent', fmt(snapshot.annual_rent));
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderOwnershipOwnership(record) {
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Ownership Transfer</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Prior Owner', esc(record.prior_owner || '—'));
+  html += createDetailRow('New Owner', esc(record.new_owner || '—'));
+  html += createDetailRow('Transfer Date', esc(record.transfer_date || '—'));
+  
+  html += '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Legal Ownership</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Recorded Owner', esc(record.recorded_owner_name || '—'));
+  html += createDetailRow('True Owner', esc(record.true_owner_name || '—'));
+  html += createDetailRow('State of Incorporation', esc(record.state_of_incorporation || '—'));
+  
+  if (record.principal_names) {
+    html += createDetailRow('Principals', 
+      `<span class="detail-val">${esc(record.principal_names)}</span>`);
+  }
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderOwnershipActivity(record) {
+  // Filter gsaEvents by lease_number
+  const events = govData.gsaEvents && govData.gsaEvents.filter(
+    e => e.lease_number === record.lease_number
+  );
+  
+  if (!events || events.length === 0) {
+    return '<div class="detail-empty">No activity recorded</div>';
+  }
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Activity Timeline</div>';
+  html += '<div class="detail-timeline">';
+  
+  events.forEach((event, idx) => {
+    const statusClass = event.event_type === 'renewal' ? 'green' : 
+                       event.event_type === 'termination' ? 'red' : 'yellow';
+    
+    html += `<div class="detail-timeline-item ${statusClass}">`;
+    html += `<div class="detail-card-date">${esc(event.event_date || '—')}</div>`;
+    html += `<div class="detail-card-title">${esc(event.event_type || 'Event')}</div>`;
+    html += `<div class="detail-card-body">`;
+    html += `<strong>${esc(event.lessor_name || '—')}</strong><br>`;
+    html += `Annual Rent: ${fmt(event.annual_rent)}<br>`;
+    html += `RSF: ${event.lease_rsf ? fmtN(event.lease_rsf) : '—'}`;
+    if (event.changed_fields) {
+      html += `<br><span class="detail-val muted">Changed: ${esc(event.changed_fields)}</span>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  });
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+// ============================================================================
+// GOV-LEAD DETAIL PANEL
+// ============================================================================
+
+function renderLeadDetail(record, tab) {
+  let html = '';
+  
+  switch (tab) {
+    case 'Overview':
+      html = renderLeadOverview(record);
+      break;
+    case 'Property':
+      html = renderLeadProperty(record);
+      break;
+    case 'Pipeline':
+      html = renderLeadPipeline(record);
+      break;
+    case 'Contacts':
+      html = renderLeadContacts(record);
+      break;
+    case 'Activity':
+      html = renderLeadActivity(record);
+      break;
+  }
+  
+  return html;
+}
+
+function renderLeadOverview(record) {
+  const tempColor = record.lead_temperature === 'Hot' ? 'red' : 
+                    record.lead_temperature === 'Warm' ? 'yellow' : 'cyan';
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Priority & Temperature</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Priority Score', 
+    `<span class="detail-badge" style="background: ${tempColor === 'red' ? '#f87171' : tempColor === 'yellow' ? '#fbbf24' : '#22d3ee'}">${record.priority_score || '—'}</span>`);
+  html += createDetailRow('Lead Temperature', 
+    `<span class="detail-badge">${esc(record.lead_temperature || 'Cold')}</span>`);
+  html += createDetailRow('Lead Source', esc(record.lead_source || '—'));
+  
+  html += '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Key Metrics</div>';
+  html += '<div class="detail-grid">';
+  
+  const value = fmt(record.estimated_value);
+  const rent = fmt(record.annual_rent);
+  const sqft = record.square_feet ? fmtN(record.square_feet) : '—';
+  
+  html += createDetailRow('Estimated Value', `<span class="detail-val money">${value}</span>`);
+  html += createDetailRow('Annual Rent', `<span class="detail-val money">${rent}</span>`);
+  html += createDetailRow('Square Feet', sqft);
+  html += createDetailRow('Year Built', record.year_built || '—');
+  html += createDetailRow('Firm Term Remaining', 
+    record.firm_term_remaining ? fmtN(record.firm_term_remaining) + ' months' : '—');
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderLeadProperty(record) {
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Property Information</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Address', esc(record.address || '—'));
+  html += createDetailRow('City / State', 
+    esc((record.city || '') + (record.state ? ', ' + record.state : '') || '—'));
+  html += createDetailRow('Agency', esc(record.agency_full_name || '—'));
+  html += createDetailRow('Tenant', esc(record.tenant_agency || '—'));
+  html += createDetailRow('Lease Effective', esc(record.lease_effective || '—'));
+  html += createDetailRow('Lease Expiration', esc(record.lease_expiration || '—'));
+  html += createDetailRow('RBA', record.rba || '—');
+  html += createDetailRow('Land Acres', record.land_acres ? fmtN(record.land_acres) : '—');
+  html += createDetailRow('Year Renovated', record.year_renovated || '—');
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderLeadPipeline(record) {
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">CRM Pipeline</div>';
+  
+  html += '<div class="detail-form">';
+  
+  html += '<div class="detail-row">';
+  html += '<label class="detail-lbl">Pipeline Status</label>';
+  html += '<select id="govDetailPipeline" class="detail-val">';
+  html += '<option value="new" ' + (record.pipeline_status === 'new' ? 'selected' : '') + '>New</option>';
+  html += '<option value="contacted" ' + (record.pipeline_status === 'contacted' ? 'selected' : '') + '>Contacted</option>';
+  html += '<option value="qualified" ' + (record.pipeline_status === 'qualified' ? 'selected' : '') + '>Qualified</option>';
+  html += '<option value="proposal" ' + (record.pipeline_status === 'proposal' ? 'selected' : '') + '>Proposal</option>';
+  html += '<option value="closed-won" ' + (record.pipeline_status === 'closed-won' ? 'selected' : '') + '>Closed Won</option>';
+  html += '<option value="closed-lost" ' + (record.pipeline_status === 'closed-lost' ? 'selected' : '') + '>Closed Lost</option>';
+  html += '</select>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<label class="detail-lbl">Research Status</label>';
+  html += '<select id="govDetailResearch" class="detail-val">';
+  html += '<option value="pending" ' + (record.research_status === 'pending' ? 'selected' : '') + '>Pending</option>';
+  html += '<option value="in-progress" ' + (record.research_status === 'in-progress' ? 'selected' : '') + '>In Progress</option>';
+  html += '<option value="complete" ' + (record.research_status === 'complete' ? 'selected' : '') + '>Complete</option>';
+  html += '<option value="archived" ' + (record.research_status === 'archived' ? 'selected' : '') + '>Archived</option>';
+  html += '</select>';
+  html += '</div>';
+  
+  if (record.sf_sync_status) {
+    html += '<div class="detail-row">';
+    html += '<label class="detail-lbl">Salesforce Sync</label>';
+    html += '<span class="detail-badge">' + esc(record.sf_sync_status) + '</span>';
+    html += '</div>';
+  }
+  
+  html += '<div class="detail-row">';
+  html += '<label class="detail-lbl">Research Notes</label>';
+  html += '<textarea id="govDetailNotes" class="detail-val" style="min-height: 100px; font-family: monospace; font-size: 12px; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">' + esc(record.research_notes || '') + '</textarea>';
+  html += '</div>';
+  
+  html += '<div class="detail-row" style="margin-top: 16px;">';
+  html += '<button class="act-btn primary" onclick="saveGovDetailLead(' + JSON.stringify(record.lead_id) + ')">Save Changes</button>';
+  html += '</div>';
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderLeadContacts(record) {
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Contact Information</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Name', esc(record.contact_name || '—'));
+  html += createDetailRow('Title', esc(record.contact_title || '—'));
+  html += createDetailRow('Company', esc(record.contact_company || '—'));
+  html += createDetailRow('Phone', esc(record.contact_phone || '—'));
+  html += createDetailRow('Email', esc(record.contact_email || '—'));
+  
+  if (record.phone_2) {
+    html += createDetailRow('Phone 2', esc(record.phone_2));
+  }
+  
+  if (record.mailing_address) {
+    html += createDetailRow('Mailing Address', esc(record.mailing_address));
+    if (record.mailing_address_2) {
+      html += createDetailRow('Address 2', esc(record.mailing_address_2));
+    }
+  }
+  
+  html += '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-actions">';
+  html += '<button class="gov-btn" onclick="showToast(\'Log call - coming soon\')">Log Call</button>';
+  html += '<button class="gov-btn" onclick="showToast(\'Send email - coming soon\')">Send Email</button>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderLeadActivity(record) {
+  // Filter gsaEvents by lease_number
+  const events = govData.gsaEvents && govData.gsaEvents.filter(
+    e => e.lease_number === record.lease_number
+  );
+  
+  if (!events || events.length === 0) {
+    return '<div class="detail-empty">No activity recorded</div>';
+  }
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Activity Timeline</div>';
+  html += '<div class="detail-timeline">';
+  
+  events.forEach((event, idx) => {
+    const statusClass = event.event_type === 'renewal' ? 'green' : 
+                       event.event_type === 'termination' ? 'red' : 'yellow';
+    
+    html += `<div class="detail-timeline-item ${statusClass}">`;
+    html += `<div class="detail-card-date">${esc(event.event_date || '—')}</div>`;
+    html += `<div class="detail-card-title">${esc(event.event_type || 'Event')}</div>`;
+    html += `<div class="detail-card-body">`;
+    html += `<strong>${esc(event.lessor_name || '—')}</strong><br>`;
+    html += `Annual Rent: ${fmt(event.annual_rent)}<br>`;
+    html += `RSF: ${event.lease_rsf ? fmtN(event.lease_rsf) : '—'}`;
+    if (event.changed_fields) {
+      html += `<br><span class="detail-val muted">Changed: ${esc(event.changed_fields)}</span>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  });
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+// ============================================================================
+// GOV-LISTING DETAIL PANEL
+// ============================================================================
+
+function renderListingDetail(record, tab) {
+  let html = '';
+  
+  switch (tab) {
+    case 'Overview':
+      html = renderListingOverview(record);
+      break;
+    case 'Property':
+      html = renderListingProperty(record);
+      break;
+    case 'Market':
+      html = renderListingMarket(record);
+      break;
+    case 'Activity':
+      html = renderListingActivity(record);
+      break;
+  }
+  
+  return html;
+}
+
+function renderListingOverview(record) {
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Listing Details</div>';
+  html += '<div class="detail-grid">';
+  
+  const price = fmt(record.asking_price);
+  const capRate = record.asking_cap_rate ? pct(record.asking_cap_rate / 100) : '—';
+  
+  html += createDetailRow('Asking Price', `<span class="detail-val money">${price}</span>`);
+  html += createDetailRow('Asking Cap Rate', capRate);
+  html += createDetailRow('Listing Source', esc(record.listing_source || '—'));
+  html += createDetailRow('Listing Status', 
+    `<span class="detail-badge">${esc(record.listing_status || 'Active')}</span>`);
+  html += createDetailRow('Days on Market', record.days_on_market || '—');
+  html += createDetailRow('URL Status', esc(record.url_status || '—'));
+  html += createDetailRow('Tenant Agency', esc(record.tenant_agency || '—'));
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderListingProperty(record) {
+  // Find matching FRPP record by city
+  const frpp = govData.frppRecords && govData.frppRecords.find(
+    f => f.city_name === record.city && f.state_name === record.state
+  );
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Property Information</div>';
+  html += '<div class="detail-grid">';
+  
+  html += createDetailRow('Address', esc(record.address || '—'));
+  html += createDetailRow('City / State', 
+    esc((record.city || '') + (record.state ? ', ' + record.state : '') || '—'));
+  
+  if (frpp) {
+    html += createDetailRow('Property Type', esc(frpp.property_type || '—'));
+    html += createDetailRow('Square Feet', frpp.square_feet ? fmtN(frpp.square_feet) : '—');
+    html += createDetailRow('Annual Rent', fmt(frpp.annual_rent_to_lessor));
+    html += createDetailRow('Lease Expiration', esc(frpp.lease_expiration_date || '—'));
+  }
+  
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderListingMarket(record) {
+  // Find comparable sales/ownership transfers in same city/state
+  const comps = govData.ownership && govData.ownership.filter(
+    o => o.city === record.city && o.state === record.state && o.sale_price
+  );
+  
+  if (!comps || comps.length === 0) {
+    return '<div class="detail-empty">No comparable sales found in this market</div>';
+  }
+  
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Comparable Sales</div>';
+  
+  html += '<div style="overflow-x: auto;">';
+  html += '<table style="width: 100%; font-size: 12px; border-collapse: collapse;">';
+  html += '<thead><tr style="border-bottom: 2px solid #ccc;">';
+  html += '<th style="text-align: left; padding: 8px;">Address</th>';
+  html += '<th style="text-align: right; padding: 8px;">Sale Price</th>';
+  html += '<th style="text-align: right; padding: 8px;">Cap Rate</th>';
+  html += '<th style="text-align: right; padding: 8px;">Sq Ft</th>';
+  html += '<th style="text-align: center; padding: 8px;">Transfer Date</th>';
+  html += '</tr></thead>';
+  html += '<tbody>';
+  
+  comps.slice(0, 10).forEach(comp => {
+    const price = fmt(comp.sale_price);
+    const capRate = comp.cap_rate ? pct(comp.cap_rate / 100) : '—';
+    const sqft = comp.square_feet ? fmtN(comp.square_feet) : '—';
+    
+    html += '<tr style="border-bottom: 1px solid #eee;">';
+    html += `<td style="padding: 8px;">${esc(comp.address || '—')}</td>`;
+    html += `<td style="text-align: right; padding: 8px; font-weight: 600;">${price}</td>`;
+    html += `<td style="text-align: right; padding: 8px;">${capRate}</td>`;
+    html += `<td style="text-align: right; padding: 8px;">${sqft}</td>`;
+    html += `<td style="text-align: center; padding: 8px;">${esc(comp.transfer_date || '—')}</td>`;
+    html += '</tr>';
+  });
+  
+  html += '</tbody>';
+  html += '</table>';
+  html += '</div>';
+  html += '</div>';
+  
+  return html;
+}
+
+function renderListingActivity(record) {
+  return '<div class="detail-empty">Activity timeline coming soon</div>';
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function createDetailRow(label, value) {
+  return `<div class="detail-row">
+    <span class="detail-lbl">${esc(label)}</span>
+    <span class="detail-val">${value}</span>
+  </div>`;
+}
+
+/**
+ * Save changes to a gov lead record
+ * Updates pipeline_status, research_status, and research_notes
+ */
+function saveGovDetailLead(leadId) {
+  const pipelineStatus = document.getElementById('govDetailPipeline')?.value;
+  const researchStatus = document.getElementById('govDetailResearch')?.value;
+  const researchNotes = document.getElementById('govDetailNotes')?.value;
+  
+  if (!pipelineStatus || !researchStatus) {
+    showToast('Please select pipeline and research status');
+    return;
+  }
+  
+  const data = {
+    pipeline_status: pipelineStatus,
+    research_status: researchStatus,
+    research_notes: researchNotes || null
+  };
+  
+  // Patch the prospect_leads table
+  patchRecord('prospect_leads', { lead_id: leadId }, data)
+    .then(() => {
+      showToast('Lead updated successfully');
+      // Refresh the detail view
+      setTimeout(() => {
+        if (window.refreshDetailPanel) {
+          window.refreshDetailPanel();
+        }
+      }, 500);
+    })
+    .catch(err => {
+      console.error('Error saving lead:', err);
+      showToast('Error updating lead: ' + err.message);
+    });
+}
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
+window.renderGovDetailBody = renderGovDetailBody;
+window.saveGovDetailLead = saveGovDetailLead;

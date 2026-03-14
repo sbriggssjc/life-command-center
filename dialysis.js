@@ -364,7 +364,7 @@ function renderDiaChanges() {
       const npiChanged = row.snapshot_npi_changed ? ' • NPI Changed' : '';
       const highlight = isLargeMove ? 'background: rgba(251, 191, 36, 0.1);' : '';
       
-      html += `<div class="table-row" style="${highlight}">`;
+      html += `<div class="table-row clickable-row" style="${highlight}" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.city || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
@@ -458,7 +458,7 @@ function renderDiaNpi() {
     filtered.slice(0, 150).forEach(row => {
       const signalColor = row.signal_type === 'npi_changed' ? 'var(--accent)' : 'var(--text2)';
       
-      html += '<div class="table-row">';
+      html += `<div class="table-row clickable-row" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
       html += `<div style="flex: 1.5; color: ${signalColor};">${esc(row.signal_type || '')}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.city || '')}</div>`;
@@ -993,6 +993,415 @@ function renderDiaActivity() {
 }
 
 // ============================================================================
+// DETAIL PANEL RENDERER
+// ============================================================================
+
+/**
+ * Main detail panel renderer - dispatches to tab-specific renderers
+ */
+function renderDiaDetailBody(record, tab) {
+  tab = tab || 'overview';
+  
+  if (!record) {
+    return '<div class="detail-empty">No record selected</div>';
+  }
+  
+  let html = '';
+  
+  switch (tab) {
+    case 'overview':
+      html = renderDiaDetailOverview(record);
+      break;
+    case 'property':
+      html = renderDiaDetailProperty(record);
+      break;
+    case 'signals':
+      html = renderDiaDetailSignals(record);
+      break;
+    case 'research':
+      html = renderDiaDetailResearch(record);
+      break;
+    case 'activity':
+      html = renderDiaDetailActivity(record);
+      break;
+    default:
+      html = renderDiaDetailOverview(record);
+  }
+  
+  return html;
+}
+
+/**
+ * Overview tab - key facility information
+ */
+function renderDiaDetailOverview(record) {
+  const facility_name = record.facility_name || '—';
+  const ccn = record.ccn || '—';
+  const npi = record.npi || '—';
+  const operator_name = record.operator_name || '—';
+  const city = record.city || '—';
+  const state = record.state || '—';
+  const latest_total_patients = record.latest_total_patients || 0;
+  const delta_patients = record.delta_patients || 0;
+  const pct_change = record.pct_change || 0;
+  const change_type = record.change_type || '—';
+  
+  let html = '<div class="detail-section">';
+  
+  // Header with facility name and key identifiers
+  html += '<div class="detail-section-title">' + esc(facility_name) + '</div>';
+  
+  html += '<div class="detail-grid">';
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">CCN</div>';
+  html += '<div class="detail-val">' + esc(ccn) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">NPI</div>';
+  html += '<div class="detail-val">' + esc(npi) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">Operator</div>';
+  html += '<div class="detail-val">' + esc(operator_name) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">Location</div>';
+  html += '<div class="detail-val">' + esc(city) + ', ' + esc(state) + '</div>';
+  html += '</div>';
+  html += '</div>';
+  
+  // Metrics grid
+  html += '<div class="detail-section-title" style="margin-top: 24px;">Metrics</div>';
+  
+  html += '<div class="detail-grid">';
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">Latest Patient Count</div>';
+  html += '<div class="detail-val">' + fmtN(latest_total_patients) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">Patient Change (Δ)</div>';
+  const deltaColor = delta_patients > 0 ? 'color: var(--success);' : delta_patients < 0 ? 'color: var(--danger);' : '';
+  html += '<div class="detail-val" style="' + deltaColor + '">' + (delta_patients > 0 ? '+' : '') + fmtN(delta_patients) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">% Change</div>';
+  html += '<div class="detail-val" style="' + deltaColor + '">' + pct(pct_change) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">Change Type</div>';
+  html += '<div class="detail-val">' + metricHTML(change_type) + '</div>';
+  html += '</div>';
+  html += '</div>';
+  
+  html += '</div>';
+  
+  return html;
+}
+
+/**
+ * Property tab - location and matching records
+ */
+function renderDiaDetailProperty(record) {
+  const ccn = record.ccn;
+  const facility_name = record.facility_name || '—';
+  const city = record.city || '—';
+  const state = record.state || '—';
+  
+  let html = '<div class="detail-section">';
+  
+  html += '<div class="detail-section-title">Property Information</div>';
+  
+  html += '<div class="detail-grid">';
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">Facility</div>';
+  html += '<div class="detail-val">' + esc(facility_name) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">City</div>';
+  html += '<div class="detail-val">' + esc(city) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">State</div>';
+  html += '<div class="detail-val">' + esc(state) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="detail-row">';
+  html += '<div class="detail-lbl">CCN</div>';
+  html += '<div class="detail-val">' + esc(ccn || '—') + '</div>';
+  html += '</div>';
+  html += '</div>';
+  
+  // Matching inventory changes for this CCN
+  if (ccn && diaData.inventoryChanges) {
+    const matching = diaData.inventoryChanges.filter(r => r.ccn === ccn);
+    
+    if (matching.length > 0) {
+      html += '<div class="detail-section-title" style="margin-top: 24px;">Inventory Snapshots</div>';
+      
+      matching.forEach((item, idx) => {
+        html += '<div class="detail-card">';
+        html += '<div class="detail-card-header">';
+        html += '<div class="detail-card-title">' + metricHTML(item.change_type) + '</div>';
+        html += '<div class="detail-card-date">' + fmt(item.snapshot_date) + '</div>';
+        html += '</div>';
+        html += '<div class="detail-card-body">';
+        html += '<div class="detail-row">';
+        html += '<div class="detail-lbl">Patient Count</div>';
+        html += '<div class="detail-val">' + fmtN(item.latest_total_patients) + '</div>';
+        html += '</div>';
+        html += '<div class="detail-row">';
+        html += '<div class="detail-lbl">Change</div>';
+        const deltaColor = item.delta_patients > 0 ? 'color: var(--success);' : item.delta_patients < 0 ? 'color: var(--danger);' : '';
+        html += '<div class="detail-val" style="' + deltaColor + '">' + (item.delta_patients > 0 ? '+' : '') + fmtN(item.delta_patients) + '</div>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+      });
+    }
+  }
+  
+  html += '</div>';
+  
+  return html;
+}
+
+/**
+ * Signals tab - NPI and data quality signals
+ */
+function renderDiaDetailSignals(record) {
+  const ccn = record.ccn;
+  const npi = record.npi;
+  
+  let html = '<div class="detail-section">';
+  
+  if (!ccn && !npi) {
+    html += '<div class="detail-empty">No facility identifiers to look up signals</div>';
+    html += '</div>';
+    return html;
+  }
+  
+  const signals = (diaData.npiSignals || []).filter(s => s.ccn === ccn || s.npi === npi);
+  
+  if (signals.length === 0) {
+    html += '<div class="detail-empty">No signals detected for this facility</div>';
+    html += '</div>';
+    return html;
+  }
+  
+  html += '<div class="detail-section-title">Data Quality Signals</div>';
+  
+  signals.forEach(signal => {
+    const signalClass = signal.signal_type === 'npi_change' ? 'badge-warning' : 'badge-info';
+    
+    html += '<div class="detail-card">';
+    html += '<div class="detail-card-header">';
+    html += '<div class="detail-card-title">';
+    html += '<span class="detail-badge ' + signalClass + '">' + esc(signal.signal_type) + '</span>';
+    html += '</div>';
+    html += '</div>';
+    html += '<div class="detail-card-body">';
+    
+    if (signal.signal_type === 'npi_change') {
+      html += '<div class="detail-row">';
+      html += '<div class="detail-lbl">Old NPI</div>';
+      html += '<div class="detail-val">' + esc(signal.old_npi || '—') + '</div>';
+      html += '</div>';
+      html += '<div class="detail-row">';
+      html += '<div class="detail-lbl">New NPI</div>';
+      html += '<div class="detail-val">' + esc(signal.new_npi || '—') + '</div>';
+      html += '</div>';
+    }
+    
+    html += '<div class="detail-row">';
+    html += '<div class="detail-lbl">Patients</div>';
+    html += '<div class="detail-val">' + fmtN(signal.latest_total_patients) + '</div>';
+    html += '</div>';
+    
+    html += '</div>';
+    html += '</div>';
+  });
+  
+  html += '</div>';
+  
+  return html;
+}
+
+/**
+ * Research tab - property review queue and lease backfill status
+ */
+function renderDiaDetailResearch(record) {
+  const clinic_id = record.clinic_id;
+  const ccn = record.ccn;
+  
+  let html = '<div class="detail-section">';
+  
+  // Property review queue items
+  if (ccn && diaData.propertyReviewQueue) {
+    const reviewItems = diaData.propertyReviewQueue.filter(r => r.ccn === ccn);
+    
+    if (reviewItems.length > 0) {
+      html += '<div class="detail-section-title">Property Review Queue</div>';
+      
+      reviewItems.forEach(item => {
+        html += '<div class="detail-card">';
+        html += '<div class="detail-card-header">';
+        html += '<div class="detail-card-title">' + metricHTML(item.review_type) + '</div>';
+        html += '<div class="detail-card-date">' + fmt(item.created_at) + '</div>';
+        html += '</div>';
+        html += '<div class="detail-card-body">';
+        html += '<div class="detail-row">';
+        html += '<div class="detail-lbl">Facility</div>';
+        html += '<div class="detail-val">' + esc(item.facility_name || '—') + '</div>';
+        html += '</div>';
+        html += '<div class="detail-row">';
+        html += '<div class="detail-lbl">Status</div>';
+        html += '<div class="detail-val">' + (item.status || '—') + '</div>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+      });
+    }
+  }
+  
+  // Lease backfill items
+  if (ccn && diaData.leaseBackfillRows) {
+    const leaseItems = diaData.leaseBackfillRows.filter(r => r.ccn === ccn);
+    
+    if (leaseItems.length > 0) {
+      html += '<div class="detail-section-title" style="margin-top: 24px;">Lease Backfill Status</div>';
+      
+      leaseItems.forEach(item => {
+        html += '<div class="detail-card">';
+        html += '<div class="detail-card-header">';
+        html += '<div class="detail-card-title">' + esc(item.facility_name || '—') + '</div>';
+        html += '<div class="detail-card-date">' + fmt(item.updated_at || item.created_at) + '</div>';
+        html += '</div>';
+        html += '<div class="detail-card-body">';
+        html += '<div class="detail-row">';
+        html += '<div class="detail-lbl">Status</div>';
+        html += '<div class="detail-val">' + (item.status || 'pending') + '</div>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+      });
+    }
+  }
+  
+  // Research status form
+  html += '<div class="detail-section-title" style="margin-top: 24px;">Update Research Status</div>';
+  
+  html += '<div class="detail-form">';
+  html += '<div class="form-group">';
+  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Research Status</label>';
+  html += '<select id="diaDetailStatus" style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">';
+  html += '<option value="">Select status...</option>';
+  html += '<option value="pending">Pending</option>';
+  html += '<option value="in_progress">In Progress</option>';
+  html += '<option value="verified_lease">Verified Lease</option>';
+  html += '<option value="approved_link">Approved Link</option>';
+  html += '<option value="rejected">Rejected</option>';
+  html += '</select>';
+  html += '</div>';
+  
+  html += '<div class="form-group">';
+  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Notes</label>';
+  html += '<textarea id="diaDetailNotes" placeholder="Add notes..." style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical; min-height: 100px;"></textarea>';
+  html += '</div>';
+  
+  html += '<div style="display: flex; gap: 8px;">';
+  html += '<button class="btn-primary" onclick="saveDiaDetailResearch()">Save</button>';
+  html += '</div>';
+  html += '</div>';
+  
+  html += '</div>';
+  
+  return html;
+}
+
+/**
+ * Activity tab - research outcomes timeline
+ */
+function renderDiaDetailActivity(record) {
+  const clinic_id = record.clinic_id;
+  
+  let html = '<div class="detail-section">';
+  
+  if (!clinic_id) {
+    html += '<div class="detail-empty">No clinic ID to look up activity</div>';
+    html += '</div>';
+    return html;
+  }
+  
+  const outcomes = (diaData.researchOutcomes || []).filter(o => o.clinic_id === clinic_id);
+  
+  if (outcomes.length === 0) {
+    html += '<div class="detail-empty">No research outcomes recorded</div>';
+    html += '</div>';
+    return html;
+  }
+  
+  html += '<div class="detail-section-title">Research Activity Timeline</div>';
+  
+  html += '<div class="detail-timeline">';
+  
+  outcomes.slice().reverse().forEach((outcome, idx) => {
+    const statusColor = outcome.status === 'verified_lease' || outcome.status === 'approved_link' ? 'color: var(--success);' : 'color: var(--text2);';
+    
+    html += '<div class="detail-timeline-item">';
+    html += '<div style="display: flex; justify-content: space-between; margin-bottom: 8px;">';
+    html += '<div style="font-weight: 600;">' + esc(outcome.queue_type || 'unknown') + '</div>';
+    html += '<div style="color: var(--text2); font-size: 12px;">' + fmt(outcome.assigned_at || outcome.created_at) + '</div>';
+    html += '</div>';
+    html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
+    html += '<div style="' + statusColor + '">' + esc(outcome.status || 'unknown') + '</div>';
+    if (outcome.assigned_to) {
+      html += '<div style="color: var(--text2); font-size: 12px;">by ' + esc(outcome.assigned_to) + '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  });
+  
+  html += '</div>';
+  
+  html += '</div>';
+  
+  return html;
+}
+
+/**
+ * Save research status from detail panel
+ */
+function saveDiaDetailResearch() {
+  const status = (document.getElementById('diaDetailStatus') || {}).value;
+  const notes = (document.getElementById('diaDetailNotes') || {}).value;
+  
+  if (!status) {
+    showToast('Please select a status', 'warning');
+    return;
+  }
+  
+  // Get clinic ID from the current detail panel context
+  // This assumes the showDetail function sets a global context or we extract from form
+  const clinicIdEl = document.querySelector('[data-clinic-id]');
+  const clinicId = clinicIdEl ? clinicIdEl.getAttribute('data-clinic-id') : null;
+  
+  if (!clinicId) {
+    showToast('Clinic ID not found', 'error');
+    return;
+  }
+  
+  saveDiaOutcome('property_review', clinicId, status, null, notes);
+}
+
+// ============================================================================
 // EXPORT PUBLIC FUNCTIONS
 // ============================================================================
 
@@ -1005,3 +1414,5 @@ window.renderDiaChanges = renderDiaChanges;
 window.renderDiaNpi = renderDiaNpi;
 window.renderDiaResearch = renderDiaResearch;
 window.renderDiaActivity = renderDiaActivity;
+window.renderDiaDetailBody = renderDiaDetailBody;
+window.saveDiaDetailResearch = saveDiaDetailResearch;

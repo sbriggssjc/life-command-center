@@ -152,16 +152,56 @@ input, select { font-family: inherit; }
 /* Detail slide panel */
 .detail-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 200; }
 .detail-overlay.open { display: block; }
-.detail-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; max-width: 480px; background: var(--s1); overflow-y: auto; z-index: 201; animation: slideIn 0.2s ease-out; padding: 20px; padding-top: calc(20px + var(--safe-top)); }
+.detail-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 100%; max-width: 520px; background: var(--s1); overflow-y: auto; z-index: 201; animation: slideIn 0.2s ease-out; padding: 0; display: none; }
+.detail-panel.open { display: block; }
 @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
-.detail-close { background: none; border: none; color: var(--text2); font-size: 22px; cursor: pointer; float: right; }
-.detail-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; padding-right: 32px; }
-.detail-row { margin-bottom: 14px; }
-.detail-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 3px; }
-.detail-val { font-size: 14px; }
-.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.detail-header { padding: 16px 20px; padding-top: calc(16px + var(--safe-top)); border-bottom: 1px solid var(--border); display: flex; align-items: flex-start; gap: 12px; background: var(--s1); position: sticky; top: 0; z-index: 2; }
+.detail-header-info { flex: 1; min-width: 0; }
+.detail-close { background: none; border: none; color: var(--text2); font-size: 22px; cursor: pointer; padding: 4px 8px; border-radius: 6px; flex-shrink: 0; }
+.detail-close:hover { background: var(--s2); color: var(--text); }
+.detail-title { font-size: 17px; font-weight: 600; line-height: 1.3; margin-bottom: 4px; }
+.detail-subtitle { font-size: 13px; color: var(--text2); }
+.detail-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; margin-top: 6px; }
+.detail-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--s1); position: sticky; top: 0; z-index: 1; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.detail-tab { flex: none; padding: 10px 16px; font-size: 12px; font-weight: 500; color: var(--text3); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; transition: color 0.15s; }
+.detail-tab:hover { color: var(--text2); }
+.detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.detail-body { padding: 20px; }
+.detail-section { margin-bottom: 20px; }
+.detail-section-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.detail-row { margin-bottom: 12px; }
+.detail-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); margin-bottom: 2px; }
+.detail-val { font-size: 14px; color: var(--text); }
+.detail-val a { color: var(--accent); }
+.detail-val.money { font-family: 'JetBrains Mono', monospace; color: var(--green); }
+.detail-val.muted { color: var(--text2); }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .detail-notes { background: var(--s2); border-radius: 8px; padding: 12px; font-size: 13px; color: var(--text2); line-height: 1.5; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
 .detail-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.detail-card { background: var(--s2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+.detail-card:hover { border-color: var(--s3); }
+.detail-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.detail-card-title { font-size: 13px; font-weight: 600; }
+.detail-card-date { font-size: 11px; color: var(--text3); }
+.detail-card-body { font-size: 13px; color: var(--text2); line-height: 1.4; }
+.detail-timeline { position: relative; padding-left: 20px; }
+.detail-timeline::before { content: ''; position: absolute; left: 6px; top: 4px; bottom: 4px; width: 2px; background: var(--border); }
+.detail-timeline-item { position: relative; margin-bottom: 16px; }
+.detail-timeline-item::before { content: ''; position: absolute; left: -17px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); border: 2px solid var(--s1); }
+.detail-timeline-item.green::before { background: var(--green); }
+.detail-timeline-item.red::before { background: var(--red); }
+.detail-timeline-item.yellow::before { background: var(--yellow); }
+.detail-form { margin-top: 12px; }
+.detail-form label { font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px; margin-top: 12px; }
+.detail-form label:first-child { margin-top: 0; }
+.detail-form input, .detail-form select, .detail-form textarea { width: 100%; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text); font-size: 14px; outline: none; font-family: inherit; }
+.detail-form input:focus, .detail-form select:focus, .detail-form textarea:focus { border-color: var(--accent); }
+.detail-form textarea { resize: vertical; min-height: 80px; }
+.detail-form .btn-row { display: flex; gap: 8px; margin-top: 16px; }
+.detail-empty { text-align: center; padding: 32px 16px; color: var(--text3); font-size: 13px; }
+.clickable-row { cursor: pointer; transition: background 0.15s; }
+.clickable-row:hover { background: var(--s2) !important; }
+tr.clickable-row:hover td { background: var(--s2); }
 
 /* Loading */
 .loading { text-align: center; padding: 32px; color: var(--text2); }
@@ -554,9 +594,13 @@ input, select { font-family: inherit; }
   </div>
 </div>
 
-<!-- Detail Panel -->
+<!-- Detail Panel (slide-over) -->
 <div class="detail-overlay" id="detailOverlay" onclick="if(event.target===this)closeDetail()"></div>
-<div class="detail-panel" id="detailPanel" style="display:none"></div>
+<div class="detail-panel" id="detailPanel">
+  <div class="detail-header" id="detailHeader"></div>
+  <div class="detail-tabs" id="detailTabs"></div>
+  <div class="detail-body" id="detailBody"></div>
+</div>
 
 <!-- Log Call Modal -->
 <div class="modal-overlay" id="logCallModal">
@@ -804,6 +848,10 @@ function renderDiaOverview(){return '<div style="color:var(--text2)">Loading dia
 function renderDiaChanges(){return renderDiaOverview();}
 function renderDiaNpi(){return renderDiaOverview();}
 function renderDiaResearch(){return renderDiaOverview();}
+
+// Placeholder functions for detail panel body renderers (overridden by gov.js and dialysis.js)
+function renderGovDetailBody(record, source, tab) { return '<div class="detail-empty">Government detail not loaded</div>'; }
+function renderDiaDetailBody(record, tab) { return '<div class="detail-empty">Dialysis detail not loaded</div>'; }
 function renderDiaTab(){
   const el=document.getElementById('bizPageInner');
   if(!el)return;
@@ -1102,41 +1150,168 @@ function renderBizSubset(subset) {
 }
 
 // ============================================================
-// DETAIL PANEL
+// DETAIL PANEL (Tabbed Architecture)
 // ============================================================
-function showDetail(a) {
-  const p = document.getElementById('detailPanel');
-  let html = `<button class="detail-close" onclick="closeDetail()">&times;</button>`;
-  html += `<div class="detail-title">${esc(a.subject || '(No subject)')}</div>`;
-  html += `<div style="margin-bottom:16px"><span class="act-cat ${catClass(a.computed_category)}" style="font-size:13px;padding:4px 12px">${esc(a.computed_category || 'General')}</span></div>`;
-  html += '<div class="detail-grid">';
-  html += `<div class="detail-row"><div class="detail-lbl">Company</div><div class="detail-val">${esc(a.company_name || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">${esc(a.company_city_state || a.company_address || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Contact</div><div class="detail-val">${esc(a.contact_name || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Email</div><div class="detail-val">${a.email ? `<a href="mailto:${esc(a.email)}">${esc(a.email)}</a>` : '—'}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Phone</div><div class="detail-val">${a.phone ? `<a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : '—'}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">${a.activity_date || '—'}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val">${esc(a.status || '—')}</div></div>`;
-  html += `<div class="detail-row"><div class="detail-lbl">Type</div><div class="detail-val">${esc(a.nm_type || a.task_subtype || '—')}</div></div>`;
-  html += '</div>';
-  if (a.nm_notes) {
-    html += `<div class="detail-row"><div class="detail-lbl">Notes</div><div class="detail-notes">${esc(a.nm_notes)}</div></div>`;
-  }
-  html += '<div class="detail-actions">';
-  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>`;
-  if (a.sf_link) html += `<a href="${a.sf_link}" target="_blank" class="act-btn">&#x2197; Salesforce</a>`;
-  if (a.phone) html += `<a href="tel:${esc(a.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
-  if (a.email) html += `<a href="mailto:${esc(a.email)}" class="act-btn">&#x2709; Email</a>`;
-  html += '</div>';
 
-  p.innerHTML = html;
-  p.style.display = 'block';
-  document.getElementById('detailOverlay').classList.add('open');
+// Global state for detail panel
+window._detailRecord = null;
+window._detailSource = null;
+window._detailTab = 'Overview';
+
+function showDetail(record, source = 'activity') {
+  window._detailRecord = record;
+  window._detailSource = source;
+  window._detailTab = 'Overview';
+  
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  
+  // Render header
+  const header = renderDetailHeader(record, source);
+  document.getElementById('detailHeader').innerHTML = header;
+  
+  // Render tabs
+  const tabs = renderDetailTabs(source);
+  document.getElementById('detailTabs').innerHTML = tabs;
+  
+  // Render initial body
+  const body = renderDetailBody(record, source, window._detailTab);
+  document.getElementById('detailBody').innerHTML = body;
+  
+  panel.style.display = 'block';
+  overlay.classList.add('open');
 }
 
 function closeDetail() {
+  window._detailRecord = null;
+  window._detailSource = null;
+  window._detailTab = null;
+  
   document.getElementById('detailPanel').style.display = 'none';
   document.getElementById('detailOverlay').classList.remove('open');
+  document.getElementById('detailHeader').innerHTML = '';
+  document.getElementById('detailTabs').innerHTML = '';
+  document.getElementById('detailBody').innerHTML = '';
+}
+
+function switchDetailTab(tabName) {
+  if(!window._detailRecord || !window._detailSource) return;
+  
+  window._detailTab = tabName;
+  
+  // Update active tab highlight
+  const tabs = document.querySelectorAll('.detail-tab');
+  tabs.forEach(t => {
+    t.classList.toggle('active', t.textContent.trim() === tabName);
+  });
+  
+  // Render new body content
+  const body = renderDetailBody(window._detailRecord, window._detailSource, tabName);
+  document.getElementById('detailBody').innerHTML = body;
+}
+
+function renderDetailHeader(record, source) {
+  let title = '';
+  let subtitle = '';
+  let badge = '';
+  
+  if(source === 'activity') {
+    title = esc(record.subject || '(No subject)');
+    subtitle = esc(record.computed_category || 'Activity');
+    badge = 'Activity';
+  } else if(source === 'gov-ownership') {
+    title = esc(record.address || record.lease_number || '(No address)');
+    subtitle = `${esc(record.city || '')}${record.city && record.state ? ', ' : ''}${esc(record.state || '')} · Ownership Transfer`;
+    badge = 'GOV';
+  } else if(source === 'gov-lead') {
+    title = esc(record.lessor_name || record.address || record.lease_number || '(No name)');
+    subtitle = `${esc(record.city || '')}${record.city && record.state ? ', ' : ''}${esc(record.state || '')} · Lead`;
+    badge = 'LEAD';
+  } else if(source === 'gov-listing') {
+    title = esc(record.address || '(No address)');
+    subtitle = `${esc(record.city || '')}${record.state ? ', ' + esc(record.state) : ''} · Listing`;
+    badge = 'LISTING';
+  } else if(source === 'dia-clinic') {
+    title = esc(record.facility_name || '(No name)');
+    subtitle = `${esc(record.city || '')}${record.city && record.state ? ', ' : ''}${esc(record.state || '')} · ${esc(record.operator_name || 'Clinic')}`;
+    badge = 'DIA';
+  }
+  
+  return `
+    <div class="detail-header-info">
+      <div style="flex: 1;">
+        <div class="detail-title">${title}</div>
+        <div class="detail-subtitle">${subtitle}</div>
+      </div>
+      ${badge ? `<span class="detail-badge" style="background:${
+        source === 'activity' ? 'var(--accent2)' :
+        source.startsWith('gov') ? 'var(--gov-green)' :
+        source.startsWith('dia') ? 'var(--purple)' : 'var(--s3)'
+      };color:#fff">${esc(badge)}</span>` : ''}
+      <button class="detail-close" onclick="closeDetail()">&times;</button>
+    </div>
+  `;
+}
+
+function renderDetailTabs(source) {
+  const tabConfigs = {
+    'activity': ['Details'],
+    'gov-ownership': ['Overview', 'Lease', 'Ownership', 'Activity'],
+    'gov-lead': ['Overview', 'Property', 'Pipeline', 'Contacts', 'Activity'],
+    'gov-listing': ['Overview', 'Property', 'Market', 'Activity'],
+    'dia-clinic': ['Overview', 'Property', 'Signals', 'Research', 'Activity']
+  };
+  
+  const tabs = tabConfigs[source] || ['Details'];
+  const currentTab = window._detailTab || tabs[0];
+  
+  let html = '';
+  tabs.forEach(tab => {
+    const isActive = tab === currentTab ? 'active' : '';
+    html += `<button class="detail-tab ${isActive}" onclick="switchDetailTab('${esc(tab)}')">${esc(tab)}</button>`;
+  });
+  
+  return html;
+}
+
+function renderDetailBody(record, source, tab) {
+  if(source === 'activity') {
+    return renderActivityDetailBody(record, tab);
+  } else if(source === 'gov-ownership' || source === 'gov-lead' || source === 'gov-listing') {
+    return renderGovDetailBody(record, source, tab);
+  } else if(source === 'dia-clinic') {
+    return renderDiaDetailBody(record, tab);
+  }
+  return '<div class="detail-empty">Unknown source type</div>';
+}
+
+function renderActivityDetailBody(record) {
+  let html = '<div class="detail-section">';
+  
+  if(record.subject) html += `<div class="detail-row"><span class="detail-lbl">Subject:</span> <span class="detail-val">${esc(record.subject)}</span></div>`;
+  if(record.computed_category) html += `<div class="detail-row"><span class="detail-lbl">Category:</span> <span class="detail-val"><span class="act-cat ${catClass(record.computed_category)}" style="font-size:13px;padding:4px 12px">${esc(record.computed_category)}</span></span></div>`;
+  if(record.company_name) html += `<div class="detail-row"><span class="detail-lbl">Company:</span> <span class="detail-val">${esc(record.company_name)}</span></div>`;
+  if(record.company_city_state || record.company_address) html += `<div class="detail-row"><span class="detail-lbl">Location:</span> <span class="detail-val">${esc(record.company_city_state || record.company_address)}</span></div>`;
+  if(record.contact_name) html += `<div class="detail-row"><span class="detail-lbl">Contact:</span> <span class="detail-val">${esc(record.contact_name)}</span></div>`;
+  if(record.email) html += `<div class="detail-row"><span class="detail-lbl">Email:</span> <span class="detail-val"><a href="mailto:${esc(record.email)}">${esc(record.email)}</a></span></div>`;
+  if(record.phone) html += `<div class="detail-row"><span class="detail-lbl">Phone:</span> <span class="detail-val"><a href="tel:${esc(record.phone)}">${esc(record.phone)}</a></span></div>`;
+  if(record.activity_date) html += `<div class="detail-row"><span class="detail-lbl">Date:</span> <span class="detail-val">${esc(record.activity_date)}</span></div>`;
+  if(record.status) html += `<div class="detail-row"><span class="detail-lbl">Status:</span> <span class="detail-val">${esc(record.status)}</span></div>`;
+  if(record.nm_type || record.task_subtype) html += `<div class="detail-row"><span class="detail-lbl">Type:</span> <span class="detail-val">${esc(record.nm_type || record.task_subtype)}</span></div>`;
+  
+  if(record.nm_notes) {
+    html += `<div class="detail-notes"><strong>Notes:</strong><br>${esc(record.nm_notes)}</div>`;
+  }
+  
+  html += '<div class="detail-actions">';
+  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${JSON.stringify({sf_contact_id:record.sf_contact_id||'',sf_company_id:record.sf_company_id||'',name:record.contact_name||record.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>`;
+  if(record.sf_link) html += `<a href="${record.sf_link}" target="_blank" class="act-btn">&#x2197; Salesforce</a>`;
+  if(record.phone) html += `<a href="tel:${esc(record.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
+  if(record.email) html += `<a href="mailto:${esc(record.email)}" class="act-btn">&#x2709; Email</a>`;
+  html += '</div>';
+  
+  html += '</div>';
+  return html;
 }
 
 // ============================================================
