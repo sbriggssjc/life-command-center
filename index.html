@@ -1159,6 +1159,11 @@ function renderBizContent() {
     console.log('→ renderDiaTab'); renderDiaTab();
     return;
   }
+  // Ensure bizContent container exists (may have been replaced by Marketing/Prospects)
+  if (!document.getElementById('bizContent')) {
+    const outer = document.getElementById('bizPageInner');
+    if (outer) outer.innerHTML = '<div id="bizContent"><div class="loading"><span class="spinner"></span></div></div>';
+  }
   const filtered = filterBizActivities();
   const start = bizPage * PAGE_SIZE;
   const pageItems = filtered.slice(start, start + PAGE_SIZE);

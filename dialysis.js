@@ -1086,8 +1086,8 @@ function renderDiaDetailOverview(record) {
   const city = record.city || '—';
   const state = record.state || '—';
   const latest_total_patients = record.latest_total_patients || 0;
-  const delta_patients = record.delta_patients || 0;
-  const pct_change = record.pct_change || 0;
+  const delta_patients = record.delta_patients;
+  const pct_change = record.pct_change;
   const change_type = record.change_type || '—';
   
   let html = '<div class="detail-section">';
@@ -1129,12 +1129,12 @@ function renderDiaDetailOverview(record) {
   html += '<div class="detail-row">';
   html += '<div class="detail-lbl">Patient Change (Δ)</div>';
   const deltaColor = delta_patients > 0 ? 'color: var(--success);' : delta_patients < 0 ? 'color: var(--danger);' : '';
-  html += '<div class="detail-val" style="' + deltaColor + '">' + (delta_patients > 0 ? '+' : '') + fmtN(delta_patients) + '</div>';
+  html += '<div class="detail-val" style="' + deltaColor + '">' + (delta_patients != null ? (delta_patients > 0 ? '+' : '') + fmtN(delta_patients) : '—') + '</div>';
   html += '</div>';
-  
+
   html += '<div class="detail-row">';
   html += '<div class="detail-lbl">% Change</div>';
-  html += '<div class="detail-val" style="' + deltaColor + '">' + pct(pct_change) + '</div>';
+  html += '<div class="detail-val" style="' + deltaColor + '">' + (pct_change != null ? pct(pct_change) : '—') + '</div>';
   html += '</div>';
   
   html += '<div class="detail-row">';
@@ -1493,7 +1493,7 @@ function renderDiaSales() {
 
   sorted.slice(0, 200).forEach(r => {
     const typeColor = r.change_type === 'added' ? '#34d399' : r.change_type === 'removed' ? '#f87171' : 'var(--text2)';
-    const deltaColor = (r.delta_patients || 0) > 0 ? '#34d399' : (r.delta_patients || 0) < 0 ? '#f87171' : 'var(--text2)';
+    const deltaColor = r.delta_patients > 0 ? '#34d399' : r.delta_patients < 0 ? '#f87171' : 'var(--text3)';
 
     html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
     html += '<div style="flex: 2;" class="truncate">' + esc(r.facility_name || '—') + '</div>';
@@ -1501,8 +1501,8 @@ function renderDiaSales() {
     html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
     html += '<div style="flex: 1; color: ' + typeColor + ';">' + esc(r.change_type || '—') + '</div>';
     html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + ((r.delta_patients || 0) > 0 ? '+' : '') + fmtN(r.delta_patients || 0) + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(r.pct_change || 0) + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + (r.delta_patients != null ? (r.delta_patients > 0 ? '+' : '') + fmtN(r.delta_patients) : '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + (r.pct_change != null ? pct(r.pct_change) : '—') + '</div>';
     html += '<div style="flex: 1; color: var(--text2);">' + esc(r.ccn || '—') + '</div>';
     html += '</div>';
   });
