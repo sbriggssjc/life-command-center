@@ -1284,22 +1284,22 @@ async function execProspectsSearch() {
     let govLeads = [], govOwnership = [], govContacts = [], govListings = [];
     if (govConnected) {
       const [gl, go, gc, gli] = await Promise.all([
-        govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ',lessor.ilike.' + like + ')', limit: 15 }),
-        govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_bureau.ilike.' + like + ')', limit: 15 }),
-        govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',company.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 15 }),
-        govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ')', limit: 15 })
+        govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ')', limit: 15 }),
+        govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_name.ilike.' + like + ',new_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 15 }),
+        govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',entity_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 15 }),
+        govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',seller_name.ilike.' + like + ')', limit: 15 })
       ]);
-      govLeads = (gl.data || []).map(r => ({ ...r, _title: r.address || r.tenant || '—', _badge: 'Gov Lead', _badgeBg: 'rgba(52,211,153,0.15)', _badgeColor: '#34d399', _source: 'gov-lead', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant ? 'Tenant: ' + r.tenant : '', r.lessor ? 'Lessor: ' + r.lessor : '', r.pipeline_stage || ''].filter(Boolean) }));
-      govOwnership = (go.data || []).map(r => ({ ...r, _title: r.address || r.lease_number || '—', _badge: 'Gov Ownership', _badgeBg: 'rgba(108,140,255,0.15)', _badgeColor: '#6c8cff', _source: 'gov-ownership', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.agency_bureau || '', r.estimated_value ? 'Value: ' + fmt(r.estimated_value) : ''].filter(Boolean) }));
-      govContacts = (gc.data || []).map(r => ({ ...r, _title: r.name || r.company || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: '', _meta: [r.company || '', r.phone || '', r.email || '', r.role || ''].filter(Boolean) }));
-      govListings = (gli.data || []).map(r => ({ ...r, _title: r.address || r.tenant || '—', _badge: 'Gov Listing', _badgeBg: 'rgba(251,191,36,0.15)', _badgeColor: '#fbbf24', _source: 'gov-listing', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant ? 'Tenant: ' + r.tenant : '', r.asking_price ? 'Asking: ' + fmt(r.asking_price) : ''].filter(Boolean) }));
+      govLeads = (gl.data || []).map(r => ({ ...r, _title: r.address || r.tenant_agency || '—', _badge: 'Gov Lead', _badgeBg: 'rgba(52,211,153,0.15)', _badgeColor: '#34d399', _source: 'gov-lead', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + r.tenant_agency : '', r.lessor_name ? 'Owner: ' + r.lessor_name : '', r.recorded_owner ? 'Recorded: ' + r.recorded_owner : '', r.pipeline_stage || ''].filter(Boolean) }));
+      govOwnership = (go.data || []).map(r => ({ ...r, _title: r.address || r.lease_number || '—', _badge: 'Gov Ownership', _badgeBg: 'rgba(108,140,255,0.15)', _badgeColor: '#6c8cff', _source: 'gov-ownership', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.agency_name || '', r.new_owner ? 'Owner: ' + r.new_owner : '', r.estimated_value ? 'Value: ' + fmt(r.estimated_value) : ''].filter(Boolean) }));
+      govContacts = (gc.data || []).map(r => ({ ...r, _title: r.name || r.entity_type || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: '', _meta: [r.entity_type || '', r.phone || '', r.email || '', r.role || ''].filter(Boolean) }));
+      govListings = (gli.data || []).map(r => ({ ...r, _title: r.address || r.tenant_agency || '—', _badge: 'Gov Listing', _badgeBg: 'rgba(251,191,36,0.15)', _badgeColor: '#fbbf24', _source: 'gov-listing', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + r.tenant_agency : '', r.seller_name ? 'Seller: ' + r.seller_name : '', r.asking_price ? 'Asking: ' + fmt(r.asking_price) : ''].filter(Boolean) }));
     }
 
     // Dia queries (only if connected)
     let diaClinics = [], diaNpi = [];
     if (diaConnected) {
       const [dc, dn] = await Promise.all([
-        diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',ccn.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 20 }),
+        diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 20 }),
         diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 15 })
       ]);
       diaClinics = (dc || []).map(r => ({ ...r, _title: r.facility_name || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + r.operator_name : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
