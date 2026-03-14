@@ -2187,7 +2187,7 @@ function renderGovSales() {
 
   html += metricHTML('Total Sales', fmtN(totalSales), 'transactions', 'blue');
   html += metricHTML('Total Volume', fmt(totalVolume), 'sale price', 'green');
-  html += metricHTML('Avg Cap Rate', avgCap > 0 ? avgCap.toFixed(2) + '%' : '—', 'across all sales', 'yellow');
+  html += metricHTML('Avg Cap Rate', avgCap > 0 ? (avgCap * 100).toFixed(2) + '%' : '—', 'across all sales', 'yellow');
   html += metricHTML('Avg $/SF', avgPSF > 0 ? '$' + avgPSF.toFixed(0) : '—', 'price per sqft', 'purple');
   html += '</div>';
 
@@ -2218,7 +2218,7 @@ function renderGovSales() {
     html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
     html += '<div style="flex: 1;" class="truncate">' + esc(r.agency || '—') + '</div>';
     html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmt(r.sold_price) + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + (r.sold_cap_rate ? r.sold_cap_rate.toFixed(2) + '%' : '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + (r.sold_cap_rate ? (r.sold_cap_rate * 100).toFixed(2) + '%' : '—') + '</div>';
     html += '<div style="flex: 1; text-align: right;">' + (r.sold_price_psf ? '$' + r.sold_price_psf.toFixed(0) : '—') + '</div>';
     html += '<div style="flex: 1; text-align: right;">' + fmtN(r.sf_leased || r.rba || 0) + '</div>';
     html += '<div style="flex: 1; color: var(--text2);">' + esc(r.sale_date ? r.sale_date.substring(0, 10) : '—') + '</div>';
