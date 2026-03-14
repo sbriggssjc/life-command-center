@@ -179,11 +179,20 @@ function renderDiaTab() {
     case 'overview':
       inner.innerHTML = renderDiaOverview();
       break;
+    case 'search':
+      inner.innerHTML = renderDiaSearch();
+      break;
     case 'changes':
       inner.innerHTML = renderDiaChanges();
       break;
     case 'npi':
       inner.innerHTML = renderDiaNpi();
+      break;
+    case 'sales':
+      inner.innerHTML = renderDiaSales();
+      break;
+    case 'players':
+      inner.innerHTML = renderDiaPlayers();
       break;
     case 'research':
       inner.innerHTML = renderDiaResearch();
@@ -209,8 +218,9 @@ function renderDiaOverview() {
   // Metrics row
   html += '<div class="gov-metrics">';
   
-  const totalClinics = diaData.freshness.total_clinics || 0;
-  const coveragePct = diaData.freshness.coverage_pct || 0;
+  const freshness = diaData.freshness || {};
+  const totalClinics = freshness.total_clinics || 0;
+  const coveragePct = freshness.coverage_pct || 0;
   const addedCount = (diaData.inventorySummary.added?.clinic_count || 0);
   const removedCount = (diaData.inventorySummary.removed?.clinic_count || 0);
   const npiSignalCount = Object.values(diaData.npiSummary).reduce((s, r) => s + (r.signal_count || 0), 0);

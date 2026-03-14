@@ -188,7 +188,7 @@ async function loadGovData() {
     
     // Load loans
     const loansRes = await govQuery('loans',
-      'property_id, lender_name, loan_amount, loan_type, status',
+      'property_id, index_name, loan_amount, loan_type, status',
       {
         limit: 500
       }
@@ -1572,6 +1572,9 @@ function renderGovTab() {
     case 'overview':
       html = renderGovOverview();
       break;
+    case 'search':
+      html = renderGovSearch();
+      break;
     case 'ownership':
       html = renderGovOwnership();
       break;
@@ -1580,6 +1583,12 @@ function renderGovTab() {
       break;
     case 'listings':
       html = renderGovListings();
+      break;
+    case 'sales':
+      html = renderGovSales();
+      break;
+    case 'players':
+      html = renderGovPlayers();
       break;
     case 'research':
       html = renderGovResearch();
