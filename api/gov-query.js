@@ -99,14 +99,15 @@ export default async function handler(req, res) {
     // Forward the content-range header for count info
     const contentRange = response.headers.get('content-range');
 
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
-
     if (!response.ok) {
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(response.status).json({
         error: `Supabase returned ${response.status}`,
         detail: body.substring(0, 500)
       });
     }
+
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
 
     // Return data with count from content-range
     let count = 0;

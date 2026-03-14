@@ -96,14 +96,15 @@ export default async function handler(req, res) {
     const body = await response.text();
     const contentRange = response.headers.get('content-range');
 
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
-
     if (!response.ok) {
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(response.status).json({
         error: `Supabase returned ${response.status}`,
         detail: body.substring(0, 500)
       });
     }
+
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
 
     let count = 0;
     if (contentRange) {
