@@ -1208,7 +1208,8 @@ function renderBizContent() {
     html += `<div class="pager"><button onclick="bizPage--;renderBizContent()" ${bizPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${bizPage+1} of ${totalPages}</span><button onclick="bizPage++;renderBizContent()" ${bizPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
   }
 
-  document.getElementById('bizContent').innerHTML = html;
+  const _bcEl = document.getElementById('bizContent');
+  if (_bcEl) _bcEl.innerHTML = html;
 }
 
 let bizSearchTimeout;
@@ -1244,7 +1245,8 @@ function renderBizSubset(subset) {
       </div>
     </div>`;
   }
-  document.getElementById('bizContent').innerHTML = html;
+  const _bcEl = document.getElementById('bizContent');
+  if (_bcEl) _bcEl.innerHTML = html;
 }
 
 // ============================================================
@@ -1267,7 +1269,7 @@ async function loadMarketing() {
   if (!mktLoaded) {
     el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading marketing pipeline...</p></div>';
     try {
-      const raw = await diaQuery('v_marketing_pipeline', '*', { order: 'due_date.desc.nullslast', limit: 2000 });
+      const raw = await diaQuery('v_marketing_pipeline', '*', { limit: 1000 });
       mktData = raw || [];
       mktLoaded = true;
       const badge = document.getElementById('bizBadgeMkt');
@@ -2087,8 +2089,9 @@ function renderPriorityTasks() {
   if (items.length === 0) return '<div style="color:var(--text2);font-size:13px">No tasks loaded.</div>';
   let html = '';
   for (const a of items) {
+    const subj = (a.subject && a.subject.replace(/[!?.\s]/g, '').length > 0) ? a.subject : (a.contact_name || a.company_name || '—');
     html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
-      <div class="act-top"><div class="act-subject">${esc(a.subject || '—')}</div></div>
+      <div class="act-top"><div class="act-subject">${esc(subj)}</div></div>
       <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category || 'General')}</span></div>
     </div>`;
   }

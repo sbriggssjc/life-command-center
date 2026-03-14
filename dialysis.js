@@ -412,8 +412,8 @@ function renderDiaChanges() {
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
       html += `<div style="flex: 1;">${esc(norm(row.operator_name) || '')}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
-      html += `<div style="flex: 1; text-align: right; color: ${row.delta_patients > 0 ? '#34d399' : '#f87171'};">${row.delta_patients > 0 ? '+' : ''}${fmtN(row.delta_patients || 0)}</div>`;
-      html += `<div style="flex: 1; text-align: right; color: var(--text2);">${pct(row.pct_change || 0)}</div>`;
+      html += `<div style="flex: 1; text-align: right; color: ${row.delta_patients > 0 ? '#34d399' : row.delta_patients < 0 ? '#f87171' : 'var(--text3)'};">${row.delta_patients != null ? (row.delta_patients > 0 ? '+' : '') + fmtN(row.delta_patients) : '—'}</div>`;
+      html += `<div style="flex: 1; text-align: right; color: var(--text2);">${row.pct_change != null ? pct(row.pct_change) : '—'}</div>`;
       html += '</div>';
     });
   }
