@@ -232,6 +232,9 @@ function _udTabProperty() {
     html += '</div></div>';
   }
 
+  // ── RESEARCH QUICK LINKS ──────────────────────────────────────────────────
+  html += _udResearchLinks();
+
   return html;
 }
 
@@ -423,7 +426,7 @@ function _udTabOwnership() {
       html += _row('True Owner State', own.true_owner_state);
       html += _row('Contact 1', own.contact_1_name);
       html += _row('Contact 2', own.contact_2_name);
-      html += _rowLink('Email', own.contact_email, own.contact_email ? 'mailto:' + own.contact_email : null);
+      html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
       html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
       html += _row('Priority', own.priority_level);
       html += _row('Developer', own.developer_flag ? 'Yes' + (own.developer_tier ? ' · Tier ' + own.developer_tier : '') : null);
@@ -439,10 +442,13 @@ function _udTabOwnership() {
       html += _row('True Owner Type', own.true_owner_type);
       html += _row('True Owner State', own.true_owner_state);
       html += _row('Contact', own.contact_name);
-      html += _rowLink('Email', own.contact_email, own.contact_email ? 'mailto:' + own.contact_email : null);
+      html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
       html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
     }
     html += '</div></div>';
+
+    // ── SALESFORCE + SYSTEM LINKS ──────────────────────────────────────────
+    html += _udSystemLinks(own);
 
     // Notes
     if (own.latest_note_summary) {
@@ -679,6 +685,251 @@ function _udTabHistory() {
 }
 
 // ============================================================================
+// RESEARCH QUICK LINKS
+// ============================================================================
+
+/** State Secretary of State business entity search URLs */
+const _SOS_URLS = {
+  AL: 'https://arc-sos.state.al.us/cgi/corpname.mbr/output',
+  AK: 'https://www.commerce.alaska.gov/cbp/main/search/entities',
+  AZ: 'https://ecorp.azcc.gov/EntitySearch/Index',
+  AR: 'https://www.sos.arkansas.gov/corps/search_all.php',
+  CA: 'https://bizfileonline.sos.ca.gov/search/business',
+  CO: 'https://www.sos.state.co.us/biz/BusinessEntityCriteriaExt.do',
+  CT: 'https://service.ct.gov/business/s/onlinebusinesssearch',
+  DE: 'https://icis.corp.delaware.gov/ecorp/entitysearch/namesearch.aspx',
+  FL: 'https://search.sunbiz.org/Inquiry/CorporationSearch/ByName',
+  GA: 'https://ecorp.sos.ga.gov/BusinessSearch',
+  HI: 'https://hbe.ehawaii.gov/documents/search.html',
+  ID: 'https://sosbiz.idaho.gov/search/business',
+  IL: 'https://www.ilsos.gov/corporatellc/',
+  IN: 'https://bsd.sos.in.gov/publicbusinesssearch',
+  IA: 'https://sos.iowa.gov/search/business/(S(0))/search.aspx',
+  KS: 'https://www.sos.ks.gov/business/business-entities.html',
+  KY: 'https://web.sos.ky.gov/bussearchnprofile/(S(0))/search.aspx',
+  LA: 'https://coraweb.sos.la.gov/commercialsearch/CommercialSearchAnon.aspx',
+  ME: 'https://icrs.informe.org/nei-sos-icrs/ICRS',
+  MD: 'https://egov.maryland.gov/BusinessExpress/EntitySearch',
+  MA: 'https://corp.sec.state.ma.us/CorpWeb/CorpSearch/CorpSearch.aspx',
+  MI: 'https://cofs.lara.state.mi.us/SearchApi/Search/Search',
+  MN: 'https://mblsportal.sos.state.mn.us/Business/Search',
+  MS: 'https://corp.sos.ms.gov/corp/portal/c/page/corpBusinessIdSearch/portal.aspx',
+  MO: 'https://bsd.sos.mo.gov/BusinessEntity/BESearch.aspx',
+  MT: 'https://biz.sosmt.gov/search',
+  NE: 'https://www.nebraska.gov/sos/corp/corpsearch.cgi',
+  NV: 'https://esos.nv.gov/EntitySearch/OnlineEntitySearch',
+  NH: 'https://quickstart.sos.nh.gov/online/BusinessInquire',
+  NJ: 'https://www.njportal.com/DOR/BusinessNameSearch',
+  NM: 'https://portal.sos.state.nm.us/BFS/online/CorporationBusinessSearch',
+  NY: 'https://appext20.dos.ny.gov/corp_public/CORPSEARCH.ENTITY_SEARCH_ENTRY',
+  NC: 'https://www.sosnc.gov/online_services/search/by_title/_Business_Registration',
+  ND: 'https://firststop.sos.nd.gov/search/business',
+  OH: 'https://www.sos.state.oh.us/businesses/information-on-a-business/',
+  OK: 'https://www.sos.ok.gov/corp/corpInquiryFind.aspx',
+  OR: 'https://sos.oregon.gov/business/pages/find.aspx',
+  PA: 'https://www.corporations.pa.gov/search/corpsearch',
+  RI: 'https://business.sos.ri.gov/CorpWeb/CorpSearch/CorpSearch.aspx',
+  SC: 'https://search.scsos.com/search',
+  SD: 'https://sosenterprise.sd.gov/BusinessServices/Business/FilingSearch.aspx',
+  TN: 'https://tnbear.tn.gov/Ecommerce/FilingSearch.aspx',
+  TX: 'https://mycpa.cpa.state.tx.us/coa/coaSearchBtn',
+  UT: 'https://secure.utah.gov/bes/index.html',
+  VT: 'https://bizfilings.vermont.gov/online/BusinessInquire',
+  VA: 'https://cis.scc.virginia.gov/EntitySearch/Index',
+  WA: 'https://ccfs.sos.wa.gov/#/AdvancedSearch',
+  WV: 'https://apps.wv.gov/SOS/BusinessEntity/',
+  WI: 'https://www.wdfi.org/apps/CorpSearch/Search.aspx',
+  WY: 'https://wyobiz.wyo.gov/Business/FilingSearch.aspx',
+  DC: 'https://corponline.dcra.dc.gov/BizEntity.aspx/Search'
+};
+
+/** Full state names for display */
+const _STATE_NAMES = {
+  AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',
+  CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',
+  IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',
+  ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',
+  MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',
+  NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',
+  OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',
+  TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',
+  WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',DC:'District of Columbia'
+};
+
+/** Salesforce Lightning base URL */
+const _SF_BASE = 'https://northmarq.lightning.force.com/lightning/r';
+
+/** Build a styled quick-link button */
+function _qlBtn(label, url, icon, color) {
+  if (!url) return '';
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="ql-btn" style="--ql-color:${color}" title="${esc(label)}">
+    <span class="ql-icon">${icon}</span>
+    <span class="ql-label">${esc(label)}</span>
+  </a>`;
+}
+
+/** Research Quick Links — property-level research shortcuts */
+function _udResearchLinks() {
+  if (!_udCache || !_udCache.property) return '';
+  const p = _udCache.property;
+  const own = _udCache.ownership;
+  const db = _udCache.db;
+
+  const county = p.county || '';
+  const state = (p.state || '').toUpperCase().trim();
+  const city = p.city || '';
+  const address = p.address || '';
+  const fullAddr = address + (city ? ', ' + city : '') + (state ? ', ' + state : '');
+
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Research Quick Links</div>';
+  html += '<div class="ql-grid">';
+
+  // ── COUNTY RESEARCH ──
+  if (county && state) {
+    const countyQ = encodeURIComponent(county + ' County ' + (_STATE_NAMES[state] || state));
+    html += _qlBtn(
+      county + ' Co. Appraiser',
+      'https://www.google.com/search?q=' + countyQ + '+property+appraiser+records&btnI=1',
+      '🏛', '#6c8cff'
+    );
+    html += _qlBtn(
+      county + ' Co. GIS',
+      'https://www.google.com/search?q=' + countyQ + '+GIS+parcel+map&btnI=1',
+      '🗺', '#4ecdc4'
+    );
+  }
+
+  // ── PROPERTY STATE SOS ──
+  if (state && _SOS_URLS[state]) {
+    html += _qlBtn(
+      state + ' Sec. of State',
+      _SOS_URLS[state],
+      '📋', '#f7b731'
+    );
+  }
+
+  // ── OWNER HOME STATE SOS (LLC/SPE) ──
+  let ownerState = null;
+  if (own) {
+    // Gov has recorded_owner_state / true_owner_state; Dia has recorded_owner_state / true_owner_state
+    ownerState = (own.true_owner_state || own.recorded_owner_state || '').toUpperCase().trim();
+  }
+  // Also check ownership_history state_of_incorporation from fallback
+  const incorpState = (_udCache.fallback?.state_of_incorporation || '').toUpperCase().trim();
+  const sosState = incorpState || ownerState;
+
+  if (sosState && sosState !== state && _SOS_URLS[sosState]) {
+    html += _qlBtn(
+      sosState + ' SOS (Owner)',
+      _SOS_URLS[sosState],
+      '🏢', '#e056a0'
+    );
+  }
+
+  // ── GOOGLE MAPS / STREET VIEW ──
+  if (address && city) {
+    const mapsQ = encodeURIComponent(fullAddr);
+    html += _qlBtn(
+      'Google Maps',
+      'https://www.google.com/maps/search/' + mapsQ,
+      '📍', '#34a853'
+    );
+    if (p.latitude && p.longitude) {
+      html += _qlBtn(
+        'Street View',
+        `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.latitude},${p.longitude}`,
+        '👁', '#4285f4'
+      );
+    }
+  }
+
+  // ── SALESFORCE LINKS ──
+  const sfContactId = own?.sf_contact_id || own?.salesforce_id || '';
+  const sfOppId = own?.sf_opportunity_id || '';
+  const sfCompanyId = own?.sf_company_id || '';
+
+  if (sfContactId) {
+    html += _qlBtn('SF Contact', `${_SF_BASE}/Contact/${sfContactId}/view`, '👤', '#00a1e0');
+  }
+  if (sfOppId) {
+    html += _qlBtn('SF Opportunity', `${_SF_BASE}/Opportunity/${sfOppId}/view`, '💰', '#ff9f43');
+  }
+  if (sfCompanyId) {
+    html += _qlBtn('SF Account', `${_SF_BASE}/Account/${sfCompanyId}/view`, '🏬', '#a55eea');
+  }
+
+  // ── THIRD PARTY SEARCH ──
+  if (address && city) {
+    const costarQ = encodeURIComponent(fullAddr);
+    html += _qlBtn(
+      'CoStar Lookup',
+      'https://www.costar.com/search?q=' + costarQ,
+      '⭐', '#ff6348'
+    );
+    html += _qlBtn(
+      'LoopNet',
+      'https://www.loopnet.com/search/commercial-real-estate/' + encodeURIComponent(city + '-' + state) + '/for-sale/',
+      '🔄', '#1e90ff'
+    );
+  }
+
+  // ── OWNER WEBSITE / GOOGLE LOOKUP ──
+  const ownerName = own?.true_owner || own?.recorded_owner || '';
+  if (ownerName) {
+    html += _qlBtn(
+      'Owner Search',
+      'https://www.google.com/search?q=' + encodeURIComponent('"' + ownerName + '" real estate'),
+      '🔍', '#95afc0'
+    );
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+/** System links — Salesforce records + email for the Ownership tab */
+function _udSystemLinks(own) {
+  if (!own) return '';
+
+  const sfContactId = own.sf_contact_id || own.salesforce_id || '';
+  const sfOppId = own.sf_opportunity_id || '';
+  const sfCompanyId = own.sf_company_id || '';
+  const contactEmail = own.contact_email || '';
+
+  // Only show if we have at least one link
+  if (!sfContactId && !sfOppId && !sfCompanyId && !contactEmail) return '';
+
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">System Links</div>';
+  html += '<div class="ql-grid">';
+
+  if (sfContactId) {
+    html += _qlBtn('SF Contact', `${_SF_BASE}/Contact/${sfContactId}/view`, '👤', '#00a1e0');
+  }
+  if (sfOppId) {
+    html += _qlBtn('SF Opportunity', `${_SF_BASE}/Opportunity/${sfOppId}/view`, '💰', '#ff9f43');
+  }
+  if (sfCompanyId) {
+    html += _qlBtn('SF Account', `${_SF_BASE}/Account/${sfCompanyId}/view`, '🏬', '#a55eea');
+  }
+
+  // Email — open in Outlook Web (search for contact)
+  if (contactEmail) {
+    const owlSearch = `https://outlook.office.com/mail/search/id//?query=${encodeURIComponent(contactEmail)}`;
+    html += _qlBtn('Email History', owlSearch, '📧', '#0078d4');
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+/** Build Outlook Web App search URL for email history with a contact */
+function _outlookSearchUrl(email) {
+  return `https://outlook.office.com/mail/search/id//?query=${encodeURIComponent(email)}`;
+}
+
+// ============================================================================
 // SHARED HELPERS
 // ============================================================================
 
@@ -773,16 +1024,32 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
   const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 
   try {
+    // ── GENERIC SF PAYLOAD ──
+    // Salesforce gets only a generic activity description — no deal-specific
+    // notes, no client engagement details. This ensures compliance with rules
+    // of engagement while keeping proprietary intel in Supabase only.
+    const _SF_GENERIC_MAP = {
+      'Client Outreach': 'Investment Sales - Client Touch',
+      'Introduction Call': 'Investment Sales - Introduction',
+      'Follow-up': 'Investment Sales - Follow-up',
+      'Property Discussion': 'Investment Sales - Property Research',
+      'Email Correspondence': 'Investment Sales - Email Correspondence',
+      'Market Update': 'Investment Sales - Market Update'
+    };
+    const sfSubject = _SF_GENERIC_MAP[actType] || 'Investment Sales - Activity';
+
     const payload = {
       sf_contact_id: sfContactId || undefined,
       sf_company_id: sfCompanyId || undefined,
       activity_type: actType,
       activity_date: actDate,
       outcome: outcome,
-      notes: notes,
+      // Redacted: SF only sees generic subject, no notes
+      notes: sfSubject,
       force: true
     };
 
+    // 1. Log to Salesforce (generic)
     const res = await fetch(`${API}/sync/log-to-sf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -791,9 +1058,9 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
     const data = await res.json();
 
     if (data.success) {
-      showToast('Activity logged to Salesforce!', 'success');
+      showToast('Activity logged (SF generic + private notes saved)', 'success');
       document.getElementById('udLogNotes').value = '';
-      // Also log to outbound_activities in Dia DB
+      // 2. Log FULL details to outbound_activities in Supabase (private)
       try {
         await _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes);
       } catch (e) { console.warn('Outbound log fallback error:', e); }
@@ -810,7 +1077,7 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
   btn.textContent = '\u260E Log Activity';
 }
 
-/** Also write to outbound_activities table for local tracking */
+/** Write FULL private activity details to outbound_activities (Supabase only — never SF) */
 async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes) {
   const url = new URL('/api/dia-query', window.location.origin);
   url.searchParams.set('table', 'outbound_activities');
@@ -824,6 +1091,7 @@ async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcom
       activity_type: actType,
       activity_date: actDate,
       status: outcome,
+      notes: notes || null,
       user_name: 'scott',
       ref_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null
     })

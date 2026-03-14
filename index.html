@@ -198,6 +198,12 @@ input, select { font-family: inherit; }
 .detail-form input:focus, .detail-form select:focus, .detail-form textarea:focus { border-color: var(--accent); }
 .detail-form textarea { resize: vertical; min-height: 80px; }
 .detail-form .btn-row { display: flex; gap: 8px; margin-top: 16px; }
+/* Research Quick Links */
+.ql-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.ql-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; background: color-mix(in srgb, var(--ql-color, var(--accent)) 12%, var(--s1)); border: 1px solid color-mix(in srgb, var(--ql-color, var(--accent)) 25%, transparent); color: var(--ql-color, var(--accent)); text-decoration: none; font-size: 12px; font-weight: 500; transition: all 0.15s; cursor: pointer; white-space: nowrap; }
+.ql-btn:hover { background: color-mix(in srgb, var(--ql-color, var(--accent)) 22%, var(--s1)); border-color: var(--ql-color, var(--accent)); transform: translateY(-1px); box-shadow: 0 2px 8px color-mix(in srgb, var(--ql-color, var(--accent)) 20%, transparent); }
+.ql-icon { font-size: 14px; line-height: 1; }
+.ql-label { font-size: 12px; }
 .detail-empty { text-align: center; padding: 32px 16px; color: var(--text3); font-size: 13px; }
 .clickable-row { cursor: pointer; transition: background 0.15s; }
 .clickable-row:hover { background: var(--s2) !important; }
