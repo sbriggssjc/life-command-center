@@ -709,12 +709,16 @@ function formatDate(d) {
 }
 
 const TZ = 'America/Chicago';
-function tzHour(d) { return parseInt(new Date(d).toLocaleString('en-US',{hour:'numeric',hour12:false,timeZone:TZ})); }
-function tzMin(d) { return parseInt(new Date(d).toLocaleString('en-US',{minute:'numeric',timeZone:TZ})); }
+// Calendar events from edge function have +00:00 but are actually Central Time
+// Strip the false UTC offset so JS treats them as local (Central) time
+function stripTZ(d) { return String(d).replace(/[Zz]$/,'').replace(/[+-]\d{2}:\d{2}$/,''); }
+function tzHour(d) { return new Date(stripTZ(d)).getHours(); }
+function tzMin(d) { return new Date(stripTZ(d)).getMinutes(); }
 function tzHourMin(d) { return tzHour(d)*60+tzMin(d); }
+function tzDateStr(d) { return new Date(stripTZ(d)).toLocaleDateString('en-US'); }
 function formatTime(d) {
-  if (!d) return ''; const date = new Date(d); if (isNaN(date)) return '';
-  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: TZ });
+  if (!d) return ''; const date = new Date(stripTZ(d)); if (isNaN(date)) return '';
+  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
 function fmt(n) {
@@ -1295,7 +1299,6 @@ function renderHomeStats() {
   document.getElementById('statDue').textContent = due.length;
 }
 
-function tzDateStr(d) { return new Date(d).toLocaleDateString('en-US',{timeZone:TZ}); }
 function renderTodaySchedule() {
   const today = tzDateStr(new Date());
   const todayEvts = calEvents.filter(e => tzDateStr(e.start_time) === today);
@@ -1417,7 +1420,7 @@ function renderCalendarFull() {
   if (calEvents.length === 0) { document.getElementById('calendarFull').innerHTML = '<div style="color:var(--text2)">No events loaded.</div>'; return; }
   const byDay = {};
   for (const ev of calEvents) {
-    const d = new Date(ev.start_time).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const d = new Date(stripTZ(ev.start_time)).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     if (!byDay[d]) byDay[d] = [];
     byDay[d].push(ev);
   }

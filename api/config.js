@@ -8,14 +8,20 @@ export default function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
 
+  const govKey = process.env.GOV_SUPABASE_KEY || '';
+  const diaKey = process.env.DIA_SUPABASE_KEY || '';
+
   res.status(200).json({
     gov: {
       url: process.env.GOV_SUPABASE_URL || 'https://scknotsqkcheojiaewwh.supabase.co',
-      key: process.env.GOV_SUPABASE_KEY || ''
+      key: govKey,
+      set: govKey.length > 0
     },
     dia: {
       url: process.env.DIA_SUPABASE_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co',
-      key: process.env.DIA_SUPABASE_KEY || ''
-    }
+      key: diaKey,
+      set: diaKey.length > 0
+    },
+    env_keys: Object.keys(process.env).filter(k => k.includes('SUPABASE') || k.includes('GOV') || k.includes('DIA')).sort()
   });
 }
