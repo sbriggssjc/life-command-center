@@ -825,9 +825,14 @@ document.querySelectorAll('.bnav').forEach(btn => {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById(btn.dataset.page).classList.add('active');
     document.getElementById('bizSubTabs').style.display = btn.dataset.page === 'pageBiz' ? 'flex' : 'none';
-    document.getElementById('govInnerTabs').style.display = 'none';
-    document.getElementById('diaInnerTabs').style.display = 'none';
-    if (btn.dataset.page === 'pageBiz') renderBizContent();
+    if (btn.dataset.page === 'pageBiz') {
+      document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
+      document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
+      renderBizContent();
+    } else {
+      document.getElementById('govInnerTabs').style.display = 'none';
+      document.getElementById('diaInnerTabs').style.display = 'none';
+    }
     if (btn.dataset.page === 'pageCal') renderCalendarFull();
   });
 });
@@ -998,10 +1003,15 @@ function updateBizBadges() {
 }
 
 function renderBizContent() {
-  // If dialysis tab with a data inner tab (not activity), let dialysis.js handle it
-  if (currentBizTab === 'dialysis' && currentDiaTab !== 'activity' && diaConnected) {
-    renderDiaTab();
-    return;
+  // If dialysis tab with a data inner tab, route to dialysis.js
+  if (currentBizTab === 'dialysis' && currentDiaTab !== 'activity') {
+    if (diaConnected) {
+      renderDiaTab();
+      return;
+    } else {
+      showDiaConnectionForm();
+      return;
+    }
   }
   const filtered = filterBizActivities();
   const start = bizPage * PAGE_SIZE;
