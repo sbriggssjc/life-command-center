@@ -420,14 +420,40 @@ function _rankingBar(label, rank, total, context) {
 
 function _udTabOwnership() {
   const own = _udCache.ownership;
+  const chain = _udCache.chain || [];
   const db = _udCache.db;
 
   let html = '';
 
+  // ── DATA GAP INDICATOR ──────────────────────────────────────────────
+  const gaps = [];
+  if (!own) gaps.push('ownership record');
+  else {
+    if (!own.true_owner && !own.recorded_owner) gaps.push('owner name');
+    if (!own.contact_email) gaps.push('contact email');
+    if (!own.contact_phone) gaps.push('contact phone');
+    if (!own.contact_name && !own.contact_1_name) gaps.push('contact name');
+    if (!own.sf_contact_id && !own.salesforce_id) gaps.push('Salesforce link');
+    if (db === 'gov' && !own.true_owner) gaps.push('true owner (behind LLC)');
+    if (db === 'gov' && !own.true_owner_state) gaps.push('true owner state');
+  }
+  if (chain.length === 0) gaps.push('ownership history');
+
+  if (gaps.length > 0) {
+    html += '<div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;">';
+    html += '<div style="font-size: 12px; font-weight: 600; color: var(--yellow); margin-bottom: 4px;">Data Gaps (' + gaps.length + ')</div>';
+    html += '<div style="font-size: 12px; color: var(--text2); line-height: 1.6;">';
+    html += gaps.map(g => '<span style="display:inline-block;background:var(--s2);padding:2px 8px;border-radius:4px;margin:2px 4px 2px 0;font-size:11px;">' + esc(g) + '</span>').join('');
+    html += '</div></div>';
+  }
+
+  // ── CURRENT OWNERSHIP ──────────────────────────────────────────────
   if (!own) {
-    html += '<div class="detail-empty">No ownership data available</div>';
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Current Ownership</div>';
+    html += '<div class="detail-empty">No ownership record found. Use Research Quick Links to identify the owner and log it below.</div>';
+    html += '</div>';
   } else {
-    // Current ownership
     html += '<div class="detail-section">';
     html += '<div class="detail-section-title">Current Ownership</div>';
     html += '<div class="detail-grid">';
@@ -475,6 +501,60 @@ function _udTabOwnership() {
       html += '</div>';
     }
   }
+
+  // ── OWNERSHIP HISTORY (CHAIN) ──────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += `<div class="detail-section-title">Ownership History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${chain.length} records</span></div>`;
+
+  if (chain.length === 0) {
+    html += '<div class="detail-empty" style="font-size:13px">No ownership transfer history found for this property. Check the History tab or use Research Quick Links to trace prior owners.</div>';
+  } else {
+    html += '<div class="detail-timeline">';
+    chain.forEach((h, idx) => {
+      const isFirst = idx === 0;
+      const statusClass = isFirst ? 'green' : '';
+      html += `<div class="detail-timeline-item ${statusClass}">`;
+      html += `<div class="detail-card-date">${esc(_fmtDate(h.transfer_date) || 'Unknown date')}</div>`;
+
+      if (db === 'gov') {
+        html += `<div class="detail-card-title">${esc(h.to_owner || '—')}</div>`;
+        html += '<div class="detail-card-body">';
+        if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
+        if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
+        if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
+        if (h.annual_rent) html += `Rent: ${fmt(h.annual_rent)}<br>`;
+        if (h.square_feet) html += `SF: ${fmtN(h.square_feet)}<br>`;
+        if (h.recorded_owner_name) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${esc(h.recorded_owner_name)}<br>`;
+        if (h.true_owner_name) html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
+        if (h.principal_names) html += `<span style="font-size:12px;color:var(--text3)">Principals:</span> ${esc(h.principal_names)}<br>`;
+        if (h.research_status) html += `<span class="detail-badge">${esc(cleanLabel(h.research_status))}</span>`;
+        html += '</div>';
+      } else {
+        const ownerLabel = h.recorded_owner_name || h.true_owner_name || '—';
+        html += `<div class="detail-card-title">${esc(ownerLabel)}</div>`;
+        html += '<div class="detail-card-body">';
+        if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
+          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
+        }
+        if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
+        if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
+        if (h.rent) html += `Rent: ${fmt(h.rent)}<br>`;
+        if (h.ownership_type) html += `<span style="font-size:12px;color:var(--text3)">Type:</span> ${esc(h.ownership_type)}<br>`;
+        if (h.ownership_source) html += `<span style="font-size:12px;color:var(--text3)">Source:</span> ${esc(h.ownership_source)}<br>`;
+        if (h.ownership_end) html += `<span style="font-size:12px;color:var(--text3)">End:</span> ${esc(_fmtDate(h.ownership_end))}<br>`;
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // ── RECENT TOUCHPOINTS (loaded async) ─────────────────────────────
+  html += '<div id="udTouchpoints"><div style="text-align:center;padding:16px;color:var(--text3)"><span class="spinner"></span> Loading touchpoints...</div></div>';
+
+  // ── SALESFORCE ACTIVITY FEED (loaded async) ────────────────────────
+  html += '<div id="udActivityFeed"><div style="text-align:center;padding:24px;color:var(--text3)"><span class="spinner"></span> Loading activity feed...</div></div>';
 
   // ── INLINE LOG CALL FORM ──────────────────────────────────────────────
   html += '<div class="detail-section">';
@@ -544,12 +624,6 @@ function _udTabOwnership() {
   html += '</div>';
   html += '</div>';
   html += '</div></div>';
-
-  // ── RECENT TOUCHPOINTS ────────────────────────────────────────────
-  html += '<div id="udTouchpoints"><div style="text-align:center;padding:16px;color:var(--text3)"><span class="spinner"></span> Loading touchpoints...</div></div>';
-
-  // ── SALESFORCE ACTIVITY FEED ─────────────────────────────────────
-  html += '<div id="udActivityFeed"><div style="text-align:center;padding:24px;color:var(--text3)"><span class="spinner"></span> Loading activity feed...</div></div>';
 
   // Async loads after DOM renders
   _loadEmailTemplates(own);

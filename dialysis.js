@@ -1565,8 +1565,8 @@ async function renderDiaSales() {
   html += '</div>';
 
   // Scrollable table
-  html += '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 10px;">';
-  html += '<table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">';
+  html += '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 10px; max-height: 70vh;">';
+  html += '<table style="width: max-content; min-width: 2200px; border-collapse: collapse; font-size: 12px;">';
 
   // Header
   html += '<thead><tr style="background: var(--s2); position: sticky; top: 0; z-index: 1;">';
