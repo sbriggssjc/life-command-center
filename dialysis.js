@@ -1530,23 +1530,27 @@ async function renderDiaSales() {
 
   // Metrics
   html += '<div class="gov-metrics">';
+  // Helper: compute average cap rate, filtering outliers (only 0.01–0.25 i.e. 1%–25%)
+  const avgCapRate = (arr, field) => {
+    const valid = arr.filter(r => { const v = parseFloat(r[field]); return v > 0.01 && v < 0.25; });
+    if (valid.length === 0) return { val: '—', n: 0 };
+    return { val: (valid.reduce((s, r) => s + parseFloat(r[field]), 0) / valid.length * 100).toFixed(2) + '%', n: valid.length };
+  };
   if (isComps) {
     const withPrice = data.filter(r => r.price > 0);
-    const avgCap = data.filter(r => r.cap_rate > 0);
-    const avgCapVal = avgCap.length > 0 ? (avgCap.reduce((s, r) => s + parseFloat(r.cap_rate), 0) / avgCap.length * 100).toFixed(2) + '%' : '—';
+    const cap = avgCapRate(data, 'cap_rate');
     const avgPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s, r) => s + parseFloat(r.price), 0) / withPrice.length)) : '—';
     html += metricHTML('Total Sales', fmtN(data.length), 'dialysis comps', 'blue');
-    html += metricHTML('Avg Cap Rate', avgCapVal, avgCap.length + ' with cap data', 'green');
+    html += metricHTML('Avg Cap Rate', cap.val, cap.n + ' with cap data', 'green');
     html += metricHTML('Avg Sale Price', avgPrice, withPrice.length + ' with price data', 'purple');
     const thisYear = data.filter(r => r.sold_date && r.sold_date >= new Date().getFullYear() + '-01-01').length;
     html += metricHTML('This Year', fmtN(thisYear), 'sales YTD', 'yellow');
   } else {
     const withPrice = data.filter(r => r.ask_price > 0);
-    const avgCap = data.filter(r => r.ask_cap > 0);
-    const avgCapVal = avgCap.length > 0 ? (avgCap.reduce((s, r) => s + parseFloat(r.ask_cap), 0) / avgCap.length * 100).toFixed(2) + '%' : '—';
+    const cap = avgCapRate(data, 'ask_cap');
     const avgAsk = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s, r) => s + parseFloat(r.ask_price), 0) / withPrice.length)) : '—';
     html += metricHTML('Active Listings', fmtN(data.length), 'on market', 'blue');
-    html += metricHTML('Avg Ask Cap', avgCapVal, avgCap.length + ' with cap data', 'green');
+    html += metricHTML('Avg Ask Cap', cap.val, cap.n + ' with cap data', 'green');
     html += metricHTML('Avg Ask Price', avgAsk, withPrice.length + ' priced', 'purple');
     const avgDom = data.filter(r => r.dom > 0);
     const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s, r) => s + r.dom, 0) / avgDom.length) : '—';
