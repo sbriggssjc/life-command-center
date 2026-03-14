@@ -956,7 +956,7 @@ function renderOwnershipResearchCard(rec) {
   
   html += '<div class="form-group">';
   html += '<label>Lender Name</label>';
-  html += `<input type="text" id="res-lender" value="${esc(loan.lender_name || '')}" placeholder="">`;
+  html += `<input type="text" id="res-lender" value="${esc(loan.index_name || '')}" placeholder="">`;
   html += '<div id="res-lender-drop" class="ac-dropdown"></div>';
   html += '</div>';
   
@@ -1308,7 +1308,7 @@ async function saveLoanFields(rec) {
   
   const loanData = {
     property_id: propertyId,
-    lender_name: lenderName || null,
+    index_name: lenderName || null,
     loan_amount: loanAmount || null,
     loan_type: loanType || null,
     status: loanStatus || null
@@ -2181,9 +2181,9 @@ function renderGovSales() {
   // Metrics
   html += '<div class="gov-metrics">';
   const totalSales = sales.length;
-  const totalVolume = sales.reduce((s, r) => s + (r.sale_price || 0), 0);
-  const avgCap = sales.filter(r => r.cap_rate > 0).reduce((s, r, i, a) => s + r.cap_rate / a.length, 0);
-  const avgPSF = sales.filter(r => r.price_per_sqft > 0).reduce((s, r, i, a) => s + r.price_per_sqft / a.length, 0);
+  const totalVolume = sales.reduce((s, r) => s + (r.sold_price || 0), 0);
+  const avgCap = sales.filter(r => r.sold_cap_rate > 0).reduce((s, r, i, a) => s + r.sold_cap_rate / a.length, 0);
+  const avgPSF = sales.filter(r => r.sold_price_psf > 0).reduce((s, r, i, a) => s + r.sold_price_psf / a.length, 0);
 
   html += metricHTML('Total Sales', fmtN(totalSales), 'transactions', 'blue');
   html += metricHTML('Total Volume', fmt(totalVolume), 'sale price', 'green');
@@ -2216,11 +2216,11 @@ function renderGovSales() {
     html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
     html += '<div style="flex: 2;" class="truncate">' + esc(r.address || '—') + '</div>';
     html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
-    html += '<div style="flex: 1;" class="truncate">' + esc(r.tenant || '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmt(r.sale_price) + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + (r.cap_rate ? r.cap_rate.toFixed(2) + '%' : '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + (r.price_per_sqft ? '$' + r.price_per_sqft.toFixed(0) : '—') + '</div>';
-    html += '<div style="flex: 1; text-align: right;">' + fmtN(r.square_feet || 0) + '</div>';
+    html += '<div style="flex: 1;" class="truncate">' + esc(r.agency || '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmt(r.sold_price) + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + (r.sold_cap_rate ? r.sold_cap_rate.toFixed(2) + '%' : '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + (r.sold_price_psf ? '$' + r.sold_price_psf.toFixed(0) : '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + fmtN(r.sf_leased || r.rba || 0) + '</div>';
     html += '<div style="flex: 1; color: var(--text2);">' + esc(r.sale_date ? r.sale_date.substring(0, 10) : '—') + '</div>';
     html += '<div style="flex: 1;" class="truncate">' + esc(r.buyer || '—') + '</div>';
     html += '</div>';
@@ -2264,7 +2264,7 @@ function renderGovPlayers() {
         const key = r.buyer.trim().toUpperCase();
         if (!buyerMap[key]) buyerMap[key] = { name: r.buyer, deals: 0, volume: 0, records: [] };
         buyerMap[key].deals++;
-        buyerMap[key].volume += (r.sale_price || 0);
+        buyerMap[key].volume += (r.sold_price || 0);
         buyerMap[key].records.push(r);
       }
     });
@@ -2288,7 +2288,7 @@ function renderGovPlayers() {
         const key = r.seller.trim().toUpperCase();
         if (!sellerMap[key]) sellerMap[key] = { name: r.seller, deals: 0, volume: 0, records: [] };
         sellerMap[key].deals++;
-        sellerMap[key].volume += (r.sale_price || 0);
+        sellerMap[key].volume += (r.sold_price || 0);
         sellerMap[key].records.push(r);
       }
     });
@@ -2399,14 +2399,15 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Prospect Leads (' + leads.length + ')</h4>';
         leads.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-lead")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant_agency || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Lead</span></div>';
           html += '<div class="search-card-meta">';
           if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.tenant) html += '<span>Tenant: ' + esc(r.tenant) + '</span>';
-          if (r.lessor) html += '<span>Lessor: ' + esc(r.lessor) + '</span>';
-          if (r.annual_rent) html += '<span>Rent: ' + fmt(r.annual_rent) + '</span>';
-          if (r.pipeline_stage) html += '<span>Stage: ' + esc(r.pipeline_stage) + '</span>';
+          if (r.tenant_agency) html += '<span>Tenant: ' + esc(r.tenant_agency) + '</span>';
+          if (r.lessor_name) html += '<span>Owner: ' + esc(r.lessor_name) + '</span>';
+          if (r.recorded_owner) html += '<span>Recorded: ' + esc(r.recorded_owner) + '</span>';
+          if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
+          if (r.pipeline_status) html += '<span>Stage: ' + esc(r.pipeline_status) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -2420,7 +2421,7 @@ function renderGovSearch() {
           html += '<span class="search-card-badge" style="background: rgba(108,140,255,0.15); color: #6c8cff;">Ownership</span></div>';
           html += '<div class="search-card-meta">';
           if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.agency_bureau) html += '<span>' + esc(r.agency_bureau) + '</span>';
+          if (r.agency_name) html += '<span>' + esc(r.agency_name) + '</span>';
           if (r.estimated_value) html += '<span>Value: ' + fmt(r.estimated_value) + '</span>';
           html += '</div></div>';
         });
@@ -2431,13 +2432,14 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Listings (' + listings.length + ')</h4>';
         listings.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-listing")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant_agency || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Listing</span></div>';
           html += '<div class="search-card-meta">';
           if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.tenant) html += '<span>Tenant: ' + esc(r.tenant) + '</span>';
+          if (r.tenant_agency) html += '<span>Tenant: ' + esc(r.tenant_agency) + '</span>';
+          if (r.seller_name) html += '<span>Owner: ' + esc(r.seller_name) + '</span>';
           if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
-          if (r.status) html += '<span>Status: ' + esc(r.status) + '</span>';
+          if (r.listing_status) html += '<span>Status: ' + esc(r.listing_status) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -2447,13 +2449,15 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Contacts (' + contacts.length + ')</h4>';
         contacts.forEach(r => {
           html += '<div class="search-card">';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.name || r.company || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.name || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Contact</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.company) html += '<span>' + esc(r.company) + '</span>';
+          if (r.entity_type) html += '<span>' + esc(r.entity_type) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.total_transactions) html += '<span>Deals: ' + r.total_transactions + '</span>';
+          if (r.total_volume) html += '<span>Volume: ' + fmt(r.total_volume) + '</span>';
           if (r.phone) html += '<span>' + esc(r.phone) + '</span>';
           if (r.email) html += '<span>' + esc(r.email) + '</span>';
-          if (r.role) html += '<span>' + esc(r.role) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -2502,11 +2506,11 @@ async function execGovSearch() {
   const like = '*' + term + '*';
   try {
     const [ownership, leads, listings, contacts, properties] = await Promise.all([
-      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_bureau.ilike.' + like + ')', limit: 25 }),
-      govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ',lessor.ilike.' + like + ')', limit: 25 }),
-      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ')', limit: 25 }),
-      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',company.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
-      govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ')', limit: 25 })
+      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_name.ilike.' + like + ',new_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }),
+      govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ',contact_name.ilike.' + like + ')', limit: 25 }),
+      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',seller_name.ilike.' + like + ',listing_broker.ilike.' + like + ')', limit: 25 }),
+      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',entity_type.ilike.' + like + ',city.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
+      govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency.ilike.' + like + ')', limit: 25 })
     ]);
 
     govSearchResults = {

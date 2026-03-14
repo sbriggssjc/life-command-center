@@ -152,7 +152,7 @@ async function loadDiaData() {
       outcomes: diaData.researchOutcomes.length,
       recon: diaData.reconciliation
     });
-    showToast(`Dialysis: ${diaData.freshness.total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals loaded`, 'success');
+    showToast(`Dialysis: ${(diaData.freshness || {}).total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals loaded`, 'success');
     renderDiaTab();
   } catch (err) {
     console.error('loadDiaData error:', err);
@@ -1620,7 +1620,7 @@ let diaSearching = false;
 function renderDiaSearch() {
   let html = '<div class="biz-section">';
   html += '<div class="search-bar">';
-  html += '<input type="text" id="diaSearchInput" placeholder="Search by facility name, CCN, city, state, operator..." value="' + esc(diaSearchTerm) + '" />';
+  html += '<input type="text" id="diaSearchInput" placeholder="Search by facility name, city, state, operator, address..." value="' + esc(diaSearchTerm) + '" />';
   html += '<button onclick="execDiaSearch()">Search</button>';
   html += '</div>';
 
@@ -1648,7 +1648,7 @@ function renderDiaSearch() {
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Clinic</span></div>';
           html += '<div class="search-card-meta">';
           if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.ccn) html += '<span>CCN: ' + esc(r.ccn) + '</span>';
+          if (r.medicare_npi) html += '<span>NPI: ' + esc(r.medicare_npi) + '</span>';
           if (r.operator_name) html += '<span>Op: ' + esc(r.operator_name) + '</span>';
           if (r.latest_total_patients) html += '<span>Patients: ' + fmtN(r.latest_total_patients) + '</span>';
           if (r.change_type) html += '<span>' + esc(r.change_type) + '</span>';
@@ -1676,10 +1676,11 @@ function renderDiaSearch() {
         html += '<div class="search-results-section"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
         propQueue.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.ccn || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Property</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.state) html += '<span>' + esc(r.state) + '</span>';
+          if (r.operator_name) html += '<span>Op: ' + esc(r.operator_name) + '</span>';
           if (r.review_type) html += '<span>Review: ' + esc(r.review_type) + '</span>';
           html += '</div></div>';
         });
@@ -1690,11 +1691,12 @@ function renderDiaSearch() {
         html += '<div class="search-results-section"><h4>Research Outcomes (' + outcomes.length + ')</h4>';
         outcomes.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.ccn || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.queue_type || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Research</span></div>';
           html += '<div class="search-card-meta">';
           if (r.status) html += '<span>Status: ' + esc(r.status) + '</span>';
-          if (r.outcome_type) html += '<span>Type: ' + esc(r.outcome_type) + '</span>';
+          if (r.queue_type) html += '<span>Type: ' + esc(r.queue_type) + '</span>';
+          if (r.source_bucket) html += '<span>Source: ' + esc(r.source_bucket) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -1728,10 +1730,10 @@ async function execDiaSearch() {
   const like = '*' + term + '*';
   try {
     const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
-      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',ccn.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 50 }),
-      diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 25 }),
-      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',ccn.ilike.' + like + ')', limit: 25 }),
-      diaQuery('research_queue_outcomes', '*', { filter: 'or=(facility_name.ilike.' + like + ',ccn.ilike.' + like + ')', limit: 25 })
+      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 50 }),
+      diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',npi.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 25 }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',operator_name.ilike.' + like + ',state.ilike.' + like + ')', limit: 25 }),
+      diaQuery('research_queue_outcomes', '*', { filter: 'or=(queue_type.ilike.' + like + ',status.ilike.' + like + ',notes.ilike.' + like + ')', limit: 25 })
     ]);
 
     diaSearchResults = {
