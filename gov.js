@@ -426,15 +426,15 @@ function ownershipTable(rows) {
     const status = r.research_status || 'pending';
     const statusDot = dotClass(status);
 
-    html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
+    html += `<tr class="clickable-tr" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
     html += `<td><code>${esc(r.lease_number || '')}</code></td>`;
-    html += `<td class="truncate">${esc(r.address || '—')}</td>`;
-    html += `<td>${esc(r.city || '')}, ${esc(r.state || '')}</td>`;
-    html += `<td class="truncate">${esc(r.prior_owner || '')}</td>`;
-    html += `<td class="truncate">${esc(r.new_owner || '')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.address) || '—')}</td>`;
+    html += `<td>${esc(norm(r.city) || '')}, ${esc(r.state || '')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.prior_owner) || '')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.new_owner) || '')}</td>`;
     html += `<td>${r.transfer_date ? r.transfer_date.substring(0, 10) : ''}</td>`;
     html += `<td>${fmt(r.estimated_value || 0)}</td>`;
-    html += `<td><span class="status-dot ${statusDot}"></span>${status}</td>`;
+    html += `<td><span class="status-dot ${statusDot}"></span>${cleanLabel(status)}</td>`;
     html += '</tr>';
   });
   
@@ -460,16 +460,16 @@ function leadsTable(rows) {
 
     const pipelineStatus = r.pipeline_status || 'new';
 
-    html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-lead")'>`;
+    html += `<tr class="clickable-tr" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-lead")'>`;
     html += `<td><strong>${r.priority_score || 0}</strong></td>`;
     html += `<td><span style="color:${tempColor};">${r.lead_temperature || 'cool'}</span></td>`;
-    html += `<td class="truncate">${esc(r.address || '—')}</td>`;
-    html += `<td>${esc(r.city || '')}, ${esc(r.state || '')}</td>`;
-    html += `<td class="truncate">${esc(r.tenant_agency || r.agency_full_name || '—')}</td>`;
-    html += `<td class="truncate">${esc(r.lessor_name || '')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.address) || '—')}</td>`;
+    html += `<td>${esc(norm(r.city) || '')}, ${esc(r.state || '')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.tenant_agency || r.agency_full_name) || '—')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.lessor_name) || '')}</td>`;
     html += `<td>${fmt(r.annual_rent || 0)}/yr</td>`;
     html += `<td>${fmt(r.estimated_value || 0)}</td>`;
-    html += `<td><span class="pill">${pipelineStatus}</span></td>`;
+    html += `<td><span class="pill">${cleanLabel(pipelineStatus)}</span></td>`;
     html += '</tr>';
   });
   
@@ -490,15 +490,15 @@ function listingsTable(rows) {
     const capRate = r.asking_cap_rate ? pct(r.asking_cap_rate) : '-';
     const status = r.listing_status || 'active';
 
-    html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-listing")'>`;
-    html += `<td class="truncate" style="font-weight:500">${esc(r.tenant_agency || '—')}</td>`;
-    html += `<td class="truncate">${esc(r.address || '')}</td>`;
-    html += `<td>${esc(r.city || '')}${r.state ? ', ' + esc(r.state) : ''}</td>`;
+    html += `<tr class="clickable-tr" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-listing")'>`;
+    html += `<td class="truncate" style="font-weight:500">${esc(norm(r.tenant_agency) || '—')}</td>`;
+    html += `<td class="truncate">${esc(norm(r.address) || '')}</td>`;
+    html += `<td>${esc(norm(r.city) || '')}${r.state ? ', ' + esc(r.state) : ''}</td>`;
     html += `<td>${fmt(r.asking_price || 0)}</td>`;
     html += `<td>${capRate}</td>`;
     html += `<td>${r.days_on_market || '-'}</td>`;
-    html += `<td><span class="pill">${status}</span></td>`;
-    html += `<td>${esc(r.listing_source || '')}</td>`;
+    html += `<td><span class="pill">${cleanLabel(status)}</span></td>`;
+    html += `<td>${esc(cleanLabel(r.listing_source || ''))}</td>`;
     html += '</tr>';
   });
   
@@ -1401,9 +1401,9 @@ function renderGovOverview() {
   
   let html = '<div class="gov-metrics">';
   html += metricHTML('Properties', fmtN(propCount), 'Government-leased', 'blue');
-  html += metricHTML('Sales Comps', fmtN(saleCount), 'Completed sales', 'green');
-  html += metricHTML('Active Leads', fmtN(leadCount), 'Pipeline prospects', 'yellow');
-  html += metricHTML('Contacts', fmtN(contactCount), 'In database', 'purple');
+  html += metricHTML('Sales Comps', saleCount >= 500 ? '500+' : fmtN(saleCount), 'Completed sales', 'green');
+  html += metricHTML('Active Leads', leadCount >= 500 ? '500+' : fmtN(leadCount), 'Pipeline prospects', 'yellow');
+  html += metricHTML('Contacts', contactCount >= 500 ? '500+' : fmtN(contactCount), 'In database', 'purple');
   html += '</div>';
   
   if (yearLabels.length > 0) {
@@ -1447,7 +1447,7 @@ function renderGovOwnership() {
   const yearData = yearLabels.map(y => valByYear[y]);
   
   let html = '<div class="gov-metrics">';
-  html += metricHTML('Total Changes', fmtN(totalChanges), 'Ownership transfers', 'blue');
+  html += metricHTML('Total Changes', totalChanges >= 500 ? '500+' : fmtN(totalChanges), 'Ownership transfers', 'blue');
   html += metricHTML('With Sale Price', fmtN(withSalePrice), 'Confirmed value', 'green');
   html += metricHTML('Needs Research', fmtN(needsResearch), 'Pending', 'yellow');
   html += metricHTML('Confirmed Value', fmt(confirmedValue), 'Total', 'purple');
@@ -1484,10 +1484,10 @@ function renderGovPipeline() {
   // Leads by source
   const bySource = {};
   govData.leads.forEach(l => {
-    const source = l.lead_source || 'Unknown';
+    const source = cleanLabel(l.lead_source || 'Unknown');
     bySource[source] = (bySource[source] || 0) + 1;
   });
-  
+
   const sourceLabels = Object.keys(bySource).sort((a, b) => bySource[b] - bySource[a]).slice(0, 8);
   const sourceData = sourceLabels.map(s => bySource[s]);
   
@@ -1497,7 +1497,7 @@ function renderGovPipeline() {
   const tempColors = ['#f87171', '#fbbf24', '#6c8cff'];
   
   let html = '<div class="gov-metrics">';
-  html += metricHTML('Total Leads', fmtN(totalLeads), 'In pipeline', 'blue');
+  html += metricHTML('Total Leads', totalLeads >= 500 ? '500+' : fmtN(totalLeads), 'In pipeline', 'blue');
   html += metricHTML('Hot', fmtN(hotCount), 'Ready to move', 'red');
   html += metricHTML('Warm', fmtN(warmCount), 'Engaged', 'yellow');
   html += metricHTML('Pipeline Value', fmt(pipelineValue), 'Est. annual rent', 'purple');
@@ -1542,7 +1542,7 @@ function renderGovListings() {
   let html = '<div class="gov-metrics">';
   html += metricHTML('Active Listings', fmtN(activeListings), 'Currently on market', 'blue');
   html += metricHTML('Total Asking', fmt(totalAsking), 'Combined value', 'green');
-  html += metricHTML('Count', fmtN(govData.listings.length), 'All listings', 'yellow');
+  html += metricHTML('All Listings', govData.listings.length >= 500 ? '500+' : fmtN(govData.listings.length), 'All statuses', 'yellow');
   html += metricHTML('Under Contract', fmtN(underContract), 'Pending', 'purple');
   html += '</div>';
   
@@ -1665,17 +1665,17 @@ function renderOwnershipOverview(record) {
   html += '<div class="detail-grid">';
   
   html += createDetailRow('Lease Number', esc(record.lease_number || '—'));
-  html += createDetailRow('Address', esc(record.address || '—'));
-  html += createDetailRow('City / State', 
-    esc((record.city || '') + (record.state ? ', ' + record.state : '') || '—'));
+  html += createDetailRow('Address', esc(norm(record.address) || '—'));
+  html += createDetailRow('City / State',
+    esc((norm(record.city) || '') + (record.state ? ', ' + record.state : '') || '—'));
   html += createDetailRow('Estimated Value', `<span class="detail-val money">${value}</span>`);
   html += createDetailRow('Sale Price', `<span class="detail-val money">${salePrice}</span>`);
   html += createDetailRow('Cap Rate', capRate);
   html += createDetailRow('Square Feet', sqft);
   html += createDetailRow('Annual Rent', `<span class="detail-val money">${rent}</span>`);
   html += createDetailRow('Transfer Date', esc(record.transfer_date || '—'));
-  html += createDetailRow('Research Status', 
-    `<span class="detail-badge">${esc(record.research_status || 'Pending')}</span>`);
+  html += createDetailRow('Research Status',
+    `<span class="detail-badge">${esc(cleanLabel(record.research_status || 'pending'))}</span>`);
   
   html += '</div>';
   html += '</div>';
@@ -1705,7 +1705,7 @@ function renderOwnershipLease(record) {
   html += createDetailRow('Lease Effective', esc(snapshot.lease_effective || '—'));
   html += createDetailRow('Lease Expiration', esc(snapshot.lease_expiration || '—'));
   html += createDetailRow('RSF (Lease)', snapshot.lease_rsf ? fmtN(snapshot.lease_rsf) : '—');
-  html += createDetailRow('Lessor Name', esc(snapshot.lessor_name || '—'));
+  html += createDetailRow('Lessor Name', esc(norm(snapshot.lessor_name) || '—'));
   html += createDetailRow('Field Office', esc(snapshot.field_office_name || '—'));
   html += createDetailRow('Annual Rent', fmt(snapshot.annual_rent));
   
@@ -1824,7 +1824,7 @@ function renderLeadOverview(record) {
     `<span class="detail-badge" style="background: ${tempColor === 'red' ? '#f87171' : tempColor === 'yellow' ? '#fbbf24' : '#22d3ee'}">${record.priority_score || '—'}</span>`);
   html += createDetailRow('Lead Temperature', 
     `<span class="detail-badge">${esc(record.lead_temperature || 'Cold')}</span>`);
-  html += createDetailRow('Lead Source', esc(record.lead_source || '—'));
+  html += createDetailRow('Lead Source', esc(cleanLabel(record.lead_source || '—')));
   
   html += '</div>';
   html += '</div>';
@@ -1855,11 +1855,11 @@ function renderLeadProperty(record) {
   html += '<div class="detail-section-title">Property Information</div>';
   html += '<div class="detail-grid">';
   
-  html += createDetailRow('Address', esc(record.address || '—'));
-  html += createDetailRow('City / State', 
-    esc((record.city || '') + (record.state ? ', ' + record.state : '') || '—'));
-  html += createDetailRow('Agency', esc(record.agency_full_name || '—'));
-  html += createDetailRow('Tenant', esc(record.tenant_agency || '—'));
+  html += createDetailRow('Address', esc(norm(record.address) || '—'));
+  html += createDetailRow('City / State',
+    esc((norm(record.city) || '') + (record.state ? ', ' + record.state : '') || '—'));
+  html += createDetailRow('Agency', esc(norm(record.agency_full_name) || '—'));
+  html += createDetailRow('Tenant', esc(norm(record.tenant_agency) || '—'));
   html += createDetailRow('Lease Effective', esc(record.lease_effective || '—'));
   html += createDetailRow('Lease Expiration', esc(record.lease_expiration || '—'));
   html += createDetailRow('RBA', record.rba || '—');
@@ -2028,12 +2028,12 @@ function renderListingOverview(record) {
   
   html += createDetailRow('Asking Price', `<span class="detail-val money">${price}</span>`);
   html += createDetailRow('Asking Cap Rate', capRate);
-  html += createDetailRow('Listing Source', esc(record.listing_source || '—'));
-  html += createDetailRow('Listing Status', 
-    `<span class="detail-badge">${esc(record.listing_status || 'Active')}</span>`);
+  html += createDetailRow('Listing Source', esc(cleanLabel(record.listing_source || '—')));
+  html += createDetailRow('Listing Status',
+    `<span class="detail-badge">${esc(cleanLabel(record.listing_status || 'active'))}</span>`);
   html += createDetailRow('Days on Market', record.days_on_market || '—');
-  html += createDetailRow('URL Status', esc(record.url_status || '—'));
-  html += createDetailRow('Tenant Agency', esc(record.tenant_agency || '—'));
+  html += createDetailRow('URL Status', esc(cleanLabel(record.url_status || '—')));
+  html += createDetailRow('Tenant Agency', esc(norm(record.tenant_agency) || '—'));
   
   html += '</div>';
   html += '</div>';
@@ -2185,7 +2185,7 @@ function renderGovSales() {
   const avgCap = sales.filter(r => r.sold_cap_rate > 0).reduce((s, r, i, a) => s + r.sold_cap_rate / a.length, 0);
   const avgPSF = sales.filter(r => r.sold_price_psf > 0).reduce((s, r, i, a) => s + r.sold_price_psf / a.length, 0);
 
-  html += metricHTML('Total Sales', fmtN(totalSales), 'transactions', 'blue');
+  html += metricHTML('Total Sales', totalSales >= 500 ? '500+' : fmtN(totalSales), 'transactions', 'blue');
   html += metricHTML('Total Volume', fmt(totalVolume), 'sale price', 'green');
   html += metricHTML('Avg Cap Rate', avgCap > 0 ? (avgCap * 100).toFixed(2) + '%' : '—', 'across all sales', 'yellow');
   html += metricHTML('Avg $/SF', avgPSF > 0 ? '$' + avgPSF.toFixed(0) : '—', 'price per sqft', 'purple');
@@ -2214,15 +2214,15 @@ function renderGovSales() {
 
   sorted.slice(0, 200).forEach(r => {
     html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
-    html += '<div style="flex: 2;" class="truncate">' + esc(r.address || '—') + '</div>';
-    html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
-    html += '<div style="flex: 1;" class="truncate">' + esc(r.agency || '—') + '</div>';
+    html += '<div style="flex: 2;" class="truncate">' + esc(norm(r.address) || '—') + '</div>';
+    html += '<div style="flex: 1;">' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
+    html += '<div style="flex: 1;" class="truncate">' + esc(norm(r.agency) || '—') + '</div>';
     html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmt(r.sold_price) + '</div>';
     html += '<div style="flex: 1; text-align: right;">' + (r.sold_cap_rate ? (r.sold_cap_rate * 100).toFixed(2) + '%' : '—') + '</div>';
     html += '<div style="flex: 1; text-align: right;">' + (r.sold_price_psf ? '$' + r.sold_price_psf.toFixed(0) : '—') + '</div>';
     html += '<div style="flex: 1; text-align: right;">' + fmtN(r.sf_leased || r.rba || 0) + '</div>';
     html += '<div style="flex: 1; color: var(--text2);">' + esc(r.sale_date ? r.sale_date.substring(0, 10) : '—') + '</div>';
-    html += '<div style="flex: 1;" class="truncate">' + esc(r.buyer || '—') + '</div>';
+    html += '<div style="flex: 1;" class="truncate">' + esc(norm(r.buyer) || '—') + '</div>';
     html += '</div>';
   });
 
@@ -2399,15 +2399,15 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Prospect Leads (' + leads.length + ')</h4>';
         leads.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-lead")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant_agency || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.tenant_agency) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Lead</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.tenant_agency) html += '<span>Tenant: ' + esc(r.tenant_agency) + '</span>';
-          if (r.lessor_name) html += '<span>Owner: ' + esc(r.lessor_name) + '</span>';
-          if (r.recorded_owner) html += '<span>Recorded: ' + esc(r.recorded_owner) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.tenant_agency) html += '<span>Tenant: ' + esc(norm(r.tenant_agency)) + '</span>';
+          if (r.lessor_name) html += '<span>Owner: ' + esc(norm(r.lessor_name)) + '</span>';
+          if (r.recorded_owner) html += '<span>Recorded: ' + esc(norm(r.recorded_owner)) + '</span>';
           if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
-          if (r.pipeline_status) html += '<span>Stage: ' + esc(r.pipeline_status) + '</span>';
+          if (r.pipeline_status) html += '<span>Stage: ' + esc(cleanLabel(r.pipeline_status)) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -2417,11 +2417,11 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Ownership Records (' + ownership.length + ')</h4>';
         ownership.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.lease_number || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || r.lease_number || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(108,140,255,0.15); color: #6c8cff;">Ownership</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.agency_name) html += '<span>' + esc(r.agency_name) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.agency_name) html += '<span>' + esc(norm(r.agency_name)) + '</span>';
           if (r.estimated_value) html += '<span>Value: ' + fmt(r.estimated_value) + '</span>';
           html += '</div></div>';
         });
@@ -2432,14 +2432,14 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Listings (' + listings.length + ')</h4>';
         listings.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-listing")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant_agency || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.tenant_agency) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Listing</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.tenant_agency) html += '<span>Tenant: ' + esc(r.tenant_agency) + '</span>';
-          if (r.seller_name) html += '<span>Owner: ' + esc(r.seller_name) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.tenant_agency) html += '<span>Tenant: ' + esc(norm(r.tenant_agency)) + '</span>';
+          if (r.seller_name) html += '<span>Owner: ' + esc(norm(r.seller_name)) + '</span>';
           if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
-          if (r.listing_status) html += '<span>Status: ' + esc(r.listing_status) + '</span>';
+          if (r.listing_status) html += '<span>Status: ' + esc(cleanLabel(r.listing_status)) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -2449,11 +2449,11 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Contacts (' + contacts.length + ')</h4>';
         contacts.forEach(r => {
           html += '<div class="search-card">';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.name || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Contact</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.entity_type) html += '<span>' + esc(r.entity_type) + '</span>';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.entity_type) html += '<span>' + esc(norm(r.entity_type)) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
           if (r.total_transactions) html += '<span>Deals: ' + r.total_transactions + '</span>';
           if (r.total_volume) html += '<span>Volume: ' + fmt(r.total_volume) + '</span>';
           if (r.phone) html += '<span>' + esc(r.phone) + '</span>';
@@ -2467,11 +2467,11 @@ function renderGovSearch() {
         html += '<div class="search-results-section"><h4>Properties (' + properties.length + ')</h4>';
         properties.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.property_name || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.property_name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(34,211,238,0.15); color: #22d3ee;">Property</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.property_type) html += '<span>Type: ' + esc(r.property_type) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.property_type) html += '<span>Type: ' + esc(norm(r.property_type)) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';

@@ -352,7 +352,7 @@ tr.clickable-row:hover td { background: var(--s2); }
 .data-table td code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 .table-row { display: flex; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); gap: 8px; }
 .table-row:hover { background: var(--s2); }
-.truncate { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.truncate { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .status-dot.green { background: var(--gov-green); }
@@ -376,14 +376,17 @@ tr.clickable-row:hover td { background: var(--s2); }
 .search-bar button { padding: 10px 20px; border-radius: 10px; border: none; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .search-bar button:hover { opacity: 0.9; }
 .search-results-section { margin-bottom: 24px; }
-.search-results-section h4 { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.search-results-section h4 { color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid var(--s3); }
 .search-card { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
 .search-card:hover { border-color: var(--accent); background: var(--s2); }
 .search-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-.search-card-title { font-weight: 600; font-size: 14px; color: var(--text); }
-.search-card-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+.search-card-title { font-weight: 700; font-size: 15px; color: #fff; letter-spacing: 0.2px; }
+.search-card-badge { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
 .search-card-meta { font-size: 12px; color: var(--text2); display: flex; gap: 16px; flex-wrap: wrap; }
 .search-card-meta span { display: flex; align-items: center; gap: 4px; }
+.search-card-meta .ml { color: var(--text3); font-size: 11px; }
+.clickable-tr { cursor: pointer; }
+.clickable-tr:hover td { background: var(--s2); }
 .search-empty { text-align: center; padding: 48px 16px; color: var(--text2); }
 .search-empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
 .search-empty p { font-size: 14px; }
@@ -768,6 +771,30 @@ const SOS_URLS = {
 // HELPERS
 // ============================================================
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// Display normalization — title case, clean formatting for consistent display
+function norm(s) {
+  if (!s) return '';
+  s = String(s).trim();
+  // Already mixed case (e.g., "DaVita") — leave as-is if has mix of upper/lower
+  if (s !== s.toUpperCase() && s !== s.toLowerCase()) return s;
+  // Title case: "BOYD WATTERSON GLOBAL" → "Boyd Watterson Global"
+  return s.toLowerCase().replace(/(?:^|\s|[-\/\(])\S/g, c => c.toUpperCase());
+}
+
+// Clean up raw DB labels for display
+const labelMap = {
+  'gsa_new_award': 'GSA New Award', 'email_om': 'Email – Offering Memo',
+  'email_listing': 'Email – Listing', 'manual': 'Manual Entry',
+  'missing_inventory_npi': 'Missing from Inventory', 'new_npi': 'New NPI',
+  'closed_facility': 'Closed Facility', 'patient_swing': 'Patient Swing',
+  'new': 'New', 'queued': 'Queued', 'in_progress': 'In Progress',
+  'pending': 'Pending', 'verified': 'Verified', 'matched': 'Matched',
+  'filtered_multi_tenant': 'Multi-Tenant', 'active': 'Active',
+  'under_contract': 'Under Contract', 'added': 'Added', 'removed': 'Removed',
+  'persistent': 'Persistent'
+};
+function cleanLabel(s) { return labelMap[s] || norm(s); }
 
 function q(selector) { return document.querySelector(selector); }
 
@@ -1289,10 +1316,10 @@ async function execProspectsSearch() {
         govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',entity_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 15 }),
         govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',seller_name.ilike.' + like + ')', limit: 15 })
       ]);
-      govLeads = (gl.data || []).map(r => ({ ...r, _title: r.address || r.tenant_agency || '—', _badge: 'Gov Lead', _badgeBg: 'rgba(52,211,153,0.15)', _badgeColor: '#34d399', _source: 'gov-lead', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + r.tenant_agency : '', r.lessor_name ? 'Owner: ' + r.lessor_name : '', r.recorded_owner ? 'Recorded: ' + r.recorded_owner : '', r.pipeline_stage || ''].filter(Boolean) }));
-      govOwnership = (go.data || []).map(r => ({ ...r, _title: r.address || r.lease_number || '—', _badge: 'Gov Ownership', _badgeBg: 'rgba(108,140,255,0.15)', _badgeColor: '#6c8cff', _source: 'gov-ownership', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.agency_name || '', r.new_owner ? 'Owner: ' + r.new_owner : '', r.estimated_value ? 'Value: ' + fmt(r.estimated_value) : ''].filter(Boolean) }));
-      govContacts = (gc.data || []).map(r => ({ ...r, _title: r.name || r.entity_type || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: '', _meta: [r.entity_type || '', r.phone || '', r.email || '', r.role || ''].filter(Boolean) }));
-      govListings = (gli.data || []).map(r => ({ ...r, _title: r.address || r.tenant_agency || '—', _badge: 'Gov Listing', _badgeBg: 'rgba(251,191,36,0.15)', _badgeColor: '#fbbf24', _source: 'gov-listing', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + r.tenant_agency : '', r.seller_name ? 'Seller: ' + r.seller_name : '', r.asking_price ? 'Asking: ' + fmt(r.asking_price) : ''].filter(Boolean) }));
+      govLeads = (gl.data || []).map(r => ({ ...r, _title: norm(r.address) || norm(r.tenant_agency) || '—', _badge: 'Gov Lead', _badgeBg: 'rgba(52,211,153,0.15)', _badgeColor: '#34d399', _source: 'gov-lead', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + norm(r.tenant_agency) : '', r.lessor_name ? 'Owner: ' + norm(r.lessor_name) : '', r.recorded_owner ? 'Recorded: ' + norm(r.recorded_owner) : '', r.pipeline_stage ? cleanLabel(r.pipeline_stage) : ''].filter(Boolean) }));
+      govOwnership = (go.data || []).map(r => ({ ...r, _title: norm(r.address) || r.lease_number || '—', _badge: 'Gov Ownership', _badgeBg: 'rgba(108,140,255,0.15)', _badgeColor: '#6c8cff', _source: 'gov-ownership', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', norm(r.agency_name) || '', r.new_owner ? 'Owner: ' + norm(r.new_owner) : '', r.estimated_value ? 'Value: ' + fmt(r.estimated_value) : ''].filter(Boolean) }));
+      govContacts = (gc.data || []).map(r => ({ ...r, _title: norm(r.name) || norm(r.entity_type) || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: '', _meta: [norm(r.entity_type) || '', r.phone || '', r.email || '', norm(r.role) || ''].filter(Boolean) }));
+      govListings = (gli.data || []).map(r => ({ ...r, _title: norm(r.address) || norm(r.tenant_agency) || '—', _badge: 'Gov Listing', _badgeBg: 'rgba(251,191,36,0.15)', _badgeColor: '#fbbf24', _source: 'gov-listing', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + norm(r.tenant_agency) : '', r.seller_name ? 'Seller: ' + norm(r.seller_name) : '', r.asking_price ? 'Asking: ' + fmt(r.asking_price) : ''].filter(Boolean) }));
     }
 
     // Dia queries (only if connected)
@@ -1302,8 +1329,8 @@ async function execProspectsSearch() {
         diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 20 }),
         diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 15 })
       ]);
-      diaClinics = (dc || []).map(r => ({ ...r, _title: r.facility_name || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + r.operator_name : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
-      diaNpi = (dn || []).map(r => ({ ...r, _title: r.facility_name || r.npi || '—', _badge: 'NPI Signal', _badgeBg: 'rgba(248,113,113,0.15)', _badgeColor: '#f87171', _source: 'dia-clinic', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.signal_type || '', r.npi ? 'NPI: ' + r.npi : ''].filter(Boolean) }));
+      diaClinics = (dc || []).map(r => ({ ...r, _title: norm(r.facility_name) || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + norm(r.operator_name) : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
+      diaNpi = (dn || []).map(r => ({ ...r, _title: norm(r.facility_name) || r.npi || '—', _badge: 'NPI Signal', _badgeBg: 'rgba(248,113,113,0.15)', _badgeColor: '#f87171', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.signal_type ? cleanLabel(r.signal_type) : '', r.npi ? 'NPI: ' + r.npi : ''].filter(Boolean) }));
     }
 
     if (govLeads.length) sections.push({ title: 'Government — Prospect Leads', items: govLeads });

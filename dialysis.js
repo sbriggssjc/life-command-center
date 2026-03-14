@@ -297,10 +297,10 @@ function renderDiaOverview() {
  */
 function renderDiaMoversChart() {
   // renderBarChart(id, labels[], datasets[], isMoney) — from gov.js
-  const upLabels = diaData.moversUp.map(r => (r.facility_name || '').substring(0, 20));
+  const upLabels = diaData.moversUp.map(r => norm(r.facility_name || '').substring(0, 20));
   const upValues = diaData.moversUp.map(r => r.delta_patients);
 
-  const downLabels = diaData.moversDown.map(r => (r.facility_name || '').substring(0, 20));
+  const downLabels = diaData.moversDown.map(r => norm(r.facility_name || '').substring(0, 20));
   const downValues = diaData.moversDown.map(r => Math.abs(r.delta_patients));
 
   if (upLabels.length > 0 && typeof renderBarChart === 'function') {
@@ -339,7 +339,7 @@ function renderDiaChanges() {
   const types = ['all', 'added', 'removed', 'persistent'];
   types.forEach(type => {
     const active = diaChangeFilter === type ? ' active' : '';
-    html += `<button class="pill${active}" data-filter="${type}">${type}</button>`;
+    html += `<button class="pill${active}" data-filter="${type}">${cleanLabel(type)}</button>`;
   });
   html += '</div>';
   
@@ -372,10 +372,10 @@ function renderDiaChanges() {
       const highlight = isLargeMove ? 'background: rgba(251, 191, 36, 0.1);' : '';
       
       html += `<div class="table-row clickable-row" style="${highlight}" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
-      html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.city || '')}</div>`;
+      html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
+      html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
+      html += `<div style="flex: 1;">${esc(norm(row.operator_name) || '')}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
       html += `<div style="flex: 1; text-align: right; color: ${row.delta_patients > 0 ? '#34d399' : '#f87171'};">${row.delta_patients > 0 ? '+' : ''}${fmtN(row.delta_patients || 0)}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--text2);">${pct(row.pct_change || 0)}</div>`;
@@ -422,11 +422,11 @@ function renderDiaNpi() {
     signalTypes[type] = (signalTypes[type] || 0) + 1;
   });
   
-  html += metricHTML('Total Signals', fmtN(totalSignals), 'NPI intelligence signals', '');
+  html += metricHTML('Total Signals', totalSignals >= 500 ? '500+' : fmtN(totalSignals), 'NPI intelligence signals', '');
   html += metricHTML('Signal Types', fmtN(Object.keys(signalTypes).length), 'different categories', '');
   
   Object.entries(signalTypes).slice(0, 2).forEach(([type, count]) => {
-    html += metricHTML(type || 'Unknown', fmtN(count), 'signals', '');
+    html += metricHTML(cleanLabel(type) || 'Unknown', fmtN(count), 'signals', '');
   });
   
   html += '</div>';
@@ -436,7 +436,7 @@ function renderDiaNpi() {
   html += '<button class="pill active" data-filter="all">All</button>';
   Object.keys(signalTypes).forEach(type => {
     const active = diaNpiFilter === type ? ' active' : '';
-    html += `<button class="pill${active}" data-filter="${type}">${type || 'Unknown'}</button>`;
+    html += `<button class="pill${active}" data-filter="${type}">${cleanLabel(type) || 'Unknown'}</button>`;
   });
   html += '</div>';
   
@@ -466,11 +466,11 @@ function renderDiaNpi() {
       const signalColor = row.signal_type === 'npi_changed' ? 'var(--accent)' : 'var(--text2)';
       
       html += `<div class="table-row clickable-row" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
-      html += `<div style="flex: 1.5; color: ${signalColor};">${esc(row.signal_type || '')}</div>`;
-      html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.city || '')}</div>`;
+      html += `<div style="flex: 1.5; color: ${signalColor};">${esc(cleanLabel(row.signal_type || ''))}</div>`;
+      html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
+      html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
+      html += `<div style="flex: 1;">${esc(norm(row.operator_name) || '')}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
       html += '</div>';
     });
@@ -1213,7 +1213,7 @@ function renderDiaDetailSignals(record) {
     html += '<div class="detail-card">';
     html += '<div class="detail-card-header">';
     html += '<div class="detail-card-title">';
-    html += '<span class="detail-badge ' + signalClass + '">' + esc(signal.signal_type) + '</span>';
+    html += '<span class="detail-badge ' + signalClass + '">' + esc(cleanLabel(signal.signal_type)) + '</span>';
     html += '</div>';
     html += '</div>';
     html += '<div class="detail-card-body">';
@@ -1644,14 +1644,14 @@ function renderDiaSearch() {
         html += '<div class="search-results-section"><h4>Clinics (' + clinics.length + ')</h4>';
         clinics.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Clinic</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
           if (r.medicare_npi) html += '<span>NPI: ' + esc(r.medicare_npi) + '</span>';
-          if (r.operator_name) html += '<span>Op: ' + esc(r.operator_name) + '</span>';
+          if (r.operator_name) html += '<span>Op: ' + esc(norm(r.operator_name)) + '</span>';
           if (r.latest_total_patients) html += '<span>Patients: ' + fmtN(r.latest_total_patients) + '</span>';
-          if (r.change_type) html += '<span>' + esc(r.change_type) + '</span>';
+          if (r.change_type) html += '<span>' + esc(cleanLabel(r.change_type)) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -1661,11 +1661,11 @@ function renderDiaSearch() {
         html += '<div class="search-results-section"><h4>NPI Signals (' + npiSignals.length + ')</h4>';
         npiSignals.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.npi || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.npi || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(248,113,113,0.15); color: #f87171;">NPI Signal</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.signal_type) html += '<span>Signal: ' + esc(r.signal_type) + '</span>';
+          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.signal_type) html += '<span>Signal: ' + esc(cleanLabel(r.signal_type)) + '</span>';
           if (r.npi) html += '<span>NPI: ' + esc(r.npi) + '</span>';
           html += '</div></div>';
         });
@@ -1676,12 +1676,12 @@ function renderDiaSearch() {
         html += '<div class="search-results-section"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
         propQueue.forEach(r => {
           html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
-          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.clinic_id || '—') + '</span>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Property</span></div>';
           html += '<div class="search-card-meta">';
           if (r.state) html += '<span>' + esc(r.state) + '</span>';
-          if (r.operator_name) html += '<span>Op: ' + esc(r.operator_name) + '</span>';
-          if (r.review_type) html += '<span>Review: ' + esc(r.review_type) + '</span>';
+          if (r.operator_name) html += '<span>Op: ' + esc(norm(r.operator_name)) + '</span>';
+          if (r.review_type) html += '<span>Review: ' + esc(cleanLabel(r.review_type)) + '</span>';
           html += '</div></div>';
         });
         html += '</div>';
