@@ -61,11 +61,28 @@ function diaQuery(table, select, params = {}) {
         'Content-Type': 'application/json'
       }
     })
-      .then(res => res.json())
-      .then(data => resolve(data))
+      .then(res => {
+        if (!res.ok) {
+          return res.text().then(t => {
+            console.error(`diaQuery ${table}: HTTP ${res.status}`, t);
+            resolve([]);
+          });
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (data === undefined) return; // already resolved above
+        if (Array.isArray(data)) resolve(data);
+        else if (data && data.message) {
+          console.error(`diaQuery ${table}:`, data.message);
+          resolve([]);
+        } else {
+          resolve(data);
+        }
+      })
       .catch(err => {
         console.error('diaQuery error:', err);
-        reject(err);
+        resolve([]);
       });
   });
 }
@@ -78,6 +95,12 @@ function diaQuery(table, select, params = {}) {
  * Load all dialysis data
  */
 async function loadDiaData() {
+  // Show loading indicator
+  const inner = document.getElementById('bizPageInner');
+  if (inner) {
+    inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading dialysis data...</p></div>';
+  }
+
   try {
     diaData = {
       freshness: {},
@@ -149,10 +172,15 @@ async function loadDiaData() {
       diaData.reconciliation = recon[0];
     }
     
+    diaDataLoaded = true;
     renderDiaTab();
   } catch (err) {
     console.error('loadDiaData error:', err);
-    showToast('Failed to load dialysis data: ' + err.message, 'error');
+    // Show error in the UI instead of just console
+    const inner = document.getElementById('bizPageInner');
+    if (inner) {
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load dialysis data</p><p style="color:var(--text2);font-size:13px">' + (err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadDiaData()" style="margin-top:12px">Retry</button></div>';
+    }
   }
 }
 

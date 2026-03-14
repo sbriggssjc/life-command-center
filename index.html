@@ -612,18 +612,20 @@ let currentGovTab = 'overview';
 let currentDiaTab = 'overview';
 const DIA_SUPABASE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co';
 let diaData = {
-  freshness: null,
-  inventorySummary: [],
+  freshness: {},
+  inventorySummary: {},
   inventoryChanges: [],
-  npiSummary: [],
+  npiSummary: {},
   npiSignals: [],
   moversUp: [],
   moversDown: [],
   propertyReviewQueue: [],
   leaseBackfillRows: [],
   researchOutcomes: [],
-  reconciliation: []
+  reconciliation: {}
 };
+let diaDataLoaded = false;
+let govDataLoaded = false;
 let govData = {
   properties: [],
   salesComps: [],
@@ -832,7 +834,14 @@ document.querySelectorAll('.bnav').forEach(btn => {
     if (btn.dataset.page === 'pageBiz') {
       document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
       document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
-      renderBizContent();
+      // Auto-load data on first navigation if connected
+      if (currentBizTab === 'government' && govConnected && !govDataLoaded) {
+        loadGovData();
+      } else if (currentBizTab === 'dialysis' && diaConnected && !diaDataLoaded && currentDiaTab !== 'activity') {
+        loadDiaData();
+      } else {
+        renderBizContent();
+      }
     } else {
       document.getElementById('govInnerTabs').style.display = 'none';
       document.getElementById('diaInnerTabs').style.display = 'none';
@@ -1007,15 +1016,19 @@ function updateBizBadges() {
 }
 
 function renderBizContent() {
+  // If government tab, route to gov.js
+  if (currentBizTab === 'government') {
+    if (!govConnected) { showGovConnectionForm(); return; }
+    if (!govDataLoaded) { loadGovData(); return; }
+    renderGovTab();
+    return;
+  }
   // If dialysis tab with a data inner tab, route to dialysis.js
   if (currentBizTab === 'dialysis' && currentDiaTab !== 'activity') {
-    if (diaConnected) {
-      renderDiaTab();
-      return;
-    } else {
-      showDiaConnectionForm();
-      return;
-    }
+    if (!diaConnected) { showDiaConnectionForm(); return; }
+    if (!diaDataLoaded) { loadDiaData(); return; }
+    renderDiaTab();
+    return;
   }
   const filtered = filterBizActivities();
   const start = bizPage * PAGE_SIZE;

@@ -116,6 +116,12 @@ function metricHTML(label, value, sub, color) {
 // ============================================================================
 
 async function loadGovData() {
+  // Show loading indicator
+  const inner = document.getElementById('bizPageInner');
+  if (inner) {
+    inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading government data...</p></div>';
+  }
+
   govData.properties = [];
   govData.salesComps = [];
   govData.leads = [];
@@ -232,12 +238,18 @@ async function loadGovData() {
     govData.salesComps = [{ count: salesRes.count || 0 }];
     
     govConnected = true;
+    govDataLoaded = true;
     showToast('Government data loaded', 'success');
-    
+    renderGovTab();
+
   } catch (err) {
     console.error('Error loading government data:', err);
     govConnected = false;
     showToast('Error loading data', 'error');
+    const inner = document.getElementById('bizPageInner');
+    if (inner) {
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + (err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadGovData()" style="margin-top:12px">Retry</button></div>';
+    }
   }
 }
 
