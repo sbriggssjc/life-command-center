@@ -350,6 +350,7 @@ tr.clickable-row:hover td { background: var(--s2); }
 .data-table th { text-align: left; padding: 12px; color: var(--text2); font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
 .data-table td { padding: 12px; color: var(--text); border-bottom: 1px solid var(--border); }
 .data-table td code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.table-row { display: flex; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); gap: 8px; }
 .table-row:hover { background: var(--s2); }
 .truncate { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -367,6 +368,26 @@ tr.clickable-row:hover td { background: var(--s2); }
 .charts-row { display: flex; gap: 16px; margin-bottom: 16px; }
 .table-section { margin-bottom: 16px; }
 .table-section h3 { color: var(--text2); font-size: 12px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; }
+
+/* Search styles */
+.search-bar { display: flex; gap: 8px; margin-bottom: 20px; }
+.search-bar input { flex: 1; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--s2); color: var(--text); font-size: 14px; outline: none; }
+.search-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(108,140,255,0.15); }
+.search-bar button { padding: 10px 20px; border-radius: 10px; border: none; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.search-bar button:hover { opacity: 0.9; }
+.search-results-section { margin-bottom: 24px; }
+.search-results-section h4 { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.search-card { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.search-card:hover { border-color: var(--accent); background: var(--s2); }
+.search-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.search-card-title { font-weight: 600; font-size: 14px; color: var(--text); }
+.search-card-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+.search-card-meta { font-size: 12px; color: var(--text2); display: flex; gap: 16px; flex-wrap: wrap; }
+.search-card-meta span { display: flex; align-items: center; gap: 4px; }
+.search-empty { text-align: center; padding: 48px 16px; color: var(--text2); }
+.search-empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
+.search-empty p { font-size: 14px; }
+.search-loading { text-align: center; padding: 32px; color: var(--text2); font-size: 14px; }
 
 /* Research workbench styles */
 .research-workbench { position: relative; }
@@ -461,23 +482,30 @@ tr.clickable-row:hover td { background: var(--s2); }
   <div class="sub-tabs" id="bizSubTabs" style="display:none">
     <button class="sub-tab active" data-biz="dialysis">Dialysis <span class="badge" id="bizBadgeDia">-</span></button>
     <button class="sub-tab" data-biz="government">Government <span class="badge" id="bizBadgeGov">-</span></button>
+    <button class="sub-tab" data-biz="prospects">Prospects</button>
     <button class="sub-tab" data-biz="other">All Other <span class="badge" id="bizBadgeOther">-</span></button>
   </div>
 
   <!-- Government inner tabs (shown when Government sub-tab is active) -->
   <div class="gov-inner-tabs" id="govInnerTabs" style="display:none">
     <button class="gov-inner-tab active" data-gov-tab="overview">Overview</button>
+    <button class="gov-inner-tab" data-gov-tab="search">Search</button>
     <button class="gov-inner-tab" data-gov-tab="ownership">Ownership</button>
     <button class="gov-inner-tab" data-gov-tab="pipeline">Pipeline</button>
     <button class="gov-inner-tab" data-gov-tab="listings">Listings</button>
+    <button class="gov-inner-tab" data-gov-tab="sales">Sales</button>
+    <button class="gov-inner-tab" data-gov-tab="players">Players</button>
     <button class="gov-inner-tab" data-gov-tab="research">Research</button>
   </div>
 
   <!-- Dialysis inner tabs (shown when Dialysis sub-tab is active) -->
   <div class="gov-inner-tabs" id="diaInnerTabs" style="display:none">
     <button class="gov-inner-tab active" data-dia-tab="overview">Overview</button>
+    <button class="gov-inner-tab" data-dia-tab="search">Search</button>
     <button class="gov-inner-tab" data-dia-tab="changes">Inventory</button>
     <button class="gov-inner-tab" data-dia-tab="npi">NPI Intel</button>
+    <button class="gov-inner-tab" data-dia-tab="sales">Sales</button>
+    <button class="gov-inner-tab" data-dia-tab="players">Players</button>
     <button class="gov-inner-tab" data-dia-tab="research">Research</button>
     <button class="gov-inner-tab" data-dia-tab="activity">Activity</button>
   </div>
@@ -825,15 +853,25 @@ function renderGovOwnership(){return renderGovOverview();}
 function renderGovPipeline(){return renderGovOverview();}
 function renderGovListings(){return renderGovOverview();}
 function renderGovResearch(){return renderGovOverview();}
+function renderGovSearch(){return '<div style="color:var(--text2)">Loading gov search...</div>';}
+function renderGovSales(){return '<div style="color:var(--text2)">Loading gov sales...</div>';}
+function renderGovPlayers(){return '<div style="color:var(--text2)">Loading gov players...</div>';}
+function renderDiaSearch(){return '<div style="color:var(--text2)">Loading dia search...</div>';}
+function renderDiaSales(){return '<div style="color:var(--text2)">Loading dia sales...</div>';}
+function renderDiaPlayers(){return '<div style="color:var(--text2)">Loading dia players...</div>';}
+function renderProspects(){return '<div style="color:var(--text2)">Loading prospects...</div>';}
 function renderGovTab(){
   const el=document.getElementById('bizPageInner');
   if(!el)return;
   let h='';
   switch(currentGovTab){
     case 'overview':h=renderGovOverview();break;
+    case 'search':h=renderGovSearch();break;
     case 'ownership':h=renderGovOwnership();break;
     case 'pipeline':h=renderGovPipeline();break;
     case 'listings':h=renderGovListings();break;
+    case 'sales':h=renderGovSales();break;
+    case 'players':h=renderGovPlayers();break;
     case 'research':h=renderGovResearch();break;
   }
   el.innerHTML=h;
@@ -858,8 +896,11 @@ function renderDiaTab(){
   let h='';
   switch(currentDiaTab){
     case 'overview':h=renderDiaOverview();break;
+    case 'search':h=renderDiaSearch();break;
     case 'changes':h=renderDiaChanges();break;
     case 'npi':h=renderDiaNpi();break;
+    case 'sales':h=renderDiaSales();break;
+    case 'players':h=renderDiaPlayers();break;
     case 'research':h=renderDiaResearch();break;
     case 'activity':renderBizContent();return;
   }
@@ -911,7 +952,11 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
   document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
 
-  if (currentBizTab === 'government') {
+  if (currentBizTab === 'prospects') {
+    const el = document.getElementById('bizPageInner');
+    if (el) el.innerHTML = renderProspects();
+    setTimeout(() => { if (typeof initProspectsSearch === 'function') initProspectsSearch(); }, 0);
+  } else if (currentBizTab === 'government') {
     if (!govConnected) showGovConnectionForm();
     else {
       currentGovTab = 'overview';
@@ -953,8 +998,11 @@ document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   currentDiaTab = tab.dataset.diaTab;
   if (currentDiaTab === 'activity') {
     renderBizContent();
-  } else {
+  } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
     renderDiaTab();
+  } else {
+    // Data not loaded yet — trigger load, tab will render after
+    if (typeof loadDiaData === 'function') loadDiaData();
   }
 });
 
@@ -1047,6 +1095,13 @@ function updateBizBadges() {
 
 function renderBizContent() {
   console.log('renderBizContent:', { currentBizTab, currentDiaTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded });
+  // If prospects tab, render cross-project view
+  if (currentBizTab === 'prospects') {
+    const el = document.getElementById('bizPageInner');
+    if (el) el.innerHTML = renderProspects();
+    setTimeout(() => { if (typeof initProspectsSearch === 'function') initProspectsSearch(); }, 0);
+    return;
+  }
   // If government tab, route to gov.js
   if (currentBizTab === 'government') {
     if (!govConnected) { console.log('→ showGovConnectionForm'); showGovConnectionForm(); return; }
@@ -1147,6 +1202,126 @@ function renderBizSubset(subset) {
     </div>`;
   }
   document.getElementById('bizContent').innerHTML = html;
+}
+
+// ============================================================
+// PROSPECTS — Cross-Project CRM Lookup
+// ============================================================
+
+let prospectsSearchTerm = '';
+let prospectsResults = null;
+let prospectsSearching = false;
+
+function renderProspects() {
+  let html = '<div class="biz-section">';
+  html += '<div class="search-bar">';
+  html += '<input type="text" id="prospectsSearchInput" placeholder="Search across all projects — name, phone, LLC, address, entity, operator..." value="' + esc(prospectsSearchTerm) + '" />';
+  html += '<button onclick="execProspectsSearch()">Search</button>';
+  html += '</div>';
+
+  if (prospectsSearching) {
+    html += '<div class="search-loading">Searching across Government + Dialysis databases...</div>';
+  } else if (prospectsResults === null) {
+    html += '<div class="search-empty">';
+    html += '<div class="search-empty-icon">&#128101;</div>';
+    html += '<p>Cross-project CRM lookup — search ownership records, leads, contacts, clinics, and research outcomes across both Government and Dialysis</p>';
+    html += '</div>';
+  } else {
+    const sections = prospectsResults;
+    let total = 0;
+    sections.forEach(s => total += s.items.length);
+
+    if (total === 0) {
+      html += '<div class="search-empty"><p>No results found for "' + esc(prospectsSearchTerm) + '"</p></div>';
+    } else {
+      html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 16px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' across all projects</div>';
+
+      sections.forEach(section => {
+        if (section.items.length === 0) return;
+        html += '<div class="search-results-section"><h4>' + esc(section.title) + ' (' + section.items.length + ')</h4>';
+        section.items.forEach(r => {
+          const clickAttr = r._source ? ' onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "' + r._source + '")\'' : '';
+          html += '<div class="search-card"' + clickAttr + '>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r._title || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: ' + r._badgeBg + '; color: ' + r._badgeColor + ';">' + esc(r._badge) + '</span></div>';
+          html += '<div class="search-card-meta">';
+          (r._meta || []).forEach(m => { html += '<span>' + esc(m) + '</span>'; });
+          html += '</div></div>';
+        });
+        html += '</div>';
+      });
+    }
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function initProspectsSearch() {
+  const input = document.getElementById('prospectsSearchInput');
+  if (input) {
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') execProspectsSearch(); });
+    input.focus();
+  }
+}
+
+async function execProspectsSearch() {
+  const input = document.getElementById('prospectsSearchInput');
+  if (!input) return;
+  const term = input.value.trim();
+  if (!term) return;
+
+  prospectsSearchTerm = term;
+  prospectsSearching = true;
+  const el = document.getElementById('bizPageInner');
+  if (el) el.innerHTML = renderProspects();
+
+  const like = '*' + term + '*';
+  const sections = [];
+
+  try {
+    // Gov queries (only if connected)
+    let govLeads = [], govOwnership = [], govContacts = [], govListings = [];
+    if (govConnected) {
+      const [gl, go, gc, gli] = await Promise.all([
+        govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ',lessor.ilike.' + like + ')', limit: 15 }),
+        govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_bureau.ilike.' + like + ')', limit: 15 }),
+        govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',company.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 15 }),
+        govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ')', limit: 15 })
+      ]);
+      govLeads = (gl.data || []).map(r => ({ ...r, _title: r.address || r.tenant || '—', _badge: 'Gov Lead', _badgeBg: 'rgba(52,211,153,0.15)', _badgeColor: '#34d399', _source: 'gov-lead', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant ? 'Tenant: ' + r.tenant : '', r.lessor ? 'Lessor: ' + r.lessor : '', r.pipeline_stage || ''].filter(Boolean) }));
+      govOwnership = (go.data || []).map(r => ({ ...r, _title: r.address || r.lease_number || '—', _badge: 'Gov Ownership', _badgeBg: 'rgba(108,140,255,0.15)', _badgeColor: '#6c8cff', _source: 'gov-ownership', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.agency_bureau || '', r.estimated_value ? 'Value: ' + fmt(r.estimated_value) : ''].filter(Boolean) }));
+      govContacts = (gc.data || []).map(r => ({ ...r, _title: r.name || r.company || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: '', _meta: [r.company || '', r.phone || '', r.email || '', r.role || ''].filter(Boolean) }));
+      govListings = (gli.data || []).map(r => ({ ...r, _title: r.address || r.tenant || '—', _badge: 'Gov Listing', _badgeBg: 'rgba(251,191,36,0.15)', _badgeColor: '#fbbf24', _source: 'gov-listing', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.tenant ? 'Tenant: ' + r.tenant : '', r.asking_price ? 'Asking: ' + fmt(r.asking_price) : ''].filter(Boolean) }));
+    }
+
+    // Dia queries (only if connected)
+    let diaClinics = [], diaNpi = [];
+    if (diaConnected) {
+      const [dc, dn] = await Promise.all([
+        diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',ccn.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 20 }),
+        diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 15 })
+      ]);
+      diaClinics = (dc || []).map(r => ({ ...r, _title: r.facility_name || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + r.operator_name : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
+      diaNpi = (dn || []).map(r => ({ ...r, _title: r.facility_name || r.npi || '—', _badge: 'NPI Signal', _badgeBg: 'rgba(248,113,113,0.15)', _badgeColor: '#f87171', _source: 'dia-clinic', _meta: [r.city && r.state ? r.city + ', ' + r.state : '', r.signal_type || '', r.npi ? 'NPI: ' + r.npi : ''].filter(Boolean) }));
+    }
+
+    if (govLeads.length) sections.push({ title: 'Government — Prospect Leads', items: govLeads });
+    if (govOwnership.length) sections.push({ title: 'Government — Ownership Records', items: govOwnership });
+    if (govListings.length) sections.push({ title: 'Government — Listings', items: govListings });
+    if (govContacts.length) sections.push({ title: 'Government — Contacts', items: govContacts });
+    if (diaClinics.length) sections.push({ title: 'Dialysis — Clinics', items: diaClinics });
+    if (diaNpi.length) sections.push({ title: 'Dialysis — NPI Signals', items: diaNpi });
+
+    prospectsResults = sections;
+  } catch (err) {
+    console.error('Prospects search error:', err);
+    prospectsResults = [];
+  }
+
+  prospectsSearching = false;
+  if (el) el.innerHTML = renderProspects();
+  initProspectsSearch();
 }
 
 // ============================================================

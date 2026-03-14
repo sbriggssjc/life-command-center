@@ -202,12 +202,12 @@ async function loadGovData() {
     );
     govData.properties = [{ count: propsRes.count || 0 }];
 
-    // Load sales comps count
+    // Load sales transactions
     const salesRes = await govQuery('sales_transactions',
-      'sale_id',
-      { limit: 0 }
+      '*',
+      { order: 'sale_date.desc', limit: 500 }
     );
-    govData.salesComps = [{ count: salesRes.count || 0 }];
+    govData.salesComps = salesRes.data || [];
     
     govConnected = true;
     govDataLoaded = true;
@@ -1383,7 +1383,7 @@ function setResearchMode(mode) {
 
 function renderGovOverview() {
   const propCount = govData.properties[0]?.count || 0;
-  const saleCount = govData.salesComps[0]?.count || 0;
+  const saleCount = govData.salesComps.length || 0;
   const leadCount = govData.leads.length;
   const contactCount = govData.contacts.length;
   
@@ -2158,8 +2158,372 @@ function saveGovDetailLead(leadId) {
 }
 
 // ============================================================================
+// GOVERNMENT SALES (Comps Sheet)
+// ============================================================================
+
+let govSalesSort = 'sale_date';
+let govSalesDir = 'desc';
+
+function renderGovSales() {
+  const sales = govData.salesComps || [];
+
+  let html = '<div class="biz-section">';
+
+  // Metrics
+  html += '<div class="gov-metrics">';
+  const totalSales = sales.length;
+  const totalVolume = sales.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const avgCap = sales.filter(r => r.cap_rate > 0).reduce((s, r, i, a) => s + r.cap_rate / a.length, 0);
+  const avgPSF = sales.filter(r => r.price_per_sqft > 0).reduce((s, r, i, a) => s + r.price_per_sqft / a.length, 0);
+
+  html += metricHTML('Total Sales', fmtN(totalSales), 'transactions', 'blue');
+  html += metricHTML('Total Volume', fmt(totalVolume), 'sale price', 'green');
+  html += metricHTML('Avg Cap Rate', avgCap > 0 ? avgCap.toFixed(2) + '%' : '—', 'across all sales', 'yellow');
+  html += metricHTML('Avg $/SF', avgPSF > 0 ? '$' + avgPSF.toFixed(0) : '—', 'price per sqft', 'purple');
+  html += '</div>';
+
+  // Comps table
+  html += '<div class="table-wrapper"><div class="data-table">';
+  html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+  html += '<div style="flex: 2;">Address</div>';
+  html += '<div style="flex: 1;">City, State</div>';
+  html += '<div style="flex: 1;">Tenant</div>';
+  html += '<div style="flex: 1; text-align: right;">Sale Price</div>';
+  html += '<div style="flex: 1; text-align: right;">Cap Rate</div>';
+  html += '<div style="flex: 1; text-align: right;">$/SF</div>';
+  html += '<div style="flex: 1; text-align: right;">SF</div>';
+  html += '<div style="flex: 1;">Date</div>';
+  html += '<div style="flex: 1;">Buyer</div>';
+  html += '</div>';
+
+  const sorted = [...sales].sort((a, b) => {
+    const aVal = a[govSalesSort] || '';
+    const bVal = b[govSalesSort] || '';
+    if (govSalesDir === 'desc') return aVal > bVal ? -1 : 1;
+    return aVal > bVal ? 1 : -1;
+  });
+
+  sorted.slice(0, 200).forEach(r => {
+    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
+    html += '<div style="flex: 2;" class="truncate">' + esc(r.address || '—') + '</div>';
+    html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
+    html += '<div style="flex: 1;" class="truncate">' + esc(r.tenant || '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmt(r.sale_price) + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + (r.cap_rate ? r.cap_rate.toFixed(2) + '%' : '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + (r.price_per_sqft ? '$' + r.price_per_sqft.toFixed(0) : '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right;">' + fmtN(r.square_feet || 0) + '</div>';
+    html += '<div style="flex: 1; color: var(--text2);">' + esc(r.sale_date ? r.sale_date.substring(0, 10) : '—') + '</div>';
+    html += '<div style="flex: 1;" class="truncate">' + esc(r.buyer || '—') + '</div>';
+    html += '</div>';
+  });
+
+  if (sales.length === 0) {
+    html += '<div class="table-empty">No sales transactions loaded</div>';
+  }
+
+  html += '</div></div>';
+  html += '</div>';
+  return html;
+}
+
+// ============================================================================
+// GOVERNMENT PLAYERS (Top Buyers, Sellers, Brokers)
+// ============================================================================
+
+let govPlayersView = 'buyers';
+
+function renderGovPlayers() {
+  let html = '<div class="biz-section">';
+
+  // View toggle pills
+  html += '<div class="pills" style="margin-bottom: 20px;">';
+  ['buyers', 'sellers', 'brokers'].forEach(view => {
+    const active = govPlayersView === view ? ' active' : '';
+    html += '<button class="pill' + active + '" onclick="govPlayersView=\'' + view + '\';renderGovTab()">' + view.charAt(0).toUpperCase() + view.slice(1) + '</button>';
+  });
+  html += '</div>';
+
+  const sales = govData.salesComps || [];
+  const ownership = govData.ownership || [];
+  const listings = govData.listings || [];
+
+  if (govPlayersView === 'buyers') {
+    // Aggregate buyers from sales + ownership transfers
+    const buyerMap = {};
+    sales.forEach(r => {
+      if (r.buyer) {
+        const key = r.buyer.trim().toUpperCase();
+        if (!buyerMap[key]) buyerMap[key] = { name: r.buyer, deals: 0, volume: 0, records: [] };
+        buyerMap[key].deals++;
+        buyerMap[key].volume += (r.sale_price || 0);
+        buyerMap[key].records.push(r);
+      }
+    });
+    ownership.forEach(r => {
+      if (r.new_owner) {
+        const key = r.new_owner.trim().toUpperCase();
+        if (!buyerMap[key]) buyerMap[key] = { name: r.new_owner, deals: 0, volume: 0, records: [] };
+        buyerMap[key].deals++;
+        buyerMap[key].volume += (r.sale_price || r.estimated_value || 0);
+        buyerMap[key].records.push(r);
+      }
+    });
+
+    const topBuyers = Object.values(buyerMap).sort((a, b) => b.deals - a.deals).slice(0, 50);
+    html += renderPlayersTable(topBuyers, 'Buyer', 'gov');
+
+  } else if (govPlayersView === 'sellers') {
+    const sellerMap = {};
+    sales.forEach(r => {
+      if (r.seller) {
+        const key = r.seller.trim().toUpperCase();
+        if (!sellerMap[key]) sellerMap[key] = { name: r.seller, deals: 0, volume: 0, records: [] };
+        sellerMap[key].deals++;
+        sellerMap[key].volume += (r.sale_price || 0);
+        sellerMap[key].records.push(r);
+      }
+    });
+    ownership.forEach(r => {
+      if (r.prior_owner) {
+        const key = r.prior_owner.trim().toUpperCase();
+        if (!sellerMap[key]) sellerMap[key] = { name: r.prior_owner, deals: 0, volume: 0, records: [] };
+        sellerMap[key].deals++;
+        sellerMap[key].volume += (r.sale_price || r.estimated_value || 0);
+        sellerMap[key].records.push(r);
+      }
+    });
+
+    const topSellers = Object.values(sellerMap).sort((a, b) => b.deals - a.deals).slice(0, 50);
+    html += renderPlayersTable(topSellers, 'Seller', 'gov');
+
+  } else {
+    // Brokers from listings
+    const brokerMap = {};
+    listings.forEach(r => {
+      const broker = r.broker || r.listing_agent || r.source;
+      if (broker) {
+        const key = broker.trim().toUpperCase();
+        if (!brokerMap[key]) brokerMap[key] = { name: broker, deals: 0, volume: 0, records: [] };
+        brokerMap[key].deals++;
+        brokerMap[key].volume += (r.asking_price || 0);
+        brokerMap[key].records.push(r);
+      }
+    });
+
+    const topBrokers = Object.values(brokerMap).sort((a, b) => b.deals - a.deals).slice(0, 50);
+    html += renderPlayersTable(topBrokers, 'Broker', 'gov');
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderPlayersTable(players, roleLabel, project) {
+  let html = '<div class="gov-metrics">';
+  html += metricHTML('Total ' + roleLabel + 's', fmtN(players.length), 'unique entities', 'blue');
+  const topDealCount = players[0]?.deals || 0;
+  const topVolume = players.reduce((s, p) => s + p.volume, 0);
+  html += metricHTML('Top ' + roleLabel, players[0]?.name?.substring(0, 25) || '—', topDealCount + ' deals', 'green');
+  html += metricHTML('Total Volume', fmt(topVolume), 'across all ' + roleLabel.toLowerCase() + 's', 'yellow');
+  html += '</div>';
+
+  html += '<div class="table-wrapper"><div class="data-table">';
+  html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+  html += '<div style="flex: 3;">' + roleLabel + '</div>';
+  html += '<div style="flex: 1; text-align: right;">Deals</div>';
+  html += '<div style="flex: 2; text-align: right;">Total Volume</div>';
+  html += '<div style="flex: 2;">Most Recent</div>';
+  html += '</div>';
+
+  players.forEach((p, idx) => {
+    const latestRecord = p.records[0] || {};
+    const source = project === 'gov' ? (latestRecord.lead_id ? 'gov-lead' : 'gov-ownership') : 'dia-clinic';
+
+    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(latestRecord).replace(/'/g,"&#39;") + ', "' + source + '")\'>';
+    html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.deals + '</div>';
+    html += '<div style="flex: 2; text-align: right;">' + fmt(p.volume) + '</div>';
+    html += '<div style="flex: 2; color: var(--text2);">' + esc(latestRecord.address || latestRecord.facility_name || '—') + '</div>';
+    html += '</div>';
+  });
+
+  if (players.length === 0) {
+    html += '<div class="table-empty">No ' + roleLabel.toLowerCase() + ' data available</div>';
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+// ============================================================================
+// GOVERNMENT SEARCH
+// ============================================================================
+
+let govSearchTerm = '';
+let govSearchResults = null;
+let govSearching = false;
+
+function renderGovSearch() {
+  let html = '<div class="biz-section">';
+  html += '<div class="search-bar">';
+  html += '<input type="text" id="govSearchInput" placeholder="Search by address, tenant, city, state, lessor, contact..." value="' + esc(govSearchTerm) + '" />';
+  html += '<button onclick="execGovSearch()">Search</button>';
+  html += '</div>';
+
+  if (govSearching) {
+    html += '<div class="search-loading">Searching across all government records...</div>';
+  } else if (govSearchResults === null) {
+    html += '<div class="search-empty">';
+    html += '<div class="search-empty-icon">&#128269;</div>';
+    html += '<p>Search across ownership records, prospect leads, listings, contacts, and properties</p>';
+    html += '</div>';
+  } else {
+    const { ownership, leads, listings, contacts, properties } = govSearchResults;
+    const total = ownership.length + leads.length + listings.length + contacts.length + properties.length;
+
+    if (total === 0) {
+      html += '<div class="search-empty"><p>No results found for "' + esc(govSearchTerm) + '"</p></div>';
+    } else {
+      html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 16px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' found</div>';
+
+      if (leads.length > 0) {
+        html += '<div class="search-results-section"><h4>Prospect Leads (' + leads.length + ')</h4>';
+        leads.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-lead")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Lead</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.tenant) html += '<span>Tenant: ' + esc(r.tenant) + '</span>';
+          if (r.lessor) html += '<span>Lessor: ' + esc(r.lessor) + '</span>';
+          if (r.annual_rent) html += '<span>Rent: ' + fmt(r.annual_rent) + '</span>';
+          if (r.pipeline_stage) html += '<span>Stage: ' + esc(r.pipeline_stage) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (ownership.length > 0) {
+        html += '<div class="search-results-section"><h4>Ownership Records (' + ownership.length + ')</h4>';
+        ownership.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.lease_number || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(108,140,255,0.15); color: #6c8cff;">Ownership</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.agency_bureau) html += '<span>' + esc(r.agency_bureau) + '</span>';
+          if (r.estimated_value) html += '<span>Value: ' + fmt(r.estimated_value) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (listings.length > 0) {
+        html += '<div class="search-results-section"><h4>Listings (' + listings.length + ')</h4>';
+        listings.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-listing")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.tenant || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Listing</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.tenant) html += '<span>Tenant: ' + esc(r.tenant) + '</span>';
+          if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
+          if (r.status) html += '<span>Status: ' + esc(r.status) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (contacts.length > 0) {
+        html += '<div class="search-results-section"><h4>Contacts (' + contacts.length + ')</h4>';
+        contacts.forEach(r => {
+          html += '<div class="search-card">';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.name || r.company || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Contact</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.company) html += '<span>' + esc(r.company) + '</span>';
+          if (r.phone) html += '<span>' + esc(r.phone) + '</span>';
+          if (r.email) html += '<span>' + esc(r.email) + '</span>';
+          if (r.role) html += '<span>' + esc(r.role) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (properties.length > 0) {
+        html += '<div class="search-results-section"><h4>Properties (' + properties.length + ')</h4>';
+        properties.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.address || r.property_name || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(34,211,238,0.15); color: #22d3ee;">Property</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.property_type) html += '<span>Type: ' + esc(r.property_type) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+    }
+  }
+
+  html += '</div>';
+
+  // Attach enter-key handler after render
+  setTimeout(() => {
+    const input = document.getElementById('govSearchInput');
+    if (input) {
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') execGovSearch(); });
+      input.focus();
+    }
+  }, 0);
+
+  return html;
+}
+
+async function execGovSearch() {
+  const input = document.getElementById('govSearchInput');
+  if (!input) return;
+  const term = input.value.trim();
+  if (!term) return;
+
+  govSearchTerm = term;
+  govSearching = true;
+  renderGovTab();
+
+  const like = '*' + term + '*';
+  try {
+    const [ownership, leads, listings, contacts, properties] = await Promise.all([
+      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_bureau.ilike.' + like + ')', limit: 25 }),
+      govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ',lessor.ilike.' + like + ')', limit: 25 }),
+      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant.ilike.' + like + ')', limit: 25 }),
+      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',company.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
+      govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ')', limit: 25 })
+    ]);
+
+    govSearchResults = {
+      ownership: ownership.data || [],
+      leads: leads.data || [],
+      listings: listings.data || [],
+      contacts: contacts.data || [],
+      properties: properties.data || []
+    };
+  } catch (err) {
+    console.error('Gov search error:', err);
+    govSearchResults = { ownership: [], leads: [], listings: [], contacts: [], properties: [] };
+  }
+
+  govSearching = false;
+  renderGovTab();
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
 window.renderGovDetailBody = renderGovDetailBody;
 window.saveGovDetailLead = saveGovDetailLead;
+window.renderGovSearch = renderGovSearch;
+window.execGovSearch = execGovSearch;
+window.renderGovSales = renderGovSales;
+window.renderGovPlayers = renderGovPlayers;
+window.renderPlayersTable = renderPlayersTable;

@@ -234,7 +234,7 @@ function renderDiaOverview() {
     
     html += '<div class="table-row">';
     html += `<div style="flex: 1;">Latest Run</div>`;
-    html += `<div style="flex: 2; color: var(--text2);">${fmt(recon.started_at)}</div>`;
+    html += `<div style="flex: 2; color: var(--text2);">${new Date(recon.started_at).toLocaleString()}</div>`;
     html += `<div class="status-dot ${statusColor}"></div>`;
     html += `<div style="flex: 1; text-align: right; color: var(--text2);">${reconStatus}</div>`;
     html += '</div>';
@@ -268,8 +268,8 @@ function renderDiaOverview() {
   
   // Top movers charts
   html += '<div class="gov-chart-row">';
-  html += '<div class="gov-chart-card"><div class="gov-chart-title">Top 10 Movers Up</div><div class="chart-container" id="diaMoversUpChart"></div></div>';
-  html += '<div class="gov-chart-card"><div class="gov-chart-title">Top 10 Movers Down</div><div class="chart-container" id="diaMoversDownChart"></div></div>';
+  html += '<div class="gov-chart-card"><div class="gov-chart-title">Top 10 Movers Up</div><div class="chart-container"><canvas id="diaMoversUpChart"></canvas></div></div>';
+  html += '<div class="gov-chart-card"><div class="gov-chart-title">Top 10 Movers Down</div><div class="chart-container"><canvas id="diaMoversDownChart"></canvas></div></div>';
   html += '</div>';
   
   html += '</div>';
@@ -286,22 +286,19 @@ function renderDiaOverview() {
  * Render movers charts
  */
 function renderDiaMoversChart() {
-  const upData = diaData.moversUp.map(r => ({
-    label: r.facility_name.substring(0, 20),
-    value: r.delta_patients
-  }));
-  
-  const downData = diaData.moversDown.map(r => ({
-    label: r.facility_name.substring(0, 20),
-    value: Math.abs(r.delta_patients)
-  }));
-  
-  if (upData.length > 0 && typeof renderBarChart === 'function') {
-    renderBarChart('diaMoversUpChart', upData, '#34d399', 'Patients');
+  // renderBarChart(id, labels[], datasets[], isMoney) — from gov.js
+  const upLabels = diaData.moversUp.map(r => (r.facility_name || '').substring(0, 20));
+  const upValues = diaData.moversUp.map(r => r.delta_patients);
+
+  const downLabels = diaData.moversDown.map(r => (r.facility_name || '').substring(0, 20));
+  const downValues = diaData.moversDown.map(r => Math.abs(r.delta_patients));
+
+  if (upLabels.length > 0 && typeof renderBarChart === 'function') {
+    renderBarChart('diaMoversUpChart', upLabels, [{ label: 'Patients Added', data: upValues }], false);
   }
-  
-  if (downData.length > 0 && typeof renderBarChart === 'function') {
-    renderBarChart('diaMoversDownChart', downData, '#f87171', 'Patients');
+
+  if (downLabels.length > 0 && typeof renderBarChart === 'function') {
+    renderBarChart('diaMoversDownChart', downLabels, [{ label: 'Patients Lost', data: downValues }], false);
   }
 }
 
@@ -1002,14 +999,14 @@ function renderDiaActivity() {
  * Main detail panel renderer - dispatches to tab-specific renderers
  */
 function renderDiaDetailBody(record, tab) {
-  tab = tab || 'overview';
-  
+  tab = (tab || 'Overview').toLowerCase();
+
   if (!record) {
     return '<div class="detail-empty">No record selected</div>';
   }
-  
+
   let html = '';
-  
+
   switch (tab) {
     case 'overview':
       html = renderDiaDetailOverview(record);
@@ -1097,7 +1094,7 @@ function renderDiaDetailOverview(record) {
   
   html += '<div class="detail-row">';
   html += '<div class="detail-lbl">Change Type</div>';
-  html += '<div class="detail-val">' + metricHTML(change_type) + '</div>';
+  html += '<div class="detail-val">' + esc(change_type || '—') + '</div>';
   html += '</div>';
   html += '</div>';
   
@@ -1151,7 +1148,7 @@ function renderDiaDetailProperty(record) {
       matching.forEach((item, idx) => {
         html += '<div class="detail-card">';
         html += '<div class="detail-card-header">';
-        html += '<div class="detail-card-title">' + metricHTML(item.change_type) + '</div>';
+        html += '<div class="detail-card-title">' + esc(item.change_type || '—') + '</div>';
         html += '<div class="detail-card-date">' + fmt(item.snapshot_date) + '</div>';
         html += '</div>';
         html += '<div class="detail-card-body">';
@@ -1410,6 +1407,342 @@ function saveDiaDetailResearch() {
 // These override the placeholders in index.html
 window.diaQuery = diaQuery;
 window.loadDiaData = loadDiaData;
+// ============================================================================
+// DIALYSIS SALES (Facility Transfers / Market Activity)
+// ============================================================================
+
+function renderDiaSales() {
+  const changes = diaData.inventoryChanges || [];
+  // "Sales" in dialysis = facility additions/removals (ownership transfers, new openings, closures)
+  const added = changes.filter(r => r.change_type === 'added');
+  const removed = changes.filter(r => r.change_type === 'removed');
+
+  let html = '<div class="biz-section">';
+
+  // Metrics
+  html += '<div class="gov-metrics">';
+  html += metricHTML('New Facilities', fmtN(added.length), 'opened this period', 'green');
+  html += metricHTML('Closed Facilities', fmtN(removed.length), 'removed this period', 'red');
+  const avgPatientsAdded = added.length > 0 ? Math.round(added.reduce((s, r) => s + (r.latest_total_patients || 0), 0) / added.length) : 0;
+  html += metricHTML('Avg Patients (New)', fmtN(avgPatientsAdded), 'per new facility', 'blue');
+  const bigMoves = changes.filter(r => Math.abs(r.delta_patients || 0) > 50).length;
+  html += metricHTML('Major Moves', fmtN(bigMoves), '>50 patient swing', 'yellow');
+  html += '</div>';
+
+  // Comps-style table
+  html += '<h3 class="gov-chart-title" style="margin-top: 20px;">Recent Market Activity</h3>';
+  html += '<div class="table-wrapper"><div class="data-table">';
+  html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+  html += '<div style="flex: 2;">Facility</div>';
+  html += '<div style="flex: 1;">City, State</div>';
+  html += '<div style="flex: 1;">Operator</div>';
+  html += '<div style="flex: 1;">Type</div>';
+  html += '<div style="flex: 1; text-align: right;">Patients</div>';
+  html += '<div style="flex: 1; text-align: right;">Delta</div>';
+  html += '<div style="flex: 1; text-align: right;">% Change</div>';
+  html += '<div style="flex: 1;">CCN</div>';
+  html += '</div>';
+
+  // Sort by abs delta descending for most impactful first
+  const sorted = [...changes].sort((a, b) => Math.abs(b.delta_patients || 0) - Math.abs(a.delta_patients || 0));
+
+  sorted.slice(0, 200).forEach(r => {
+    const typeColor = r.change_type === 'added' ? '#34d399' : r.change_type === 'removed' ? '#f87171' : 'var(--text2)';
+    const deltaColor = (r.delta_patients || 0) > 0 ? '#34d399' : (r.delta_patients || 0) < 0 ? '#f87171' : 'var(--text2)';
+
+    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+    html += '<div style="flex: 2;" class="truncate">' + esc(r.facility_name || '—') + '</div>';
+    html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
+    html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
+    html += '<div style="flex: 1; color: ' + typeColor + ';">' + esc(r.change_type || '—') + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + ((r.delta_patients || 0) > 0 ? '+' : '') + fmtN(r.delta_patients || 0) + '</div>';
+    html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(r.pct_change || 0) + '</div>';
+    html += '<div style="flex: 1; color: var(--text2);">' + esc(r.ccn || '—') + '</div>';
+    html += '</div>';
+  });
+
+  if (changes.length === 0) {
+    html += '<div class="table-empty">No market activity data loaded</div>';
+  }
+
+  html += '</div></div>';
+  html += '</div>';
+  return html;
+}
+
+// ============================================================================
+// DIALYSIS PLAYERS (Top Operators, Largest Clinics)
+// ============================================================================
+
+let diaPlayersView = 'operators';
+
+function renderDiaPlayers() {
+  let html = '<div class="biz-section">';
+
+  // View toggle
+  html += '<div class="pills" style="margin-bottom: 20px;">';
+  ['operators', 'largest', 'movers'].forEach(view => {
+    const active = diaPlayersView === view ? ' active' : '';
+    const label = view === 'operators' ? 'Top Operators' : view === 'largest' ? 'Largest Clinics' : 'Biggest Movers';
+    html += '<button class="pill' + active + '" onclick="diaPlayersView=\'' + view + '\';renderDiaTab()">' + label + '</button>';
+  });
+  html += '</div>';
+
+  const changes = diaData.inventoryChanges || [];
+
+  if (diaPlayersView === 'operators') {
+    // Aggregate by operator
+    const opMap = {};
+    changes.forEach(r => {
+      if (r.operator_name) {
+        const key = r.operator_name.trim().toUpperCase();
+        if (!opMap[key]) opMap[key] = { name: r.operator_name, clinics: 0, patients: 0, records: [] };
+        opMap[key].clinics++;
+        opMap[key].patients += (r.latest_total_patients || 0);
+        opMap[key].records.push(r);
+      }
+    });
+    const topOps = Object.values(opMap).sort((a, b) => b.clinics - a.clinics).slice(0, 50);
+
+    html += '<div class="gov-metrics">';
+    html += metricHTML('Unique Operators', fmtN(topOps.length), 'in dataset', 'blue');
+    html += metricHTML('Top Operator', (topOps[0]?.name || '—').substring(0, 25), topOps[0]?.clinics + ' clinics', 'green');
+    const totalPatients = topOps.reduce((s, p) => s + p.patients, 0);
+    html += metricHTML('Total Patients', fmtN(totalPatients), 'across all operators', 'purple');
+    html += '</div>';
+
+    html += '<div class="table-wrapper"><div class="data-table">';
+    html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+    html += '<div style="flex: 3;">Operator</div>';
+    html += '<div style="flex: 1; text-align: right;">Clinics</div>';
+    html += '<div style="flex: 1; text-align: right;">Total Patients</div>';
+    html += '<div style="flex: 1; text-align: right;">Avg Patients</div>';
+    html += '</div>';
+
+    topOps.forEach((p, idx) => {
+      const avg = p.clinics > 0 ? Math.round(p.patients / p.clinics) : 0;
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(p.records[0]).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+      html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
+      html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.clinics + '</div>';
+      html += '<div style="flex: 1; text-align: right;">' + fmtN(p.patients) + '</div>';
+      html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + fmtN(avg) + '</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+
+  } else if (diaPlayersView === 'largest') {
+    // Largest clinics by patient count
+    const sorted = [...changes].sort((a, b) => (b.latest_total_patients || 0) - (a.latest_total_patients || 0)).slice(0, 50);
+
+    html += '<div class="gov-metrics">';
+    html += metricHTML('Largest Clinic', (sorted[0]?.facility_name || '—').substring(0, 25), fmtN(sorted[0]?.latest_total_patients || 0) + ' patients', 'green');
+    html += metricHTML('Top 10 Avg', fmtN(Math.round(sorted.slice(0, 10).reduce((s, r) => s + (r.latest_total_patients || 0), 0) / Math.min(10, sorted.length))), 'patients per clinic', 'blue');
+    html += '</div>';
+
+    html += '<div class="table-wrapper"><div class="data-table">';
+    html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+    html += '<div style="flex: 2;">Facility</div>';
+    html += '<div style="flex: 1;">City, State</div>';
+    html += '<div style="flex: 1;">Operator</div>';
+    html += '<div style="flex: 1; text-align: right;">Patients</div>';
+    html += '<div style="flex: 1;">CCN</div>';
+    html += '</div>';
+
+    sorted.forEach((r, idx) => {
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+      html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(r.facility_name || '—') + '</div>';
+      html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
+      html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
+      html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
+      html += '<div style="flex: 1; color: var(--text2);">' + esc(r.ccn || '—') + '</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+
+  } else {
+    // Biggest movers by absolute delta
+    const sorted = [...changes].filter(r => r.delta_patients !== 0).sort((a, b) => Math.abs(b.delta_patients || 0) - Math.abs(a.delta_patients || 0)).slice(0, 50);
+
+    html += '<div class="gov-metrics">';
+    const biggestUp = changes.filter(r => (r.delta_patients || 0) > 0).sort((a, b) => b.delta_patients - a.delta_patients)[0];
+    const biggestDown = changes.filter(r => (r.delta_patients || 0) < 0).sort((a, b) => a.delta_patients - b.delta_patients)[0];
+    html += metricHTML('Biggest Gainer', (biggestUp?.facility_name || '—').substring(0, 25), '+' + fmtN(biggestUp?.delta_patients || 0) + ' patients', 'green');
+    html += metricHTML('Biggest Loser', (biggestDown?.facility_name || '—').substring(0, 25), fmtN(biggestDown?.delta_patients || 0) + ' patients', 'red');
+    html += '</div>';
+
+    html += '<div class="table-wrapper"><div class="data-table">';
+    html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+    html += '<div style="flex: 2;">Facility</div>';
+    html += '<div style="flex: 1;">City, State</div>';
+    html += '<div style="flex: 1;">Operator</div>';
+    html += '<div style="flex: 1; text-align: right;">Delta</div>';
+    html += '<div style="flex: 1; text-align: right;">% Change</div>';
+    html += '<div style="flex: 1; text-align: right;">Current</div>';
+    html += '</div>';
+
+    sorted.forEach((r, idx) => {
+      const deltaColor = (r.delta_patients || 0) > 0 ? '#34d399' : '#f87171';
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+      html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(r.facility_name || '—') + '</div>';
+      html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
+      html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
+      html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + ((r.delta_patients || 0) > 0 ? '+' : '') + fmtN(r.delta_patients || 0) + '</div>';
+      html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(r.pct_change || 0) + '</div>';
+      html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ============================================================================
+// DIALYSIS SEARCH
+// ============================================================================
+
+let diaSearchTerm = '';
+let diaSearchResults = null;
+let diaSearching = false;
+
+function renderDiaSearch() {
+  let html = '<div class="biz-section">';
+  html += '<div class="search-bar">';
+  html += '<input type="text" id="diaSearchInput" placeholder="Search by facility name, CCN, city, state, operator..." value="' + esc(diaSearchTerm) + '" />';
+  html += '<button onclick="execDiaSearch()">Search</button>';
+  html += '</div>';
+
+  if (diaSearching) {
+    html += '<div class="search-loading">Searching across all dialysis records...</div>';
+  } else if (diaSearchResults === null) {
+    html += '<div class="search-empty">';
+    html += '<div class="search-empty-icon">&#128269;</div>';
+    html += '<p>Search across clinic inventory, NPI signals, property links, and research outcomes</p>';
+    html += '</div>';
+  } else {
+    const { clinics, npiSignals, propQueue, outcomes } = diaSearchResults;
+    const total = clinics.length + npiSignals.length + propQueue.length + outcomes.length;
+
+    if (total === 0) {
+      html += '<div class="search-empty"><p>No results found for "' + esc(diaSearchTerm) + '"</p></div>';
+    } else {
+      html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 16px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' found</div>';
+
+      if (clinics.length > 0) {
+        html += '<div class="search-results-section"><h4>Clinics (' + clinics.length + ')</h4>';
+        clinics.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Clinic</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.ccn) html += '<span>CCN: ' + esc(r.ccn) + '</span>';
+          if (r.operator_name) html += '<span>Op: ' + esc(r.operator_name) + '</span>';
+          if (r.latest_total_patients) html += '<span>Patients: ' + fmtN(r.latest_total_patients) + '</span>';
+          if (r.change_type) html += '<span>' + esc(r.change_type) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (npiSignals.length > 0) {
+        html += '<div class="search-results-section"><h4>NPI Signals (' + npiSignals.length + ')</h4>';
+        npiSignals.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.npi || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(248,113,113,0.15); color: #f87171;">NPI Signal</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.signal_type) html += '<span>Signal: ' + esc(r.signal_type) + '</span>';
+          if (r.npi) html += '<span>NPI: ' + esc(r.npi) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (propQueue.length > 0) {
+        html += '<div class="search-results-section"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
+        propQueue.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.ccn || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Property</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.city || r.state) html += '<span>' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
+          if (r.review_type) html += '<span>Review: ' + esc(r.review_type) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+
+      if (outcomes.length > 0) {
+        html += '<div class="search-results-section"><h4>Research Outcomes (' + outcomes.length + ')</h4>';
+        outcomes.forEach(r => {
+          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.facility_name || r.ccn || '—') + '</span>';
+          html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Research</span></div>';
+          html += '<div class="search-card-meta">';
+          if (r.status) html += '<span>Status: ' + esc(r.status) + '</span>';
+          if (r.outcome_type) html += '<span>Type: ' + esc(r.outcome_type) + '</span>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+    }
+  }
+
+  html += '</div>';
+
+  setTimeout(() => {
+    const input = document.getElementById('diaSearchInput');
+    if (input) {
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') execDiaSearch(); });
+      input.focus();
+    }
+  }, 0);
+
+  return html;
+}
+
+async function execDiaSearch() {
+  const input = document.getElementById('diaSearchInput');
+  if (!input) return;
+  const term = input.value.trim();
+  if (!term) return;
+
+  diaSearchTerm = term;
+  diaSearching = true;
+  renderDiaTab();
+
+  const like = '*' + term + '*';
+  try {
+    const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
+      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',ccn.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 50 }),
+      diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 25 }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',ccn.ilike.' + like + ')', limit: 25 }),
+      diaQuery('research_queue_outcomes', '*', { filter: 'or=(facility_name.ilike.' + like + ',ccn.ilike.' + like + ')', limit: 25 })
+    ]);
+
+    diaSearchResults = {
+      clinics: clinics || [],
+      npiSignals: npiSignals || [],
+      propQueue: propQueue || [],
+      outcomes: outcomes || []
+    };
+  } catch (err) {
+    console.error('Dia search error:', err);
+    diaSearchResults = { clinics: [], npiSignals: [], propQueue: [], outcomes: [] };
+  }
+
+  diaSearching = false;
+  renderDiaTab();
+}
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
 window.renderDiaTab = renderDiaTab;
 window.renderDiaOverview = renderDiaOverview;
 window.renderDiaChanges = renderDiaChanges;
@@ -1418,3 +1751,7 @@ window.renderDiaResearch = renderDiaResearch;
 window.renderDiaActivity = renderDiaActivity;
 window.renderDiaDetailBody = renderDiaDetailBody;
 window.saveDiaDetailResearch = saveDiaDetailResearch;
+window.renderDiaSearch = renderDiaSearch;
+window.execDiaSearch = execDiaSearch;
+window.renderDiaSales = renderDiaSales;
+window.renderDiaPlayers = renderDiaPlayers;
