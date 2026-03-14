@@ -1470,8 +1470,15 @@ async function renderDiaSales() {
     const inner = q('#bizPageInner');
     if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales comps...</p></div>';
     try {
-      const raw = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 2000 });
-      diaSalesComps = raw || [];
+      // Paginate: PostgREST limits to 1000 rows per request
+      let all = [], pg = 0;
+      while (true) {
+        const batch = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
+        all = all.concat(batch || []);
+        if (!batch || batch.length < 1000) break;
+        pg++;
+      }
+      diaSalesComps = all;
     } catch (e) { console.error('Sales comps load error:', e); diaSalesComps = []; }
     diaSalesLoading = false;
   }
@@ -1480,8 +1487,14 @@ async function renderDiaSales() {
     const inner = q('#bizPageInner');
     if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading available listings...</p></div>';
     try {
-      const raw = await diaQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 3000 });
-      diaAvailListings = raw || [];
+      let all = [], pg = 0;
+      while (true) {
+        const batch = await diaQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
+        all = all.concat(batch || []);
+        if (!batch || batch.length < 1000) break;
+        pg++;
+      }
+      diaAvailListings = all;
     } catch (e) { console.error('Available listings load error:', e); diaAvailListings = []; }
     diaSalesLoading = false;
   }
