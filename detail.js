@@ -53,8 +53,22 @@ async function openUnifiedDetail(db, ids, fallback) {
 
   // Determine query function
   const qFn = db === 'gov' ? govQuery : diaQuery;
-  const propertyId = ids.property_id;
+  let propertyId = ids.property_id;
   const leaseNumber = ids.lease_number;
+
+  // For Dialysis clinics without property_id, resolve via medicare_clinics
+  if (!propertyId && db === 'dia' && fallback.clinic_id) {
+    try {
+      const mcRes = await diaQuery('medicare_clinics', 'property_id', {
+        filter: `medicare_id=eq.${encodeURIComponent(fallback.clinic_id)}`,
+        limit: 1
+      });
+      const mcArr = Array.isArray(mcRes) ? mcRes : (mcRes?.data || []);
+      if (mcArr.length && mcArr[0].property_id) {
+        propertyId = mcArr[0].property_id;
+      }
+    } catch (e) { console.warn('clinic→property lookup failed', e); }
+  }
 
   // Build filter — prefer property_id, fall back to lease_number
   const propFilter = propertyId ? `property_id=eq.${propertyId}` : null;

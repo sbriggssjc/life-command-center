@@ -102,13 +102,48 @@ async function loadDiaData() {
     const invChanges = await diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 500 });
     diaData.inventoryChanges = invChanges || [];
     
-    // Separate movers up/down and limit to top 10
-    const moversUpList = diaData.inventoryChanges.filter(r => r.delta_patients > 0);
-    const moversDownList = diaData.inventoryChanges.filter(r => r.delta_patients < 0);
-    moversUpList.sort((a, b) => b.delta_patients - a.delta_patients);
-    moversDownList.sort((a, b) => a.delta_patients - b.delta_patients);
-    diaData.moversUp = moversUpList.slice(0, 10);
-    diaData.moversDown = moversDownList.slice(0, 10);
+    // Load top movers from month-over-month patient counts
+    try {
+      const [moversUpRaw, moversDownRaw] = await Promise.all([
+        diaQuery('v_facility_patient_counts_mom', '*', {
+          filter: 'delta_patients=gt.0',
+          order: 'delta_patients.desc',
+          limit: 10
+        }),
+        diaQuery('v_facility_patient_counts_mom', '*', {
+          filter: 'delta_patients=lt.0',
+          order: 'delta_patients.asc',
+          limit: 10
+        })
+      ]);
+      // Collect all mover clinic_ids and batch-lookup facility names
+      const allMovers = [...(moversUpRaw || []), ...(moversDownRaw || [])];
+      const moverIds = [...new Set(allMovers.map(r => r.clinic_id).filter(Boolean))];
+      const nameMap = {};
+      if (moverIds.length > 0) {
+        try {
+          const nameRows = await diaQuery('medicare_clinics', 'medicare_id,facility_name', {
+            filter: 'medicare_id=in.(' + moverIds.join(',') + ')',
+            limit: 30
+          });
+          (nameRows || []).forEach(r => { if (r.medicare_id) nameMap[r.medicare_id] = r.facility_name; });
+        } catch (e) { console.warn('name lookup failed', e); }
+      }
+      // Also check inventory cache
+      (diaData.inventoryChanges || []).forEach(r => {
+        if (r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) nameMap[r.clinic_id] = r.facility_name;
+      });
+      const enrich = (arr) => (arr || []).map(r => ({
+        ...r,
+        facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id)
+      }));
+      diaData.moversUp = enrich(moversUpRaw);
+      diaData.moversDown = enrich(moversDownRaw);
+    } catch (e) {
+      console.warn('Failed to load movers MoM data', e);
+      diaData.moversUp = [];
+      diaData.moversDown = [];
+    }
     
     // Load NPI signal summary
     const npiSignalSummary = await diaQuery('v_npi_inventory_signal_summary', '*');
