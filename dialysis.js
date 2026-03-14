@@ -583,13 +583,14 @@ function renderDiaPropertyResearch() {
     html += '</div>';
     
     filtered.slice(0, 50).forEach((row, idx) => {
-      html += `<div class="table-row" style="cursor: pointer;" data-prop-idx="${idx}">`;
+      html += `<div class="table-row clickable-row" style="cursor: pointer;" data-prop-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
       html += `<div style="flex: 0.5;">${row.state}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${row.review_type}</div>`;
+      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>&rsaquo;</span></div>`;
       html += '</div>';
     });
   }
@@ -779,13 +780,14 @@ function renderDiaLeaseResearch() {
     filtered.slice(0, 50).forEach((row, idx) => {
       const watchColor = row.closure_watch_level === 'high' ? '#f87171' : 'var(--text2)';
       
-      html += `<div class="table-row" style="cursor: pointer;" data-lease-idx="${idx}">`;
+      html += `<div class="table-row clickable-row" style="cursor: pointer;" data-lease-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: ${watchColor};">${row.closure_watch_level || 'none'}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${row.lease_backfill_priority || 'unknown'}</div>`;
+      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>&rsaquo;</span></div>`;
       html += '</div>';
     });
   }
@@ -976,7 +978,7 @@ function renderDiaActivity() {
     outcomes.slice(0, 100).forEach(row => {
       const statusColor = row.status === 'verified_lease' || row.status === 'approved_link' ? '#34d399' : 'var(--text2)';
       
-      html += '<div class="table-row">';
+      html += `<div class="table-row clickable-row" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
       html += `<div style="flex: 1;">${row.queue_type || 'unknown'}</div>`;
       html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
       html += `<div style="flex: 1; color: ${statusColor};">${row.status || 'unknown'}</div>`;

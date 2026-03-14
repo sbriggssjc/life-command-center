@@ -1237,11 +1237,51 @@ function renderDetailHeader(record, source) {
     badge = 'DIA';
   }
   
+  // Build key-fields bar showing Tenant, Address, City, State
+  let keyFields = '';
+  if (source.startsWith('gov')) {
+    const tenant = record.tenant_agency || record.agency_full_name || '';
+    const addr = record.address || '';
+    const loc = (record.city || '') + (record.city && record.state ? ', ' : '') + (record.state || '');
+    const lease = record.lease_number || '';
+    const lessor = record.lessor_name || record.prior_owner || record.new_owner || '';
+    keyFields = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
+    if (addr) keyFields += `<div><span style="color:var(--text3)">Address:</span> <span style="color:var(--text)">${esc(addr)}</span></div>`;
+    if (loc.trim()) keyFields += `<div><span style="color:var(--text3)">Location:</span> <span style="color:var(--text)">${esc(loc)}</span></div>`;
+    if (tenant) keyFields += `<div><span style="color:var(--text3)">Tenant:</span> <span style="color:var(--text)">${esc(tenant)}</span></div>`;
+    if (lease) keyFields += `<div><span style="color:var(--text3)">Lease:</span> <span style="color:var(--text);font-family:monospace">${esc(lease)}</span></div>`;
+    if (lessor) keyFields += `<div><span style="color:var(--text3)">Lessor:</span> <span style="color:var(--text)">${esc(lessor)}</span></div>`;
+    keyFields += '</div>';
+  } else if (source === 'dia-clinic') {
+    const ccn = record.ccn || '';
+    const npi = record.npi || '';
+    const loc = (record.city || '') + (record.city && record.state ? ', ' : '') + (record.state || '');
+    const op = record.operator_name || '';
+    const patients = record.latest_total_patients;
+    keyFields = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
+    if (loc.trim()) keyFields += `<div><span style="color:var(--text3)">Location:</span> <span style="color:var(--text)">${esc(loc)}</span></div>`;
+    if (op) keyFields += `<div><span style="color:var(--text3)">Operator:</span> <span style="color:var(--text)">${esc(op)}</span></div>`;
+    if (ccn) keyFields += `<div><span style="color:var(--text3)">CCN:</span> <span style="color:var(--text);font-family:monospace">${esc(ccn)}</span></div>`;
+    if (npi) keyFields += `<div><span style="color:var(--text3)">NPI:</span> <span style="color:var(--text);font-family:monospace">${esc(npi)}</span></div>`;
+    if (patients !== undefined && patients !== null) keyFields += `<div><span style="color:var(--text3)">Patients:</span> <span style="color:var(--accent);font-weight:600">${fmtN(patients)}</span></div>`;
+    keyFields += '</div>';
+  } else if (source === 'activity') {
+    const company = record.company_name || '';
+    const loc = record.company_city_state || record.company_address || '';
+    const contact = record.contact_name || '';
+    keyFields = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
+    if (company) keyFields += `<div><span style="color:var(--text3)">Company:</span> <span style="color:var(--text)">${esc(company)}</span></div>`;
+    if (loc) keyFields += `<div><span style="color:var(--text3)">Location:</span> <span style="color:var(--text)">${esc(loc)}</span></div>`;
+    if (contact) keyFields += `<div><span style="color:var(--text3)">Contact:</span> <span style="color:var(--text)">${esc(contact)}</span></div>`;
+    keyFields += '</div>';
+  }
+
   return `
     <div class="detail-header-info">
       <div style="flex: 1;">
         <div class="detail-title">${title}</div>
         <div class="detail-subtitle">${subtitle}</div>
+        ${keyFields}
       </div>
       ${badge ? `<span class="detail-badge" style="background:${
         source === 'activity' ? 'var(--accent2)' :

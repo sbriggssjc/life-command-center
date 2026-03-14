@@ -419,21 +419,21 @@ function ownershipTable(rows) {
   }
   
   let html = '<div class="table-wrapper"><table class="data-table"><thead><tr>';
-  html += '<th>Lease</th><th>Location</th><th>From</th><th>To</th><th>Date</th><th>Est. Value</th><th>Sale Price</th><th>Status</th>';
+  html += '<th>Lease</th><th>Address</th><th>City, State</th><th>From</th><th>To</th><th>Date</th><th>Est. Value</th><th>Status</th>';
   html += '</tr></thead><tbody>';
-  
+
   rows.slice(0, 50).forEach(r => {
     const status = r.research_status || 'pending';
     const statusDot = dotClass(status);
-    
+
     html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
     html += `<td><code>${esc(r.lease_number || '')}</code></td>`;
+    html += `<td class="truncate">${esc(r.address || '—')}</td>`;
     html += `<td>${esc(r.city || '')}, ${esc(r.state || '')}</td>`;
     html += `<td class="truncate">${esc(r.prior_owner || '')}</td>`;
     html += `<td class="truncate">${esc(r.new_owner || '')}</td>`;
     html += `<td>${r.transfer_date ? r.transfer_date.substring(0, 10) : ''}</td>`;
     html += `<td>${fmt(r.estimated_value || 0)}</td>`;
-    html += `<td>${r.sale_price ? fmt(r.sale_price) : '-'}</td>`;
     html += `<td><span class="status-dot ${statusDot}"></span>${status}</td>`;
     html += '</tr>';
   });
@@ -448,29 +448,28 @@ function leadsTable(rows) {
   }
   
   let html = '<div class="table-wrapper"><table class="data-table"><thead><tr>';
-  html += '<th>Score</th><th>Temp</th><th>Location</th><th>Lessor</th><th>Rent</th><th>Value</th><th>Source</th><th>Pipeline</th><th>Research</th>';
+  html += '<th>Score</th><th>Temp</th><th>Address</th><th>City, State</th><th>Tenant</th><th>Lessor</th><th>Rent</th><th>Value</th><th>Pipeline</th>';
   html += '</tr></thead><tbody>';
-  
+
   rows.slice(0, 50).forEach(r => {
     const tempColor = {
       'hot': '#f87171',
       'warm': '#fbbf24',
       'cool': '#6c8cff'
     }[r.lead_temperature] || '#9498a8';
-    
+
     const pipelineStatus = r.pipeline_status || 'new';
-    const researchStatus = r.research_status || 'pending';
-    
+
     html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-lead")'>`;
     html += `<td><strong>${r.priority_score || 0}</strong></td>`;
     html += `<td><span style="color:${tempColor};">${r.lead_temperature || 'cool'}</span></td>`;
+    html += `<td class="truncate">${esc(r.address || '—')}</td>`;
     html += `<td>${esc(r.city || '')}, ${esc(r.state || '')}</td>`;
+    html += `<td class="truncate">${esc(r.tenant_agency || r.agency_full_name || '—')}</td>`;
     html += `<td class="truncate">${esc(r.lessor_name || '')}</td>`;
     html += `<td>${fmt(r.annual_rent || 0)}/yr</td>`;
     html += `<td>${fmt(r.estimated_value || 0)}</td>`;
-    html += `<td>${esc(r.lead_source || '')}</td>`;
     html += `<td><span class="pill">${pipelineStatus}</span></td>`;
-    html += `<td><span class="pill">${researchStatus}</span></td>`;
     html += '</tr>';
   });
   
@@ -484,24 +483,22 @@ function listingsTable(rows) {
   }
   
   let html = '<div class="table-wrapper"><table class="data-table"><thead><tr>';
-  html += '<th>Address</th><th>City</th><th>Asking</th><th>Cap Rate</th><th>Source</th><th>DOM</th><th>Status</th><th>URL</th><th>Tenant</th>';
+  html += '<th>Tenant</th><th>Address</th><th>City, State</th><th>Asking</th><th>Cap Rate</th><th>DOM</th><th>Status</th><th>Source</th>';
   html += '</tr></thead><tbody>';
-  
+
   rows.slice(0, 50).forEach(r => {
     const capRate = r.asking_cap_rate ? pct(r.asking_cap_rate) : '-';
     const status = r.listing_status || 'active';
-    const urlStatus = r.url_status || 'unknown';
-    
+
     html += `<tr class="table-row clickable-row" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-listing")'>`;
+    html += `<td class="truncate" style="font-weight:500">${esc(r.tenant_agency || '—')}</td>`;
     html += `<td class="truncate">${esc(r.address || '')}</td>`;
-    html += `<td>${esc(r.city || '')}</td>`;
+    html += `<td>${esc(r.city || '')}${r.state ? ', ' + esc(r.state) : ''}</td>`;
     html += `<td>${fmt(r.asking_price || 0)}</td>`;
     html += `<td>${capRate}</td>`;
-    html += `<td>${esc(r.listing_source || '')}</td>`;
     html += `<td>${r.days_on_market || '-'}</td>`;
     html += `<td><span class="pill">${status}</span></td>`;
-    html += `<td>${urlStatus}</td>`;
-    html += `<td>${esc(r.tenant_agency || '')}</td>`;
+    html += `<td>${esc(r.listing_source || '')}</td>`;
     html += '</tr>';
   });
   
@@ -2091,7 +2088,7 @@ function renderListingMarket(record) {
     const capRate = comp.cap_rate ? pct(comp.cap_rate / 100) : '—';
     const sqft = comp.square_feet ? fmtN(comp.square_feet) : '—';
     
-    html += '<tr style="border-bottom: 1px solid #eee;">';
+    html += `<tr class="clickable-row" style="border-bottom: 1px solid #eee;cursor:pointer" onclick='showDetail(${JSON.stringify(comp).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
     html += `<td style="padding: 8px;">${esc(comp.address || '—')}</td>`;
     html += `<td style="text-align: right; padding: 8px; font-weight: 600;">${price}</td>`;
     html += `<td style="text-align: right; padding: 8px;">${capRate}</td>`;
