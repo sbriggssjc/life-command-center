@@ -453,25 +453,85 @@ function _udTabOwnership() {
     }
   }
 
-  // CRM Actions
+  // ── INLINE LOG CALL FORM ──────────────────────────────────────────────
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">CRM Actions</div>';
-  html += '<div class="detail-actions">';
+  html += '<div class="detail-section-title">Log Call / Activity</div>';
 
-  const logCallData = {
-    sf_contact_id: own?.salesforce_id || own?.sf_contact_id || '',
-    sf_company_id: own?.sf_company_id || '',
-    name: own?.true_owner || own?.recorded_owner || own?.contact_1_name || ''
-  };
-  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${JSON.stringify(logCallData).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>`;
+  const sfCid = own?.salesforce_id || own?.sf_contact_id || '';
+  const sfCoId = own?.sf_company_id || '';
+  const ownerName = own?.true_owner || own?.recorded_owner || own?.contact_1_name || '';
+
+  html += '<div class="detail-form" id="udLogCallForm">';
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:8px">Logging for: <strong>${esc(ownerName || 'Unknown')}</strong></div>`;
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div>';
+  html += '<label>Activity Type</label>';
+  html += '<select id="udLogType">';
+  html += '<option value="Client Outreach">Client Outreach</option>';
+  html += '<option value="Introduction Call">Introduction Call</option>';
+  html += '<option value="Follow-up">Follow-up</option>';
+  html += '<option value="Property Discussion">Property Discussion</option>';
+  html += '<option value="Email Correspondence">Email Correspondence</option>';
+  html += '<option value="Market Update">Market Update</option>';
+  html += '</select>';
+  html += '</div>';
+
+  html += '<div>';
+  html += '<label>Outcome</label>';
+  html += '<select id="udLogOutcome">';
+  html += '<option value="connected">Connected</option>';
+  html += '<option value="voicemail">Voicemail</option>';
+  html += '<option value="no_answer">No Answer</option>';
+  html += '<option value="email_sent">Email Sent</option>';
+  html += '<option value="meeting_set">Meeting Set</option>';
+  html += '</select>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '<label>Date</label>';
+  html += `<input type="date" id="udLogDate" value="${new Date().toISOString().split('T')[0]}">`;
+
+  html += '<label>Notes</label>';
+  html += '<textarea id="udLogNotes" placeholder="Call notes, key takeaways, next steps..." style="min-height:80px"></textarea>';
+
+  html += '<div style="display:flex;gap:8px;margin-top:12px">';
+  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udSubmitLogCall('${esc(sfCid)}','${esc(sfCoId)}')">&#x260E; Log Activity</button>`;
   if (own?.contact_phone) html += `<a href="tel:${esc(own.contact_phone)}" class="act-btn">&#x1F4DE; Call</a>`;
-  if (own?.contact_email) html += `<a href="mailto:${esc(own.contact_email)}" class="act-btn">&#x2709; Email</a>`;
+  if (own?.contact_email) html += `<a href="mailto:${esc(own.contact_email)}" class="act-btn">&#x2709; Quick Email</a>`;
+  html += '</div>';
   html += '</div></div>';
 
-  // Salesforce Activity Feed
-  _loadActivityFeed(own);
+  // ── EMAIL TEMPLATE SECTION ──────────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Email Templates</div>';
+  html += '<div class="detail-form">';
+  html += '<label>Template</label>';
+  html += '<select id="udTemplateSelect" onchange="_udPreviewTemplate()">';
+  html += '<option value="">— Select a template —</option>';
+  html += '</select>';
+  html += '<div id="udTemplatePreview" style="display:none;margin-top:12px">';
+  html += '<label>Subject</label>';
+  html += '<div id="udTemplateSubject" style="font-size:13px;padding:8px 12px;background:var(--s2);border-radius:8px;color:var(--text);margin-bottom:8px"></div>';
+  html += '<label>Body Preview</label>';
+  html += '<div id="udTemplateBody" style="font-size:12px;padding:12px;background:var(--s2);border-radius:8px;color:var(--text2);max-height:200px;overflow-y:auto;line-height:1.5"></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:12px">';
+  html += '<button class="act-btn primary" onclick="_udSendTemplate()">&#x2709; Open in Email Client</button>';
+  html += '<button class="act-btn" onclick="_udCopyTemplate()">&#x1F4CB; Copy to Clipboard</button>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div></div>';
 
+  // ── RECENT TOUCHPOINTS ────────────────────────────────────────────
+  html += '<div id="udTouchpoints"><div style="text-align:center;padding:16px;color:var(--text3)"><span class="spinner"></span> Loading touchpoints...</div></div>';
+
+  // ── SALESFORCE ACTIVITY FEED ─────────────────────────────────────
   html += '<div id="udActivityFeed"><div style="text-align:center;padding:24px;color:var(--text3)"><span class="spinner"></span> Loading activity feed...</div></div>';
+
+  // Async loads after DOM renders
+  _loadEmailTemplates(own);
+  _loadTouchpoints(own);
+  _loadActivityFeed(own);
 
   return html;
 }
@@ -688,7 +748,295 @@ function showUnifiedDetail(record, source) {
   openUnifiedDetail(db, ids, record);
 }
 
+// ============================================================================
+// CRM: INLINE LOG CALL
+// ============================================================================
+
+async function _udSubmitLogCall(sfContactId, sfCompanyId) {
+  const btn = document.getElementById('udLogSubmit');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Logging...';
+
+  const actType = document.getElementById('udLogType')?.value || 'Client Outreach';
+  const outcome = document.getElementById('udLogOutcome')?.value || 'connected';
+  const actDate = document.getElementById('udLogDate')?.value || new Date().toISOString().split('T')[0];
+  const notes = document.getElementById('udLogNotes')?.value || '';
+
+  if (!sfContactId && !sfCompanyId) {
+    showToast('No Salesforce contact or company ID available.', 'error');
+    btn.disabled = false;
+    btn.textContent = '\u260E Log Activity';
+    return;
+  }
+
+  const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
+
+  try {
+    const payload = {
+      sf_contact_id: sfContactId || undefined,
+      sf_company_id: sfCompanyId || undefined,
+      activity_type: actType,
+      activity_date: actDate,
+      outcome: outcome,
+      notes: notes,
+      force: true
+    };
+
+    const res = await fetch(`${API}/sync/log-to-sf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      showToast('Activity logged to Salesforce!', 'success');
+      document.getElementById('udLogNotes').value = '';
+      // Also log to outbound_activities in Dia DB
+      try {
+        await _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes);
+      } catch (e) { console.warn('Outbound log fallback error:', e); }
+    } else if (data.warning) {
+      showToast(`Warning: ${data.message || 'Recent activity detected'}`, 'error');
+    } else {
+      showToast(`Error: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (e) {
+    showToast(`Network error: ${e.message}`, 'error');
+  }
+
+  btn.disabled = false;
+  btn.textContent = '\u260E Log Activity';
+}
+
+/** Also write to outbound_activities table for local tracking */
+async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes) {
+  const url = new URL('/api/dia-query', window.location.origin);
+  url.searchParams.set('table', 'outbound_activities');
+
+  await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sf_contact_id: sfContactId || null,
+      sf_company_id: sfCompanyId || null,
+      activity_type: actType,
+      activity_date: actDate,
+      status: outcome,
+      user_name: 'scott',
+      ref_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null
+    })
+  });
+}
+
+// ============================================================================
+// CRM: EMAIL TEMPLATES
+// ============================================================================
+
+let _udTemplates = [];
+
+async function _loadEmailTemplates(own) {
+  await new Promise(r => setTimeout(r, 80));
+  const sel = document.getElementById('udTemplateSelect');
+  if (!sel) return;
+
+  try {
+    _udTemplates = await diaQuery('bd_email_templates', '*', { order: 'name.asc', limit: 20 });
+
+    if (!_udTemplates || _udTemplates.length === 0) {
+      sel.innerHTML = '<option value="">No templates available</option>';
+      return;
+    }
+
+    let opts = '<option value="">— Select a template —</option>';
+    _udTemplates.forEach((t, i) => {
+      opts += `<option value="${i}">${esc(t.name)} (${esc(t.template_type)})</option>`;
+    });
+    sel.innerHTML = opts;
+  } catch (e) {
+    console.error('Template load error:', e);
+    sel.innerHTML = '<option value="">Error loading templates</option>';
+  }
+}
+
+function _udPreviewTemplate() {
+  const sel = document.getElementById('udTemplateSelect');
+  const preview = document.getElementById('udTemplatePreview');
+  if (!sel || !preview) return;
+
+  const idx = sel.value;
+  if (idx === '' || !_udTemplates[idx]) {
+    preview.style.display = 'none';
+    return;
+  }
+
+  const tmpl = _udTemplates[idx];
+  const merged = _udMergeFields(tmpl);
+
+  document.getElementById('udTemplateSubject').textContent = merged.subject;
+  document.getElementById('udTemplateBody').innerHTML = merged.bodyHtml;
+  preview.style.display = 'block';
+}
+
+function _udMergeFields(tmpl) {
+  const prop = _udCache?.property || {};
+  const own = _udCache?.ownership || {};
+
+  const contactName = own.contact_1_name || own.contact_name || own.true_owner || own.recorded_owner || 'there';
+  const propertyName = prop.page_title || prop.address || 'the property';
+  const cityState = (prop.city || '') + (prop.state ? ', ' + prop.state : '');
+  const annualRent = prop.annual_rent ? fmt(prop.annual_rent) : '';
+  const askingPrice = prop.asking_price ? fmt(prop.asking_price) : '';
+  const capRate = prop.cap_rate ? Number(prop.cap_rate).toFixed(2) + '%' : '';
+  const agency = prop.agency_full || prop.agency_short || '';
+  const leaseTerm = '';
+
+  const merge = (str) => {
+    if (!str) return '';
+    return str
+      .replace(/\{\{contact_name\}\}/g, contactName)
+      .replace(/\{\{property_name\}\}/g, propertyName)
+      .replace(/\{\{city_state\}\}/g, cityState)
+      .replace(/\{\{annual_rent\}\}/g, annualRent)
+      .replace(/\{\{asking_price\}\}/g, askingPrice)
+      .replace(/\{\{cap_rate\}\}/g, capRate)
+      .replace(/\{\{agency\}\}/g, agency)
+      .replace(/\{\{lease_term\}\}/g, leaseTerm);
+  };
+
+  return {
+    subject: merge(tmpl.subject_template),
+    bodyHtml: merge(tmpl.html_body_template),
+    bodyText: _htmlToText(merge(tmpl.html_body_template))
+  };
+}
+
+/** Strip HTML to plain text for mailto body */
+function _htmlToText(html) {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function _udSendTemplate() {
+  const sel = document.getElementById('udTemplateSelect');
+  const idx = sel?.value;
+  if (idx === '' || !_udTemplates[idx]) { showToast('Select a template first'); return; }
+
+  const tmpl = _udTemplates[idx];
+  const merged = _udMergeFields(tmpl);
+  const own = _udCache?.ownership || {};
+  const toEmail = own.contact_email || '';
+
+  const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(merged.subject)}&body=${encodeURIComponent(merged.bodyText)}`;
+  window.open(mailto, '_blank');
+}
+
+async function _udCopyTemplate() {
+  const sel = document.getElementById('udTemplateSelect');
+  const idx = sel?.value;
+  if (idx === '' || !_udTemplates[idx]) { showToast('Select a template first'); return; }
+
+  const tmpl = _udTemplates[idx];
+  const merged = _udMergeFields(tmpl);
+
+  try {
+    await navigator.clipboard.writeText(merged.bodyText);
+    showToast('Template copied to clipboard!', 'success');
+  } catch (e) {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = merged.bodyText;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    showToast('Template copied!', 'success');
+  }
+}
+
+// ============================================================================
+// CRM: TOUCHPOINT HISTORY
+// ============================================================================
+
+async function _loadTouchpoints(own) {
+  await new Promise(r => setTimeout(r, 60));
+  const el = document.getElementById('udTouchpoints');
+  if (!el) return;
+
+  const sfId = own?.salesforce_id || own?.sf_contact_id || '';
+  const sfCoId = own?.sf_company_id || '';
+
+  if (!sfId && !sfCoId) {
+    el.innerHTML = '';
+    return;
+  }
+
+  try {
+    const filter = sfId ? `sf_contact_id=eq.${sfId}` : `sf_company_id=eq.${sfCoId}`;
+    const rows = await diaQuery('outbound_activities', '*', {
+      filter: filter,
+      order: 'activity_date.desc',
+      limit: 10
+    });
+
+    if (!rows || rows.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+
+    let html = '<div class="detail-section">';
+    html += `<div class="detail-section-title">Recent Touchpoints <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${rows.length} logged</span></div>`;
+
+    rows.forEach(r => {
+      const statusColors = {
+        connected: 'var(--green)',
+        voicemail: 'var(--yellow)',
+        no_answer: 'var(--red)',
+        email_sent: 'var(--accent)',
+        meeting_set: 'var(--purple)'
+      };
+      const color = statusColors[r.status] || 'var(--text3)';
+
+      html += '<div class="detail-card">';
+      html += '<div class="detail-card-header">';
+      html += `<div class="detail-card-title" style="display:flex;align-items:center;gap:6px">`;
+      html += `<span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>`;
+      html += `${esc(r.activity_type || 'Activity')}`;
+      html += '</div>';
+      html += `<div class="detail-card-date">${esc(_fmtDate(r.activity_date))}</div>`;
+      html += '</div>';
+      html += '<div class="detail-card-body">';
+      html += `<span style="font-size:11px;color:${color}">${esc(cleanLabel(r.status || ''))}</span>`;
+      if (r.user_name) html += ` <span style="font-size:11px;color:var(--text3)">by ${esc(r.user_name)}</span>`;
+      html += '</div></div>';
+    });
+
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    console.error('Touchpoints load error:', e);
+    el.innerHTML = '';
+  }
+}
+
 // Expose to global scope
 window.openUnifiedDetail = openUnifiedDetail;
 window.switchUnifiedTab = switchUnifiedTab;
 window.showUnifiedDetail = showUnifiedDetail;
+window._udSubmitLogCall = _udSubmitLogCall;
+window._udPreviewTemplate = _udPreviewTemplate;
+window._udSendTemplate = _udSendTemplate;
+window._udCopyTemplate = _udCopyTemplate;
