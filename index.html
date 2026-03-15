@@ -223,6 +223,71 @@ tr.clickable-row:hover td { background: var(--s2); }
 .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Error / Retry states */
+.widget-error { text-align: center; padding: 16px 12px; color: var(--text2); font-size: 13px; }
+.widget-error .err-icon { font-size: 20px; margin-bottom: 6px; opacity: 0.5; }
+.widget-error .err-msg { margin-bottom: 8px; }
+.retry-btn { background: var(--s2); border: 1px solid var(--border); color: var(--accent); padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+.retry-btn:hover { background: var(--accent2); color: #fff; border-color: var(--accent); }
+
+/* Settings page */
+.settings-section { margin-bottom: 24px; }
+.settings-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); margin-bottom: 10px; font-weight: 600; }
+.settings-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: var(--s1); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; }
+.settings-row-info { flex: 1; min-width: 0; }
+.settings-row-label { font-size: 14px; font-weight: 500; }
+.settings-row-desc { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.settings-toggle { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.settings-toggle input { opacity: 0; width: 0; height: 0; }
+.settings-toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--s3); border-radius: 12px; transition: 0.2s; }
+.settings-toggle .slider:before { content: ''; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: var(--text2); border-radius: 50%; transition: 0.2s; }
+.settings-toggle input:checked + .slider { background: var(--accent); }
+.settings-toggle input:checked + .slider:before { transform: translateX(20px); background: #fff; }
+.settings-val { font-size: 13px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+
+/* Messages / Inbox */
+.msg-item { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s; }
+.msg-item:hover { border-color: var(--accent); }
+.msg-item.unread { border-left: 3px solid var(--accent); }
+.msg-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.msg-sender { font-size: 14px; font-weight: 600; }
+.msg-time { font-size: 11px; color: var(--text3); }
+.msg-subject { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.msg-preview { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-badge { background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; }
+.msg-empty { text-align: center; padding: 40px 16px; color: var(--text2); }
+.msg-empty svg { width: 48px; height: 48px; stroke: var(--text3); margin-bottom: 12px; }
+.msg-tabs { display: flex; gap: 0; margin-bottom: 16px; background: var(--s2); border-radius: 10px; padding: 3px; }
+.msg-tab { flex: 1; padding: 8px; text-align: center; font-size: 13px; font-weight: 500; color: var(--text2); border: none; background: none; border-radius: 8px; cursor: pointer; }
+.msg-tab.active { background: var(--s1); color: var(--text); }
+
+/* AI Copilot */
+.copilot-fab { position: fixed; bottom: calc(70px + var(--safe-bottom)); right: 16px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--purple)); border: none; color: #fff; font-size: 22px; cursor: pointer; z-index: 150; box-shadow: 0 4px 16px rgba(108,140,255,0.4); display: flex; align-items: center; justify-content: center; transition: transform 0.2s, box-shadow 0.2s; }
+.copilot-fab:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(108,140,255,0.5); }
+.copilot-fab.hidden { display: none; }
+.copilot-panel { position: fixed; bottom: 0; right: 0; width: 100%; max-width: 420px; height: 70vh; max-height: 600px; background: var(--s1); border-top-left-radius: 16px; border-top-right-radius: 16px; border: 1px solid var(--border); z-index: 250; display: none; flex-direction: column; box-shadow: 0 -4px 32px rgba(0,0,0,0.4); }
+.copilot-panel.open { display: flex; animation: slideUp 0.25s ease-out; }
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.copilot-header { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.copilot-header-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.copilot-header-title .dot { width: 8px; height: 8px; background: var(--green); }
+.copilot-close { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.copilot-close:hover { background: var(--s2); color: var(--text); }
+.copilot-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.copilot-msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+.copilot-msg.bot { background: var(--s2); color: var(--text); align-self: flex-start; border-bottom-left-radius: 4px; }
+.copilot-msg.user { background: var(--accent2); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+.copilot-msg.typing { color: var(--text2); font-style: italic; }
+.copilot-input-row { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; flex-shrink: 0; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.copilot-input { flex: 1; background: var(--s2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; color: var(--text); font-size: 14px; outline: none; font-family: inherit; resize: none; max-height: 80px; }
+.copilot-input:focus { border-color: var(--accent); }
+.copilot-send { background: var(--accent2); border: none; color: #fff; width: 40px; height: 40px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.copilot-send:hover { background: var(--accent); }
+.copilot-send:disabled { opacity: 0.4; cursor: default; }
+.copilot-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.copilot-suggestion { background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: var(--text2); cursor: pointer; transition: all 0.15s; }
+.copilot-suggestion:hover { border-color: var(--accent); color: var(--accent); }
+
 /* Toast */
 .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 24px; font-size: 14px; z-index: 400; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
 .toast.show { display: block; animation: fadeUp 0.3s ease-out; }
@@ -621,6 +686,30 @@ tr.clickable-row:hover td { background: var(--s2); }
         </div>
       </div>
     </div>
+
+    <!-- MESSAGES -->
+    <div class="page" id="pageMessages">
+      <div class="page-inner">
+        <h2 style="font-size:18px;margin-bottom:16px">Messages</h2>
+        <div class="msg-tabs" id="msgTabs">
+          <button class="msg-tab active" data-msg-tab="flagged">Flagged</button>
+          <button class="msg-tab" data-msg-tab="recent">Recent</button>
+          <button class="msg-tab" data-msg-tab="sent">Sent</button>
+        </div>
+        <div id="msgSearch" class="search-bar" style="margin-bottom:12px">
+          <input class="search-input" placeholder="Search messages..." id="msgSearchInput" oninput="filterMessages()">
+        </div>
+        <div id="msgList"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="page" id="pageSettings">
+      <div class="page-inner">
+        <h2 style="font-size:18px;margin-bottom:16px">Settings</h2>
+        <div id="settingsContent"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Bottom Nav -->
@@ -629,17 +718,51 @@ tr.clickable-row:hover td { background: var(--s2); }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       Today
     </button>
-    <button class="bnav" data-page="pageCal">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-      Calendar
-    </button>
     <button class="bnav" data-page="pageBiz">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
       Business
     </button>
-    <button class="bnav" data-page="pagePersonal">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-      Personal
+    <button class="bnav" data-page="pageCal">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Calendar
+    </button>
+    <button class="bnav" data-page="pageMessages">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      Messages
+    </button>
+    <button class="bnav" data-page="pageSettings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </button>
+  </div>
+</div>
+
+<!-- AI Copilot FAB -->
+<button class="copilot-fab" id="copilotFab" onclick="toggleCopilot()" title="AI Copilot">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 014 4v1h2a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V9a2 2 0 012-2h2V6a4 4 0 014-4z"/><circle cx="9" cy="13" r="1" fill="currentColor"/><circle cx="15" cy="13" r="1" fill="currentColor"/><path d="M9 17h6" stroke-linecap="round"/></svg>
+</button>
+
+<!-- AI Copilot Panel -->
+<div class="copilot-panel" id="copilotPanel">
+  <div class="copilot-header">
+    <div class="copilot-header-title"><div class="dot"></div> LCC Copilot</div>
+    <button class="copilot-close" onclick="toggleCopilot()">&times;</button>
+  </div>
+  <div class="copilot-messages" id="copilotMessages">
+    <div class="copilot-msg bot">
+      Hey Scott! I'm your LCC Copilot. I can help you search properties, analyze deals, summarize activities, or answer questions about your portfolio. What can I help with?
+      <div class="copilot-suggestions" style="margin-top:10px">
+        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('Summarize my activity this week')">This week's activity</button>
+        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('What government leases expire in the next 12 months?')">Expiring leases</button>
+        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('Show me hot dialysis leads')">Hot dialysis leads</button>
+        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('What are today\'s priority tasks?')">Today's priorities</button>
+      </div>
+    </div>
+  </div>
+  <div class="copilot-input-row">
+    <textarea class="copilot-input" id="copilotInput" placeholder="Ask anything about your data..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCopilotMessage()}"></textarea>
+    <button class="copilot-send" id="copilotSend" onclick="sendCopilotMessage()">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
     </button>
   </div>
 </div>
@@ -983,6 +1106,8 @@ document.querySelectorAll('.bnav').forEach(btn => {
       document.getElementById('diaInnerTabs').style.display = 'none';
     }
     if (btn.dataset.page === 'pageCal') renderCalendarFull();
+    if (btn.dataset.page === 'pageMessages') loadMessages();
+    if (btn.dataset.page === 'pageSettings') renderSettings();
   });
 });
 
@@ -2035,21 +2160,29 @@ async function loadActivities() {
 async function loadEmails() {
   try {
     const res = await fetch(`${API}/sync/flagged-emails?limit=500`);
+    if (!res.ok) throw new Error('API returned ' + res.status);
     const data = await res.json();
     emails = data.emails || [];
     renderHomeStats();
     document.getElementById('recentEmails').innerHTML = renderRecentEmails();
-  } catch (e) { console.error('Emails load error:', e); }
+  } catch (e) {
+    console.error('Emails load error:', e);
+    document.getElementById('recentEmails').innerHTML = '<div class="widget-error"><div class="err-msg">Unable to load emails</div><button class="retry-btn" onclick="loadEmails()">Retry</button></div>';
+  }
 }
 
 async function loadCalendar() {
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=14&limit=100`);
+    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=14&limit=200`);
+    if (!res.ok) throw new Error('API returned ' + res.status);
     const data = await res.json();
     calEvents = data.events || [];
     renderHomeStats();
     document.getElementById('todaySchedule').innerHTML = renderTodaySchedule();
-  } catch (e) { console.error('Calendar load error:', e); }
+  } catch (e) {
+    console.error('Calendar load error:', e);
+    document.getElementById('todaySchedule').innerHTML = '<div class="widget-error"><div class="err-msg">Unable to load schedule</div><button class="retry-btn" onclick="loadCalendar()">Retry</button></div>';
+  }
 }
 
 async function loadHealth() {
@@ -2063,6 +2196,7 @@ async function loadHealth() {
 async function loadWeather() {
   try {
     const res = await fetch(WEATHER_API);
+    if (!res.ok) throw new Error('API returned ' + res.status);
     const d = await res.json();
     const cur = d.current || {};
     const daily = d.daily || {};
@@ -2073,11 +2207,20 @@ async function loadWeather() {
     const wind = Math.round(cur.wind_speed_10m || 0);
     const code = cur.weather_code || 0;
     const desc = weatherDesc(code);
+    const emoji = weatherEmoji(code);
     document.getElementById('wxTemp').textContent = `${temp}°F`;
-    document.getElementById('wxDetails').innerHTML = `${desc}<br>High ${hi}° / Low ${lo}° · Humidity ${hum}% · Wind ${wind} mph`;
+    document.getElementById('wxDetails').innerHTML = `${emoji} ${desc}<br>High ${hi}° / Low ${lo}° · Humidity ${hum}% · Wind ${wind} mph`;
   } catch (e) {
-    document.getElementById('wxDetails').textContent = 'Weather unavailable';
+    console.error('Weather load error:', e);
+    document.getElementById('wxTemp').textContent = '--°';
+    document.getElementById('wxDetails').innerHTML = '<div class="widget-error"><div class="err-msg">Weather unavailable</div><button class="retry-btn" onclick="loadWeather()">Retry</button></div>';
   }
+}
+function weatherEmoji(code) {
+  if (code === 0) return '☀️'; if (code <= 3) return '⛅'; if (code <= 48) return '🌫️';
+  if (code <= 57) return '🌦️'; if (code <= 67) return '🌧️'; if (code <= 77) return '🌨️';
+  if (code <= 82) return '🌧️'; if (code <= 86) return '🌨️'; if (code >= 95) return '⛈️';
+  return '☁️';
 }
 
 function weatherDesc(code) {
@@ -2096,7 +2239,9 @@ function weatherDesc(code) {
 async function loadMarket() {
   try {
     const res = await fetch(TREASURY_API_URL);
+    if (!res.ok) throw new Error('API returned ' + res.status);
     const d = await res.json();
+    if (d.error) throw new Error(d.error);
     if (d.ten_yr) {
       document.getElementById('mktTreasury').textContent = d.ten_yr.toFixed(2) + '%';
       if (d.prev_ten_yr) {
@@ -2105,8 +2250,14 @@ async function loadMarket() {
         chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% (as of ' + d.date + ')';
         chgEl.className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
       }
+    } else {
+      throw new Error('No yield data');
     }
-  } catch (e) { console.error('Market load error:', e); }
+  } catch (e) {
+    console.error('Market load error:', e);
+    document.getElementById('mktTreasury').textContent = '--';
+    document.getElementById('mktTreasuryChg').innerHTML = '<div class="widget-error"><div class="err-msg">Market data unavailable</div><button class="retry-btn" onclick="loadMarket()">Retry</button></div>';
+  }
 }
 
 function renderHomeStats() {
@@ -2387,6 +2538,459 @@ async function loadPersonalTasks() {
     console.error('Personal tasks load error:', e);
     el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">Unable to load personal tasks.</div>';
   }
+}
+
+// ============================================================
+// MESSAGES PAGE
+// ============================================================
+let msgData = { flagged: [], recent: [], sent: [] };
+let currentMsgTab = 'flagged';
+let messagesLoaded = false;
+
+async function loadMessages() {
+  if (messagesLoaded) { renderMessages(); return; }
+  const el = document.getElementById('msgList');
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  try {
+    // Use flagged emails as the primary message source
+    if (emails.length > 0) {
+      msgData.flagged = emails;
+    } else {
+      const res = await fetch(`${API}/sync/flagged-emails?limit=500`);
+      if (!res.ok) throw new Error('API returned ' + res.status);
+      const data = await res.json();
+      msgData.flagged = data.emails || [];
+    }
+    // Recent = most recent from activities that have email type
+    msgData.recent = activities.filter(a => {
+      const cat = (a.computed_category || '').toLowerCase();
+      return cat.includes('email') || (a.subject || '').toLowerCase().includes('email');
+    }).slice(0, 50);
+    // Sent = activities logged as outbound
+    msgData.sent = activities.filter(a => {
+      const type = (a.activity_type || '').toLowerCase();
+      return type.includes('email') || type.includes('correspondence');
+    }).slice(0, 50);
+    messagesLoaded = true;
+    renderMessages();
+  } catch (e) {
+    console.error('Messages load error:', e);
+    el.innerHTML = '<div class="widget-error"><div class="err-icon">&#x1F4EC;</div><div class="err-msg">Unable to load messages</div><button class="retry-btn" onclick="loadMessages()">Retry</button></div>';
+  }
+}
+
+function renderMessages() {
+  const el = document.getElementById('msgList');
+  const search = (document.getElementById('msgSearchInput') || {}).value || '';
+  const searchLower = search.toLowerCase();
+
+  // Update tab active state
+  document.querySelectorAll('#msgTabs .msg-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.msgTab === currentMsgTab);
+  });
+
+  let items = [];
+  if (currentMsgTab === 'flagged') {
+    items = msgData.flagged.map(e => ({
+      sender: e.sender_name || e.sender_email || 'Unknown',
+      subject: e.subject || '(No subject)',
+      preview: e.body_preview || '',
+      time: e.received_date,
+      link: e.outlook_link || e.web_link,
+      unread: e.is_read === false,
+    }));
+  } else if (currentMsgTab === 'recent') {
+    items = msgData.recent.map(a => ({
+      sender: a.contact_name || a.company_name || 'Unknown',
+      subject: a.subject || '(No subject)',
+      preview: a.description || '',
+      time: a.activity_date,
+      link: null,
+      unread: false,
+    }));
+  } else {
+    items = msgData.sent.map(a => ({
+      sender: 'To: ' + (a.contact_name || a.company_name || 'Unknown'),
+      subject: a.subject || '(No subject)',
+      preview: a.description || '',
+      time: a.activity_date,
+      link: null,
+      unread: false,
+    }));
+  }
+
+  if (searchLower) {
+    items = items.filter(m =>
+      m.sender.toLowerCase().includes(searchLower) ||
+      m.subject.toLowerCase().includes(searchLower) ||
+      m.preview.toLowerCase().includes(searchLower)
+    );
+  }
+
+  if (items.length === 0) {
+    el.innerHTML = `<div class="msg-empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <div style="font-size:14px;margin-bottom:4px">No messages${searchLower ? ' matching "' + esc(search) + '"' : ''}</div>
+      <div style="font-size:12px;color:var(--text3)">${currentMsgTab === 'flagged' ? 'Flagged Outlook emails will appear here' : 'Activity-based messages will appear here'}</div>
+    </div>`;
+    return;
+  }
+
+  let html = '';
+  for (const m of items.slice(0, 50)) {
+    html += `<div class="msg-item${m.unread ? ' unread' : ''}" ${m.link ? `onclick="window.open('${m.link}','_blank')"` : ''}>
+      <div class="msg-header">
+        <div class="msg-sender">${esc(m.sender)}</div>
+        <div class="msg-time">${formatDate(m.time)}</div>
+      </div>
+      <div class="msg-subject">${esc(m.subject)}</div>
+      ${m.preview ? `<div class="msg-preview">${esc(m.preview)}</div>` : ''}
+    </div>`;
+  }
+  if (items.length > 50) html += `<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 50 of ${items.length} messages</div>`;
+  el.innerHTML = html;
+}
+
+function filterMessages() { renderMessages(); }
+
+// Message tab click handler
+document.getElementById('msgTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.msg-tab');
+  if (!tab) return;
+  currentMsgTab = tab.dataset.msgTab;
+  renderMessages();
+});
+
+// ============================================================
+// SETTINGS PAGE
+// ============================================================
+const LCC_SETTINGS_KEY = 'lcc-settings';
+let appSettings = {
+  notifications: true,
+  darkMode: true,
+  autoRefresh: true,
+  refreshInterval: 5,
+  timezone: 'America/Chicago',
+  defaultTab: 'dialysis',
+  compactView: false,
+  showWeather: true,
+  showMarkets: true,
+};
+
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem(LCC_SETTINGS_KEY);
+    if (saved) appSettings = { ...appSettings, ...JSON.parse(saved) };
+  } catch (e) {}
+}
+function saveSettings() {
+  try { localStorage.setItem(LCC_SETTINGS_KEY, JSON.stringify(appSettings)); } catch (e) {}
+}
+loadSettings();
+
+function renderSettings() {
+  const el = document.getElementById('settingsContent');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-title">General</div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Auto-Refresh Data</div>
+          <div class="settings-row-desc">Automatically refresh activities and dashboard data</div>
+        </div>
+        <label class="settings-toggle"><input type="checkbox" ${appSettings.autoRefresh ? 'checked' : ''} onchange="toggleSetting('autoRefresh', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Compact View</div>
+          <div class="settings-row-desc">Reduce padding and show more data per screen</div>
+        </div>
+        <label class="settings-toggle"><input type="checkbox" ${appSettings.compactView ? 'checked' : ''} onchange="toggleSetting('compactView', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Default Business Tab</div>
+          <div class="settings-row-desc">Which tab opens first in Business view</div>
+        </div>
+        <select style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--text);font-size:13px;outline:none;width:auto" onchange="setSetting('defaultTab', this.value)">
+          <option value="dialysis" ${appSettings.defaultTab === 'dialysis' ? 'selected' : ''}>Dialysis</option>
+          <option value="government" ${appSettings.defaultTab === 'government' ? 'selected' : ''}>Government</option>
+          <option value="marketing" ${appSettings.defaultTab === 'marketing' ? 'selected' : ''}>Marketing</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Home Widgets</div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Show Weather</div>
+          <div class="settings-row-desc">Display Tulsa, OK weather on home screen</div>
+        </div>
+        <label class="settings-toggle"><input type="checkbox" ${appSettings.showWeather ? 'checked' : ''} onchange="toggleSetting('showWeather', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Show Markets</div>
+          <div class="settings-row-desc">Display Treasury yield data on home screen</div>
+        </div>
+        <label class="settings-toggle"><input type="checkbox" ${appSettings.showMarkets ? 'checked' : ''} onchange="toggleSetting('showMarkets', this.checked)"><span class="slider"></span></label>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Data Connections</div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Government Database</div>
+          <div class="settings-row-desc">Supabase connection for government property data</div>
+        </div>
+        <div class="settings-val" style="color:${govConnected ? 'var(--green)' : 'var(--red)'}">${govConnected ? 'Connected' : 'Disconnected'}</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Dialysis Database</div>
+          <div class="settings-row-desc">Supabase connection for dialysis clinic data</div>
+        </div>
+        <div class="settings-val" style="color:${diaConnected ? 'var(--green)' : 'var(--red)'}">${diaConnected ? 'Connected' : 'Disconnected'}</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Salesforce Sync</div>
+          <div class="settings-row-desc">Activity sync via Edge Function</div>
+        </div>
+        <div class="settings-val" style="color:${activitiesLoaded && activities.length > 0 ? 'var(--green)' : 'var(--yellow)'}">${activitiesLoaded ? activities.length + ' activities' : 'Loading...'}</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Outlook Sync</div>
+          <div class="settings-row-desc">Flagged email sync via Edge Function</div>
+        </div>
+        <div class="settings-val" style="color:${emails.length > 0 ? 'var(--green)' : 'var(--yellow)'}">${emails.length > 0 ? emails.length + ' emails' : 'No data'}</div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">App Info</div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Version</div>
+          <div class="settings-row-desc">Life Command Center</div>
+        </div>
+        <div class="settings-val">2.1.0</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">User</div>
+          <div class="settings-row-desc">Northmarq Investment Sales</div>
+        </div>
+        <div class="settings-val" style="color:var(--text)">Scott Briggs</div>
+      </div>
+      <div class="settings-row" style="cursor:pointer" onclick="clearCacheAndReload()">
+        <div class="settings-row-info">
+          <div class="settings-row-label" style="color:var(--red)">Clear Cache & Reload</div>
+          <div class="settings-row-desc">Force refresh all data and clear local storage</div>
+        </div>
+        <div style="color:var(--red);font-size:18px">&#x21BB;</div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleSetting(key, val) {
+  appSettings[key] = val;
+  saveSettings();
+  applySettings();
+}
+function setSetting(key, val) {
+  appSettings[key] = val;
+  saveSettings();
+}
+function applySettings() {
+  // Apply widget visibility
+  const wx = document.getElementById('weatherWidget');
+  if (wx) wx.style.display = appSettings.showWeather ? '' : 'none';
+  const mkt = document.getElementById('marketWidget');
+  if (mkt) mkt.style.display = appSettings.showMarkets ? '' : 'none';
+  // Apply compact mode
+  document.body.classList.toggle('compact', appSettings.compactView);
+}
+function clearCacheAndReload() {
+  if (confirm('Clear all cached data and reload the app?')) {
+    localStorage.clear();
+    if ('caches' in window) caches.keys().then(names => names.forEach(n => caches.delete(n)));
+    location.reload();
+  }
+}
+// Apply settings on load
+setTimeout(applySettings, 100);
+
+// ============================================================
+// AI COPILOT
+// ============================================================
+let copilotOpen = false;
+let copilotHistory = [];
+
+function toggleCopilot() {
+  copilotOpen = !copilotOpen;
+  document.getElementById('copilotPanel').classList.toggle('open', copilotOpen);
+  document.getElementById('copilotFab').classList.toggle('hidden', copilotOpen);
+  if (copilotOpen) {
+    setTimeout(() => document.getElementById('copilotInput').focus(), 300);
+  }
+}
+
+function sendCopilotSuggestion(text) {
+  document.getElementById('copilotInput').value = text;
+  sendCopilotMessage();
+}
+
+async function sendCopilotMessage() {
+  const input = document.getElementById('copilotInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Add user message
+  appendCopilotMsg(msg, 'user');
+
+  // Add typing indicator
+  const typingId = 'typing-' + Date.now();
+  appendCopilotMsg('Thinking...', 'bot typing', typingId);
+
+  // Build context from loaded data
+  const context = buildCopilotContext();
+
+  copilotHistory.push({ role: 'user', content: msg });
+
+  try {
+    const res = await fetch(`${API}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: msg,
+        context: context,
+        history: copilotHistory.slice(-6),
+      }),
+    });
+
+    if (!res.ok) throw new Error('API returned ' + res.status);
+    const data = await res.json();
+    const reply = data.response || data.message || data.reply || 'I couldn\'t generate a response. Try rephrasing your question.';
+
+    // Remove typing indicator
+    const typingEl = document.getElementById(typingId);
+    if (typingEl) typingEl.remove();
+
+    appendCopilotMsg(reply, 'bot');
+    copilotHistory.push({ role: 'assistant', content: reply });
+
+  } catch (e) {
+    console.error('Copilot error:', e);
+    const typingEl = document.getElementById(typingId);
+    if (typingEl) typingEl.remove();
+
+    // Fallback: use local data to answer common questions
+    const localReply = handleLocalCopilotQuery(msg);
+    appendCopilotMsg(localReply, 'bot');
+    copilotHistory.push({ role: 'assistant', content: localReply });
+  }
+}
+
+function appendCopilotMsg(text, cls, id) {
+  const container = document.getElementById('copilotMessages');
+  const div = document.createElement('div');
+  div.className = 'copilot-msg ' + cls;
+  if (id) div.id = id;
+  div.innerHTML = formatCopilotText(text);
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function formatCopilotText(text) {
+  // Basic markdown-like formatting
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>')
+    .replace(/`(.+?)`/g, '<code style="background:var(--s2);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
+}
+
+function buildCopilotContext() {
+  const ctx = {};
+  ctx.total_activities = activities.length;
+  ctx.total_emails = emails.length;
+  ctx.today_events = calEvents.filter(e => tzDateStr(e.start_time) === tzDateStr(new Date())).length;
+  ctx.gov_connected = govConnected;
+  ctx.dia_connected = diaConnected;
+
+  // Recent activities summary
+  const now = new Date();
+  const weekAgo = new Date(now - 7 * 86400000);
+  const thisWeek = activities.filter(a => a.activity_date && new Date(a.activity_date) >= weekAgo);
+  ctx.activities_this_week = thisWeek.length;
+
+  // Category breakdown
+  const cats = {};
+  for (const a of activities) {
+    const c = a.computed_category || 'General';
+    cats[c] = (cats[c] || 0) + 1;
+  }
+  ctx.category_breakdown = cats;
+
+  return ctx;
+}
+
+function handleLocalCopilotQuery(msg) {
+  const lower = msg.toLowerCase();
+
+  if (lower.includes('this week') || lower.includes('activity') && lower.includes('summar')) {
+    const now = new Date();
+    const weekAgo = new Date(now - 7 * 86400000);
+    const thisWeek = activities.filter(a => a.activity_date && new Date(a.activity_date) >= weekAgo);
+    const cats = {};
+    for (const a of thisWeek) { const c = a.computed_category || 'General'; cats[c] = (cats[c] || 0) + 1; }
+    let reply = `**This Week's Activity Summary**\nYou have **${thisWeek.length}** activities logged this week.\n\n`;
+    for (const [cat, count] of Object.entries(cats).sort((a,b) => b[1]-a[1])) {
+      reply += `• ${cat}: ${count}\n`;
+    }
+    return reply;
+  }
+
+  if (lower.includes('today') && (lower.includes('event') || lower.includes('schedule') || lower.includes('calendar'))) {
+    const today = tzDateStr(new Date());
+    const todayEvts = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
+    if (todayEvts.length === 0) return 'You have no events scheduled for today.';
+    let reply = `**Today's Schedule** (${todayEvts.length} events)\n\n`;
+    for (const ev of todayEvts) {
+      const time = ev.is_all_day ? 'All Day' : formatTime(ev.start_time);
+      reply += `• **${time}** — ${ev.subject || '(No title)'}\n`;
+    }
+    return reply;
+  }
+
+  if (lower.includes('priorit') || lower.includes('task')) {
+    const priority = activities.filter(a => (a.computed_category || '').includes('Priority'));
+    const items = priority.length > 0 ? priority.slice(0, 5) : activities.slice(0, 5);
+    let reply = `**Priority Tasks** (${priority.length} flagged)\n\n`;
+    for (const a of items) {
+      reply += `• ${a.subject || a.contact_name || '—'} — ${a.company_name || ''} (${formatDate(a.activity_date)})\n`;
+    }
+    return reply;
+  }
+
+  if (lower.includes('email') || lower.includes('flagged')) {
+    return `You have **${emails.length}** flagged emails. The most recent are from: ${emails.slice(0, 3).map(e => e.sender_name || e.sender_email).join(', ')}.`;
+  }
+
+  if (lower.includes('connection') || lower.includes('status') || lower.includes('health')) {
+    return `**System Status**\n• Government DB: ${govConnected ? '✅ Connected' : '❌ Disconnected'}\n• Dialysis DB: ${diaConnected ? '✅ Connected' : '❌ Disconnected'}\n• Activities: ${activities.length} loaded\n• Emails: ${emails.length} flagged\n• Calendar: ${calEvents.length} events`;
+  }
+
+  return `I wasn't able to reach the AI service, but I can help with local data queries. Try asking about:\n• "Summarize my activity this week"\n• "What's on my schedule today?"\n• "Show priority tasks"\n• "System connection status"`;
 }
 
 // ============================================================
