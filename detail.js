@@ -34,14 +34,15 @@ async function openUnifiedDetail(db, ids, fallback) {
   const loc = (fallback.city || '') + (fallback.city && fallback.state ? ', ' : '') + (fallback.state || '');
 
   document.getElementById('detailHeader').innerHTML = `
+    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
     <div class="detail-header-info">
-      <div style="flex:1">
+      <div style="flex:1;min-width:0">
         <div class="detail-title">${esc(title)}</div>
         <div class="detail-subtitle">${esc(loc)}</div>
       </div>
       <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
-      <button class="detail-close" onclick="closeDetail()">&times;</button>
-    </div>`;
+    </div>
+    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
   // Render tab bar
   const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'History'];
