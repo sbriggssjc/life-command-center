@@ -2100,6 +2100,177 @@ async function renderDiaSales() {
 }
 
 // ============================================================================
+
+// ============================================================================
+// DIALYSIS LEASES TAB
+// ============================================================================
+let diaLeasesData = null;
+
+function renderDiaLeases() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return '';
+
+  // Use existing lease backfill data + any clinic inventory with lease info
+  if (!diaLeasesData) {
+    el.innerHTML = '<div class="loading"><span class="spinner"></span> Loading lease data...</div>';
+    (async () => {
+      try {
+        // Load clinics with lease/property data
+        let allClinics = [], pg = 0;
+        while (true) {
+          const batch = await diaQuery('medicare_clinics',
+            'medicare_id,facility_name,chain_organization,address,city,state,operator_type,lease_expiration,lease_term_remaining,property_type,year_built,square_footage,rent_estimate',
+            { limit: 2000, offset: pg * 2000 }
+          );
+          allClinics = allClinics.concat(batch.data || []);
+          if (!batch.data || batch.data.length < 2000) break;
+          pg++;
+        }
+        diaLeasesData = allClinics;
+        el.innerHTML = buildDiaLeasesHTML();
+      } catch (e) {
+        console.error('Dia leases load error:', e);
+        el.innerHTML = '<div class="widget-error"><div class="err-msg">Failed to load lease data</div><button class="retry-btn" onclick="diaLeasesData=null;renderDiaLeases()">Retry</button></div>';
+      }
+    })();
+    return '';
+  }
+
+  el.innerHTML = buildDiaLeasesHTML();
+  return '';
+}
+
+function buildDiaLeasesHTML() {
+  const clinics = diaLeasesData || [];
+  const withLease = clinics.filter(c => c.lease_expiration || c.lease_term_remaining != null);
+  const withTerm = clinics.filter(c => c.lease_term_remaining != null);
+  const backfill = diaData.leaseBackfillRows || [];
+
+  // Compute lease coverage
+  const leaseCoverage = clinics.length > 0 ? ((withLease.length / clinics.length) * 100).toFixed(1) : '0';
+  const avgTerm = withTerm.length > 0 ? (withTerm.reduce((s, c) => s + (c.lease_term_remaining || 0), 0) / withTerm.length) : 0;
+  const totalRent = clinics.reduce((s, c) => s + (parseFloat(c.rent_estimate) || 0), 0);
+
+  // Expiration buckets
+  const expired = withTerm.filter(c => c.lease_term_remaining < 0);
+  const under1yr = withTerm.filter(c => c.lease_term_remaining >= 0 && c.lease_term_remaining <= 1);
+  const yr1to3 = withTerm.filter(c => c.lease_term_remaining > 1 && c.lease_term_remaining <= 3);
+  const yr3to5 = withTerm.filter(c => c.lease_term_remaining > 3 && c.lease_term_remaining <= 5);
+  const over5 = withTerm.filter(c => c.lease_term_remaining > 5);
+
+  let html = '<div style="margin-bottom:24px">';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">📋</span> Dialysis Lease Intelligence</div>';
+
+  // Stats
+  html += '<div class="dia-grid dia-grid-4" style="margin-bottom:20px">';
+  html += infoCard({ title: 'Total Clinics', value: fmtN(clinics.length), sub: 'In database', color: 'blue' });
+  html += infoCard({ title: 'Lease Coverage', value: leaseCoverage + '%', sub: fmtN(withLease.length) + ' with lease data', color: 'cyan' });
+  html += infoCard({ title: 'Avg Term', value: avgTerm.toFixed(1) + ' yrs', sub: fmtN(withTerm.length) + ' with term data', color: 'green' });
+  html += infoCard({ title: 'Expiring < 1yr', value: fmtN(expired.length + under1yr.length), sub: 'Prospecting targets', color: 'red' });
+  html += '</div>';
+
+  // Lease Backfill Queue
+  if (backfill.length > 0) {
+    html += '<div class="widget" style="margin-bottom:16px">';
+    html += `<div class="widget-title">Lease Data Backfill Queue <span style="font-size:12px;font-weight:400;color:var(--text3)">(${backfill.length} clinics need lease data)</span></div>`;
+    html += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Clinics in database missing lease information — research candidates for the Research tab.</div>';
+    html += `<button class="retry-btn" onclick="currentDiaTab='research';renderDiaTab()">Go to Research Workbench</button>`;
+    html += '</div>';
+  }
+
+  // Expiration Distribution
+  if (withTerm.length > 0) {
+    html += '<div class="widget" style="margin-bottom:16px">';
+    html += '<div class="widget-title">Lease Expiration Distribution</div>';
+    const buckets = [
+      { label: 'Expired', count: expired.length, color: '#ef4444' },
+      { label: '0–1 Years', count: under1yr.length, color: '#f87171' },
+      { label: '1–3 Years', count: yr1to3.length, color: '#fb923c' },
+      { label: '3–5 Years', count: yr3to5.length, color: '#34d399' },
+      { label: '5+ Years', count: over5.length, color: '#60a5fa' },
+    ];
+    const maxB = Math.max(...buckets.map(b => b.count), 1);
+    html += '<div style="display:flex;flex-direction:column;gap:6px">';
+    for (const b of buckets) {
+      const pctW = ((b.count / maxB) * 100).toFixed(0);
+      html += `<div style="display:flex;align-items:center;gap:8px">
+        <div style="width:80px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">${b.label}</div>
+        <div style="flex:1;background:var(--s2);border-radius:4px;height:22px;overflow:hidden">
+          <div style="width:${pctW}%;background:${b.color};height:100%;border-radius:4px;min-width:${b.count > 0 ? '2px' : '0'}"></div>
+        </div>
+        <div style="width:40px;font-size:12px;font-weight:600;color:var(--text)">${fmtN(b.count)}</div>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // Expiring Soon Table
+  const urgent = [...expired, ...under1yr, ...yr1to3].sort((a, b) => (a.lease_term_remaining || 0) - (b.lease_term_remaining || 0));
+  if (urgent.length > 0) {
+    html += '<div class="widget" style="margin-bottom:16px">';
+    html += `<div class="widget-title">Expiring Leases — Prospecting Targets <span style="font-size:12px;font-weight:400;color:var(--text3)">(${urgent.length} clinics)</span></div>`;
+    html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
+    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th style="text-align:right">Term Left</th><th>Expiration</th>';
+    html += '</tr></thead><tbody>';
+    for (const c of urgent.slice(0, 50)) {
+      const tColor = (c.lease_term_remaining || 0) < 0 ? 'var(--red)' : (c.lease_term_remaining || 0) <= 1 ? '#f87171' : '#fb923c';
+      const tLabel = c.lease_term_remaining != null ? (c.lease_term_remaining < 0 ? 'Expired' : c.lease_term_remaining.toFixed(1) + ' yrs') : '—';
+      const exp = c.lease_expiration ? new Date(c.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
+      html += `<tr><td>${esc(c.facility_name || '—')}</td><td>${esc(c.chain_organization || c.operator_type || '—')}</td><td>${esc(c.city || '—')}</td><td>${esc(c.state || '—')}</td><td style="text-align:right;color:${tColor};font-weight:600">${tLabel}</td><td>${exp}</td></tr>`;
+    }
+    html += '</tbody></table></div>';
+    if (urgent.length > 50) html += `<div style="text-align:center;font-size:12px;color:var(--text3);padding:8px">Showing 50 of ${urgent.length}</div>`;
+    html += '</div>';
+  }
+
+  // Chain/Operator Lease Analysis
+  const chainMap = {};
+  for (const c of withTerm) {
+    const chain = c.chain_organization || c.operator_type || 'Independent';
+    if (!chainMap[chain]) chainMap[chain] = { count: 0, termSum: 0, expiring: 0 };
+    chainMap[chain].count++;
+    chainMap[chain].termSum += (c.lease_term_remaining || 0);
+    if (c.lease_term_remaining <= 3) chainMap[chain].expiring++;
+  }
+  const topChains = Object.entries(chainMap).sort((a, b) => b[1].count - a[1].count).slice(0, 12);
+  if (topChains.length > 0) {
+    html += '<div class="widget">';
+    html += '<div class="widget-title">Lease Exposure by Operator</div>';
+    html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
+    html += '<th>Operator</th><th style="text-align:right">Clinics</th><th style="text-align:right">Avg Term</th><th style="text-align:right">Expiring &lt;3yr</th>';
+    html += '</tr></thead><tbody>';
+    for (const [name, data] of topChains) {
+      const avgT = data.count > 0 ? (data.termSum / data.count).toFixed(1) : '—';
+      html += `<tr><td>${esc(name)}</td><td style="text-align:right">${fmtN(data.count)}</td><td style="text-align:right">${avgT} yrs</td><td style="text-align:right;color:${data.expiring > 0 ? 'var(--red)' : 'var(--text2)'}">${fmtN(data.expiring)}</td></tr>`;
+    }
+    html += '</tbody></table></div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ============================================================================
+// DIALYSIS LOANS TAB
+// ============================================================================
+function renderDiaLoans() {
+  // Dialysis doesn't have loan data yet — show scaffold
+  let html = '<div style="margin-bottom:24px">';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">🏦</span> Dialysis Loan Intelligence</div>';
+  html += '<div class="widget" style="text-align:center;padding:40px 20px">';
+  html += '<div style="font-size:48px;margin-bottom:12px;opacity:0.3">🏦</div>';
+  html += '<div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--text)">Loan Data Coming Soon</div>';
+  html += '<div style="font-size:13px;color:var(--text2);max-width:400px;margin:0 auto;line-height:1.6">';
+  html += 'This tab will display dialysis facility loan data including property financing, maturity schedules, and refinancing opportunities. Data ingestion pipeline is being built.';
+  html += '</div>';
+  html += '<div style="margin-top:20px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">';
+  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label">Total Loans</div><div class="stat-value" style="color:var(--text3)">0</div></div>';
+  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label">Total Volume</div><div class="stat-value" style="color:var(--text3)">$0</div></div>';
+  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label">Maturing &lt;1yr</div><div class="stat-value" style="color:var(--text3)">0</div></div>';
+  html += '</div>';
+  html += '</div></div>';
+  return html;
+}
 // DIALYSIS PLAYERS (Top Operators, Largest Clinics)
 // ============================================================================
 
@@ -2385,5 +2556,7 @@ window.renderDiaSearch = renderDiaSearch;
 window.execDiaSearch = execDiaSearch;
 window.renderDiaSales = renderDiaSales;
 window.renderDiaPlayers = renderDiaPlayers;
+window.renderDiaLeases = renderDiaLeases;
+window.renderDiaLoans = renderDiaLoans;
 window.goToDiaTab = goToDiaTab;
 window.infoCard = infoCard;

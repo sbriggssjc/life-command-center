@@ -607,8 +607,9 @@ body.compact .greeting { font-size: 18px; }
     <button class="gov-inner-tab" data-gov-tab="search">Search</button>
     <button class="gov-inner-tab" data-gov-tab="ownership">Ownership</button>
     <button class="gov-inner-tab" data-gov-tab="pipeline">Pipeline</button>
-    <button class="gov-inner-tab" data-gov-tab="listings">Listings</button>
     <button class="gov-inner-tab" data-gov-tab="sales">Sales</button>
+    <button class="gov-inner-tab" data-gov-tab="leases">Leases</button>
+    <button class="gov-inner-tab" data-gov-tab="loans">Loans</button>
     <button class="gov-inner-tab" data-gov-tab="players">Players</button>
     <button class="gov-inner-tab" data-gov-tab="research">Research</button>
   </div>
@@ -620,6 +621,8 @@ body.compact .greeting { font-size: 18px; }
     <button class="gov-inner-tab" data-dia-tab="changes">Inventory</button>
     <button class="gov-inner-tab" data-dia-tab="npi">NPI Intel</button>
     <button class="gov-inner-tab" data-dia-tab="sales">Sales</button>
+    <button class="gov-inner-tab" data-dia-tab="leases">Leases</button>
+    <button class="gov-inner-tab" data-dia-tab="loans">Loans</button>
     <button class="gov-inner-tab" data-dia-tab="players">Players</button>
     <button class="gov-inner-tab" data-dia-tab="research">Research</button>
     <button class="gov-inner-tab" data-dia-tab="activity">Activity</button>
@@ -1064,9 +1067,13 @@ function renderGovResearch(){return renderGovOverview();}
 function renderGovSearch(){return '<div style="color:var(--text2)">Loading gov search...</div>';}
 function renderGovSales(){return '<div style="color:var(--text2)">Loading gov sales...</div>';}
 function renderGovPlayers(){return '<div style="color:var(--text2)">Loading gov players...</div>';}
+function renderGovLeases(){return '<div style="color:var(--text2)">Loading gov leases...</div>';}
+function renderGovLoans(){return '<div style="color:var(--text2)">Loading gov loans...</div>';}
 function renderDiaSearch(){return '<div style="color:var(--text2)">Loading dia search...</div>';}
 function renderDiaSales(){return '<div style="color:var(--text2)">Loading dia sales...</div>';}
 function renderDiaPlayers(){return '<div style="color:var(--text2)">Loading dia players...</div>';}
+function renderDiaLeases(){return '<div style="color:var(--text2)">Loading dia leases...</div>';}
+function renderDiaLoans(){return '<div style="color:var(--text2)">Loading dia loans...</div>';}
 function renderProspects(){return '<div style="color:var(--text2)">Loading prospects...</div>';}
 function renderGovTab(){
   const el=document.getElementById('bizPageInner');
@@ -1079,6 +1086,8 @@ function renderGovTab(){
     case 'pipeline':h=renderGovPipeline();break;
     case 'listings':h=renderGovListings();break;
     case 'sales':h=renderGovSales();break;
+    case 'leases':h=renderGovLeases();break;
+    case 'loans':h=renderGovLoans();break;
     case 'players':h=renderGovPlayers();break;
     case 'research':h=renderGovResearch();break;
   }
@@ -1108,6 +1117,8 @@ function renderDiaTab(){
     case 'changes':h=renderDiaChanges();break;
     case 'npi':h=renderDiaNpi();break;
     case 'sales':h=renderDiaSales();break;
+    case 'leases':h=renderDiaLeases();break;
+    case 'loans':h=renderDiaLoans();break;
     case 'players':h=renderDiaPlayers();break;
     case 'research':h=renderDiaResearch();break;
     case 'activity':renderBizContent();return;
