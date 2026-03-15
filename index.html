@@ -2097,16 +2097,18 @@ function renderHomeStats() {
   document.getElementById('statActivities').textContent = activities.length.toLocaleString();
   document.getElementById('statEmails').textContent = emails.length.toLocaleString();
   const today = tzDateStr(new Date());
-  const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today);
+  const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
   document.getElementById('statEvents').textContent = todayEvents.length;
   const now = Date.now(); const week = 7 * 86400000;
   const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
   document.getElementById('statDue').textContent = due.length;
 }
 
+function isCanceled(ev) { return (ev.subject || '').startsWith('[CANCELED]') || (ev.subject || '').startsWith('Canceled:') || ev.is_cancelled; }
+
 function renderTodaySchedule() {
   const today = tzDateStr(new Date());
-  const todayEvts = calEvents.filter(e => tzDateStr(e.start_time) === today);
+  const todayEvts = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
   if (todayEvts.length === 0) return '<div style="color:var(--text2);font-size:14px;padding:8px 0">No events scheduled today.</div>';
 
   const allDay = todayEvts.filter(e => e.is_all_day);
@@ -2186,13 +2188,13 @@ function renderPriorityTasks() {
 
 function renderCategoryMetrics() {
   if (activities.length === 0) return '<div style="color:var(--text2);font-size:13px">No activities recorded yet</div>';
-  const dialysis = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius'); });
-  const govt = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal'); });
+  const isDiaCategory = c => c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius') || c.includes('medical') || c.includes('healthcare');
+  const isGovCategory = c => c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal');
+  const dialysis = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return isDiaCategory(c); });
+  const govt = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return isGovCategory(c); });
   const other = activities.filter(a => {
     const c = (a.computed_category || '').toLowerCase();
-    const isDia = c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius');
-    const isGov = c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal');
-    return !isDia && !isGov;
+    return !isDiaCategory(c) && !isGovCategory(c);
   });
   const now = Date.now(); const week = 7 * 86400000;
   const dueSoon = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
@@ -2236,8 +2238,10 @@ function renderCalendarFull() {
     html += `<div style="font-size:14px;font-weight:600;padding:12px 0 6px;color:${isToday ? 'var(--accent)' : 'var(--text)'}">${day}${isToday ? ' (Today)' : ''}</div>`;
     html += '<div class="widget" style="margin-bottom:8px">';
     for (const ev of events) {
+      const canceled = isCanceled(ev);
       const time = ev.is_all_day ? '<span class="cal-allday">All Day</span>' : `${formatTime(ev.start_time)} – ${formatTime(ev.end_time)}`;
-      html += `<div class="cal-item"><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
+      const cancelStyle = canceled ? ' style="opacity:0.4;text-decoration:line-through"' : '';
+      html += `<div class="cal-item"${cancelStyle}><div class="cal-time">${time}</div><div><div class="cal-subj">${esc(ev.subject || '(No title)')}</div>${ev.location ? `<div class="cal-loc">${esc(ev.location)}</div>` : ''}${ev.organizer_name ? `<div class="cal-loc">Organizer: ${esc(ev.organizer_name)}</div>` : ''}</div></div>`;
     }
     html += '</div>';
   }
