@@ -288,6 +288,27 @@ tr.clickable-row:hover td { background: var(--s2); }
 .copilot-suggestion { background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: var(--text2); cursor: pointer; transition: all 0.15s; }
 .copilot-suggestion:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Compact mode — tighter spacing when enabled in Settings */
+body.compact .page-inner { padding: 10px 12px 16px; }
+body.compact .widget { padding: 10px; margin-bottom: 8px; }
+body.compact .stat-card { padding: 10px; }
+body.compact .stat-value { font-size: 20px; }
+body.compact .stat-label { font-size: 10px; }
+body.compact .act-item { padding: 10px; margin-bottom: 6px; }
+body.compact .act-subject { font-size: 13px; }
+body.compact .msg-item { padding: 10px; margin-bottom: 6px; }
+body.compact .settings-row { padding: 10px 12px; }
+body.compact .widget-title { margin-bottom: 6px; }
+body.compact .widget-grid { gap: 8px; margin-bottom: 8px; }
+body.compact .weather-temp { font-size: 28px; }
+body.compact .greeting { font-size: 18px; }
+
+/* Bottom nav — 5-button responsive fit */
+@media (max-width: 374px) {
+  .bottom-nav .bnav { padding: 6px 2px 4px; font-size: 9px; gap: 2px; }
+  .bottom-nav .bnav svg { width: 18px; height: 18px; }
+}
+
 /* Toast */
 .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 24px; font-size: 14px; z-index: 400; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
 .toast.show { display: block; animation: fadeUp 0.3s ease-out; }
@@ -1266,16 +1287,21 @@ function filterBizActivities() {
 }
 
 function updateBizBadges() {
-  let dia = 0, gov = 0, other = 0;
+  let dia = 0, gov = 0, mkt = 0, other = 0;
   for (const a of activities) {
     const c = (a.computed_category || '').toLowerCase();
-    if (c.includes('dialysis') || c.includes('medical') || c.includes('healthcare')) dia++;
-    else if (c.includes('government')) gov++;
+    const t = (a.activity_type || '').toLowerCase();
+    if (c.includes('dialysis') || c.includes('medical') || c.includes('healthcare') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius')) dia++;
+    else if (c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal')) gov++;
+    else if (c.includes('marketing') || c.includes('prospect') || t.includes('marketing')) mkt++;
     else other++;
   }
-  document.getElementById('bizBadgeDia').textContent = dia || '—';
-  document.getElementById('bizBadgeGov').textContent = gov || '—';
-  document.getElementById('bizBadgeOther').textContent = other || '—';
+  const el = id => document.getElementById(id);
+  if (el('bizBadgeDia')) el('bizBadgeDia').textContent = dia || '—';
+  if (el('bizBadgeGov')) el('bizBadgeGov').textContent = gov || '—';
+  // Only set marketing badge if marketing data hasn't loaded yet (it has its own count)
+  if (el('bizBadgeMkt') && !mktLoaded) el('bizBadgeMkt').textContent = mkt || '—';
+  if (el('bizBadgeOther')) el('bizBadgeOther').textContent = other || '—';
 }
 
 function renderBizContent() {
