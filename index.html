@@ -606,12 +606,15 @@ tr.clickable-row:hover td { background: var(--s2); }
     <div class="page" id="pagePersonal">
       <div class="page-inner">
         <h2 style="font-size:18px;margin-bottom:16px">Personal</h2>
+        <!-- Personal Calendar -->
         <div class="widget">
-          <div class="widget-title">Personal Email & Tasks</div>
-          <div style="padding:24px;text-align:center;color:var(--text2)">
-            <p style="margin-bottom:8px">Personal Outlook.com sync is not yet connected.</p>
-            <p style="font-size:13px">The Power Automate flow currently syncs your work email (sabriggs@NorthMarq.com). To add personal email, you'll need to add an Outlook.com connector in Power Automate.</p>
-          </div>
+          <div class="widget-title">Personal Calendar</div>
+          <div id="personalCalendar"><div class="loading"><span class="spinner"></span></div></div>
+        </div>
+        <!-- Personal To Do Lists -->
+        <div class="widget">
+          <div class="widget-title">Personal Tasks</div>
+          <div id="personalTasks"><div class="loading"><span class="spinner"></span></div></div>
         </div>
       </div>
     </div>
@@ -2260,6 +2263,113 @@ function renderCalendarFull() {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); closeLogCall(); } });
 
 // ============================================================
+// PERSONAL TAB — Calendar & Tasks
+// ============================================================
+let personalCalEvents = [];
+let personalTodoLists = ['Personal', 'Family', 'Kids', 'Health', 'Finance', 'House'];
+
+async function loadPersonalCalendar() {
+  try {
+    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=personal`);
+    const data = await res.json();
+    personalCalEvents = data.events || [];
+    renderPersonalCalendar();
+  } catch (e) {
+    console.error('Personal calendar load error:', e);
+    renderPersonalCalendar();
+  }
+}
+
+function renderPersonalCalendar() {
+  const el = document.getElementById('personalCalendar');
+  if (!el) return;
+  if (personalCalEvents.length === 0) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">' +
+      '<div style="font-size:13px;margin-bottom:8px">No personal calendar events found.</div>' +
+      '<div style="font-size:12px;color:var(--text3)">Set up the Personal Calendar Sync flow in Power Automate to see events here.<br>See <strong>Personal-Outlook-Flow-Setup.md</strong> in the repo for instructions.</div>' +
+      '</div>';
+    return;
+  }
+  // Group by date
+  const byDate = {};
+  const tz = 'America/Chicago';
+  for (const ev of personalCalEvents) {
+    if (isCanceled(ev)) continue;
+    const d = tzDateStr(ev.start_time);
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(ev);
+  }
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+  const dates = Object.keys(byDate).sort();
+  let html = '';
+  for (const d of dates) {
+    const isToday = d === today;
+    const label = isToday ? 'Today' : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    html += `<div style="font-size:11px;font-weight:600;color:${isToday ? 'var(--cyan)' : 'var(--text3)'};text-transform:uppercase;letter-spacing:0.5px;margin:12px 0 6px;padding:0 16px">${label}</div>`;
+    for (const ev of byDate[d]) {
+      const t0 = ev.is_all_day ? 'All Day' : new Date(ev.start_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      const t1 = ev.is_all_day ? '' : ' - ' + new Date(ev.end_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      const loc = ev.location ? ` · ${esc(ev.location)}` : '';
+      html += `<div style="padding:8px 16px;border-bottom:1px solid var(--s2);cursor:pointer" onclick="${ev.web_link ? `window.open('${ev.web_link}','_blank')` : ''}">
+        <div style="font-size:14px;color:var(--text1)">${esc(ev.subject || '(No title)')}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">${t0}${t1}${loc}</div>
+      </div>`;
+    }
+  }
+  el.innerHTML = html || '<div style="padding:20px;text-align:center;color:var(--text2)">No upcoming personal events.</div>';
+}
+
+async function loadPersonalTasks() {
+  // Personal tasks are already in the To Do sync — filter from activities or load separately
+  // For now, render tasks from calEvents that match personal To Do list categories
+  const el = document.getElementById('personalTasks');
+  if (!el) return;
+  // The existing To Do sync already includes Personal, Family, Kids, Health, Finance, House lists
+  // We can render them from the todo-sync data if available, or show a helpful message
+  try {
+    const res = await fetch(`${API}/sync/sf-activities?limit=500&sort_dir=desc`);
+    const data = await res.json();
+    const raw = data.activities || [];
+    // Filter for personal categories
+    const personalCats = ['family', 'personal', 'kids', 'health', 'finance', 'house'];
+    const personalItems = raw.filter(a => {
+      const cat = (a.computed_category || '').toLowerCase();
+      return personalCats.some(c => cat.includes(c));
+    });
+    if (personalItems.length === 0) {
+      el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">' +
+        '<div style="font-size:13px;margin-bottom:8px">Personal tasks will appear here.</div>' +
+        '<div style="font-size:12px;color:var(--text3)">Flag personal emails in Outlook.com to create tasks, or add tasks directly in Microsoft To Do.</div>' +
+        '</div>';
+      return;
+    }
+    let html = '';
+    // Group by list/category
+    const grouped = {};
+    for (const item of personalItems.slice(0, 30)) {
+      const cat = item.computed_category || 'Personal';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(item);
+    }
+    for (const [cat, items] of Object.entries(grouped)) {
+      html += `<div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin:12px 0 6px;padding:0 16px">${esc(cat)} (${items.length})</div>`;
+      for (const item of items.slice(0, 5)) {
+        const subj = item.subject || item.contact_name || '—';
+        const date = item.activity_date ? formatDate(item.activity_date) : '';
+        html += `<div style="padding:8px 16px;border-bottom:1px solid var(--s2)">
+          <div style="font-size:14px;color:var(--text1)">${esc(subj)}</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">${date}</div>
+        </div>`;
+      }
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    console.error('Personal tasks load error:', e);
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">Unable to load personal tasks.</div>';
+  }
+}
+
+// ============================================================
 // INIT
 // ============================================================
 document.getElementById('greeting').textContent = getGreeting();
@@ -2267,7 +2377,7 @@ document.getElementById('greetingDate').textContent = new Date().toLocaleDateStr
 
 // Auto-connect credentials then load data
 autoConnectCredentials().then(() => {
-  Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket()]);
+  Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()]);
 });
 
 if ('serviceWorker' in navigator) {
