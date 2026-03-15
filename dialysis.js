@@ -234,6 +234,12 @@ function renderDiaTab() {
     case 'sales':
       renderDiaSales(); // async — renders directly to DOM
       return;
+    case 'leases':
+      renderDiaLeases(); // async — renders directly to DOM
+      return;
+    case 'loans':
+      inner.innerHTML = renderDiaLoans();
+      break;
     case 'players':
       inner.innerHTML = renderDiaPlayers();
       break;
@@ -2105,32 +2111,28 @@ async function renderDiaSales() {
 // DIALYSIS LEASES TAB
 // ============================================================================
 let diaLeasesData = null;
+let diaLeaseWatchlist = null;
+let diaLeaseGaps = null;
 
 function renderDiaLeases() {
   const el = document.getElementById('bizPageInner');
   if (!el) return '';
 
-  // Use existing lease backfill data + any clinic inventory with lease info
   if (!diaLeasesData) {
     el.innerHTML = '<div class="loading"><span class="spinner"></span> Loading lease data...</div>';
     (async () => {
       try {
-        // Load clinics with lease/property data
-        let allClinics = [], pg = 0;
-        while (true) {
-          const batch = await diaQuery('medicare_clinics',
-            'medicare_id,facility_name,chain_organization,address,city,state,operator_type,lease_expiration,lease_term_remaining,property_type,year_built,square_footage,rent_estimate',
-            { limit: 2000, offset: pg * 2000 }
-          );
-          allClinics = allClinics.concat(batch.data || []);
-          if (!batch.data || batch.data.length < 2000) break;
-          pg++;
-        }
-        diaLeasesData = allClinics;
+        const [watchlist, gaps] = await Promise.all([
+          diaQuery('v_clinic_lease_renewal_watchlist', '*', { limit: 1000 }),
+          diaQuery('v_clinic_lease_data_gaps', 'gap_type,clinic_id,facility_name,operator_name,city,state,lease_expiration,total_patients', { limit: 2000 })
+        ]);
+        diaLeaseWatchlist = watchlist || [];
+        diaLeaseGaps = gaps || [];
+        diaLeasesData = true;
         el.innerHTML = buildDiaLeasesHTML();
       } catch (e) {
         console.error('Dia leases load error:', e);
-        el.innerHTML = '<div class="widget-error"><div class="err-msg">Failed to load lease data</div><button class="retry-btn" onclick="diaLeasesData=null;renderDiaLeases()">Retry</button></div>';
+        el.innerHTML = '<div class="widget-error"><div class="err-msg">Failed to load lease data: ' + esc(e.message || '') + '</div><button class="retry-btn" onclick="diaLeasesData=null;renderDiaLeases()">Retry</button></div>';
       }
     })();
     return '';
@@ -2141,107 +2143,132 @@ function renderDiaLeases() {
 }
 
 function buildDiaLeasesHTML() {
-  const clinics = diaLeasesData || [];
-  const withLease = clinics.filter(c => c.lease_expiration || c.lease_term_remaining != null);
-  const withTerm = clinics.filter(c => c.lease_term_remaining != null);
+  const watchlist = diaLeaseWatchlist || [];
+  const gaps = diaLeaseGaps || [];
   const backfill = diaData.leaseBackfillRows || [];
+  const totalClinics = (diaData.freshness || {}).total_clinics || 8513;
 
-  // Compute lease coverage
-  const leaseCoverage = clinics.length > 0 ? ((withLease.length / clinics.length) * 100).toFixed(1) : '0';
-  const avgTerm = withTerm.length > 0 ? (withTerm.reduce((s, c) => s + (c.lease_term_remaining || 0), 0) / withTerm.length) : 0;
-  const totalRent = clinics.reduce((s, c) => s + (parseFloat(c.rent_estimate) || 0), 0);
+  // Gap type counts
+  const gapCounts = {};
+  gaps.forEach(function(g) { gapCounts[g.gap_type] = (gapCounts[g.gap_type] || 0) + 1; });
+  const missingPropLink = gapCounts['missing_property_link'] || 0;
+  const missingLeaseRow = gapCounts['missing_lease_row'] || 0;
+  const staleLeases = gapCounts['lease_stale_vs_inventory'] || 0;
+  const expiredActive = gapCounts['expired_lease_on_active_clinic'] || 0;
+  const expiring12m = gapCounts['expiring_within_12_months'] || 0;
+  const totalGaps = gaps.length;
+  const linkedWithLease = totalClinics - missingPropLink - missingLeaseRow;
 
-  // Expiration buckets
-  const expired = withTerm.filter(c => c.lease_term_remaining < 0);
-  const under1yr = withTerm.filter(c => c.lease_term_remaining >= 0 && c.lease_term_remaining <= 1);
-  const yr1to3 = withTerm.filter(c => c.lease_term_remaining > 1 && c.lease_term_remaining <= 3);
-  const yr3to5 = withTerm.filter(c => c.lease_term_remaining > 3 && c.lease_term_remaining <= 5);
-  const over5 = withTerm.filter(c => c.lease_term_remaining > 5);
+  // Watchlist buckets
+  const expired = watchlist.filter(function(w) { return w.renewal_watchlist_type === 'expired_lease_risk'; });
+  const risk12m = watchlist.filter(function(w) { return w.renewal_watchlist_type.indexOf('12m') >= 0; });
+  const missingFollow = watchlist.filter(function(w) { return w.renewal_watchlist_type === 'missing_lease_followup'; });
 
   let html = '<div style="margin-bottom:24px">';
   html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">📋</span> Dialysis Lease Intelligence</div>';
 
-  // Stats
+  // Summary Stats
   html += '<div class="dia-grid dia-grid-4" style="margin-bottom:20px">';
-  html += infoCard({ title: 'Total Clinics', value: fmtN(clinics.length), sub: 'In database', color: 'blue' });
-  html += infoCard({ title: 'Lease Coverage', value: leaseCoverage + '%', sub: fmtN(withLease.length) + ' with lease data', color: 'cyan' });
-  html += infoCard({ title: 'Avg Term', value: avgTerm.toFixed(1) + ' yrs', sub: fmtN(withTerm.length) + ' with term data', color: 'green' });
-  html += infoCard({ title: 'Expiring < 1yr', value: fmtN(expired.length + under1yr.length), sub: 'Prospecting targets', color: 'red' });
+  html += infoCard({ title: 'Total Clinics', value: fmtN(totalClinics), sub: 'Tracked nationwide', color: 'blue' });
+  html += infoCard({ title: 'Lease Coverage', value: ((linkedWithLease / totalClinics) * 100).toFixed(1) + '%', sub: fmtN(linkedWithLease) + ' with lease data', color: 'cyan' });
+  html += infoCard({ title: 'Data Gaps', value: fmtN(totalGaps), sub: 'Clinics need attention', color: 'yellow' });
+  html += infoCard({ title: 'Watchlist', value: fmtN(watchlist.length), sub: fmtN(expired.length) + ' expired · ' + fmtN(risk12m.length) + ' within 12m', color: 'red' });
   html += '</div>';
 
-  // Lease Backfill Queue
+  // Backfill Queue
   if (backfill.length > 0) {
     html += '<div class="widget" style="margin-bottom:16px">';
-    html += `<div class="widget-title">Lease Data Backfill Queue <span style="font-size:12px;font-weight:400;color:var(--text3)">(${backfill.length} clinics need lease data)</span></div>`;
-    html += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Clinics in database missing lease information — research candidates for the Research tab.</div>';
-    html += `<button class="retry-btn" onclick="currentDiaTab='research';renderDiaTab()">Go to Research Workbench</button>`;
+    html += '<div class="widget-title">Lease Data Backfill Queue <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + backfill.length + ' clinics need lease data)</span></div>';
+    html += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Clinics missing lease information — research candidates for the Research tab.</div>';
+    html += '<button class="retry-btn" onclick="currentDiaTab=\'research\';renderDiaTab()">Go to Research Workbench</button>';
     html += '</div>';
   }
 
-  // Expiration Distribution
-  if (withTerm.length > 0) {
+  // Data Gap Summary
+  if (totalGaps > 0) {
     html += '<div class="widget" style="margin-bottom:16px">';
-    html += '<div class="widget-title">Lease Expiration Distribution</div>';
-    const buckets = [
-      { label: 'Expired', count: expired.length, color: '#ef4444' },
-      { label: '0–1 Years', count: under1yr.length, color: '#f87171' },
-      { label: '1–3 Years', count: yr1to3.length, color: '#fb923c' },
-      { label: '3–5 Years', count: yr3to5.length, color: '#34d399' },
-      { label: '5+ Years', count: over5.length, color: '#60a5fa' },
+    html += '<div class="widget-title">Lease Data Quality</div>';
+    var gapBuckets = [
+      { label: 'Missing Property Link', count: missingPropLink, color: '#ef4444' },
+      { label: 'Stale vs Inventory', count: staleLeases, color: '#fb923c' },
+      { label: 'Missing Lease Row', count: missingLeaseRow, color: '#f59e0b' },
+      { label: 'Expired on Active', count: expiredActive, color: '#f87171' },
+      { label: 'Expiring < 12mo', count: expiring12m, color: '#fbbf24' },
     ];
-    const maxB = Math.max(...buckets.map(b => b.count), 1);
+    var maxB = Math.max.apply(null, gapBuckets.map(function(b) { return b.count; }).concat([1]));
     html += '<div style="display:flex;flex-direction:column;gap:6px">';
-    for (const b of buckets) {
-      const pctW = ((b.count / maxB) * 100).toFixed(0);
-      html += `<div style="display:flex;align-items:center;gap:8px">
-        <div style="width:80px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">${b.label}</div>
-        <div style="flex:1;background:var(--s2);border-radius:4px;height:22px;overflow:hidden">
-          <div style="width:${pctW}%;background:${b.color};height:100%;border-radius:4px;min-width:${b.count > 0 ? '2px' : '0'}"></div>
-        </div>
-        <div style="width:40px;font-size:12px;font-weight:600;color:var(--text)">${fmtN(b.count)}</div>
-      </div>`;
+    for (var gi = 0; gi < gapBuckets.length; gi++) {
+      var b = gapBuckets[gi];
+      if (b.count === 0) continue;
+      var pctW = ((b.count / maxB) * 100).toFixed(0);
+      html += '<div style="display:flex;align-items:center;gap:8px">';
+      html += '<div style="width:140px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">' + b.label + '</div>';
+      html += '<div style="flex:1;background:var(--s2);border-radius:4px;height:22px;overflow:hidden">';
+      html += '<div style="width:' + pctW + '%;background:' + b.color + ';height:100%;border-radius:4px;min-width:2px"></div>';
+      html += '</div>';
+      html += '<div style="width:50px;font-size:12px;font-weight:600;color:var(--text)">' + fmtN(b.count) + '</div>';
+      html += '</div>';
     }
     html += '</div></div>';
   }
 
-  // Expiring Soon Table
-  const urgent = [...expired, ...under1yr, ...yr1to3].sort((a, b) => (a.lease_term_remaining || 0) - (b.lease_term_remaining || 0));
-  if (urgent.length > 0) {
+  // Lease Renewal Watchlist Table
+  if (watchlist.length > 0) {
     html += '<div class="widget" style="margin-bottom:16px">';
-    html += `<div class="widget-title">Expiring Leases — Prospecting Targets <span style="font-size:12px;font-weight:400;color:var(--text3)">(${urgent.length} clinics)</span></div>`;
+    html += '<div class="widget-title">Lease Renewal Watchlist <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + watchlist.length + ' clinics)</span></div>';
+    html += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Clinics with expiring, expired, or at-risk leases — sorted by urgency.</div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th style="text-align:right">Term Left</th><th>Expiration</th>';
+    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th>Risk</th><th style="text-align:right">Months Left</th><th>Expiration</th>';
     html += '</tr></thead><tbody>';
-    for (const c of urgent.slice(0, 50)) {
-      const tColor = (c.lease_term_remaining || 0) < 0 ? 'var(--red)' : (c.lease_term_remaining || 0) <= 1 ? '#f87171' : '#fb923c';
-      const tLabel = c.lease_term_remaining != null ? (c.lease_term_remaining < 0 ? 'Expired' : c.lease_term_remaining.toFixed(1) + ' yrs') : '—';
-      const exp = c.lease_expiration ? new Date(c.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
-      html += `<tr><td>${esc(c.facility_name || '—')}</td><td>${esc(c.chain_organization || c.operator_type || '—')}</td><td>${esc(c.city || '—')}</td><td>${esc(c.state || '—')}</td><td style="text-align:right;color:${tColor};font-weight:600">${tLabel}</td><td>${exp}</td></tr>`;
+    var sorted = watchlist.slice().sort(function(a, b) { return (a.months_to_expiration || 999) - (b.months_to_expiration || 999); });
+    for (var wi = 0; wi < Math.min(sorted.length, 75); wi++) {
+      var c = sorted[wi];
+      var mo = c.months_to_expiration;
+      var moLabel = mo != null ? (mo <= 0 ? 'Expired' : mo + 'mo') : '—';
+      var moColor = mo != null ? (mo <= 0 ? 'var(--red)' : mo <= 12 ? '#f87171' : mo <= 24 ? '#fb923c' : 'var(--text2)') : 'var(--text3)';
+      var riskBadge = c.closure_watch_level === 'high' ? '<span style="background:#ef4444;color:#fff;padding:1px 6px;border-radius:4px;font-size:11px">HIGH</span>'
+        : c.closure_watch_level === 'moderate' ? '<span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:4px;font-size:11px">MOD</span>'
+        : '<span style="font-size:11px;color:var(--text3)">low</span>';
+      var exp = c.lease_expiration ? new Date(c.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
+      html += '<tr>';
+      html += '<td>' + esc(c.facility_name || '—') + '</td>';
+      html += '<td>' + esc(c.operator_name || c.parent_organization || '—') + '</td>';
+      html += '<td>' + esc(c.city || '—') + '</td>';
+      html += '<td>' + esc(c.state || '—') + '</td>';
+      html += '<td>' + riskBadge + '</td>';
+      html += '<td style="text-align:right;color:' + moColor + ';font-weight:600">' + moLabel + '</td>';
+      html += '<td>' + exp + '</td>';
+      html += '</tr>';
     }
     html += '</tbody></table></div>';
-    if (urgent.length > 50) html += `<div style="text-align:center;font-size:12px;color:var(--text3);padding:8px">Showing 50 of ${urgent.length}</div>`;
+    if (watchlist.length > 75) html += '<div style="text-align:center;font-size:12px;color:var(--text3);padding:8px">Showing 75 of ' + watchlist.length + '</div>';
     html += '</div>';
   }
 
-  // Chain/Operator Lease Analysis
-  const chainMap = {};
-  for (const c of withTerm) {
-    const chain = c.chain_organization || c.operator_type || 'Independent';
-    if (!chainMap[chain]) chainMap[chain] = { count: 0, termSum: 0, expiring: 0 };
-    chainMap[chain].count++;
-    chainMap[chain].termSum += (c.lease_term_remaining || 0);
-    if (c.lease_term_remaining <= 3) chainMap[chain].expiring++;
+  // Operator Lease Exposure
+  var opMap = {};
+  for (var oi = 0; oi < watchlist.length; oi++) {
+    var row = watchlist[oi];
+    var op = row.operator_name || row.parent_organization || 'Independent';
+    if (!opMap[op]) opMap[op] = { count: 0, expired: 0, expiring12m: 0 };
+    opMap[op].count++;
+    if (row.months_to_expiration != null && row.months_to_expiration <= 0) opMap[op].expired++;
+    if (row.months_to_expiration != null && row.months_to_expiration > 0 && row.months_to_expiration <= 12) opMap[op].expiring12m++;
   }
-  const topChains = Object.entries(chainMap).sort((a, b) => b[1].count - a[1].count).slice(0, 12);
-  if (topChains.length > 0) {
+  var topOps = Object.entries(opMap).sort(function(a, b) { return b[1].count - a[1].count; }).slice(0, 15);
+  if (topOps.length > 0) {
     html += '<div class="widget">';
-    html += '<div class="widget-title">Lease Exposure by Operator</div>';
+    html += '<div class="widget-title">Operator Lease Exposure (Watchlist)</div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Operator</th><th style="text-align:right">Clinics</th><th style="text-align:right">Avg Term</th><th style="text-align:right">Expiring &lt;3yr</th>';
+    html += '<th>Operator</th><th style="text-align:right">On Watchlist</th><th style="text-align:right">Expired</th><th style="text-align:right">Expiring &lt;12mo</th>';
     html += '</tr></thead><tbody>';
-    for (const [name, data] of topChains) {
-      const avgT = data.count > 0 ? (data.termSum / data.count).toFixed(1) : '—';
-      html += `<tr><td>${esc(name)}</td><td style="text-align:right">${fmtN(data.count)}</td><td style="text-align:right">${avgT} yrs</td><td style="text-align:right;color:${data.expiring > 0 ? 'var(--red)' : 'var(--text2)'}">${fmtN(data.expiring)}</td></tr>`;
+    for (var ti = 0; ti < topOps.length; ti++) {
+      var name = topOps[ti][0], data = topOps[ti][1];
+      html += '<tr><td>' + esc(name) + '</td>';
+      html += '<td style="text-align:right">' + fmtN(data.count) + '</td>';
+      html += '<td style="text-align:right;color:' + (data.expired > 0 ? 'var(--red)' : 'var(--text2)') + '">' + fmtN(data.expired) + '</td>';
+      html += '<td style="text-align:right;color:' + (data.expiring12m > 0 ? '#f87171' : 'var(--text2)') + '">' + fmtN(data.expiring12m) + '</td>';
+      html += '</tr>';
     }
     html += '</tbody></table></div></div>';
   }
