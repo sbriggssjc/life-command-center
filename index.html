@@ -1999,6 +1999,7 @@ async function submitLogCall() {
 // ============================================================
 // HOME PAGE DATA LOADING & RENDERING
 // ============================================================
+let activitiesLoaded = false;
 async function loadActivities() {
   try {
     const res = await fetch(`${API}/sync/sf-activities?limit=5000&sort_dir=desc`);
@@ -2012,6 +2013,7 @@ async function loadActivities() {
       seen.add(key);
       return true;
     });
+    activitiesLoaded = true;
     console.log(`Activities: ${raw.length} raw → ${activities.length} unique`);
     updateBizBadges();
     renderHomeStats();
@@ -2019,6 +2021,7 @@ async function loadActivities() {
     document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
   } catch (e) {
     console.error('Activities load error:', e);
+    activitiesLoaded = true;
     // Clear loading spinners even on error
     document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
     document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
@@ -2103,14 +2106,17 @@ async function loadMarket() {
 }
 
 function renderHomeStats() {
-  document.getElementById('statActivities').textContent = activities.length.toLocaleString();
-  document.getElementById('statEmails').textContent = emails.length.toLocaleString();
+  // Only update activity-dependent stats once activities have loaded (prevents 0-flash)
+  if (activitiesLoaded) {
+    document.getElementById('statActivities').textContent = activities.length.toLocaleString();
+    const now = Date.now(); const week = 7 * 86400000;
+    const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
+    document.getElementById('statDue').textContent = due.length;
+  }
+  document.getElementById('statEmails').textContent = emails.length >= 500 ? '500+' : emails.length.toLocaleString();
   const today = tzDateStr(new Date());
   const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
   document.getElementById('statEvents').textContent = todayEvents.length;
-  const now = Date.now(); const week = 7 * 86400000;
-  const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
-  document.getElementById('statDue').textContent = due.length;
 }
 
 function isCanceled(ev) { return (ev.subject || '').startsWith('[CANCELED]') || (ev.subject || '').startsWith('Canceled:') || ev.is_cancelled; }
@@ -2285,8 +2291,8 @@ function renderPersonalCalendar() {
   if (!el) return;
   if (personalCalEvents.length === 0) {
     el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">' +
-      '<div style="font-size:13px;margin-bottom:8px">No personal calendar events found.</div>' +
-      '<div style="font-size:12px;color:var(--text3)">Set up the Personal Calendar Sync flow in Power Automate to see events here.<br>See <strong>Personal-Outlook-Flow-Setup.md</strong> in the repo for instructions.</div>' +
+      '<div style="font-size:13px;margin-bottom:8px">No personal calendar events in the next 30 days.</div>' +
+      '<div style="font-size:12px;color:var(--text3)">Events from your personal Outlook.com calendar will sync here automatically every hour via Power Automate.</div>' +
       '</div>';
     return;
   }
@@ -2320,33 +2326,43 @@ function renderPersonalCalendar() {
 }
 
 async function loadPersonalTasks() {
-  // Personal tasks are already in the To Do sync — filter from activities or load separately
-  // For now, render tasks from calEvents that match personal To Do list categories
+  // Render personal tasks filtered from the already-loaded activities
   const el = document.getElementById('personalTasks');
   if (!el) return;
-  // The existing To Do sync already includes Personal, Family, Kids, Health, Finance, House lists
-  // We can render them from the todo-sync data if available, or show a helpful message
   try {
-    const res = await fetch(`${API}/sync/sf-activities?limit=500&sort_dir=desc`);
-    const data = await res.json();
-    const raw = data.activities || [];
-    // Filter for personal categories
-    const personalCats = ['family', 'personal', 'kids', 'health', 'finance', 'house'];
+    // Wait for activities to be loaded if they haven't been yet
+    if (!activitiesLoaded) {
+      await new Promise(resolve => {
+        const check = setInterval(() => { if (activitiesLoaded) { clearInterval(check); resolve(); } }, 200);
+        setTimeout(() => { clearInterval(check); resolve(); }, 10000); // 10s timeout
+      });
+    }
+    const raw = activities;
+    // Filter for personal categories (including medical/healthcare from SF)
+    const personalCats = ['family', 'personal', 'kids', 'health', 'finance', 'house', 'medical'];
     const personalItems = raw.filter(a => {
       const cat = (a.computed_category || '').toLowerCase();
       return personalCats.some(c => cat.includes(c));
     });
-    if (personalItems.length === 0) {
+    // Deduplicate personal items by subject + date
+    const pSeen = new Set();
+    const dedupedPersonal = personalItems.filter(a => {
+      const key = `${a.subject}|${a.activity_date}`;
+      if (pSeen.has(key)) return false;
+      pSeen.add(key);
+      return true;
+    });
+    if (dedupedPersonal.length === 0) {
       el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">' +
-        '<div style="font-size:13px;margin-bottom:8px">Personal tasks will appear here.</div>' +
-        '<div style="font-size:12px;color:var(--text3)">Flag personal emails in Outlook.com to create tasks, or add tasks directly in Microsoft To Do.</div>' +
+        '<div style="font-size:13px;margin-bottom:8px">No personal tasks found.</div>' +
+        '<div style="font-size:12px;color:var(--text3)">Personal tasks from Microsoft To Do and flagged personal emails will appear here once synced.</div>' +
         '</div>';
       return;
     }
     let html = '';
     // Group by list/category
     const grouped = {};
-    for (const item of personalItems.slice(0, 30)) {
+    for (const item of dedupedPersonal.slice(0, 30)) {
       const cat = item.computed_category || 'Personal';
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(item);
