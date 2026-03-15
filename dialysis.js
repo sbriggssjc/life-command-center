@@ -17,7 +17,8 @@ let diaChangeFilter = 'all'; // 'all' | 'added' | 'removed' | 'persistent'
 let diaNpiFilter = null; // filter by signal_type
 let diaSalesView = 'comps'; // 'comps' | 'available'
 let diaSalesComps = null;   // lazy-loaded from v_sales_comps
-let diaAvailListings = null; // lazy-loaded from v_available_listings
+let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
+let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
 let diaSalesLoading = false;
 let diaSalesSearch = '';
 let diaSalesPage = 0;
@@ -319,9 +320,14 @@ function renderDiaOverview() {
   if (!diaAvailListings) {
     (async () => {
       try {
+        // Filter to on-market statuses only: active, Active, Available, For Sale
         let all = [], pg = 0;
         while (true) {
-          const batch = await diaQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
+          const batch = await diaQuery('available_listings', '*', {
+            order: 'listing_date.desc.nullslast',
+            limit: 1000, offset: pg * 1000,
+            filter: 'status=in.(active,Active,Available,For Sale)',
+          });
           all = all.concat(batch || []);
           if (!batch || batch.length < 1000) break;
           pg++;
@@ -330,6 +336,22 @@ function renderDiaOverview() {
       } catch(e) { diaAvailListings = []; }
       const mktEl = document.getElementById('diaOverviewMarket');
       if (mktEl) mktEl.innerHTML = renderOnMarketInner();
+    })();
+  }
+
+  // Lazy-load clinic financial estimates
+  if (!diaFinancialEstimates) {
+    (async () => {
+      try {
+        // Load latest primary estimates (highest-confidence per clinic)
+        const batch = await diaQuery('clinic_financial_estimates', 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,patient_count,chairs_used,confidence_score', {
+          filter: 'is_latest=eq.true',
+          limit: 10000,
+        });
+        diaFinancialEstimates = batch || [];
+      } catch(e) { diaFinancialEstimates = []; }
+      const finEl = document.getElementById('diaOverviewFinancials');
+      if (finEl) finEl.innerHTML = renderFinancialMetricsInner();
     })();
   }
 
@@ -370,10 +392,12 @@ function renderDiaOverview() {
   const totalPatients = clinicsWithPatients.reduce((s,c) => s + (c.latest_total_patients || 0), 0);
   const avgPatients = clinicsWithPatients.length > 0 ? Math.round(totalPatients / clinicsWithPatients.length) : 0;
 
-  // Touchpoint metrics from SF activities (dialysis-related)
-  const diaActivities = (typeof activities !== 'undefined' ? activities : []).filter(a => {
-    const cat = (a.computed_category || '').toLowerCase();
-    return cat.includes('dialysis') || cat.includes('medical') || cat.includes('fmc') || cat.includes('davita') || cat.includes('fresenius');
+  // Touchpoint metrics from SF activities — full Northmarq IS team
+  const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
+  const allActivities = (typeof activities !== 'undefined' ? activities : []);
+  const diaActivities = allActivities.filter(a => {
+    const who = (a.assigned_to || '').toLowerCase();
+    return NM_TEAM.some(name => who.includes(name));
   });
   const now = new Date();
   const sixMonthsAgo = new Date(now); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
@@ -443,37 +467,54 @@ function renderDiaOverview() {
   html += '</div>';
 
   // ═══════════════════════════════════════════════
-  // SECTION 3: OUTREACH & TOUCHPOINTS
+  // SECTION 3: CLINIC FINANCIALS (async)
   // ═══════════════════════════════════════════════
-  html += sectionHeader('Outreach & Touchpoints', '📞', 'activity');
+  html += sectionHeader('Clinic Financial Estimates', '💵', 'search');
+  html += '<div id="diaOverviewFinancials">' + renderFinancialMetricsInner() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 4: OUTREACH & TOUCHPOINTS
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Team Outreach & Touchpoints', '📞', 'activity');
   html += '<div class="dia-grid dia-grid-5">';
-  html += infoCard({ title: 'Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue', tab: 'activity' });
-  html += infoCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'owner contacts', color: 'green', tab: 'activity' });
+  html += infoCard({ title: 'Team Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue', tab: 'activity' });
+  html += infoCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'team contacts', color: 'green', tab: 'activity' });
   html += infoCard({ title: 'Last 30 Days', value: fmtN(touchpoints1mo), sub: 'recent contacts', color: 'cyan', tab: 'activity' });
   html += infoCard({ title: 'Unique Accounts', value: fmtN(uniqueAccounts), sub: 'companies touched', color: 'purple', tab: 'activity' });
   html += infoCard({ title: 'Avg / Account', value: avgTouchPerAcct, sub: 'touchpoints per account YTD', color: 'yellow', tab: 'activity' });
   html += '</div>';
 
+  // Per-team-member breakdown
+  html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
+  const memberColors = { 'kelly largent': 'green', 'sarah martin': 'purple', 'scott briggs': 'blue', 'nathanael berwaldt': 'cyan' };
+  NM_TEAM.forEach(name => {
+    const memberActs = diaActivities.filter(a => (a.assigned_to || '').toLowerCase().includes(name));
+    const ytd = memberActs.filter(a => a.activity_date && new Date(a.activity_date) >= yearStart).length;
+    const displayName = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    html += infoCard({ title: displayName, value: fmtN(ytd), sub: 'YTD touchpoints', color: memberColors[name] || 'blue', tab: 'activity' });
+  });
+  html += '</div>';
+
   // ═══════════════════════════════════════════════
-  // SECTION 4: TTM SALES MARKET
+  // SECTION 5: TTM SALES MARKET
   // ═══════════════════════════════════════════════
   html += sectionHeader('TTM Sales Activity', '💰', 'sales');
   html += '<div id="diaOverviewSales">' + renderSalesMetricsInner() + '</div>';
 
   // ═══════════════════════════════════════════════
-  // SECTION 5: NORTHMARQ PERFORMANCE
+  // SECTION 6: NORTHMARQ PERFORMANCE
   // ═══════════════════════════════════════════════
   html += sectionHeader('Northmarq Performance', '🏆', 'sales');
   html += '<div id="diaOverviewNM">' + renderNorthmarqInner() + '</div>';
 
   // ═══════════════════════════════════════════════
-  // SECTION 6: ON MARKET
+  // SECTION 7: ON MARKET
   // ═══════════════════════════════════════════════
   html += sectionHeader('On Market', '🏪', 'sales');
   html += '<div id="diaOverviewMarket">' + renderOnMarketInner() + '</div>';
 
   // ═══════════════════════════════════════════════
-  // SECTION 7: RESEARCH PIPELINE
+  // SECTION 8: RESEARCH PIPELINE
   // ═══════════════════════════════════════════════
   html += sectionHeader('Research Pipeline', '🔬', 'research');
   html += '<div class="dia-grid dia-grid-4">';
@@ -598,6 +639,65 @@ function renderOnMarketInner() {
   h += infoCard({ title: 'Avg Ask Price', value: avgAskPrice, sub: fmtN(withPrice.length) + ' priced', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Days on Market', value: avgDomVal, sub: fmtN(avgDom.length) + ' with dates', color: 'yellow', tab: 'sales' });
   h += infoCard({ title: 'NM Market Share', value: listings.length > 0 ? (nmListings.length/listings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
+  h += '</div>';
+  return h;
+}
+
+function renderFinancialMetricsInner() {
+  if (!diaFinancialEstimates) {
+    return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading financial estimates...</div></div></div>';
+  }
+  const est = diaFinancialEstimates;
+  if (est.length === 0) {
+    return '<div class="dia-info-card" style="text-align:center;padding:18px;color:var(--text2)">No financial estimates available</div>';
+  }
+
+  // Prefer highest-confidence per clinic (group by medicare_id, pick highest confidence)
+  const byClinic = {};
+  est.forEach(e => {
+    const id = e.medicare_id;
+    if (!byClinic[id] || (e.confidence_score || 0) > (byClinic[id].confidence_score || 0)) {
+      byClinic[id] = e;
+    }
+  });
+  const best = Object.values(byClinic);
+  const withRev = best.filter(e => e.estimated_annual_revenue > 0);
+  const withProfit = best.filter(e => e.estimated_annual_profit > 0);
+  const withEbitda = best.filter(e => e.estimated_ebitda > 0);
+
+  const totalRev = withRev.reduce((s, e) => s + parseFloat(e.estimated_annual_revenue), 0);
+  const avgRev = withRev.length > 0 ? totalRev / withRev.length : 0;
+  const totalProfit = withProfit.reduce((s, e) => s + parseFloat(e.estimated_annual_profit), 0);
+  const avgProfit = withProfit.length > 0 ? totalProfit / withProfit.length : 0;
+  const avgEbitda = withEbitda.length > 0 ? withEbitda.reduce((s, e) => s + parseFloat(e.estimated_ebitda), 0) / withEbitda.length : 0;
+  const avgMargin = avgRev > 0 ? (avgProfit / avgRev * 100).toFixed(1) : '—';
+
+  // By source breakdown
+  const sources = {};
+  est.forEach(e => {
+    const src = e.estimate_source || 'unknown';
+    if (!sources[src]) sources[src] = 0;
+    sources[src]++;
+  });
+
+  const coveragePct = best.length > 0 && typeof diaData !== 'undefined' && diaData.freshness?.total_clinics > 0
+    ? (best.length / diaData.freshness.total_clinics * 100).toFixed(1) : '—';
+
+  let h = '<div class="dia-grid dia-grid-5">';
+  h += infoCard({ title: 'Clinics Estimated', value: fmtN(best.length), sub: coveragePct + '% of database', color: 'blue', tab: 'search' });
+  h += infoCard({ title: 'Avg Revenue / Clinic', value: '$' + fmtN(Math.round(avgRev / 1000)) + 'K', sub: fmtN(withRev.length) + ' with revenue data', color: 'green', tab: 'search' });
+  h += infoCard({ title: 'Avg Profit / Clinic', value: '$' + fmtN(Math.round(avgProfit / 1000)) + 'K', sub: avgMargin + '% avg margin', color: 'cyan', tab: 'search' });
+  h += infoCard({ title: 'Avg EBITDA', value: '$' + fmtN(Math.round(avgEbitda / 1000)) + 'K', sub: fmtN(withEbitda.length) + ' with EBITDA', color: 'purple', tab: 'search' });
+  h += infoCard({ title: 'Industry Revenue', value: '$' + fmtN(Math.round(totalRev / 1e9)) + 'B', sub: 'est. across ' + fmtN(withRev.length) + ' clinics', color: 'yellow', tab: 'search' });
+  h += '</div>';
+
+  // Source breakdown row
+  h += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
+  const srcLabels = { ttm_reported: 'TTM Reported', cms_patient_count: 'CMS Patient Count', google_hours: 'Google Hours', cms_chair_count: 'CMS Chair Count' };
+  const srcColors = { ttm_reported: 'green', cms_patient_count: 'blue', google_hours: 'cyan', cms_chair_count: 'yellow' };
+  Object.entries(sources).forEach(([src, cnt]) => {
+    h += infoCard({ title: srcLabels[src] || src, value: fmtN(cnt), sub: 'estimates', color: srcColors[src] || 'blue' });
+  });
   h += '</div>';
   return h;
 }
@@ -1753,7 +1853,10 @@ async function renderDiaSales() {
     try {
       let all = [], pg = 0;
       while (true) {
-        const batch = await diaQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
+        const batch = await diaQuery('available_listings', '*', {
+          order: 'listing_date.desc.nullslast', limit: 1000, offset: pg * 1000,
+          filter: 'status=in.(active,Active,Available,For Sale)',
+        });
         all = all.concat(batch || []);
         if (!batch || batch.length < 1000) break;
         pg++;
