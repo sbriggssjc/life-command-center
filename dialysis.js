@@ -1636,7 +1636,7 @@ async function renderDiaSales() {
   const fmtPSF = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
   const fmtAcres = (v) => v != null && v > 0 ? parseFloat(v).toFixed(2) + ' ac' : '—';
   const fmtSF = (v) => v != null && v > 0 ? Number(Math.round(v)).toLocaleString('en-US') + ' SF' : '—';
-  const fmtTerm = (v) => v != null ? parseFloat(v).toFixed(1) + ' yr' : '—';
+  const fmtTerm = (v) => v != null ? (parseFloat(v) < 0 ? 'Exp.' : parseFloat(v).toFixed(1) + ' yr') : '—';
   const fmtDate = (v) => v || '—';
 
   pageRows.forEach(r => {

@@ -280,7 +280,7 @@ function _udTabLease() {
     html += _row('Termination', _fmtDate(l.termination_date));
     html += _row('Initial Term', l.initial_term_years ? Number(l.initial_term_years).toFixed(1) + ' yrs' : null);
     html += _row('Total Term', l.total_term_years ? Number(l.total_term_years).toFixed(1) + ' yrs' : null);
-    html += _row('Term Remaining', l.term_remaining_years != null ? Number(l.term_remaining_years).toFixed(1) + ' yrs' : null);
+    html += _row('Term Remaining', l.term_remaining_years != null ? (Number(l.term_remaining_years) < 0 ? '<span style="color:var(--red)">Expired</span>' : Number(l.term_remaining_years).toFixed(1) + ' yrs') : null);
     html += _row('No. of Renewals', l.num_renewals);
     html += _rowMoney('Annual Rent', l.annual_rent);
     html += _rowMoney('Rent / SF', l.rent_psf);

@@ -1994,7 +1994,16 @@ async function loadActivities() {
   try {
     const res = await fetch(`${API}/sync/sf-activities?limit=5000&sort_dir=desc`);
     const data = await res.json();
-    activities = data.activities || [];
+    const raw = data.activities || [];
+    // Deduplicate — API returns ~2x duplicates
+    const seen = new Set();
+    activities = raw.filter(a => {
+      const key = `${a.subject}|${a.contact_name||a.first_name}|${a.company_name}|${a.activity_date}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    console.log(`Activities: ${raw.length} raw → ${activities.length} unique`);
     updateBizBadges();
     renderHomeStats();
     document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
