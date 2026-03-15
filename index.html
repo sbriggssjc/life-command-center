@@ -913,6 +913,8 @@ const SOS_URLS = {
 // HELPERS
 // ============================================================
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+// Safe JSON for embedding in HTML onclick attributes — escapes <, >, &, ', "
+function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;').replace(/"/g,'&quot;'); }
 
 // Display normalization — title case, clean formatting for consistent display
 function norm(s) {
@@ -1340,14 +1342,14 @@ function renderBizContent() {
   } else {
     for (const a of pageItems) {
       const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
-      html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
+      html += `<div class="act-item" onclick='showDetail(${safeJSON(a)})'>
         <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
         <div class="act-meta">
           <span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span>
           <span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category || 'General')}</span>
         </div>
         <div class="act-actions">
-          <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||a.subject||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>
+          <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${safeJSON({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||a.subject||''})})">&#x260E; Log Call</button>
           ${sfBtn}
         </div>
       </div>`;
@@ -1386,11 +1388,11 @@ function renderBizSubset(subset) {
   let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">${subset.length} results · <a href="#" onclick="event.preventDefault();renderBizContent()">Clear filter</a></div>`;
   for (const a of pageItems) {
     const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
-    html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
+    html += `<div class="act-item" onclick='showDetail(${safeJSON(a)})'>
       <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
       <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category)}</span></div>
       <div class="act-actions">
-        <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${JSON.stringify({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>
+        <button class="act-btn primary" onclick="event.stopPropagation();openLogCall(${safeJSON({sf_contact_id:a.sf_contact_id||'',sf_company_id:a.sf_company_id||'',name:a.contact_name||a.company_name||''})})">&#x260E; Log Call</button>
         ${sfBtn}
       </div>
     </div>`;
@@ -1613,7 +1615,7 @@ function renderMarketing() {
 
     // Contact rows
     contacts.forEach(c => {
-      const logData = JSON.stringify({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''}).replace(/'/g,"&#39;");
+      const logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
       html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border)">`;
       html += `<div style="flex:1;min-width:0">`;
       html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')}</div>`;
@@ -1773,7 +1775,7 @@ function renderProspects() {
         if (section.items.length === 0) return;
         html += '<div class="search-results-section"><h4>' + esc(section.title) + ' (' + section.items.length + ')</h4>';
         section.items.forEach(r => {
-          const clickAttr = r._source ? ' onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "' + r._source + '")\'' : '';
+          const clickAttr = r._source ? ' onclick=\'showDetail(' + safeJSON(r) + ', "' + r._source + '")\'' : '';
           html += '<div class="search-card"' + clickAttr + '>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(r._title || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: ' + r._badgeBg + '; color: ' + r._badgeColor + ';">' + esc(r._badge) + '</span></div>';
@@ -2062,7 +2064,7 @@ function renderActivityDetailBody(record) {
   }
   
   html += '<div class="detail-actions">';
-  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${JSON.stringify({sf_contact_id:record.sf_contact_id||'',sf_company_id:record.sf_company_id||'',name:record.contact_name||record.company_name||''}).replace(/'/g,"&#39;")})">&#x260E; Log Call</button>`;
+  html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${safeJSON({sf_contact_id:record.sf_contact_id||'',sf_company_id:record.sf_company_id||'',name:record.contact_name||record.company_name||''})})">&#x260E; Log Call</button>`;
   if(record.sf_link) html += `<a href="${record.sf_link}" target="_blank" class="act-btn">&#x2197; Salesforce</a>`;
   if(record.phone) html += `<a href="tel:${esc(record.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
   if(record.email) html += `<a href="mailto:${esc(record.email)}" class="act-btn">&#x2709; Email</a>`;
@@ -2348,7 +2350,7 @@ function renderPriorityTasks() {
   let html = '';
   for (const a of items) {
     const subj = (a.subject && a.subject.replace(/[!?.\s]/g, '').length > 0) ? a.subject : (a.contact_name || a.company_name || '—');
-    html += `<div class="act-item" onclick='showDetail(${JSON.stringify(a).replace(/'/g,"&#39;")})'>
+    html += `<div class="act-item" onclick='showDetail(${safeJSON(a)})'>
       <div class="act-top"><div class="act-subject">${esc(subj)}</div></div>
       <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category || 'General')}</span></div>
     </div>`;

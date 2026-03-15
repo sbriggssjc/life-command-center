@@ -248,7 +248,7 @@ async function loadGovData() {
     showToast('Error loading data', 'error');
     const inner = document.getElementById('bizPageInner');
     if (inner) {
-      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + (err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadGovData()" style="margin-top:12px">Retry</button></div>';
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadGovData()" style="margin-top:12px">Retry</button></div>';
     }
   }
 }
@@ -443,7 +443,7 @@ function ownershipTable(rows) {
     const status = r.research_status || 'pending';
     const statusDot = dotClass(status);
 
-    html += `<tr class="clickable-tr" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
+    html += `<tr class="clickable-tr" onclick='showDetail(${safeJSON(r)}, "gov-ownership")'>`;
     html += `<td><code>${esc(r.lease_number || '')}</code></td>`;
     html += `<td class="truncate">${esc(norm(r.address) || '—')}</td>`;
     html += `<td>${esc(norm(r.city) || '')}, ${esc(r.state || '')}</td>`;
@@ -477,7 +477,7 @@ function leadsTable(rows) {
 
     const pipelineStatus = r.pipeline_status || 'new';
 
-    html += `<tr class="clickable-tr" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-lead")'>`;
+    html += `<tr class="clickable-tr" onclick='showDetail(${safeJSON(r)}, "gov-lead")'>`;
     html += `<td><strong>${r.priority_score || 0}</strong></td>`;
     html += `<td><span style="color:${tempColor};">${r.lead_temperature || 'cool'}</span></td>`;
     html += `<td class="truncate">${esc(norm(r.address) || '—')}</td>`;
@@ -507,7 +507,7 @@ function listingsTable(rows) {
     const capRate = r.asking_cap_rate ? pct(r.asking_cap_rate) : '-';
     const status = r.listing_status || 'active';
 
-    html += `<tr class="clickable-tr" onclick='showDetail(${JSON.stringify(r).replace(/'/g,"&#39;")}, "gov-listing")'>`;
+    html += `<tr class="clickable-tr" onclick='showDetail(${safeJSON(r)}, "gov-listing")'>`;
     html += `<td class="truncate" style="font-weight:500">${esc(norm(r.tenant_agency) || '—')}</td>`;
     html += `<td class="truncate">${esc(norm(r.address) || '')}</td>`;
     html += `<td>${esc(norm(r.city) || '')}${r.state ? ', ' + esc(r.state) : ''}</td>`;
@@ -747,7 +747,7 @@ function setupAutocomplete(inputId, onSelect) {
   inp.addEventListener('blur', () => {
     setTimeout(() => {
       drop.style.display = 'none';
-    }, 100);
+    }, 250); // 250ms delay to allow mousedown on dropdown items to fire first
   });
 }
 
@@ -1286,7 +1286,7 @@ async function patchRecord(table, idCol, idVal, data) {
   const url = new URL('/api/gov-query', window.location.origin);
   url.searchParams.set('table', table);
   url.searchParams.set('filter', `${idCol}=eq.${idVal}`);
-  
+
   try {
     const response = await fetch(url.toString(), {
       method: 'PATCH',
@@ -1295,17 +1295,19 @@ async function patchRecord(table, idCol, idVal, data) {
       },
       body: JSON.stringify(data)
     });
-    
+
     if (!response.ok) {
-      console.error(`PATCH error: ${response.status}`, await response.text());
+      const errText = await response.text();
+      console.error(`PATCH error: ${response.status}`, errText);
       showToast('Error saving data', 'error');
-      return;
+      return false;
     }
-    
-    showToast('Saved', 'success');
+
+    return true;
   } catch (err) {
     console.error('patchRecord error:', err);
     showToast('Error saving', 'error');
+    return false;
   }
 }
 
@@ -2568,7 +2570,7 @@ function renderListingMarket(record) {
     const capRate = comp.cap_rate ? pct(comp.cap_rate / 100) : '—';
     const sqft = comp.square_feet ? fmtN(comp.square_feet) : '—';
     
-    html += `<tr class="clickable-row" style="border-bottom: 1px solid #eee;cursor:pointer" onclick='showDetail(${JSON.stringify(comp).replace(/'/g,"&#39;")}, "gov-ownership")'>`;
+    html += `<tr class="clickable-row" style="border-bottom: 1px solid #eee;cursor:pointer" onclick='showDetail(${safeJSON(comp)}, "gov-ownership")'>`;
     html += `<td style="padding: 8px;">${esc(comp.address || '—')}</td>`;
     html += `<td style="text-align: right; padding: 8px; font-weight: 600;">${price}</td>`;
     html += `<td style="text-align: right; padding: 8px;">${capRate}</td>`;
@@ -2620,20 +2622,16 @@ function saveGovDetailLead(leadId) {
     research_notes: researchNotes || null
   };
   
-  // Patch the prospect_leads table
-  patchRecord('prospect_leads', { lead_id: leadId }, data)
-    .then(() => {
-      showToast('Lead updated successfully');
-      // Refresh the detail view
-      setTimeout(() => {
-        if (window.refreshDetailPanel) {
-          window.refreshDetailPanel();
-        }
-      }, 500);
+  // Patch the prospect_leads table — args: table, idCol, idVal, data
+  patchRecord('prospect_leads', 'lead_id', leadId, data)
+    .then((ok) => {
+      if (ok !== false) {
+        showToast('Lead updated successfully', 'success');
+      }
     })
     .catch(err => {
       console.error('Error saving lead:', err);
-      showToast('Error updating lead: ' + err.message);
+      showToast('Error updating lead: ' + err.message, 'error');
     });
 }
 
@@ -3100,7 +3098,7 @@ function renderPlayersTable(players, roleLabel, project) {
     const latestRecord = p.records[0] || {};
     const source = project === 'gov' ? (latestRecord.lead_id ? 'gov-lead' : 'gov-ownership') : 'dia-clinic';
 
-    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(latestRecord).replace(/'/g,"&#39;") + ', "' + source + '")\'>';
+    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(latestRecord) + ', "' + source + '")\'>';
     html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
     html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.deals + '</div>';
     html += '<div style="flex: 2; text-align: right;">' + fmt(p.volume) + '</div>';
@@ -3150,7 +3148,7 @@ function renderGovSearch() {
       if (leads.length > 0) {
         html += '<div class="search-results-section"><h4>Prospect Leads (' + leads.length + ')</h4>';
         leads.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-lead")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-lead")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.tenant_agency) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Lead</span></div>';
           html += '<div class="search-card-meta">';
@@ -3168,7 +3166,7 @@ function renderGovSearch() {
       if (ownership.length > 0) {
         html += '<div class="search-results-section"><h4>Ownership Records (' + ownership.length + ')</h4>';
         ownership.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-ownership")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || r.lease_number || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(108,140,255,0.15); color: #6c8cff;">Ownership</span></div>';
           html += '<div class="search-card-meta">';
@@ -3183,7 +3181,7 @@ function renderGovSearch() {
       if (listings.length > 0) {
         html += '<div class="search-results-section"><h4>Listings (' + listings.length + ')</h4>';
         listings.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-listing")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-listing")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.tenant_agency) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Listing</span></div>';
           html += '<div class="search-card-meta">';
@@ -3218,7 +3216,7 @@ function renderGovSearch() {
       if (properties.length > 0) {
         html += '<div class="search-results-section"><h4>Properties (' + properties.length + ')</h4>';
         properties.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "gov-ownership")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-ownership")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.property_name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(34,211,238,0.15); color: #22d3ee;">Property</span></div>';
           html += '<div class="search-card-meta">';

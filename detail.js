@@ -1509,10 +1509,25 @@ async function _loadTouchpoints(own) {
   }
 }
 
+/**
+ * Refresh the current detail panel without re-opening.
+ * Re-fetches data and re-renders the active tab.
+ */
+function refreshDetailPanel() {
+  if (!_udCache) return;
+  const db = _udCache.db;
+  const ids = _udCache.ids;
+  const fallback = _udCache.fallback || _udCache;
+  if (db && ids) {
+    openUnifiedDetail(db, ids, fallback);
+  }
+}
+
 // Expose to global scope
 window.openUnifiedDetail = openUnifiedDetail;
 window.switchUnifiedTab = switchUnifiedTab;
 window.showUnifiedDetail = showUnifiedDetail;
+window.refreshDetailPanel = refreshDetailPanel;
 window._udSubmitLogCall = _udSubmitLogCall;
 window._udPreviewTemplate = _udPreviewTemplate;
 window._udSendTemplate = _udSendTemplate;

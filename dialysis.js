@@ -202,7 +202,7 @@ async function loadDiaData() {
     // Show error in the UI instead of just console
     const inner = document.getElementById('bizPageInner');
     if (inner) {
-      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load dialysis data</p><p style="color:var(--text2);font-size:13px">' + (err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadDiaData()" style="margin-top:12px">Retry</button></div>';
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load dialysis data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadDiaData()" style="margin-top:12px">Retry</button></div>';
     }
   }
 }
@@ -777,7 +777,7 @@ function renderDiaChanges() {
       const npiChanged = row.snapshot_npi_changed ? ' • NPI Changed' : '';
       const highlight = isLargeMove ? 'background: rgba(251, 191, 36, 0.1);' : '';
       
-      html += `<div class="table-row clickable-row" style="${highlight}" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
+      html += `<div class="table-row clickable-row" style="${highlight}" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
       html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
@@ -871,7 +871,7 @@ function renderDiaNpi() {
     filtered.slice(0, 150).forEach(row => {
       const signalColor = row.signal_type === 'npi_changed' ? 'var(--accent)' : 'var(--text2)';
       
-      html += `<div class="table-row clickable-row" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
+      html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
       html += `<div style="flex: 1.5; color: ${signalColor};">${esc(cleanLabel(row.signal_type || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
@@ -1003,7 +1003,7 @@ function renderDiaPropertyResearch() {
       html += `<div style="flex: 0.5;">${row.state}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${row.review_type}</div>`;
-      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>&rsaquo;</span></div>`;
+      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${safeJSON(row)}, "dia-clinic")'>&rsaquo;</span></div>`;
       html += '</div>';
     });
   }
@@ -1200,7 +1200,7 @@ function renderDiaLeaseResearch() {
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: ${watchColor};">${row.closure_watch_level || 'none'}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${row.lease_backfill_priority || 'unknown'}</div>`;
-      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>&rsaquo;</span></div>`;
+      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${safeJSON(row)}, "dia-clinic")'>&rsaquo;</span></div>`;
       html += '</div>';
     });
   }
@@ -1391,7 +1391,7 @@ function renderDiaActivity() {
     outcomes.slice(0, 100).forEach(row => {
       const statusColor = row.status === 'verified_lease' || row.status === 'approved_link' ? '#34d399' : 'var(--text2)';
       
-      html += `<div class="table-row clickable-row" onclick='showDetail(${JSON.stringify(row).replace(/'/g,"&#39;")}, "dia-clinic")'>`;
+      html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
       html += `<div style="flex: 1;">${row.queue_type || 'unknown'}</div>`;
       html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
       html += `<div style="flex: 1; color: ${statusColor};">${row.status || 'unknown'}</div>`;
@@ -2150,7 +2150,7 @@ function renderDiaPlayers() {
 
     topOps.forEach((p, idx) => {
       const avg = p.clinics > 0 ? Math.round(p.patients / p.clinics) : 0;
-      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(p.records[0]).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(p.records[0]) + ', "dia-clinic")\'>';
       html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.clinics + '</div>';
       html += '<div style="flex: 1; text-align: right;">' + fmtN(p.patients) + '</div>';
@@ -2178,7 +2178,7 @@ function renderDiaPlayers() {
     html += '</div>';
 
     sorted.forEach((r, idx) => {
-      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
       html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(r.facility_name || '—') + '</div>';
       html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
       html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
@@ -2211,7 +2211,7 @@ function renderDiaPlayers() {
 
     sorted.forEach((r, idx) => {
       const deltaColor = (r.delta_patients || 0) > 0 ? '#34d399' : '#f87171';
-      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
       html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(r.facility_name || '—') + '</div>';
       html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
       html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
@@ -2261,7 +2261,7 @@ function renderDiaSearch() {
       if (clinics.length > 0) {
         html += '<div class="search-results-section"><h4>Clinics (' + clinics.length + ')</h4>';
         clinics.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Clinic</span></div>';
           html += '<div class="search-card-meta">';
@@ -2278,7 +2278,7 @@ function renderDiaSearch() {
       if (npiSignals.length > 0) {
         html += '<div class="search-results-section"><h4>NPI Signals (' + npiSignals.length + ')</h4>';
         npiSignals.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.npi || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(248,113,113,0.15); color: #f87171;">NPI Signal</span></div>';
           html += '<div class="search-card-meta">';
@@ -2293,7 +2293,7 @@ function renderDiaSearch() {
       if (propQueue.length > 0) {
         html += '<div class="search-results-section"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
         propQueue.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Property</span></div>';
           html += '<div class="search-card-meta">';
@@ -2308,7 +2308,7 @@ function renderDiaSearch() {
       if (outcomes.length > 0) {
         html += '<div class="search-results-section"><h4>Research Outcomes (' + outcomes.length + ')</h4>';
         outcomes.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + JSON.stringify(r).replace(/'/g,"&#39;") + ', "dia-clinic")\'>';
+          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.queue_type || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Research</span></div>';
           html += '<div class="search-card-meta">';
