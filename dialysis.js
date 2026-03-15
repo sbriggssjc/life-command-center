@@ -248,107 +248,371 @@ function renderDiaTab() {
 }
 
 // ============================================================================
-// OVERVIEW TAB
+// OVERVIEW TAB — Infographic-Style Command Center
 // ============================================================================
 
-/**
- * Render overview dashboard
- */
-function renderDiaOverview() {
-  let html = '<div class="biz-section">';
-  
-  // Metrics row
-  html += '<div class="gov-metrics">';
-  
-  const freshness = diaData.freshness || {};
-  const totalClinics = freshness.total_clinics || 0;
-  const coveragePct = freshness.coverage_pct || 0;
-  const addedCount = (diaData.inventorySummary.added?.clinic_count || 0);
-  const removedCount = (diaData.inventorySummary.removed?.clinic_count || 0);
-  const npiSignalCount = Object.values(diaData.npiSummary).reduce((s, r) => s + (r.signal_count || 0), 0);
-  
-  html += metricHTML('Total Clinics', fmtN(totalClinics), 'tracked nationwide', '');
-  html += metricHTML('Coverage %', coveragePct.toFixed(1) + '%', 'of clinics counted', '');
-  html += metricHTML('Changes This Month', fmtN(addedCount + removedCount), `${fmtN(addedCount)} added, ${fmtN(removedCount)} removed`, '');
-  html += metricHTML('NPI Signals', fmtN(npiSignalCount), 'requiring attention', '');
-  
-  html += '</div>';
-  
-  // Run Pulse section
-  html += '<div class="biz-section">';
-  html += '<h3 class="gov-chart-title">Run Pulse</h3>';
-  html += '<div class="data-table">';
-  
-  const recon = diaData.reconciliation;
-  if (recon && recon.started_at) {
-    const reconStatus = recon.run_status || 'unknown';
-    const statusColor = reconStatus === 'success' ? 'green' : reconStatus === 'running' ? 'amber' : 'red';
-    
-    html += '<div class="table-row">';
-    html += `<div style="flex: 1;">Latest Run</div>`;
-    html += `<div style="flex: 2; color: var(--text2);">${new Date(recon.started_at).toLocaleString()}</div>`;
-    html += `<div class="status-dot ${statusColor}"></div>`;
-    html += `<div style="flex: 1; text-align: right; color: var(--text2);">${reconStatus}</div>`;
-    html += '</div>';
-    
-    if (recon.rows_fetched !== undefined) {
-      html += '<div class="table-row">';
-      html += `<div style="flex: 1;">Rows Fetched</div>`;
-      html += `<div style="flex: 4; text-align: right; color: var(--accent);">${fmtN(recon.rows_fetched)}</div>`;
-      html += '</div>';
-    }
-    
-    if (recon.rows_updated !== undefined) {
-      html += '<div class="table-row">';
-      html += `<div style="flex: 1;">Rows Updated</div>`;
-      html += `<div style="flex: 4; text-align: right; color: var(--accent);">${fmtN(recon.rows_updated)}</div>`;
-      html += '</div>';
-    }
-    
-    if (recon.reconciliation_gap !== undefined) {
-      html += '<div class="table-row">';
-      html += `<div style="flex: 1;">Reconciliation Gap</div>`;
-      html += `<div style="flex: 4; text-align: right; color: var(--text2);">${fmtN(recon.reconciliation_gap)}</div>`;
-      html += '</div>';
-    }
-  } else {
-    html += '<div class="table-empty">No reconciliation data</div>';
-  }
-  
-  html += '</div>';
-  html += '</div>';
-  
-  // Top movers charts
-  html += '<div class="gov-chart-row">';
-  html += '<div class="gov-chart-card"><div class="gov-chart-title">Top 10 Movers Up</div><div class="chart-container"><canvas id="diaMoversUpChart"></canvas></div></div>';
-  html += '<div class="gov-chart-card"><div class="gov-chart-title">Top 10 Movers Down</div><div class="chart-container"><canvas id="diaMoversDownChart"></canvas></div></div>';
-  html += '</div>';
-  
-  html += '</div>';
-  
-  // Render charts after HTML is inserted
-  setTimeout(() => {
-    renderDiaMoversChart();
-  }, 0);
-  
-  return html;
+// Helper: navigate to a dia sub-tab
+function goToDiaTab(tabName) {
+  currentDiaTab = tabName;
+  document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
+  const btn = document.querySelector('[data-dia-tab="' + tabName + '"]');
+  if (btn) btn.classList.add('active');
+  if (tabName === 'activity') { renderBizContent(); }
+  else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) { renderDiaTab(); }
+}
+
+// Helper: build a clickable infographic card
+function infoCard(opts) {
+  const { title, value, sub, trend, trendLabel, color, icon, tab, span } = opts;
+  const colors = { blue:'#6c8cff', green:'#34d399', yellow:'#fbbf24', red:'#f87171', purple:'#a78bfa', cyan:'#22d3ee', white:'var(--text1)', orange:'#fb923c' };
+  const c = colors[color] || colors.blue;
+  const trendColor = trend > 0 ? '#34d399' : trend < 0 ? '#f87171' : 'var(--text3)';
+  const trendArrow = trend > 0 ? '▲' : trend < 0 ? '▼' : '—';
+  const trendStr = trend != null ? `<div style="font-size:11px;color:${trendColor};margin-top:4px">${trendArrow} ${trendLabel || ''}</div>` : '';
+  const click = tab ? ` onclick="goToDiaTab('${tab}')" style="cursor:pointer"` : '';
+  const spanStyle = span ? `grid-column: span ${span};` : '';
+  return `<div class="dia-info-card"${click} style="${spanStyle}">
+    ${icon ? `<div style="font-size:20px;margin-bottom:4px">${icon}</div>` : ''}
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
+    <div style="font-size:28px;font-weight:800;color:${c};line-height:1">${value}</div>
+    ${sub ? `<div style="font-size:11px;color:var(--text2);margin-top:4px">${sub}</div>` : ''}
+    ${trendStr}
+  </div>`;
+}
+
+// Helper: section header
+function sectionHeader(title, icon, tab) {
+  const click = tab ? ` onclick="goToDiaTab('${tab}')" style="cursor:pointer"` : '';
+  return `<div${click} style="display:flex;align-items:center;gap:8px;margin:28px 0 12px;padding:0 2px">
+    <span style="font-size:16px">${icon}</span>
+    <span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text2)">${title}</span>
+    ${tab ? '<span style="font-size:11px;color:var(--accent);margin-left:auto">View Details →</span>' : ''}
+  </div>`;
 }
 
 /**
- * Render movers charts
+ * Render overview — infographic-style command center homepage
+ */
+function renderDiaOverview() {
+  // Kick off lazy-loading sales comps and listings in background if not cached
+  if (!diaSalesComps && !diaSalesLoading) {
+    diaSalesLoading = true;
+    (async () => {
+      try {
+        let all = [], pg = 0;
+        while (true) {
+          const batch = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
+          all = all.concat(batch || []);
+          if (!batch || batch.length < 1000) break;
+          pg++;
+        }
+        diaSalesComps = all;
+      } catch(e) { diaSalesComps = []; }
+      diaSalesLoading = false;
+      // Re-render sales section once loaded
+      const salesEl = document.getElementById('diaOverviewSales');
+      if (salesEl) salesEl.innerHTML = renderSalesMetricsInner();
+      const nmEl = document.getElementById('diaOverviewNM');
+      if (nmEl) nmEl.innerHTML = renderNorthmarqInner();
+    })();
+  }
+  if (!diaAvailListings) {
+    (async () => {
+      try {
+        let all = [], pg = 0;
+        while (true) {
+          const batch = await diaQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
+          all = all.concat(batch || []);
+          if (!batch || batch.length < 1000) break;
+          pg++;
+        }
+        diaAvailListings = all;
+      } catch(e) { diaAvailListings = []; }
+      const mktEl = document.getElementById('diaOverviewMarket');
+      if (mktEl) mktEl.innerHTML = renderOnMarketInner();
+    })();
+  }
+
+  let html = '<div style="padding:4px 0">';
+
+  // ── STYLE ──
+  html += `<style>
+    .dia-info-card { background: var(--s2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; transition: all 0.15s; position: relative; overflow: hidden; }
+    .dia-info-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
+    .dia-info-card[onclick] { cursor: pointer; }
+    .dia-info-card[onclick]::after { content: '→'; position: absolute; top: 12px; right: 14px; font-size: 14px; color: var(--text3); opacity: 0; transition: opacity 0.15s; }
+    .dia-info-card[onclick]:hover::after { opacity: 1; color: var(--accent); }
+    .dia-grid { display: grid; gap: 10px; }
+    .dia-grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .dia-grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .dia-grid-5 { grid-template-columns: repeat(5, 1fr); }
+    .dia-divider { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+    @media (max-width: 900px) {
+      .dia-grid-4, .dia-grid-5 { grid-template-columns: repeat(2, 1fr); }
+      .dia-grid-3 { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>`;
+
+  // ── DATA ──
+  const f = diaData.freshness || {};
+  const totalClinics = f.total_clinics || 0;
+  const coveragePct = f.coverage_pct || 0;
+  const clinicsWithCounts = f.clinics_with_counts || 0;
+  const addedCount = diaData.inventorySummary.added?.clinic_count || 0;
+  const removedCount = diaData.inventorySummary.removed?.clinic_count || 0;
+  const npiSignalCount = Object.values(diaData.npiSummary).reduce((s,r) => s + (r.signal_count||0), 0);
+  const propQueueLen = diaData.propertyReviewQueue?.length || 0;
+  const leaseBackfillLen = diaData.leaseBackfillRows?.length || 0;
+  const researchDone = diaData.researchOutcomes?.length || 0;
+
+  // Compute patient stats from inventory changes
+  const clinicsWithPatients = diaData.inventoryChanges.filter(c => c.latest_total_patients > 0);
+  const totalPatients = clinicsWithPatients.reduce((s,c) => s + (c.latest_total_patients || 0), 0);
+  const avgPatients = clinicsWithPatients.length > 0 ? Math.round(totalPatients / clinicsWithPatients.length) : 0;
+
+  // Touchpoint metrics from SF activities (dialysis-related)
+  const diaActivities = (typeof activities !== 'undefined' ? activities : []).filter(a => {
+    const cat = (a.computed_category || '').toLowerCase();
+    return cat.includes('dialysis') || cat.includes('medical') || cat.includes('fmc') || cat.includes('davita') || cat.includes('fresenius');
+  });
+  const now = new Date();
+  const sixMonthsAgo = new Date(now); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const oneMonthAgo = new Date(now); oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const touchpointsYTD = diaActivities.filter(a => a.activity_date && new Date(a.activity_date) >= yearStart).length;
+  const touchpoints6mo = diaActivities.filter(a => a.activity_date && new Date(a.activity_date) >= sixMonthsAgo).length;
+  const touchpoints1mo = diaActivities.filter(a => a.activity_date && new Date(a.activity_date) >= oneMonthAgo).length;
+  const uniqueAccounts = new Set(diaActivities.map(a => a.company_name).filter(Boolean)).size;
+  const avgTouchPerAcct = uniqueAccounts > 0 ? (touchpointsYTD / uniqueAccounts).toFixed(1) : '—';
+
+  // Property linkage stats
+  const linkedPct = totalClinics > 0 ? ((totalClinics - propQueueLen) / totalClinics * 100).toFixed(1) : '—';
+  const leaseBackfillPct = totalClinics > 0 ? ((totalClinics - leaseBackfillLen) / totalClinics * 100).toFixed(1) : '—';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 1: DATABASE HEALTH
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Database Health', '🏥', 'search');
+  html += '<div class="dia-grid dia-grid-4">';
+  html += infoCard({ title: 'Total Clinics', value: fmtN(totalClinics), sub: 'tracked nationwide', color: 'blue', tab: 'search' });
+  html += infoCard({ title: 'Data Coverage', value: coveragePct.toFixed(1) + '%', sub: fmtN(clinicsWithCounts) + ' clinics with patient data', color: coveragePct > 50 ? 'green' : 'yellow', tab: 'search' });
+  html += infoCard({ title: 'Property Linked', value: linkedPct + '%', sub: fmtN(totalClinics - propQueueLen) + ' of ' + fmtN(totalClinics) + ' matched', color: 'cyan', tab: 'research' });
+  html += infoCard({ title: 'Lease Coverage', value: leaseBackfillPct + '%', sub: fmtN(leaseBackfillLen) + ' need backfill', color: 'purple', tab: 'research' });
+  html += '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 2: CLINICAL METRICS
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Clinical Metrics', '📊', 'changes');
+  html += '<div class="dia-grid dia-grid-4">';
+  html += infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avgPatients), sub: fmtN(totalPatients) + ' total across ' + fmtN(clinicsWithPatients.length) + ' clinics', color: 'blue', tab: 'changes' });
+  html += infoCard({ title: 'Inventory Changes', value: fmtN(addedCount + removedCount), sub: '+' + fmtN(addedCount) + ' added · -' + fmtN(removedCount) + ' removed', color: addedCount > removedCount ? 'green' : 'red', tab: 'changes' });
+  html += infoCard({ title: 'NPI Signals', value: fmtN(npiSignalCount), sub: 'provider changes detected', color: 'orange', tab: 'npi' });
+  html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name || '').substring(0,30) : 'no data', color: 'green', tab: 'changes' });
+  html += '</div>';
+
+  // Top Movers mini-charts
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">';
+  html += '<div class="dia-info-card" onclick="goToDiaTab(\'changes\')" style="cursor:pointer;padding:14px 16px">';
+  html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top 5 Movers Up</div>';
+  (diaData.moversUp || []).slice(0, 5).forEach((r, i) => {
+    const maxDelta = diaData.moversUp[0]?.delta_patients || 1;
+    const barW = Math.round((r.delta_patients / maxDelta) * 100);
+    html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name||'').substring(0,25))}</div>
+      <div style="width:80px;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#34d399;border-radius:4px"></div></div>
+      <div style="width:36px;font-size:10px;color:#34d399;text-align:right;font-weight:600">+${r.delta_patients}</div>
+    </div>`;
+  });
+  html += '</div>';
+
+  html += '<div class="dia-info-card" onclick="goToDiaTab(\'changes\')" style="cursor:pointer;padding:14px 16px">';
+  html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top 5 Movers Down</div>';
+  (diaData.moversDown || []).slice(0, 5).forEach((r, i) => {
+    const maxDelta = Math.abs(diaData.moversDown[0]?.delta_patients || 1);
+    const barW = Math.round((Math.abs(r.delta_patients) / maxDelta) * 100);
+    html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name||'').substring(0,25))}</div>
+      <div style="width:80px;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#f87171;border-radius:4px"></div></div>
+      <div style="width:36px;font-size:10px;color:#f87171;text-align:right;font-weight:600">${r.delta_patients}</div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 3: OUTREACH & TOUCHPOINTS
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Outreach & Touchpoints', '📞', 'activity');
+  html += '<div class="dia-grid dia-grid-5">';
+  html += infoCard({ title: 'Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue', tab: 'activity' });
+  html += infoCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'owner contacts', color: 'green', tab: 'activity' });
+  html += infoCard({ title: 'Last 30 Days', value: fmtN(touchpoints1mo), sub: 'recent contacts', color: 'cyan', tab: 'activity' });
+  html += infoCard({ title: 'Unique Accounts', value: fmtN(uniqueAccounts), sub: 'companies touched', color: 'purple', tab: 'activity' });
+  html += infoCard({ title: 'Avg / Account', value: avgTouchPerAcct, sub: 'touchpoints per account YTD', color: 'yellow', tab: 'activity' });
+  html += '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 4: TTM SALES MARKET
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('TTM Sales Activity', '💰', 'sales');
+  html += '<div id="diaOverviewSales">' + renderSalesMetricsInner() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 5: NORTHMARQ PERFORMANCE
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Northmarq Performance', '🏆', 'sales');
+  html += '<div id="diaOverviewNM">' + renderNorthmarqInner() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 6: ON MARKET
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('On Market', '🏪', 'sales');
+  html += '<div id="diaOverviewMarket">' + renderOnMarketInner() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 7: RESEARCH PIPELINE
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Research Pipeline', '🔬', 'research');
+  html += '<div class="dia-grid dia-grid-4">';
+  html += infoCard({ title: 'Property Queue', value: fmtN(propQueueLen), sub: 'pending review', color: 'yellow', tab: 'research' });
+  html += infoCard({ title: 'Lease Backfill', value: fmtN(leaseBackfillLen), sub: 'missing lease data', color: 'orange', tab: 'research' });
+  html += infoCard({ title: 'Completed Reviews', value: fmtN(researchDone), sub: 'outcomes logged', color: 'green', tab: 'research' });
+  const reconStatus = diaData.reconciliation?.run_status || 'unknown';
+  const reconDate = diaData.reconciliation?.started_at ? new Date(diaData.reconciliation.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+  html += infoCard({ title: 'Last Ingestion', value: reconDate, sub: reconStatus, color: reconStatus === 'success' ? 'green' : reconStatus === 'partial' ? 'yellow' : 'red' });
+  html += '</div>';
+
+  html += '</div>'; // end wrapper
+  return html;
+}
+
+// ── Inner renderers for async-loaded sections ──
+
+function renderSalesMetricsInner() {
+  if (!diaSalesComps) {
+    return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading sales data...</div></div></div>';
+  }
+  const comps = diaSalesComps;
+  const now = new Date();
+  const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
+  const ttmComps = comps.filter(r => r.sold_date && new Date(r.sold_date) >= ttmStart);
+  const ttmWithPrice = ttmComps.filter(r => r.price > 0);
+  const ttmVolume = ttmWithPrice.reduce((s,r) => s + parseFloat(r.price || 0), 0);
+  const ttmTxns = ttmComps.length;
+
+  // Cap rates (filter outliers: 1%–25%)
+  const validCaps = ttmComps.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate)).sort((a,b) => a - b);
+  const avgCap = validCaps.length > 0 ? (validCaps.reduce((s,v) => s+v, 0) / validCaps.length * 100).toFixed(2) + '%' : '—';
+  const q1Idx = Math.floor(validCaps.length * 0.25);
+  const q3Idx = Math.floor(validCaps.length * 0.75);
+  const lowerQCap = validCaps.length > 4 ? (validCaps[q1Idx] * 100).toFixed(2) + '%' : '—';
+  const upperQCap = validCaps.length > 4 ? (validCaps[q3Idx] * 100).toFixed(2) + '%' : '—';
+
+  let h = '<div class="dia-grid dia-grid-5">';
+  h += infoCard({ title: 'TTM Volume', value: '$' + fmtN(Math.round(ttmVolume / 1000000)) + 'M', sub: fmtN(ttmWithPrice.length) + ' priced transactions', color: 'green', tab: 'sales' });
+  h += infoCard({ title: 'TTM Transactions', value: fmtN(ttmTxns), sub: 'trailing 12 months', color: 'blue', tab: 'sales' });
+  h += infoCard({ title: 'Avg Cap Rate', value: avgCap, sub: fmtN(validCaps.length) + ' with cap data', color: 'cyan', tab: 'sales' });
+  h += infoCard({ title: 'Lower Quartile', value: lowerQCap, sub: '25th percentile', color: 'purple', tab: 'sales' });
+  h += infoCard({ title: 'Upper Quartile', value: upperQCap, sub: '75th percentile', color: 'yellow', tab: 'sales' });
+  h += '</div>';
+
+  // Historical total comps
+  h += '<div class="dia-grid dia-grid-3" style="margin-top:10px">';
+  const allWithPrice = comps.filter(r => r.price > 0);
+  const totalVolume = allWithPrice.reduce((s,r) => s + parseFloat(r.price || 0), 0);
+  const avgPrice = allWithPrice.length > 0 ? '$' + fmtN(Math.round(allWithPrice.reduce((s,r) => s + parseFloat(r.price), 0) / allWithPrice.length)) : '—';
+  h += infoCard({ title: 'All-Time Comps', value: fmtN(comps.length), sub: 'total in database', color: 'blue', tab: 'sales' });
+  h += infoCard({ title: 'All-Time Volume', value: '$' + fmtN(Math.round(totalVolume / 1000000)) + 'M', sub: fmtN(allWithPrice.length) + ' priced sales', color: 'green', tab: 'sales' });
+  h += infoCard({ title: 'Avg Sale Price', value: avgPrice, sub: 'across all comps', color: 'purple', tab: 'sales' });
+  h += '</div>';
+  return h;
+}
+
+function renderNorthmarqInner() {
+  if (!diaSalesComps) {
+    return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading...</div></div></div>';
+  }
+  const comps = diaSalesComps;
+  const now = new Date();
+  const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
+  const ttmComps = comps.filter(r => r.sold_date && new Date(r.sold_date) >= ttmStart);
+  const isNM = r => ((r.listing_broker||'')+(r.procuring_broker||'')).toLowerCase().includes('northmarq');
+  const nmComps = ttmComps.filter(isNM);
+  const nmWithPrice = nmComps.filter(r => r.price > 0);
+  const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.price || 0), 0);
+  const ttmWithPrice = ttmComps.filter(r => r.price > 0);
+  const ttmVolume = ttmWithPrice.reduce((s,r) => s + parseFloat(r.price || 0), 0);
+  const marketShareTxn = ttmComps.length > 0 ? (nmComps.length / ttmComps.length * 100).toFixed(1) + '%' : '—';
+  const marketShareVol = ttmVolume > 0 ? (nmVolume / ttmVolume * 100).toFixed(1) + '%' : '—';
+
+  // NM avg cap vs market avg cap
+  const nmCaps = nmComps.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
+  const mktCaps = ttmComps.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
+  const nmAvgCap = nmCaps.length > 0 ? (nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length*100).toFixed(2) + '%' : '—';
+  const mktAvgCap = mktCaps.length > 0 ? (mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length*100).toFixed(2) + '%' : '—';
+  // Cap rate advantage (lower cap = higher price = better for sellers)
+  const capAdv = (nmCaps.length > 0 && mktCaps.length > 0) ?
+    ((mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length - nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length) * 10000).toFixed(0) : null;
+  const capAdvStr = capAdv ? capAdv + ' bps tighter' : '—';
+
+  let h = '<div class="dia-grid dia-grid-4">';
+  h += infoCard({ title: 'NM TTM Sales', value: fmtN(nmComps.length), sub: '$' + fmtN(Math.round(nmVolume / 1000000)) + 'M volume', color: 'green', tab: 'sales' });
+  h += infoCard({ title: 'Market Share (Txns)', value: marketShareTxn, sub: fmtN(nmComps.length) + ' of ' + fmtN(ttmComps.length) + ' TTM deals', color: 'blue', tab: 'sales' });
+  h += infoCard({ title: 'NM Avg Cap Rate', value: nmAvgCap, sub: 'vs ' + mktAvgCap + ' market avg', color: 'cyan', tab: 'sales' });
+  h += infoCard({ title: 'Seller Value Add', value: capAdvStr, sub: capAdv && parseInt(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
+  h += '</div>';
+  return h;
+}
+
+function renderOnMarketInner() {
+  if (!diaAvailListings) {
+    return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading listings...</div></div></div>';
+  }
+  const listings = diaAvailListings;
+  const withPrice = listings.filter(r => r.ask_price > 0);
+  const validCaps = listings.filter(r => { const v = parseFloat(r.ask_cap); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.ask_cap)).sort((a,b) => a-b);
+  const avgAskCap = validCaps.length > 0 ? (validCaps.reduce((s,v)=>s+v,0)/validCaps.length*100).toFixed(2) + '%' : '—';
+  const q1Idx = Math.floor(validCaps.length * 0.25);
+  const q3Idx = Math.floor(validCaps.length * 0.75);
+  const lowerQ = validCaps.length > 4 ? (validCaps[q1Idx]*100).toFixed(2)+'%' : '—';
+  const upperQ = validCaps.length > 4 ? (validCaps[q3Idx]*100).toFixed(2)+'%' : '—';
+  const avgDom = listings.filter(r => r.dom > 0);
+  const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,r)=>s+r.dom,0)/avgDom.length) : '—';
+  const isNM = r => ((r.listing_broker||'')).toLowerCase().includes('northmarq');
+  const nmListings = listings.filter(isNM);
+
+  let h = '<div class="dia-grid dia-grid-5">';
+  h += infoCard({ title: 'Active Listings', value: fmtN(listings.length), sub: 'clinics on market', color: 'blue', tab: 'sales' });
+  h += infoCard({ title: 'Avg Ask Cap', value: avgAskCap, sub: fmtN(validCaps.length) + ' with cap data', color: 'cyan', tab: 'sales' });
+  h += infoCard({ title: 'Lower Quartile', value: lowerQ, sub: '25th pctl ask cap', color: 'purple', tab: 'sales' });
+  h += infoCard({ title: 'Upper Quartile', value: upperQ, sub: '75th pctl ask cap', color: 'yellow', tab: 'sales' });
+  h += infoCard({ title: 'NM On Market', value: fmtN(nmListings.length), sub: 'Northmarq listings', color: 'green', tab: 'sales' });
+  h += '</div>';
+
+  // Additional row
+  h += '<div class="dia-grid dia-grid-3" style="margin-top:10px">';
+  const avgAskPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s,r)=>s+parseFloat(r.ask_price),0)/withPrice.length)) : '—';
+  h += infoCard({ title: 'Avg Ask Price', value: avgAskPrice, sub: fmtN(withPrice.length) + ' priced', color: 'blue', tab: 'sales' });
+  h += infoCard({ title: 'Avg Days on Market', value: avgDomVal, sub: fmtN(avgDom.length) + ' with dates', color: 'yellow', tab: 'sales' });
+  h += infoCard({ title: 'NM Market Share', value: listings.length > 0 ? (nmListings.length/listings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
+  h += '</div>';
+  return h;
+}
+
+/**
+ * Render movers charts (legacy — kept for backward compat but overview uses inline bars now)
  */
 function renderDiaMoversChart() {
-  // renderBarChart(id, labels[], datasets[], isMoney) — from gov.js
   const upLabels = diaData.moversUp.map(r => norm(r.facility_name || '').substring(0, 20));
   const upValues = diaData.moversUp.map(r => r.delta_patients);
-
   const downLabels = diaData.moversDown.map(r => norm(r.facility_name || '').substring(0, 20));
   const downValues = diaData.moversDown.map(r => Math.abs(r.delta_patients));
-
   if (upLabels.length > 0 && typeof renderBarChart === 'function') {
     renderBarChart('diaMoversUpChart', upLabels, [{ label: 'Patients Added', data: upValues }], false);
   }
-
   if (downLabels.length > 0 && typeof renderBarChart === 'function') {
     renderBarChart('diaMoversDownChart', downLabels, [{ label: 'Patients Lost', data: downValues }], false);
   }
@@ -2018,3 +2282,5 @@ window.renderDiaSearch = renderDiaSearch;
 window.execDiaSearch = execDiaSearch;
 window.renderDiaSales = renderDiaSales;
 window.renderDiaPlayers = renderDiaPlayers;
+window.goToDiaTab = goToDiaTab;
+window.infoCard = infoCard;
