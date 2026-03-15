@@ -95,6 +95,7 @@ async function loadGovData() {
   }
 
   govData.properties = [];
+  govData.portfolioProperties = [];
   govData.salesComps = [];
   govData.leads = [];
   govData.contacts = [];
@@ -201,6 +202,22 @@ async function loadGovData() {
       { limit: 0 }
     );
     govData.properties = [{ count: propsRes.count || 0 }];
+
+    // Load property portfolio data for overview analytics (agency, lease term, rent, SF)
+    // Pull lightweight columns only — paginate to get all ~16K rows
+    try {
+      let allProps = [], pg = 0;
+      while (true) {
+        const batch = await govQuery('properties',
+          'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type',
+          { limit: 2000, offset: pg * 2000 }
+        );
+        allProps = allProps.concat(batch.data || []);
+        if (!batch.data || batch.data.length < 2000) break;
+        pg++;
+      }
+      govData.portfolioProperties = allProps;
+    } catch (e) { console.warn('Portfolio properties load error:', e); govData.portfolioProperties = []; }
 
     // Load sales transactions
     const salesRes = await govQuery('sales_transactions',
@@ -1381,6 +1398,7 @@ function setResearchMode(mode) {
 // TAB RENDERERS
 // ============================================================================
 
+
 function renderGovOverview() {
   // ── Kick off lazy-loading sales comps for overview metrics ──
   if (!govSalesComps && !govSalesLoading) {
@@ -1407,7 +1425,7 @@ function renderGovOverview() {
 
   let html = '<div style="padding:4px 0">';
 
-  // ── STYLE (reuse dia-info-card pattern) ──
+  // ── STYLE ──
   html += `<style>
     .gov-info-card { background: var(--s2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; transition: all 0.15s; position: relative; overflow: hidden; }
     .gov-info-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
@@ -1423,10 +1441,10 @@ function renderGovOverview() {
     }
   </style>`;
 
-  // ── Helper functions ──
-  const colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
+  // ── Helpers ──
+  const _colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
   function govCard(opts) {
-    const c = colors[opts.color] || colors.blue;
+    const c = _colors[opts.color] || _colors.blue;
     const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
     return `<div class="gov-info-card"${clickAttr}>
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
@@ -1439,11 +1457,24 @@ function renderGovOverview() {
     return `<div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)">
       <div style="font-size:13px;font-weight:700;color:var(--text1)">${icon} ${title}</div>${viewLink}</div>`;
   }
+  function inlineBar(items, maxVal) {
+    let out = '';
+    items.forEach(item => {
+      const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
+      out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
+        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
+        <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
+      </div>`;
+    });
+    return out;
+  }
 
   // ──────────────────────────────────────
   // DATA COMPUTATIONS
   // ──────────────────────────────────────
-  const propCount = govData.properties[0]?.count || 0;
+  const portfolio = govData.portfolioProperties || [];
+  const propCount = govData.properties[0]?.count || portfolio.length;
   const ownership = govData.ownership || [];
   const leads = govData.leads || [];
   const contacts = govData.contacts || [];
@@ -1451,10 +1482,181 @@ function renderGovOverview() {
   const gsaEvents = govData.gsaEvents || [];
   const gsaSnapshots = govData.gsaSnapshots || [];
   const frpp = govData.frppRecords || [];
-  const countyAuth = govData.countyAuth || [];
   const loans = govData.loans || [];
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
 
-  // Ownership metrics
+  // Portfolio aggregates
+  const withSF = portfolio.filter(p => p.sf_leased > 0);
+  const totalSF = withSF.reduce((s, p) => s + (p.sf_leased || 0), 0);
+  const totalGrossRent = portfolio.reduce((s, p) => s + (p.gross_rent || 0), 0);
+  const withRentPSF = portfolio.filter(p => p.gross_rent_psf > 0);
+  const avgRentPSF = withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—';
+  const totalNOI = portfolio.reduce((s, p) => s + (p.noi || 0), 0);
+  const distinctAgencies = new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+
+  // Lease expiration analysis
+  const withTerm = portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
+  const expiring1yr = withTerm.filter(p => p.firm_term_remaining <= 1).length;
+  const expiring2yr = withTerm.filter(p => p.firm_term_remaining <= 2).length;
+  const expiring5yr = withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
+  const longTerm = withTerm.filter(p => p.firm_term_remaining > 5).length;
+  const avgFirmTerm = withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—';
+
+  // Agency breakdown (top 10 by count)
+  const agencyMap = {};
+  portfolio.forEach(p => {
+    const a = p.agency || 'Unknown';
+    if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
+    agencyMap[a].count++;
+    agencyMap[a].rent += (p.gross_rent || 0);
+    agencyMap[a].sf += (p.sf_leased || 0);
+    if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
+  });
+  const topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
+  const topAgenciesByRent = Object.entries(agencyMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
+
+  // State breakdown
+  const stateMap = {};
+  portfolio.forEach(p => {
+    const s = p.state || 'UNK';
+    if (!stateMap[s]) stateMap[s] = { count: 0, rent: 0, sf: 0 };
+    stateMap[s].count++;
+    stateMap[s].rent += (p.gross_rent || 0);
+    stateMap[s].sf += (p.sf_leased || 0);
+  });
+  const topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
+
+  // ═══════════════════════════════════════════════
+  // SECTION 1: PORTFOLIO AT A GLANCE
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Portfolio at a Glance', '🏛️', 'search');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Total Properties', value: fmtN(propCount), sub: 'government-leased nationwide', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Total SF Leased', value: fmtN(Math.round(totalSF / 1e6)) + 'M', sub: fmtN(withSF.length) + ' properties with data', color: 'green', tab: 'search' });
+  html += govCard({ title: 'Total Gross Rent', value: '$' + fmtN(Math.round(totalGrossRent / 1e9)) + 'B', sub: 'annual government rent', color: 'cyan', tab: 'search' });
+  html += govCard({ title: 'Avg Rent / SF', value: '$' + avgRentPSF, sub: fmtN(withRentPSF.length) + ' properties', color: 'purple', tab: 'search' });
+  html += govCard({ title: 'Agencies Tracked', value: fmtN(distinctAgencies), sub: 'distinct tenants', color: 'yellow', tab: 'search' });
+  html += '</div>';
+
+  // Total NOI row
+  if (totalNOI > 0) {
+    html += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
+    html += govCard({ title: 'Total NOI', value: '$' + fmtN(Math.round(totalNOI / 1e6)) + 'M', sub: 'net operating income', color: 'green', tab: 'search' });
+    const avgNOI = withSF.length > 0 ? totalNOI / withSF.length : 0;
+    html += govCard({ title: 'Avg NOI / Property', value: avgNOI > 0 ? '$' + fmtN(Math.round(avgNOI / 1000)) + 'K' : '—', sub: 'across portfolio', color: 'blue', tab: 'search' });
+    html += govCard({ title: 'Contacts', value: contacts.length >= 500 ? '500+' : fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 2: LEASE EXPIRATION RISK
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Lease Expiration Risk', '⏰', 'pipeline');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Expiring < 1 Year', value: fmtN(expiring1yr), sub: withTerm.length > 0 ? (expiring1yr/withTerm.length*100).toFixed(1) + '% of portfolio' : '', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Expiring < 2 Years', value: fmtN(expiring2yr), sub: withTerm.length > 0 ? (expiring2yr/withTerm.length*100).toFixed(1) + '% of portfolio' : '', color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: '2–5 Year Term', value: fmtN(expiring5yr), sub: 'mid-range leases', color: 'yellow', tab: 'search' });
+  html += govCard({ title: '5+ Year Term', value: fmtN(longTerm), sub: 'long-term secured', color: 'green', tab: 'search' });
+  html += govCard({ title: 'Avg Firm Term', value: avgFirmTerm + ' yrs', sub: fmtN(withTerm.length) + ' with term data', color: 'blue', tab: 'search' });
+  html += '</div>';
+
+  // Expiration timeline bar
+  if (withTerm.length > 0) {
+    html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lease Expiration Distribution</div>';
+    const buckets = [
+      { label: 'Expired / < 0 yrs', count: withTerm.filter(p => p.firm_term_remaining < 0).length, color: '#ef4444' },
+      { label: '0 – 1 years', count: withTerm.filter(p => p.firm_term_remaining >= 0 && p.firm_term_remaining <= 1).length, color: '#f87171' },
+      { label: '1 – 2 years', count: withTerm.filter(p => p.firm_term_remaining > 1 && p.firm_term_remaining <= 2).length, color: '#fb923c' },
+      { label: '2 – 3 years', count: withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 3).length, color: '#fbbf24' },
+      { label: '3 – 5 years', count: withTerm.filter(p => p.firm_term_remaining > 3 && p.firm_term_remaining <= 5).length, color: '#34d399' },
+      { label: '5 – 10 years', count: withTerm.filter(p => p.firm_term_remaining > 5 && p.firm_term_remaining <= 10).length, color: '#22d3ee' },
+      { label: '10+ years', count: withTerm.filter(p => p.firm_term_remaining > 10).length, color: '#60a5fa' },
+    ];
+    const maxBucket = Math.max(...buckets.map(b => b.count));
+    html += inlineBar(buckets.map(b => ({
+      label: b.label, value: b.count, display: fmtN(b.count), barColor: b.color, labelWidth: 100, valueWidth: 40
+    })), maxBucket);
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 3: AGENCY BREAKDOWN
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Agency Breakdown', '🏢', 'search');
+
+  if (topAgencies.length > 0) {
+    // Top agencies by property count
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    html += '<div class="gov-info-card" onclick="goToGovTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Property Count</div>';
+    const maxAgCount = topAgencies[0][1].count;
+    html += inlineBar(topAgencies.map(([name, d]) => ({
+      label: name.length > 18 ? name.substring(0,16) + '…' : name,
+      value: d.count, display: fmtN(d.count), barColor: '#60a5fa', labelWidth: 110, valueWidth: 40
+    })), maxAgCount);
+    html += '</div>';
+
+    // Top agencies by rent
+    html += '<div class="gov-info-card" onclick="goToGovTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Annual Rent</div>';
+    const maxAgRent = topAgenciesByRent[0][1].rent;
+    html += inlineBar(topAgenciesByRent.map(([name, d]) => ({
+      label: name.length > 18 ? name.substring(0,16) + '…' : name,
+      value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#34d399', labelWidth: 110, valueWidth: 56
+    })), maxAgRent);
+    html += '</div>';
+    html += '</div>';
+
+    // Agency avg term remaining
+    html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Avg Firm Term Remaining by Major Agency</div>';
+    const agencyTerms = topAgencies.filter(([, d]) => d.termCount > 0).map(([name, d]) => ({
+      name, avgTerm: d.termSum / d.termCount, count: d.count
+    })).sort((a,b) => a.avgTerm - b.avgTerm);
+    const maxTerm = Math.max(...agencyTerms.map(a => Math.max(a.avgTerm, 0)), 1);
+    html += inlineBar(agencyTerms.map(a => ({
+      label: a.name.length > 18 ? a.name.substring(0,16) + '…' : a.name,
+      value: Math.max(a.avgTerm, 0),
+      display: a.avgTerm.toFixed(1) + ' yrs',
+      barColor: a.avgTerm < 1 ? '#f87171' : a.avgTerm < 2 ? '#fb923c' : a.avgTerm < 5 ? '#fbbf24' : '#34d399',
+      labelWidth: 110, valueWidth: 50
+    })), maxTerm);
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 4: GEOGRAPHIC DISTRIBUTION
+  // ═══════════════════════════════════════════════
+  if (topStates.length > 0) {
+    html += govSectionHeader('Geographic Distribution', '🗺️', 'search');
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+
+    // By count
+    html += '<div class="gov-info-card" style="padding:14px 16px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Property Count</div>';
+    const maxStCount = topStates[0][1].count;
+    html += inlineBar(topStates.map(([st, d]) => ({
+      label: STATE_FULL[st] || st, value: d.count, display: fmtN(d.count), barColor: '#a78bfa', labelWidth: 110, valueWidth: 40
+    })), maxStCount);
+    html += '</div>';
+
+    // By rent
+    const topStatesByRent = Object.entries(stateMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
+    html += '<div class="gov-info-card" style="padding:14px 16px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Annual Rent</div>';
+    const maxStRent = topStatesByRent[0][1].rent;
+    html += inlineBar(topStatesByRent.map(([st, d]) => ({
+      label: STATE_FULL[st] || st, value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#22d3ee', labelWidth: 110, valueWidth: 56
+    })), maxStRent);
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 5: OWNERSHIP INTELLIGENCE
+  // ═══════════════════════════════════════════════
   const totalOwnershipChanges = ownership.length;
   const withSalePrice = ownership.filter(o => o.sale_price > 0);
   const confirmedValue = withSalePrice.reduce((s, o) => s + (o.sale_price || 0), 0);
@@ -1462,37 +1664,62 @@ function renderGovOverview() {
   const ownershipCaps = withSalePrice.filter(o => o.cap_rate > 0.01 && o.cap_rate < 0.25).map(o => parseFloat(o.cap_rate)).sort((a,b) => a - b);
   const avgOwnershipCap = ownershipCaps.length > 0 ? (ownershipCaps.reduce((s,v) => s+v, 0) / ownershipCaps.length * 100).toFixed(2) + '%' : '—';
 
-  // Pipeline / leads metrics
+  html += govSectionHeader('Ownership Intelligence', '🔍', 'ownership');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Ownership Changes', value: totalOwnershipChanges >= 500 ? '500+' : fmtN(totalOwnershipChanges), sub: 'transfers tracked', color: 'blue', tab: 'ownership' });
+  html += govCard({ title: 'Confirmed Sales', value: fmtN(withSalePrice.length), sub: '$' + fmtN(Math.round(confirmedValue / 1e6)) + 'M total value', color: 'green', tab: 'ownership' });
+  html += govCard({ title: 'Avg Sale Cap Rate', value: avgOwnershipCap, sub: fmtN(ownershipCaps.length) + ' with cap data', color: 'cyan', tab: 'ownership' });
+  html += govCard({ title: 'Needs Research', value: fmtN(needsResearch), sub: 'pending investigation', color: 'yellow', tab: 'research' });
+  html += govCard({ title: 'Research Coverage', value: totalOwnershipChanges > 0 ? ((totalOwnershipChanges - needsResearch) / totalOwnershipChanges * 100).toFixed(1) + '%' : '—', sub: 'changes researched', color: 'purple', tab: 'research' });
+  html += '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 6: PROSPECT PIPELINE
+  // ═══════════════════════════════════════════════
   const hotLeads = leads.filter(l => l.lead_temperature === 'hot').length;
   const warmLeads = leads.filter(l => l.lead_temperature === 'warm').length;
   const pipelineValue = leads.reduce((s, l) => s + (l.estimated_value || 0), 0);
+
+  html += govSectionHeader('Prospect Pipeline', '🎯', 'pipeline');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Total Leads', value: leads.length >= 500 ? '500+' : fmtN(leads.length), sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
+  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads), sub: 'high priority', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads), sub: 'active prospects', color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M', sub: 'estimated total', color: 'green', tab: 'pipeline' });
   const avgLeadValue = leads.length > 0 ? pipelineValue / leads.length : 0;
+  html += govCard({ title: 'Avg Lead Value', value: avgLeadValue > 0 ? '$' + fmtN(Math.round(avgLeadValue / 1000)) + 'K' : '—', sub: 'per prospect', color: 'purple', tab: 'pipeline' });
+  html += '</div>';
 
-  // Listings metrics
-  const activeListings = listings.filter(l => l.listing_status === 'active');
-  const underContract = listings.filter(l => l.listing_status === 'under_contract');
-  const totalAsking = activeListings.reduce((s, l) => s + (l.asking_price || 0), 0);
-  const listingCaps = activeListings.filter(l => l.asking_cap_rate > 0.01 && l.asking_cap_rate < 0.25).map(l => parseFloat(l.asking_cap_rate)).sort((a,b) => a - b);
-  const avgAskingCap = listingCaps.length > 0 ? (listingCaps.reduce((s,v)=>s+v,0)/listingCaps.length*100).toFixed(2)+'%' : '—';
-  const avgDom = activeListings.filter(l => l.days_on_market > 0);
-  const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,l) => s + l.days_on_market, 0) / avgDom.length) : '—';
+  // Pipeline by agency
+  const leadsByAgency = {};
+  leads.forEach(l => { const a = l.tenant_agency || l.agency_full_name || 'Unknown'; leadsByAgency[a] = (leadsByAgency[a] || 0) + 1; });
+  const topLeadAgencies = Object.entries(leadsByAgency).sort((a,b) => b[1] - a[1]).slice(0, 8);
+  if (topLeadAgencies.length > 1) {
+    html += '<div class="gov-info-card" onclick="goToGovTab(\'pipeline\')" style="cursor:pointer;padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Leads by Tenant Agency</div>';
+    const maxLead = topLeadAgencies[0][1];
+    html += inlineBar(topLeadAgencies.map(([name, cnt]) => ({
+      label: name.length > 20 ? name.substring(0,18) + '…' : name,
+      value: cnt, display: fmtN(cnt), barColor: '#fb923c', labelWidth: 130, valueWidth: 35
+    })), maxLead);
+    html += '</div>';
+  }
 
-  // GSA metrics
-  const now = new Date();
-  const yearStart = new Date(now.getFullYear(), 0, 1);
-  const oneYearAgo = new Date(now); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const gsaEventsYTD = gsaEvents.filter(e => e.event_date && new Date(e.event_date) >= yearStart).length;
-  const gsaEventTypes = {};
-  gsaEvents.forEach(e => { gsaEventTypes[e.event_type] = (gsaEventTypes[e.event_type] || 0) + 1; });
-  const totalGsaRent = gsaSnapshots.reduce((s, s2) => s + (s2.annual_rent || 0), 0);
+  // Deal grade breakdown
+  const gradeMap = {};
+  leads.forEach(l => { if (l.deal_grade) gradeMap[l.deal_grade] = (gradeMap[l.deal_grade] || 0) + 1; });
+  if (Object.keys(gradeMap).length > 0) {
+    const gradeColors = { A: '#34d399', B: '#60a5fa', C: '#fbbf24', D: '#fb923c', F: '#f87171' };
+    html += '<div class="gov-grid gov-grid-' + Math.min(Object.keys(gradeMap).length, 5) + '" style="margin-top:10px">';
+    Object.entries(gradeMap).sort((a,b) => a[0].localeCompare(b[0])).forEach(([grade, cnt]) => {
+      html += govCard({ title: 'Grade ' + grade, value: fmtN(cnt), sub: 'leads', color: grade === 'A' ? 'green' : grade === 'B' ? 'blue' : grade === 'C' ? 'yellow' : 'orange', tab: 'pipeline' });
+    });
+    html += '</div>';
+  }
 
-  // FRPP metrics
-  const frppTotalSF = frpp.reduce((s, r) => s + (r.square_feet || 0), 0);
-  const frppTotalRent = frpp.reduce((s, r) => s + (r.annual_rent_to_lessor || 0), 0);
-  const frppAgencies = new Set(frpp.map(r => r.using_agency).filter(Boolean)).size;
-
-  // Touchpoint metrics (gov-related activities from SF)
-  const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
+  // ═══════════════════════════════════════════════
+  // SECTION 7: OUTREACH & TOUCHPOINTS
+  // ═══════════════════════════════════════════════
   const allActivities = (typeof activities !== 'undefined' ? activities : []);
   const govCategories = ['government', 'gsa', 'va', 'ssa', 'usps', 'federal', 'state/local'];
   const govActivities = allActivities.filter(a => {
@@ -1506,132 +1733,50 @@ function renderGovOverview() {
   const touchpoints1mo = govActivities.filter(a => a.activity_date && new Date(a.activity_date) >= oneMonthAgo).length;
   const uniqueGovAccounts = new Set(govActivities.map(a => a.company_name).filter(Boolean)).size;
 
-  // ═══════════════════════════════════════════════
-  // SECTION 1: DATABASE HEALTH
-  // ═══════════════════════════════════════════════
-  html += govSectionHeader('Database Health', '🏛️', 'search');
-  html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Properties', value: fmtN(propCount), sub: 'government-leased tracked', color: 'blue', tab: 'search' });
-  html += govCard({ title: 'Contacts', value: contacts.length >= 500 ? '500+' : fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
-  html += govCard({ title: 'County Resources', value: fmtN(countyAuth.length), sub: 'assessor/recorder links', color: 'cyan', tab: 'research' });
-  html += govCard({ title: 'GSA Snapshots', value: fmtN(gsaSnapshots.length), sub: 'lease data records', color: 'green', tab: 'search' });
-  html += govCard({ title: 'FRPP Records', value: fmtN(frpp.length), sub: 'federal real property', color: 'yellow', tab: 'search' });
-  html += '</div>';
-
-  // ═══════════════════════════════════════════════
-  // SECTION 2: OWNERSHIP INTELLIGENCE
-  // ═══════════════════════════════════════════════
-  html += govSectionHeader('Ownership Intelligence', '🔍', 'ownership');
-  html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Ownership Changes', value: totalOwnershipChanges >= 500 ? '500+' : fmtN(totalOwnershipChanges), sub: 'transfers tracked', color: 'blue', tab: 'ownership' });
-  html += govCard({ title: 'Confirmed Sales', value: fmtN(withSalePrice.length), sub: '$' + fmtN(Math.round(confirmedValue / 1e6)) + 'M total value', color: 'green', tab: 'ownership' });
-  html += govCard({ title: 'Avg Sale Cap Rate', value: avgOwnershipCap, sub: fmtN(ownershipCaps.length) + ' with cap data', color: 'cyan', tab: 'ownership' });
-  html += govCard({ title: 'Needs Research', value: fmtN(needsResearch), sub: 'pending investigation', color: 'yellow', tab: 'research' });
-  html += govCard({ title: 'Research Coverage', value: totalOwnershipChanges > 0 ? ((totalOwnershipChanges - needsResearch) / totalOwnershipChanges * 100).toFixed(1) + '%' : '—', sub: 'changes researched', color: 'purple', tab: 'research' });
-  html += '</div>';
-
-  // Ownership by year mini-chart
-  const ownByYear = {};
-  ownership.forEach(o => {
-    if (o.transfer_date) {
-      const year = o.transfer_date.substring(0, 4);
-      ownByYear[year] = (ownByYear[year] || 0) + 1;
-    }
-  });
-  const yearLabels = Object.keys(ownByYear).sort();
-  if (yearLabels.length > 0) {
-    html += '<div class="gov-info-card" onclick="goToGovTab(\'ownership\')" style="cursor:pointer;padding:14px 16px;margin-top:10px">';
-    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Ownership Changes by Year</div>';
-    const maxYearCount = Math.max(...yearLabels.map(y => ownByYear[y]));
-    yearLabels.slice(-8).forEach(year => {
-      const count = ownByYear[year];
-      const barW = Math.round((count / maxYearCount) * 100);
-      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div style="width:36px;font-size:11px;color:var(--text2);text-align:right;font-weight:600">${year}</div>
-        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#60a5fa;border-radius:4px"></div></div>
-        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  // ═══════════════════════════════════════════════
-  // SECTION 3: PROSPECT PIPELINE
-  // ═══════════════════════════════════════════════
-  html += govSectionHeader('Prospect Pipeline', '🎯', 'pipeline');
-  html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Total Leads', value: leads.length >= 500 ? '500+' : fmtN(leads.length), sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
-  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads), sub: 'high priority', color: 'red', tab: 'pipeline' });
-  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads), sub: 'active prospects', color: 'orange', tab: 'pipeline' });
-  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M', sub: 'estimated total', color: 'green', tab: 'pipeline' });
-  html += govCard({ title: 'Avg Lead Value', value: avgLeadValue > 0 ? '$' + fmtN(Math.round(avgLeadValue / 1000)) + 'K' : '—', sub: 'per prospect', color: 'purple', tab: 'pipeline' });
-  html += '</div>';
-
-  // Lead temperature breakdown
-  const tempCounts = {};
-  leads.forEach(l => { const t = l.lead_temperature || 'unknown'; tempCounts[t] = (tempCounts[t] || 0) + 1; });
-  if (Object.keys(tempCounts).length > 0) {
-    html += '<div class="gov-info-card" onclick="goToGovTab(\'pipeline\')" style="cursor:pointer;padding:14px 16px;margin-top:10px">';
-    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lead Temperature Distribution</div>';
-    const tempColors = { hot: '#f87171', warm: '#fb923c', cold: '#60a5fa', unknown: '#94a3b8' };
-    const maxTemp = Math.max(...Object.values(tempCounts));
-    Object.entries(tempCounts).sort((a,b) => b[1] - a[1]).forEach(([temp, count]) => {
-      const barW = Math.round((count / maxTemp) * 100);
-      const barColor = tempColors[temp] || '#94a3b8';
-      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div style="width:60px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;text-transform:capitalize">${temp}</div>
-        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${barColor};border-radius:4px"></div></div>
-        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  // ═══════════════════════════════════════════════
-  // SECTION 4: OUTREACH & TOUCHPOINTS
-  // ═══════════════════════════════════════════════
   html += govSectionHeader('Government Outreach', '📞', 'search');
-  html += '<div class="gov-grid gov-grid-5">';
+  html += '<div class="gov-grid gov-grid-4">';
   html += govCard({ title: 'Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue' });
   html += govCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'gov contacts', color: 'green' });
   html += govCard({ title: 'Last 30 Days', value: fmtN(touchpoints1mo), sub: 'recent contacts', color: 'cyan' });
   html += govCard({ title: 'Unique Accounts', value: fmtN(uniqueGovAccounts), sub: 'gov entities touched', color: 'purple' });
-  html += govCard({ title: 'Categories', value: Object.keys(gsaEventTypes).length || '—', sub: 'GSA event types tracked', color: 'yellow' });
   html += '</div>';
 
   // Per-category breakdown
   const catCounts = {};
   govActivities.forEach(a => { const c = a.computed_category || 'Uncategorized'; catCounts[c] = (catCounts[c] || 0) + 1; });
-  if (Object.keys(catCounts).length > 0) {
+  if (Object.keys(catCounts).length > 1) {
     html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Touchpoints by Category</div>';
     const maxCat = Math.max(...Object.values(catCounts));
-    Object.entries(catCounts).sort((a,b) => b[1] - a[1]).forEach(([cat, count]) => {
-      const barW = Math.round((count / maxCat) * 100);
-      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div style="width:120px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(cat)}</div>
-        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#60a5fa;border-radius:4px"></div></div>
-        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
-      </div>`;
-    });
+    html += inlineBar(Object.entries(catCounts).sort((a,b) => b[1] - a[1]).map(([cat, count]) => ({
+      label: cat, value: count, display: fmtN(count), barColor: '#60a5fa', labelWidth: 120, valueWidth: 35
+    })), maxCat);
     html += '</div>';
   }
 
   // ═══════════════════════════════════════════════
-  // SECTION 5: TTM SALES MARKET
+  // SECTION 8: TTM SALES
   // ═══════════════════════════════════════════════
   html += govSectionHeader('TTM Sales Activity', '💰', 'sales');
   html += '<div id="govOverviewSales">' + renderGovSalesMetrics() + '</div>';
 
   // ═══════════════════════════════════════════════
-  // SECTION 6: NORTHMARQ PERFORMANCE
+  // SECTION 9: NORTHMARQ PERFORMANCE
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Northmarq Performance', '🏆', 'sales');
   html += '<div id="govOverviewNM">' + renderGovNorthmarqMetrics() + '</div>';
 
   // ═══════════════════════════════════════════════
-  // SECTION 7: ON MARKET
+  // SECTION 10: ON MARKET
   // ═══════════════════════════════════════════════
+  const activeListings = listings.filter(l => l.listing_status === 'active');
+  const underContract = listings.filter(l => l.listing_status === 'under_contract');
+  const totalAsking = activeListings.reduce((s, l) => s + (l.asking_price || 0), 0);
+  const listingCaps = activeListings.filter(l => l.asking_cap_rate > 0.01 && l.asking_cap_rate < 0.25).map(l => parseFloat(l.asking_cap_rate)).sort((a,b) => a-b);
+  const avgAskingCap = listingCaps.length > 0 ? (listingCaps.reduce((s,v)=>s+v,0)/listingCaps.length*100).toFixed(2)+'%' : '—';
+  const avgDom = activeListings.filter(l => l.days_on_market > 0);
+  const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,l) => s + l.days_on_market, 0) / avgDom.length) : '—';
+
   html += govSectionHeader('On Market', '🏢', 'listings');
   html += '<div class="gov-grid gov-grid-5">';
   html += govCard({ title: 'Active Listings', value: fmtN(activeListings.length), sub: 'currently on market', color: 'blue', tab: 'listings' });
@@ -1641,25 +1786,21 @@ function renderGovOverview() {
   html += govCard({ title: 'Avg DOM', value: avgDomVal, sub: 'days on market', color: 'yellow', tab: 'listings' });
   html += '</div>';
 
-  // Listing cap rate quartiles
-  if (listingCaps.length > 4) {
-    const q1 = (listingCaps[Math.floor(listingCaps.length * 0.25)] * 100).toFixed(2) + '%';
-    const median = (listingCaps[Math.floor(listingCaps.length * 0.5)] * 100).toFixed(2) + '%';
-    const q3 = (listingCaps[Math.floor(listingCaps.length * 0.75)] * 100).toFixed(2) + '%';
-    html += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
-    html += govCard({ title: '25th Pctl Cap', value: q1, sub: 'lower quartile', color: 'green', tab: 'listings' });
-    html += govCard({ title: 'Median Cap', value: median, sub: '50th percentile', color: 'blue', tab: 'listings' });
-    html += govCard({ title: '75th Pctl Cap', value: q3, sub: 'upper quartile', color: 'orange', tab: 'listings' });
-    html += '</div>';
-  }
+  // ═══════════════════════════════════════════════
+  // SECTION 11: GSA LEASE INTEL
+  // ═══════════════════════════════════════════════
+  const gsaEventsYTD = gsaEvents.filter(e => e.event_date && new Date(e.event_date) >= yearStart).length;
+  const gsaEventTypes = {};
+  gsaEvents.forEach(e => { gsaEventTypes[e.event_type] = (gsaEventTypes[e.event_type] || 0) + 1; });
+  const totalGsaRent = gsaSnapshots.reduce((s, s2) => s + (s2.annual_rent || 0), 0);
+  const frppTotalSF = frpp.reduce((s, r) => s + (r.square_feet || 0), 0);
+  const frppTotalRent = frpp.reduce((s, r) => s + (r.annual_rent_to_lessor || 0), 0);
+  const frppAgencies = new Set(frpp.map(r => r.using_agency).filter(Boolean)).size;
 
-  // ═══════════════════════════════════════════════
-  // SECTION 8: GSA LEASE INTEL
-  // ═══════════════════════════════════════════════
   html += govSectionHeader('GSA Lease Intelligence', '📋', 'search');
   html += '<div class="gov-grid gov-grid-4">';
   html += govCard({ title: 'GSA Events YTD', value: fmtN(gsaEventsYTD), sub: now.getFullYear() + ' lease events', color: 'blue' });
-  html += govCard({ title: 'Total GSA Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaSnapshots.length) + ' leases tracked', color: 'green' });
+  html += govCard({ title: 'GSA Total Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaSnapshots.length) + ' leases tracked', color: 'green' });
   html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(frpp.length) + ' federal properties', color: 'cyan' });
   html += govCard({ title: 'FRPP Agencies', value: fmtN(frppAgencies), sub: '$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent', color: 'purple' });
   html += '</div>';
@@ -1669,29 +1810,9 @@ function renderGovOverview() {
     html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">GSA Event Types</div>';
     const maxEvt = Math.max(...Object.values(gsaEventTypes));
-    Object.entries(gsaEventTypes).sort((a,b) => b[1] - a[1]).forEach(([type, count]) => {
-      const barW = Math.round((count / maxEvt) * 100);
-      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div style="width:120px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(type)}</div>
-        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#22d3ee;border-radius:4px"></div></div>
-        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  // ═══════════════════════════════════════════════
-  // SECTION 9: FINANCING / LOANS
-  // ═══════════════════════════════════════════════
-  if (loans.length > 0) {
-    html += govSectionHeader('Financing Intelligence', '🏦', 'search');
-    const totalLoanAmt = loans.reduce((s, l) => s + (l.loan_amount || 0), 0);
-    const loanTypes = {};
-    loans.forEach(l => { const t = l.loan_type || 'Unknown'; loanTypes[t] = (loanTypes[t] || 0) + 1; });
-    html += '<div class="gov-grid gov-grid-3">';
-    html += govCard({ title: 'Tracked Loans', value: fmtN(loans.length), sub: 'in database', color: 'blue' });
-    html += govCard({ title: 'Total Loan Volume', value: '$' + fmtN(Math.round(totalLoanAmt / 1e6)) + 'M', sub: 'aggregate financing', color: 'green' });
-    html += govCard({ title: 'Loan Types', value: fmtN(Object.keys(loanTypes).length), sub: Object.entries(loanTypes).map(([t,c]) => t + ' (' + c + ')').join(', '), color: 'purple' });
+    html += inlineBar(Object.entries(gsaEventTypes).sort((a,b) => b[1] - a[1]).map(([type, count]) => ({
+      label: type, value: count, display: fmtN(count), barColor: '#22d3ee', labelWidth: 120, valueWidth: 35
+    })), maxEvt);
     html += '</div>';
   }
 
@@ -1706,27 +1827,22 @@ function renderGovSalesMetrics() {
   if (!govSalesComps && govSalesLoading) {
     return '<div class="gov-grid gov-grid-5"><div class="gov-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading sales data...</div></div></div>';
   }
+  const _c = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24' };
+  function card(opts) {
+    const c = _c[opts.color] || _c.blue;
+    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+    return `<div class="gov-info-card"${clickAttr}><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div><div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}</div>`;
+  }
+
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
   const ttmWithPrice = ttmSales.filter(r => r.sale_price > 0);
   const ttmVolume = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sale_price || 0), 0);
-
   const validCaps = ttmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate)).sort((a,b) => a - b);
   const avgCap = validCaps.length > 0 ? (validCaps.reduce((s,v) => s+v, 0) / validCaps.length * 100).toFixed(2) + '%' : '—';
   const q1 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.25)] * 100).toFixed(2) + '%' : '—';
   const q3 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.75)] * 100).toFixed(2) + '%' : '—';
-
-  const colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24' };
-  function card(opts) {
-    const c = colors[opts.color] || colors.blue;
-    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
-    return `<div class="gov-info-card"${clickAttr}>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
-      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
-      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
-    </div>`;
-  }
 
   let h = '<div class="gov-grid gov-grid-5">';
   h += card({ title: 'TTM Volume', value: '$' + fmtN(Math.round(ttmVolume / 1e6)) + 'M', sub: fmtN(ttmWithPrice.length) + ' priced transactions', color: 'green', tab: 'sales' });
@@ -1736,7 +1852,7 @@ function renderGovSalesMetrics() {
   h += card({ title: 'Upper Quartile', value: q3, sub: '75th percentile', color: 'yellow', tab: 'sales' });
   h += '</div>';
 
-  // All-time row
+  // All-time
   const allWithPrice = sales.filter(r => r.sale_price > 0);
   const totalVolume = allWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
   h += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
@@ -1752,6 +1868,13 @@ function renderGovNorthmarqMetrics() {
   if (!govSalesComps && govSalesLoading) {
     return '<div class="gov-grid gov-grid-4"><div class="gov-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading...</div></div></div>';
   }
+  const _c = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', yellow: '#fbbf24' };
+  function card(opts) {
+    const c = _c[opts.color] || _c.blue;
+    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+    return `<div class="gov-info-card"${clickAttr}><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div><div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}</div>`;
+  }
+
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
@@ -1759,27 +1882,13 @@ function renderGovNorthmarqMetrics() {
   const nmSales = ttmSales.filter(isNM);
   const nmWithPrice = nmSales.filter(r => r.sale_price > 0);
   const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
-  const ttmWithPrice = ttmSales.filter(r => r.sale_price > 0);
-  const ttmVolume = ttmWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
   const marketShareTxn = ttmSales.length > 0 ? (nmSales.length / ttmSales.length * 100).toFixed(1) + '%' : '—';
-
   const nmCaps = nmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
   const mktCaps = ttmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
   const nmAvgCap = nmCaps.length > 0 ? (nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length*100).toFixed(2) + '%' : '—';
   const mktAvgCap = mktCaps.length > 0 ? (mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length*100).toFixed(2) + '%' : '—';
   const capAdv = (nmCaps.length > 0 && mktCaps.length > 0) ?
     ((mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length - nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length) * 10000).toFixed(0) : null;
-
-  const colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', yellow: '#fbbf24' };
-  function card(opts) {
-    const c = colors[opts.color] || colors.blue;
-    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
-    return `<div class="gov-info-card"${clickAttr}>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
-      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
-      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
-    </div>`;
-  }
 
   let h = '<div class="gov-grid gov-grid-4">';
   h += card({ title: 'NM TTM Sales', value: fmtN(nmSales.length), sub: '$' + fmtN(Math.round(nmVolume / 1e6)) + 'M volume', color: 'green', tab: 'sales' });
