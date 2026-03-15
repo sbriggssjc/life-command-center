@@ -2300,8 +2300,8 @@ async function renderGovSales() {
 
   // Sub-tab toggle
   html += '<div class="pills" style="margin-bottom: 16px;">';
-  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-gov-sales-view="comps">Sales Comps (' + fmtN((govSalesComps || []).length) + ')</button>';
-  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-gov-sales-view="available">Available (' + fmtN((govAvailListings || []).length) + ')</button>';
+  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-gov-sales-view="comps">Sales Comps (' + (govSalesComps ? fmtN(govSalesComps.length) : '…') + ')</button>';
+  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-gov-sales-view="available">Available (' + (govAvailListings ? fmtN(govAvailListings.length) : '…') + ')</button>';
   html += '</div>';
 
   // Metrics
@@ -2313,8 +2313,16 @@ async function renderGovSales() {
     html += metricHTML('Total Sales', fmtN(filtered.length), 'gov comps', 'blue');
     html += metricHTML('Avg Cap Rate', cap.val, cap.n + ' with cap data', 'green');
     html += metricHTML('Avg Sale Price', avgPrice, withPrice.length + ' with price data', 'purple');
-    const thisYear = filtered.filter(r => r.sold_date && r.sold_date >= new Date().getFullYear() + '-01-01').length;
-    html += metricHTML('This Year', fmtN(thisYear), 'sales YTD', 'yellow');
+    const curYear = new Date().getFullYear();
+    let thisYear = filtered.filter(r => r.sold_date && r.sold_date >= curYear + '-01-01').length;
+    let ytdLabel = 'sales YTD';
+    if (thisYear === 0 && filtered.length > 0) {
+      // Fallback to most recent year with data
+      const prevYear = curYear - 1;
+      thisYear = filtered.filter(r => r.sold_date && r.sold_date >= prevYear + '-01-01' && r.sold_date < curYear + '-01-01').length;
+      ytdLabel = prevYear + ' sales';
+    }
+    html += metricHTML('This Year', fmtN(thisYear), ytdLabel, 'yellow');
   } else {
     const withPrice = filtered.filter(r => r.ask_price > 0);
     const cap = avgCapRate(filtered, 'ask_cap');
@@ -2513,7 +2521,8 @@ function renderGovPlayers() {
   });
   html += '</div>';
 
-  const sales = govData.salesComps || [];
+  // Prefer the full lazy-loaded v_sales_comps (2155 rows) over govData.salesComps (500-row limit)
+  const sales = (govSalesComps && govSalesComps.length > 0) ? govSalesComps : (govData.salesComps || []);
   const ownership = govData.ownership || [];
   const listings = govData.listings || [];
 
@@ -2521,11 +2530,12 @@ function renderGovPlayers() {
     // Aggregate buyers from sales + ownership transfers
     const buyerMap = {};
     sales.forEach(r => {
-      if (r.buyer) {
-        const key = r.buyer.trim().toUpperCase();
-        if (!buyerMap[key]) buyerMap[key] = { name: r.buyer, deals: 0, volume: 0, records: [] };
+      const buyer = r.buyer || r.purchasing_broker;
+      if (buyer) {
+        const key = buyer.trim().toUpperCase();
+        if (!buyerMap[key]) buyerMap[key] = { name: buyer, deals: 0, volume: 0, records: [] };
         buyerMap[key].deals++;
-        buyerMap[key].volume += (r.sold_price || 0);
+        buyerMap[key].volume += (r.sold_price || r.price || r.sold_price_psf || 0);
         buyerMap[key].records.push(r);
       }
     });
@@ -2549,7 +2559,7 @@ function renderGovPlayers() {
         const key = r.seller.trim().toUpperCase();
         if (!sellerMap[key]) sellerMap[key] = { name: r.seller, deals: 0, volume: 0, records: [] };
         sellerMap[key].deals++;
-        sellerMap[key].volume += (r.sold_price || 0);
+        sellerMap[key].volume += (r.sold_price || r.price || 0);
         sellerMap[key].records.push(r);
       }
     });
@@ -2567,8 +2577,18 @@ function renderGovPlayers() {
     html += renderPlayersTable(topSellers, 'Seller', 'gov');
 
   } else {
-    // Brokers from listings
+    // Brokers from sales + listings
     const brokerMap = {};
+    sales.forEach(r => {
+      const broker = r.listing_broker;
+      if (broker) {
+        const key = broker.trim().toUpperCase();
+        if (!brokerMap[key]) brokerMap[key] = { name: broker, deals: 0, volume: 0, records: [] };
+        brokerMap[key].deals++;
+        brokerMap[key].volume += (r.sold_price || r.price || 0);
+        brokerMap[key].records.push(r);
+      }
+    });
     listings.forEach(r => {
       const broker = r.broker || r.listing_agent || r.source;
       if (broker) {

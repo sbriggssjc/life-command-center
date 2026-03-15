@@ -1000,7 +1000,11 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
       currentGovTab = 'overview';
       document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
       q('[data-gov-tab="overview"]').classList.add('active');
-      loadGovData();
+      if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
+        renderGovTab();
+      } else {
+        loadGovData();
+      }
     }
   } else if (currentBizTab === 'dialysis') {
     if (!diaConnected) {
@@ -1012,7 +1016,11 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
       currentDiaTab = 'overview';
       document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
       q('[data-dia-tab="overview"]').classList.add('active');
-      loadDiaData();
+      if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
+        renderDiaTab();
+      } else {
+        loadDiaData();
+      }
     }
   } else {
     renderBizContent();
@@ -1991,7 +1999,12 @@ async function loadActivities() {
     renderHomeStats();
     document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
     document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
-  } catch (e) { console.error('Activities load error:', e); }
+  } catch (e) {
+    console.error('Activities load error:', e);
+    // Clear loading spinners even on error
+    document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
+    document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
+  }
 }
 
 async function loadEmails() {
@@ -2163,7 +2176,7 @@ function renderPriorityTasks() {
 }
 
 function renderCategoryMetrics() {
-  if (activities.length === 0) return '<div style="color:var(--text2);font-size:13px">Loading...</div>';
+  if (activities.length === 0) return '<div style="color:var(--text2);font-size:13px">No activities recorded yet</div>';
   const dialysis = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius'); });
   const govt = activities.filter(a => { const c = (a.computed_category || '').toLowerCase(); return c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal'); });
   const other = activities.filter(a => {

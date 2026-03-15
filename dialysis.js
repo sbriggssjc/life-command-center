@@ -1524,8 +1524,8 @@ async function renderDiaSales() {
 
   // Sub-tab toggle: Sales Comps | Available
   html += '<div class="pills" style="margin-bottom: 16px;">';
-  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-sales-view="comps">Sales Comps (' + fmtN((diaSalesComps || []).length) + ')</button>';
-  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-sales-view="available">Available (' + fmtN((diaAvailListings || []).length) + ')</button>';
+  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-sales-view="comps">Sales Comps (' + (diaSalesComps ? fmtN(diaSalesComps.length) : '…') + ')</button>';
+  html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-sales-view="available">Available (' + (diaAvailListings ? fmtN(diaAvailListings.length) : '…') + ')</button>';
   html += '</div>';
 
   // Metrics
@@ -1543,8 +1543,15 @@ async function renderDiaSales() {
     html += metricHTML('Total Sales', fmtN(data.length), 'dialysis comps', 'blue');
     html += metricHTML('Avg Cap Rate', cap.val, cap.n + ' with cap data', 'green');
     html += metricHTML('Avg Sale Price', avgPrice, withPrice.length + ' with price data', 'purple');
-    const thisYear = data.filter(r => r.sold_date && r.sold_date >= new Date().getFullYear() + '-01-01').length;
-    html += metricHTML('This Year', fmtN(thisYear), 'sales YTD', 'yellow');
+    const curYear = new Date().getFullYear();
+    let thisYear = data.filter(r => r.sold_date && r.sold_date >= curYear + '-01-01').length;
+    let ytdLabel = 'sales YTD';
+    if (thisYear === 0 && data.length > 0) {
+      const prevYear = curYear - 1;
+      thisYear = data.filter(r => r.sold_date && r.sold_date >= prevYear + '-01-01' && r.sold_date < curYear + '-01-01').length;
+      ytdLabel = prevYear + ' sales';
+    }
+    html += metricHTML('This Year', fmtN(thisYear), ytdLabel, 'yellow');
   } else {
     const withPrice = data.filter(r => r.ask_price > 0);
     const cap = avgCapRate(data, 'ask_cap');
