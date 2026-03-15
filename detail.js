@@ -324,40 +324,99 @@ function _udTabOperations() {
   const r = rankings;
   let html = '';
 
-  // Patient metrics
+  // ── KPI SUMMARY CARDS ──
+  const kpis = [];
+  if (r.latest_estimated_patients) kpis.push({ label: 'Patients', value: fmtN(r.latest_estimated_patients), trend: _trendArrow(r.patient_yoy_pct, 'YoY'), sub: r.patient_vs_3yr_avg_pct != null ? _trendBadge(r.patient_vs_3yr_avg_pct, 'vs 3yr avg') : '' });
+  if (r.ttm_revenue) kpis.push({ label: 'Revenue (TTM)', value: '$' + _fmtCompact(r.ttm_revenue), trend: r.estimated_annual_revenue ? _trendCompare(r.ttm_revenue, r.estimated_annual_revenue, 'vs Est') : '', sub: '' });
+  if (r.ttm_operating_profit) kpis.push({ label: 'Oper. Profit', value: '$' + _fmtCompact(r.ttm_operating_profit), trend: r.ttm_operating_margin != null ? '<span style="font-size:11px;color:' + (Number(r.ttm_operating_margin) >= 12 ? 'var(--green)' : Number(r.ttm_operating_margin) >= 0 ? 'var(--yellow)' : 'var(--red)') + '">' + Number(r.ttm_operating_margin).toFixed(1) + '% margin</span>' : '', sub: '' });
+  if (r.capacity_utilization_pct != null) kpis.push({ label: 'Utilization', value: Number(r.capacity_utilization_pct).toFixed(0) + '%', trend: '<span style="font-size:11px;color:' + (Number(r.capacity_utilization_pct) >= 85 ? 'var(--green)' : Number(r.capacity_utilization_pct) >= 65 ? 'var(--yellow)' : 'var(--red)') + '">' + (Number(r.capacity_utilization_pct) >= 85 ? 'High' : Number(r.capacity_utilization_pct) >= 65 ? 'Moderate' : 'Low') + '</span>', sub: '' });
+
+  if (kpis.length > 0) {
+    html += '<div style="display:grid;grid-template-columns:repeat(' + Math.min(kpis.length, 4) + ',1fr);gap:10px;margin-bottom:16px">';
+    kpis.forEach(k => {
+      html += '<div style="background:var(--s2);border-radius:10px;padding:12px 14px;text-align:center">';
+      html += '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">' + esc(k.label) + '</div>';
+      html += '<div style="font-size:20px;font-weight:700;color:var(--text1)">' + k.value + '</div>';
+      if (k.trend) html += '<div style="margin-top:4px">' + k.trend + '</div>';
+      if (k.sub) html += '<div style="margin-top:2px">' + k.sub + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // ── CLINIC INFRASTRUCTURE ──
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Patient Metrics</div>';
+  html += '<div class="detail-section-title">Clinic Infrastructure</div>';
   html += '<div class="detail-grid">';
-  html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
-  html += _row('Last Year', r.patients_last_year ? fmtN(r.patients_last_year) : null);
-  html += _row('Two Years Ago', r.patients_two_years_ago ? fmtN(r.patients_two_years_ago) : null);
-  html += _row('3-Yr Trend', r.patient_trend_3yr != null ? (Number(r.patient_trend_3yr) > 0 ? '+' : '') + Number(r.patient_trend_3yr).toFixed(1) + '%' : null);
-  html += _row('Max Capacity', r.max_patient_capacity ? fmtN(r.max_patient_capacity) : null);
-  html += _row('Utilization', r.capacity_utilization_pct != null ? Number(r.capacity_utilization_pct).toFixed(1) + '%' : null);
   html += _row('Chairs', r.number_of_chairs ? fmtN(r.number_of_chairs) : null);
   html += _row('Stations', r.stations ? fmtN(r.stations) : null);
+  html += _row('Estimated Capacity', r.estimated_capacity ? fmtN(r.estimated_capacity) + ' patients' : (r.max_patient_capacity ? fmtN(r.max_patient_capacity) + ' patients' : null));
+  html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
+  html += _row('Utilization', r.capacity_utilization_pct != null ? _utilBar(Number(r.capacity_utilization_pct)) : null);
+  // Derived KPIs
+  if (r.latest_estimated_patients && r.number_of_chairs) {
+    html += _row('Patients / Chair', (Number(r.latest_estimated_patients) / Number(r.number_of_chairs)).toFixed(1));
+  }
   html += '</div></div>';
 
-  // Financial metrics
+  // ── PATIENT TRENDS ──
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Financial (TTM)</div>';
+  html += '<div class="detail-section-title">Patient Trends</div>';
+  html += '<div class="detail-grid">';
+  html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
+  if (r.patients_last_year) html += _rowTrend('Last Year', fmtN(r.patients_last_year), r.patient_yoy_pct);
+  if (r.patients_two_years_ago) html += _row('Two Years Ago', fmtN(r.patients_two_years_ago));
+  if (r.patient_3yr_avg) html += _rowTrend('3-Year Average', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
+  if (r.patient_trend_3yr != null) html += _row('3-Yr Trend', _trendArrow(r.patient_trend_3yr));
+  html += '</div></div>';
+
+  // ── FINANCIAL (TTM) ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Financial Performance (TTM)</div>';
   html += '<div class="detail-grid">';
   html += _rowMoney('Revenue', r.ttm_revenue);
   html += _rowMoney('Operating Costs', r.ttm_operating_costs);
   html += _rowMoney('Operating Profit', r.ttm_operating_profit);
-  html += _row('Operating Margin', r.ttm_operating_margin != null ? Number(r.ttm_operating_margin).toFixed(1) + '%' : null);
+  html += _row('Operating Margin', r.ttm_operating_margin != null ? _marginBadge(Number(r.ttm_operating_margin)) : null);
+  // Revenue per patient & per chair
+  if (r.ttm_revenue && r.latest_estimated_patients) {
+    html += _rowMoney('Revenue / Patient', Math.round(Number(r.ttm_revenue) / Number(r.latest_estimated_patients)));
+  }
+  if (r.ttm_revenue && r.number_of_chairs) {
+    html += _rowMoney('Revenue / Chair', Math.round(Number(r.ttm_revenue) / Number(r.number_of_chairs)));
+  }
   html += '</div></div>';
 
-  // Treatment mix
+  // ── FINANCIAL ESTIMATES ──
+  if (r.estimated_annual_revenue || r.estimated_annual_profit || r.estimated_weekly_revenue) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Financial Estimates</div>';
+    html += '<div class="detail-grid">';
+    html += _rowMoney('Est. Annual Revenue', r.estimated_annual_revenue);
+    html += _rowMoney('Est. Annual Profit', r.estimated_annual_profit);
+    html += _rowMoney('Est. Weekly Revenue', r.estimated_weekly_revenue);
+    html += _rowMoney('Est. Weekly Profit', r.estimated_weekly_profit);
+    html += _rowMoney('Max Annual Revenue', r.max_annual_revenue);
+    if (r.ttm_revenue && r.estimated_annual_revenue) {
+      const pctDiff = ((Number(r.ttm_revenue) - Number(r.estimated_annual_revenue)) / Number(r.estimated_annual_revenue) * 100).toFixed(1);
+      html += _row('TTM vs Estimate', _trendArrow(pctDiff, 'variance'));
+    }
+    if (r.revenue_calc_method) html += _row('Calc Method', r.revenue_calc_method);
+    html += '</div></div>';
+  }
+
+  // ── TREATMENT MIX ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Treatment Mix (TTM)</div>';
   html += '<div class="detail-grid">';
   html += _row('Total Treatments', r.ttm_total_treatments ? fmtN(r.ttm_total_treatments) : null);
   html += _row('Medicare Treatments', r.ttm_medicare_treatments ? fmtN(r.ttm_medicare_treatments) : null);
   html += _row('Commercial Treatments', r.ttm_commercial_treatments ? fmtN(r.ttm_commercial_treatments) : null);
+  if (r.estimated_annual_treatments) html += _row('Est. Annual Treatments', fmtN(r.estimated_annual_treatments));
+  if (r.estimated_treatments_per_week) html += _row('Est. Treatments/Week', fmtN(r.estimated_treatments_per_week));
   html += '</div></div>';
 
-  // Payer mix
+  // ── PAYER MIX ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Payer Mix</div>';
   html += '<div class="detail-grid">';
@@ -366,7 +425,7 @@ function _udTabOperations() {
   html += _row('Private %', r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct).toFixed(1) + '%' : null);
   html += '</div></div>';
 
-  // Quality
+  // ── QUALITY ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Quality & Compliance</div>';
   html += '<div class="detail-grid">';
@@ -375,7 +434,7 @@ function _udTabOperations() {
   html += _row('Profit/Non-Profit', r.profit_nonprofit);
   html += '</div></div>';
 
-  // Operator
+  // ── OPERATOR ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Operator</div>';
   html += '<div class="detail-grid">';
@@ -383,19 +442,77 @@ function _udTabOperations() {
   html += _row('Chain Organization', r.chain_organization);
   html += '</div></div>';
 
-  // Rankings
+  // ── COMPARATIVE RANKINGS ──
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Comparative Rankings</div>';
-  html += _rankingBar('County (Patients)', r.county_patient_rank, r.county_total, r.county);
-  html += _rankingBar('State (Patients)', r.state_patient_rank, r.state_total, r.state);
-  html += _rankingBar('National (Patients)', r.national_patient_rank, r.national_total);
-  html += _rankingBar('Operator (Patients)', r.operator_patient_rank, r.operator_total, r.operator_name);
-  if (r.state_revenue_rank) {
-    html += _rankingBar('State (Revenue)', r.state_revenue_rank, r.state_total, r.state);
-  }
+  html += '<div class="detail-section-title">Comparative Rankings (Patients)</div>';
+  html += _rankingBar('County', r.county_patient_rank, r.county_total, r.county);
+  html += _rankingBar('State', r.state_patient_rank, r.state_total, r.state);
+  html += _rankingBar('National', r.national_patient_rank, r.national_total);
+  html += _rankingBar('Operator', r.operator_patient_rank, r.operator_total, r.operator_name);
   html += '</div>';
 
+  // Revenue rankings
+  if (r.state_revenue_rank || r.county_revenue_rank) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Comparative Rankings (Revenue)</div>';
+    html += _rankingBar('County', r.county_revenue_rank, r.county_total, r.county);
+    html += _rankingBar('State', r.state_revenue_rank, r.state_total, r.state);
+    html += _rankingBar('National', r.national_revenue_rank, r.national_total);
+    html += '</div>';
+  }
+
   return html;
+}
+
+/** Format large numbers compactly ($1.2M, $450K) */
+function _fmtCompact(n) {
+  const v = Number(n);
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+  return fmtN(v);
+}
+
+/** Trend arrow with optional label */
+function _trendArrow(pct, label) {
+  if (pct == null) return '';
+  const v = Number(pct);
+  const arrow = v > 0 ? '&#9650;' : v < 0 ? '&#9660;' : '&#9654;';
+  const color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
+  return '<span style="font-size:12px;color:' + color + '">' + arrow + ' ' + (v > 0 ? '+' : '') + v.toFixed(1) + '%' + (label ? ' <span style="color:var(--text3)">' + esc(label) + '</span>' : '') + '</span>';
+}
+
+/** Trend badge (colored pill) */
+function _trendBadge(pct, label) {
+  if (pct == null) return '';
+  const v = Number(pct);
+  const color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
+  return '<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;background:' + color + '22;color:' + color + '">' + (v > 0 ? '+' : '') + v.toFixed(1) + '% ' + esc(label) + '</span>';
+}
+
+/** Compare TTM to estimated with trend arrow */
+function _trendCompare(actual, estimate, label) {
+  const diff = ((Number(actual) - Number(estimate)) / Number(estimate) * 100).toFixed(1);
+  return _trendArrow(diff, label);
+}
+
+/** Row with trend indicator */
+function _rowTrend(label, value, pctChange) {
+  if (!value) return '';
+  return '<div class="detail-row"><span class="detail-label">' + esc(label) + '</span><span class="detail-value">' + value + (pctChange != null ? ' ' + _trendArrow(pctChange) : '') + '</span></div>';
+}
+
+/** Utilization bar with color coding */
+function _utilBar(pct) {
+  const color = pct >= 85 ? 'var(--green)' : pct >= 65 ? 'var(--yellow)' : 'var(--red)';
+  return '<span style="display:inline-flex;align-items:center;gap:8px">' + pct.toFixed(1) + '%' +
+    '<span style="display:inline-block;width:60px;height:6px;background:var(--s2);border-radius:3px;overflow:hidden;vertical-align:middle">' +
+    '<span style="display:block;width:' + Math.min(pct, 100) + '%;height:100%;background:' + color + ';border-radius:3px"></span></span></span>';
+}
+
+/** Margin badge with color */
+function _marginBadge(margin) {
+  const color = margin >= 12 ? 'var(--green)' : margin >= 0 ? 'var(--yellow)' : 'var(--red)';
+  return '<span style="color:' + color + ';font-weight:600">' + margin.toFixed(1) + '%</span>';
 }
 
 /** Render a ranking bar with visual indicator */
