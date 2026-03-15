@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v50';
+const CACHE_NAME = 'lcc-v51';
 const STATIC_ASSETS = [
   './',
   './index.html',

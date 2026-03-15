@@ -445,6 +445,16 @@ body.compact .greeting { font-size: 18px; }
 .metric-value { color: var(--text); font-size: 28px; font-weight: 700; }
 .metric-sub { color: var(--text2); font-size: 13px; margin-top: 4px; }
 
+/* Shared grid layout classes (used by both dialysis.js and gov.js) */
+.dia-grid { display: grid; gap: 10px; }
+.dia-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.dia-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.dia-grid-5 { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 700px) {
+  .dia-grid-4, .dia-grid-5 { grid-template-columns: repeat(2, 1fr); }
+  .dia-grid-3 { grid-template-columns: repeat(2, 1fr); }
+}
+
 .table-empty { text-align: center; padding: 32px; color: var(--text2); font-size: 14px; }
 .table-wrapper { overflow-x: auto; border-radius: 8px; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }

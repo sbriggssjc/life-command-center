@@ -238,8 +238,8 @@ function renderDiaTab() {
       renderDiaLeases(); // async — renders directly to DOM
       return;
     case 'loans':
-      inner.innerHTML = renderDiaLoans();
-      break;
+      renderDiaLoans(); // async — renders directly to DOM
+      return;
     case 'players':
       inner.innerHTML = renderDiaPlayers();
       break;
@@ -2280,22 +2280,129 @@ function buildDiaLeasesHTML() {
 // ============================================================================
 // DIALYSIS LOANS TAB
 // ============================================================================
+let diaLoansData = null;
+
 function renderDiaLoans() {
-  // Dialysis doesn't have loan data yet — show scaffold
+  const el = document.getElementById('bizPageInner');
+  if (!el) return '';
+
+  if (!diaLoansData) {
+    el.innerHTML = '<div class="loading"><span class="spinner"></span> Loading loan data...</div>';
+    (async () => {
+      try {
+        const loans = await diaQuery('loans',
+          'loan_id,property_id,loan_amount,current_balance,interest_rate_percent,interest_rate_text,maturity_date,origination_date,loan_to_value,loan_type,recourse,alert_flag,lender_name,loan_term',
+          { limit: 1000 }
+        );
+        diaLoansData = loans || [];
+        el.innerHTML = buildDiaLoansHTML();
+      } catch (e) {
+        console.error('Dia loans load error:', e);
+        el.innerHTML = '<div class="widget-error"><div class="err-msg">Failed to load loan data: ' + esc(e.message || '') + '</div><button class="retry-btn" onclick="diaLoansData=null;renderDiaLoans()">Retry</button></div>';
+      }
+    })();
+    return '';
+  }
+
+  el.innerHTML = buildDiaLoansHTML();
+  return '';
+}
+
+function buildDiaLoansHTML() {
+  const loans = diaLoansData || [];
+
   let html = '<div style="margin-bottom:24px">';
   html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">🏦</span> Dialysis Loan Intelligence</div>';
-  html += '<div class="widget" style="text-align:center;padding:40px 20px">';
-  html += '<div style="font-size:48px;margin-bottom:12px;opacity:0.3">🏦</div>';
-  html += '<div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--text)">Loan Data Coming Soon</div>';
-  html += '<div style="font-size:13px;color:var(--text2);max-width:400px;margin:0 auto;line-height:1.6">';
-  html += 'This tab will display dialysis facility loan data including property financing, maturity schedules, and refinancing opportunities. Data ingestion pipeline is being built.';
+
+  if (loans.length === 0) {
+    html += '<div class="widget" style="text-align:center;padding:40px 20px">';
+    html += '<div style="font-size:48px;margin-bottom:12px;opacity:0.3">🏦</div>';
+    html += '<div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--text)">No Loan Data Available</div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  // Stats
+  var withAmt = loans.filter(function(l) { return l.loan_amount; });
+  var totalVol = withAmt.reduce(function(s, l) { return s + (parseFloat(l.loan_amount) || 0); }, 0);
+  var withRate = loans.filter(function(l) { return parseFloat(l.interest_rate_percent) > 0; });
+  var avgRate = withRate.length > 0 ? (withRate.reduce(function(s, l) { return s + parseFloat(l.interest_rate_percent); }, 0) / withRate.length) : 0;
+  var withMaturity = loans.filter(function(l) { return l.maturity_date; });
+  var now = new Date();
+  var oneYr = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
+  var maturingUnder1 = withMaturity.filter(function(l) { return new Date(l.maturity_date) <= oneYr; }).length;
+  var flagged = loans.filter(function(l) { return l.alert_flag; }).length;
+
+  html += '<div class="dia-grid dia-grid-4" style="margin-bottom:20px">';
+  html += infoCard({ title: 'Total Loans', value: fmtN(loans.length), sub: fmtN(withAmt.length) + ' with amounts', color: 'blue' });
+  html += infoCard({ title: 'Total Volume', value: fmt(totalVol), sub: 'Across ' + fmtN(withAmt.length) + ' loans', color: 'green' });
+  html += infoCard({ title: 'Avg Rate', value: avgRate > 0 ? avgRate.toFixed(2) + '%' : 'N/A', sub: withRate.length + ' loans with rates', color: 'cyan' });
+  html += infoCard({ title: 'Flagged', value: fmtN(flagged), sub: flagged > 0 ? 'Need attention' : 'No alerts', color: flagged > 0 ? 'red' : 'green' });
   html += '</div>';
-  html += '<div style="margin-top:20px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">';
-  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label">Total Loans</div><div class="stat-value" style="color:var(--text3)">0</div></div>';
-  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label">Total Volume</div><div class="stat-value" style="color:var(--text3)">$0</div></div>';
-  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label">Maturing &lt;1yr</div><div class="stat-value" style="color:var(--text3)">0</div></div>';
-  html += '</div>';
+
+  // Loan size distribution
+  var buckets = [
+    { label: '$0–$1M', min: 0, max: 1e6, count: 0, vol: 0 },
+    { label: '$1M–$5M', min: 1e6, max: 5e6, count: 0, vol: 0 },
+    { label: '$5M–$10M', min: 5e6, max: 10e6, count: 0, vol: 0 },
+    { label: '$10M–$25M', min: 10e6, max: 25e6, count: 0, vol: 0 },
+    { label: '$25M+', min: 25e6, max: Infinity, count: 0, vol: 0 }
+  ];
+  withAmt.forEach(function(l) {
+    var amt = parseFloat(l.loan_amount) || 0;
+    for (var i = 0; i < buckets.length; i++) {
+      if (amt >= buckets[i].min && amt < buckets[i].max) {
+        buckets[i].count++;
+        buckets[i].vol += amt;
+        break;
+      }
+    }
+  });
+  var maxBkt = Math.max.apply(null, buckets.map(function(b) { return b.count; }).concat([1]));
+
+  html += '<div class="widget" style="margin-bottom:16px">';
+  html += '<div class="widget-title">Loan Size Distribution</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:6px">';
+  for (var bi = 0; bi < buckets.length; bi++) {
+    var bk = buckets[bi];
+    if (bk.count === 0) continue;
+    var pctW = ((bk.count / maxBkt) * 100).toFixed(0);
+    html += '<div style="display:flex;align-items:center;gap:8px">';
+    html += '<div style="width:100px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">' + bk.label + '</div>';
+    html += '<div style="flex:1;background:var(--s2);border-radius:4px;height:22px;overflow:hidden">';
+    html += '<div style="width:' + pctW + '%;background:#6c8cff;height:100%;border-radius:4px;min-width:2px"></div>';
+    html += '</div>';
+    html += '<div style="width:40px;font-size:12px;font-weight:600;color:var(--text)">' + fmtN(bk.count) + '</div>';
+    html += '<div style="width:70px;font-size:11px;color:var(--text3)">' + fmt(bk.vol) + '</div>';
+    html += '</div>';
+  }
   html += '</div></div>';
+
+  // Loan table — top loans by amount
+  var sorted = withAmt.slice().sort(function(a, b) { return (parseFloat(b.loan_amount) || 0) - (parseFloat(a.loan_amount) || 0); });
+  html += '<div class="widget" style="margin-bottom:16px">';
+  html += '<div class="widget-title">Largest Loans <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + fmtN(sorted.length) + ' loans with amounts)</span></div>';
+  html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
+  html += '<th>Property ID</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Recourse</th><th>Alert</th>';
+  html += '</tr></thead><tbody>';
+  for (var li = 0; li < Math.min(sorted.length, 50); li++) {
+    var ln = sorted[li];
+    var rate = parseFloat(ln.interest_rate_percent) > 0 ? parseFloat(ln.interest_rate_percent).toFixed(2) + '%' : (ln.interest_rate_text || '—');
+    var alertBadge = ln.alert_flag ? '<span style="background:#ef4444;color:#fff;padding:1px 6px;border-radius:4px;font-size:11px">FLAG</span>' : '<span style="font-size:11px;color:var(--text3)">—</span>';
+    html += '<tr>';
+    html += '<td>' + esc(String(ln.property_id || '—')) + '</td>';
+    html += '<td style="text-align:right;font-weight:600">' + fmt(parseFloat(ln.loan_amount) || 0) + '</td>';
+    html += '<td style="text-align:right">' + rate + '</td>';
+    html += '<td>' + esc(ln.loan_type || '—') + '</td>';
+    html += '<td>' + esc(ln.recourse || '—') + '</td>';
+    html += '<td>' + alertBadge + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  if (sorted.length > 50) html += '<div style="text-align:center;font-size:12px;color:var(--text3);padding:8px">Showing 50 of ' + fmtN(sorted.length) + '</div>';
+  html += '</div>';
+
+  html += '</div>';
   return html;
 }
 // DIALYSIS PLAYERS (Top Operators, Largest Clinics)

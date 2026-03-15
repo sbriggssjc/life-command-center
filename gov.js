@@ -122,7 +122,7 @@ async function loadGovData() {
     
     // Load prospect leads
     const leadsRes = await govQuery('prospect_leads',
-      'lead_id, lease_number, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_commencement, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
+      'lead_id, lease_number, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
       {
         order: 'priority_score.desc',
         limit: 500
@@ -161,7 +161,7 @@ async function loadGovData() {
     
     // Load GSA snapshots
     const gsaSnapshotsRes = await govQuery('gsa_snapshots',
-      'snapshot_date, lease_number, address, city, state, lease_rsf, annual_rent, lessor_name, lease_commencement, lease_expiration, field_office_name',
+      'snapshot_date, lease_number, address, city, state, lease_rsf, annual_rent, lessor_name, lease_effective, lease_expiration, field_office_name',
       {
         order: 'snapshot_date.desc',
         limit: 500
@@ -859,14 +859,14 @@ function renderOwnershipResearchCard(rec) {
     <div class="context-value">${rec.transfer_date ? rec.transfer_date.substring(0, 10) : 'Unknown'}</div>
   </div>`;
   
-  if (snapshot.lease_commencement) {
+  if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_commencement.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
       <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
     </div>`;
   }
-  
+
   if (frpp.street_address) {
     html += `<div class="context-block">
       <div class="context-label">FRPP Property Type</div>
@@ -1053,10 +1053,10 @@ function renderLeadResearchCard(rec) {
     <div class="context-sub">Score: ${rec.priority_score || 0}</div>
   </div>`;
   
-  if (snapshot.lease_commencement) {
+  if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_commencement.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
       <div class="context-sub">Firm: ${rec.firm_term_remaining || 'TBD'}</div>
     </div>`;
   }
@@ -2181,7 +2181,7 @@ function renderOwnershipLease(record) {
   html += '<div class="detail-section-title">Lease Details</div>';
   html += '<div class="detail-grid">';
   
-  html += createDetailRow('Lease Effective', esc(snapshot.lease_commencement || '—'));
+  html += createDetailRow('Lease Effective', esc(snapshot.lease_effective || '—'));
   html += createDetailRow('Lease Expiration', esc(snapshot.lease_expiration || '—'));
   html += createDetailRow('RSF (Lease)', snapshot.lease_rsf ? fmtN(snapshot.lease_rsf) : '—');
   html += createDetailRow('Lessor Name', esc(norm(snapshot.lessor_name) || '—'));
@@ -2339,7 +2339,7 @@ function renderLeadProperty(record) {
     esc((norm(record.city) || '') + (record.state ? ', ' + record.state : '') || '—'));
   html += createDetailRow('Agency', esc(norm(record.agency_full_name) || '—'));
   html += createDetailRow('Tenant', esc(norm(record.tenant_agency) || '—'));
-  html += createDetailRow('Lease Effective', esc(record.lease_commencement || '—'));
+  html += createDetailRow('Lease Effective', esc(record.lease_effective || '—'));
   html += createDetailRow('Lease Expiration', esc(record.lease_expiration || '—'));
   html += createDetailRow('RBA', record.rba || '—');
   html += createDetailRow('Land Acres', record.land_acres ? fmtN(record.land_acres) : '—');
