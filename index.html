@@ -564,6 +564,16 @@ body.compact .greeting { font-size: 18px; }
   .detail-panel { max-width: 100%; }
 }
 
+/* Home layout — mobile-first stacking, sidebar below main */
+.home-layout { display: flex; flex-direction: column; gap: 12px; }
+.home-main { min-width: 0; }
+.home-sidebar { min-width: 0; }
+
+/* Clickable stat cards */
+.stat-card.clickable { cursor: pointer; transition: border-color 0.15s, transform 0.1s; border: 1px solid transparent; }
+.stat-card.clickable:hover { border-color: var(--accent); transform: translateY(-1px); }
+.stat-card.clickable:active { transform: translateY(0); }
+
 @media (min-width: 768px) {
   .home-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
   .widget-grid { grid-template-columns: repeat(4, 1fr); }
@@ -625,10 +635,10 @@ body.compact .greeting { font-size: 18px; }
           <div class="home-main">
             <!-- Stats -->
             <div class="widget-grid" id="homeStats">
-              <div class="stat-card"><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Salesforce</div></div>
-              <div class="stat-card"><div class="stat-label">Flagged Emails</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Outlook</div></div>
-              <div class="stat-card"><div class="stat-label">Today's Events</div><div class="stat-value" id="statEvents">-</div><div class="stat-sub">Calendar</div></div>
-              <div class="stat-card"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Salesforce</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageMessages')"><div class="stat-label">Flagged Emails</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Outlook</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageCal')"><div class="stat-label">Today's Events</div><div class="stat-value" id="statEvents">-</div><div class="stat-sub">Calendar</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
             </div>
 
             <!-- Weather -->
@@ -1013,6 +1023,12 @@ function dotClass(status) {
     matched:"gov-dot green",pending:"gov-dot amber",verified:"gov-dot cyan",active:"gov-dot green",under_contract:"gov-dot amber",
     new:"gov-dot blue",queued:"gov-dot blue",in_progress:"gov-dot amber"};
   return m[status]||"gov-dot dim";
+}
+
+// Programmatic page navigation — simulates clicking a bottom nav button
+function navTo(pageId) {
+  const btn = document.querySelector(`.bnav[data-page="${pageId}"]`);
+  if (btn) btn.click();
 }
 
 function showToast(msg, type = '') {
@@ -2831,6 +2847,10 @@ function toggleSetting(key, val) {
   appSettings[key] = val;
   saveSettings();
   applySettings();
+  // Restart auto-refresh if that setting changed
+  if (key === 'autoRefresh' || key === 'refreshInterval') {
+    if (typeof startAutoRefresh === 'function') startAutoRefresh();
+  }
 }
 function setSetting(key, val) {
   appSettings[key] = val;
@@ -3022,6 +3042,38 @@ function handleLocalCopilotQuery(msg) {
 }
 
 // ============================================================
+// ENHANCED GREETING — updates with daily context after data loads
+// ============================================================
+function updateGreeting() {
+  const el = document.getElementById('greeting');
+  if (!el) return;
+  const base = getGreeting();
+
+  // After data loads, add a contextual summary
+  if (!activitiesLoaded && calEvents.length === 0) {
+    el.textContent = base;
+    return;
+  }
+
+  const today = tzDateStr(new Date());
+  const todayEvts = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
+  const now = Date.now();
+  const weekEnd = now + 7 * 86400000;
+  const dueSoon = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= weekEnd; });
+
+  let summary = '';
+  if (todayEvts.length > 0 || dueSoon.length > 0 || emails.length > 0) {
+    const parts = [];
+    if (todayEvts.length > 0) parts.push(`${todayEvts.length} event${todayEvts.length > 1 ? 's' : ''} today`);
+    if (dueSoon.length > 0) parts.push(`${dueSoon.length} due this week`);
+    if (emails.length > 0) parts.push(`${emails.length >= 500 ? '500+' : emails.length} flagged email${emails.length !== 1 ? 's' : ''}`);
+    summary = parts.join(' · ');
+  }
+
+  el.innerHTML = base + (summary ? `<span style="display:block;font-size:13px;color:var(--text2);font-weight:400;margin-top:4px">${summary}</span>` : '');
+}
+
+// ============================================================
 // INIT
 // ============================================================
 document.getElementById('greeting').textContent = getGreeting();
@@ -3029,7 +3081,52 @@ document.getElementById('greetingDate').textContent = new Date().toLocaleDateStr
 
 // Auto-connect credentials then load data
 autoConnectCredentials().then(() => {
-  Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()]);
+  Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
+    .then(() => updateGreeting())
+    .catch(() => updateGreeting());
+});
+
+// ============================================================
+// AUTO-REFRESH — periodically reload data when enabled in Settings
+// ============================================================
+let autoRefreshTimer = null;
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!appSettings.autoRefresh) return;
+  const interval = Math.max(1, appSettings.refreshInterval || 5) * 60 * 1000;
+  autoRefreshTimer = setInterval(() => {
+    console.log('Auto-refresh triggered');
+    loadActivities();
+    loadEmails();
+    loadCalendar();
+    loadHealth();
+    loadWeather();
+    loadMarket();
+    updateGreeting();
+  }, interval);
+}
+function stopAutoRefresh() {
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+}
+// Start auto-refresh after initial load
+setTimeout(startAutoRefresh, 5000);
+
+// Also refresh when app regains focus (e.g., user switches back to PWA)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && appSettings.autoRefresh) {
+    // Debounce: only refresh if > 2 minutes since last visibility change
+    const lastRefresh = window._lastVisibilityRefresh || 0;
+    const now = Date.now();
+    if (now - lastRefresh > 120000) {
+      window._lastVisibilityRefresh = now;
+      loadActivities();
+      loadEmails();
+      loadCalendar();
+      loadWeather();
+      loadMarket();
+      updateGreeting();
+    }
+  }
 });
 
 if ('serviceWorker' in navigator) {
