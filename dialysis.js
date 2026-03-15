@@ -11,8 +11,8 @@
 let diaCharts = {};
 let diaResearchMode = 'property'; // 'property' | 'lease'
 let diaResearchIdx = 0;
-let diaPropertyFilter = { review_type: null, state: null };
-let diaLeaseFilter = { priority: null };
+let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
+let diaLeaseFilter = { priority: null, selectedIdx: undefined };
 let diaChangeFilter = 'all'; // 'all' | 'added' | 'removed' | 'persistent'
 let diaNpiFilter = null; // filter by signal_type
 let diaSalesView = 'comps'; // 'comps' | 'available'
@@ -918,8 +918,8 @@ function renderDiaResearch() {
   
   // Mode tabs
   html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">';
-  html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property">Property Review Queue</button>`;
-  html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease">Lease Backfill Queue</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property" style="cursor: pointer; font-weight: ${diaResearchMode === 'property' ? '600' : '500'};">Property Review Queue</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease" style="cursor: pointer; font-weight: ${diaResearchMode === 'lease' ? '600' : '500'};">Lease Backfill Queue</button>`;
   html += '</div>';
   
   if (diaResearchMode === 'property') {
@@ -1002,14 +1002,21 @@ function renderDiaPropertyResearch() {
     html += '</div>';
     
     filtered.slice(0, 50).forEach((row, idx) => {
-      html += `<div class="table-row clickable-row" style="cursor: pointer;" data-prop-idx="${idx}">`;
+      const isSelected = diaPropertyFilter.selectedIdx === idx;
+      const isResolved = diaData.researchOutcomes.some(o => o.clinic_id === row.clinic_id && o.queue_type === 'property_review');
+      const rowStyle = isSelected ? 'background: rgba(52, 211, 153, 0.1); border-left: 3px solid var(--accent);' : isResolved ? 'background: rgba(52, 211, 153, 0.05); opacity: 0.7;' : '';
+      html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-prop-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
       html += `<div style="flex: 0.5;">${row.state}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${row.review_type}</div>`;
-      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${safeJSON(row)}, "dia-clinic")'>&rsaquo;</span></div>`;
+      if (isResolved) {
+        html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--green);font-size:16px" title="Resolved">✓</span></div>`;
+      } else {
+        html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${safeJSON(row)}, "dia-clinic")'>&rsaquo;</span></div>`;
+      }
       html += '</div>';
     });
   }
@@ -1113,13 +1120,18 @@ function renderDiaPropertyCard(item) {
   
   html += '<div class="form-divider"></div>';
   
-  html += `<button class="btn-primary" data-save-prop="${item.clinic_id}" style="width: 100%;">Save Outcome</button>`;
+  html += '<div style="display: flex; gap: 10px;">';
+  html += `<button class="btn-primary" data-save-prop="${item.clinic_id}" style="flex: 1;">Save Outcome</button>`;
+  html += `<button class="pill" data-skip-prop="${item.clinic_id}" style="flex: 1; padding: 10px 20px; font-size: 13px; font-weight: 600;">Skip</button>`;
+  html += '</div>';
   
   html += '</div>';
   html += '</div>';
   
   setTimeout(() => {
     const saveBtn = document.querySelector(`[data-save-prop="${item.clinic_id}"]`);
+    const skipBtn = document.querySelector(`[data-skip-prop="${item.clinic_id}"]`);
+    
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
         const outcome = (q('#propOutcome') || {}).value;
@@ -1132,6 +1144,13 @@ function renderDiaPropertyCard(item) {
         }
         
         saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes);
+      });
+    }
+    
+    if (skipBtn) {
+      skipBtn.addEventListener('click', () => {
+        diaPropertyFilter.selectedIdx = undefined;
+        renderDiaTab();
       });
     }
   }, 0);
@@ -1198,15 +1217,22 @@ function renderDiaLeaseResearch() {
     
     filtered.slice(0, 50).forEach((row, idx) => {
       const watchColor = row.closure_watch_level === 'high' ? '#f87171' : 'var(--text2)';
+      const isSelected = diaLeaseFilter.selectedIdx === idx;
+      const isResolved = diaData.researchOutcomes.some(o => o.clinic_id === row.clinic_id && o.queue_type === 'lease_backfill');
+      const rowStyle = isSelected ? 'background: rgba(52, 211, 153, 0.1); border-left: 3px solid var(--accent);' : isResolved ? 'background: rgba(52, 211, 153, 0.05); opacity: 0.7;' : '';
       
-      html += `<div class="table-row clickable-row" style="cursor: pointer;" data-lease-idx="${idx}">`;
+      html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-lease-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: ${watchColor};">${row.closure_watch_level || 'none'}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${row.lease_backfill_priority || 'unknown'}</div>`;
-      html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${safeJSON(row)}, "dia-clinic")'>&rsaquo;</span></div>`;
+      if (isResolved) {
+        html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--green);font-size:16px" title="Resolved">✓</span></div>`;
+      } else {
+        html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--accent);font-size:16px" title="Open detail" onclick='event.stopPropagation();showDetail(${safeJSON(row)}, "dia-clinic")'>&rsaquo;</span></div>`;
+      }
       html += '</div>';
     });
   }
@@ -1304,13 +1330,18 @@ function renderDiaLeaseCard(item) {
   
   html += '<div class="form-divider"></div>';
   
-  html += `<button class="btn-primary" data-save-lease="${item.clinic_id}" style="width: 100%;">Save Outcome</button>`;
+  html += '<div style="display: flex; gap: 10px;">';
+  html += `<button class="btn-primary" data-save-lease="${item.clinic_id}" style="flex: 1;">Save Outcome</button>`;
+  html += `<button class="pill" data-skip-lease="${item.clinic_id}" style="flex: 1; padding: 10px 20px; font-size: 13px; font-weight: 600;">Skip</button>`;
+  html += '</div>';
   
   html += '</div>';
   html += '</div>';
   
   setTimeout(() => {
     const saveBtn = document.querySelector(`[data-save-lease="${item.clinic_id}"]`);
+    const skipBtn = document.querySelector(`[data-skip-lease="${item.clinic_id}"]`);
+    
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
         const outcome = (q('#leaseOutcome') || {}).value;
@@ -1323,6 +1354,13 @@ function renderDiaLeaseCard(item) {
         }
         
         saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes);
+      });
+    }
+    
+    if (skipBtn) {
+      skipBtn.addEventListener('click', () => {
+        diaLeaseFilter.selectedIdx = undefined;
+        renderDiaTab();
       });
     }
   }, 0);
@@ -1356,11 +1394,22 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to save outcome');
+      const errText = await response.text();
+      throw new Error('Failed to save outcome: ' + errText);
     }
 
     showToast('Outcome saved', 'success');
-    loadDiaData();
+    
+    // Clear selection and reload data
+    if (queueType === 'property_review') {
+      diaPropertyFilter.selectedIdx = undefined;
+    } else {
+      diaLeaseFilter.selectedIdx = undefined;
+    }
+    
+    // Reload data and re-render to advance to next record
+    await loadDiaData();
+    renderDiaTab();
   } catch (err) {
     console.error('saveDiaOutcome error:', err);
     showToast('Failed to save outcome: ' + err.message, 'error');
@@ -2409,15 +2458,19 @@ function buildDiaLoansHTML() {
 // ============================================================================
 
 let diaPlayersView = 'operators';
+let diaBuyers = null;        // lazy-loaded from sales_transactions
+let diaSellers = null;       // lazy-loaded from sales_transactions
+let diaBrokers = null;       // lazy-loaded from sale_brokers/brokers/sales_transactions (joined client-side)
+let diaPlayersLoading = false;
 
 function renderDiaPlayers() {
   let html = '<div class="biz-section">';
 
   // View toggle
   html += '<div class="pills" style="margin-bottom: 20px;">';
-  ['operators', 'largest', 'movers'].forEach(view => {
+  ['operators', 'largest', 'movers', 'buyers', 'sellers', 'brokers'].forEach(view => {
     const active = diaPlayersView === view ? ' active' : '';
-    const label = view === 'operators' ? 'Top Operators' : view === 'largest' ? 'Largest Clinics' : 'Biggest Movers';
+    const label = view === 'operators' ? 'Top Operators' : view === 'largest' ? 'Largest Clinics' : view === 'movers' ? 'Biggest Movers' : view === 'buyers' ? 'Top Buyers' : view === 'sellers' ? 'Top Sellers' : 'Brokers';
     html += '<button class="pill' + active + '" onclick="diaPlayersView=\'' + view + '\';renderDiaTab()">' + label + '</button>';
   });
   html += '</div>';
@@ -2493,7 +2546,7 @@ function renderDiaPlayers() {
     });
     html += '</div></div>';
 
-  } else {
+  } else if (diaPlayersView === 'movers') {
     // Biggest movers by absolute delta
     const sorted = [...changes].filter(r => r.delta_patients !== 0).sort((a, b) => Math.abs(b.delta_patients || 0) - Math.abs(a.delta_patients || 0)).slice(0, 50);
 
@@ -2526,6 +2579,221 @@ function renderDiaPlayers() {
       html += '</div>';
     });
     html += '</div></div>';
+  } else if (diaPlayersView === 'buyers') {
+    // Show loading spinner and load data on first view
+    if (diaBuyers === null && !diaPlayersLoading) {
+      html += '<div style="color: var(--text2); text-align: center; padding: 40px;">Loading buyer data...</div>';
+      diaPlayersLoading = true;
+      (async () => {
+        try {
+          const buyersRaw = await diaQuery('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id');
+          // Group by buyer_name
+          const buyerMap = {};
+          buyersRaw.forEach(r => {
+            if (r.buyer_name) {
+              const key = r.buyer_name.trim().toUpperCase();
+              if (!buyerMap[key]) buyerMap[key] = { name: r.buyer_name, type: r.buyer_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
+              buyerMap[key].deals++;
+              buyerMap[key].volume += (r.sold_price || 0);
+              if (r.cap_rate) buyerMap[key].capRates.push(r.cap_rate);
+              buyerMap[key].records.push(r);
+            }
+          });
+          diaBuyers = Object.values(buyerMap).sort((a, b) => b.volume - a.volume);
+          diaPlayersLoading = false;
+          renderDiaTab();
+        } catch (err) {
+          console.error('Error loading buyer data:', err);
+          diaPlayersLoading = false;
+        }
+      })();
+    } else if (diaBuyers) {
+      const top50 = diaBuyers.slice(0, 50);
+      const totalVolume = top50.reduce((s, b) => s + b.volume, 0);
+      const totalDeals = top50.reduce((s, b) => s + b.deals, 0);
+
+      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
+      html += infoCard({ title: 'Total Buyers', value: fmtN(diaBuyers.length), sub: 'in dataset', color: 'blue' });
+      html += infoCard({ title: 'Top Buyer', value: top50[0] ? (top50[0].name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
+      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
+      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
+      html += '</div>';
+
+      html += '<div class="table-wrapper"><div class="data-table">';
+      html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+      html += '<div style="flex: 2;">Buyer Name</div>';
+      html += '<div style="flex: 1;">Type</div>';
+      html += '<div style="flex: 1; text-align: right;">Deals</div>';
+      html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
+      html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
+      html += '</div>';
+
+      top50.forEach((b, idx) => {
+        const avgCapRate = b.capRates.length > 0 ? b.capRates.reduce((s, cr) => s + cr, 0) / b.capRates.length : 0;
+        html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "sales-transaction")\'>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(b.name) + '</div>';
+        html += '<div style="flex: 1;">' + esc(b.type || '—') + '</div>';
+        html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
+        html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
+        html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
+
+  } else if (diaPlayersView === 'sellers') {
+    // Show loading spinner and load data on first view
+    if (diaSellers === null && !diaPlayersLoading) {
+      html += '<div style="color: var(--text2); text-align: center; padding: 40px;">Loading seller data...</div>';
+      diaPlayersLoading = true;
+      (async () => {
+        try {
+          const sellersRaw = await diaQuery('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id');
+          // Group by seller_name
+          const sellerMap = {};
+          sellersRaw.forEach(r => {
+            if (r.seller_name) {
+              const key = r.seller_name.trim().toUpperCase();
+              if (!sellerMap[key]) sellerMap[key] = { name: r.seller_name, type: r.seller_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
+              sellerMap[key].deals++;
+              sellerMap[key].volume += (r.sold_price || 0);
+              if (r.cap_rate) sellerMap[key].capRates.push(r.cap_rate);
+              sellerMap[key].records.push(r);
+            }
+          });
+          diaSellers = Object.values(sellerMap).sort((a, b) => b.volume - a.volume);
+          diaPlayersLoading = false;
+          renderDiaTab();
+        } catch (err) {
+          console.error('Error loading seller data:', err);
+          diaPlayersLoading = false;
+        }
+      })();
+    } else if (diaSellers) {
+      const top50 = diaSellers.slice(0, 50);
+      const totalVolume = top50.reduce((s, s2) => s + s2.volume, 0);
+      const totalDeals = top50.reduce((s, s2) => s + s2.deals, 0);
+
+      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
+      html += infoCard({ title: 'Total Sellers', value: fmtN(diaSellers.length), sub: 'in dataset', color: 'red' });
+      html += infoCard({ title: 'Top Seller', value: top50[0] ? (top50[0].name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
+      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
+      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
+      html += '</div>';
+
+      html += '<div class="table-wrapper"><div class="data-table">';
+      html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+      html += '<div style="flex: 2;">Seller Name</div>';
+      html += '<div style="flex: 1;">Type</div>';
+      html += '<div style="flex: 1; text-align: right;">Deals</div>';
+      html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
+      html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
+      html += '</div>';
+
+      top50.forEach((s2, idx) => {
+        const avgCapRate = s2.capRates.length > 0 ? s2.capRates.reduce((s, cr) => s + cr, 0) / s2.capRates.length : 0;
+        html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(s2.records[0]) + ', "sales-transaction")\'>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(s2.name) + '</div>';
+        html += '<div style="flex: 1;">' + esc(s2.type || '—') + '</div>';
+        html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + s2.deals + '</div>';
+        html += '<div style="flex: 1; text-align: right;">' + fmt(s2.volume, 'currency') + '</div>';
+        html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
+
+  } else if (diaPlayersView === 'brokers') {
+    // Show loading spinner and load data on first view
+    if (diaBrokers === null && !diaPlayersLoading) {
+      html += '<div style="color: var(--text2); text-align: center; padding: 40px;">Loading broker data...</div>';
+      diaPlayersLoading = true;
+      (async () => {
+        try {
+          // Query three tables and join client-side
+          const saleBrokers = await diaQuery('sale_brokers', '*');
+          const brokers = await diaQuery('brokers', 'broker_id,broker_name,company,email,phone');
+          const sales = await diaQuery('sales_transactions', 'sale_id,sold_price,sale_date,cap_rate,buyer_name,seller_name');
+          
+          // Create lookup maps
+          const brokerMap = {};
+          brokers.forEach(b => { brokerMap[b.broker_id] = b; });
+          const saleMap = {};
+          sales.forEach(s => { saleMap[s.sale_id] = s; });
+          
+          // Join: for each sale_broker, add broker and sale info
+          const brokerStats = {};
+          saleBrokers.forEach(sb => {
+            const broker = brokerMap[sb.broker_id];
+            const sale = saleMap[sb.sale_id];
+            if (broker && sale) {
+              const key = broker.broker_id;
+              if (!brokerStats[key]) {
+                brokerStats[key] = {
+                  broker_id: broker.broker_id,
+                  broker_name: broker.broker_name,
+                  company: broker.company,
+                  email: broker.email,
+                  phone: broker.phone,
+                  deals: 0,
+                  volume: 0,
+                  capRates: [],
+                  roles: new Set(),
+                  records: []
+                };
+              }
+              brokerStats[key].deals++;
+              brokerStats[key].volume += (sale.sold_price || 0);
+              if (sale.cap_rate) brokerStats[key].capRates.push(sale.cap_rate);
+              brokerStats[key].roles.add(sb.role);
+              brokerStats[key].records.push({ ...sb, broker: broker, sale: sale });
+            }
+          });
+          
+          // Convert to array and sort by volume
+          diaBrokers = Object.values(brokerStats)
+            .map(b => ({ ...b, roles: Array.from(b.roles) }))
+            .sort((a, b) => b.volume - a.volume);
+          diaPlayersLoading = false;
+          renderDiaTab();
+        } catch (err) {
+          console.error('Error loading broker data:', err);
+          diaPlayersLoading = false;
+        }
+      })();
+    } else if (diaBrokers) {
+      const top50 = diaBrokers.slice(0, 50);
+      const totalVolume = top50.reduce((s, b) => s + b.volume, 0);
+      const totalDeals = top50.reduce((s, b) => s + b.deals, 0);
+
+      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
+      html += infoCard({ title: 'Total Brokers', value: fmtN(diaBrokers.length), sub: 'in dataset', color: 'orange' });
+      html += infoCard({ title: 'Top Broker', value: top50[0] ? (top50[0].broker_name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
+      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
+      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
+      html += '</div>';
+
+      html += '<div class="table-wrapper"><div class="data-table">';
+      html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
+      html += '<div style="flex: 2;">Broker Name</div>';
+      html += '<div style="flex: 1;">Company</div>';
+      html += '<div style="flex: 1; text-align: right;">Deals</div>';
+      html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
+      html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
+      html += '</div>';
+
+      top50.forEach((b, idx) => {
+        const avgCapRate = b.capRates.length > 0 ? b.capRates.reduce((s, cr) => s + cr, 0) / b.capRates.length : 0;
+        html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "sale-broker")\'>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(b.broker_name) + '</div>';
+        html += '<div style="flex: 1;" class="truncate">' + esc(b.company || '—') + '</div>';
+        html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
+        html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
+        html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
   }
 
   html += '</div>';
