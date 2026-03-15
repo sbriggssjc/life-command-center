@@ -1382,50 +1382,412 @@ function setResearchMode(mode) {
 // ============================================================================
 
 function renderGovOverview() {
+  // ── Kick off lazy-loading sales comps for overview metrics ──
+  if (!govSalesComps && !govSalesLoading) {
+    govSalesLoading = true;
+    (async () => {
+      try {
+        let all = [], offset = 0;
+        while (true) {
+          const res = await govQuery('v_sales_comps', '*', { order: 'sale_date.desc.nullslast', limit: 1000, offset });
+          const rows = res.data || [];
+          all = all.concat(rows);
+          if (rows.length < 1000) break;
+          offset += 1000;
+        }
+        govSalesComps = all;
+      } catch(e) { govSalesComps = []; }
+      govSalesLoading = false;
+      const el = document.getElementById('govOverviewSales');
+      if (el) el.innerHTML = renderGovSalesMetrics();
+      const nmEl = document.getElementById('govOverviewNM');
+      if (nmEl) nmEl.innerHTML = renderGovNorthmarqMetrics();
+    })();
+  }
+
+  let html = '<div style="padding:4px 0">';
+
+  // ── STYLE (reuse dia-info-card pattern) ──
+  html += `<style>
+    .gov-info-card { background: var(--s2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; transition: all 0.15s; position: relative; overflow: hidden; }
+    .gov-info-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
+    .gov-info-card[onclick] { cursor: pointer; }
+    .gov-info-card[onclick]::after { content: '→'; position: absolute; top: 12px; right: 14px; font-size: 14px; color: var(--text3); opacity: 0; transition: opacity 0.15s; }
+    .gov-info-card[onclick]:hover::after { opacity: 1; color: var(--accent); }
+    .gov-grid { display: grid; gap: 10px; }
+    .gov-grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .gov-grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .gov-grid-5 { grid-template-columns: repeat(5, 1fr); }
+    @media (max-width: 700px) {
+      .gov-grid-3, .gov-grid-4, .gov-grid-5 { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>`;
+
+  // ── Helper functions ──
+  const colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
+  function govCard(opts) {
+    const c = colors[opts.color] || colors.blue;
+    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+    return `<div class="gov-info-card"${clickAttr}>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
+      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
+      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
+    </div>`;
+  }
+  function govSectionHeader(title, icon, tab) {
+    const viewLink = tab ? `<span onclick="goToGovTab('${tab}')" style="cursor:pointer;font-size:11px;color:var(--accent);font-weight:500">View Details →</span>` : '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:700;color:var(--text1)">${icon} ${title}</div>${viewLink}</div>`;
+  }
+
+  // ──────────────────────────────────────
+  // DATA COMPUTATIONS
+  // ──────────────────────────────────────
   const propCount = govData.properties[0]?.count || 0;
-  const saleCount = govData.salesComps.length || 0;
-  const leadCount = govData.leads.length;
-  const contactCount = govData.contacts.length;
-  
-  // Ownership by year aggregation
+  const ownership = govData.ownership || [];
+  const leads = govData.leads || [];
+  const contacts = govData.contacts || [];
+  const listings = govData.listings || [];
+  const gsaEvents = govData.gsaEvents || [];
+  const gsaSnapshots = govData.gsaSnapshots || [];
+  const frpp = govData.frppRecords || [];
+  const countyAuth = govData.countyAuth || [];
+  const loans = govData.loans || [];
+
+  // Ownership metrics
+  const totalOwnershipChanges = ownership.length;
+  const withSalePrice = ownership.filter(o => o.sale_price > 0);
+  const confirmedValue = withSalePrice.reduce((s, o) => s + (o.sale_price || 0), 0);
+  const needsResearch = ownership.filter(o => !o.research_status || o.research_status === 'pending').length;
+  const ownershipCaps = withSalePrice.filter(o => o.cap_rate > 0.01 && o.cap_rate < 0.25).map(o => parseFloat(o.cap_rate)).sort((a,b) => a - b);
+  const avgOwnershipCap = ownershipCaps.length > 0 ? (ownershipCaps.reduce((s,v) => s+v, 0) / ownershipCaps.length * 100).toFixed(2) + '%' : '—';
+
+  // Pipeline / leads metrics
+  const hotLeads = leads.filter(l => l.lead_temperature === 'hot').length;
+  const warmLeads = leads.filter(l => l.lead_temperature === 'warm').length;
+  const pipelineValue = leads.reduce((s, l) => s + (l.estimated_value || 0), 0);
+  const avgLeadValue = leads.length > 0 ? pipelineValue / leads.length : 0;
+
+  // Listings metrics
+  const activeListings = listings.filter(l => l.listing_status === 'active');
+  const underContract = listings.filter(l => l.listing_status === 'under_contract');
+  const totalAsking = activeListings.reduce((s, l) => s + (l.asking_price || 0), 0);
+  const listingCaps = activeListings.filter(l => l.asking_cap_rate > 0.01 && l.asking_cap_rate < 0.25).map(l => parseFloat(l.asking_cap_rate)).sort((a,b) => a - b);
+  const avgAskingCap = listingCaps.length > 0 ? (listingCaps.reduce((s,v)=>s+v,0)/listingCaps.length*100).toFixed(2)+'%' : '—';
+  const avgDom = activeListings.filter(l => l.days_on_market > 0);
+  const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,l) => s + l.days_on_market, 0) / avgDom.length) : '—';
+
+  // GSA metrics
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const oneYearAgo = new Date(now); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const gsaEventsYTD = gsaEvents.filter(e => e.event_date && new Date(e.event_date) >= yearStart).length;
+  const gsaEventTypes = {};
+  gsaEvents.forEach(e => { gsaEventTypes[e.event_type] = (gsaEventTypes[e.event_type] || 0) + 1; });
+  const totalGsaRent = gsaSnapshots.reduce((s, s2) => s + (s2.annual_rent || 0), 0);
+
+  // FRPP metrics
+  const frppTotalSF = frpp.reduce((s, r) => s + (r.square_feet || 0), 0);
+  const frppTotalRent = frpp.reduce((s, r) => s + (r.annual_rent_to_lessor || 0), 0);
+  const frppAgencies = new Set(frpp.map(r => r.using_agency).filter(Boolean)).size;
+
+  // Touchpoint metrics (gov-related activities from SF)
+  const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
+  const allActivities = (typeof activities !== 'undefined' ? activities : []);
+  const govCategories = ['government', 'gsa', 'va', 'ssa', 'usps', 'federal', 'state/local'];
+  const govActivities = allActivities.filter(a => {
+    const cat = (a.computed_category || '').toLowerCase();
+    return govCategories.some(c => cat.includes(c));
+  });
+  const touchpointsYTD = govActivities.filter(a => a.activity_date && new Date(a.activity_date) >= yearStart).length;
+  const sixMonthsAgo = new Date(now); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const touchpoints6mo = govActivities.filter(a => a.activity_date && new Date(a.activity_date) >= sixMonthsAgo).length;
+  const oneMonthAgo = new Date(now); oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+  const touchpoints1mo = govActivities.filter(a => a.activity_date && new Date(a.activity_date) >= oneMonthAgo).length;
+  const uniqueGovAccounts = new Set(govActivities.map(a => a.company_name).filter(Boolean)).size;
+
+  // ═══════════════════════════════════════════════
+  // SECTION 1: DATABASE HEALTH
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Database Health', '🏛️', 'search');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Properties', value: fmtN(propCount), sub: 'government-leased tracked', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Contacts', value: contacts.length >= 500 ? '500+' : fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
+  html += govCard({ title: 'County Resources', value: fmtN(countyAuth.length), sub: 'assessor/recorder links', color: 'cyan', tab: 'research' });
+  html += govCard({ title: 'GSA Snapshots', value: fmtN(gsaSnapshots.length), sub: 'lease data records', color: 'green', tab: 'search' });
+  html += govCard({ title: 'FRPP Records', value: fmtN(frpp.length), sub: 'federal real property', color: 'yellow', tab: 'search' });
+  html += '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 2: OWNERSHIP INTELLIGENCE
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Ownership Intelligence', '🔍', 'ownership');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Ownership Changes', value: totalOwnershipChanges >= 500 ? '500+' : fmtN(totalOwnershipChanges), sub: 'transfers tracked', color: 'blue', tab: 'ownership' });
+  html += govCard({ title: 'Confirmed Sales', value: fmtN(withSalePrice.length), sub: '$' + fmtN(Math.round(confirmedValue / 1e6)) + 'M total value', color: 'green', tab: 'ownership' });
+  html += govCard({ title: 'Avg Sale Cap Rate', value: avgOwnershipCap, sub: fmtN(ownershipCaps.length) + ' with cap data', color: 'cyan', tab: 'ownership' });
+  html += govCard({ title: 'Needs Research', value: fmtN(needsResearch), sub: 'pending investigation', color: 'yellow', tab: 'research' });
+  html += govCard({ title: 'Research Coverage', value: totalOwnershipChanges > 0 ? ((totalOwnershipChanges - needsResearch) / totalOwnershipChanges * 100).toFixed(1) + '%' : '—', sub: 'changes researched', color: 'purple', tab: 'research' });
+  html += '</div>';
+
+  // Ownership by year mini-chart
   const ownByYear = {};
-  govData.ownership.forEach(o => {
+  ownership.forEach(o => {
     if (o.transfer_date) {
       const year = o.transfer_date.substring(0, 4);
       ownByYear[year] = (ownByYear[year] || 0) + 1;
     }
   });
-  
   const yearLabels = Object.keys(ownByYear).sort();
-  const yearData = yearLabels.map(y => ownByYear[y]);
-  
-  let html = '<div class="gov-metrics">';
-  html += metricHTML('Properties', fmtN(propCount), 'Government-leased', 'blue');
-  html += metricHTML('Sales Comps', saleCount >= 500 ? '500+' : fmtN(saleCount), 'Completed sales', 'green');
-  html += metricHTML('Active Leads', leadCount >= 500 ? '500+' : fmtN(leadCount), 'Pipeline prospects', 'yellow');
-  html += metricHTML('Contacts', contactCount >= 500 ? '500+' : fmtN(contactCount), 'In database', 'purple');
-  html += '</div>';
-  
   if (yearLabels.length > 0) {
-    html += `<div class="chart-container">
-      <h3>Ownership Changes by Year</h3>
-      <canvas id="chart-ov-year" height="80"></canvas>
+    html += '<div class="gov-info-card" onclick="goToGovTab(\'ownership\')" style="cursor:pointer;padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Ownership Changes by Year</div>';
+    const maxYearCount = Math.max(...yearLabels.map(y => ownByYear[y]));
+    yearLabels.slice(-8).forEach(year => {
+      const count = ownByYear[year];
+      const barW = Math.round((count / maxYearCount) * 100);
+      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div style="width:36px;font-size:11px;color:var(--text2);text-align:right;font-weight:600">${year}</div>
+        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#60a5fa;border-radius:4px"></div></div>
+        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 3: PROSPECT PIPELINE
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Prospect Pipeline', '🎯', 'pipeline');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Total Leads', value: leads.length >= 500 ? '500+' : fmtN(leads.length), sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
+  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads), sub: 'high priority', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads), sub: 'active prospects', color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M', sub: 'estimated total', color: 'green', tab: 'pipeline' });
+  html += govCard({ title: 'Avg Lead Value', value: avgLeadValue > 0 ? '$' + fmtN(Math.round(avgLeadValue / 1000)) + 'K' : '—', sub: 'per prospect', color: 'purple', tab: 'pipeline' });
+  html += '</div>';
+
+  // Lead temperature breakdown
+  const tempCounts = {};
+  leads.forEach(l => { const t = l.lead_temperature || 'unknown'; tempCounts[t] = (tempCounts[t] || 0) + 1; });
+  if (Object.keys(tempCounts).length > 0) {
+    html += '<div class="gov-info-card" onclick="goToGovTab(\'pipeline\')" style="cursor:pointer;padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lead Temperature Distribution</div>';
+    const tempColors = { hot: '#f87171', warm: '#fb923c', cold: '#60a5fa', unknown: '#94a3b8' };
+    const maxTemp = Math.max(...Object.values(tempCounts));
+    Object.entries(tempCounts).sort((a,b) => b[1] - a[1]).forEach(([temp, count]) => {
+      const barW = Math.round((count / maxTemp) * 100);
+      const barColor = tempColors[temp] || '#94a3b8';
+      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div style="width:60px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;text-transform:capitalize">${temp}</div>
+        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${barColor};border-radius:4px"></div></div>
+        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 4: OUTREACH & TOUCHPOINTS
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Government Outreach', '📞', 'search');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Touchpoints YTD', value: fmtN(touchpointsYTD), sub: now.getFullYear() + ' year to date', color: 'blue' });
+  html += govCard({ title: 'Last 6 Months', value: fmtN(touchpoints6mo), sub: 'gov contacts', color: 'green' });
+  html += govCard({ title: 'Last 30 Days', value: fmtN(touchpoints1mo), sub: 'recent contacts', color: 'cyan' });
+  html += govCard({ title: 'Unique Accounts', value: fmtN(uniqueGovAccounts), sub: 'gov entities touched', color: 'purple' });
+  html += govCard({ title: 'Categories', value: Object.keys(gsaEventTypes).length || '—', sub: 'GSA event types tracked', color: 'yellow' });
+  html += '</div>';
+
+  // Per-category breakdown
+  const catCounts = {};
+  govActivities.forEach(a => { const c = a.computed_category || 'Uncategorized'; catCounts[c] = (catCounts[c] || 0) + 1; });
+  if (Object.keys(catCounts).length > 0) {
+    html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Touchpoints by Category</div>';
+    const maxCat = Math.max(...Object.values(catCounts));
+    Object.entries(catCounts).sort((a,b) => b[1] - a[1]).forEach(([cat, count]) => {
+      const barW = Math.round((count / maxCat) * 100);
+      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div style="width:120px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(cat)}</div>
+        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#60a5fa;border-radius:4px"></div></div>
+        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 5: TTM SALES MARKET
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('TTM Sales Activity', '💰', 'sales');
+  html += '<div id="govOverviewSales">' + renderGovSalesMetrics() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 6: NORTHMARQ PERFORMANCE
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('Northmarq Performance', '🏆', 'sales');
+  html += '<div id="govOverviewNM">' + renderGovNorthmarqMetrics() + '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 7: ON MARKET
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('On Market', '🏢', 'listings');
+  html += '<div class="gov-grid gov-grid-5">';
+  html += govCard({ title: 'Active Listings', value: fmtN(activeListings.length), sub: 'currently on market', color: 'blue', tab: 'listings' });
+  html += govCard({ title: 'Under Contract', value: fmtN(underContract.length), sub: 'pending close', color: 'green', tab: 'listings' });
+  html += govCard({ title: 'Total Asking', value: totalAsking > 0 ? '$' + fmtN(Math.round(totalAsking / 1e6)) + 'M' : '—', sub: 'active asking value', color: 'cyan', tab: 'listings' });
+  html += govCard({ title: 'Avg Ask Cap', value: avgAskingCap, sub: fmtN(listingCaps.length) + ' with cap data', color: 'purple', tab: 'listings' });
+  html += govCard({ title: 'Avg DOM', value: avgDomVal, sub: 'days on market', color: 'yellow', tab: 'listings' });
+  html += '</div>';
+
+  // Listing cap rate quartiles
+  if (listingCaps.length > 4) {
+    const q1 = (listingCaps[Math.floor(listingCaps.length * 0.25)] * 100).toFixed(2) + '%';
+    const median = (listingCaps[Math.floor(listingCaps.length * 0.5)] * 100).toFixed(2) + '%';
+    const q3 = (listingCaps[Math.floor(listingCaps.length * 0.75)] * 100).toFixed(2) + '%';
+    html += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
+    html += govCard({ title: '25th Pctl Cap', value: q1, sub: 'lower quartile', color: 'green', tab: 'listings' });
+    html += govCard({ title: 'Median Cap', value: median, sub: '50th percentile', color: 'blue', tab: 'listings' });
+    html += govCard({ title: '75th Pctl Cap', value: q3, sub: 'upper quartile', color: 'orange', tab: 'listings' });
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 8: GSA LEASE INTEL
+  // ═══════════════════════════════════════════════
+  html += govSectionHeader('GSA Lease Intelligence', '📋', 'search');
+  html += '<div class="gov-grid gov-grid-4">';
+  html += govCard({ title: 'GSA Events YTD', value: fmtN(gsaEventsYTD), sub: now.getFullYear() + ' lease events', color: 'blue' });
+  html += govCard({ title: 'Total GSA Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaSnapshots.length) + ' leases tracked', color: 'green' });
+  html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(frpp.length) + ' federal properties', color: 'cyan' });
+  html += govCard({ title: 'FRPP Agencies', value: fmtN(frppAgencies), sub: '$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent', color: 'purple' });
+  html += '</div>';
+
+  // GSA event type breakdown
+  if (Object.keys(gsaEventTypes).length > 0) {
+    html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">GSA Event Types</div>';
+    const maxEvt = Math.max(...Object.values(gsaEventTypes));
+    Object.entries(gsaEventTypes).sort((a,b) => b[1] - a[1]).forEach(([type, count]) => {
+      const barW = Math.round((count / maxEvt) * 100);
+      html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <div style="width:120px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(type)}</div>
+        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#22d3ee;border-radius:4px"></div></div>
+        <div style="width:30px;font-size:10px;color:var(--text2);text-align:right">${count}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // ═══════════════════════════════════════════════
+  // SECTION 9: FINANCING / LOANS
+  // ═══════════════════════════════════════════════
+  if (loans.length > 0) {
+    html += govSectionHeader('Financing Intelligence', '🏦', 'search');
+    const totalLoanAmt = loans.reduce((s, l) => s + (l.loan_amount || 0), 0);
+    const loanTypes = {};
+    loans.forEach(l => { const t = l.loan_type || 'Unknown'; loanTypes[t] = (loanTypes[t] || 0) + 1; });
+    html += '<div class="gov-grid gov-grid-3">';
+    html += govCard({ title: 'Tracked Loans', value: fmtN(loans.length), sub: 'in database', color: 'blue' });
+    html += govCard({ title: 'Total Loan Volume', value: '$' + fmtN(Math.round(totalLoanAmt / 1e6)) + 'M', sub: 'aggregate financing', color: 'green' });
+    html += govCard({ title: 'Loan Types', value: fmtN(Object.keys(loanTypes).length), sub: Object.entries(loanTypes).map(([t,c]) => t + ' (' + c + ')').join(', '), color: 'purple' });
+    html += '</div>';
+  }
+
+  html += '</div>'; // end wrapper
+  return html;
+}
+
+// ── Gov Overview inner renderers (lazy-loaded sections) ──
+
+function renderGovSalesMetrics() {
+  const sales = govSalesComps || govData.salesComps || [];
+  if (!govSalesComps && govSalesLoading) {
+    return '<div class="gov-grid gov-grid-5"><div class="gov-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading sales data...</div></div></div>';
+  }
+  const now = new Date();
+  const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
+  const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
+  const ttmWithPrice = ttmSales.filter(r => r.sale_price > 0);
+  const ttmVolume = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sale_price || 0), 0);
+
+  const validCaps = ttmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate)).sort((a,b) => a - b);
+  const avgCap = validCaps.length > 0 ? (validCaps.reduce((s,v) => s+v, 0) / validCaps.length * 100).toFixed(2) + '%' : '—';
+  const q1 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.25)] * 100).toFixed(2) + '%' : '—';
+  const q3 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.75)] * 100).toFixed(2) + '%' : '—';
+
+  const colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24' };
+  function card(opts) {
+    const c = colors[opts.color] || colors.blue;
+    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+    return `<div class="gov-info-card"${clickAttr}>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
+      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
+      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
     </div>`;
   }
-  
-  html += '<div class="table-section">';
-  html += '<h3>Top Ownership Changes</h3>';
-  html += ownershipTable(govData.ownership.slice(0, 50));
-  html += '</div>';
-  
-  // Render chart after DOM update
-  setTimeout(() => {
-    if (yearLabels.length > 0) {
-      renderBarChart('chart-ov-year', yearLabels, [{ label: 'Changes', data: yearData }], false);
-    }
-  }, 100);
-  
-  return html;
+
+  let h = '<div class="gov-grid gov-grid-5">';
+  h += card({ title: 'TTM Volume', value: '$' + fmtN(Math.round(ttmVolume / 1e6)) + 'M', sub: fmtN(ttmWithPrice.length) + ' priced transactions', color: 'green', tab: 'sales' });
+  h += card({ title: 'TTM Transactions', value: fmtN(ttmSales.length), sub: 'trailing 12 months', color: 'blue', tab: 'sales' });
+  h += card({ title: 'Avg Cap Rate', value: avgCap, sub: fmtN(validCaps.length) + ' with cap data', color: 'cyan', tab: 'sales' });
+  h += card({ title: 'Lower Quartile', value: q1, sub: '25th percentile', color: 'purple', tab: 'sales' });
+  h += card({ title: 'Upper Quartile', value: q3, sub: '75th percentile', color: 'yellow', tab: 'sales' });
+  h += '</div>';
+
+  // All-time row
+  const allWithPrice = sales.filter(r => r.sale_price > 0);
+  const totalVolume = allWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
+  h += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
+  h += card({ title: 'All-Time Comps', value: fmtN(sales.length), sub: 'total in database', color: 'blue', tab: 'sales' });
+  h += card({ title: 'All-Time Volume', value: '$' + fmtN(Math.round(totalVolume / 1e6)) + 'M', sub: fmtN(allWithPrice.length) + ' priced sales', color: 'green', tab: 'sales' });
+  h += card({ title: 'Avg Sale Price', value: allWithPrice.length > 0 ? '$' + fmtN(Math.round(totalVolume / allWithPrice.length)) : '—', sub: 'across all comps', color: 'purple', tab: 'sales' });
+  h += '</div>';
+  return h;
+}
+
+function renderGovNorthmarqMetrics() {
+  const sales = govSalesComps || govData.salesComps || [];
+  if (!govSalesComps && govSalesLoading) {
+    return '<div class="gov-grid gov-grid-4"><div class="gov-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading...</div></div></div>';
+  }
+  const now = new Date();
+  const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
+  const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
+  const isNM = r => ((r.listing_broker||'')+(r.buyer_broker||'')).toLowerCase().includes('northmarq');
+  const nmSales = ttmSales.filter(isNM);
+  const nmWithPrice = nmSales.filter(r => r.sale_price > 0);
+  const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
+  const ttmWithPrice = ttmSales.filter(r => r.sale_price > 0);
+  const ttmVolume = ttmWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
+  const marketShareTxn = ttmSales.length > 0 ? (nmSales.length / ttmSales.length * 100).toFixed(1) + '%' : '—';
+
+  const nmCaps = nmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
+  const mktCaps = ttmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
+  const nmAvgCap = nmCaps.length > 0 ? (nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length*100).toFixed(2) + '%' : '—';
+  const mktAvgCap = mktCaps.length > 0 ? (mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length*100).toFixed(2) + '%' : '—';
+  const capAdv = (nmCaps.length > 0 && mktCaps.length > 0) ?
+    ((mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length - nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length) * 10000).toFixed(0) : null;
+
+  const colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', yellow: '#fbbf24' };
+  function card(opts) {
+    const c = colors[opts.color] || colors.blue;
+    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+    return `<div class="gov-info-card"${clickAttr}>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
+      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
+      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
+    </div>`;
+  }
+
+  let h = '<div class="gov-grid gov-grid-4">';
+  h += card({ title: 'NM TTM Sales', value: fmtN(nmSales.length), sub: '$' + fmtN(Math.round(nmVolume / 1e6)) + 'M volume', color: 'green', tab: 'sales' });
+  h += card({ title: 'Market Share', value: marketShareTxn, sub: fmtN(nmSales.length) + ' of ' + fmtN(ttmSales.length) + ' TTM deals', color: 'blue', tab: 'sales' });
+  h += card({ title: 'NM Avg Cap Rate', value: nmAvgCap, sub: 'vs ' + mktAvgCap + ' market avg', color: 'cyan', tab: 'sales' });
+  h += card({ title: 'Seller Value Add', value: capAdv ? capAdv + ' bps tighter' : '—', sub: capAdv && parseInt(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
+  h += '</div>';
+  return h;
 }
 
 function renderGovOwnership() {
@@ -2814,6 +3176,18 @@ async function execGovSearch() {
 // EXPORTS
 // ============================================================================
 
+// Helper to programmatically navigate to gov sub-tabs
+function goToGovTab(tabName) {
+  currentGovTab = tabName;
+  document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
+  const btn = document.querySelector('[data-gov-tab="' + tabName + '"]');
+  if (btn) btn.classList.add('active');
+  if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
+    renderGovTab();
+  }
+}
+
+window.goToGovTab = goToGovTab;
 window.renderGovDetailBody = renderGovDetailBody;
 window.saveGovDetailLead = saveGovDetailLead;
 window.renderGovSearch = renderGovSearch;
@@ -2821,3 +3195,4 @@ window.execGovSearch = execGovSearch;
 window.renderGovSales = renderGovSales;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
+window.renderGovOverview = renderGovOverview;
