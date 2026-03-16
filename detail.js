@@ -353,7 +353,7 @@ function _udTabOperations() {
   html += _row('Stations', r.stations ? fmtN(r.stations) : null);
   html += _row('Estimated Capacity', r.estimated_capacity ? fmtN(r.estimated_capacity) + ' patients' : (r.max_patient_capacity ? fmtN(r.max_patient_capacity) + ' patients' : null));
   html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
-  html += _row('Utilization', r.capacity_utilization_pct != null ? _utilBar(Number(r.capacity_utilization_pct)) : null);
+  html += _rowHtml('Utilization', r.capacity_utilization_pct != null ? _utilBar(Number(r.capacity_utilization_pct)) : null);
   // Derived KPIs
   if (r.latest_estimated_patients && r.number_of_chairs) {
     html += _row('Patients / Chair', (Number(r.latest_estimated_patients) / Number(r.number_of_chairs)).toFixed(1));
@@ -368,7 +368,7 @@ function _udTabOperations() {
   if (r.patients_last_year) html += _rowTrend('Last Year', fmtN(r.patients_last_year), r.patient_yoy_pct);
   if (r.patients_two_years_ago) html += _row('Two Years Ago', fmtN(r.patients_two_years_ago));
   if (r.patient_3yr_avg) html += _rowTrend('3-Year Average', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
-  if (r.patient_trend_3yr != null) html += _row('3-Yr Trend', _trendArrow(r.patient_trend_3yr));
+  if (r.patient_trend_3yr != null) html += _rowHtml('3-Yr Trend', _trendArrow(r.patient_trend_3yr));
   html += '</div></div>';
 
   // ── FINANCIAL (TTM) ──
@@ -378,7 +378,7 @@ function _udTabOperations() {
   html += _rowMoney('Revenue', r.ttm_revenue);
   html += _rowMoney('Operating Costs', r.ttm_operating_costs);
   html += _rowMoney('Operating Profit', r.ttm_operating_profit);
-  html += _row('Operating Margin', r.ttm_operating_margin != null ? _marginBadge(Number(r.ttm_operating_margin)) : null);
+  html += _rowHtml('Operating Margin', r.ttm_operating_margin != null ? _marginBadge(Number(r.ttm_operating_margin)) : null);
   // Revenue per patient & per chair
   if (r.ttm_revenue && r.latest_estimated_patients) {
     html += _rowMoney('Revenue / Patient', Math.round(Number(r.ttm_revenue) / Number(r.latest_estimated_patients)));
@@ -400,7 +400,7 @@ function _udTabOperations() {
     html += _rowMoney('Max Annual Revenue', r.max_annual_revenue);
     if (r.ttm_revenue && r.estimated_annual_revenue) {
       const pctDiff = ((Number(r.ttm_revenue) - Number(r.estimated_annual_revenue)) / Number(r.estimated_annual_revenue) * 100).toFixed(1);
-      html += _row('TTM vs Estimate', _trendArrow(pctDiff, 'variance'));
+      html += _rowHtml('TTM vs Estimate', _trendArrow(pctDiff, 'variance'));
     }
     if (r.revenue_calc_method) html += _row('Calc Method', r.revenue_calc_method);
     html += '</div></div>';
@@ -430,7 +430,7 @@ function _udTabOperations() {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Quality & Compliance</div>';
   html += '<div class="detail-grid">';
-  html += _row('Star Rating', r.star_rating != null ? _stars(Number(r.star_rating)) : null);
+  html += _rowHtml('Star Rating', r.star_rating != null ? _stars(Number(r.star_rating)) : null);
   html += _row('Deficiency Count', r.deficiency_count != null ? fmtN(r.deficiency_count) : null);
   html += _row('Profit/Non-Profit', r.profit_nonprofit);
   html += '</div></div>';
@@ -1187,6 +1187,15 @@ function _row(label, value) {
   return `<div class="detail-row">
     <div class="detail-lbl">${esc(label)}</div>
     <div class="detail-val">${esc(String(value))}</div>
+  </div>`;
+}
+
+/** Row with raw HTML value (for utilization bars, trend arrows, margin badges, etc.) */
+function _rowHtml(label, value) {
+  if (value == null || value === '') return '';
+  return `<div class="detail-row">
+    <div class="detail-lbl">${esc(label)}</div>
+    <div class="detail-val">${value}</div>
   </div>`;
 }
 
