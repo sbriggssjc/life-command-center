@@ -128,6 +128,10 @@ async function openUnifiedDetail(db, ids, fallback) {
     if (property) {
       const realTitle = property.page_title || property.facility_name || fallback.tenant_operator || fallback.agency || property.address || fallback.address || '(Unknown)';
       const loc2 = (property.city || '') + (property.state ? ', ' + property.state : '');
+      // "Not a Lead" button for dia-clinic records (dismiss from clinic lead pipeline)
+      const dismissBtn = (db === 'dia' && fallback.clinic_id)
+        ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
+        : '';
       document.getElementById('detailHeader').innerHTML = `
         <div class="detail-header-info">
           <div style="flex:1">
@@ -135,6 +139,7 @@ async function openUnifiedDetail(db, ids, fallback) {
             <div class="detail-subtitle">${esc(loc2)}${property.county ? ' · ' + esc(property.county) + ' County' : ''}</div>
             ${_udKeyFields(db, property, ownership)}
           </div>
+          ${dismissBtn}
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
           <button class="detail-close" onclick="closeDetail()">&times;</button>
         </div>`;
@@ -155,7 +160,13 @@ function _udKeyFields(db, prop, own) {
   let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
   if (prop.address) html += `<div><span style="color:var(--text3)">Address:</span> <span style="color:var(--text)">${esc(prop.address)}</span></div>`;
   if (prop.lease_number) html += `<div><span style="color:var(--text3)">Lease:</span> <span style="color:var(--text);font-family:monospace">${esc(prop.lease_number)}</span></div>`;
-  if (prop.agency_short || prop.agency_full) html += `<div><span style="color:var(--text3)">Agency:</span> <span style="color:var(--text)">${esc(prop.agency_short || prop.agency_full)}</span></div>`;
+  if (db === 'dia') {
+    // Dialysis: show operator, not agency
+    const opName = prop.operator_name || prop.facility_name || '';
+    if (opName) html += `<div><span style="color:var(--text3)">Operator:</span> <span style="color:var(--text)">${esc(opName)}</span></div>`;
+  } else {
+    if (prop.agency_short || prop.agency_full) html += `<div><span style="color:var(--text3)">Agency:</span> <span style="color:var(--text)">${esc(prop.agency_short || prop.agency_full)}</span></div>`;
+  }
   if (own) {
     const ownerName = own.true_owner || own.recorded_owner || '';
     if (ownerName) html += `<div><span style="color:var(--text3)">Owner:</span> <span style="color:var(--text)">${esc(ownerName)}</span></div>`;
@@ -165,6 +176,45 @@ function _udKeyFields(db, prop, own) {
   html += '</div>';
   return html;
 }
+
+/** Dismiss a dia-clinic lead as "not a lead" from the unified detail sidebar */
+async function _udDismissLead() {
+  if (!_udCache || _udCache.db !== 'dia') return;
+  const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id;
+  const propertyId = _udCache.ids?.property_id;
+  if (!clinicId) { showToast('No clinic ID — cannot dismiss', 'error'); return; }
+
+  try {
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'research_queue_outcomes');
+    const payload = {
+      queue_type: 'clinic_lead',
+      clinic_id: clinicId,
+      status: 'not_applicable',
+      notes: 'Dismissed from detail panel — not a viable net lease lead',
+      selected_property_id: propertyId || null,
+      assigned_at: new Date().toISOString()
+    };
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      console.error('Dismiss error:', await res.text());
+      showToast('Error dismissing lead', 'error');
+      return;
+    }
+    showToast('Lead dismissed — marked as not applicable', 'success');
+    closeDetail();
+    // Re-render dia tab if the function exists (refreshes the clinic leads list)
+    if (typeof renderDiaTab === 'function') renderDiaTab();
+  } catch (e) {
+    console.error('Dismiss error:', e);
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+window._udDismissLead = _udDismissLead;
 
 /** Switch tabs without re-fetching data */
 function switchUnifiedTab(tabName) {
@@ -230,8 +280,8 @@ function _udTabProperty() {
     html += '</div></div>';
   }
 
-  // Government-specific
-  if (p.agency_short || p.agency_full || p.government_type) {
+  // Government-specific (only show for gov database)
+  if (_udCache.db === 'gov' && (p.agency_short || p.agency_full || p.government_type)) {
     html += '<div class="detail-section">';
     html += '<div class="detail-section-title">Government Agency</div>';
     html += '<div class="detail-grid">';
@@ -1794,11 +1844,10 @@ async function _udSaveOwnership() {
     // 3. Upsert contacts table for contact info
     if (contactName || contactEmail || contactPhone) {
       const contactPayload = {
-        contact_name: contactName || null,
-        contact_email: contactEmail || null,
-        contact_phone: contactPhone || null,
-        company: trueOwner || null,
-        role: 'owner'
+        name: contactName || null,
+        email: contactEmail || null,
+        phone: contactPhone || null,
+        contact_type: 'owner'
       };
       
       if (contactId) {
@@ -1911,12 +1960,10 @@ async function _intelSavePriorSale() {
     const payload = {
       property_id: propertyId,
       sale_date: saleDate || null,
-      sale_price: salePrice ? parseFloat(salePrice) : null,
+      sold_price: salePrice ? parseFloat(salePrice) : null,
       cap_rate: capRate ? parseFloat(capRate) : null,
       buyer_name: buyer,
-      seller_name: seller,
-      listing_broker: broker,
-      notes: notes
+      seller_name: seller
     };
     const res = await fetch(url.toString(), {
       method: 'POST',
@@ -1955,13 +2002,13 @@ async function _intelSaveLoan() {
       property_id: propertyId,
       lender_name: lender,
       loan_amount: loanAmount ? parseFloat(loanAmount) : null,
-      interest_rate: interestRate ? parseFloat(interestRate) : null,
+      interest_rate_percent: interestRate ? parseFloat(interestRate) : null,
       loan_type: loanType || null,
       origination_date: origDate || null,
       maturity_date: matDate || null,
-      amortization_years: amortization ? parseInt(amortization) : null,
-      recourse_type: recourse || null,
-      ltv_percent: ltv ? parseFloat(ltv) : null
+      loan_term: amortization ? parseInt(amortization) : null,
+      recourse: recourse || null,
+      loan_to_value: ltv ? parseFloat(ltv) : null
     };
     const res = await fetch(url.toString(), {
       method: 'POST',
