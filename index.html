@@ -860,6 +860,7 @@ const PAGE_SIZE = 40;
 // State
 let activities = [];
 let emails = [];
+let emailTotalCount = 0;
 let calEvents = [];
 let currentBizTab = 'dialysis';
 let bizSearch = '';
@@ -990,7 +991,9 @@ function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d); if (isNaN(date)) return d;
   const now = new Date(); const diff = Math.floor((now - date) / 86400000);
-  if (diff === 0) return 'Today'; if (diff === 1) return 'Yesterday'; if (diff < 7) return `${diff}d ago`;
+  if (diff === 0) return 'Today'; if (diff === 1) return 'Yesterday'; if (diff === -1) return 'Tomorrow';
+  if (diff < 0) return `In ${Math.abs(diff)}d`;
+  if (diff < 7) return `${diff}d ago`;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -2229,6 +2232,7 @@ async function loadEmails() {
     if (!res.ok) throw new Error('API returned ' + res.status);
     const data = await res.json();
     emails = data.emails || [];
+    emailTotalCount = data.total || emails.length;
     renderHomeStats();
     document.getElementById('recentEmails').innerHTML = renderRecentEmails();
   } catch (e) {
@@ -2334,7 +2338,7 @@ function renderHomeStats() {
     const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
     document.getElementById('statDue').textContent = due.length;
   }
-  document.getElementById('statEmails').textContent = emails.length >= 500 ? '500+' : emails.length.toLocaleString();
+  document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
   const today = tzDateStr(new Date());
   const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
   document.getElementById('statEvents').textContent = todayEvents.length;
@@ -3088,7 +3092,8 @@ function updateGreeting() {
     const parts = [];
     if (todayEvts.length > 0) parts.push(`${todayEvts.length} event${todayEvts.length > 1 ? 's' : ''} today`);
     if (dueSoon.length > 0) parts.push(`${dueSoon.length} due this week`);
-    if (emails.length > 0) parts.push(`${emails.length >= 500 ? '500+' : emails.length} flagged email${emails.length !== 1 ? 's' : ''}`);
+    const emailDisplay = emailTotalCount || emails.length;
+    if (emailDisplay > 0) parts.push(`${emailDisplay.toLocaleString()} flagged email${emailDisplay !== 1 ? 's' : ''}`);
     summary = parts.join(' · ');
   }
 
