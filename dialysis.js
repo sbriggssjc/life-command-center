@@ -65,6 +65,19 @@ async function diaQuery(table, select, params = {}) {
   }
 }
 
+// Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
+async function diaQueryAll(table, select, params = {}) {
+  let all = [], offset = 0;
+  const pageSize = 1000;
+  while (true) {
+    const rows = await diaQuery(table, select, { ...params, limit: pageSize, offset });
+    all = all.concat(rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 // ============================================================================
 // DATA LOADING
 // ============================================================================
@@ -2237,8 +2250,8 @@ function renderDiaLeases() {
     (async () => {
       try {
         const [watchlist, gaps] = await Promise.all([
-          diaQuery('v_clinic_lease_renewal_watchlist', '*', { limit: 1000 }),
-          diaQuery('v_clinic_lease_data_gaps', 'gap_type,clinic_id,facility_name,operator_name,city,state,lease_expiration,total_patients', { limit: 2000 })
+          diaQueryAll('v_clinic_lease_renewal_watchlist', '*'),
+          diaQueryAll('v_clinic_lease_data_gaps', 'gap_type,clinic_id,facility_name,operator_name,city,state,lease_expiration,total_patients')
         ]);
         diaLeaseWatchlist = watchlist || [];
         diaLeaseGaps = gaps || [];
@@ -2651,7 +2664,7 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const buyersRaw = await diaQuery('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id', { limit: 5000 });
+          const buyersRaw = await diaQueryAll('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id');
           // Group by buyer_name
           const buyerMap = {};
           buyersRaw.forEach(r => {
@@ -2713,7 +2726,7 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const sellersRaw = await diaQuery('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id', { limit: 5000 });
+          const sellersRaw = await diaQueryAll('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id');
           // Group by seller_name
           const sellerMap = {};
           sellersRaw.forEach(r => {
@@ -2776,9 +2789,9 @@ function renderDiaPlayers() {
       (async () => {
         try {
           // Query three tables and join client-side
-          const saleBrokers = await diaQuery('sale_brokers', '*', { limit: 5000 });
-          const brokers = await diaQuery('brokers', 'broker_id,broker_name,company,email,phone', { limit: 5000 });
-          const sales = await diaQuery('sales_transactions', 'sale_id,sold_price,sale_date,cap_rate,buyer_name,seller_name', { limit: 5000 });
+          const saleBrokers = await diaQueryAll('sale_brokers', '*');
+          const brokers = await diaQueryAll('brokers', 'broker_id,broker_name,company,email,phone');
+          const sales = await diaQueryAll('sales_transactions', 'sale_id,sold_price,sale_date,cap_rate,buyer_name,seller_name');
           
           // Create lookup maps
           const brokerMap = {};

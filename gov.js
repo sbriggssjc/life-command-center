@@ -111,21 +111,27 @@ async function loadGovData() {
   
   try {
     // Load ownership changes with optimized query
-    const ownershipRes = await govQuery('ownership_history', 
-      'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
-      {
-        order: 'estimated_value.desc',
-        limit: 500
+    // Paginate ownership — 4500+ rows
+    {
+      let all = [], offset = 0;
+      while (true) {
+        const batch = await govQuery('ownership_history',
+          'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
+          { order: 'estimated_value.desc', limit: 1000, offset }
+        );
+        all = all.concat(batch.data || []);
+        if (!batch.data || batch.data.length < 1000) break;
+        offset += 1000;
       }
-    );
-    govData.ownership = ownershipRes.data || [];
+      govData.ownership = all;
+    }
     
     // Load prospect leads
     const leadsRes = await govQuery('prospect_leads',
       'lead_id, lease_number, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
       {
         order: 'priority_score.desc',
-        limit: 500
+        limit: 1000
       }
     );
     govData.leads = leadsRes.data || [];
@@ -141,13 +147,20 @@ async function loadGovData() {
     govData.listings = listingsRes.data || [];
     
     // Load contacts
-    const contactsRes = await govQuery('contacts',
-      'contact_id, name, contact_type, total_volume, phone, email',
-      {
-        limit: 500
+    // Paginate contacts — 4600+ rows
+    {
+      let all = [], offset = 0;
+      while (true) {
+        const batch = await govQuery('contacts',
+          'contact_id, name, contact_type, total_volume, phone, email',
+          { limit: 1000, offset }
+        );
+        all = all.concat(batch.data || []);
+        if (!batch.data || batch.data.length < 1000) break;
+        offset += 1000;
       }
-    );
-    govData.contacts = contactsRes.data || [];
+      govData.contacts = all;
+    }
     
     // Load GSA lease events
     const gsaEventsRes = await govQuery('gsa_lease_events',
@@ -170,22 +183,31 @@ async function loadGovData() {
     govData.gsaSnapshots = gsaSnapshotsRes.data || [];
     
     // Load FRPP records
+    // FRPP: 20K+ records — load count + first 1000 for overview stats
     const frppRes = await govQuery('frpp_records',
       'using_agency, using_bureau, street_address, city_name, state_name, square_feet, annual_rent_to_lessor, lease_expiration_date, property_type',
       {
-        limit: 500
+        limit: 1000
       }
     );
     govData.frppRecords = frppRes.data || [];
+    govData.frppCount = frppRes.count || govData.frppRecords.length;
     
     // Load county authorities
-    const countyRes = await govQuery('county_authorities',
-      'county_name, state_code, netronline_url, assessor_url, recorder_url, treasurer_url, tax_url, gis_url, clerk_url, other_urls',
-      {
-        limit: 500
+    // Paginate county authorities — 4400+ rows
+    {
+      let all = [], offset = 0;
+      while (true) {
+        const batch = await govQuery('county_authorities',
+          'county_name, state_code, netronline_url, assessor_url, recorder_url, treasurer_url, tax_url, gis_url, clerk_url, other_urls',
+          { limit: 1000, offset }
+        );
+        all = all.concat(batch.data || []);
+        if (!batch.data || batch.data.length < 1000) break;
+        offset += 1000;
       }
-    );
-    govData.countyAuth = countyRes.data || [];
+      govData.countyAuth = all;
+    }
     
     // Load loans
     const loansRes = await govQuery('loans',
@@ -205,26 +227,37 @@ async function loadGovData() {
 
     // Load property portfolio data for overview analytics (agency, lease term, rent, SF)
     // Pull lightweight columns only — paginate to get all ~16K rows
+    // NOTE: PostgREST caps at 1000 rows per request regardless of limit param
     try {
-      let allProps = [], pg = 0;
+      let allProps = [], offset = 0;
+      const pageSize = 1000;
       while (true) {
         const batch = await govQuery('properties',
           'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type',
-          { limit: 2000, offset: pg * 2000 }
+          { limit: pageSize, offset }
         );
         allProps = allProps.concat(batch.data || []);
-        if (!batch.data || batch.data.length < 2000) break;
-        pg++;
+        if (!batch.data || batch.data.length < pageSize) break;
+        offset += pageSize;
       }
       govData.portfolioProperties = allProps;
     } catch (e) { console.warn('Portfolio properties load error:', e); govData.portfolioProperties = []; }
 
     // Load sales transactions
-    const salesRes = await govQuery('sales_transactions',
-      '*',
-      { order: 'sale_date.desc', limit: 500 }
-    );
-    govData.salesComps = salesRes.data || [];
+    // Paginate sales — 2600+ rows
+    {
+      let all = [], offset = 0;
+      while (true) {
+        const batch = await govQuery('sales_transactions',
+          '*',
+          { order: 'sale_date.desc', limit: 1000, offset }
+        );
+        all = all.concat(batch.data || []);
+        if (!batch.data || batch.data.length < 1000) break;
+        offset += 1000;
+      }
+      govData.salesComps = all;
+    }
     
     govConnected = true;
     govDataLoaded = true;
@@ -1803,7 +1836,7 @@ function renderGovOverview() {
   html += '<div class="gov-grid gov-grid-4">';
   html += govCard({ title: 'GSA Events YTD', value: fmtN(gsaEventsYTD), sub: now.getFullYear() + ' lease events', color: 'blue' });
   html += govCard({ title: 'GSA Total Rent', value: '$' + fmtN(Math.round(totalGsaRent / 1e6)) + 'M', sub: fmtN(gsaSnapshots.length) + ' leases tracked', color: 'green' });
-  html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(frpp.length) + ' federal properties', color: 'cyan' });
+  html += govCard({ title: 'FRPP Square Feet', value: fmtN(Math.round(frppTotalSF / 1e6)) + 'M', sub: fmtN(govData.frppCount || frpp.length) + ' federal properties', color: 'cyan' });
   html += govCard({ title: 'FRPP Agencies', value: fmtN(frppAgencies), sub: '$' + fmtN(Math.round(frppTotalRent / 1e6)) + 'M annual rent', color: 'purple' });
   html += '</div>';
 
@@ -1880,7 +1913,7 @@ function renderGovNorthmarqMetrics() {
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
-  const isNM = r => ((r.listing_broker||'')+(r.buyer_broker||'')).toLowerCase().includes('northmarq');
+  const isNM = r => r.is_northmarq || ((r.listing_broker||'')+(r.purchasing_broker||'')).toLowerCase().match(/northmarq|sjc[;:]|briggs|hellwig|corriston/);
   const nmSales = ttmSales.filter(isNM);
   const nmWithPrice = nmSales.filter(r => (r.sold_price || r.sale_price) > 0);
   const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
