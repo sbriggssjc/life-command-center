@@ -177,44 +177,195 @@ function _udKeyFields(db, prop, own) {
   return html;
 }
 
-/** Dismiss a dia-clinic lead as "not a lead" from the unified detail sidebar */
-async function _udDismissLead() {
+/** Show the dismiss form inline at the top of the detail body */
+function _udDismissLead() {
+  if (!_udCache || _udCache.db !== 'dia') return;
+  const existing = document.getElementById('ud-dismiss-form');
+  if (existing) { existing.remove(); return; } // toggle off
+
+  const prop = _udCache.property || {};
+  const currentSF = prop.building_sf || prop.building_size || '';
+
+  const formHTML = `
+    <div id="ud-dismiss-form" style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:10px;padding:14px 16px;margin:0 0 16px 0;font-size:12px;">
+      <div style="font-weight:700;color:var(--red,#ef4444);font-size:13px;margin-bottom:10px">Dismiss Lead — Not Viable</div>
+
+      <div style="margin-bottom:8px">
+        <label style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Reason</label>
+        <select id="ud-dismiss-reason" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px">
+          <option value="hospital_campus">Hospital Campus / Medical Complex</option>
+          <option value="multi_tenant">Multi-Tenant Building (not single-tenant NNN)</option>
+          <option value="government_owned">Government-Owned Property</option>
+          <option value="too_small">Too Small / Not Institutional Grade</option>
+          <option value="no_property_match">Cannot Match to Property</option>
+          <option value="closed">Clinic Closed / Relocated</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom:8px">
+        <label style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Notes</label>
+        <input type="text" id="ud-dismiss-notes" placeholder="e.g. In 1.4M SF hospital, owned by Hartford Healthcare" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px;box-sizing:border-box" />
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <label style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Building Size (SF)</label>
+          <input type="number" id="ud-dismiss-rba" value="${currentSF}" placeholder="e.g. 1400000" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px;box-sizing:border-box" />
+        </div>
+        <div>
+          <label style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Occupancy</label>
+          <select id="ud-dismiss-occupancy" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px">
+            <option value="">— no change —</option>
+            <option value="multi">Multi-Tenant</option>
+            <option value="single">Single-Tenant</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <label style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">True Owner</label>
+          <input type="text" id="ud-dismiss-owner" placeholder="e.g. Hartford Healthcare" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px;box-sizing:border-box" />
+        </div>
+        <div>
+          <label style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Owner Type</label>
+          <select id="ud-dismiss-owner-type" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);font-size:12px">
+            <option value="">— not specified —</option>
+            <option value="hospital_system">Hospital System</option>
+            <option value="university">University / Academic Medical Center</option>
+            <option value="government">Government Entity</option>
+            <option value="reit">REIT / Institutional</option>
+            <option value="private_equity">Private Equity</option>
+            <option value="individual">Individual / Family</option>
+            <option value="operator">Operator-Owned</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button onclick="document.getElementById('ud-dismiss-form').remove()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);font-size:12px;cursor:pointer;font-family:Outfit,sans-serif">Cancel</button>
+        <button onclick="_udSubmitDismiss()" style="padding:6px 14px;border:none;border-radius:6px;background:var(--red,#ef4444);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif">Dismiss Lead</button>
+      </div>
+    </div>`;
+
+  const body = document.getElementById('detailBody');
+  if (body) body.insertAdjacentHTML('afterbegin', formHTML);
+}
+window._udDismissLead = _udDismissLead;
+
+/** Submit the dismiss form — save outcome + update property data */
+async function _udSubmitDismiss() {
   if (!_udCache || _udCache.db !== 'dia') return;
   const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id;
   const propertyId = _udCache.ids?.property_id;
   if (!clinicId) { showToast('No clinic ID — cannot dismiss', 'error'); return; }
 
+  const reason = document.getElementById('ud-dismiss-reason')?.value || 'other';
+  const notes = document.getElementById('ud-dismiss-notes')?.value?.trim() || '';
+  const rba = document.getElementById('ud-dismiss-rba')?.value;
+  const occupancy = document.getElementById('ud-dismiss-occupancy')?.value;
+  const trueOwner = document.getElementById('ud-dismiss-owner')?.value?.trim() || '';
+  const ownerType = document.getElementById('ud-dismiss-owner-type')?.value || '';
+
+  const reasonLabels = {
+    hospital_campus: 'Hospital Campus / Medical Complex',
+    multi_tenant: 'Multi-Tenant Building',
+    government_owned: 'Government-Owned Property',
+    too_small: 'Too Small / Not Institutional',
+    no_property_match: 'Cannot Match to Property',
+    closed: 'Clinic Closed / Relocated',
+    other: 'Other'
+  };
+  const fullNotes = [
+    'Reason: ' + (reasonLabels[reason] || reason),
+    notes || null,
+    rba ? 'Building SF: ' + Number(rba).toLocaleString() : null,
+    occupancy === 'multi' ? 'Multi-tenant building' : null,
+    trueOwner ? 'Owner: ' + trueOwner : null,
+    ownerType ? 'Owner type: ' + ownerType : null
+  ].filter(Boolean).join(' | ');
+
+  // Disable the submit button to prevent double-clicks
+  const btn = document.querySelector('#ud-dismiss-form button:last-child');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+
   try {
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'research_queue_outcomes');
-    const payload = {
+    // 1. Save research_queue_outcomes
+    const outUrl = new URL('/api/dia-query', window.location.origin);
+    outUrl.searchParams.set('table', 'research_queue_outcomes');
+    const outPayload = {
       queue_type: 'clinic_lead',
       clinic_id: clinicId,
       status: 'not_applicable',
-      notes: 'Dismissed from detail panel — not a viable net lease lead',
+      notes: fullNotes,
       selected_property_id: propertyId || null,
       assigned_at: new Date().toISOString()
     };
-    const res = await fetch(url.toString(), {
+    const outRes = await fetch(outUrl.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(outPayload)
     });
-    if (!res.ok) {
-      console.error('Dismiss error:', await res.text());
-      showToast('Error dismissing lead', 'error');
+    if (!outRes.ok) {
+      console.error('Dismiss outcome error:', await outRes.text());
+      showToast('Error saving dismiss outcome', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Dismiss Lead'; }
       return;
     }
-    showToast('Lead dismissed — marked as not applicable', 'success');
+
+    // 2. Update property record if we have a property_id and any property data was entered
+    if (propertyId && (rba || occupancy || trueOwner)) {
+      const propUrl = new URL('/api/dia-query', window.location.origin);
+      propUrl.searchParams.set('table', 'properties');
+      propUrl.searchParams.set('filter', `property_id=eq.${propertyId}`);
+      const propPayload = {};
+      if (rba) propPayload.building_sf = parseInt(rba);
+      if (occupancy === 'multi') propPayload.is_single_tenant = false;
+      if (occupancy === 'single') propPayload.is_single_tenant = true;
+      if (trueOwner) propPayload.tenant = trueOwner; // tenant field used for owner display
+
+      const propRes = await fetch(propUrl.toString(), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(propPayload)
+      });
+      if (!propRes.ok) {
+        console.warn('Property update warning:', await propRes.text());
+        // Non-fatal — the lead is still dismissed
+      }
+    }
+
+    // 3. If true owner entered, also save to ownership records
+    if (propertyId && trueOwner) {
+      try {
+        const owUrl = new URL('/api/dia-query', window.location.origin);
+        owUrl.searchParams.set('table', 'true_owners');
+        const owPayload = { name: trueOwner, owner_type: ownerType || 'other' };
+        await fetch(owUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+          body: JSON.stringify(owPayload)
+        });
+      } catch (e) { console.warn('Owner record save warning:', e); }
+    }
+
+    // Refresh local outcomes cache
+    if (typeof diaData !== 'undefined' && diaData.researchOutcomes) {
+      diaData.researchOutcomes.push(outPayload);
+    }
+
+    showToast('Lead dismissed — research saved', 'success');
     closeDetail();
-    // Re-render dia tab if the function exists (refreshes the clinic leads list)
     if (typeof renderDiaTab === 'function') renderDiaTab();
   } catch (e) {
     console.error('Dismiss error:', e);
     showToast('Error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Dismiss Lead'; }
   }
 }
-window._udDismissLead = _udDismissLead;
+window._udSubmitDismiss = _udSubmitDismiss;
 
 /** Switch tabs without re-fetching data */
 function switchUnifiedTab(tabName) {

@@ -13,7 +13,7 @@ let diaResearchMode = 'property'; // 'property' | 'lease' | 'clinic_leads'
 let diaResearchIdx = 0;
 let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
 let diaLeaseFilter = { priority: null, selectedIdx: undefined };
-let diaClinicLeadFilter = { category: null, tier: null, state: null, selectedIdx: undefined };
+let diaClinicLeadFilter = { category: null, tier: null, state: null, selectedIdx: undefined, hideResolved: true };
 let diaClinicLeadQueue = null; // lazy-loaded from v_clinic_research_priority
 let diaClinicLeadLoading = false;
 let diaChangeFilter = 'all'; // 'all' | 'added' | 'removed' | 'persistent'
@@ -1680,8 +1680,18 @@ function renderDiaClinicLeads() {
   html += '</div>';
   html += '</div>';
 
+  // Hide resolved toggle
+  const hideRes = diaClinicLeadFilter.hideResolved;
+  const resolvedCount = queue.filter(r => resolvedIds.has(r.medicare_id)).length;
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">';
+  html += `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2)">`;
+  html += `<input type="checkbox" id="clHideResolved" ${hideRes ? 'checked' : ''} style="accent-color:var(--accent)" />`;
+  html += `Hide dismissed (${resolvedCount})</label>`;
+  html += '</div>';
+
   // Apply filters
   let filtered = queue;
+  if (hideRes) filtered = filtered.filter(r => !resolvedIds.has(r.medicare_id));
   if (diaClinicLeadFilter.category) filtered = filtered.filter(r => r.research_category === diaClinicLeadFilter.category);
   if (diaClinicLeadFilter.tier) filtered = filtered.filter(r => r.priority_tier === diaClinicLeadFilter.tier);
   if (diaClinicLeadFilter.state) filtered = filtered.filter(r => r.state === diaClinicLeadFilter.state);
@@ -1771,6 +1781,15 @@ function renderDiaClinicLeads() {
     if (stateEl) {
       stateEl.addEventListener('change', () => {
         diaClinicLeadFilter.state = stateEl.value || null;
+        diaClinicLeadFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    }
+    // Hide resolved toggle
+    const hideEl = document.getElementById('clHideResolved');
+    if (hideEl) {
+      hideEl.addEventListener('change', () => {
+        diaClinicLeadFilter.hideResolved = hideEl.checked;
         diaClinicLeadFilter.selectedIdx = undefined;
         renderDiaTab();
       });
@@ -4123,16 +4142,16 @@ async function saveSaleTransaction() {
   const record = window._saleRecord;
   if (!record || !record.sale_id) return;
 
-  const buyer = q('#dia-buyer-name').value.trim();
-  const buyerType = q('#dia-buyer-type').value.trim();
-  const seller = q('#dia-seller-name').value.trim();
-  const price = parseFloat(q('#dia-sold-price').value) || null;
-  const capRateVal = parseFloat(q('#dia-cap-rate').value);
+  const buyer = q('#dia-buyer-name')?.value?.trim() || null;
+  const buyerType = q('#dia-buyer-type')?.value?.trim() || null;
+  const seller = q('#dia-seller-name')?.value?.trim() || null;
+  const price = parseFloat(q('#dia-sold-price')?.value) || null;
+  const capRateVal = parseFloat(q('#dia-cap-rate')?.value);
   const capRate = capRateVal ? capRateVal / 100 : null;
-  const saleDate = q('#dia-sale-date').value || null;
-  const capMethod = q('#dia-cap-rate-method').value.trim();
-  const capNotes = q('#dia-cap-rate-notes').value.trim();
-  const notes = q('#dia-notes').value.trim();
+  const saleDate = q('#dia-sale-date')?.value || null;
+  const capMethod = q('#dia-cap-rate-method')?.value?.trim() || null;
+  const capNotes = q('#dia-cap-rate-notes')?.value?.trim() || null;
+  const notes = q('#dia-notes')?.value?.trim() || null;
 
   const data = {
     buyer_name: buyer || null,
@@ -4165,13 +4184,13 @@ async function saveSaleProperty() {
   const record = window._saleRecord;
   if (!record || !record.property_id) return;
 
-  const address = q('#dia-prop-address').value.trim();
-  const city = q('#dia-prop-city').value.trim();
-  const state = q('#dia-prop-state').value.trim();
-  const tenant = q('#dia-prop-tenant').value.trim();
-  const rba = parseFloat(q('#dia-prop-rba').value) || null;
-  const land = parseFloat(q('#dia-prop-land').value) || null;
-  const year = parseInt(q('#dia-prop-year').value) || null;
+  const address = q('#dia-prop-address')?.value?.trim() || null;
+  const city = q('#dia-prop-city')?.value?.trim() || null;
+  const state = q('#dia-prop-state')?.value?.trim() || null;
+  const tenant = q('#dia-prop-tenant')?.value?.trim() || null;
+  const rba = parseFloat(q('#dia-prop-rba')?.value) || null;
+  const land = parseFloat(q('#dia-prop-land')?.value) || null;
+  const year = parseInt(q('#dia-prop-year')?.value) || null;
 
   const data = {
     address: address || null,
@@ -4197,9 +4216,9 @@ async function saveSaleProperty() {
 }
 
 async function saveSaleOwner(ownershipId, idx) {
-  const ownerType = q('#dia-owner-type-' + idx).value.trim();
-  const ownerSource = q('#dia-owner-source-' + idx).value.trim();
-  const notes = q('#dia-owner-notes-' + idx).value.trim();
+  const ownerType = q('#dia-owner-type-' + idx)?.value?.trim() || null;
+  const ownerSource = q('#dia-owner-source-' + idx)?.value?.trim() || null;
+  const notes = q('#dia-owner-notes-' + idx)?.value?.trim() || null;
 
   const data = {
     owner_type: ownerType || null,
@@ -4217,8 +4236,8 @@ async function saveSaleResearch() {
   const record = window._saleRecord;
   if (!record || !record.sale_id) return;
 
-  const status = q('#dia-research-status').value.trim();
-  const notes = q('#dia-research-notes').value.trim();
+  const status = q('#dia-research-status')?.value?.trim() || null;
+  const notes = q('#dia-research-notes')?.value?.trim() || null;
 
   if (!status) {
     showToast('Please select a status', 'error');
