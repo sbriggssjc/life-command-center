@@ -45,7 +45,7 @@ async function openUnifiedDetail(db, ids, fallback) {
     <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
   // Render tab bar
-  const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'History'];
+  const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'Intel', 'History'];
   document.getElementById('detailTabs').innerHTML = tabs.map((t, i) =>
     `<button class="detail-tab ${i === 0 ? 'active' : ''}" onclick="switchUnifiedTab('${t}')">${t}</button>`
   ).join('');
@@ -186,6 +186,7 @@ function _udRenderTab(tab) {
     case 'Lease': return _udTabLease();
     case 'Operations': return _udTabOperations();
     case 'Ownership': return _udTabOwnership();
+    case 'Intel': return _udTabIntel();
     case 'History': return _udTabHistory();
     default: return '<div class="detail-empty">Unknown tab</div>';
   }
@@ -874,6 +875,123 @@ async function _loadActivityFeed(own) {
     console.error('Activity feed error:', err);
     feedEl.innerHTML = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div><div class="detail-empty">Error loading activity feed</div></div>';
   }
+}
+
+// ─── INTEL TAB ────────────────────────────────────────────────────────────────
+
+function _udTabIntel() {
+  if (!_udCache) return '<div class="detail-empty">No data loaded</div>';
+  const propertyId = _udCache.ids?.property_id;
+  if (!propertyId) return '<div class="detail-empty">No property ID</div>';
+
+  let html = '';
+
+  // ── PRIOR SALE SECTION ──────────────────────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-prior-sale\').style.display = this.parentElement.querySelector(\'.intel-prior-sale\').style.display === \'none\' ? \'block\' : \'none\'">Prior Sale</div>';
+  html += '<div class="intel-prior-sale" style="display:block">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Sale Date</label>';
+  html += '<input id="intelSaleDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Sale Price ($)</label>';
+  html += '<input id="intelSalePrice" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Cap Rate at Sale (%)</label>';
+  html += '<input id="intelCapRateSale" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Buyer</label>';
+  html += '<input id="intelBuyer" type="text" placeholder="Entity name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Seller</label>';
+  html += '<input id="intelSeller" type="text" placeholder="Entity name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Listing Broker</label>';
+  html += '<input id="intelBroker" type="text" placeholder="Broker name/firm" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Notes</label>';
+  html += '<textarea id="intelSaleNotes" rows="2" placeholder="Sale notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea></div>';
+  html += '<button onclick="_intelSavePriorSale()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Prior Sale</button>';
+  html += '</div></div>';
+
+  // ── LOAN / DEBT SECTION ─────────────────────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-loan\').style.display = this.parentElement.querySelector(\'.intel-loan\').style.display === \'none\' ? \'block\' : \'none\'">Loan / Debt</div>';
+  html += '<div class="intel-loan" style="display:block">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Lender</label>';
+  html += '<input id="intelLender" type="text" placeholder="Bank or fund name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Amount ($)</label>';
+  html += '<input id="intelLoanAmount" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Interest Rate (%)</label>';
+  html += '<input id="intelInterestRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Type</label>';
+  html += '<select id="intelLoanType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
+  html += '<option value="">—</option>';
+  ['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Other'].forEach(t => {
+    html += `<option value="${t}">${t}</option>`;
+  });
+  html += '</select></div>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Origination Date</label>';
+  html += '<input id="intelOrigDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Maturity Date</label>';
+  html += '<input id="intelMatDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Amortization (years)</label>';
+  html += '<input id="intelAmortization" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Recourse</label>';
+  html += '<select id="intelRecourse" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
+  html += '<option value="">—</option>';
+  ['Recourse', 'Non-Recourse', 'Partial'].forEach(t => {
+    html += `<option value="${t}">${t}</option>`;
+  });
+  html += '</select></div>';
+  html += '</div>';
+  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">LTV (%)</label>';
+  html += '<input id="intelLTV" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<button onclick="_intelSaveLoan()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Loan Info</button>';
+  html += '</div></div>';
+
+  // ── CASH FLOW / VALUATION SECTION ───────────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-cashflow\').style.display = this.parentElement.querySelector(\'.intel-cashflow\').style.display === \'none\' ? \'block\' : \'none\'">Cash Flow / Valuation</div>';
+  html += '<div class="intel-cashflow" style="display:block">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Annual Rent / NOI ($)</label>';
+  html += '<input id="intelAnnualRent" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Rent Per SF ($/SF)</label>';
+  html += '<input id="intelRentPerSF" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Expense Type (NNN, Gross, etc.)</label>';
+  html += '<input id="intelExpenseType" type="text" placeholder="e.g., NNN, Modified Gross" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Estimated Value ($)</label>';
+  html += '<input id="intelEstValue" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Current Cap Rate (%)</label>';
+  html += '<input id="intelCurrentCapRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<button onclick="_intelSaveCashFlow()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Cash Flow</button>';
+  html += '</div></div>';
+
+  // ── RESEARCH NOTES SECTION ──────────────────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-notes\').style.display = this.parentElement.querySelector(\'.intel-notes\').style.display === \'none\' ? \'block\' : \'none\'">Research Notes</div>';
+  html += '<div class="intel-notes" style="display:block">';
+  html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Source / Date</label>';
+  html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Date Found</label>';
+  html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<button onclick="_intelSaveNotes()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
+  html += '</div></div>';
+
+  return html;
 }
 
 // ─── HISTORY TAB ─────────────────────────────────────────────────────────────
@@ -1574,6 +1692,8 @@ function refreshDetailPanel() {
 
 /**
  * Save ownership resolution from the unified detail Ownership tab form
+ * Upserts to: recorded_owners, true_owners, contacts, research_queue_outcomes
+ * Patches properties to link the owner IDs
  */
 async function _udSaveOwnership() {
   if (!_udCache) { showToast('No record loaded', 'error'); return; }
@@ -1591,26 +1711,145 @@ async function _udSaveOwnership() {
   const notes = (document.getElementById('udOwnNotes') || {}).value?.trim() || null;
 
   const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+  let recordedOwnerId = _udCache.ids?.recorded_owner_id || null;
+  let trueOwnerId = _udCache.ids?.true_owner_id || null;
+  let contactId = _udCache.ids?.contact_id || null;
 
-  // Check if ownership record exists
-  const own = _udCache.ownership;
-  if (own && own.ownership_id) {
-    // PATCH existing
-    const url = new URL(proxyBase, window.location.origin);
-    url.searchParams.set('table', 'ownership_history');
-    url.searchParams.set('filter', `ownership_id=eq.${own.ownership_id}`);
-    const data = { owner_type: ownerType, notes: notes };
-    try {
-      const res = await fetch(url.toString(), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-      if (!res.ok) { showToast('Error updating ownership: ' + res.status, 'error'); return; }
-    } catch (e) { showToast('Network error: ' + e.message, 'error'); return; }
-  }
+  try {
+    // 1. Upsert recorded_owners table
+    if (recordedOwner) {
+      const recordedOwnerPayload = {
+        name: recordedOwner,
+        state_of_incorporation: incState || null,
+        normalized_name: recordedOwner.toLowerCase()
+      };
+      
+      if (recordedOwnerId) {
+        // PATCH existing
+        const url = new URL(proxyBase, window.location.origin);
+        url.searchParams.set('table', 'recorded_owners');
+        url.searchParams.set('filter', `recorded_owner_id=eq.${recordedOwnerId}`);
+        const res = await fetch(url.toString(), { 
+          method: 'PATCH', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify(recordedOwnerPayload) 
+        });
+        if (!res.ok) console.error('Error patching recorded_owner:', res.status);
+      } else {
+        // INSERT new
+        const url = new URL(proxyBase, window.location.origin);
+        url.searchParams.set('table', 'recorded_owners');
+        const res = await fetch(url.toString(), { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, 
+          body: JSON.stringify(recordedOwnerPayload) 
+        });
+        if (res.ok) {
+          const [created] = await res.json();
+          recordedOwnerId = created.recorded_owner_id;
+        } else {
+          console.error('Error creating recorded_owner:', res.status);
+        }
+      }
+    }
 
-  // Update or create v_ownership_current via the correct tables
-  // For now, save the contact/owner info to research_queue_outcomes as a clinic_lead
-  const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id || null;
-  if (clinicId) {
-    try {
+    // 2. Upsert true_owners table
+    if (trueOwner) {
+      const trueOwnerPayload = {
+        name: trueOwner,
+        owner_type: ownerType || null,
+        contact_1_name: contactName || null,
+        notes: notes || null
+      };
+      
+      if (trueOwnerId) {
+        // PATCH existing
+        const url = new URL(proxyBase, window.location.origin);
+        url.searchParams.set('table', 'true_owners');
+        url.searchParams.set('filter', `true_owner_id=eq.${trueOwnerId}`);
+        const res = await fetch(url.toString(), { 
+          method: 'PATCH', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify(trueOwnerPayload) 
+        });
+        if (!res.ok) console.error('Error patching true_owner:', res.status);
+      } else {
+        // INSERT new
+        const url = new URL(proxyBase, window.location.origin);
+        url.searchParams.set('table', 'true_owners');
+        const res = await fetch(url.toString(), { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, 
+          body: JSON.stringify(trueOwnerPayload) 
+        });
+        if (res.ok) {
+          const [created] = await res.json();
+          trueOwnerId = created.true_owner_id;
+        } else {
+          console.error('Error creating true_owner:', res.status);
+        }
+      }
+    }
+
+    // 3. Upsert contacts table for contact info
+    if (contactName || contactEmail || contactPhone) {
+      const contactPayload = {
+        contact_name: contactName || null,
+        contact_email: contactEmail || null,
+        contact_phone: contactPhone || null,
+        company: trueOwner || null,
+        role: 'owner'
+      };
+      
+      if (contactId) {
+        // PATCH existing
+        const url = new URL(proxyBase, window.location.origin);
+        url.searchParams.set('table', 'contacts');
+        url.searchParams.set('filter', `contact_id=eq.${contactId}`);
+        const res = await fetch(url.toString(), { 
+          method: 'PATCH', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify(contactPayload) 
+        });
+        if (!res.ok) console.error('Error patching contact:', res.status);
+      } else {
+        // INSERT new
+        const url = new URL(proxyBase, window.location.origin);
+        url.searchParams.set('table', 'contacts');
+        const res = await fetch(url.toString(), { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, 
+          body: JSON.stringify(contactPayload) 
+        });
+        if (res.ok) {
+          const [created] = await res.json();
+          contactId = created.contact_id;
+        } else {
+          console.error('Error creating contact:', res.status);
+        }
+      }
+    }
+
+    // 4. PATCH properties to link the owner IDs
+    if (recordedOwnerId || trueOwnerId) {
+      const propertyPayload = {};
+      if (recordedOwnerId) propertyPayload.recorded_owner_id = recordedOwnerId;
+      if (trueOwnerId) propertyPayload.true_owner_id = trueOwnerId;
+      
+      const url = new URL(proxyBase, window.location.origin);
+      url.searchParams.set('table', 'properties');
+      url.searchParams.set('filter', `property_id=eq.${propertyId}`);
+      const res = await fetch(url.toString(), { 
+        method: 'PATCH', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(propertyPayload) 
+      });
+      if (!res.ok) console.error('Error patching property owner links:', res.status);
+    }
+
+    // 5. Save to research_queue_outcomes as a log entry
+    const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id || null;
+    if (clinicId) {
       const url = new URL(proxyBase, window.location.origin);
       url.searchParams.set('table', 'research_queue_outcomes');
       const payload = {
@@ -1630,14 +1869,187 @@ async function _udSaveOwnership() {
         selected_property_id: propertyId,
         assigned_at: new Date().toISOString()
       };
-      const res = await fetch(url.toString(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!res.ok) { const err = await res.text(); console.error('Ownership save error:', err); }
-    } catch (e) { console.error('Ownership resolution save error:', e); }
-  }
+      const res = await fetch(url.toString(), { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload) 
+      });
+      if (!res.ok) console.error('Error creating research_queue_outcome:', res.status);
+    }
 
-  showToast('Ownership resolution saved!', 'success');
-  // Refresh the detail panel
-  refreshDetailPanel();
+    showToast('Ownership resolution saved!', 'success');
+    // Refresh the detail panel
+    refreshDetailPanel();
+  } catch (e) {
+    console.error('Ownership save error:', e);
+    showToast('Error saving ownership: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INTEL TAB SAVE FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function _intelSavePriorSale() {
+  if (!_udCache) { showToast('No record loaded', 'error'); return; }
+  const propertyId = _udCache.ids?.property_id;
+  if (!propertyId) { showToast('No property ID', 'error'); return; }
+  const db = _udCache.db;
+  const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+
+  const saleDate = document.getElementById('intelSaleDate')?.value || null;
+  const salePrice = document.getElementById('intelSalePrice')?.value || null;
+  const capRate = document.getElementById('intelCapRateSale')?.value || null;
+  const buyer = document.getElementById('intelBuyer')?.value?.trim() || null;
+  const seller = document.getElementById('intelSeller')?.value?.trim() || null;
+  const broker = document.getElementById('intelBroker')?.value?.trim() || null;
+  const notes = document.getElementById('intelSaleNotes')?.value?.trim() || null;
+
+  try {
+    const url = new URL(proxyBase, window.location.origin);
+    url.searchParams.set('table', 'sales_transactions');
+    const payload = {
+      property_id: propertyId,
+      sale_date: saleDate || null,
+      sale_price: salePrice ? parseFloat(salePrice) : null,
+      cap_rate: capRate ? parseFloat(capRate) : null,
+      buyer_name: buyer,
+      seller_name: seller,
+      listing_broker: broker,
+      notes: notes
+    };
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { const err = await res.text(); console.error('Sale save error:', err); showToast('Error saving sale: ' + res.status, 'error'); return; }
+    showToast('Prior sale saved!', 'success');
+  } catch (e) {
+    console.error('Prior sale save error:', e);
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+async function _intelSaveLoan() {
+  if (!_udCache) { showToast('No record loaded', 'error'); return; }
+  const propertyId = _udCache.ids?.property_id;
+  if (!propertyId) { showToast('No property ID', 'error'); return; }
+  const db = _udCache.db;
+  const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+
+  const lender = document.getElementById('intelLender')?.value?.trim() || null;
+  const loanAmount = document.getElementById('intelLoanAmount')?.value || null;
+  const interestRate = document.getElementById('intelInterestRate')?.value || null;
+  const loanType = document.getElementById('intelLoanType')?.value || null;
+  const origDate = document.getElementById('intelOrigDate')?.value || null;
+  const matDate = document.getElementById('intelMatDate')?.value || null;
+  const amortization = document.getElementById('intelAmortization')?.value || null;
+  const recourse = document.getElementById('intelRecourse')?.value || null;
+  const ltv = document.getElementById('intelLTV')?.value || null;
+
+  try {
+    const url = new URL(proxyBase, window.location.origin);
+    url.searchParams.set('table', 'loans');
+    const payload = {
+      property_id: propertyId,
+      lender_name: lender,
+      loan_amount: loanAmount ? parseFloat(loanAmount) : null,
+      interest_rate: interestRate ? parseFloat(interestRate) : null,
+      loan_type: loanType || null,
+      origination_date: origDate || null,
+      maturity_date: matDate || null,
+      amortization_years: amortization ? parseInt(amortization) : null,
+      recourse_type: recourse || null,
+      ltv_percent: ltv ? parseFloat(ltv) : null
+    };
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { const err = await res.text(); console.error('Loan save error:', err); showToast('Error saving loan: ' + res.status, 'error'); return; }
+    showToast('Loan info saved!', 'success');
+  } catch (e) {
+    console.error('Loan save error:', e);
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+async function _intelSaveCashFlow() {
+  if (!_udCache) { showToast('No record loaded', 'error'); return; }
+  const propertyId = _udCache.ids?.property_id;
+  if (!propertyId) { showToast('No property ID', 'error'); return; }
+  const db = _udCache.db;
+  const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+
+  const annualRent = document.getElementById('intelAnnualRent')?.value || null;
+  const rentPerSF = document.getElementById('intelRentPerSF')?.value || null;
+  const expenseType = document.getElementById('intelExpenseType')?.value?.trim() || null;
+  const estValue = document.getElementById('intelEstValue')?.value || null;
+  const currentCapRate = document.getElementById('intelCurrentCapRate')?.value || null;
+
+  try {
+    const url = new URL(proxyBase, window.location.origin);
+    url.searchParams.set('table', 'properties');
+    url.searchParams.set('filter', `property_id=eq.${propertyId}`);
+    const payload = {
+      last_known_rent: annualRent ? parseFloat(annualRent) : null,
+      current_value_estimate: estValue ? parseFloat(estValue) : null
+    };
+    const res = await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { const err = await res.text(); console.error('Cash flow update error:', err); showToast('Error saving cash flow: ' + res.status, 'error'); return; }
+    showToast('Cash flow / valuation saved!', 'success');
+  } catch (e) {
+    console.error('Cash flow save error:', e);
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+async function _intelSaveNotes() {
+  if (!_udCache) { showToast('No record loaded', 'error'); return; }
+  const propertyId = _udCache.ids?.property_id;
+  if (!propertyId) { showToast('No property ID', 'error'); return; }
+  const db = _udCache.db;
+  const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+
+  const notes = document.getElementById('intelResearchNotes')?.value?.trim() || null;
+  const source = document.getElementById('intelResearchSource')?.value?.trim() || null;
+  const dateFound = document.getElementById('intelResearchDate')?.value || null;
+
+  if (!notes) { showToast('Please enter some research notes', 'error'); return; }
+
+  try {
+    const url = new URL(proxyBase, window.location.origin);
+    url.searchParams.set('table', 'research_queue_outcomes');
+    const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id || null;
+    const payload = {
+      queue_type: 'intel_research',
+      clinic_id: clinicId || null,
+      status: 'completed',
+      notes: [
+        notes,
+        source ? 'Source: ' + source : null,
+        dateFound ? 'Date: ' + dateFound : null
+      ].filter(Boolean).join(' | '),
+      selected_property_id: propertyId,
+      assigned_at: new Date().toISOString()
+    };
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) { const err = await res.text(); console.error('Notes save error:', err); showToast('Error saving notes: ' + res.status, 'error'); return; }
+    showToast('Research notes saved!', 'success');
+  } catch (e) {
+    console.error('Notes save error:', e);
+    showToast('Error: ' + e.message, 'error');
+  }
 }
 
 // Expose to global scope
@@ -1650,3 +2062,7 @@ window._udPreviewTemplate = _udPreviewTemplate;
 window._udSendTemplate = _udSendTemplate;
 window._udCopyTemplate = _udCopyTemplate;
 window._udSaveOwnership = _udSaveOwnership;
+window._intelSavePriorSale = _intelSavePriorSale;
+window._intelSaveLoan = _intelSaveLoan;
+window._intelSaveCashFlow = _intelSaveCashFlow;
+window._intelSaveNotes = _intelSaveNotes;
