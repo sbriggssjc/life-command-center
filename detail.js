@@ -129,7 +129,7 @@ async function openUnifiedDetail(db, ids, fallback) {
       const realTitle = property.page_title || property.facility_name || fallback.tenant_operator || fallback.agency || property.address || fallback.address || '(Unknown)';
       const loc2 = (property.city || '') + (property.state ? ', ' + property.state : '');
       // "Not a Lead" button for dia-clinic records (dismiss from clinic lead pipeline)
-      const dismissBtn = (db === 'dia' && fallback.clinic_id)
+      const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
         : '';
       document.getElementById('detailHeader').innerHTML = `
@@ -161,8 +161,9 @@ function _udKeyFields(db, prop, own) {
   if (prop.address) html += `<div><span style="color:var(--text3)">Address:</span> <span style="color:var(--text)">${esc(prop.address)}</span></div>`;
   if (prop.lease_number) html += `<div><span style="color:var(--text3)">Lease:</span> <span style="color:var(--text);font-family:monospace">${esc(prop.lease_number)}</span></div>`;
   if (db === 'dia') {
-    // Dialysis: show operator, not agency
-    const opName = prop.operator_name || prop.facility_name || '';
+    // Dialysis: show operator, not agency — check property data then fallback record
+    const fb = _udCache?.fallback || {};
+    const opName = prop.operator_name || fb.operator_name || fb.chain_organization || prop.facility_name || fb.facility_name || '';
     if (opName) html += `<div><span style="color:var(--text3)">Operator:</span> <span style="color:var(--text)">${esc(opName)}</span></div>`;
   } else {
     if (prop.agency_short || prop.agency_full) html += `<div><span style="color:var(--text3)">Agency:</span> <span style="color:var(--text)">${esc(prop.agency_short || prop.agency_full)}</span></div>`;
