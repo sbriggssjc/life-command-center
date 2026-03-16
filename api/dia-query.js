@@ -19,8 +19,9 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'table parameter required' });
   }
 
-  // Handle POST/PATCH requests (for inserts/upserts/updates)
+  // Handle POST/PATCH requests (for inserts/upserts/updates and RPC calls)
   if (req.method === 'POST' || req.method === 'PATCH') {
+    const isRpc = table.startsWith('rpc/');
     try {
       // Build URL with query filters for PATCH
       let patchUrl = `${diaUrl}/rest/v1/${table}`;
@@ -49,7 +50,8 @@ export default async function handler(req, res) {
           'apikey': diaKey,
           'Authorization': `Bearer ${diaKey}`,
           'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
+          // RPC calls need the response body; regular writes don't
+          'Prefer': isRpc ? 'return=representation' : 'return=minimal'
         },
         body: JSON.stringify(req.body)
       });
@@ -57,6 +59,17 @@ export default async function handler(req, res) {
       if (!response.ok) {
         const errBody = await response.text();
         return res.status(response.status).json({ error: errBody });
+      }
+
+      // RPC calls return data; forward it to the client
+      if (isRpc) {
+        const body = await response.text();
+        try {
+          const data = JSON.parse(body);
+          return res.status(200).json({ data: Array.isArray(data) ? data : [data], count: 1 });
+        } catch {
+          return res.status(200).json({ data: [], count: 0 });
+        }
       }
 
       return res.status(req.method === 'POST' ? 201 : 200).json({ ok: true });

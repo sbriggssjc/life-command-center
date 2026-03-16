@@ -836,6 +836,8 @@ body.compact .greeting { font-size: 18px; }
       </select>
       <label>Date</label>
       <input type="date" id="logCallDate">
+      <label>Notes <span style="font-weight:400;color:var(--text3)">(optional)</span></label>
+      <textarea id="logCallNotes" rows="3" placeholder="Call notes, discussion topics, next steps..." style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
     </div>
     <div class="modal-foot">
       <button class="btn-cancel" onclick="closeLogCall()">Cancel</button>
@@ -1739,9 +1741,6 @@ function debounceMktSearch(val) {
 async function mktMatchLead(leadId) {
   showToast('Matching against Salesforce...', 'success');
   try {
-    const result = await diaQuery('rpc/match_marketing_lead_to_sf', '', { filter: `p_lead_id=${leadId}` });
-    // Since RPC calls work differently via REST, use direct SQL via edge function
-    // For now, trigger a re-query — the match function runs server-side
     const url = new URL('/api/dia-query', window.location.origin);
     url.searchParams.set('table', 'rpc/match_marketing_lead_to_sf');
     const res = await fetch(url.toString(), {
@@ -1749,6 +1748,12 @@ async function mktMatchLead(leadId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ p_lead_id: leadId })
     });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('Match RPC error:', res.status, errText);
+      showToast('Error calling match function — ' + res.status, 'error');
+      return;
+    }
     const data = await res.json();
     if (data && data.data && data.data[0]) {
       const m = data.data[0];
@@ -1757,6 +1762,8 @@ async function mktMatchLead(leadId) {
       } else {
         showToast(`Matched via ${m.match_method}!`, 'success');
       }
+    } else {
+      showToast('Match completed — no result returned', 'success');
     }
     // Refresh data
     mktLoaded = false;
@@ -1773,11 +1780,17 @@ async function mktUpdateStatus(leadId, newStatus) {
     const url = new URL('/api/dia-query', window.location.origin);
     url.searchParams.set('table', 'marketing_leads');
     url.searchParams.set('filter', `lead_id=eq.${leadId}`);
-    await fetch(url.toString(), {
+    const res = await fetch(url.toString(), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus })
     });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('mktUpdateStatus error:', res.status, errText);
+      showToast('Error updating status — server returned ' + res.status, 'error');
+      return;
+    }
     // Update local cache
     const item = mktData.find(d => d.item_id === leadId);
     if (item) item.status = newStatus;
@@ -2147,6 +2160,7 @@ function renderActivityDetailBody(record) {
 function openLogCall(data) {
   logCallData = data;
   document.getElementById('logCallDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('logCallNotes').value = '';
   document.getElementById('logCallContext').textContent = `Logging activity for: ${data.name || 'Unknown'}`;
   document.getElementById('logCallSubmit').disabled = false;
   document.getElementById('logCallSubmit').textContent = 'Log Activity';
@@ -2165,6 +2179,7 @@ async function submitLogCall() {
     sf_company_id: logCallData.sf_company_id || undefined,
     activity_type: document.getElementById('logCallType').value,
     activity_date: document.getElementById('logCallDate').value,
+    notes: document.getElementById('logCallNotes').value || undefined,
     force: true,
   };
   if (!payload.sf_contact_id && !payload.sf_company_id) {

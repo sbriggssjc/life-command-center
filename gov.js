@@ -1268,7 +1268,7 @@ async function saveOwnership(rec) {
     recorded_owner_name: q('#res-recorded-owner').value || null,
     state_of_incorporation: q('#res-incorporation').value || null,
     recorded_owner_phone: q('#res-phone').value || null,
-    mailing_address: q('#res-mailing').value || null,
+    recorded_owner_address: q('#res-mailing').value || null,
     true_owner_name: q('#res-true-owner').value || null,
     principal_names: q('#res-principal-names').value || null,
     phone_2: q('#res-phone-2').value || null,
@@ -1298,7 +1298,14 @@ async function saveLead(rec) {
     true_owner: q('#res-true-owner').value || null,
     state_of_incorporation: q('#res-incorporation').value || null,
     principal_names: q('#res-principal-names').value || null,
-    phone_2: q('#res-phone').value || null,
+    contact_email: q('#res-principal-email').value || null,
+    contact_phone: q('#res-phone').value || null,
+    contact_mailing: q('#res-mailing').value || null,
+    phone_2: q('#res-phone-2').value || null,
+    mailing_address_2: q('#res-mailing-2').value || null,
+    rba: parseFloat(q('#res-rba').value) || null,
+    land_acres: parseFloat(q('#res-land-acres').value) || null,
+    year_renovated: parseInt(q('#res-year-renovated').value) || null,
     research_notes: q('#res-notes').value || null,
     research_status: 'completed'
   };
@@ -1391,25 +1398,22 @@ async function saveLoanFields(rec) {
   }
 }
 
-function researchMark(mark) {
+async function researchMark(mark) {
   const rec = researchQueue[researchIdx];
   if (!rec) return;
-  
+
   let status = 'marked';
   if (mark === 'spe_rename') status = 'spe_rename';
   if (mark === 'na') status = 'not_applicable';
-  
+
   const table = researchMode === 'ownership' ? 'ownership_history' : 'prospect_leads';
   const idCol = researchMode === 'ownership' ? 'ownership_id' : 'lead_id';
-  
-  patchRecord(table, idCol, rec[idCol], { research_status: status });
-  
+
+  const ok = await patchRecord(table, idCol, rec[idCol], { research_status: status });
+  if (!ok) return; // patchRecord already shows toast on error
+
   researchIdx++;
-  if (researchIdx >= researchQueue.length) {
-    renderGovTab();
-  } else {
-    renderGovTab();
-  }
+  renderGovTab();
 }
 
 function researchNav(dir) {

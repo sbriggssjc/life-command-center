@@ -3530,6 +3530,11 @@ async function saveSaleResearch() {
     return;
   }
 
+  if (!record.clinic_id) {
+    showToast('No clinic linked to this sale — cannot save research outcome', 'error');
+    return;
+  }
+
   // Create or update research_queue_outcomes record
   const url = new URL('/api/dia-query', window.location.origin);
   url.searchParams.set('table', 'research_queue_outcomes');
@@ -3537,10 +3542,10 @@ async function saveSaleResearch() {
   try {
     const data = {
       queue_type: 'sales_comp',
-      sale_id: record.sale_id,
+      clinic_id: record.clinic_id,
       status: status,
       notes: notes || null,
-      resolved_at: new Date().toISOString()
+      selected_property_id: record.property_id || null
     };
 
     const response = await fetch(url.toString(), {
