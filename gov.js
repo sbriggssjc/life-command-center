@@ -149,11 +149,11 @@ async function loadGovData() {
     govData.leads = leadsRes.data || [];
     
     // Load active listings
-    const listingsRes = await govQuery('available_listings',
+    // Load ALL available listings (paginated past PostgREST cap)
+    const listingsRes = await govQueryAll('available_listings',
       'listing_id, address, city, state, asking_price, asking_cap_rate, listing_source, listing_status, url_status, days_on_market, tenant_agency',
       {
-        order: 'asking_price.desc',
-        limit: 500
+        order: 'asking_price.desc'
       }
     );
     govData.listings = listingsRes.data || [];
@@ -3614,9 +3614,7 @@ function renderGovSearch() {
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Contact</span></div>';
           html += '<div class="search-card-meta">';
-          if (r.entity_type) html += '<span>' + esc(norm(r.entity_type)) + '</span>';
-          if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.total_transactions) html += '<span>Deals: ' + r.total_transactions + '</span>';
+          if (r.contact_type) html += '<span>' + esc(norm(r.contact_type)) + '</span>';
           if (r.total_volume) html += '<span>Volume: ' + fmt(r.total_volume) + '</span>';
           if (r.phone) html += '<span>' + esc(r.phone) + '</span>';
           if (r.email) html += '<span>' + esc(r.email) + '</span>';
@@ -3671,7 +3669,7 @@ async function execGovSearch() {
       govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_name.ilike.' + like + ',new_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }),
       govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ',contact_name.ilike.' + like + ')', limit: 25 }),
       govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',seller_name.ilike.' + like + ',listing_broker.ilike.' + like + ')', limit: 25 }),
-      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',entity_type.ilike.' + like + ',city.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
+      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',contact_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
       govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency.ilike.' + like + ')', limit: 25 })
     ]);
 
