@@ -2096,8 +2096,7 @@ async function renderDiaSales() {
   const fmtDate = (v) => v || '—';
 
   pageRows.forEach(r => {
-    const rowData = JSON.stringify({ property_id: r.property_id, clinic_id: r.clinic_id, tenant_operator: r.tenant_operator, address: r.address, city: r.city, state: r.state }).replace(/'/g, '&#39;');
-    html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "dia-clinic")\' style="cursor: pointer;">';
+    html += '<tr class="clickable-row" onclick=\'showSaleDetail(' + safeJSON(r) + ')\' style="cursor: pointer;">';
     html += td(r.tenant_operator, true);
     html += td(r.address, true);
     html += td(r.city);
@@ -3014,6 +3013,554 @@ async function execDiaSearch() {
 
 window.renderDiaTab = renderDiaTab;
 window.renderDiaOverview = renderDiaOverview;
+// ============================================================================
+// SALES COMP DETAIL/EDIT PANEL
+// ============================================================================
+
+async function diaPatchRecord(table, idCol, idVal, data) {
+  const url = new URL('/api/dia-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('filter', `${idCol}=eq.${idVal}`);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`PATCH error: ${response.status}`, errText);
+      showToast('Error saving data', 'error');
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('diaPatchRecord error:', err);
+    showToast('Error saving', 'error');
+    return false;
+  }
+}
+
+async function showSaleDetail(record) {
+  if (!record || !record.sale_id) {
+    showToast('Unable to open sale detail', 'error');
+    return;
+  }
+
+  // Store in window for detail panel
+  window._saleRecord = record;
+  window._saleCurrentTab = 'deal';
+
+  const overlay = q('#detailOverlay');
+  const panel = q('#detailPanel');
+  const header = q('#detailHeader');
+  const tabsContainer = q('#detailTabs');
+  const body = q('#detailBody');
+
+  if (!panel || !header || !tabsContainer || !body) return;
+
+  // Show panel
+  if (overlay) overlay.style.display = 'flex';
+  panel.style.display = 'flex';
+
+  // Render header
+  const title = esc(record.tenant_operator || 'Sale Comp');
+  const subtitle = esc(`${record.address || ''}, ${record.city || ''}, ${record.state || ''}`);
+  const salePrice = record.price ? '$' + Number(record.price).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
+
+  header.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 16px; border-bottom: 1px solid var(--border);">
+      <div>
+        <h2 style="margin: 0; color: var(--text); font-size: 18px; font-weight: 600;">${title}</h2>
+        <p style="margin: 4px 0 0 0; color: var(--text2); font-size: 13px;">${subtitle}</p>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span style="color: var(--accent); font-weight: 600; font-size: 14px;">${salePrice}</span>
+        <button onclick="closeSaleDetail()" style="background: none; border: none; color: var(--text2); font-size: 24px; cursor: pointer; padding: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">&times;</button>
+      </div>
+    </div>
+  `;
+
+  // Render tabs
+  const tabs = ['Deal', 'Property', 'Ownership', 'Research'];
+  let tabsHtml = '<div style="display: flex; border-bottom: 1px solid var(--border); gap: 0;">';
+  tabs.forEach(tab => {
+    const isActive = window._saleCurrentTab === tab.toLowerCase();
+    const style = isActive
+      ? 'color: var(--accent); border-bottom: 2px solid var(--accent); background: rgba(var(--accent-rgb), 0.1);'
+      : 'color: var(--text2); border-bottom: 2px solid transparent;';
+    tabsHtml += `<button onclick="switchSaleTab('${tab.toLowerCase()}')" style="flex: 1; padding: 12px; background: none; border: none; cursor: pointer; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.3px; ${style}">${tab}</button>`;
+  });
+  tabsHtml += '</div>';
+  tabsContainer.innerHTML = tabsHtml;
+
+  // Render body based on current tab
+  renderSaleDetailBody(record);
+}
+
+function switchSaleTab(tab) {
+  window._saleCurrentTab = tab;
+  const record = window._saleRecord;
+  if (record) renderSaleDetailBody(record);
+
+  // Update active tab style
+  document.querySelectorAll('#detailTabs button').forEach(btn => {
+    const btnTab = btn.textContent.trim().toLowerCase();
+    if (btnTab === tab) {
+      btn.style.color = 'var(--accent)';
+      btn.style.borderBottomColor = 'var(--accent)';
+      btn.style.background = 'rgba(var(--accent-rgb), 0.1)';
+    } else {
+      btn.style.color = 'var(--text2)';
+      btn.style.borderBottomColor = 'transparent';
+      btn.style.background = 'none';
+    }
+  });
+}
+
+async function renderSaleDetailBody(record) {
+  const body = q('#detailBody');
+  if (!body) return;
+
+  let html = '';
+
+  if (window._saleCurrentTab === 'deal') {
+    html = renderSaleDealTab(record);
+  } else if (window._saleCurrentTab === 'property') {
+    html = renderSalePropertyTab(record);
+  } else if (window._saleCurrentTab === 'ownership') {
+    html = await renderSaleOwnershipTab(record);
+  } else if (window._saleCurrentTab === 'research') {
+    html = renderSaleResearchTab(record);
+  }
+
+  body.innerHTML = html;
+}
+
+function renderSaleDealTab(record) {
+  const lblStyle = 'display:block;color:var(--text2);font-size:12px;margin-bottom:6px;font-weight:600;';
+  const inpStyle = 'width:100%;padding:8px;background:var(--s2);color:var(--text);border:1px solid var(--border);border-radius:4px;box-sizing:border-box;font-family:inherit;font-size:13px;';
+  const gridStyle = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;';
+
+  let html = '<div style="padding: 16px; overflow-y: auto; max-height: calc(100% - 100px);">';
+
+  // Transaction Details section
+  html += '<div style="margin-bottom: 24px;">';
+  html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Transaction Details</h3>';
+  
+  html += '<div style="' + gridStyle + '">';
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Buyer Name</label>';
+  html += '<input type="text" id="dia-buyer-name" value="' + esc(record.buyer_name || '') + '" placeholder="Buyer name" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Buyer Type</label>';
+  html += '<select id="dia-buyer-type" style="' + inpStyle + '">';
+  html += '<option value=""' + (record.buyer_type ? '' : ' selected') + '>Select type</option>';
+  const buyerTypes = ['Individual', 'Private Equity', 'REIT', 'Strategic Buyer', 'Other'];
+  buyerTypes.forEach(t => {
+    html += '<option value="' + esc(t) + '"' + (record.buyer_type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Seller Name</label>';
+  html += '<input type="text" id="dia-seller-name" value="' + esc(record.seller_name || '') + '" placeholder="Seller name" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Sold Price</label>';
+  html += '<input type="number" id="dia-sold-price" value="' + (record.sold_price || '') + '" placeholder="0" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Cap Rate (%)</label>';
+  html += '<input type="number" id="dia-cap-rate" value="' + ((record.cap_rate && record.cap_rate < 1) ? (record.cap_rate * 100).toFixed(2) : (record.cap_rate || '')) + '" placeholder="0.00" step="0.01" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Sale Date</label>';
+  html += '<input type="date" id="dia-sale-date" value="' + (record.sale_date || '') + '" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Cap Rate Method</label>';
+  html += '<select id="dia-cap-rate-method" style="' + inpStyle + '">';
+  html += '<option value=""' + (record.cap_rate_method ? '' : ' selected') + '>Select method</option>';
+  const methods = ['NOI / Purchase Price', 'Operating Expense Analysis', 'Market Comparable', 'Other'];
+  methods.forEach(m => {
+    html += '<option value="' + esc(m) + '"' + (record.cap_rate_method === m ? ' selected' : '') + '>' + esc(m) + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Cap Rate Notes</label>';
+  html += '<textarea id="dia-cap-rate-notes" placeholder="Notes about cap rate calculation..." style="' + inpStyle + 'min-height:80px;resize:vertical;">' + esc(record.cap_rate_notes || '') + '</textarea>';
+  html += '</div>';
+  
+  html += '<div style="margin-top: 12px;">';
+  html += '<label style="' + lblStyle + '">Transaction Notes</label>';
+  html += '<textarea id="dia-notes" placeholder="Additional notes..." style="' + inpStyle + 'min-height:80px;resize:vertical;">' + esc(record.notes || '') + '</textarea>';
+  html += '</div>';
+  
+  html += '</div>';
+
+  // Broker Info section
+  html += '<div style="margin-bottom: 24px;">';
+  html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Broker Info (Read-Only)</h3>';
+  
+  html += '<div style="' + gridStyle + '">';
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Listing Broker</label>';
+  html += '<div style="padding:8px;background:var(--s3);color:var(--text3);border:1px solid var(--border);border-radius:4px;font-size:13px;">' + esc(record.listing_broker || '—') + '</div>';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Procuring Broker</label>';
+  html += '<div style="padding:8px;background:var(--s3);color:var(--text3);border:1px solid var(--border);border-radius:4px;font-size:13px;">' + esc(record.procuring_broker || '—') + '</div>';
+  html += '</div>';
+  
+  html += '</div>';
+  html += '</div>';
+
+  // Computed section
+  html += '<div style="margin-bottom: 24px;">';
+  html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Computed Values (Read-Only)</h3>';
+  
+  const pricePerSF = record.rba && record.price ? (record.price / record.rba).toFixed(2) : 'N/A';
+  const bidAskSpread = record.bid_ask_spread ? Math.round(record.bid_ask_spread) + ' bps' : 'N/A';
+  const dom = record.dom ? record.dom + ' days' : 'N/A';
+  
+  html += '<div style="' + gridStyle + '">';
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Price Per SF</label>';
+  html += '<div style="padding:8px;background:var(--s3);color:var(--text3);border:1px solid var(--border);border-radius:4px;font-size:13px;">' + esc(pricePerSF) + '</div>';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Bid-Ask Spread</label>';
+  html += '<div style="padding:8px;background:var(--s3);color:var(--text3);border:1px solid var(--border);border-radius:4px;font-size:13px;">' + esc(bidAskSpread) + '</div>';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Days on Market</label>';
+  html += '<div style="padding:8px;background:var(--s3);color:var(--text3);border:1px solid var(--border);border-radius:4px;font-size:13px;">' + esc(dom) + '</div>';
+  html += '</div>';
+  
+  html += '</div>';
+  html += '</div>';
+
+  // Save button
+  html += '<div style="position: sticky; bottom: 0; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--s1);">';
+  html += '<button onclick="saveSaleTransaction()" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Save Transaction</button>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function renderSalePropertyTab(record) {
+  const lblStyle = 'display:block;color:var(--text2);font-size:12px;margin-bottom:6px;font-weight:600;';
+  const inpStyle = 'width:100%;padding:8px;background:var(--s2);color:var(--text);border:1px solid var(--border);border-radius:4px;box-sizing:border-box;font-family:inherit;font-size:13px;';
+  const gridStyle = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;';
+
+  let html = '<div style="padding: 16px; overflow-y: auto; max-height: calc(100% - 100px);">';
+  html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Property Information</h3>';
+  
+  html += '<div style="' + gridStyle + '">';
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Address</label>';
+  html += '<input type="text" id="dia-prop-address" value="' + esc(record.address || '') + '" placeholder="Address" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">City</label>';
+  html += '<input type="text" id="dia-prop-city" value="' + esc(record.city || '') + '" placeholder="City" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">State</label>';
+  html += '<input type="text" id="dia-prop-state" value="' + esc(record.state || '') + '" placeholder="State" maxlength="2" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Tenant/Operator</label>';
+  html += '<input type="text" id="dia-prop-tenant" value="' + esc(record.tenant_operator || '') + '" placeholder="Tenant/Operator" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Building Size (RBA, SF)</label>';
+  html += '<input type="number" id="dia-prop-rba" value="' + (record.rba || '') + '" placeholder="0" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Land Area (acres)</label>';
+  html += '<input type="number" id="dia-prop-land" value="' + (record.land_area || '') + '" placeholder="0" step="0.01" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Year Built</label>';
+  html += '<input type="number" id="dia-prop-year" value="' + (record.year_built || '') + '" placeholder="YYYY" min="1800" max="2100" style="' + inpStyle + '" />';
+  html += '</div>';
+  
+  html += '</div>';
+
+  html += '</div>';
+
+  // Save button
+  html += '<div style="position: sticky; bottom: 0; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--s1);">';
+  html += '<button onclick="saveSaleProperty()" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Save Property</button>';
+  html += '</div>';
+
+  return html;
+}
+
+async function renderSaleOwnershipTab(record) {
+  const lblStyle = 'display:block;color:var(--text2);font-size:12px;margin-bottom:6px;font-weight:600;';
+  const inpStyle = 'width:100%;padding:8px;background:var(--s2);color:var(--text);border:1px solid var(--border);border-radius:4px;box-sizing:border-box;font-family:inherit;font-size:13px;';
+
+  let html = '<div style="padding: 16px; overflow-y: auto; max-height: calc(100% - 60px);">';
+  html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Ownership History</h3>';
+
+  try {
+    const owners = await diaQuery('ownership_history', '*', {
+      filter: `property_id=eq.${record.property_id}`,
+      order: 'start_date.desc',
+      limit: 50
+    });
+
+    if (!owners || owners.length === 0) {
+      html += '<p style="color: var(--text3); font-size: 13px;">No ownership history records found.</p>';
+    } else {
+      owners.forEach((owner, idx) => {
+        html += '<div style="margin-bottom: 16px; padding: 12px; background: var(--s2); border: 1px solid var(--border); border-radius: 6px;">';
+        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">';
+        
+        html += '<div>';
+        html += '<label style="' + lblStyle + '">Owner Type</label>';
+        html += '<select id="dia-owner-type-' + idx + '" style="' + inpStyle + '">';
+        const ownerTypes = ['Operator', 'Owner', 'Investor', 'Other'];
+        ownerTypes.forEach(t => {
+          html += '<option value="' + esc(t) + '"' + (owner.owner_type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+        });
+        html += '</select>';
+        html += '</div>';
+        
+        html += '<div>';
+        html += '<label style="' + lblStyle + '">Ownership Source</label>';
+        html += '<input type="text" id="dia-owner-source-' + idx + '" value="' + esc(owner.ownership_source || '') + '" placeholder="Source" style="' + inpStyle + '" />';
+        html += '</div>';
+        
+        html += '</div>';
+        
+        html += '<div>';
+        html += '<label style="' + lblStyle + '">Notes</label>';
+        html += '<textarea id="dia-owner-notes-' + idx + '" placeholder="Notes..." style="' + inpStyle + 'min-height:60px;resize:vertical;">' + esc(owner.notes || '') + '</textarea>';
+        html += '</div>';
+        
+        html += '<button onclick="saveSaleOwner(' + owner.ownership_id + ', ' + idx + ')" style="width: 100%; padding: 8px; margin-top: 8px; background: var(--accent); color: white; border: none; border-radius: 4px; font-weight: 600; font-size: 12px; cursor: pointer;">Save Owner Record</button>';
+        html += '</div>';
+      });
+    }
+  } catch (e) {
+    console.error('Error loading ownership history:', e);
+    html += '<p style="color: var(--error); font-size: 13px;">Error loading ownership history.</p>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderSaleResearchTab(record) {
+  const lblStyle = 'display:block;color:var(--text2);font-size:12px;margin-bottom:6px;font-weight:600;';
+  const inpStyle = 'width:100%;padding:8px;background:var(--s2);color:var(--text);border:1px solid var(--border);border-radius:4px;box-sizing:border-box;font-family:inherit;font-size:13px;';
+
+  let html = '<div style="padding: 16px; overflow-y: auto; max-height: calc(100% - 100px);">';
+  html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Research Resolution</h3>';
+
+  html += '<div style="margin-bottom: 16px;">';
+  html += '<label style="' + lblStyle + '">Status</label>';
+  html += '<select id="dia-research-status" style="' + inpStyle + '">';
+  const statuses = ['pending_review', 'verified', 'needs_correction', 'flagged', 'resolved'];
+  statuses.forEach(s => {
+    html += '<option value="' + esc(s) + '">' + esc(s.replace(/_/g, ' ')) + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+
+  html += '<div>';
+  html += '<label style="' + lblStyle + '">Research Notes</label>';
+  html += '<textarea id="dia-research-notes" placeholder="Notes about this sale comp..." style="' + inpStyle + 'min-height:120px;resize:vertical;"></textarea>';
+  html += '</div>';
+
+  html += '</div>';
+
+  // Save button
+  html += '<div style="position: sticky; bottom: 0; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--s1);">';
+  html += '<button onclick="saveSaleResearch()" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Resolve Research</button>';
+  html += '</div>';
+
+  return html;
+}
+
+async function saveSaleTransaction() {
+  const record = window._saleRecord;
+  if (!record || !record.sale_id) return;
+
+  const buyer = q('#dia-buyer-name').value.trim();
+  const buyerType = q('#dia-buyer-type').value.trim();
+  const seller = q('#dia-seller-name').value.trim();
+  const price = parseFloat(q('#dia-sold-price').value) || null;
+  const capRateVal = parseFloat(q('#dia-cap-rate').value);
+  const capRate = capRateVal ? capRateVal / 100 : null;
+  const saleDate = q('#dia-sale-date').value || null;
+  const capMethod = q('#dia-cap-rate-method').value.trim();
+  const capNotes = q('#dia-cap-rate-notes').value.trim();
+  const notes = q('#dia-notes').value.trim();
+
+  const data = {
+    buyer_name: buyer || null,
+    buyer_type: buyerType || null,
+    seller_name: seller || null,
+    sold_price: price,
+    cap_rate: capRate,
+    sale_date: saleDate,
+    cap_rate_method: capMethod || null,
+    cap_rate_notes: capNotes || null,
+    notes: notes || null
+  };
+
+  const success = await diaPatchRecord('sales_transactions', 'sale_id', record.sale_id, data);
+  if (success) {
+    showToast('Transaction saved successfully', 'success');
+    // Update in-memory record
+    Object.assign(record, data);
+    // Update in array
+    if (window.diaSalesComps) {
+      const idx = window.diaSalesComps.findIndex(r => r.sale_id === record.sale_id);
+      if (idx >= 0) {
+        Object.assign(window.diaSalesComps[idx], data);
+      }
+    }
+  }
+}
+
+async function saveSaleProperty() {
+  const record = window._saleRecord;
+  if (!record || !record.property_id) return;
+
+  const address = q('#dia-prop-address').value.trim();
+  const city = q('#dia-prop-city').value.trim();
+  const state = q('#dia-prop-state').value.trim();
+  const tenant = q('#dia-prop-tenant').value.trim();
+  const rba = parseFloat(q('#dia-prop-rba').value) || null;
+  const land = parseFloat(q('#dia-prop-land').value) || null;
+  const year = parseInt(q('#dia-prop-year').value) || null;
+
+  const data = {
+    address: address || null,
+    city: city || null,
+    state: state || null,
+    tenant: tenant || null,
+    building_size: rba,
+    land_area: land,
+    year_built: year
+  };
+
+  const success = await diaPatchRecord('properties', 'property_id', record.property_id, data);
+  if (success) {
+    showToast('Property saved successfully', 'success');
+    Object.assign(record, data);
+    if (window.diaSalesComps) {
+      const idx = window.diaSalesComps.findIndex(r => r.property_id === record.property_id);
+      if (idx >= 0) {
+        Object.assign(window.diaSalesComps[idx], data);
+      }
+    }
+  }
+}
+
+async function saveSaleOwner(ownershipId, idx) {
+  const ownerType = q('#dia-owner-type-' + idx).value.trim();
+  const ownerSource = q('#dia-owner-source-' + idx).value.trim();
+  const notes = q('#dia-owner-notes-' + idx).value.trim();
+
+  const data = {
+    owner_type: ownerType || null,
+    ownership_source: ownerSource || null,
+    notes: notes || null
+  };
+
+  const success = await diaPatchRecord('ownership_history', 'ownership_id', ownershipId, data);
+  if (success) {
+    showToast('Owner record saved successfully', 'success');
+  }
+}
+
+async function saveSaleResearch() {
+  const record = window._saleRecord;
+  if (!record || !record.sale_id) return;
+
+  const status = q('#dia-research-status').value.trim();
+  const notes = q('#dia-research-notes').value.trim();
+
+  if (!status) {
+    showToast('Please select a status', 'error');
+    return;
+  }
+
+  // Create or update research_queue_outcomes record
+  const url = new URL('/api/dia-query', window.location.origin);
+  url.searchParams.set('table', 'research_queue_outcomes');
+
+  try {
+    const data = {
+      queue_type: 'sales_comp',
+      sale_id: record.sale_id,
+      status: status,
+      notes: notes || null,
+      resolved_at: new Date().toISOString()
+    };
+
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`Research save error: ${response.status}`, errText);
+      showToast('Error saving research', 'error');
+      return;
+    }
+
+    showToast('Research resolution saved', 'success');
+  } catch (err) {
+    console.error('saveSaleResearch error:', err);
+    showToast('Error saving research', 'error');
+  }
+}
+
+function closeSaleDetail() {
+  window._saleRecord = null;
+  window._saleCurrentTab = null;
+  const overlay = q('#detailOverlay');
+  const panel = q('#detailPanel');
+  if (overlay) overlay.style.display = 'none';
+  if (panel) panel.style.display = 'none';
+  q('#detailTabs').innerHTML = '';
+  q('#detailBody').innerHTML = '';
+}
+
 window.renderDiaChanges = renderDiaChanges;
 window.renderDiaNpi = renderDiaNpi;
 window.renderDiaResearch = renderDiaResearch;
@@ -3028,3 +3575,10 @@ window.renderDiaLeases = renderDiaLeases;
 window.renderDiaLoans = renderDiaLoans;
 window.goToDiaTab = goToDiaTab;
 window.infoCard = infoCard;
+window.showSaleDetail = showSaleDetail;
+window.switchSaleTab = switchSaleTab;
+window.saveSaleTransaction = saveSaleTransaction;
+window.saveSaleProperty = saveSaleProperty;
+window.saveSaleOwner = saveSaleOwner;
+window.saveSaleResearch = saveSaleResearch;
+window.closeSaleDetail = closeSaleDetail;
