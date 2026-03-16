@@ -123,21 +123,12 @@ async function loadGovData() {
   showToast('Loading government data...', 'info');
   
   try {
-    // Load ownership changes with optimized query
-    // Paginate ownership — 4500+ rows
-    {
-      let all = [], offset = 0;
-      while (true) {
-        const batch = await govQuery('ownership_history',
-          'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
-          { order: 'estimated_value.desc', limit: 1000, offset }
-        );
-        all = all.concat(batch.data || []);
-        if (!batch.data || batch.data.length < 1000) break;
-        offset += 1000;
-      }
-      govData.ownership = all;
-    }
+    // Load ALL ownership changes (paginated past PostgREST cap — 4500+ rows)
+    const ownershipRes = await govQueryAll('ownership_history',
+      'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
+      { order: 'estimated_value.desc' }
+    );
+    govData.ownership = ownershipRes.data || [];
     
     // Load ALL prospect leads (paginated to overcome PostgREST 1000-row cap)
     const leadsRes = await govQueryAll('prospect_leads',
@@ -158,21 +149,12 @@ async function loadGovData() {
     );
     govData.listings = listingsRes.data || [];
     
-    // Load contacts
-    // Paginate contacts — 4600+ rows
-    {
-      let all = [], offset = 0;
-      while (true) {
-        const batch = await govQuery('contacts',
-          'contact_id, name, contact_type, total_volume, phone, email',
-          { limit: 1000, offset }
-        );
-        all = all.concat(batch.data || []);
-        if (!batch.data || batch.data.length < 1000) break;
-        offset += 1000;
-      }
-      govData.contacts = all;
-    }
+    // Load ALL contacts (paginated past PostgREST cap — 4600+ rows)
+    const contactsRes = await govQueryAll('contacts',
+      'contact_id, name, contact_type, total_volume, phone, email',
+      {}
+    );
+    govData.contacts = contactsRes.data || [];
     
     // Load GSA lease events
     const gsaEventsRes = await govQuery('gsa_lease_events',
@@ -3473,7 +3455,7 @@ function renderGovPlayers() {
     listings.forEach(r => {
       const broker = r.broker || r.listing_agent || r.source;
       if (broker) {
-        const key = broker.trim().toUpperCase();
+        const key = normalizeEntity(broker);
         if (!brokerMap[key]) brokerMap[key] = { name: broker, deals: 0, volume: 0, records: [] };
         brokerMap[key].deals++;
         brokerMap[key].volume += (r.asking_price || 0);
@@ -3583,7 +3565,8 @@ function renderGovSearch() {
           html += '<span class="search-card-badge" style="background: rgba(108,140,255,0.15); color: #6c8cff;">Ownership</span></div>';
           html += '<div class="search-card-meta">';
           if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
-          if (r.agency_name) html += '<span>' + esc(norm(r.agency_name)) + '</span>';
+          if (r.prior_owner) html += '<span>From: ' + esc(norm(r.prior_owner)) + '</span>';
+          if (r.new_owner) html += '<span>To: ' + esc(norm(r.new_owner)) + '</span>';
           if (r.estimated_value) html += '<span>Value: ' + fmt(r.estimated_value) + '</span>';
           html += '</div></div>';
         });
@@ -3666,9 +3649,9 @@ async function execGovSearch() {
   const like = '*' + term + '*';
   try {
     const [ownership, leads, listings, contacts, properties] = await Promise.all([
-      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency_name.ilike.' + like + ',new_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }),
+      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',new_owner.ilike.' + like + ',prior_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }),
       govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ',contact_name.ilike.' + like + ')', limit: 25 }),
-      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',seller_name.ilike.' + like + ',listing_broker.ilike.' + like + ')', limit: 25 }),
+      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ')', limit: 25 }),
       govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',contact_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
       govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency.ilike.' + like + ')', limit: 25 })
     ]);
