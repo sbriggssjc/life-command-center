@@ -1721,10 +1721,12 @@ function renderGovOverview() {
 
   html += govSectionHeader('Prospect Pipeline', '🎯', 'pipeline');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Total Leads', value: fmtN(leads.length), sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
-  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads), sub: 'high priority', color: 'red', tab: 'pipeline' });
-  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads), sub: 'active prospects', color: 'orange', tab: 'pipeline' });
-  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M', sub: 'estimated total', color: 'green', tab: 'pipeline' });
+  const leadsAtCap = leads.length >= 1000;
+  const capSuffix = leadsAtCap ? '+' : '';
+  html += govCard({ title: 'Total Leads', value: fmtN(leads.length) + capSuffix, sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
+  html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads) + capSuffix, sub: 'high priority', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads) + capSuffix, sub: 'active prospects', color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M' + capSuffix, sub: 'estimated total', color: 'green', tab: 'pipeline' });
   const avgLeadValue = leads.length > 0 ? pipelineValue / leads.length : 0;
   html += govCard({ title: 'Avg Lead Value', value: avgLeadValue > 0 ? '$' + fmtN(Math.round(avgLeadValue / 1000)) + 'K' : '—', sub: 'per prospect', color: 'purple', tab: 'pipeline' });
   html += '</div>';
@@ -1985,15 +1987,24 @@ function renderGovOwnership() {
 }
 
 function renderGovPipeline() {
-  const totalLeads = govData.leads.length;
-  const hotCount = govData.leads.filter(l => l.lead_temperature === 'hot').length;
-  const warmCount = govData.leads.filter(l => l.lead_temperature === 'warm').length;
-  
-  const pipelineValue = govData.leads.reduce((sum, l) => sum + (l.estimated_value || 0), 0);
+  // Deduplicate leads by lead_id (data may contain duplicate rows from JOINs)
+  const seenIds = new Set();
+  const dedupedLeads = govData.leads.filter(l => {
+    const key = l.lead_id || (l.address + '|' + l.city + '|' + l.tenant_agency);
+    if (seenIds.has(key)) return false;
+    seenIds.add(key);
+    return true;
+  });
+  const totalLeads = dedupedLeads.length;
+  const atCap = govData.leads.length >= 1000;
+  const hotCount = dedupedLeads.filter(l => l.lead_temperature === 'hot').length;
+  const warmCount = dedupedLeads.filter(l => l.lead_temperature === 'warm').length;
+
+  const pipelineValue = dedupedLeads.reduce((sum, l) => sum + (l.estimated_value || 0), 0);
   
   // Leads by source
   const bySource = {};
-  govData.leads.forEach(l => {
+  dedupedLeads.forEach(l => {
     const source = cleanLabel(l.lead_source || 'Unknown');
     bySource[source] = (bySource[source] || 0) + 1;
   });
@@ -2007,10 +2018,10 @@ function renderGovPipeline() {
   const tempColors = ['#f87171', '#fbbf24', '#6c8cff'];
   
   let html = '<div class="gov-metrics">';
-  html += metricHTML('Total Leads', fmtN(totalLeads), 'In pipeline', 'blue');
-  html += metricHTML('Hot', fmtN(hotCount), 'Ready to move', 'red');
-  html += metricHTML('Warm', fmtN(warmCount), 'Engaged', 'yellow');
-  html += metricHTML('Pipeline Value', fmt(pipelineValue), 'Est. annual rent', 'purple');
+  html += metricHTML('Total Leads', fmtN(totalLeads) + (atCap ? '+' : ''), 'in pipeline' + (atCap ? ' (showing first 1,000)' : ''), 'blue');
+  html += metricHTML('Hot', fmtN(hotCount) + (atCap ? '+' : ''), 'high priority', 'red');
+  html += metricHTML('Warm', fmtN(warmCount) + (atCap ? '+' : ''), 'active prospects', 'yellow');
+  html += metricHTML('Pipeline Value', fmt(pipelineValue) + (atCap ? '+' : ''), 'estimated total', 'purple');
   html += '</div>';
   
   html += `<div class="charts-row">`;
@@ -2031,7 +2042,7 @@ function renderGovPipeline() {
   
   html += '<div class="table-section">';
   html += '<h3>Top Prospects</h3>';
-  html += leadsTable(govData.leads.slice(0, 100));
+  html += leadsTable(dedupedLeads.slice(0, 100));
   html += '</div>';
   
   setTimeout(() => {
@@ -3112,8 +3123,17 @@ function buildGovLeasesHTML() {
   html += '</div></div>';
 
   // ── Expiring Soon — Prospecting Targets ──
-  const urgentLeases = [...expired, ...under1yr, ...yr1to2]
-    .sort((a, b) => (a.firm_term_remaining || 0) - (b.firm_term_remaining || 0));
+  // Sort: soonest-to-expire first (small positive values), then expired leases at the end
+  const urgentLeases = [...under1yr, ...yr1to2, ...expired]
+    .sort((a, b) => {
+      const aT = a.firm_term_remaining ?? -999;
+      const bT = b.firm_term_remaining ?? -999;
+      // Positive terms first (ascending), then negative/expired last
+      if (aT >= 0 && bT >= 0) return aT - bT;
+      if (aT >= 0) return -1;
+      if (bT >= 0) return 1;
+      return bT - aT; // among expired, most recently expired first
+    });
 
   html += '<div class="widget" style="margin-bottom:16px">';
   html += `<div class="widget-title">Expiring Soon — Prospecting Targets <span style="font-size:12px;font-weight:400;color:var(--text3)">(${urgentLeases.length} properties)</span></div>`;
@@ -3357,6 +3377,21 @@ function renderGovPlayers() {
   });
   html += '</div>';
 
+  // Normalize entity names to merge variants (e.g., "Boyd Watterson" + "Boyd Watterson Global")
+  function normalizeEntity(name) {
+    if (!name) return '';
+    let n = name.trim().toUpperCase()
+      .replace(/,?\s*(LLC|LP|INC\.?|CORP\.?|L\.?P\.?|L\.?L\.?C\.?|LTD\.?|CO\.?)$/i, '')
+      .replace(/\s+/g, ' ').trim();
+    // Merge known entity families
+    if (n.startsWith('BOYD WATTERSON')) return 'BOYD WATTERSON';
+    if (n.startsWith('EASTERLY')) return 'EASTERLY';
+    if (n.startsWith('TANENBAUM') || n.startsWith('GARDNER-TANNENBAUM') || n.startsWith('GARDNER TANNENBAUM')) return 'TANENBAUM / GARDNER-TANNENBAUM';
+    if (n.startsWith('NGP')) return 'NGP CAPITAL';
+    if (n.startsWith('RMR')) return 'RMR';
+    return n;
+  }
+
   // Prefer the full lazy-loaded v_sales_comps (2155 rows) over govData.salesComps (500-row limit)
   const sales = (govSalesComps && govSalesComps.length > 0) ? govSalesComps : (govData.salesComps || []);
   const ownership = govData.ownership || [];
@@ -3368,7 +3403,7 @@ function renderGovPlayers() {
     sales.forEach(r => {
       const buyer = r.buyer || r.purchasing_broker;
       if (buyer) {
-        const key = buyer.trim().toUpperCase();
+        const key = normalizeEntity(buyer);
         if (!buyerMap[key]) buyerMap[key] = { name: buyer, deals: 0, volume: 0, records: [] };
         buyerMap[key].deals++;
         buyerMap[key].volume += (r.sold_price || r.price || r.sold_price_psf || 0);
@@ -3377,7 +3412,7 @@ function renderGovPlayers() {
     });
     ownership.forEach(r => {
       if (r.new_owner) {
-        const key = r.new_owner.trim().toUpperCase();
+        const key = normalizeEntity(r.new_owner);
         if (!buyerMap[key]) buyerMap[key] = { name: r.new_owner, deals: 0, volume: 0, records: [] };
         buyerMap[key].deals++;
         buyerMap[key].volume += (r.sale_price || r.estimated_value || 0);
@@ -3392,7 +3427,7 @@ function renderGovPlayers() {
     const sellerMap = {};
     sales.forEach(r => {
       if (r.seller) {
-        const key = r.seller.trim().toUpperCase();
+        const key = normalizeEntity(r.seller);
         if (!sellerMap[key]) sellerMap[key] = { name: r.seller, deals: 0, volume: 0, records: [] };
         sellerMap[key].deals++;
         sellerMap[key].volume += (r.sold_price || r.price || 0);
@@ -3401,7 +3436,7 @@ function renderGovPlayers() {
     });
     ownership.forEach(r => {
       if (r.prior_owner) {
-        const key = r.prior_owner.trim().toUpperCase();
+        const key = normalizeEntity(r.prior_owner);
         if (!sellerMap[key]) sellerMap[key] = { name: r.prior_owner, deals: 0, volume: 0, records: [] };
         sellerMap[key].deals++;
         sellerMap[key].volume += (r.sale_price || r.estimated_value || 0);
@@ -3418,7 +3453,7 @@ function renderGovPlayers() {
     sales.forEach(r => {
       const broker = r.listing_broker;
       if (broker) {
-        const key = broker.trim().toUpperCase();
+        const key = normalizeEntity(broker);
         if (!brokerMap[key]) brokerMap[key] = { name: broker, deals: 0, volume: 0, records: [] };
         brokerMap[key].deals++;
         brokerMap[key].volume += (r.sold_price || r.price || 0);
