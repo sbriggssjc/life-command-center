@@ -2651,7 +2651,7 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const buyersRaw = await diaQuery('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id');
+          const buyersRaw = await diaQuery('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id', { limit: 5000 });
           // Group by buyer_name
           const buyerMap = {};
           buyersRaw.forEach(r => {
@@ -2713,7 +2713,7 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const sellersRaw = await diaQuery('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id');
+          const sellersRaw = await diaQuery('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id', { limit: 5000 });
           // Group by seller_name
           const sellerMap = {};
           sellersRaw.forEach(r => {
@@ -2776,9 +2776,9 @@ function renderDiaPlayers() {
       (async () => {
         try {
           // Query three tables and join client-side
-          const saleBrokers = await diaQuery('sale_brokers', '*');
-          const brokers = await diaQuery('brokers', 'broker_id,broker_name,company,email,phone');
-          const sales = await diaQuery('sales_transactions', 'sale_id,sold_price,sale_date,cap_rate,buyer_name,seller_name');
+          const saleBrokers = await diaQuery('sale_brokers', '*', { limit: 5000 });
+          const brokers = await diaQuery('brokers', 'broker_id,broker_name,company,email,phone', { limit: 5000 });
+          const sales = await diaQuery('sales_transactions', 'sale_id,sold_price,sale_date,cap_rate,buyer_name,seller_name', { limit: 5000 });
           
           // Create lookup maps
           const brokerMap = {};

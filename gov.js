@@ -1839,9 +1839,9 @@ function renderGovSalesMetrics() {
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
-  const ttmWithPrice = ttmSales.filter(r => r.sale_price > 0);
-  const ttmVolume = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sale_price || 0), 0);
-  const validCaps = ttmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate)).sort((a,b) => a - b);
+  const ttmWithPrice = ttmSales.filter(r => (r.sold_price || r.sale_price) > 0);
+  const ttmVolume = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
+  const validCaps = ttmSales.filter(r => { const v = parseFloat(r.sold_cap_rate || r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.sold_cap_rate || r.cap_rate)).sort((a,b) => a - b);
   const avgCap = validCaps.length > 0 ? (validCaps.reduce((s,v) => s+v, 0) / validCaps.length * 100).toFixed(2) + '%' : '—';
   const q1 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.25)] * 100).toFixed(2) + '%' : '—';
   const q3 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.75)] * 100).toFixed(2) + '%' : '—';
@@ -1855,8 +1855,8 @@ function renderGovSalesMetrics() {
   h += '</div>';
 
   // All-time
-  const allWithPrice = sales.filter(r => r.sale_price > 0);
-  const totalVolume = allWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
+  const allWithPrice = sales.filter(r => (r.sold_price || r.sale_price) > 0);
+  const totalVolume = allWithPrice.reduce((s,r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
   h += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
   h += card({ title: 'All-Time Comps', value: fmtN(sales.length), sub: 'total in database', color: 'blue', tab: 'sales' });
   h += card({ title: 'All-Time Volume', value: '$' + fmtN(Math.round(totalVolume / 1e6)) + 'M', sub: fmtN(allWithPrice.length) + ' priced sales', color: 'green', tab: 'sales' });
@@ -1882,11 +1882,11 @@ function renderGovNorthmarqMetrics() {
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
   const isNM = r => ((r.listing_broker||'')+(r.buyer_broker||'')).toLowerCase().includes('northmarq');
   const nmSales = ttmSales.filter(isNM);
-  const nmWithPrice = nmSales.filter(r => r.sale_price > 0);
-  const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.sale_price || 0), 0);
+  const nmWithPrice = nmSales.filter(r => (r.sold_price || r.sale_price) > 0);
+  const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
   const marketShareTxn = ttmSales.length > 0 ? (nmSales.length / ttmSales.length * 100).toFixed(1) + '%' : '—';
-  const nmCaps = nmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
-  const mktCaps = ttmSales.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
+  const nmCaps = nmSales.filter(r => { const v = parseFloat(r.sold_cap_rate || r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.sold_cap_rate || r.cap_rate));
+  const mktCaps = ttmSales.filter(r => { const v = parseFloat(r.sold_cap_rate || r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.sold_cap_rate || r.cap_rate));
   const nmAvgCap = nmCaps.length > 0 ? (nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length*100).toFixed(2) + '%' : '—';
   const mktAvgCap = mktCaps.length > 0 ? (mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length*100).toFixed(2) + '%' : '—';
   const capAdv = (nmCaps.length > 0 && mktCaps.length > 0) ?
