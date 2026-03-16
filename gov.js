@@ -801,7 +801,7 @@ async function loadResearchQueue() {
   
   if (researchMode === 'ownership') {
     // Load ownership changes with research_status = pending or 'needs_research'
-    const pending = govData.ownership.filter(o => !o.sale_price && !o.research_status || o.research_status === 'pending');
+    const pending = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending'));
     
     for (const rec of pending.slice(0, 50)) {
       // Enrich with GSA snapshots
@@ -1288,19 +1288,19 @@ async function saveLead(rec) {
   const quickStatus = q('#res-quick-status').value;
   
   const data = {
-    recorded_owner: q('#res-recorded-owner').value || null,
-    true_owner: q('#res-true-owner').value || null,
-    state_of_incorporation: q('#res-incorporation').value || null,
-    principal_names: q('#res-principal-names').value || null,
-    contact_email: q('#res-principal-email').value || null,
-    contact_phone: q('#res-phone').value || null,
-    contact_mailing: q('#res-mailing').value || null,
-    phone_2: q('#res-phone-2').value || null,
-    mailing_address_2: q('#res-mailing-2').value || null,
-    rba: parseFloat(q('#res-rba').value) || null,
-    land_acres: parseFloat(q('#res-land-acres').value) || null,
-    year_renovated: parseInt(q('#res-year-renovated').value) || null,
-    research_notes: q('#res-notes').value || null,
+    recorded_owner: q('#res-recorded-owner')?.value || null,
+    true_owner: q('#res-true-owner')?.value || null,
+    state_of_incorporation: q('#res-incorporation')?.value || null,
+    principal_names: q('#res-principal-names')?.value || null,
+    contact_email: q('#res-principal-email')?.value || null,
+    contact_phone: q('#res-phone')?.value || null,
+    mailing_address: q('#res-mailing')?.value || null,
+    phone_2: q('#res-phone-2')?.value || null,
+    mailing_address_2: q('#res-mailing-2')?.value || null,
+    rba: parseFloat(q('#res-rba')?.value) || null,
+    land_acres: parseFloat(q('#res-land-acres')?.value) || null,
+    year_renovated: parseInt(q('#res-year-renovated')?.value) || null,
+    research_notes: q('#res-notes')?.value || null,
     research_status: 'completed'
   };
   

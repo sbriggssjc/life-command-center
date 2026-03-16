@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST' || req.method === 'PATCH') {
     const isRpc = table.startsWith('rpc/');
     // Honor client's Prefer header — needed for POST return=representation (ownership save)
-    const clientPrefer = req.headers['prefer'] || req.headers['Prefer'] || '';
+    const clientPrefer = req.headers['prefer'] || '';
     const wantsRepresentation = clientPrefer.includes('return=representation');
     try {
       // Build URL with query filters for PATCH

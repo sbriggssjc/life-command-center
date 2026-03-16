@@ -1258,8 +1258,10 @@ function renderDiaPropertyResearch() {
     
     document.querySelectorAll('[data-prop-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        diaPropertyFilter.selectedIdx = parseInt(e.currentTarget.dataset.propIdx);
-        renderDiaTab();
+        const idx = parseInt(e.currentTarget.dataset.propIdx);
+        const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
+        const item = filtered[idx];
+        if (item) showDetail(item, 'dia-clinic');
       });
     });
   }, 0);
@@ -1474,8 +1476,10 @@ function renderDiaLeaseResearch() {
     
     document.querySelectorAll('[data-lease-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        diaLeaseFilter.selectedIdx = parseInt(e.currentTarget.dataset.leaseIdx);
-        renderDiaTab();
+        const idx = parseInt(e.currentTarget.dataset.leaseIdx);
+        const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
+        const item = filtered[idx];
+        if (item) showDetail(item, 'dia-clinic');
       });
     });
   }, 0);
@@ -1737,12 +1741,11 @@ function renderDiaClinicLeads() {
 
   // Attach handlers
   setTimeout(() => {
-    // Row clicks
+    // Row clicks — open unified detail sidebar
     document.querySelectorAll('.cl-row').forEach(el => {
       el.addEventListener('click', () => {
         const idx = parseInt(el.dataset.clIdx);
-        diaClinicLeadFilter.selectedIdx = (diaClinicLeadFilter.selectedIdx === idx) ? undefined : idx;
-        renderDiaTab();
+        if (page[idx]) showDetail(page[idx], 'dia-clinic');
       });
     });
     // Category filter
