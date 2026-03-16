@@ -9,11 +9,22 @@
 // ============================================================================
 
 let diaCharts = {};
-let diaResearchMode = 'property'; // 'property' | 'lease'
+let diaResearchMode = 'property'; // 'property' | 'lease' | 'clinic_leads'
 let diaResearchIdx = 0;
 let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
 let diaLeaseFilter = { priority: null, selectedIdx: undefined };
+let diaClinicLeadFilter = { category: null, tier: null, state: null, selectedIdx: undefined };
+let diaClinicLeadQueue = null; // lazy-loaded from v_clinic_research_priority
+let diaClinicLeadLoading = false;
 let diaChangeFilter = 'all'; // 'all' | 'added' | 'removed' | 'persistent'
+let diaCmsData = null;  // lazy-loaded from v_cms_data
+let diaCmsLoading = false;
+let diaCmsSearch = '';
+let diaCmsPage = 0;
+let diaCmsSort = { col: 'latest_total_patients', dir: 'desc' };
+let diaCmsStateFilter = '';
+let diaCmsOperatorFilter = '';
+const DIA_CMS_PAGE_SIZE = 50;
 let diaNpiFilter = null; // filter by signal_type
 let diaSalesView = 'comps'; // 'comps' | 'available'
 let diaSalesComps = null;   // lazy-loaded from v_sales_comps
@@ -744,87 +755,246 @@ function renderDiaMoversChart() {
 // ============================================================================
 
 /**
- * Render inventory changes tab
+ * Render CMS Data tab (formerly Inventory) — comprehensive clinic table with financials,
+ * dynamic averages, sort, and filter
  */
 function renderDiaChanges() {
-  let html = '<div class="biz-section">';
-  
-  // Metrics
-  html += '<div class="gov-metrics">';
-  const addedCount = (diaData.inventorySummary.added?.clinic_count || 0);
-  const removedCount = (diaData.inventorySummary.removed?.clinic_count || 0);
-  const persistentCount = (diaData.inventorySummary.persistent?.clinic_count || 0);
-  
-  html += metricHTML('Added', fmtN(addedCount), 'new clinics', '');
-  html += metricHTML('Removed', fmtN(removedCount), 'clinics closed', '');
-  html += metricHTML('Persistent', fmtN(persistentCount), 'unchanged clinics', '');
-  html += metricHTML('Total Changes', fmtN(addedCount + removedCount), 'this month', '');
-  html += '</div>';
-  
-  // Filter pills
-  html += '<div class="pills" style="margin: 20px 0;">';
-  const types = ['all', 'added', 'removed', 'persistent'];
-  types.forEach(type => {
-    const active = diaChangeFilter === type ? ' active' : '';
-    html += `<button class="pill${active}" data-filter="${type}">${cleanLabel(type)}</button>`;
-  });
-  html += '</div>';
-  
-  // Table
-  html += '<div class="table-wrapper">';
-  html += '<div class="data-table">';
-  
-  let filtered = diaData.inventoryChanges;
-  if (diaChangeFilter !== 'all') {
-    filtered = filtered.filter(r => r.change_type === diaChangeFilter);
+  // Lazy-load CMS data from the comprehensive view
+  if (diaCmsData === null && !diaCmsLoading) {
+    diaCmsLoading = true;
+    (async () => {
+      try {
+        let all = [], offset = 0;
+        while (true) {
+          const batch = await diaQuery('v_cms_data', '*', {
+            order: 'latest_total_patients.desc.nullslast',
+            limit: 1000, offset
+          });
+          all = all.concat(batch || []);
+          if (!batch || batch.length < 1000) break;
+          offset += 1000;
+        }
+        diaCmsData = all;
+      } catch (e) {
+        console.error('CMS data load error:', e);
+        diaCmsData = [];
+      }
+      diaCmsLoading = false;
+      renderDiaTab();
+    })();
+    return '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CMS data...</p></div>';
   }
-  
-  if (filtered.length === 0) {
-    html += '<div class="table-empty">No changes to display</div>';
-  } else {
-    // Header
-    html += '<div class="table-row" style="font-weight: 600; border-bottom: 1px solid var(--border);">';
-    html += '<div style="flex: 2;">Facility</div>';
-    html += '<div style="flex: 1;">City</div>';
-    html += '<div style="flex: 1;">State</div>';
-    html += '<div style="flex: 1;">Operator</div>';
-    html += '<div style="flex: 1; text-align: right;">Patients</div>';
-    html += '<div style="flex: 1; text-align: right;">Delta</div>';
-    html += '<div style="flex: 1; text-align: right;">% Change</div>';
-    html += '</div>';
-    
-    filtered.slice(0, 100).forEach(row => {
-      const isLargeMove = Math.abs(row.delta_patients || 0) > 100;
-      const npiChanged = row.snapshot_npi_changed ? ' • NPI Changed' : '';
-      const highlight = isLargeMove ? 'background: rgba(251, 191, 36, 0.1);' : '';
-      
-      html += `<div class="table-row clickable-row" style="${highlight}" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
-      html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(norm(row.operator_name) || '')}</div>`;
-      html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
-      html += `<div style="flex: 1; text-align: right; color: ${row.delta_patients > 0 ? '#34d399' : row.delta_patients < 0 ? '#f87171' : 'var(--text3)'};">${row.delta_patients != null ? (row.delta_patients > 0 ? '+' : '') + fmtN(row.delta_patients) : '—'}</div>`;
-      html += `<div style="flex: 1; text-align: right; color: var(--text2);">${row.pct_change != null ? pct(row.pct_change) : '—'}</div>`;
-      html += '</div>';
+  if (diaCmsLoading) {
+    return '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CMS data...</p></div>';
+  }
+
+  const data = diaCmsData || [];
+
+  // === Apply filters ===
+  let filtered = data;
+  if (diaCmsStateFilter) filtered = filtered.filter(r => r.state === diaCmsStateFilter);
+  if (diaCmsOperatorFilter) filtered = filtered.filter(r => (r.operator_name || r.chain_organization || '') === diaCmsOperatorFilter);
+  if (diaCmsSearch) {
+    const sq = diaCmsSearch.toLowerCase();
+    filtered = filtered.filter(r =>
+      (r.facility_name || '').toLowerCase().includes(sq) ||
+      (r.operator_name || '').toLowerCase().includes(sq) ||
+      (r.city || '').toLowerCase().includes(sq) ||
+      (r.address || '').toLowerCase().includes(sq) ||
+      (r.chain_organization || '').toLowerCase().includes(sq) ||
+      (r.recorded_owner_name || '').toLowerCase().includes(sq) ||
+      (r.clinic_id || '').includes(sq)
+    );
+  }
+
+  // === Apply sort ===
+  if (diaCmsSort.col) {
+    const dir = diaCmsSort.dir === 'asc' ? 1 : -1;
+    const col = diaCmsSort.col;
+    filtered = [...filtered].sort((a, b) => {
+      let va = a[col], vb = b[col];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === 'string') return va.localeCompare(vb) * dir;
+      return (va - vb) * dir;
     });
   }
-  
+
+  // === Compute dynamic averages for filtered set ===
+  const n = filtered.length;
+  const sum = (arr, fn) => arr.reduce((s, r) => { const v = fn(r); return v != null && !isNaN(v) ? s + Number(v) : s; }, 0);
+  const cnt = (arr, fn) => arr.reduce((s, r) => { const v = fn(r); return v != null && !isNaN(v) ? s + 1 : s; }, 0);
+  const avg = (arr, fn) => { const c = cnt(arr, fn); return c > 0 ? sum(arr, fn) / c : null; };
+
+  const avgPatients = avg(filtered, r => r.latest_total_patients);
+  const avgDelta = avg(filtered, r => r.delta_patients);
+  const avgPctChange = avg(filtered, r => r.pct_change);
+  const avgRevenue = avg(filtered, r => r.estimated_annual_revenue);
+  const avgEbitda = avg(filtered, r => r.estimated_ebitda);
+  const totalRevenue = sum(filtered, r => r.estimated_annual_revenue);
+
+  let html = '<div class="biz-section">';
+
+  // === Dynamic average cards ===
+  html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px">';
+  html += _cmsAvgCard('Clinics', fmtN(n), '#60a5fa');
+  html += _cmsAvgCard('Avg Patients', avgPatients != null ? Math.round(avgPatients).toLocaleString() : '–', '#34d399');
+  html += _cmsAvgCard('Avg Δ Patients', avgDelta != null ? (avgDelta >= 0 ? '+' : '') + Math.round(avgDelta).toLocaleString() : '–', avgDelta >= 0 ? '#34d399' : '#f87171');
+  html += _cmsAvgCard('Avg Revenue', avgRevenue != null ? '$' + (avgRevenue / 1000000).toFixed(1) + 'M' : '–', '#a78bfa');
+  html += _cmsAvgCard('Avg EBITDA', avgEbitda != null ? '$' + Math.round(avgEbitda / 1000).toLocaleString() + 'K' : '–', '#fb923c');
+  html += _cmsAvgCard('Total Revenue', totalRevenue > 0 ? '$' + (totalRevenue / 1000000000).toFixed(2) + 'B' : '–', '#22d3ee');
   html += '</div>';
+
+  // === Filters row ===
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">';
+  // Search
+  html += `<input type="text" id="cmsSearch" placeholder="Search clinics..." value="${esc(diaCmsSearch)}" style="flex:1;min-width:180px;font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">`;
+  // State dropdown
+  const states = [...new Set(data.map(r => r.state).filter(Boolean))].sort();
+  html += `<select id="cmsStateFilter" style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">`;
+  html += `<option value="">All States</option>`;
+  states.forEach(s => html += `<option value="${s}" ${diaCmsStateFilter === s ? 'selected' : ''}>${s}</option>`);
+  html += '</select>';
+  // Operator dropdown (top 20)
+  const opCounts = {};
+  data.forEach(r => { const op = r.operator_name || r.chain_organization; if (op) opCounts[op] = (opCounts[op] || 0) + 1; });
+  const topOps = Object.entries(opCounts).sort((a, b) => b[1] - a[1]).slice(0, 30);
+  html += `<select id="cmsOperatorFilter" style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);max-width:200px">`;
+  html += `<option value="">All Operators</option>`;
+  topOps.forEach(([op, ct]) => html += `<option value="${esc(op)}" ${diaCmsOperatorFilter === op ? 'selected' : ''}>${esc(op)} (${ct})</option>`);
+  html += '</select>';
+  html += `<span style="font-size:11px;color:var(--text3)">${fmtN(filtered.length)} of ${fmtN(data.length)}</span>`;
   html += '</div>';
+
+  // === Table ===
+  const page = filtered.slice(diaCmsPage * DIA_CMS_PAGE_SIZE, (diaCmsPage + 1) * DIA_CMS_PAGE_SIZE);
+  const totalPages = Math.ceil(filtered.length / DIA_CMS_PAGE_SIZE);
+
+  html += '<div class="table-wrapper" style="overflow-x:auto">';
+  html += '<div class="data-table" style="min-width:900px">';
+
+  // Header (sortable)
+  const cols = [
+    { key: 'operator_name', label: 'Operator', flex: '1.2' },
+    { key: 'facility_name', label: 'Facility', flex: '1.4' },
+    { key: 'address', label: 'Address', flex: '1.2' },
+    { key: 'city', label: 'City', flex: '0.8' },
+    { key: 'state', label: 'ST', flex: '0.4' },
+    { key: 'latest_total_patients', label: 'Patients', flex: '0.6', align: 'right' },
+    { key: 'pct_change', label: 'Δ%', flex: '0.5', align: 'right' },
+    { key: 'estimated_annual_revenue', label: 'Revenue', flex: '0.7', align: 'right' },
+    { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.7', align: 'right' }
+  ];
+
+  html += '<div class="table-row" style="font-weight:600;border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3)">';
+  cols.forEach(c => {
+    const isActive = diaCmsSort.col === c.key;
+    const arrow = isActive ? (diaCmsSort.dir === 'asc' ? ' ↑' : ' ↓') : '';
+    const style = `flex:${c.flex};${c.align ? 'text-align:' + c.align + ';' : ''}cursor:pointer;user-select:none;${isActive ? 'color:var(--accent);' : ''}`;
+    html += `<div data-cms-sort="${c.key}" style="${style}">${c.label}${arrow}</div>`;
+  });
   html += '</div>';
-  
-  // Attach filter handlers after HTML
+
+  // Rows
+  page.forEach(row => {
+    const pctVal = row.pct_change != null ? Number(row.pct_change) : null;
+    const pctColor = pctVal > 0 ? '#34d399' : pctVal < 0 ? '#f87171' : 'var(--text3)';
+    const pctStr = pctVal != null ? (pctVal > 0 ? '+' : '') + pctVal.toFixed(1) + '%' : '–';
+
+    html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")' style="font-size:12px">`;
+    html += `<div style="flex:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.operator_name || row.chain_organization || '–')}</div>`;
+    html += `<div style="flex:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(row.facility_name || '')}</div>`;
+    html += `<div style="flex:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2);font-size:11px">${esc(row.address || '')}</div>`;
+    html += `<div style="flex:0.8;color:var(--text2)">${esc(row.city || '')}</div>`;
+    html += `<div style="flex:0.4;color:var(--text2)">${esc(row.state || '')}</div>`;
+    html += `<div style="flex:0.6;text-align:right;font-weight:500;color:var(--accent)">${row.latest_total_patients != null ? fmtN(row.latest_total_patients) : '–'}</div>`;
+    html += `<div style="flex:0.5;text-align:right;color:${pctColor};font-weight:500">${pctStr}</div>`;
+    html += `<div style="flex:0.7;text-align:right;color:var(--text2)">${row.estimated_annual_revenue ? '$' + (Number(row.estimated_annual_revenue) / 1000000).toFixed(1) + 'M' : '–'}</div>`;
+    html += `<div style="flex:0.7;text-align:right;color:var(--text2)">${row.estimated_ebitda ? '$' + Math.round(Number(row.estimated_ebitda) / 1000).toLocaleString() + 'K' : '–'}</div>`;
+    html += '</div>';
+  });
+
+  if (page.length === 0) {
+    html += '<div class="table-empty" style="padding:24px;text-align:center;color:var(--text3)">No clinics match filters</div>';
+  }
+
+  html += '</div>'; // data-table
+  html += '</div>'; // table-wrapper
+
+  // Pagination
+  if (totalPages > 1) {
+    html += '<div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:12px;font-size:12px">';
+    html += `<button id="cmsPrev" style="padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);cursor:pointer" ${diaCmsPage === 0 ? 'disabled' : ''}>← Prev</button>`;
+    html += `<span style="color:var(--text3)">Page ${diaCmsPage + 1} of ${totalPages}</span>`;
+    html += `<button id="cmsNext" style="padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);cursor:pointer" ${diaCmsPage >= totalPages - 1 ? 'disabled' : ''}>Next →</button>`;
+    html += '</div>';
+  }
+
+  html += '</div>'; // biz-section
+
+  // === Attach handlers ===
   setTimeout(() => {
-    document.querySelectorAll('.pills .pill').forEach(btn => {
-      btn.addEventListener('click', e => {
-        diaChangeFilter = e.target.dataset.filter;
+    // Sort headers
+    document.querySelectorAll('[data-cms-sort]').forEach(el => {
+      el.addEventListener('click', () => {
+        const col = el.dataset.cmsSort;
+        if (diaCmsSort.col === col) {
+          diaCmsSort.dir = diaCmsSort.dir === 'desc' ? 'asc' : 'desc';
+        } else {
+          diaCmsSort.col = col;
+          diaCmsSort.dir = 'desc';
+        }
+        diaCmsPage = 0;
         renderDiaTab();
       });
     });
+    // Search
+    const searchEl = document.getElementById('cmsSearch');
+    if (searchEl) {
+      let debounce;
+      searchEl.addEventListener('input', () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          diaCmsSearch = searchEl.value;
+          diaCmsPage = 0;
+          renderDiaTab();
+        }, 300);
+      });
+    }
+    // State filter
+    const stateEl = document.getElementById('cmsStateFilter');
+    if (stateEl) {
+      stateEl.addEventListener('change', () => {
+        diaCmsStateFilter = stateEl.value;
+        diaCmsPage = 0;
+        renderDiaTab();
+      });
+    }
+    // Operator filter
+    const opEl = document.getElementById('cmsOperatorFilter');
+    if (opEl) {
+      opEl.addEventListener('change', () => {
+        diaCmsOperatorFilter = opEl.value;
+        diaCmsPage = 0;
+        renderDiaTab();
+      });
+    }
+    // Pagination
+    const prevBtn = document.getElementById('cmsPrev');
+    const nextBtn = document.getElementById('cmsNext');
+    if (prevBtn) prevBtn.addEventListener('click', () => { diaCmsPage--; renderDiaTab(); });
+    if (nextBtn) nextBtn.addEventListener('click', () => { diaCmsPage++; renderDiaTab(); });
   }, 0);
-  
+
   return html;
+}
+
+function _cmsAvgCard(title, value, color) {
+  return `<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;text-align:center">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:2px">${title}</div>
+    <div style="font-size:18px;font-weight:800;color:${color}">${value}</div>
+  </div>`;
 }
 
 // ============================================================================
@@ -932,15 +1102,18 @@ function renderDiaResearch() {
   let html = '<div class="research-workbench">';
   
   // Mode tabs
-  html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">';
-  html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property" style="cursor: pointer; font-weight: ${diaResearchMode === 'property' ? '600' : '500'};">Property Review Queue</button>`;
-  html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease" style="cursor: pointer; font-weight: ${diaResearchMode === 'lease' ? '600' : '500'};">Lease Backfill Queue</button>`;
+  html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap;">';
+  html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property" style="cursor: pointer; font-weight: ${diaResearchMode === 'property' ? '600' : '500'};">Property Review</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease" style="cursor: pointer; font-weight: ${diaResearchMode === 'lease' ? '600' : '500'};">Lease Backfill</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'clinic_leads' ? '-green' : ''}" data-mode="clinic_leads" style="cursor: pointer; font-weight: ${diaResearchMode === 'clinic_leads' ? '600' : '500'};">Clinic Leads</button>`;
   html += '</div>';
-  
+
   if (diaResearchMode === 'property') {
     html += renderDiaPropertyResearch();
-  } else {
+  } else if (diaResearchMode === 'lease') {
     html += renderDiaLeaseResearch();
+  } else if (diaResearchMode === 'clinic_leads') {
+    html += renderDiaClinicLeads();
   }
   
   html += '</div>';
@@ -1383,6 +1556,454 @@ function renderDiaLeaseCard(item) {
   return html;
 }
 
+// ============================================================================
+// CLINIC LEADS RESEARCH QUEUE
+// ============================================================================
+
+/**
+ * Render clinic leads research queue — prioritized by composite seller-signal score
+ */
+function renderDiaClinicLeads() {
+  // Lazy-load the priority queue
+  if (diaClinicLeadQueue === null && !diaClinicLeadLoading) {
+    diaClinicLeadLoading = true;
+    (async () => {
+      try {
+        let all = [], offset = 0;
+        while (true) {
+          const batch = await diaQuery('v_clinic_research_priority', '*', {
+            order: 'priority_score.desc.nullslast',
+            limit: 1000, offset
+          });
+          all = all.concat(batch || []);
+          if (!batch || batch.length < 1000) break;
+          offset += 1000;
+        }
+        diaClinicLeadQueue = all;
+      } catch (e) {
+        console.error('Clinic leads queue load error:', e);
+        diaClinicLeadQueue = [];
+      }
+      diaClinicLeadLoading = false;
+      renderDiaTab();
+    })();
+    return '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading clinic leads queue...</p></div>';
+  }
+  if (diaClinicLeadLoading) {
+    return '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading clinic leads queue...</p></div>';
+  }
+
+  const queue = diaClinicLeadQueue || [];
+  const resolvedIds = new Set(
+    (diaData.researchOutcomes || [])
+      .filter(o => o.queue_type === 'clinic_lead')
+      .map(o => o.clinic_id)
+  );
+
+  // Category & tier counts
+  const cats = { unlinked: 0, ownership_gap: 0, seller_signal: 0 };
+  const tiers = { high: 0, medium: 0, low: 0 };
+  queue.forEach(r => { cats[r.research_category] = (cats[r.research_category] || 0) + 1; tiers[r.priority_tier] = (tiers[r.priority_tier] || 0) + 1; });
+
+  let html = '';
+
+  // === Summary metrics ===
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">';
+  html += _clCard('Total Clinics', fmtN(queue.length), 'blue');
+  html += _clCard('High Priority', fmtN(tiers.high), 'red');
+  html += _clCard('Ownership Gap', fmtN(cats.ownership_gap), 'orange');
+  html += _clCard('Seller Signals', fmtN(cats.seller_signal), 'purple');
+  html += '</div>';
+
+  // === Filters ===
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">';
+  // Category filters
+  html += '<div style="display:flex;gap:4px;align-items:center;margin-right:12px;">';
+  html += '<span style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Category:</span>';
+  const catOpts = [
+    { key: null, label: 'All' },
+    { key: 'ownership_gap', label: `Ownership Gap (${fmtN(cats.ownership_gap)})` },
+    { key: 'seller_signal', label: `Seller Signal (${fmtN(cats.seller_signal)})` },
+    { key: 'unlinked', label: `Unlinked (${cats.unlinked})` }
+  ];
+  catOpts.forEach(o => {
+    const active = diaClinicLeadFilter.category === o.key;
+    html += `<button class="cl-filter-btn" data-cl-cat="${o.key}" style="font-size:11px;padding:4px 10px;border-radius:12px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};background:${active ? 'var(--accent)' : 'var(--s2)'};color:${active ? '#fff' : 'var(--text2)'};cursor:pointer">${o.label}</button>`;
+  });
+  html += '</div>';
+  // Tier filters
+  html += '<div style="display:flex;gap:4px;align-items:center;">';
+  html += '<span style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Priority:</span>';
+  const tierOpts = [
+    { key: null, label: 'All' },
+    { key: 'high', label: 'High', color: '#f87171' },
+    { key: 'medium', label: 'Medium', color: '#fbbf24' },
+    { key: 'low', label: 'Low', color: '#94a3b8' }
+  ];
+  tierOpts.forEach(o => {
+    const active = diaClinicLeadFilter.tier === o.key;
+    html += `<button class="cl-filter-btn" data-cl-tier="${o.key}" style="font-size:11px;padding:4px 10px;border-radius:12px;border:1px solid ${active ? (o.color || 'var(--accent)') : 'var(--border)'};background:${active ? (o.color || 'var(--accent)') : 'var(--s2)'};color:${active ? '#fff' : 'var(--text2)'};cursor:pointer">${o.label}</button>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Apply filters
+  let filtered = queue;
+  if (diaClinicLeadFilter.category) filtered = filtered.filter(r => r.research_category === diaClinicLeadFilter.category);
+  if (diaClinicLeadFilter.tier) filtered = filtered.filter(r => r.priority_tier === diaClinicLeadFilter.tier);
+  if (diaClinicLeadFilter.state) filtered = filtered.filter(r => r.state === diaClinicLeadFilter.state);
+
+  // State dropdown
+  const states = [...new Set(filtered.map(r => r.state).filter(Boolean))].sort();
+  html += '<div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">';
+  html += `<select id="clStateFilter" style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">`;
+  html += `<option value="">All States (${states.length})</option>`;
+  states.forEach(s => html += `<option value="${s}" ${diaClinicLeadFilter.state === s ? 'selected' : ''}>${s}</option>`);
+  html += '</select>';
+  html += `<span style="font-size:12px;color:var(--text3)">${fmtN(filtered.length)} clinics</span>`;
+  html += '</div>';
+
+  // === Table ===
+  const pageSize = 50;
+  const page = filtered.slice(0, pageSize);
+
+  html += '<div class="data-table">';
+  // Header
+  html += '<div class="table-row" style="font-weight:600;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3)">';
+  html += '<div style="flex:0.5">Score</div>';
+  html += '<div style="flex:1.5">Facility</div>';
+  html += '<div style="flex:0.8">City/State</div>';
+  html += '<div style="flex:0.6">Patients</div>';
+  html += '<div style="flex:0.7">Revenue</div>';
+  html += '<div style="flex:0.6">Category</div>';
+  html += '<div style="flex:0.3">&#x200B;</div>';
+  html += '</div>';
+
+  page.forEach((row, idx) => {
+    const isSelected = diaClinicLeadFilter.selectedIdx === idx;
+    const isResolved = resolvedIds.has(row.medicare_id);
+    const tierColor = row.priority_tier === 'high' ? '#f87171' : row.priority_tier === 'medium' ? '#fbbf24' : '#94a3b8';
+    const catLabel = row.research_category === 'seller_signal' ? 'Seller' : row.research_category === 'ownership_gap' ? 'Gap' : 'Unlinked';
+
+    html += `<div class="table-row cl-row clickable-row" data-cl-idx="${idx}" style="font-size:12px;cursor:pointer;${isSelected ? 'background:rgba(52,211,153,0.1);border-left:3px solid #34d399;' : ''}${isResolved ? 'opacity:0.5;' : ''}">`;
+    html += `<div style="flex:0.5"><span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:11px;font-weight:700;background:${tierColor}20;color:${tierColor}">${row.priority_score}</span></div>`;
+    html += `<div style="flex:1.5;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.facility_name || '')}</div>`;
+    html += `<div style="flex:0.8;color:var(--text2)">${esc(row.city || '')}${row.state ? ', ' + row.state : ''}</div>`;
+    html += `<div style="flex:0.6;color:var(--text2)">${row.latest_estimated_patients || '–'}</div>`;
+    html += `<div style="flex:0.7;color:var(--text2)">${row.estimated_annual_revenue ? '$' + fmtN(Math.round(row.estimated_annual_revenue / 1000)) + 'K' : '–'}</div>`;
+    html += `<div style="flex:0.6"><span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--s3);color:var(--text2)">${catLabel}</span></div>`;
+    html += `<div style="flex:0.3;text-align:right">${isResolved ? '✓' : '→'}</div>`;
+    html += '</div>';
+  });
+
+  if (page.length === 0) {
+    html += '<div class="table-empty" style="padding:24px;text-align:center;color:var(--text3)">No clinics match current filters</div>';
+  }
+  html += '</div>';
+
+  // Selected card
+  if (diaClinicLeadFilter.selectedIdx !== undefined && page[diaClinicLeadFilter.selectedIdx]) {
+    html += renderClinicLeadCard(page[diaClinicLeadFilter.selectedIdx]);
+  }
+
+  // Attach handlers
+  setTimeout(() => {
+    // Row clicks
+    document.querySelectorAll('.cl-row').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.clIdx);
+        diaClinicLeadFilter.selectedIdx = (diaClinicLeadFilter.selectedIdx === idx) ? undefined : idx;
+        renderDiaTab();
+      });
+    });
+    // Category filter
+    document.querySelectorAll('[data-cl-cat]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = btn.dataset.clCat;
+        diaClinicLeadFilter.category = val === 'null' ? null : val;
+        diaClinicLeadFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    });
+    // Tier filter
+    document.querySelectorAll('[data-cl-tier]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = btn.dataset.clTier;
+        diaClinicLeadFilter.tier = val === 'null' ? null : val;
+        diaClinicLeadFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    });
+    // State filter
+    const stateEl = document.getElementById('clStateFilter');
+    if (stateEl) {
+      stateEl.addEventListener('change', () => {
+        diaClinicLeadFilter.state = stateEl.value || null;
+        diaClinicLeadFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    }
+  }, 0);
+
+  return html;
+}
+
+function _clCard(title, value, color) {
+  const colors = { blue: '#60a5fa', green: '#34d399', red: '#f87171', orange: '#fb923c', purple: '#a78bfa', yellow: '#fbbf24', cyan: '#22d3ee' };
+  const c = colors[color] || colors.blue;
+  return `<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:4px">${title}</div>
+    <div style="font-size:22px;font-weight:800;color:${c}">${value}</div>
+  </div>`;
+}
+
+/**
+ * Render the research card for a selected clinic lead — mirrors GSA research pattern
+ */
+function renderClinicLeadCard(rec) {
+  let html = '<div style="margin-top:20px;border:1px solid var(--accent);border-radius:12px;padding:20px;background:var(--s1)">';
+
+  // Header
+  html += `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">`;
+  html += `<div>`;
+  html += `<h3 style="margin:0;font-size:16px;font-weight:700;color:var(--text)">${esc(rec.facility_name || 'Unknown Facility')}</h3>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(rec.address || '')}${rec.city ? ', ' + esc(rec.city) : ''}${rec.state ? ', ' + rec.state : ''} ${rec.zip_code || ''}</div>`;
+  html += `</div>`;
+  const tierColor = rec.priority_tier === 'high' ? '#f87171' : rec.priority_tier === 'medium' ? '#fbbf24' : '#94a3b8';
+  html += `<div style="text-align:right">`;
+  html += `<span style="display:inline-block;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;background:${tierColor}20;color:${tierColor}">${rec.priority_score} pts</span>`;
+  html += `<div style="font-size:10px;color:var(--text3);margin-top:2px">${(rec.research_category || '').replace('_', ' ').toUpperCase()}</div>`;
+  html += `</div></div>`;
+
+  // Context grid
+  html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;font-size:12px">';
+  html += _clCtx('Medicare ID', rec.medicare_id);
+  html += _clCtx('Operator', rec.chain_organization || 'Independent');
+  html += _clCtx('Stations', rec.stations || '–');
+  html += _clCtx('Patients', rec.latest_estimated_patients || '–');
+  html += _clCtx('Est. Revenue', rec.estimated_annual_revenue ? '$' + fmtN(Math.round(rec.estimated_annual_revenue)) : '–');
+  html += _clCtx('Capacity Util.', rec.capacity_utilization_pct ? rec.capacity_utilization_pct + '%' : '–');
+  html += _clCtx('Building SF', rec.building_size ? fmtN(Math.round(rec.building_size)) : '–');
+  html += _clCtx('Land Area', rec.land_area ? fmtN(Math.round(rec.land_area)) + ' SF' : '–');
+  html += _clCtx('Year Built', rec.year_built || '–');
+  html += _clCtx('Last Rent', rec.last_known_rent ? '$' + fmtN(Math.round(rec.last_known_rent)) : '–');
+  html += _clCtx('Ownership Tenure', rec.ownership_tenure_yrs ? rec.ownership_tenure_yrs + ' yrs' : '–');
+  html += _clCtx('Loan Maturity', rec.months_to_maturity != null ? rec.months_to_maturity + ' mo' : '–');
+  html += '</div>';
+
+  // Loan context (if exists)
+  if (rec.loan_id) {
+    html += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:16px;font-size:12px">';
+    html += '<div style="font-weight:600;margin-bottom:4px;color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Loan Info</div>';
+    html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">`;
+    html += _clCtx('Lender', rec.lender_name || '–');
+    html += _clCtx('Amount', rec.loan_amount ? '$' + fmtN(Math.round(rec.loan_amount)) : '–');
+    html += _clCtx('Type', rec.loan_type || '–');
+    html += '</div></div>';
+  }
+
+  // Quick actions
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
+  const searchQ = `${rec.facility_name || ''} ${rec.address || ''} ${rec.city || ''} ${rec.state || ''} dialysis ownership`;
+  html += `<a href="https://www.google.com/search?q=${encodeURIComponent(searchQ)}" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>`;
+  if (rec.state) {
+    html += `<a href="https://www.google.com/search?q=${encodeURIComponent('Secretary of State business search ' + rec.state)}" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">SOS ${rec.state}</a>`;
+  }
+  if (rec.city && rec.state) {
+    html += `<a href="https://www.google.com/search?q=${encodeURIComponent(rec.city + ' ' + rec.state + ' county property records')}" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">County Records</a>`;
+  }
+  html += '</div>';
+
+  // === RESEARCH FORM (mirrors GSA pattern) ===
+  html += '<div style="border-top:1px solid var(--border);padding-top:16px">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:12px;color:var(--text)">Research Form</div>';
+
+  // Row 1: Owner info
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
+  html += _clInput('Recorded Owner', 'cl-recorded-owner', '');
+  html += _clInput('True Owner / Developer', 'cl-true-owner', '');
+  html += '</div>';
+
+  // Row 2: Entity details
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">';
+  html += _clInput('State of Incorporation', 'cl-incorporation', '');
+  html += _clInput('Principal Names', 'cl-principals', '');
+  html += _clInput('Contact Email', 'cl-email', '', 'email');
+  html += '</div>';
+
+  // Row 3: Contact info
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">';
+  html += _clInput('Phone', 'cl-phone', '', 'tel');
+  html += _clInput('Phone 2', 'cl-phone-2', '', 'tel');
+  html += _clInput('Mailing Address', 'cl-mailing', '');
+  html += '</div>';
+
+  // Row 4: Pipeline status
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
+  html += '<div>';
+  html += '<label style="font-size:11px;font-weight:600;color:var(--text2);display:block;margin-bottom:3px">Pipeline Status</label>';
+  html += '<select id="cl-pipeline-status" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
+  html += '<option value="">— Select —</option>';
+  html += '<option value="new_lead">New Lead</option>';
+  html += '<option value="researching">Researching</option>';
+  html += '<option value="contacted">Contacted</option>';
+  html += '<option value="meeting_set">Meeting Set</option>';
+  html += '<option value="proposal_sent">Proposal Sent</option>';
+  html += '<option value="not_for_sale">Not For Sale</option>';
+  html += '<option value="dead">Dead</option>';
+  html += '</select>';
+  html += '</div>';
+  html += _clInput('Mailing Address 2', 'cl-mailing-2', '');
+  html += '</div>';
+
+  // Row 5: Research notes
+  html += '<div style="margin-bottom:14px">';
+  html += '<label style="font-size:11px;font-weight:600;color:var(--text2);display:block;margin-bottom:3px">Research Notes</label>';
+  html += `<textarea id="cl-notes" rows="3" placeholder="Research findings, next steps..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>`;
+  html += '</div>';
+
+  // Action buttons
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += `<button id="clSaveBtn" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save & Next</button>`;
+  html += `<button id="clSkipBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text2)">Skip</button>`;
+  html += `<button id="clNaBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text3)">N/A</button>`;
+  html += '</div>';
+
+  html += '</div>'; // form
+  html += '</div>'; // card
+
+  // Attach save/skip handlers
+  setTimeout(() => {
+    const saveBtn = document.getElementById('clSaveBtn');
+    const skipBtn = document.getElementById('clSkipBtn');
+    const naBtn = document.getElementById('clNaBtn');
+
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        await saveClinicLeadResearch(rec);
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save & Next';
+      });
+    }
+    if (skipBtn) {
+      skipBtn.addEventListener('click', () => {
+        diaClinicLeadFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    }
+    if (naBtn) {
+      naBtn.addEventListener('click', async () => {
+        naBtn.disabled = true;
+        await markClinicLead(rec, 'not_applicable');
+        naBtn.disabled = false;
+      });
+    }
+  }, 0);
+
+  return html;
+}
+
+function _clCtx(label, value) {
+  return `<div><span style="color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${label}</span><div style="font-weight:500;color:var(--text)">${value}</div></div>`;
+}
+
+function _clInput(label, id, value, type) {
+  return `<div>
+    <label style="font-size:11px;font-weight:600;color:var(--text2);display:block;margin-bottom:3px">${label}</label>
+    <input type="${type || 'text'}" id="${id}" value="${esc(value || '')}" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box">
+  </div>`;
+}
+
+/**
+ * Save clinic lead research — writes to research_queue_outcomes + updates properties if data entered
+ */
+async function saveClinicLeadResearch(rec) {
+  const data = {
+    recorded_owner: (document.getElementById('cl-recorded-owner') || {}).value || null,
+    true_owner: (document.getElementById('cl-true-owner') || {}).value || null,
+    state_of_incorporation: (document.getElementById('cl-incorporation') || {}).value || null,
+    principal_names: (document.getElementById('cl-principals') || {}).value || null,
+    contact_email: (document.getElementById('cl-email') || {}).value || null,
+    contact_phone: (document.getElementById('cl-phone') || {}).value || null,
+    phone_2: (document.getElementById('cl-phone-2') || {}).value || null,
+    mailing_address: (document.getElementById('cl-mailing') || {}).value || null,
+    mailing_address_2: (document.getElementById('cl-mailing-2') || {}).value || null,
+    pipeline_status: (document.getElementById('cl-pipeline-status') || {}).value || null,
+    notes: (document.getElementById('cl-notes') || {}).value || null
+  };
+
+  // 1. Save research outcome
+  const outcomeOk = await saveClinicLeadOutcome(rec.medicare_id, 'completed', data.notes, rec.property_id);
+  if (!outcomeOk) return;
+
+  // 2. If we have owner info and a property_id, update the property's owner fields
+  if (rec.property_id && (data.recorded_owner || data.true_owner)) {
+    const propUpdate = {};
+    if (data.recorded_owner) propUpdate.tenant = data.recorded_owner; // recorded_owner maps to tenant field for display
+    await diaPatchRecord('properties', 'property_id', rec.property_id, propUpdate);
+  }
+
+  showToast('Clinic lead saved!', 'success');
+
+  // Advance to next
+  diaClinicLeadFilter.selectedIdx = undefined;
+  renderDiaTab();
+}
+
+/**
+ * Mark a clinic lead as N/A or other quick-status
+ */
+async function markClinicLead(rec, status) {
+  await saveClinicLeadOutcome(rec.medicare_id, status, null, rec.property_id);
+  showToast(`Marked as ${status.replace('_', ' ')}`, 'success');
+  diaClinicLeadFilter.selectedIdx = undefined;
+  renderDiaTab();
+}
+
+/**
+ * Persist to research_queue_outcomes for clinic_lead queue type
+ */
+async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
+  try {
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'research_queue_outcomes');
+
+    const payload = {
+      queue_type: 'clinic_lead',
+      clinic_id: clinicId,
+      status: status,
+      notes: notes || null,
+      selected_property_id: propertyId || null,
+      assigned_at: new Date().toISOString()
+    };
+
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Clinic lead save error:', response.status, errText);
+      showToast('Error saving clinic lead', 'error');
+      return false;
+    }
+
+    // Refresh outcomes cache
+    const freshOutcomes = await diaQuery('research_queue_outcomes', '*', { limit: 500 });
+    diaData.researchOutcomes = freshOutcomes || [];
+
+    return true;
+  } catch (err) {
+    console.error('saveClinicLeadOutcome error:', err);
+    showToast('Error saving: ' + err.message, 'error');
+    return false;
+  }
+}
+
 /**
  * Save research outcome
  */
@@ -1500,6 +2121,9 @@ function renderDiaDetailBody(record, tab) {
     case 'property':
       html = renderDiaDetailProperty(record);
       break;
+    case 'ownership':
+      html = renderDiaDetailOwnership(record);
+      break;
     case 'signals':
       html = renderDiaDetailSignals(record);
       break;
@@ -1512,149 +2136,168 @@ function renderDiaDetailBody(record, tab) {
     default:
       html = renderDiaDetailOverview(record);
   }
-  
+
   return html;
 }
 
 /**
- * Overview tab - key facility information
+ * Overview tab — comprehensive facility info with financials, lease, and ownership summary
  */
 function renderDiaDetailOverview(record) {
-  const facility_name = record.facility_name || '—';
-  const ccn = record.ccn || '—';
-  const npi = record.npi || '—';
-  const operator_name = record.operator_name || '—';
-  const city = record.city || '—';
-  const state = record.state || '—';
-  const latest_total_patients = record.latest_total_patients || 0;
-  const delta_patients = record.delta_patients;
-  const pct_change = record.pct_change;
-  const change_type = record.change_type || '—';
-  
+  const r = record;
   let html = '<div class="detail-section">';
-  
-  // Header with facility name and key identifiers
-  html += '<div class="detail-section-title">' + esc(facility_name) + '</div>';
-  
-  html += '<div class="detail-grid">';
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">CCN</div>';
-  html += '<div class="detail-val">' + esc(ccn) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">NPI</div>';
-  html += '<div class="detail-val">' + esc(npi) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">Operator</div>';
-  html += '<div class="detail-val">' + esc(operator_name) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">Location</div>';
-  html += '<div class="detail-val">' + esc(city) + ', ' + esc(state) + '</div>';
-  html += '</div>';
-  html += '</div>';
-  
-  // Metrics grid
-  html += '<div class="detail-section-title" style="margin-top: 24px;">Metrics</div>';
-  
-  html += '<div class="detail-grid">';
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">Latest Patient Count</div>';
-  html += '<div class="detail-val">' + fmtN(latest_total_patients) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">Patient Change (Δ)</div>';
-  const deltaColor = delta_patients > 0 ? 'color: var(--success);' : delta_patients < 0 ? 'color: var(--danger);' : '';
-  html += '<div class="detail-val" style="' + deltaColor + '">' + (delta_patients != null ? (delta_patients > 0 ? '+' : '') + fmtN(delta_patients) : '—') + '</div>';
-  html += '</div>';
 
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">% Change</div>';
-  html += '<div class="detail-val" style="' + deltaColor + '">' + (pct_change != null ? pct(pct_change) : '—') + '</div>';
+  // Facility identity
+  html += '<div class="detail-section-title">' + esc(r.facility_name || '—') + '</div>';
+  html += _detRow('Address', [r.address, r.city, r.state, r.zip_code].filter(Boolean).join(', ') || '—');
+  html += _detRow('CCN / Medicare ID', r.ccn || r.clinic_id || r.medicare_id || '—');
+  html += _detRow('NPI', r.npi || r.medicare_npi || '—');
+  html += _detRow('Operator', r.operator_name || r.chain_organization || '—');
+  html += _detRow('Parent Org', r.parent_organization || '—');
+  html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
+
+  // Patient metrics
+  html += '<div class="detail-section-title" style="margin-top:20px">Patient Metrics</div>';
+  html += _detRow('Latest Patients', r.latest_total_patients != null ? fmtN(r.latest_total_patients) : '—');
+  const dp = r.delta_patients;
+  const dpColor = dp > 0 ? 'color:#34d399' : dp < 0 ? 'color:#f87171' : '';
+  html += '<div class="detail-row"><div class="detail-lbl">Patient Change (Δ)</div><div class="detail-val" style="' + dpColor + '">' + (dp != null ? (dp > 0 ? '+' : '') + fmtN(dp) : '—') + '</div></div>';
+  html += '<div class="detail-row"><div class="detail-lbl">% Change</div><div class="detail-val" style="' + dpColor + '">' + (r.pct_change != null ? Number(r.pct_change).toFixed(1) + '%' : '—') + '</div></div>';
+  html += _detRow('Capacity Utilization', r.capacity_utilization_pct ? r.capacity_utilization_pct + '%' : '—');
+
+  // Financial summary
+  html += '<div class="detail-section-title" style="margin-top:20px">Financials</div>';
+  html += _detRow('Est. Annual Revenue', r.estimated_annual_revenue ? '$' + Number(r.estimated_annual_revenue).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+  html += _detRow('Est. EBITDA', r.estimated_ebitda ? '$' + Number(r.estimated_ebitda).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+  html += _detRow('Operating Margin', r.operating_margin_assumption ? (Number(r.operating_margin_assumption) * 100).toFixed(1) + '%' : '—');
+  html += _detRow('Revenue / Patient', r.revenue_per_patient ? '$' + Number(r.revenue_per_patient).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+  html += _detRow('Payer Mix (Medicare)', r.payer_mix_medicare ? (Number(r.payer_mix_medicare) * 100).toFixed(0) + '%' : '—');
+  html += _detRow('Payer Mix (Commercial)', r.payer_mix_commercial ? (Number(r.payer_mix_commercial) * 100).toFixed(0) + '%' : '—');
+
+  // Lease summary (if present)
+  html += '<div class="detail-section-title" style="margin-top:20px">Lease</div>';
+  if (r.lease_id) {
+    html += _detRow('Tenant', r.lease_tenant || '—');
+    html += _detRow('Lease Start', r.lease_start || '—');
+    html += _detRow('Lease Expiration', r.lease_expiration || '—');
+    html += _detRow('Rent', r.rent ? '$' + Number(r.rent).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+    html += _detRow('Rent PSF', r.rent_per_sf ? '$' + Number(r.rent_per_sf).toFixed(2) : '—');
+    html += _detRow('Expense Structure', r.expense_structure || '—');
+    html += _detRow('Guarantor', r.guarantor || '—');
+    html += _detRow('Renewal Options', r.renewal_options || '—');
+    if (r.lease_expiration_risk) {
+      const riskColor = r.lease_expiration_risk === 'high' ? '#f87171' : r.lease_expiration_risk === 'medium' ? '#fbbf24' : '#34d399';
+      html += '<div class="detail-row"><div class="detail-lbl">Expiration Risk</div><div class="detail-val" style="color:' + riskColor + ';font-weight:600">' + esc(r.lease_expiration_risk) + '</div></div>';
+    }
+  } else {
+    html += '<div style="color:var(--text3);font-size:12px;padding:4px 0">No active lease linked</div>';
+  }
+
+  // Ownership summary (if present)
+  html += '<div class="detail-section-title" style="margin-top:20px">Ownership</div>';
+  if (r.ownership_id) {
+    html += _detRow('Recorded Owner', r.recorded_owner_name || '—');
+    html += _detRow('True Owner / Developer', r.true_owner_name || '— not traced');
+    html += _detRow('Owner Type', r.owner_type || '—');
+    html += _detRow('Ownership Start', r.ownership_start || '—');
+    html += _detRow('Last Sale Price', r.last_sold_price ? '$' + Number(r.last_sold_price).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+    if (r.is_developer) html += _detRow('Developer?', 'Yes');
+  } else {
+    html += '<div style="color:var(--text3);font-size:12px;padding:4px 0">No ownership chain linked — <span style="color:var(--accent);cursor:pointer" onclick="switchUnifiedTab(\'Ownership\')">resolve now</span></div>';
+  }
+
   html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">Change Type</div>';
-  html += '<div class="detail-val">' + esc(change_type || '—') + '</div>';
+  return html;
+}
+
+function _detRow(label, value) {
+  return '<div class="detail-row"><div class="detail-lbl">' + label + '</div><div class="detail-val">' + esc(String(value || '—')) + '</div></div>';
+}
+
+/**
+ * Property tab — location, building info, and inventory snapshots
+ */
+function renderDiaDetailProperty(record) {
+  const r = record;
+  let html = '<div class="detail-section">';
+
+  html += '<div class="detail-section-title">Property Information</div>';
+  html += _detRow('Facility', r.facility_name || '—');
+  html += _detRow('Address', r.address || '—');
+  html += _detRow('City / State', (r.city || '—') + ', ' + (r.state || '—'));
+  html += _detRow('ZIP', r.zip_code || '—');
+  html += _detRow('Property ID', r.property_id || 'Not linked');
+  html += _detRow('Building Size', r.building_size ? fmtN(Math.round(Number(r.building_size))) + ' SF' : '—');
+  html += _detRow('Land Area', r.land_area ? fmtN(Math.round(Number(r.land_area))) + ' SF' : '—');
+  html += _detRow('Year Built', r.year_built || '—');
+  html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
+
+  // Lease detail section
+  html += '<div class="detail-section-title" style="margin-top:20px">Active Lease</div>';
+  if (r.lease_id) {
+    html += _detRow('Tenant', r.lease_tenant || '—');
+    html += _detRow('Lease Start', r.lease_start || '—');
+    html += _detRow('Lease Expiration', r.lease_expiration || '—');
+    html += _detRow('Renewal Options', r.renewal_options || '—');
+    html += _detRow('Rent', r.rent ? '$' + Number(r.rent).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+    html += _detRow('Rent PSF', r.rent_per_sf ? '$' + Number(r.rent_per_sf).toFixed(2) : '—');
+    html += _detRow('Expense Structure', r.expense_structure || '—');
+    html += _detRow('Guarantor', r.guarantor || '—');
+    html += _detRow('Lease Status', r.lease_status || '—');
+    if (r.lease_expiration_risk) {
+      const riskColor = r.lease_expiration_risk === 'high' ? '#f87171' : r.lease_expiration_risk === 'medium' ? '#fbbf24' : '#34d399';
+      html += '<div class="detail-row"><div class="detail-lbl">Expiration Risk</div><div class="detail-val" style="color:' + riskColor + ';font-weight:600">' + esc(r.lease_expiration_risk) + '</div></div>';
+    }
+  } else {
+    html += '<div style="color:var(--text3);font-size:12px;padding:4px 0">No active lease found for this property</div>';
+  }
+
   html += '</div>';
-  html += '</div>';
-  
-  html += '</div>';
-  
   return html;
 }
 
 /**
- * Property tab - location and matching records
+ * Ownership tab — view chain and resolve ownership back to developer
  */
-function renderDiaDetailProperty(record) {
-  const ccn = record.ccn;
-  const facility_name = record.facility_name || '—';
-  const city = record.city || '—';
-  const state = record.state || '—';
-  
+function renderDiaDetailOwnership(record) {
+  const r = record;
   let html = '<div class="detail-section">';
-  
-  html += '<div class="detail-section-title">Property Information</div>';
-  
-  html += '<div class="detail-grid">';
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">Facility</div>';
-  html += '<div class="detail-val">' + esc(facility_name) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">City</div>';
-  html += '<div class="detail-val">' + esc(city) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">State</div>';
-  html += '<div class="detail-val">' + esc(state) + '</div>';
-  html += '</div>';
-  
-  html += '<div class="detail-row">';
-  html += '<div class="detail-lbl">CCN</div>';
-  html += '<div class="detail-val">' + esc(ccn || '—') + '</div>';
-  html += '</div>';
-  html += '</div>';
-  
-  // Matching inventory changes for this CCN
-  if (ccn && diaData.inventoryChanges) {
-    const matching = diaData.inventoryChanges.filter(r => r.ccn === ccn);
-    
-    if (matching.length > 0) {
-      html += '<div class="detail-section-title" style="margin-top: 24px;">Inventory Snapshots</div>';
-      
-      matching.forEach((item, idx) => {
-        html += '<div class="detail-card">';
-        html += '<div class="detail-card-header">';
-        html += '<div class="detail-card-title">' + esc(item.change_type || '—') + '</div>';
-        html += '<div class="detail-card-date">' + fmt(item.snapshot_date) + '</div>';
-        html += '</div>';
-        html += '<div class="detail-card-body">';
-        html += '<div class="detail-row">';
-        html += '<div class="detail-lbl">Patient Count</div>';
-        html += '<div class="detail-val">' + fmtN(item.latest_total_patients) + '</div>';
-        html += '</div>';
-        html += '<div class="detail-row">';
-        html += '<div class="detail-lbl">Change</div>';
-        const deltaColor = item.delta_patients > 0 ? 'color: var(--success);' : item.delta_patients < 0 ? 'color: var(--danger);' : '';
-        html += '<div class="detail-val" style="' + deltaColor + '">' + (item.delta_patients > 0 ? '+' : '') + fmtN(item.delta_patients) + '</div>';
-        html += '</div>';
-        html += '</div>';
-        html += '</div>';
-      });
-    }
+
+  html += '<div class="detail-section-title">Ownership Chain</div>';
+
+  if (r.ownership_id) {
+    html += _detRow('Recorded Owner', r.recorded_owner_name || '— unknown');
+    html += _detRow('True Owner / Developer', r.true_owner_name || '— not traced');
+    html += _detRow('Owner Type', r.owner_type || '—');
+    html += _detRow('Ownership Start', r.ownership_start || '—');
+    html += _detRow('Last Sale Price', r.last_sold_price ? '$' + Number(r.last_sold_price).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+  } else {
+    html += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No ownership records found for this property</div>';
   }
-  
+
+  // Ownership resolution form
+  html += '<div class="detail-section-title" style="margin-top:20px">Resolve Ownership</div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Trace the ownership chain back to the developer / true owner. This writes to the ownership_history table.</div>';
+
+  html += '<div class="detail-grid" style="gap:10px">';
+  html += '<div class="detail-row" style="flex-direction:column;align-items:stretch"><label style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px">Recorded Owner</label><input id="dia-own-recorded" type="text" value="' + esc(r.recorded_owner_name || '') + '" placeholder="Entity name on deed" style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)"></div>';
+  html += '<div class="detail-row" style="flex-direction:column;align-items:stretch"><label style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px">True Owner / Developer</label><input id="dia-own-true" type="text" value="' + esc(r.true_owner_name || '') + '" placeholder="Parent entity, developer, fund" style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)"></div>';
+  html += '<div class="detail-row" style="flex-direction:column;align-items:stretch"><label style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px">Owner Type</label><select id="dia-own-type" style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)"><option value="">— Select —</option><option value="individual"' + (r.owner_type === 'individual' ? ' selected' : '') + '>Individual</option><option value="llc"' + (r.owner_type === 'llc' ? ' selected' : '') + '>LLC</option><option value="reit"' + (r.owner_type === 'reit' ? ' selected' : '') + '>REIT</option><option value="developer"' + (r.owner_type === 'developer' ? ' selected' : '') + '>Developer</option><option value="fund"' + (r.owner_type === 'fund' ? ' selected' : '') + '>Fund</option><option value="operator"' + (r.owner_type === 'operator' ? ' selected' : '') + '>Operator</option><option value="other"' + (r.owner_type === 'other' ? ' selected' : '') + '>Other</option></select></div>';
+  html += '<div class="detail-row" style="flex-direction:column;align-items:stretch"><label style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px">Notes</label><textarea id="dia-own-notes" rows="2" placeholder="Research notes..." style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit"></textarea></div>';
   html += '</div>';
-  
+
+  html += '<button onclick="saveDiaOwnershipResolution()" style="margin-top:12px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership</button>';
+
+  // Quick actions
+  html += '<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">';
+  const searchQ = (r.recorded_owner_name || r.facility_name || '') + ' ' + (r.state || '');
+  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ + ' ownership') + '" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Google Owner</a>';
+  if (r.state) {
+    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent('Secretary of State business search ' + r.state) + '" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">SOS ' + esc(r.state) + '</a>';
+  }
+  html += '</div>';
+
+  html += '</div>';
   return html;
 }
 
@@ -3600,3 +4243,71 @@ window.saveSaleProperty = saveSaleProperty;
 window.saveSaleOwner = saveSaleOwner;
 window.saveSaleResearch = saveSaleResearch;
 window.closeSaleDetail = closeSaleDetail;
+window.renderDiaClinicLeads = renderDiaClinicLeads;
+window.saveClinicLeadResearch = saveClinicLeadResearch;
+window.markClinicLead = markClinicLead;
+window.saveDiaOwnershipResolution = saveDiaOwnershipResolution;
+
+/**
+ * Save ownership resolution from the dialysis-specific detail panel (fallback path).
+ * Reads form fields from renderDiaDetailOwnership(), patches ownership_history
+ * if a record exists, and logs the resolution to research_queue_outcomes.
+ */
+async function saveDiaOwnershipResolution() {
+  const record = window._detailRecord;
+  if (!record) { showToast('No record loaded', 'error'); return; }
+
+  const propertyId = record.property_id;
+  if (!propertyId) { showToast('No property ID — cannot save ownership', 'error'); return; }
+
+  const recordedOwner = (q('#dia-own-recorded') || {}).value?.trim() || null;
+  const trueOwner     = (q('#dia-own-true') || {}).value?.trim() || null;
+  const ownerType     = (q('#dia-own-type') || {}).value || null;
+  const notes         = (q('#dia-own-notes') || {}).value?.trim() || null;
+
+  // If there's an existing ownership record, PATCH it
+  if (record.ownership_id) {
+    const patchData = {};
+    if (ownerType) patchData.owner_type = ownerType;
+    if (notes) patchData.notes = notes;
+    if (Object.keys(patchData).length > 0) {
+      const ok = await diaPatchRecord('ownership_history', 'ownership_id', record.ownership_id, patchData);
+      if (!ok) return; // toast already shown by diaPatchRecord
+    }
+  }
+
+  // Log resolution to research_queue_outcomes
+  const clinicId = record.clinic_id || record.medicare_id || null;
+  if (clinicId) {
+    try {
+      const url = new URL('/api/dia-query', window.location.origin);
+      url.searchParams.set('table', 'research_queue_outcomes');
+      const payload = {
+        queue_type: 'ownership_resolution',
+        clinic_id: clinicId,
+        status: 'completed',
+        notes: [
+          recordedOwner ? 'Recorded Owner: ' + recordedOwner : null,
+          trueOwner ? 'True Owner: ' + trueOwner : null,
+          ownerType ? 'Type: ' + ownerType : null,
+          notes ? 'Notes: ' + notes : null
+        ].filter(Boolean).join(' | '),
+        selected_property_id: propertyId,
+        assigned_at: new Date().toISOString()
+      };
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        console.error('Ownership resolution save error:', err);
+      }
+    } catch (e) {
+      console.error('Ownership resolution POST error:', e);
+    }
+  }
+
+  showToast('Ownership resolution saved!', 'success');
+}

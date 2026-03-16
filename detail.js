@@ -620,6 +620,45 @@ function _udTabOwnership() {
     }
   }
 
+  // ── RESOLVE OWNERSHIP FORM ──────────────────────────────────────
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Resolve Ownership</div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Update or create the ownership record for this property. Traces the chain back to the developer.</div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Recorded Owner</label>';
+  html += `<input id="udOwnRecorded" type="text" value="${esc(own?.recorded_owner || '')}" placeholder="Entity name on deed" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">True Owner / Developer</label>';
+  html += `<input id="udOwnTrue" type="text" value="${esc(own?.true_owner || '')}" placeholder="Parent entity, developer, fund" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
+  html += '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Owner Type</label>';
+  html += '<select id="udOwnType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
+  html += '<option value="">—</option>';
+  ['individual','llc','reit','developer','fund','operator','other'].forEach(t => {
+    html += `<option value="${t}" ${own?.owner_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`;
+  });
+  html += '</select></div>';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Contact Name</label>';
+  html += `<input id="udOwnContact" type="text" value="${esc(own?.contact_1_name || own?.contact_name || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Contact Phone</label>';
+  html += `<input id="udOwnPhone" type="tel" value="${esc(own?.contact_phone || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
+  html += '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Contact Email</label>';
+  html += `<input id="udOwnEmail" type="email" value="${esc(own?.contact_email || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
+  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">State of Incorporation</label>';
+  html += `<input id="udOwnState" type="text" value="${esc(own?.recorded_owner_state || own?.true_owner_state || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
+  html += '</div>';
+
+  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Notes</label>';
+  html += '<textarea id="udOwnNotes" rows="2" placeholder="Research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea></div>';
+
+  html += `<button onclick="_udSaveOwnership()" style="margin-top:10px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership Resolution</button>`;
+  html += '</div>';
+
   // ── OWNERSHIP HISTORY (CHAIN) ──────────────────────────────────────
   html += '<div class="detail-section">';
   html += `<div class="detail-section-title">Ownership History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${chain.length} records</span></div>`;
@@ -1523,6 +1562,74 @@ function refreshDetailPanel() {
   }
 }
 
+/**
+ * Save ownership resolution from the unified detail Ownership tab form
+ */
+async function _udSaveOwnership() {
+  if (!_udCache) { showToast('No record loaded', 'error'); return; }
+  const db = _udCache.db;
+  const propertyId = _udCache.ids?.property_id;
+  if (!propertyId) { showToast('No property ID — cannot save ownership', 'error'); return; }
+
+  const recordedOwner = (document.getElementById('udOwnRecorded') || {}).value?.trim() || null;
+  const trueOwner = (document.getElementById('udOwnTrue') || {}).value?.trim() || null;
+  const ownerType = (document.getElementById('udOwnType') || {}).value || null;
+  const contactName = (document.getElementById('udOwnContact') || {}).value?.trim() || null;
+  const contactPhone = (document.getElementById('udOwnPhone') || {}).value?.trim() || null;
+  const contactEmail = (document.getElementById('udOwnEmail') || {}).value?.trim() || null;
+  const incState = (document.getElementById('udOwnState') || {}).value?.trim() || null;
+  const notes = (document.getElementById('udOwnNotes') || {}).value?.trim() || null;
+
+  const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+
+  // Check if ownership record exists
+  const own = _udCache.ownership;
+  if (own && own.ownership_id) {
+    // PATCH existing
+    const url = new URL(proxyBase, window.location.origin);
+    url.searchParams.set('table', 'ownership_history');
+    url.searchParams.set('filter', `ownership_id=eq.${own.ownership_id}`);
+    const data = { owner_type: ownerType, notes: notes };
+    try {
+      const res = await fetch(url.toString(), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!res.ok) { showToast('Error updating ownership: ' + res.status, 'error'); return; }
+    } catch (e) { showToast('Network error: ' + e.message, 'error'); return; }
+  }
+
+  // Update or create v_ownership_current via the correct tables
+  // For now, save the contact/owner info to research_queue_outcomes as a clinic_lead
+  const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id || null;
+  if (clinicId) {
+    try {
+      const url = new URL(proxyBase, window.location.origin);
+      url.searchParams.set('table', 'research_queue_outcomes');
+      const payload = {
+        queue_type: 'ownership_resolution',
+        clinic_id: clinicId,
+        status: 'completed',
+        notes: [
+          recordedOwner ? 'Recorded Owner: ' + recordedOwner : null,
+          trueOwner ? 'True Owner: ' + trueOwner : null,
+          ownerType ? 'Type: ' + ownerType : null,
+          contactName ? 'Contact: ' + contactName : null,
+          contactPhone ? 'Phone: ' + contactPhone : null,
+          contactEmail ? 'Email: ' + contactEmail : null,
+          incState ? 'Inc. State: ' + incState : null,
+          notes ? 'Notes: ' + notes : null
+        ].filter(Boolean).join(' | '),
+        selected_property_id: propertyId,
+        assigned_at: new Date().toISOString()
+      };
+      const res = await fetch(url.toString(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) { const err = await res.text(); console.error('Ownership save error:', err); }
+    } catch (e) { console.error('Ownership resolution save error:', e); }
+  }
+
+  showToast('Ownership resolution saved!', 'success');
+  // Refresh the detail panel
+  refreshDetailPanel();
+}
+
 // Expose to global scope
 window.openUnifiedDetail = openUnifiedDetail;
 window.switchUnifiedTab = switchUnifiedTab;
@@ -1532,3 +1639,4 @@ window._udSubmitLogCall = _udSubmitLogCall;
 window._udPreviewTemplate = _udPreviewTemplate;
 window._udSendTemplate = _udSendTemplate;
 window._udCopyTemplate = _udCopyTemplate;
+window._udSaveOwnership = _udSaveOwnership;

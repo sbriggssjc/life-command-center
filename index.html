@@ -628,7 +628,7 @@ body.compact .greeting { font-size: 18px; }
   <div class="gov-inner-tabs" id="diaInnerTabs" style="display:none">
     <button class="gov-inner-tab active" data-dia-tab="overview">Overview</button>
     <button class="gov-inner-tab" data-dia-tab="search">Search</button>
-    <button class="gov-inner-tab" data-dia-tab="changes">Inventory</button>
+    <button class="gov-inner-tab" data-dia-tab="changes">CMS Data</button>
     <button class="gov-inner-tab" data-dia-tab="npi">NPI Intel</button>
     <button class="gov-inner-tab" data-dia-tab="sales">Sales</button>
     <button class="gov-inner-tab" data-dia-tab="leases">Leases</button>
@@ -2098,7 +2098,7 @@ function renderDetailTabs(source) {
     'gov-ownership': ['Overview', 'Lease', 'Ownership', 'Activity'],
     'gov-lead': ['Overview', 'Property', 'Pipeline', 'Contacts', 'Activity'],
     'gov-listing': ['Overview', 'Property', 'Market', 'Activity'],
-    'dia-clinic': ['Overview', 'Property', 'Signals', 'Research', 'Activity']
+    'dia-clinic': ['Overview', 'Property', 'Ownership', 'Signals', 'Research', 'Activity']
   };
   
   const tabs = tabConfigs[source] || ['Details'];
