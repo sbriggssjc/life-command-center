@@ -58,6 +58,19 @@ async function govQuery(table, select, params = {}) {
   }
 }
 
+// Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
+async function govQueryAll(table, select, params = {}) {
+  let all = [], offset = 0;
+  const pageSize = 1000;
+  while (true) {
+    const result = await govQuery(table, select, { ...params, limit: pageSize, offset });
+    all = all.concat(result.data || []);
+    if ((result.data || []).length < pageSize) break;
+    offset += pageSize;
+  }
+  return { data: all, count: all.length };
+}
+
 // ============================================================================
 // METRIC CARD HTML
 // ============================================================================
@@ -126,12 +139,11 @@ async function loadGovData() {
       govData.ownership = all;
     }
     
-    // Load prospect leads
-    const leadsRes = await govQuery('prospect_leads',
+    // Load ALL prospect leads (paginated to overcome PostgREST 1000-row cap)
+    const leadsRes = await govQueryAll('prospect_leads',
       'lead_id, lease_number, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
       {
-        order: 'priority_score.desc',
-        limit: 1000
+        order: 'priority_score.desc'
       }
     );
     govData.leads = leadsRes.data || [];
@@ -1632,8 +1644,7 @@ function renderGovOverview() {
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Property Count</div>';
     const maxAgCount = topAgencies[0][1].count;
     html += inlineBar(topAgencies.map(([name, d]) => ({
-      label: name.length > 18 ? name.substring(0,16) + '…' : name,
-      value: d.count, display: fmtN(d.count), barColor: '#60a5fa', labelWidth: 110, valueWidth: 40
+      label: name, value: d.count, display: fmtN(d.count), barColor: '#60a5fa', labelWidth: 140, valueWidth: 40
     })), maxAgCount);
     html += '</div>';
 
@@ -1642,8 +1653,7 @@ function renderGovOverview() {
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Annual Rent</div>';
     const maxAgRent = topAgenciesByRent[0][1].rent;
     html += inlineBar(topAgenciesByRent.map(([name, d]) => ({
-      label: name.length > 18 ? name.substring(0,16) + '…' : name,
-      value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#34d399', labelWidth: 110, valueWidth: 56
+      label: name, value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#34d399', labelWidth: 140, valueWidth: 56
     })), maxAgRent);
     html += '</div>';
     html += '</div>';
@@ -1656,11 +1666,11 @@ function renderGovOverview() {
     })).sort((a,b) => a.avgTerm - b.avgTerm);
     const maxTerm = Math.max(...agencyTerms.map(a => Math.max(a.avgTerm, 0)), 1);
     html += inlineBar(agencyTerms.map(a => ({
-      label: a.name.length > 18 ? a.name.substring(0,16) + '…' : a.name,
+      label: a.name,
       value: Math.max(a.avgTerm, 0),
       display: a.avgTerm.toFixed(1) + ' yrs',
       barColor: a.avgTerm < 1 ? '#f87171' : a.avgTerm < 2 ? '#fb923c' : a.avgTerm < 5 ? '#fbbf24' : '#34d399',
-      labelWidth: 110, valueWidth: 50
+      labelWidth: 140, valueWidth: 50
     })), maxTerm);
     html += '</div>';
   }

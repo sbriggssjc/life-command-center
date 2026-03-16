@@ -1486,7 +1486,7 @@ function renderBizSubset(subset) {
 let mktData = [];
 let mktLoaded = false;
 let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
-let mktFilter = 'all';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
+let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
 let mktSearch = '';
 let mktPage = 0;
 const MKT_PAGE = 20;
@@ -1625,7 +1625,9 @@ function renderMarketing() {
   html += '<div class="widget-grid">';
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='sf_deal';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">SF Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${sfDeals.length} contacts</div></div>`;
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='leads';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Inbound Leads</div><div class="stat-value" style="color:var(--purple)">${inboundLeads.length}</div><div class="stat-sub">${unmatched ? unmatched + ' unmatched' : 'All matched'}</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
+  const overduePct = mktData.length > 0 ? Math.round((overdue / mktData.length) * 100) : 0;
+  const overdueSub = overduePct > 80 ? 'Likely stale dates' : 'Past due date';
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:${overduePct > 80 ? 'var(--yellow)' : 'var(--red)'}">${overdue}</div><div class="stat-sub">${overdueSub}</div></div>`;
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Total Pipeline</div><div class="stat-value" style="color:var(--green)">${mktData.length}</div><div class="stat-sub">All sources</div></div>`;
   html += '</div>';
 
@@ -2744,9 +2746,13 @@ function renderMessages() {
   const search = (document.getElementById('msgSearchInput') || {}).value || '';
   const searchLower = search.toLowerCase();
 
-  // Update tab active state
+  // Update tab active state and counts
+  const tabCounts = { flagged: msgData.flagged.length, recent: msgData.recent.length, sent: msgData.sent.length };
+  const tabLabels = { flagged: 'Flagged', recent: 'Recent', sent: 'Sent' };
   document.querySelectorAll('#msgTabs .msg-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.msgTab === currentMsgTab);
+    const ct = tabCounts[t.dataset.msgTab];
+    t.textContent = tabLabels[t.dataset.msgTab] + (ct ? ` (${ct})` : '');
   });
 
   let items = [];
