@@ -854,7 +854,7 @@ body.compact .greeting { font-size: 18px; }
 // CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
-const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=36.15&longitude=-95.99&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Chicago&forecast_days=1';
+const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=44.98&longitude=-93.27&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Chicago&forecast_days=1';
 const TREASURY_API_URL = '/api/treasury';
 const GOV_SUPABASE_URL = 'https://scknotsqkcheojiaewwh.supabase.co';
 const PAGE_SIZE = 40;
@@ -1440,7 +1440,9 @@ function debounceBizSearch(val) {
 
 function toggleBizCatFilter(el, cat) {
   const wasActive = el.classList.contains('active');
-  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  // Scope to only the pills container this pill belongs to (not all pills on the page)
+  const pillsContainer = el.closest('.pills');
+  if (pillsContainer) pillsContainer.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
   if (!wasActive) {
     el.classList.add('active');
     const filtered = filterBizActivities().filter(a => (a.computed_category || 'General') === cat);
@@ -2468,7 +2470,7 @@ function renderRecentEmails() {
   let html = '';
   for (const e of emails.slice(0, 6)) {
     const link = e.outlook_link || e.web_link || '#';
-    html += `<div class="email-card" onclick="window.open('${link}','_blank')">
+    html += `<div class="email-card" onclick="window.open(${safeJSON(link)},'_blank')">
       <div class="email-subj">${esc(e.subject || '(No subject)')}</div>
       <div class="email-from"><span>${esc(e.sender_name || e.sender_email || '')}</span><span>${formatDate(e.received_date)}</span></div>
     </div>`;
@@ -2723,7 +2725,7 @@ function renderMessages() {
 
   let html = '';
   for (const m of items.slice(0, 50)) {
-    html += `<div class="msg-item${m.unread ? ' unread' : ''}" ${m.link ? `onclick="window.open('${m.link}','_blank')"` : ''}>
+    html += `<div class="msg-item${m.unread ? ' unread' : ''}" ${m.link ? `onclick="window.open(${safeJSON(m.link)},'_blank')"` : ''}>
       <div class="msg-header">
         <div class="msg-sender">${esc(m.sender)}</div>
         <div class="msg-time">${formatDate(m.time)}</div>
@@ -2803,6 +2805,7 @@ function renderSettings() {
           <option value="dialysis" ${appSettings.defaultTab === 'dialysis' ? 'selected' : ''}>Dialysis</option>
           <option value="government" ${appSettings.defaultTab === 'government' ? 'selected' : ''}>Government</option>
           <option value="marketing" ${appSettings.defaultTab === 'marketing' ? 'selected' : ''}>Marketing</option>
+          <option value="prospects" ${appSettings.defaultTab === 'prospects' ? 'selected' : ''}>Prospects</option>
         </select>
       </div>
     </div>
@@ -2812,7 +2815,7 @@ function renderSettings() {
       <div class="settings-row">
         <div class="settings-row-info">
           <div class="settings-row-label">Show Weather</div>
-          <div class="settings-row-desc">Display Tulsa, OK weather on home screen</div>
+          <div class="settings-row-desc">Display Minneapolis, MN weather on home screen</div>
         </div>
         <label class="settings-toggle"><input type="checkbox" ${appSettings.showWeather ? 'checked' : ''} onchange="toggleSetting('showWeather', this.checked)"><span class="slider"></span></label>
       </div>

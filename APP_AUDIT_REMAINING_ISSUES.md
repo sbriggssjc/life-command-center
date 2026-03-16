@@ -95,6 +95,41 @@ Issues identified during a full app audit that require backend/data fixes beyond
 
 ---
 
+## Issue 9: Activity renderBizSubset — No Pagination
+
+**What was fixed (frontend):** Scoped the pill active-toggle to only the parent `.pills` container (was incorrectly resetting all pills on the page).
+
+**What still needs fixing:** When clicking a category pill to filter activities, `renderBizSubset()` only shows the first `PAGE_SIZE` items with no pagination. Unlike the main `renderBizContent()` which has a pager, filtered results are silently truncated. This needs a pagination mechanism similar to what `renderBizContent` uses, or at minimum a "showing X of Y" indicator.
+
+**File:** `index.html`, lines ~1453-1470
+
+---
+
+## Issue 10: Prospects Search — Contact Card Click Does Nothing
+
+**Problem:** Government Contact results (`_source: ''`) have an empty `_source`, so `showDetail()` is never called — clicking these cards does nothing.
+
+**Suggested Fix:**
+1. Set `_source: 'gov-contact'` and add a handler in `showDetail()` for this source
+2. Or at minimum show a detail overlay with the contact's info (name, entity, phone, email, role)
+
+**File:** `index.html`, line ~1908
+
+---
+
+## Issue 11: Prospects Search — `or=` Filter May Not Work With All Column Names
+
+**Problem:** The Prospects search builds `or=(address.ilike.*term*,city.ilike.*term*,...)` filters using column names that may have changed or may not exist in the target table. If any column in the `or=` clause doesn't exist, PostgREST returns a 400 error silently.
+
+**Suggested Fix:**
+1. Wrap each prospect query in a try/catch that falls back gracefully if a column doesn't exist
+2. Verify all column names match the actual table schemas for both databases
+3. The `contacts` table query references `name` and `entity_type` — confirm these exist (contacts table may have `contact_name` not `name`)
+
+**File:** `index.html`, lines ~1901-1920
+
+---
+
 ## Supabase Connections
 
 - **Government:** Project ID `scknotsqkcheojiaewwh`
