@@ -2613,9 +2613,8 @@ async function renderDiaSales() {
     try {
       let all = [], pg = 0;
       while (true) {
-        const batch = await diaQuery('available_listings', '*', {
+        const batch = await diaQuery('v_available_listings', '*', {
           order: 'listing_date.desc.nullslast', limit: 1000, offset: pg * 1000,
-          filter: 'status=in.(active,Active,Available,For Sale)',
         });
         all = all.concat(batch || []);
         if (!batch || batch.length < 1000) break;
@@ -3107,8 +3106,8 @@ function renderDiaLoans() {
     el.innerHTML = '<div class="loading"><span class="spinner"></span> Loading loan data...</div>';
     (async () => {
       try {
-        const loans = await diaQuery('loans',
-          'loan_id,property_id,loan_amount,current_balance,interest_rate_percent,interest_rate_text,maturity_date,origination_date,loan_to_value,loan_type,recourse,alert_flag,lender_name,loan_term',
+        const loans = await diaQuery('v_loans',
+          'loan_id,property_id,facility_name,address,city,state,operator,loan_amount,current_balance,interest_rate_percent,interest_rate_text,maturity_date,origination_date,loan_to_value,loan_type,recourse,alert_flag,lender_name,loan_term',
           { limit: 1000 }
         );
         diaLoansData = loans || [];
@@ -3200,18 +3199,21 @@ function buildDiaLoansHTML() {
   html += '<div class="widget" style="margin-bottom:16px">';
   html += '<div class="widget-title">Largest Loans <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + fmtN(sorted.length) + ' loans with amounts)</span></div>';
   html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-  html += '<th>Property ID</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Recourse</th><th>Alert</th>';
+  html += '<th>Facility</th><th>City</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Lender</th><th>Maturity</th><th>Alert</th>';
   html += '</tr></thead><tbody>';
   for (var li = 0; li < Math.min(sorted.length, 50); li++) {
     var ln = sorted[li];
     var rate = parseFloat(ln.interest_rate_percent) > 0 ? parseFloat(ln.interest_rate_percent).toFixed(2) + '%' : (ln.interest_rate_text || '—');
     var alertBadge = ln.alert_flag ? '<span style="background:#ef4444;color:#fff;padding:1px 6px;border-radius:4px;font-size:11px">FLAG</span>' : '<span style="font-size:11px;color:var(--text3)">—</span>';
+    var matDate = ln.maturity_date ? new Date(ln.maturity_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short' }) : '—';
     html += '<tr>';
-    html += '<td>' + esc(String(ln.property_id || '—')) + '</td>';
+    html += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(ln.facility_name || String(ln.property_id || '—')) + '</td>';
+    html += '<td>' + esc((ln.city || '') + (ln.state ? ', ' + ln.state : '')) + '</td>';
     html += '<td style="text-align:right;font-weight:600">' + fmt(parseFloat(ln.loan_amount) || 0) + '</td>';
     html += '<td style="text-align:right">' + rate + '</td>';
     html += '<td>' + esc(ln.loan_type || '—') + '</td>';
-    html += '<td>' + esc(ln.recourse || '—') + '</td>';
+    html += '<td>' + esc(ln.lender_name || '—') + '</td>';
+    html += '<td>' + matDate + '</td>';
     html += '<td>' + alertBadge + '</td>';
     html += '</tr>';
   }
