@@ -1452,10 +1452,15 @@ function toggleBizCatFilter(el, cat) {
   renderBizContent();
 }
 
+let _bizSubsetData = [];
+let _bizSubsetPage = 0;
+
 function renderBizSubset(subset) {
-  const start = 0;
-  const pageItems = subset.slice(start, PAGE_SIZE);
-  let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">${subset.length} results · <a href="#" onclick="event.preventDefault();renderBizContent()">Clear filter</a></div>`;
+  if (subset !== undefined) { _bizSubsetData = subset; _bizSubsetPage = 0; }
+  const start = _bizSubsetPage * PAGE_SIZE;
+  const pageItems = _bizSubsetData.slice(start, start + PAGE_SIZE);
+  const totalPages = Math.ceil(_bizSubsetData.length / PAGE_SIZE);
+  let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">${_bizSubsetData.length} results · <a href="#" onclick="event.preventDefault();renderBizContent()">Clear filter</a></div>`;
   for (const a of pageItems) {
     const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
     html += `<div class="act-item" onclick='showDetail(${safeJSON(a)})'>
@@ -1466,6 +1471,9 @@ function renderBizSubset(subset) {
         ${sfBtn}
       </div>
     </div>`;
+  }
+  if (totalPages > 1) {
+    html += `<div class="pager"><button onclick="_bizSubsetPage--;renderBizSubset()" ${_bizSubsetPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${_bizSubsetPage+1} of ${totalPages}</span><button onclick="_bizSubsetPage++;renderBizSubset()" ${_bizSubsetPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
   }
   const _bcEl = document.getElementById('bizContent');
   if (_bcEl) _bcEl.innerHTML = html;
@@ -1756,9 +1764,11 @@ async function mktMatchLead(leadId) {
       showToast('Error calling match function — ' + res.status, 'error');
       return;
     }
-    const data = await res.json();
-    if (data && data.data && data.data[0]) {
-      const m = data.data[0];
+    const raw = await res.json();
+    // Proxy returns array directly for RPC; handle both formats for safety
+    const rows = Array.isArray(raw) ? raw : (raw.data || []);
+    if (rows.length > 0 && rows[0]) {
+      const m = rows[0];
       if (m.match_method === 'no_match') {
         showToast('No SF match found — flagged for manual review', 'error');
       } else {
@@ -1907,7 +1917,7 @@ async function execProspectsSearch() {
       ]);
       govLeads = (gl.data || []).map(r => ({ ...r, _title: norm(r.address) || norm(r.tenant_agency) || '—', _badge: 'Gov Lead', _badgeBg: 'rgba(52,211,153,0.15)', _badgeColor: '#34d399', _source: 'gov-lead', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + norm(r.tenant_agency) : '', r.lessor_name ? 'Owner: ' + norm(r.lessor_name) : '', r.recorded_owner ? 'Recorded: ' + norm(r.recorded_owner) : '', r.pipeline_stage ? cleanLabel(r.pipeline_stage) : ''].filter(Boolean) }));
       govOwnership = (go.data || []).map(r => ({ ...r, _title: norm(r.address) || r.lease_number || '—', _badge: 'Gov Ownership', _badgeBg: 'rgba(108,140,255,0.15)', _badgeColor: '#6c8cff', _source: 'gov-ownership', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', norm(r.agency_name) || '', r.new_owner ? 'Owner: ' + norm(r.new_owner) : '', r.estimated_value ? 'Value: ' + fmt(r.estimated_value) : ''].filter(Boolean) }));
-      govContacts = (gc.data || []).map(r => ({ ...r, _title: norm(r.name) || norm(r.entity_type) || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: '', _meta: [norm(r.entity_type) || '', r.phone || '', r.email || '', norm(r.role) || ''].filter(Boolean) }));
+      govContacts = (gc.data || []).map(r => ({ ...r, _title: norm(r.name) || norm(r.entity_type) || '—', _badge: 'Gov Contact', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'gov-contact', _meta: [norm(r.entity_type) || '', r.phone || '', r.email || '', norm(r.role) || ''].filter(Boolean) }));
       govListings = (gli.data || []).map(r => ({ ...r, _title: norm(r.address) || norm(r.tenant_agency) || '—', _badge: 'Gov Listing', _badgeBg: 'rgba(251,191,36,0.15)', _badgeColor: '#fbbf24', _source: 'gov-listing', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.tenant_agency ? 'Tenant: ' + norm(r.tenant_agency) : '', r.seller_name ? 'Seller: ' + norm(r.seller_name) : '', r.asking_price ? 'Asking: ' + fmt(r.asking_price) : ''].filter(Boolean) }));
     }
 
@@ -1957,6 +1967,10 @@ function showDetail(record, source = 'activity') {
       showUnifiedDetail(record, source);
       return;
     }
+  }
+  // Gov contacts get a simple detail panel (no unified detail needed)
+  if (source === 'gov-contact') {
+    // Falls through to the standard detail panel below
   }
 
   window._detailRecord = record;
@@ -2031,6 +2045,10 @@ function renderDetailHeader(record, source) {
     title = esc(record.address || '(No address)');
     subtitle = `${esc(record.city || '')}${record.state ? ', ' + esc(record.state) : ''} · Listing`;
     badge = 'LISTING';
+  } else if(source === 'gov-contact') {
+    title = esc(record.name || record.contact_name || '(No name)');
+    subtitle = esc(record.entity_type || record.role || 'Contact');
+    badge = 'CONTACT';
   } else if(source === 'dia-clinic') {
     title = esc(record.facility_name || '(No name)');
     subtitle = `${esc(record.city || '')}${record.city && record.state ? ', ' : ''}${esc(record.state || '')} · ${esc(record.operator_name || 'Clinic')}`;
@@ -2051,6 +2069,19 @@ function renderDetailHeader(record, source) {
     if (tenant) keyFields += `<div><span style="color:var(--text3)">Tenant:</span> <span style="color:var(--text)">${esc(tenant)}</span></div>`;
     if (lease) keyFields += `<div><span style="color:var(--text3)">Lease:</span> <span style="color:var(--text);font-family:monospace">${esc(lease)}</span></div>`;
     if (lessor) keyFields += `<div><span style="color:var(--text3)">Lessor:</span> <span style="color:var(--text)">${esc(lessor)}</span></div>`;
+    keyFields += '</div>';
+  } else if (source === 'gov-contact') {
+    const entity = record.entity_type || '';
+    const phone = record.phone || '';
+    const email = record.email || '';
+    const role = record.role || '';
+    const company = record.company || '';
+    keyFields = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
+    if (entity) keyFields += `<div><span style="color:var(--text3)">Entity:</span> <span style="color:var(--text)">${esc(entity)}</span></div>`;
+    if (company) keyFields += `<div><span style="color:var(--text3)">Company:</span> <span style="color:var(--text)">${esc(company)}</span></div>`;
+    if (role) keyFields += `<div><span style="color:var(--text3)">Role:</span> <span style="color:var(--text)">${esc(role)}</span></div>`;
+    if (phone) keyFields += `<div><span style="color:var(--text3)">Phone:</span> <a href="tel:${esc(phone)}" style="color:var(--accent)">${esc(phone)}</a></div>`;
+    if (email) keyFields += `<div><span style="color:var(--text3)">Email:</span> <a href="mailto:${esc(email)}" style="color:var(--accent)">${esc(email)}</a></div>`;
     keyFields += '</div>';
   } else if (source === 'dia-clinic') {
     const ccn = record.ccn || '';
@@ -2100,6 +2131,7 @@ function renderDetailTabs(source) {
     'gov-ownership': ['Overview', 'Lease', 'Ownership', 'Activity'],
     'gov-lead': ['Overview', 'Property', 'Pipeline', 'Contacts', 'Activity'],
     'gov-listing': ['Overview', 'Property', 'Market', 'Activity'],
+    'gov-contact': ['Details'],
     'dia-clinic': ['Overview', 'Property', 'Ownership', 'Signals', 'Research', 'Activity']
   };
   
@@ -2118,12 +2150,47 @@ function renderDetailTabs(source) {
 function renderDetailBody(record, source, tab) {
   if(source === 'activity') {
     return renderActivityDetailBody(record, tab);
+  } else if(source === 'gov-contact') {
+    return renderGovContactDetailBody(record);
   } else if(source === 'gov-ownership' || source === 'gov-lead' || source === 'gov-listing') {
     return renderGovDetailBody(record, source, tab);
   } else if(source === 'dia-clinic') {
     return renderDiaDetailBody(record, tab);
   }
   return '<div class="detail-empty">Unknown source type</div>';
+}
+
+function renderGovContactDetailBody(record) {
+  let html = '<div style="padding:16px">';
+  html += '<div style="font-size:15px;font-weight:700;margin-bottom:12px;color:var(--text)">Contact Details</div>';
+  const fields = [
+    ['Name', record.name || record.contact_name],
+    ['Entity Type', record.entity_type],
+    ['Company', record.company],
+    ['Role', record.role],
+    ['Phone', record.phone],
+    ['Email', record.email],
+    ['Address', record.address],
+    ['City', record.city],
+    ['State', record.state],
+    ['Notes', record.notes]
+  ];
+  html += '<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;font-size:13px">';
+  for (const [label, val] of fields) {
+    if (!val) continue;
+    let display = esc(val);
+    if (label === 'Phone') display = `<a href="tel:${esc(val)}" style="color:var(--accent)">${esc(val)}</a>`;
+    if (label === 'Email') display = `<a href="mailto:${esc(val)}" style="color:var(--accent)">${esc(val)}</a>`;
+    html += `<div style="color:var(--text3);font-weight:500">${label}</div><div style="color:var(--text)">${display}</div>`;
+  }
+  html += '</div>';
+  // Action buttons
+  html += '<div style="display:flex;gap:8px;margin-top:20px">';
+  if (record.phone) html += `<a href="tel:${esc(record.phone)}" class="act-btn primary" style="text-decoration:none;font-size:13px;padding:8px 16px">&#x260E; Call</a>`;
+  if (record.email) html += `<a href="mailto:${esc(record.email)}" class="act-btn" style="text-decoration:none;font-size:13px;padding:8px 16px">&#x2709; Email</a>`;
+  html += '</div>';
+  html += '</div>';
+  return html;
 }
 
 function renderActivityDetailBody(record) {
@@ -2510,6 +2577,12 @@ function renderCalendarFull() {
 // ============================================================
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); closeLogCall(); } });
 
+// Auto-set title attribute on truncated elements for hover tooltips
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('.truncate');
+  if (el && !el.title) el.title = el.textContent.trim();
+});
+
 // ============================================================
 // PERSONAL TAB — Calendar & Tasks
 // ============================================================
@@ -2867,7 +2940,7 @@ function renderSettings() {
           <div class="settings-row-label">Version</div>
           <div class="settings-row-desc">Life Command Center</div>
         </div>
-        <div class="settings-val">2.1.0</div>
+        <div class="settings-val">2.2.0</div>
       </div>
       <div class="settings-row">
         <div class="settings-row-info">

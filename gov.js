@@ -1501,7 +1501,7 @@ function renderGovOverview() {
     items.forEach(item => {
       const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
       out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
+        <div title="${esc(item.label)}" style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
         <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
         <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
       </div>`;
