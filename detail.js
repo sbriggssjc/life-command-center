@@ -443,21 +443,22 @@ function _udTabOperations() {
   html += _row('Chain Organization', r.chain_organization);
   html += '</div></div>';
 
-  // ── COMPARATIVE RANKINGS ──
+  // ── COMPARATIVE RANKINGS (PATIENTS) ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Comparative Rankings (Patients)</div>';
   html += _rankingBar('County', r.county_patient_rank, r.county_total, r.county);
   html += _rankingBar('State', r.state_patient_rank, r.state_total, r.state);
-  html += _rankingBar('National', r.national_patient_rank, r.national_total);
   html += _rankingBar('Operator', r.operator_patient_rank, r.operator_total, r.operator_name);
+  html += _rankingBar('National', r.national_patient_rank, r.national_total);
   html += '</div>';
 
-  // Revenue rankings
-  if (r.state_revenue_rank || r.county_revenue_rank) {
+  // ── COMPARATIVE RANKINGS (REVENUE) ──
+  if (r.state_revenue_rank || r.county_revenue_rank || r.national_revenue_rank) {
     html += '<div class="detail-section">';
     html += '<div class="detail-section-title">Comparative Rankings (Revenue)</div>';
     html += _rankingBar('County', r.county_revenue_rank, r.county_total, r.county);
     html += _rankingBar('State', r.state_revenue_rank, r.state_total, r.state);
+    html += _rankingBar('Operator', r.operator_revenue_rank, r.operator_revenue_total || r.operator_total, r.operator_name);
     html += _rankingBar('National', r.national_revenue_rank, r.national_total);
     html += '</div>';
   }
