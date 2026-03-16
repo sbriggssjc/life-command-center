@@ -21,9 +21,10 @@ let diaCmsData = null;  // lazy-loaded from v_cms_data
 let diaCmsLoading = false;
 let diaCmsSearch = '';
 let diaCmsPage = 0;
-let diaCmsSort = { col: 'latest_total_patients', dir: 'desc' };
+let diaCmsSort = { col: 'est_in_center_patients', dir: 'desc' };
 let diaCmsStateFilter = '';
 let diaCmsOperatorFilter = '';
+let diaCmsModalityFilter = '';
 const DIA_CMS_PAGE_SIZE = 50;
 let diaNpiFilter = null; // filter by signal_type
 let diaSalesView = 'comps'; // 'comps' | 'available'
@@ -792,6 +793,7 @@ function renderDiaChanges() {
 
   // === Apply filters ===
   let filtered = data;
+  if (diaCmsModalityFilter) filtered = filtered.filter(r => r.modality_type === diaCmsModalityFilter);
   if (diaCmsStateFilter) filtered = filtered.filter(r => r.state === diaCmsStateFilter);
   if (diaCmsOperatorFilter) filtered = filtered.filter(r => (r.operator_name || r.chain_organization || '') === diaCmsOperatorFilter);
   if (diaCmsSearch) {
@@ -827,23 +829,25 @@ function renderDiaChanges() {
   const cnt = (arr, fn) => arr.reduce((s, r) => { const v = fn(r); return v != null && !isNaN(v) ? s + 1 : s; }, 0);
   const avg = (arr, fn) => { const c = cnt(arr, fn); return c > 0 ? sum(arr, fn) / c : null; };
 
-  const avgPatients = avg(filtered, r => r.latest_total_patients);
-  const avgDelta = avg(filtered, r => r.delta_patients);
-  const avgPctChange = avg(filtered, r => r.pct_change);
+  const avgICPts = avg(filtered, r => r.est_in_center_patients);
+  const avgHomePts = avg(filtered, r => r.est_home_patients);
   const avgRevenue = avg(filtered, r => r.estimated_annual_revenue);
   const avgEbitda = avg(filtered, r => r.estimated_ebitda);
-  const totalRevenue = sum(filtered, r => r.estimated_annual_revenue);
+  const totalEstRevenue = sum(filtered, r => r.est_combined_revenue);
+  const cntHome = filtered.filter(r => r.modality_type === 'home').length;
+  const cntHybrid = filtered.filter(r => r.modality_type === 'hybrid').length;
+  const cntIC = filtered.filter(r => r.modality_type === 'in_center').length;
 
   let html = '<div class="biz-section">';
 
   // === Dynamic average cards ===
   html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px">';
-  html += _cmsAvgCard('Clinics', fmtN(n), '#60a5fa');
-  html += _cmsAvgCard('Avg Patients', avgPatients != null ? Math.round(avgPatients).toLocaleString() : '–', '#34d399');
-  html += _cmsAvgCard('Avg Δ Patients', avgDelta != null ? (avgDelta >= 0 ? '+' : '') + Math.round(avgDelta).toLocaleString() : '–', avgDelta >= 0 ? '#34d399' : '#f87171');
-  html += _cmsAvgCard('Avg Revenue', avgRevenue != null ? '$' + (avgRevenue / 1000000).toFixed(1) + 'M' : '–', '#a78bfa');
-  html += _cmsAvgCard('Avg EBITDA', avgEbitda != null ? '$' + Math.round(avgEbitda / 1000).toLocaleString() + 'K' : '–', '#fb923c');
-  html += _cmsAvgCard('Total Revenue', totalRevenue > 0 ? '$' + (totalRevenue / 1000000000).toFixed(2) + 'B' : '–', '#22d3ee');
+  html += _cmsAvgCard('Clinics', fmtN(n) + '<div style="font-size:9px;color:var(--text3);margin-top:2px">' + cntIC + ' IC · ' + cntHybrid + ' Hyb · ' + cntHome + ' Home</div>', '#60a5fa');
+  html += _cmsAvgCard('Avg In-Center Pts', avgICPts != null ? Math.round(avgICPts).toLocaleString() : '–', '#34d399');
+  html += _cmsAvgCard('Avg Home Pts', avgHomePts != null ? Math.round(avgHomePts).toLocaleString() : '–', '#a78bfa');
+  html += _cmsAvgCard('Avg Revenue', avgRevenue != null ? '$' + (avgRevenue / 1000000).toFixed(1) + 'M' : '–', '#fb923c');
+  html += _cmsAvgCard('Avg EBITDA', avgEbitda != null ? '$' + Math.round(avgEbitda / 1000).toLocaleString() + 'K' : '–', '#f87171');
+  html += _cmsAvgCard('Est Total Rev', totalEstRevenue > 0 ? '$' + (totalEstRevenue / 1000000000).toFixed(2) + 'B' : '–', '#22d3ee');
   html += '</div>';
 
   // === Filters row ===
@@ -864,6 +868,13 @@ function renderDiaChanges() {
   html += `<option value="">All Operators</option>`;
   topOps.forEach(([op, ct]) => html += `<option value="${esc(op)}" ${diaCmsOperatorFilter === op ? 'selected' : ''}>${esc(op)} (${ct})</option>`);
   html += '</select>';
+  // Modality filter
+  html += `<select id="cmsModalityFilter" style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">`;
+  html += `<option value="">All Types</option>`;
+  html += `<option value="in_center" ${diaCmsModalityFilter === 'in_center' ? 'selected' : ''}>In-Center</option>`;
+  html += `<option value="hybrid" ${diaCmsModalityFilter === 'hybrid' ? 'selected' : ''}>Hybrid</option>`;
+  html += `<option value="home" ${diaCmsModalityFilter === 'home' ? 'selected' : ''}>Home Only</option>`;
+  html += '</select>';
   html += `<span style="font-size:11px;color:var(--text3)">${fmtN(filtered.length)} of ${fmtN(data.length)}</span>`;
   html += '</div>';
 
@@ -876,15 +887,17 @@ function renderDiaChanges() {
 
   // Header (sortable)
   const cols = [
-    { key: 'operator_name', label: 'Operator', flex: '1.2' },
-    { key: 'facility_name', label: 'Facility', flex: '1.4' },
-    { key: 'address', label: 'Address', flex: '1.2' },
-    { key: 'city', label: 'City', flex: '0.8' },
-    { key: 'state', label: 'ST', flex: '0.4' },
-    { key: 'latest_total_patients', label: 'Patients', flex: '0.6', align: 'right' },
-    { key: 'pct_change', label: 'Δ%', flex: '0.5', align: 'right' },
-    { key: 'estimated_annual_revenue', label: 'Revenue', flex: '0.7', align: 'right' },
-    { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.7', align: 'right' }
+    { key: 'operator_name', label: 'Operator', flex: '1.1' },
+    { key: 'facility_name', label: 'Facility', flex: '1.3' },
+    { key: 'city', label: 'City', flex: '0.7' },
+    { key: 'state', label: 'ST', flex: '0.3' },
+    { key: 'modality_type', label: 'Type', flex: '0.5' },
+    { key: 'est_in_center_patients', label: 'IC Pts', flex: '0.5', align: 'right' },
+    { key: 'est_home_patients', label: 'Home Pts', flex: '0.5', align: 'right' },
+    { key: 'est_in_center_revenue', label: 'IC Rev', flex: '0.6', align: 'right' },
+    { key: 'est_home_revenue', label: 'Home Rev', flex: '0.6', align: 'right' },
+    { key: 'estimated_annual_revenue', label: 'TTM Rev', flex: '0.6', align: 'right' },
+    { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.6', align: 'right' }
   ];
 
   html += '<div class="table-row" style="font-weight:600;border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3)">';
@@ -898,20 +911,27 @@ function renderDiaChanges() {
 
   // Rows
   page.forEach(row => {
-    const pctVal = row.pct_change != null ? Number(row.pct_change) : null;
-    const pctColor = pctVal > 0 ? '#34d399' : pctVal < 0 ? '#f87171' : 'var(--text3)';
-    const pctStr = pctVal != null ? (pctVal > 0 ? '+' : '') + pctVal.toFixed(1) + '%' : '–';
+    const modBadge = row.modality_type === 'hybrid' ? '<span style="color:#fbbf24;font-weight:600">Hybrid</span>'
+      : row.modality_type === 'home' ? '<span style="color:#a78bfa;font-weight:600">Home</span>'
+      : '<span style="color:#34d399;font-weight:600">IC</span>';
+    const icPts = Number(row.est_in_center_patients) || 0;
+    const hmPts = Number(row.est_home_patients) || 0;
+    const icRev = Number(row.est_in_center_revenue) || 0;
+    const hmRev = Number(row.est_home_revenue) || 0;
+    const fmtRev = v => v > 0 ? '$' + (v / 1000000).toFixed(1) + 'M' : '–';
 
     html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")' style="font-size:12px">`;
-    html += `<div style="flex:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.operator_name || row.chain_organization || '–')}</div>`;
-    html += `<div style="flex:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(row.facility_name || '')}</div>`;
-    html += `<div style="flex:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2);font-size:11px">${esc(row.address || '')}</div>`;
-    html += `<div style="flex:0.8;color:var(--text2)">${esc(row.city || '')}</div>`;
-    html += `<div style="flex:0.4;color:var(--text2)">${esc(row.state || '')}</div>`;
-    html += `<div style="flex:0.6;text-align:right;font-weight:500;color:var(--accent)">${row.latest_total_patients != null ? fmtN(row.latest_total_patients) : '–'}</div>`;
-    html += `<div style="flex:0.5;text-align:right;color:${pctColor};font-weight:500">${pctStr}</div>`;
-    html += `<div style="flex:0.7;text-align:right;color:var(--text2)">${row.estimated_annual_revenue ? '$' + (Number(row.estimated_annual_revenue) / 1000000).toFixed(1) + 'M' : '–'}</div>`;
-    html += `<div style="flex:0.7;text-align:right;color:var(--text2)">${row.estimated_ebitda ? '$' + Math.round(Number(row.estimated_ebitda) / 1000).toLocaleString() + 'K' : '–'}</div>`;
+    html += `<div style="flex:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.operator_name || row.chain_organization || '–')}</div>`;
+    html += `<div style="flex:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(row.facility_name || '')}</div>`;
+    html += `<div style="flex:0.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.city || '')}</div>`;
+    html += `<div style="flex:0.3;color:var(--text2)">${esc(row.state || '')}</div>`;
+    html += `<div style="flex:0.5;font-size:11px">${modBadge}</div>`;
+    html += `<div style="flex:0.5;text-align:right;font-weight:500;color:#34d399">${icPts > 0 ? fmtN(icPts) : '–'}</div>`;
+    html += `<div style="flex:0.5;text-align:right;font-weight:500;color:#a78bfa">${hmPts > 0 ? fmtN(hmPts) : '–'}</div>`;
+    html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${fmtRev(icRev)}</div>`;
+    html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${fmtRev(hmRev)}</div>`;
+    html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_annual_revenue ? '$' + (Number(row.estimated_annual_revenue) / 1000000).toFixed(1) + 'M' : '–'}</div>`;
+    html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_ebitda ? '$' + Math.round(Number(row.estimated_ebitda) / 1000).toLocaleString() + 'K' : '–'}</div>`;
     html += '</div>';
   });
 
@@ -976,6 +996,15 @@ function renderDiaChanges() {
     if (opEl) {
       opEl.addEventListener('change', () => {
         diaCmsOperatorFilter = opEl.value;
+        diaCmsPage = 0;
+        renderDiaTab();
+      });
+    }
+    // Modality filter
+    const modEl = document.getElementById('cmsModalityFilter');
+    if (modEl) {
+      modEl.addEventListener('change', () => {
+        diaCmsModalityFilter = modEl.value;
         diaCmsPage = 0;
         renderDiaTab();
       });
@@ -2156,21 +2185,39 @@ function renderDiaDetailOverview(record) {
   html += _detRow('Parent Org', r.parent_organization || '—');
   html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
 
-  // Patient metrics
-  html += '<div class="detail-section-title" style="margin-top:20px">Patient Metrics</div>';
-  html += _detRow('Latest Patients', r.latest_total_patients != null ? fmtN(r.latest_total_patients) : '—');
-  const dp = r.delta_patients;
-  const dpColor = dp > 0 ? 'color:#34d399' : dp < 0 ? 'color:#f87171' : '';
-  html += '<div class="detail-row"><div class="detail-lbl">Patient Change (Δ)</div><div class="detail-val" style="' + dpColor + '">' + (dp != null ? (dp > 0 ? '+' : '') + fmtN(dp) : '—') + '</div></div>';
-  html += '<div class="detail-row"><div class="detail-lbl">% Change</div><div class="detail-val" style="' + dpColor + '">' + (r.pct_change != null ? Number(r.pct_change).toFixed(1) + '%' : '—') + '</div></div>';
+  // Modality & Patient metrics
+  const modLabel = r.modality_type === 'hybrid' ? 'Hybrid (IC + Home)' : r.modality_type === 'home' ? 'Home Only' : 'In-Center';
+  const modColor = r.modality_type === 'hybrid' ? '#fbbf24' : r.modality_type === 'home' ? '#a78bfa' : '#34d399';
+  html += '<div class="detail-section-title" style="margin-top:20px">Patient Volume</div>';
+  html += '<div class="detail-row"><div class="detail-lbl">Modality</div><div class="detail-val" style="color:' + modColor + ';font-weight:600">' + modLabel + '</div></div>';
+  html += _detRow('CMS Total Patients', r.latest_total_patients != null ? fmtN(r.latest_total_patients) : '—');
+  const icPts = Number(r.est_in_center_patients) || 0;
+  const hmPts = Number(r.est_home_patients) || 0;
+  if (r.modality_type === 'hybrid' || r.modality_type === 'home') {
+    html += '<div class="detail-row"><div class="detail-lbl">Est. In-Center Pts</div><div class="detail-val" style="color:#34d399;font-weight:600">' + fmtN(icPts) + '</div></div>';
+    html += '<div class="detail-row"><div class="detail-lbl">Est. Home Pts</div><div class="detail-val" style="color:#a78bfa;font-weight:600">' + fmtN(hmPts) + '</div></div>';
+  }
   html += _detRow('Capacity Utilization', r.capacity_utilization_pct ? r.capacity_utilization_pct + '%' : '—');
 
-  // Financial summary
+  // Financial summary — bifurcated
   html += '<div class="detail-section-title" style="margin-top:20px">Financials</div>';
-  html += _detRow('Est. Annual Revenue', r.estimated_annual_revenue ? '$' + Number(r.estimated_annual_revenue).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
+  if (r.estimated_annual_revenue) {
+    html += _detRow('TTM Revenue (Reported)', '$' + Number(r.estimated_annual_revenue).toLocaleString(undefined, {maximumFractionDigits: 0}));
+  }
+  const icRev = Number(r.est_in_center_revenue) || 0;
+  const hmRev = Number(r.est_home_revenue) || 0;
+  const combRev = Number(r.est_combined_revenue) || 0;
+  if (r.modality_type === 'hybrid') {
+    html += '<div class="detail-row"><div class="detail-lbl">Est. IC Revenue</div><div class="detail-val" style="color:#34d399">$' + icRev.toLocaleString(undefined, {maximumFractionDigits: 0}) + '</div></div>';
+    html += '<div class="detail-row"><div class="detail-lbl">Est. Home Revenue</div><div class="detail-val" style="color:#a78bfa">$' + hmRev.toLocaleString(undefined, {maximumFractionDigits: 0}) + '</div></div>';
+    html += _detRow('Est. Combined Revenue', '$' + combRev.toLocaleString(undefined, {maximumFractionDigits: 0}));
+  } else if (r.modality_type === 'home') {
+    html += '<div class="detail-row"><div class="detail-lbl">Est. Home Revenue</div><div class="detail-val" style="color:#a78bfa">$' + hmRev.toLocaleString(undefined, {maximumFractionDigits: 0}) + '</div></div>';
+  } else {
+    html += _detRow('Est. IC Revenue', '$' + icRev.toLocaleString(undefined, {maximumFractionDigits: 0}));
+  }
   html += _detRow('Est. EBITDA', r.estimated_ebitda ? '$' + Number(r.estimated_ebitda).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
   html += _detRow('Operating Margin', r.operating_margin_assumption ? (Number(r.operating_margin_assumption) * 100).toFixed(1) + '%' : '—');
-  html += _detRow('Revenue / Patient', r.revenue_per_patient ? '$' + Number(r.revenue_per_patient).toLocaleString(undefined, {maximumFractionDigits: 0}) : '—');
   html += _detRow('Payer Mix (Medicare)', r.payer_mix_medicare ? (Number(r.payer_mix_medicare) * 100).toFixed(0) + '%' : '—');
   html += _detRow('Payer Mix (Commercial)', r.payer_mix_commercial ? (Number(r.payer_mix_commercial) * 100).toFixed(0) + '%' : '—');
 
