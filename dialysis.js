@@ -180,32 +180,22 @@ async function loadDiaData() {
       diaData.moversDown = [];
     }
     
-    // Load NPI signal summary
-    const npiSignalSummary = await diaQuery('v_npi_inventory_signal_summary', '*');
+    // Load NPI + research tab data in parallel (property review queue can timeout so don't block others)
+    const [npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon] = await Promise.all([
+      diaQuery('v_npi_inventory_signal_summary', '*'),
+      diaQuery('v_npi_inventory_signals', '*', { limit: 300 }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(e => { console.warn('Property review queue timeout/error', e); return []; }),
+      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }),
+      diaQuery('research_queue_outcomes', '*', { limit: 500 }),
+      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 })
+    ]);
     if (npiSignalSummary && npiSignalSummary.length > 0) {
-      npiSignalSummary.forEach(row => {
-        diaData.npiSummary[row.signal_type] = row;
-      });
+      npiSignalSummary.forEach(row => { diaData.npiSummary[row.signal_type] = row; });
     }
-    
-    // Load NPI signals
-    const npiSignals = await diaQuery('v_npi_inventory_signals', '*', { limit: 300 });
     diaData.npiSignals = npiSignals || [];
-    
-    // Load property review queue
-    const propQueue = await diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 });
     diaData.propertyReviewQueue = propQueue || [];
-    
-    // Load lease backfill candidates
-    const leaseQueue = await diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 });
     diaData.leaseBackfillRows = leaseQueue || [];
-    
-    // Load research outcomes
-    const outcomes = await diaQuery('research_queue_outcomes', '*', { limit: 500 });
     diaData.researchOutcomes = outcomes || [];
-    
-    // Load reconciliation
-    const recon = await diaQuery('v_ingestion_reconciliation', '*', { limit: 1 });
     if (recon && recon.length > 0) {
       diaData.reconciliation = recon[0];
     }
@@ -3715,7 +3705,7 @@ async function execDiaSearch() {
     const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
       diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 50 }),
       diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',npi.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 25 }),
-      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',operator_name.ilike.' + like + ',state.ilike.' + like + ')', limit: 25 }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',operator_name.ilike.' + like + ',state.ilike.' + like + ')', limit: 25 }).catch(() => []),
       diaQuery('research_queue_outcomes', '*', { filter: 'or=(queue_type.ilike.' + like + ',status.ilike.' + like + ',notes.ilike.' + like + ')', limit: 25 })
     ]);
 
