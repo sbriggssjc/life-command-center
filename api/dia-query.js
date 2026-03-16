@@ -3,7 +3,7 @@
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Prefer');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const diaKey = process.env.DIA_SUPABASE_KEY;
@@ -22,6 +22,9 @@ export default async function handler(req, res) {
   // Handle POST/PATCH requests (for inserts/upserts/updates and RPC calls)
   if (req.method === 'POST' || req.method === 'PATCH') {
     const isRpc = table.startsWith('rpc/');
+    // Honor client's Prefer header — needed for POST return=representation (ownership save)
+    const clientPrefer = req.headers['prefer'] || req.headers['Prefer'] || '';
+    const wantsRepresentation = clientPrefer.includes('return=representation');
     try {
       // Build URL with query filters for PATCH
       let patchUrl = `${diaUrl}/rest/v1/${table}`;
@@ -44,14 +47,17 @@ export default async function handler(req, res) {
         }
       }
 
+      // Determine Prefer header: RPC and client-requested representation get return=representation
+      let preferHeader = 'return=minimal';
+      if (isRpc || wantsRepresentation) preferHeader = 'return=representation';
+
       const response = await fetch(patchUrl, {
         method: req.method,
         headers: {
           'apikey': diaKey,
           'Authorization': `Bearer ${diaKey}`,
           'Content-Type': 'application/json',
-          // RPC calls need the response body; regular writes don't
-          'Prefer': isRpc ? 'return=representation' : 'return=minimal'
+          'Prefer': preferHeader
         },
         body: JSON.stringify(req.body)
       });
@@ -61,14 +67,14 @@ export default async function handler(req, res) {
         return res.status(response.status).json({ error: errBody });
       }
 
-      // RPC calls return data; forward it to the client
-      if (isRpc) {
+      // If representation was requested (RPC or client), return the created/updated record
+      if (isRpc || wantsRepresentation) {
         const body = await response.text();
         try {
           const data = JSON.parse(body);
-          return res.status(200).json({ data: Array.isArray(data) ? data : [data], count: 1 });
+          return res.status(req.method === 'POST' ? 201 : 200).json(Array.isArray(data) ? data : [data]);
         } catch {
-          return res.status(200).json({ data: [], count: 0 });
+          return res.status(req.method === 'POST' ? 201 : 200).json([]);
         }
       }
 
