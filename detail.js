@@ -1107,11 +1107,7 @@ function _udTabIntel() {
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Seller</label>';
   html += '<input id="intelSeller" type="text" placeholder="Entity name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Listing Broker</label>';
-  html += '<input id="intelBroker" type="text" placeholder="Broker name/firm" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
-  html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Notes</label>';
-  html += '<textarea id="intelSaleNotes" rows="2" placeholder="Sale notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea></div>';
   html += '<button onclick="_intelSavePriorSale()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Prior Sale</button>';
   html += '</div></div>';
 
@@ -2103,8 +2099,6 @@ async function _intelSavePriorSale() {
   const capRate = document.getElementById('intelCapRateSale')?.value || null;
   const buyer = document.getElementById('intelBuyer')?.value?.trim() || null;
   const seller = document.getElementById('intelSeller')?.value?.trim() || null;
-  const broker = document.getElementById('intelBroker')?.value?.trim() || null;
-  const notes = document.getElementById('intelSaleNotes')?.value?.trim() || null;
 
   try {
     const url = new URL(proxyBase, window.location.origin);
