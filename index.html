@@ -2114,7 +2114,8 @@ function renderActivityDetailBody(record) {
   if(record.subject) html += `<div class="detail-row"><span class="detail-lbl">Subject:</span> <span class="detail-val">${esc(record.subject)}</span></div>`;
   if(record.computed_category) html += `<div class="detail-row"><span class="detail-lbl">Category:</span> <span class="detail-val"><span class="act-cat ${catClass(record.computed_category)}" style="font-size:13px;padding:4px 12px">${esc(record.computed_category)}</span></span></div>`;
   if(record.company_name) html += `<div class="detail-row"><span class="detail-lbl">Company:</span> <span class="detail-val">${esc(record.company_name)}</span></div>`;
-  if(record.company_city_state || record.company_address) html += `<div class="detail-row"><span class="detail-lbl">Location:</span> <span class="detail-val">${esc(record.company_city_state || record.company_address)}</span></div>`;
+  const locVal = record.company_city_state || (record.company_address && record.company_address !== '0' ? record.company_address : '');
+  if(locVal) html += `<div class="detail-row"><span class="detail-lbl">Location:</span> <span class="detail-val">${esc(locVal)}</span></div>`;
   if(record.contact_name) html += `<div class="detail-row"><span class="detail-lbl">Contact:</span> <span class="detail-val">${esc(record.contact_name)}</span></div>`;
   if(record.email) html += `<div class="detail-row"><span class="detail-lbl">Email:</span> <span class="detail-val"><a href="mailto:${esc(record.email)}">${esc(record.email)}</a></span></div>`;
   if(record.phone) html += `<div class="detail-row"><span class="detail-lbl">Phone:</span> <span class="detail-val"><a href="tel:${esc(record.phone)}">${esc(record.phone)}</a></span></div>`;

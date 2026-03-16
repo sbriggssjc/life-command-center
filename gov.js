@@ -1580,7 +1580,7 @@ function renderGovOverview() {
     html += govCard({ title: 'Total NOI', value: '$' + fmtN(Math.round(totalNOI / 1e6)) + 'M', sub: 'net operating income', color: 'green', tab: 'search' });
     const avgNOI = withSF.length > 0 ? totalNOI / withSF.length : 0;
     html += govCard({ title: 'Avg NOI / Property', value: avgNOI > 0 ? '$' + fmtN(Math.round(avgNOI / 1000)) + 'K' : '—', sub: 'across portfolio', color: 'blue', tab: 'search' });
-    html += govCard({ title: 'Contacts', value: contacts.length >= 500 ? '500+' : fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
+    html += govCard({ title: 'Contacts', value: fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
     html += '</div>';
   }
 
@@ -1701,7 +1701,7 @@ function renderGovOverview() {
 
   html += govSectionHeader('Ownership Intelligence', '🔍', 'ownership');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Ownership Changes', value: totalOwnershipChanges >= 500 ? '500+' : fmtN(totalOwnershipChanges), sub: 'transfers tracked', color: 'blue', tab: 'ownership' });
+  html += govCard({ title: 'Ownership Changes', value: fmtN(totalOwnershipChanges), sub: 'transfers tracked', color: 'blue', tab: 'ownership' });
   html += govCard({ title: 'Confirmed Sales', value: fmtN(withSalePrice.length), sub: '$' + fmtN(Math.round(confirmedValue / 1e6)) + 'M total value', color: 'green', tab: 'ownership' });
   html += govCard({ title: 'Avg Sale Cap Rate', value: avgOwnershipCap, sub: fmtN(ownershipCaps.length) + ' with cap data', color: 'cyan', tab: 'ownership' });
   html += govCard({ title: 'Needs Research', value: fmtN(needsResearch), sub: 'pending investigation', color: 'yellow', tab: 'research' });
@@ -1717,7 +1717,7 @@ function renderGovOverview() {
 
   html += govSectionHeader('Prospect Pipeline', '🎯', 'pipeline');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Total Leads', value: leads.length >= 500 ? '500+' : fmtN(leads.length), sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
+  html += govCard({ title: 'Total Leads', value: fmtN(leads.length), sub: 'in pipeline', color: 'blue', tab: 'pipeline' });
   html += govCard({ title: 'Hot Leads', value: fmtN(hotLeads), sub: 'high priority', color: 'red', tab: 'pipeline' });
   html += govCard({ title: 'Warm Leads', value: fmtN(warmLeads), sub: 'active prospects', color: 'orange', tab: 'pipeline' });
   html += govCard({ title: 'Pipeline Value', value: '$' + fmtN(Math.round(pipelineValue / 1e6)) + 'M', sub: 'estimated total', color: 'green', tab: 'pipeline' });
@@ -1953,7 +1953,7 @@ function renderGovOwnership() {
   const yearData = yearLabels.map(y => valByYear[y]);
   
   let html = '<div class="gov-metrics">';
-  html += metricHTML('Total Changes', totalChanges >= 500 ? '500+' : fmtN(totalChanges), 'Ownership transfers', 'blue');
+  html += metricHTML('Total Changes', fmtN(totalChanges), 'Ownership transfers', 'blue');
   html += metricHTML('With Sale Price', fmtN(withSalePrice), 'Confirmed value', 'green');
   html += metricHTML('Needs Research', fmtN(needsResearch), 'Pending', 'yellow');
   html += metricHTML('Confirmed Value', fmt(confirmedValue), 'Total', 'purple');
@@ -2003,7 +2003,7 @@ function renderGovPipeline() {
   const tempColors = ['#f87171', '#fbbf24', '#6c8cff'];
   
   let html = '<div class="gov-metrics">';
-  html += metricHTML('Total Leads', totalLeads >= 500 ? '500+' : fmtN(totalLeads), 'In pipeline', 'blue');
+  html += metricHTML('Total Leads', fmtN(totalLeads), 'In pipeline', 'blue');
   html += metricHTML('Hot', fmtN(hotCount), 'Ready to move', 'red');
   html += metricHTML('Warm', fmtN(warmCount), 'Engaged', 'yellow');
   html += metricHTML('Pipeline Value', fmt(pipelineValue), 'Est. annual rent', 'purple');
@@ -2048,7 +2048,7 @@ function renderGovListings() {
   let html = '<div class="gov-metrics">';
   html += metricHTML('Active Listings', fmtN(activeListings), 'Currently on market', 'blue');
   html += metricHTML('Total Asking', fmt(totalAsking), 'Combined value', 'green');
-  html += metricHTML('All Listings', govData.listings.length >= 500 ? '500+' : fmtN(govData.listings.length), 'All statuses', 'yellow');
+  html += metricHTML('All Listings', fmtN(govData.listings.length), 'All statuses', 'yellow');
   html += metricHTML('Under Contract', fmtN(underContract), 'Pending', 'purple');
   html += '</div>';
   
