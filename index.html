@@ -656,7 +656,7 @@ body.compact .greeting { font-size: 18px; }
 
             <!-- Weather -->
             <div class="widget" id="weatherWidget">
-              <div class="widget-title">Weather — Minneapolis, MN</div>
+              <div class="widget-title">Weather — Locating...</div>
               <div class="weather-row">
                 <div class="weather-temp" id="wxTemp">--°</div>
                 <div class="weather-details" id="wxDetails">Loading...</div>
@@ -854,7 +854,13 @@ body.compact .greeting { font-size: 18px; }
 // CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
-const WEATHER_API = 'https://api.open-meteo.com/v1/forecast?latitude=44.98&longitude=-93.27&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/Chicago&forecast_days=1';
+// Weather — uses geolocation with Minneapolis fallback
+const WEATHER_FALLBACK_LAT = 44.98;
+const WEATHER_FALLBACK_LON = -93.27;
+const WEATHER_FALLBACK_CITY = 'Minneapolis, MN';
+function buildWeatherUrl(lat, lon) {
+  return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=1`;
+}
 const TREASURY_API_URL = '/api/treasury';
 const GOV_SUPABASE_URL = 'https://scknotsqkcheojiaewwh.supabase.co';
 const PAGE_SIZE = 40;
@@ -2348,7 +2354,34 @@ async function loadHealth() {
 
 async function loadWeather() {
   try {
-    const res = await fetch(WEATHER_API);
+    // Try geolocation first, fall back to Minneapolis
+    let lat = WEATHER_FALLBACK_LAT, lon = WEATHER_FALLBACK_LON, cityLabel = WEATHER_FALLBACK_CITY;
+    try {
+      const pos = await new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error('No geolocation'));
+        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000, maximumAge: 600000 });
+      });
+      lat = pos.coords.latitude;
+      lon = pos.coords.longitude;
+      // Reverse geocode for city name via Open-Meteo geocoding
+      try {
+        const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10`);
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          const addr = geoData.address || {};
+          const city = addr.city || addr.town || addr.village || addr.county || '';
+          const state = addr.state || '';
+          const stateAbbr = state.length > 2 ? (US_STATE_ABBR[state] || state) : state;
+          cityLabel = city + (stateAbbr ? ', ' + stateAbbr : '');
+        }
+      } catch (_) { cityLabel = `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`; }
+    } catch (_) { /* use fallback */ }
+
+    // Update widget title
+    const titleEl = document.querySelector('#weatherWidget .widget-title');
+    if (titleEl) titleEl.textContent = 'Weather — ' + cityLabel;
+
+    const res = await fetch(buildWeatherUrl(lat, lon));
     if (!res.ok) throw new Error('API returned ' + res.status);
     const d = await res.json();
     const cur = d.current || {};
@@ -2369,6 +2402,9 @@ async function loadWeather() {
     document.getElementById('wxDetails').innerHTML = '<div class="widget-error"><div class="err-msg">Weather unavailable</div><button class="retry-btn" onclick="loadWeather()">Retry</button></div>';
   }
 }
+
+// US state name → abbreviation for weather label
+const US_STATE_ABBR = {"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY"};
 function weatherEmoji(code) {
   if (code === 0) return '☀️'; if (code <= 3) return '⛅'; if (code <= 48) return '🌫️';
   if (code <= 57) return '🌦️'; if (code <= 67) return '🌧️'; if (code <= 77) return '🌨️';
@@ -2740,7 +2776,7 @@ async function loadMessages() {
 
 function renderMessages() {
   const el = document.getElementById('msgList');
-  const search = (document.getElementById('msgSearchInput') || {}).value || '';
+  const search = document.getElementById('msgSearchInput')?.value || '';
   const searchLower = search.toLowerCase();
 
   // Update tab active state and counts
@@ -2891,7 +2927,7 @@ function renderSettings() {
       <div class="settings-row">
         <div class="settings-row-info">
           <div class="settings-row-label">Show Weather</div>
-          <div class="settings-row-desc">Display Minneapolis, MN weather on home screen</div>
+          <div class="settings-row-desc">Display local weather on home screen (auto-detects location)</div>
         </div>
         <label class="settings-toggle"><input type="checkbox" ${appSettings.showWeather ? 'checked' : ''} onchange="toggleSetting('showWeather', this.checked)"><span class="slider"></span></label>
       </div>

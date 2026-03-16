@@ -1902,14 +1902,14 @@ async function _udSaveOwnership() {
   const propertyId = _udCache.ids?.property_id;
   if (!propertyId) { showToast('No property ID — cannot save ownership', 'error'); return; }
 
-  const recordedOwner = (document.getElementById('udOwnRecorded') || {}).value?.trim() || null;
-  const trueOwner = (document.getElementById('udOwnTrue') || {}).value?.trim() || null;
-  const ownerType = (document.getElementById('udOwnType') || {}).value || null;
-  const contactName = (document.getElementById('udOwnContact') || {}).value?.trim() || null;
-  const contactPhone = (document.getElementById('udOwnPhone') || {}).value?.trim() || null;
-  const contactEmail = (document.getElementById('udOwnEmail') || {}).value?.trim() || null;
-  const incState = (document.getElementById('udOwnState') || {}).value?.trim() || null;
-  const notes = (document.getElementById('udOwnNotes') || {}).value?.trim() || null;
+  const recordedOwner = document.getElementById('udOwnRecorded')?.value?.trim() || null;
+  const trueOwner = document.getElementById('udOwnTrue')?.value?.trim() || null;
+  const ownerType = document.getElementById('udOwnType')?.value || null;
+  const contactName = document.getElementById('udOwnContact')?.value?.trim() || null;
+  const contactPhone = document.getElementById('udOwnPhone')?.value?.trim() || null;
+  const contactEmail = document.getElementById('udOwnEmail')?.value?.trim() || null;
+  const incState = document.getElementById('udOwnState')?.value?.trim() || null;
+  const notes = document.getElementById('udOwnNotes')?.value?.trim() || null;
 
   const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
   let recordedOwnerId = _udCache.ids?.recorded_owner_id || null;

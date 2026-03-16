@@ -1353,9 +1353,9 @@ function renderDiaPropertyCard(item) {
     
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
-        const outcome = (q('#propOutcome') || {}).value;
-        const propId = (q('#propPropertyId') || {}).value;
-        const notes = (q('#propNotes') || {}).value;
+        const outcome = q('#propOutcome')?.value;
+        const propId = q('#propPropertyId')?.value;
+        const notes = q('#propNotes')?.value;
         
         if (!outcome) {
           showToast('Please select an outcome', 'warning');
@@ -1565,9 +1565,9 @@ function renderDiaLeaseCard(item) {
     
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
-        const outcome = (q('#leaseOutcome') || {}).value;
-        const propId = (q('#leasePropertyId') || {}).value;
-        const notes = (q('#leaseNotes') || {}).value;
+        const outcome = q('#leaseOutcome')?.value;
+        const propId = q('#leasePropertyId')?.value;
+        const notes = q('#leaseNotes')?.value;
         
         if (!outcome) {
           showToast('Please select an outcome', 'warning');
@@ -1972,17 +1972,17 @@ function _clInput(label, id, value, type) {
  */
 async function saveClinicLeadResearch(rec) {
   const data = {
-    recorded_owner: (document.getElementById('cl-recorded-owner') || {}).value || null,
-    true_owner: (document.getElementById('cl-true-owner') || {}).value || null,
-    state_of_incorporation: (document.getElementById('cl-incorporation') || {}).value || null,
-    principal_names: (document.getElementById('cl-principals') || {}).value || null,
-    contact_email: (document.getElementById('cl-email') || {}).value || null,
-    contact_phone: (document.getElementById('cl-phone') || {}).value || null,
-    phone_2: (document.getElementById('cl-phone-2') || {}).value || null,
-    mailing_address: (document.getElementById('cl-mailing') || {}).value || null,
-    mailing_address_2: (document.getElementById('cl-mailing-2') || {}).value || null,
-    pipeline_status: (document.getElementById('cl-pipeline-status') || {}).value || null,
-    notes: (document.getElementById('cl-notes') || {}).value || null
+    recorded_owner: document.getElementById('cl-recorded-owner')?.value || null,
+    true_owner: document.getElementById('cl-true-owner')?.value || null,
+    state_of_incorporation: document.getElementById('cl-incorporation')?.value || null,
+    principal_names: document.getElementById('cl-principals')?.value || null,
+    contact_email: document.getElementById('cl-email')?.value || null,
+    contact_phone: document.getElementById('cl-phone')?.value || null,
+    phone_2: document.getElementById('cl-phone-2')?.value || null,
+    mailing_address: document.getElementById('cl-mailing')?.value || null,
+    mailing_address_2: document.getElementById('cl-mailing-2')?.value || null,
+    pipeline_status: document.getElementById('cl-pipeline-status')?.value || null,
+    notes: document.getElementById('cl-notes')?.value || null
   };
 
   // 1. Save research outcome
@@ -2577,8 +2577,8 @@ function renderDiaDetailActivity(record) {
  * Save research status from detail panel
  */
 function saveDiaDetailResearch() {
-  const status = (document.getElementById('diaDetailStatus') || {}).value;
-  const notes = (document.getElementById('diaDetailNotes') || {}).value;
+  const status = document.getElementById('diaDetailStatus')?.value;
+  const notes = document.getElementById('diaDetailNotes')?.value;
   
   if (!status) {
     showToast('Please select a status', 'warning');
@@ -4331,10 +4331,10 @@ async function saveDiaOwnershipResolution() {
   const propertyId = record.property_id;
   if (!propertyId) { showToast('No property ID — cannot save ownership', 'error'); return; }
 
-  const recordedOwner = (q('#dia-own-recorded') || {}).value?.trim() || null;
-  const trueOwner     = (q('#dia-own-true') || {}).value?.trim() || null;
-  const ownerType     = (q('#dia-own-type') || {}).value || null;
-  const notes         = (q('#dia-own-notes') || {}).value?.trim() || null;
+  const recordedOwner = q('#dia-own-recorded')?.value?.trim() || null;
+  const trueOwner     = q('#dia-own-true')?.value?.trim() || null;
+  const ownerType     = q('#dia-own-type')?.value || null;
+  const notes         = q('#dia-own-notes')?.value?.trim() || null;
 
   // If there's an existing ownership record, PATCH it
   if (record.ownership_id) {
