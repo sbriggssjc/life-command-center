@@ -123,3 +123,12 @@ export function safeSelect(select) {
   if (!/^[a-zA-Z0-9_,.*:()\s]+$/.test(select)) return '*';
   return select;
 }
+
+// Validate a column name in filter parameters — must be alphanumeric/underscore only
+// Returns null if invalid, the column name if valid
+export function safeColumn(col) {
+  if (!col || typeof col !== 'string') return null;
+  // Column names: only letters, digits, underscores
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col)) return null;
+  return col;
+}

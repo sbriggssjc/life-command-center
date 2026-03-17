@@ -743,7 +743,7 @@ async function searchEntities(query, dropId, inputId, onSelect) {
   }
   
   dropEl.innerHTML = results.map((r, i) => `
-    <div class="ac-item" onclick="selectAC('${inputId}', '${r.value.replace(/'/g, "\\'")}', '${dropId}')">${esc(r.label)}</div>
+    <div class="ac-item" onclick='selectAC(${safeJSON(inputId)}, ${safeJSON(r.value)}, ${safeJSON(dropId)})'>${esc(r.label)}</div>
   `).join('');
   
   dropEl.style.display = 'block';
