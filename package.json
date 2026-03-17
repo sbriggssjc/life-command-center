@@ -1,0 +1,20 @@
+{
+  "name": "life-command-center",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Full-stack operational platform — shared team queue, inbox triage, entity management, sync orchestration",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "lint": "eslint api/ --ext .js",
+    "test": "node --test test/",
+    "test:watch": "node --test --watch test/"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "vercel": "^37.0.0"
+  }
+}
