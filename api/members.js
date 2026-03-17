@@ -11,6 +11,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { withErrorHandler } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 
 const OPS_URL = process.env.OPS_SUPABASE_URL;
@@ -35,7 +36,7 @@ async function opsQuery(method, path, body) {
 
 const VALID_ROLES = ROLES;
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
 
   if (!OPS_URL || !OPS_KEY) {
@@ -226,4 +227,4 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+});

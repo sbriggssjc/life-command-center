@@ -15,6 +15,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { withErrorHandler } from './_shared/ops-db.js';
 
 const OPS_URL = process.env.OPS_SUPABASE_URL;
 const OPS_KEY = process.env.OPS_SUPABASE_KEY;
@@ -40,7 +41,7 @@ async function opsQuery(method, path, body) {
   return { ok: res.ok, status: res.status, data: text ? JSON.parse(text) : null };
 }
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
 
   if (!OPS_URL || !OPS_KEY) {
@@ -240,4 +241,4 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+});

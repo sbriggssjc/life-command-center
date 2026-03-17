@@ -2036,6 +2036,15 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
     const freshOutcomes = await diaQuery('research_queue_outcomes', '*', { limit: 500 });
     diaData.researchOutcomes = freshOutcomes || [];
 
+    canonicalBridge('log_activity', {
+      title: 'Clinic lead outcome recorded',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(clinicId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      metadata: { clinic_id: clinicId, status: status, notes: notes, property_id: propertyId }
+    });
+
     return true;
   } catch (err) {
     console.error('saveClinicLeadOutcome error:', err);
@@ -2075,14 +2084,22 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
     }
 
     showToast('Outcome saved', 'success');
-    
+    canonicalBridge('log_activity', {
+      title: 'Research outcome saved',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(clinicId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes }
+    });
+
     // Clear selection and reload data
     if (queueType === 'property_review') {
       diaPropertyFilter.selectedIdx = undefined;
     } else {
       diaLeaseFilter.selectedIdx = undefined;
     }
-    
+
     // Reload data and re-render to advance to next record
     await loadDiaData();
     renderDiaTab();
@@ -4166,6 +4183,14 @@ async function saveSaleTransaction() {
         Object.assign(window.diaSalesComps[idx], data);
       }
     }
+    canonicalBridge('log_activity', {
+      title: 'Sale transaction saved',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(record.sale_id),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      metadata: { sale_id: record.sale_id, buyer: buyer, seller: seller, sold_price: price, sale_date: saleDate }
+    });
   }
 }
 
@@ -4201,6 +4226,15 @@ async function saveSaleProperty() {
         Object.assign(window.diaSalesComps[idx], data);
       }
     }
+    canonicalBridge('log_activity', {
+      title: 'Sale property updated',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(record.property_id),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      property_name: address || null,
+      metadata: { property_id: record.property_id, address: address, city: city, state: state, tenant: tenant }
+    });
   }
 }
 
@@ -4218,6 +4252,14 @@ async function saveSaleOwner(ownershipId, idx) {
   const success = await diaPatchRecord('ownership_history', 'ownership_id', ownershipId, data);
   if (success) {
     showToast('Owner record saved successfully', 'success');
+    canonicalBridge('save_ownership', {
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(ownershipId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      owner_type: ownerType,
+      metadata: { ownership_id: ownershipId, owner_type: ownerType, ownership_source: ownerSource, notes: notes }
+    });
   }
 }
 
@@ -4265,6 +4307,13 @@ async function saveSaleResearch() {
     }
 
     showToast('Research resolution saved', 'success');
+    canonicalBridge('complete_research', {
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(record.clinic_id),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      metadata: { queue_type: 'sales_comp', clinic_id: record.clinic_id, status: status, property_id: record.property_id, notes: notes }
+    });
   } catch (err) {
     console.error('saveSaleResearch error:', err);
     showToast('Error saving research', 'error');
@@ -4370,4 +4419,14 @@ async function saveDiaOwnershipResolution() {
   }
 
   showToast('Ownership resolution saved!', 'success');
+  canonicalBridge('save_ownership', {
+    domain: 'dialysis',
+    source_system: 'dia_supabase',
+    external_id: String(propertyId),
+    user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+    owner_name: recordedOwner,
+    true_owner_name: trueOwner,
+    owner_type: ownerType,
+    metadata: { property_id: propertyId, clinic_id: record.clinic_id || record.medicare_id || null, notes: notes }
+  });
 }

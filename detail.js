@@ -2087,6 +2087,17 @@ async function _udSaveOwnership() {
     }
 
     showToast('Ownership resolution saved!', 'success');
+    canonicalBridge('save_ownership', {
+      domain: db === 'gov' ? 'government' : 'dialysis',
+      external_id: String(propertyId),
+      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      owner_name: recordedOwner,
+      true_owner_name: trueOwner,
+      owner_type: ownerType,
+      contact_name: contactName,
+      notes: notes
+    });
     // Refresh the detail panel
     refreshDetailPanel();
   } catch (e) {
@@ -2130,6 +2141,15 @@ async function _intelSavePriorSale() {
     });
     if (!res.ok) { const err = await res.text(); console.error('Sale save error:', err); showToast('Error saving sale: ' + res.status, 'error'); return; }
     showToast('Prior sale saved!', 'success');
+    canonicalBridge('log_activity', {
+      title: 'Prior sale recorded',
+      domain: db === 'gov' ? 'government' : 'dialysis',
+      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      external_id: String(propertyId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
+      metadata: { sale_date: saleDate, sale_price: salePrice, buyer: buyer, seller: seller }
+    });
   } catch (e) {
     console.error('Prior sale save error:', e);
     showToast('Error: ' + e.message, 'error');
@@ -2175,6 +2195,15 @@ async function _intelSaveLoan() {
     });
     if (!res.ok) { const err = await res.text(); console.error('Loan save error:', err); showToast('Error saving loan: ' + res.status, 'error'); return; }
     showToast('Loan info saved!', 'success');
+    canonicalBridge('log_activity', {
+      title: 'Loan recorded',
+      domain: db === 'gov' ? 'government' : 'dialysis',
+      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      external_id: String(propertyId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
+      metadata: { lender: lender, loan_amount: loanAmount, loan_type: loanType, maturity_date: matDate }
+    });
   } catch (e) {
     console.error('Loan save error:', e);
     showToast('Error: ' + e.message, 'error');
@@ -2209,6 +2238,15 @@ async function _intelSaveCashFlow() {
     });
     if (!res.ok) { const err = await res.text(); console.error('Cash flow update error:', err); showToast('Error saving cash flow: ' + res.status, 'error'); return; }
     showToast('Cash flow / valuation saved!', 'success');
+    canonicalBridge('log_activity', {
+      title: 'Cash flow estimate saved',
+      domain: db === 'gov' ? 'government' : 'dialysis',
+      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      external_id: String(propertyId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
+      metadata: { annual_rent: annualRent, estimated_value: estValue, cap_rate: currentCapRate }
+    });
   } catch (e) {
     console.error('Cash flow save error:', e);
     showToast('Error: ' + e.message, 'error');
@@ -2251,6 +2289,15 @@ async function _intelSaveNotes() {
     });
     if (!res.ok) { const err = await res.text(); console.error('Notes save error:', err); showToast('Error saving notes: ' + res.status, 'error'); return; }
     showToast('Research notes saved!', 'success');
+    canonicalBridge('log_activity', {
+      title: 'Research notes updated',
+      domain: db === 'gov' ? 'government' : 'dialysis',
+      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      external_id: String(propertyId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
+      metadata: { notes: notes, source: source, date_found: dateFound }
+    });
   } catch (e) {
     console.error('Notes save error:', e);
     showToast('Error: ' + e.message, 'error');

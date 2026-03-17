@@ -16,9 +16,9 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps } from './_shared/ops-db.js';
+import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -58,7 +58,7 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `${req.method} not allowed` });
-}
+});
 
 // ============================================================================
 // LIST — all domains for workspace

@@ -10,13 +10,13 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, paginationParams, requireOps } from './_shared/ops-db.js';
+import { opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import {
   canTransitionInbox, inboxTransitionEffects, buildTransitionActivity,
   INBOX_TRANSITIONS, PRIORITIES, VISIBILITY_SCOPES, INBOX_SOURCE_TYPES, isValidEnum
 } from './_shared/lifecycle.js';
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -171,7 +171,7 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+});
 
 /**
  * Promote an inbox item to an action item.

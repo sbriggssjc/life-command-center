@@ -17,7 +17,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps } from './_shared/ops-db.js';
+import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 
 // Edge function base URL (existing ai-copilot deployment)
@@ -41,7 +41,7 @@ function connectorHeaders(connector) {
   return headers;
 }
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -83,7 +83,7 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+});
 
 // ============================================================================
 // SYNC JOB HELPERS

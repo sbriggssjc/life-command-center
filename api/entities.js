@@ -15,10 +15,10 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, paginationParams, requireOps } from './_shared/ops-db.js';
+import { opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from './_shared/lifecycle.js';
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -430,7 +430,7 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+});
 
 /** Pick only fields relevant to the entity type */
 function pickEntityFields(type, fields) {
