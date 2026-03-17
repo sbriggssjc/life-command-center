@@ -1,5 +1,11 @@
 // Serverless proxy for Government Supabase queries
 // Keeps service_role key server-side — never exposed to browser
+// Hardened with table allowlist and input validation
+import {
+  GOV_READ_TABLES, GOV_WRITE_TABLES,
+  isAllowedTable, safeLimit, safeSelect
+} from './_shared/allowlist.js';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
@@ -21,6 +27,11 @@ export default async function handler(req, res) {
 
   // Handle POST/PATCH requests (for inserts/upserts/updates and RPC calls)
   if (req.method === 'POST' || req.method === 'PATCH') {
+    // Validate table against write allowlist
+    if (!isAllowedTable(table, GOV_WRITE_TABLES)) {
+      return res.status(403).json({ error: `Write access denied for table: ${table}` });
+    }
+
     const isRpc = table.startsWith('rpc/');
     // Honor client's Prefer header — needed for POST return=representation (ownership save)
     const clientPrefer = req.headers['prefer'] || '';
@@ -84,9 +95,14 @@ export default async function handler(req, res) {
     }
   }
 
-  // Build Supabase REST URL
+  // Validate table against read allowlist
+  if (!isAllowedTable(table, GOV_READ_TABLES)) {
+    return res.status(403).json({ error: `Read access denied for table: ${table}` });
+  }
+
+  // Build Supabase REST URL with validated inputs
   const url = new URL(`${govUrl}/rest/v1/${table}`);
-  url.searchParams.set('select', select || '*');
+  url.searchParams.set('select', safeSelect(select));
 
   if (filter) {
     // filter format: "column=eq.value" or "column=value"
@@ -99,7 +115,7 @@ export default async function handler(req, res) {
   }
 
   if (order) url.searchParams.set('order', order);
-  if (limit !== undefined) url.searchParams.set('limit', limit);
+  url.searchParams.set('limit', safeLimit(limit));
   if (offset !== undefined) url.searchParams.set('offset', offset);
 
   try {
