@@ -45,7 +45,11 @@
 | `api/queue.js` | 155 | Unified queue: my work, team, inbox, counts, entity timeline |
 | `api/sync.js` | 380 | Sync orchestration: ingest emails/calendar/SF, outbound retries, health |
 | `api/workflows.js` | 420 | Workflow engine: promote, link SF, research follow-up, reassign, escalate, bulk ops |
-| `ops.js` | 480 | Operational UI: My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health |
+| `ops.js` | 520 | Operational UI: My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health |
+| `styles.css` | 830 | Extracted CSS (was inline in index.html) |
+| `app.js` | 2865 | Core JS: nav, calendar, weather, messages, settings, copilot (was inline in index.html) |
+| `api/queue-v2.js` | 250 | Paginated queue endpoints with server-side aggregation and perf logging |
+| `schema/009_performance.sql` | 200 | Materialized views, 25+ indexes, perf_metrics table, pg_trgm |
 | `api/config.js` | 15 | Connection status endpoint |
 | `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
 | `schema/007_queue_views.sql` | 240 | Unified queue views for operational surfaces |
@@ -276,12 +280,12 @@
 - [x] Manager oversight view — team member stats, open escalations, unassigned work alert
 
 ### Phase 6: Performance and Operational Optimization
-- [ ] Split monolithic frontend into modules
-- [ ] Queue-first backend endpoints
-- [ ] Server-side aggregations / materialized views
-- [ ] Pagination and virtualization
-- [ ] Indexes on key fields
-- [ ] Client/server performance instrumentation
+- [x] Split monolithic frontend — index.html 3955→372 LOC (CSS→`styles.css`, JS→`app.js`)
+- [x] Queue-first backend — `api/queue-v2.js` with page/per_page pagination, sort, filter params
+- [x] Server-side aggregations — `mv_work_counts`, `mv_user_work_counts` materialized views with concurrent refresh
+- [x] Pagination — offset pagination on all queue-v2 views, cursor pagination on entity_timeline
+- [x] Indexes — 25+ partial/composite indexes on action_items, inbox_items, entities, activity_events, sync tables
+- [x] Client/server performance instrumentation — `opsPerf()` timing, `perf_metrics` table, Server-Timing headers, sendBeacon reporting
 
 ### Phase 7: Domain Expansion Framework
 - [ ] Domain registry and onboarding contract
@@ -312,6 +316,9 @@
 | 2026-03-17 | Auto-watch pattern | Creators and assignees auto-subscribed; escalation adds both parties |
 | 2026-03-17 | Phase 5 UX redesign | 5+More nav, queue-first pages, freshness indicators, quick-action controls |
 | 2026-03-17 | ops.js module | 480 LOC: My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health |
+| 2026-03-17 | Frontend split | index.html 3955→372 LOC: CSS→styles.css (830 LOC), JS→app.js (2865 LOC) |
+| 2026-03-17 | Materialized views | mv_work_counts + mv_user_work_counts replace expensive joins; concurrent refresh |
+| 2026-03-17 | queue-v2 endpoint | Paginated queues with Server-Timing headers; auto-fallback to v1 in ops.js |
 
 ---
 
