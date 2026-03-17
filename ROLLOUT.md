@@ -367,7 +367,7 @@ The goal of this section is to convert the remaining open concerns into an imple
   - ✅ Bridge ensures canonical timeline reflects domain saves without rewriting legacy code.
   - ✅ Old and new workflow layers stay in sync via fire-and-forget bridge calls.
 
-### RG5: Complete UX integration and team-operating polish
+### RG5: Complete UX integration and team-operating polish ✅ RESOLVED
 - **Problem**: Core operational pages exist, but the broader app still needs consistency around user context, team filtering, and workflow affordances.
 - **Impact**: Medium-High
 - **Implementation**:
@@ -386,6 +386,15 @@ The goal of this section is to convert the remaining open concerns into an imple
   - Team members can understand ownership, visibility, and next step at a glance.
   - Managers can operate from Queue/Metrics/Sync Health without dropping into source-specific tabs.
   - Degraded states are understandable and actionable.
+- **Resolution**: Implemented in `ops.js` + `styles.css`:
+  - `workspaceContextHTML()` — context bar showing user/role/workspace on all ops pages
+  - `visBadge()` — Private/Assigned/Shared visibility badges on all queue and inbox items
+  - Advanced team queue filters — domain, assignee, visibility dropdown selects with client-side filtering
+  - `degradedBannerHTML()` — 4 degraded state types (no workspace, no connectors, sync unhealthy, dev mode)
+  - `emptyStateHTML()` — detailed empty states with contextual guidance and action buttons
+  - Normalized quick actions — Start/Complete/Wait/Resume/Assign/Reassign/Escalate on all queue items
+  - Loading feedback on all workflow actions (transition, reassign, escalate, bulk triage, promote)
+  - Metrics page wired to workspace context bar for manager overview
 
 ### RG6: Expand performance work from infrastructure to real workload validation
 - **Problem**: performance scaffolding exists, but real-world latency/load characteristics are not yet documented or validated.

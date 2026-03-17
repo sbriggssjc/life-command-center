@@ -715,6 +715,53 @@ body.compact .greeting { font-size: 18px; }
 .triage-bar input[type="checkbox"] { accent-color: var(--accent); }
 .triage-bar .triage-count { font-weight: 600; color: var(--text); }
 .triage-bar .triage-actions { margin-left: auto; display: flex; gap: 6px; }
+
+/* Workspace context bar — sits below header on ops pages */
+.ws-context { display: flex; align-items: center; gap: 10px; padding: 6px 16px; background: var(--s2); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text2); flex-shrink: 0; }
+.ws-context-name { font-weight: 600; color: var(--text); }
+.ws-context-role { padding: 1px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.ws-context-role.owner { background: color-mix(in srgb, var(--purple) 20%, transparent); color: var(--purple); }
+.ws-context-role.manager { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.ws-context-role.operator { background: color-mix(in srgb, var(--green) 20%, transparent); color: var(--green); }
+.ws-context-role.viewer { background: color-mix(in srgb, var(--text3) 20%, transparent); color: var(--text3); }
+.ws-context-sep { color: var(--text3); }
+.ws-context-sync { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+
+/* Visibility badges on queue items */
+.q-badge.vis-private { background: color-mix(in srgb, var(--purple) 15%, transparent); color: var(--purple); }
+.q-badge.vis-assigned { background: color-mix(in srgb, var(--cyan) 15%, transparent); color: var(--cyan); }
+.q-badge.vis-shared { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+
+/* Advanced filter row */
+.ops-filters-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; align-items: center; }
+.ops-filter-select { font-size: 11px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--s1); color: var(--text2); appearance: auto; cursor: pointer; }
+.ops-filter-select:focus { border-color: var(--accent); outline: none; }
+.ops-filter-label { font-size: 11px; color: var(--text3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+
+/* Degraded state banner */
+.degraded-banner { background: color-mix(in srgb, var(--orange) 8%, var(--s1)); border: 1px solid color-mix(in srgb, var(--orange) 25%, var(--border)); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--text2); }
+.degraded-banner .degraded-icon { font-size: 18px; flex-shrink: 0; line-height: 1; }
+.degraded-banner .degraded-body { flex: 1; }
+.degraded-banner .degraded-title { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.degraded-banner .degraded-action { color: var(--accent); cursor: pointer; font-weight: 600; font-size: 12px; margin-top: 4px; display: inline-block; }
+.degraded-banner .degraded-action:hover { text-decoration: underline; }
+
+/* Empty state improvements */
+.ops-empty-detailed { text-align: center; padding: 48px 24px; color: var(--text2); }
+.ops-empty-detailed svg { width: 56px; height: 56px; stroke: var(--text3); margin: 0 auto 16px; display: block; }
+.ops-empty-detailed .empty-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.ops-empty-detailed .empty-desc { font-size: 13px; max-width: 320px; margin: 0 auto 12px; line-height: 1.5; }
+.ops-empty-detailed .empty-action { display: inline-block; padding: 6px 16px; border-radius: 8px; background: var(--accent2); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; border: none; }
+
+/* Feedback toast enhancements — loading spinner variant */
+.toast-loading { display: inline-flex; align-items: center; gap: 6px; }
+.toast-loading .spinner { width: 14px; height: 14px; }
+
+/* Pager styling */
+.pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px 0; font-size: 12px; color: var(--text2); }
+.pager button { font-size: 11px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--s2); color: var(--text2); cursor: pointer; }
+.pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.pager button:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
