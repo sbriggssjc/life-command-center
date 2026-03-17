@@ -298,7 +298,7 @@ create or replace view v_research_queue as
 
 create or replace view v_work_counts as
   select
-    workspace_id,
+    w.id as workspace_id,
     (select count(*) from action_items
      where action_items.workspace_id = w.id
        and status in ('open', 'in_progress', 'waiting')) as open_actions,
