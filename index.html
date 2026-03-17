@@ -120,6 +120,12 @@
               <div id="categoryMetrics"><div class="loading"><span class="spinner"></span></div></div>
             </div>
 
+            <!-- Team Pulse — visible to managers/owners when canonical model is active -->
+            <div class="widget" id="teamPulseWidget" style="display:none">
+              <div class="widget-title">Team Pulse</div>
+              <div id="teamPulseContent"></div>
+            </div>
+
             <!-- Today's Schedule - Time Block Calendar -->
             <div class="widget">
               <div class="widget-title">Today's Schedule</div>
@@ -129,12 +135,12 @@
           <div class="home-sidebar">
             <!-- Quick Tasks -->
             <div class="widget">
-              <div class="widget-title">Priority Tasks</div>
+              <div class="widget-title" id="priorityTasksTitle">Priority Tasks</div>
               <div id="priorityTasks"><div class="loading"><span class="spinner"></span></div></div>
             </div>
-            <!-- Recent Emails -->
+            <!-- Recent Emails / Inbox -->
             <div class="widget">
-              <div class="widget-title">Flagged Emails</div>
+              <div class="widget-title" id="recentEmailsTitle">Flagged Emails</div>
               <div id="recentEmails"><div class="loading"><span class="spinner"></span></div></div>
             </div>
           </div>
