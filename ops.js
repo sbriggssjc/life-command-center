@@ -1,12 +1,35 @@
 // ============================================================================
 // ops.js — Operational UI Module
-// Life Command Center — Phase 5: UX and Interaction Redesign
+// Life Command Center — Phase 5/6: UX Redesign + Performance Optimization
 //
 // Renders: My Work, Team Queue, Inbox Triage, Entities, Research,
 //          Metrics, Sync Health
 //
 // Depends on: LCC_USER (from index.html), queue/inbox/entity/sync APIs
+// Uses queue-v2 endpoints (paginated) when available, falls back to queue v1
 // ============================================================================
+
+// --- Performance instrumentation ---
+const opsPerfLog = [];
+
+function opsPerf(label) {
+  const t0 = performance.now();
+  return {
+    end() {
+      const dur = Math.round(performance.now() - t0);
+      opsPerfLog.push({ label, dur, ts: Date.now() });
+      if (opsPerfLog.length > 200) opsPerfLog.shift();
+      if (dur > 500) console.warn(`[ops perf] ${label}: ${dur}ms`);
+      // Report to server (fire-and-forget)
+      if (LCC_USER.workspace_id && dur > 100) {
+        navigator.sendBeacon?.('/api/queue-v2?view=_perf', JSON.stringify({
+          metric_type: 'page_load', endpoint: label, duration_ms: dur
+        }));
+      }
+      return dur;
+    }
+  };
+}
 
 // --- State ---
 let opsMyWorkData = null;
@@ -23,17 +46,58 @@ let opsEntityFilter = 'all';      // all | person | company | property | clinic
 let opsResearchFilter = 'active'; // active | completed | all
 let opsInboxSelected = new Set();
 
+// --- V2 endpoint preference (uses paginated queue-v2 when available) ---
+const V2_MAP = {
+  '/api/queue?view=my_work': '/api/queue-v2?view=my_work',
+  '/api/queue?view=team_queue': '/api/queue-v2?view=team_queue',
+  '/api/queue?view=inbox': '/api/queue-v2?view=inbox',
+  '/api/queue?view=research_queue': '/api/queue-v2?view=research',
+  '/api/queue?view=work_counts': '/api/queue-v2?view=work_counts'
+};
+let useV2 = true; // Auto-degrades to v1 if v2 returns 404
+
+// --- Pagination state for infinite scroll / page navigation ---
+let opsPagination = {};
+
 // --- API helper ---
 async function opsApi(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+
+  // Try v2 endpoint first (paginated, instrumented)
+  const basePath = path.split('&')[0];
+  const v2Path = useV2 ? V2_MAP[basePath] : null;
+  const extraParams = path.includes('&') ? '&' + path.split('&').slice(1).join('&') : '';
+  const finalPath = v2Path ? v2Path + extraParams : path;
+
   try {
-    const res = await fetch(path, { headers, ...opts });
+    const perf = opsPerf(`api:${finalPath.split('?')[1]?.substring(0, 40) || finalPath}`);
+    const res = await fetch(finalPath, { headers, ...opts });
+
+    // If v2 returned 404, fall back to v1
+    if (v2Path && res.status === 404) {
+      useV2 = false;
+      console.log('[ops] queue-v2 not available, falling back to v1');
+      perf.end();
+      return opsApi(path, opts);
+    }
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
+      perf.end();
       return { ok: false, status: res.status, error: err.error || res.statusText };
     }
     const data = await res.json();
+    const dur = perf.end();
+
+    // Store pagination metadata if present
+    if (data.pagination) opsPagination[basePath] = data.pagination;
+
+    // Extract server timing
+    const serverTiming = res.headers.get('X-Response-Time');
+    if (serverTiming) data._serverTime = serverTiming;
+    data._clientTime = dur + 'ms';
+
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -119,13 +183,15 @@ function syncBannerHTML(connectors) {
 // ============================================================================
 // MY WORK — personal queue of assigned/owned items
 // ============================================================================
-async function renderMyWork() {
+async function renderMyWork(page) {
   const el = document.getElementById('myWorkContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:my_work');
 
+  const pageParam = page ? `&page=${page}&per_page=25` : '&limit=100';
   const [qRes, cRes] = await Promise.all([
-    opsApi('/api/queue?view=my_work&limit=100'),
+    opsApi(`/api/queue?view=my_work${pageParam}`),
     opsApi('/api/connectors?action=list')
   ]);
 
@@ -138,6 +204,7 @@ async function renderMyWork() {
   const connectors = cRes.ok ? (cRes.data?.connectors || cRes.data || []) : [];
 
   renderMyWorkList(el, connectors);
+  perf.end();
 }
 
 function renderMyWorkList(el, connectors) {
@@ -167,6 +234,9 @@ function renderMyWorkList(el, connectors) {
     items.forEach(item => { html += queueItemHTML(item, 'my_work'); });
   }
 
+  // Pagination controls (if using v2)
+  html += paginationHTML('/api/queue?view=my_work', 'renderMyWork');
+
   el.innerHTML = html;
 }
 
@@ -183,6 +253,7 @@ async function renderTeamQueue() {
   const el = document.getElementById('teamQueueContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:team_queue');
 
   const [qRes, uRes] = await Promise.all([
     opsApi('/api/queue?view=team_queue&limit=100'),
@@ -224,6 +295,7 @@ async function renderTeamQueue() {
   }
 
   el.innerHTML = html;
+  perf.end();
 }
 
 // ============================================================================
@@ -233,6 +305,7 @@ async function renderInboxTriage() {
   const el = document.getElementById('inboxContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:inbox_triage');
 
   const res = await opsApi(`/api/inbox?action=list&status=${opsInboxFilter === 'all' ? '' : opsInboxFilter}&limit=100`);
 
@@ -278,6 +351,7 @@ async function renderInboxTriage() {
   }
 
   el.innerHTML = html;
+  perf.end();
 }
 
 function inboxItemHTML(item, idx) {
@@ -379,6 +453,7 @@ async function renderEntitiesPage() {
   const el = document.getElementById('entitiesContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:entities');
 
   const res = await opsApi('/api/entities?action=list&limit=100');
   if (!res.ok) {
@@ -424,6 +499,7 @@ async function renderEntitiesPage() {
   }
 
   el.innerHTML = html;
+  perf.end();
 }
 
 function viewEntity(entityId) {
@@ -442,6 +518,7 @@ async function renderResearchPage() {
   const el = document.getElementById('researchContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:research');
 
   const res = await opsApi('/api/queue?view=research_queue&limit=100');
   if (!res.ok) {
@@ -492,6 +569,7 @@ async function renderResearchPage() {
   }
 
   el.innerHTML = html;
+  perf.end();
 }
 
 async function completeResearch(id) {
@@ -523,6 +601,7 @@ async function renderMetricsPage() {
   const el = document.getElementById('metricsContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:metrics');
 
   const [countsRes, oversightRes] = await Promise.all([
     opsApi('/api/queue?view=work_counts'),
@@ -585,6 +664,7 @@ async function renderMetricsPage() {
   }
 
   el.innerHTML = html;
+  perf.end();
 }
 
 function metricCardHTML(label, value, sub, colorClass) {
@@ -602,6 +682,7 @@ async function renderSyncHealthPage() {
   const el = document.getElementById('syncHealthContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:sync_health');
 
   const [connRes, healthRes] = await Promise.all([
     opsApi('/api/connectors?action=list'),
@@ -671,6 +752,7 @@ async function renderSyncHealthPage() {
   }
 
   el.innerHTML = html;
+  perf.end();
 }
 
 async function triggerSync(connectorType) {
@@ -800,6 +882,17 @@ function countByStatus(items) {
 
 function countOverdue(items) {
   return items.filter(i => isOverdue(i.due_date) && !['completed', 'cancelled'].includes(i.status)).length;
+}
+
+// --- Pagination controls HTML ---
+function paginationHTML(paginationKey, refreshFn) {
+  const p = opsPagination[paginationKey];
+  if (!p || p.total_pages <= 1) return '';
+  return `<div class="pager">
+    <button ${p.has_prev ? `onclick="${refreshFn}(${p.page - 1})"` : 'disabled'}>Prev</button>
+    <span>Page ${p.page} of ${p.total_pages} (${p.total} items)</span>
+    <button ${p.has_next ? `onclick="${refreshFn}(${p.page + 1})"` : 'disabled'}>Next</button>
+  </div>`;
 }
 
 function esc(s) {
