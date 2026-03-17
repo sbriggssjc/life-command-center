@@ -259,6 +259,207 @@
 - [x] Add sync error recording with retry support — `POST /api/sync?action=retry&error_id=`
 - [x] Add background canonical sync trigger to frontend — `triggerCanonicalSync()` fires after initial load
 
+---
+
+## Codex Audit Follow-Up (2026-03-17)
+
+### What this rebuild now appears to cover
+- Multi-user foundation exists in schema/API shape: workspaces, memberships, connector accounts, canonical entities, operational records, queue views, watchers, escalations, and domain registry are all present.
+- The UI has been materially shifted toward the target operating model: `My Work`, `Queue`, `Inbox`, `Research`, `Metrics`, and `Sync Health` now exist as first-class operational surfaces.
+- Performance work is materially improved versus the previous monolith: extracted CSS/JS, paginated queue endpoints, materialized count views, indexing, and perf instrumentation are all in place.
+- Domain scaling is no longer purely ad hoc: Government and Dialysis can now be represented through a common domain registration/mapping system, with starter templates for future verticals.
+
+### Remaining gaps or areas to verify before calling the master plan complete
+- Connector policy alignment is only partially closed. The current sync layer still targets a single shared `EDGE_FUNCTION_URL` and will need verification that Power Automate / SSO-mediated flows are truly per-user in production, not just per-user in the canonical model.
+- Auth is still transitional by design. `api/_shared/auth.js` intentionally allows a default dev user when auth is not configured; that is useful for migration, but the rebuild should not be considered production-complete until that fallback is removed or feature-flagged off outside development.
+- Existing Government and Dialysis domain modules remain largely intact and large. The operational shell is improved, but there is still substantial legacy domain UI/logic outside the new queue-first layer that should be rationalized over time.
+- Cross-system reconciliation quality still needs validation with live data. The code now has sync jobs, errors, retries, and health views, but successful real-world coverage for Outlook, Salesforce, and promoted/shared workflows should be verified with end-to-end testing across multiple users.
+- Data governance and visibility policies need a production checklist. The schema/RLS/auth model exists, but the final review should confirm private vs assigned vs shared behavior against actual organizational expectations before broad team rollout.
+
+### Recommended next verification pass
+- Run schema migrations 001-010 in a real ops database and verify queue/materialized views.
+- Validate per-user connector behavior with at least two real team members and confirm no cross-user leakage.
+- Test the full loop for: flagged email -> inbox -> promote -> assign -> resolve -> external system write-back.
+- Test the full loop for: Salesforce task -> inbox/shared action -> reassignment/escalation -> activity timeline.
+- Remove or gate transitional auth before production rollout.
+
+---
+
+## Remaining Gap Closure Plan
+
+### Summary
+The Phase 0-7 rebuild appears to have closed most architectural gaps. The remaining work is concentrated in five areas:
+- production auth and security hardening
+- live connector validation against real organizational policy constraints
+- data quality and entity reconciliation
+- legacy-domain convergence into the new operational shell
+- release validation, rollout controls, and operational readiness
+
+The goal of this section is to convert the remaining open concerns into an implementation sequence that can be executed and verified.
+
+### RG1: Remove transitional auth and complete production security hardening
+- **Problem**: `api/_shared/auth.js` still supports default dev-user fallback when auth is not configured. This is appropriate for migration but not for production.
+- **Impact**: Critical
+- **Implementation**:
+  - Add an explicit environment flag for development-only transitional auth.
+  - Default production behavior to hard-fail when JWT or approved API-key auth is unavailable.
+  - Audit all protected endpoints to ensure workspace membership and role checks are enforced consistently.
+  - Verify RLS assumptions match API-layer role names and visibility semantics.
+  - Normalize role vocabulary across schema, docs, middleware, and frontend. Current code/docs show inconsistent sets (`owner/admin/manager/member/viewer` vs `owner/manager/operator/viewer`).
+  - Review `gov-query.js` and `dia-query.js` to ensure "hardened" behavior truly restricts unsafe access patterns, especially POST/PATCH surfaces.
+- **Acceptance**:
+  - No production request succeeds through synthetic fallback auth.
+  - Role names and allowed actions are consistent across schema/API/docs.
+  - Legacy proxies cannot be used to mutate arbitrary domain tables without approved access paths.
+
+### RG2: Validate real per-user connector behavior under Power Automate and SSO
+- **Problem**: The code now models per-user connectors, but actual Outlook/Salesforce behavior still depends on shared external edge-function and Power Automate infrastructure.
+- **Impact**: Critical
+- **Implementation**:
+  - Map the exact production connector chain for each source:
+    user identity -> Power Automate flow / SSO context -> edge function -> LCC sync API -> canonical tables.
+  - Confirm whether the current edge-function endpoints actually support user-scoped credentials/session context or whether they still return globally shared data.
+  - Add connector metadata needed for policy verification:
+    source account identifier, flow identifier, last successful authenticated user context, scope granted, execution method.
+  - Extend `sync_jobs` / `sync_errors` metadata to capture Power Automate flow run IDs and source-user identifiers where available.
+  - Add a connector verification checklist for onboarding each team member:
+    Outlook flagged mail
+    Outlook calendar
+    Salesforce tasks/activities
+    outbound write-back path
+  - Add production tests for connector isolation:
+    one user's email/task/calendar items must not appear in another user's private views unless explicitly promoted/shared.
+- **Acceptance**:
+  - Two or more real users can sync simultaneously with no cross-user leakage.
+  - Sync health surfaces show real per-user/per-connector status from production pathways.
+  - Outbound and inbound behavior is proven under the organization's actual SSO / Power Automate constraints.
+
+### RG3: Close data quality and entity reconciliation gaps
+- **Problem**: External identity dedup exists, but broader canonicalization and fuzzy/alias-based reconciliation still appear incomplete.
+- **Impact**: High
+- **Implementation**:
+  - Add `entity_aliases` / canonical-name support for known organization variants.
+  - Add optional fuzzy-match review queue for likely duplicate companies/contacts/assets that do not share the same external ID.
+  - Add merge workflows for canonical entities with audit logging.
+  - Define source precedence rules when fields conflict across Government, Dialysis, Salesforce, Outlook, and future domains.
+  - Add data quality dashboards for:
+    unlinked external identities
+    duplicate candidates
+    entities missing required fields
+    stale sync-linked entities
+    orphaned action/inbox items without canonical links where links are expected
+  - Revisit the previously documented data issues in `APP_AUDIT_REMAINING_ISSUES.md` and classify which should be solved in domain data vs canonical ops model.
+- **Acceptance**:
+  - Duplicate candidate detection exists and is actionable.
+  - Canonical entities can be merged without history loss.
+  - High-value shared entities have measurable completeness and link coverage.
+
+### RG4: Converge legacy Government and Dialysis modules with the new shell
+- **Problem**: The queue-first operational shell is in place, but large legacy domain modules remain largely unchanged and still carry older workflow assumptions.
+- **Impact**: High
+- **Implementation**:
+  - Inventory domain workflows still bypassing the canonical model.
+  - Classify each legacy action path as:
+    keep as domain-specific
+    rewire into canonical action/inbox/activity flows
+    retire
+  - Prioritize rewiring high-value manual workflows into the new shell:
+    log call
+    email drafting / follow-up creation
+    research completion -> follow-up action
+    Salesforce-linked lead/task promotion
+    shared entity timeline linkage
+  - Replace duplicated status/count logic in old modules with queue/materialized-view-backed data where possible.
+  - Add adapters so domain detail panels can show canonical ownership, assignment, watchers, escalations, and recent activity consistently.
+  - Reduce direct browser writes to domain databases for workflow state when that state now belongs in canonical ops tables.
+- **Acceptance**:
+  - High-value daily workflows route through canonical operations instead of parallel legacy paths.
+  - Domain pages consistently reflect queue ownership and timeline state.
+  - Old and new workflow layers do not silently diverge.
+
+### RG5: Complete UX integration and team-operating polish
+- **Problem**: Core operational pages exist, but the broader app still needs consistency around user context, team filtering, and workflow affordances.
+- **Impact**: Medium-High
+- **Implementation**:
+  - Add clear current-user / current-workspace context in the shell.
+  - Add queue filters for assignee, watcher, visibility, connector freshness, and domain.
+  - Add teammate views to calendar and metrics for actual team management.
+  - Ensure private vs assigned vs shared visibility is clearly signaled in the UI.
+  - Add empty states and degraded states for:
+    connector not configured
+    sync unhealthy
+    no workspace membership
+    no queue items
+  - Normalize quick actions across queue items, entity pages, and domain detail views.
+  - Add explicit user-facing feedback for retries, escalations, bulk operations, and promotion workflows.
+- **Acceptance**:
+  - Team members can understand ownership, visibility, and next step at a glance.
+  - Managers can operate from Queue/Metrics/Sync Health without dropping into source-specific tabs.
+  - Degraded states are understandable and actionable.
+
+### RG6: Expand performance work from infrastructure to real workload validation
+- **Problem**: performance scaffolding exists, but real-world latency/load characteristics are not yet documented or validated.
+- **Impact**: Medium
+- **Implementation**:
+  - Capture actual baseline and post-rebuild metrics for:
+    initial shell render
+    My Work load
+    Team Queue load
+    Inbox load
+    entity timeline load
+    sync health load
+  - Identify any remaining high-cardinality views that still over-fetch or require client-side joining.
+  - Verify materialized view refresh cadence and failure handling.
+  - Add operational dashboards or queries for slow endpoints using `perf_metrics`.
+  - Stress-test with representative workspace volumes and multi-user concurrent usage.
+  - Create remediation backlog for any endpoint or render path that consistently misses target thresholds.
+- **Acceptance**:
+  - Performance targets are measured, not assumed.
+  - Slow endpoints and views are identified with concrete remediation plans.
+  - Queue-first workloads remain responsive under multi-user, multi-domain data volumes.
+
+### RG7: Add rollout safety, migration, and operational readiness controls
+- **Problem**: The build is large and additive, but still needs a controlled production rollout plan.
+- **Impact**: High
+- **Implementation**:
+  - Define environment rollout order:
+    local/dev -> staging ops DB -> pilot users -> full team rollout.
+  - Add migration runbook for schema 001-010 plus rollback considerations.
+  - Add feature flags or config gates for:
+    queue-v2 adoption
+    connector sync automation
+    team queue pages
+    domain template features
+    strict auth enforcement
+  - Create user onboarding/offboarding checklist for the four-person team.
+  - Create production support checklist:
+    who owns Power Automate flows
+    who owns edge functions
+    who refreshes materialized views
+    who handles sync failures
+  - Add acceptance test matrix before merge or deployment.
+- **Acceptance**:
+  - There is a documented pilot rollout path and support ownership model.
+  - Schema and connector rollout can be executed without guessing.
+  - The first two real users can be onboarded safely before full team expansion.
+
+### Suggested implementation order
+1. RG1: auth, roles, and proxy hardening
+2. RG2: live connector validation with at least two real users
+3. RG7: rollout controls and migration runbooks
+4. RG3: entity reconciliation and data quality
+5. RG4: legacy-domain convergence into canonical workflows
+6. RG5: UX consistency and team-operating polish
+7. RG6: final workload-based performance validation and tuning
+
+### Exit criteria for "production-ready core"
+- Transitional auth removed or locked behind dev-only configuration.
+- At least two real users validated with Outlook + Salesforce + Power Automate + canonical queues.
+- Private/shared visibility proven correct under real workflows.
+- High-value daily workflows use canonical operations without conflicting legacy paths.
+- Sync health, retry behavior, and support ownership are documented and tested.
+- Performance metrics are captured and acceptable for queue-first usage.
+
 ### Phase 4: Shared Team Workflow Rollout
 - [x] Private inbox → shared action workflow — `POST /api/workflows?action=promote_to_shared`
 - [x] Salesforce task → shared entity action workflow — `POST /api/workflows?action=sf_task_to_action`
