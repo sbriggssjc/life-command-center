@@ -49,7 +49,7 @@ select
   d.id,
   d.workspace_id,
   'properties',
-  'property',
+  'asset',
   '{
     "name": "{address} - {city}, {state}",
     "address": "address",
@@ -72,7 +72,7 @@ select
   d.id,
   d.workspace_id,
   'players',
-  'company',
+  'organization',
   '{
     "name": "company_name",
     "city": "city",
@@ -163,7 +163,7 @@ select
   d.id,
   d.workspace_id,
   'clinics',
-  'property',
+  'asset',
   '{
     "name": "{provider_name} - {city}, {state}",
     "address": "address",
@@ -186,7 +186,7 @@ select
   d.id,
   d.workspace_id,
   'providers',
-  'company',
+  'organization',
   '{
     "name": "provider_name",
     "status": "status",
