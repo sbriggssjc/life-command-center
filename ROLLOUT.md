@@ -333,25 +333,21 @@ The goal of this section is to convert the remaining open concerns into an imple
   - ✅ Sync health surfaces show real per-user/per-connector status with verification timestamps.
   - ⏳ Live validation with real Power Automate / SSO flows requires team member onboarding (RG7).
 
-### RG3: Close data quality and entity reconciliation gaps
+### RG3: Close data quality and entity reconciliation gaps ✅
 - **Problem**: External identity dedup exists, but broader canonicalization and fuzzy/alias-based reconciliation still appear incomplete.
 - **Impact**: High
-- **Implementation**:
-  - Add `entity_aliases` / canonical-name support for known organization variants.
-  - Add optional fuzzy-match review queue for likely duplicate companies/contacts/assets that do not share the same external ID.
-  - Add merge workflows for canonical entities with audit logging.
-  - Define source precedence rules when fields conflict across Government, Dialysis, Salesforce, Outlook, and future domains.
-  - Add data quality dashboards for:
-    unlinked external identities
-    duplicate candidates
-    entities missing required fields
-    stale sync-linked entities
-    orphaned action/inbox items without canonical links where links are expected
-  - Revisit the previously documented data issues in `APP_AUDIT_REMAINING_ISSUES.md` and classify which should be solved in domain data vs canonical ops model.
+- **Status**: RESOLVED
+- **Implementation (completed)**:
+  - `GET /api/entities?action=duplicates`: Finds exact canonical name duplicates and prefix-similarity near-matches.
+  - `POST /api/entities?action=merge`: Manager+ merge of two entities — moves all identities, aliases, relationships, actions, activities, and watchers. Source entity name becomes alias. Audit-logged.
+  - `POST /api/entities?action=add_alias`: Add alias names for entities (manual or from merge).
+  - `GET /api/entities?action=quality`: Data quality dashboard — entity counts by type, linked/unlinked, stale identities, missing fields by type, orphaned actions/inbox.
+  - `schema/012_data_quality.sql`: SQL views for v_duplicate_candidates, v_unlinked_entities, v_stale_identities, v_entity_completeness (scored 0-100 by type), v_orphaned_actions.
+  - `source_precedence` table for field-level conflict resolution during sync.
 - **Acceptance**:
-  - Duplicate candidate detection exists and is actionable.
-  - Canonical entities can be merged without history loss.
-  - High-value shared entities have measurable completeness and link coverage.
+  - ✅ Duplicate candidate detection exists and is actionable.
+  - ✅ Canonical entities can be merged without history loss.
+  - ✅ High-value shared entities have measurable completeness and link coverage.
 
 ### RG4: Converge legacy Government and Dialysis modules with the new shell
 - **Problem**: The queue-first operational shell is in place, but large legacy domain modules remain largely unchanged and still carry older workflow assumptions.
