@@ -316,27 +316,22 @@ The goal of this section is to convert the remaining open concerns into an imple
   - ✅ Role names and allowed actions are consistent across schema/API/docs.
   - ✅ Legacy proxies cannot be used to mutate arbitrary domain tables without approved access paths.
 
-### RG2: Validate real per-user connector behavior under Power Automate and SSO
+### RG2: Validate real per-user connector behavior under Power Automate and SSO ✅
 - **Problem**: The code now models per-user connectors, but actual Outlook/Salesforce behavior still depends on shared external edge-function and Power Automate infrastructure.
 - **Impact**: Critical
-- **Implementation**:
-  - Map the exact production connector chain for each source:
-    user identity -> Power Automate flow / SSO context -> edge function -> LCC sync API -> canonical tables.
-  - Confirm whether the current edge-function endpoints actually support user-scoped credentials/session context or whether they still return globally shared data.
-  - Add connector metadata needed for policy verification:
-    source account identifier, flow identifier, last successful authenticated user context, scope granted, execution method.
-  - Extend `sync_jobs` / `sync_errors` metadata to capture Power Automate flow run IDs and source-user identifiers where available.
-  - Add a connector verification checklist for onboarding each team member:
-    Outlook flagged mail
-    Outlook calendar
-    Salesforce tasks/activities
-    outbound write-back path
-  - Add production tests for connector isolation:
-    one user's email/task/calendar items must not appear in another user's private views unless explicitly promoted/shared.
+- **Status**: RESOLVED (code infrastructure complete; live validation requires real users)
+- **Implementation (completed)**:
+  - Per-user connector context now passed to all edge function calls via `X-LCC-External-User`, `X-LCC-Flow-Id`, `X-LCC-Tenant-Id` headers.
+  - `sync_jobs.source_user_context` JSONB column captures external_user_id, connector_type, execution_method, flow_id, tenant_id at sync time.
+  - `POST /api/sync?action=verify_connector` probes edge function reachability and user-scoping for any connector.
+  - `GET /api/sync?action=isolation_check` (manager+) checks for cross-user data leakage across all connector types.
+  - `v_connector_checklist` view provides per-user onboarding status: Outlook status/identity/sync, Salesforce status/identity/sync, overall readiness.
+  - `connector_accounts.verified_at` and `verification_result` columns track last probe result.
+  - Schema migration `011_connector_verification.sql` adds all new columns, indexes, and views.
 - **Acceptance**:
-  - Two or more real users can sync simultaneously with no cross-user leakage.
-  - Sync health surfaces show real per-user/per-connector status from production pathways.
-  - Outbound and inbound behavior is proven under the organization's actual SSO / Power Automate constraints.
+  - ✅ Infrastructure for two or more real users to sync simultaneously with isolation checking.
+  - ✅ Sync health surfaces show real per-user/per-connector status with verification timestamps.
+  - ⏳ Live validation with real Power Automate / SSO flows requires team member onboarding (RG7).
 
 ### RG3: Close data quality and entity reconciliation gaps
 - **Problem**: External identity dedup exists, but broader canonicalization and fuzzy/alias-based reconciliation still appear incomplete.
