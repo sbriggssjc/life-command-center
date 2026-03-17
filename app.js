@@ -1779,28 +1779,13 @@ async function loadHealth() {
 
 async function loadWeather() {
   try {
-    // Try geolocation first, fall back to Tulsa
-    let lat = WEATHER_FALLBACK_LAT, lon = WEATHER_FALLBACK_LON, cityLabel = WEATHER_FALLBACK_CITY;
-    try {
-      const pos = await new Promise((resolve, reject) => {
-        if (!navigator.geolocation) return reject(new Error('No geolocation'));
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000, maximumAge: 600000 });
-      });
-      lat = pos.coords.latitude;
-      lon = pos.coords.longitude;
-      // Reverse geocode for city name via Open-Meteo geocoding
-      try {
-        const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10`);
-        if (geoRes.ok) {
-          const geoData = await geoRes.json();
-          const addr = geoData.address || {};
-          const city = addr.city || addr.town || addr.village || addr.county || '';
-          const state = addr.state || '';
-          const stateAbbr = state.length > 2 ? (US_STATE_ABBR[state] || state) : state;
-          cityLabel = city + (stateAbbr ? ', ' + stateAbbr : '');
-        }
-      } catch (_) { cityLabel = `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`; }
-    } catch (_) { /* use fallback */ }
+    // Use saved location from settings, or default to Tulsa
+    const savedLat = localStorage.getItem('lcc-weather-lat');
+    const savedLon = localStorage.getItem('lcc-weather-lon');
+    const savedCity = localStorage.getItem('lcc-weather-city');
+    let lat = savedLat ? parseFloat(savedLat) : WEATHER_FALLBACK_LAT;
+    let lon = savedLon ? parseFloat(savedLon) : WEATHER_FALLBACK_LON;
+    let cityLabel = savedCity || WEATHER_FALLBACK_CITY;
 
     // Update widget title
     const titleEl = document.querySelector('#weatherWidget .widget-title');
