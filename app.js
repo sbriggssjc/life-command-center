@@ -19,6 +19,52 @@ const LCC_USER = {
   _loaded: false
 };
 
+// ============================================================
+// FEATURE FLAGS — loaded from /api/flags, gates rollout features
+// ============================================================
+const LCC_FLAGS = {
+  strict_auth: false,
+  queue_v2_enabled: false,
+  queue_v2_auto_fallback: true,
+  auto_sync_on_load: false,
+  sync_outlook_enabled: true,
+  sync_salesforce_enabled: true,
+  sync_outbound_enabled: false,
+  team_queue_enabled: false,
+  escalations_enabled: false,
+  bulk_operations_enabled: false,
+  domain_templates_enabled: false,
+  domain_sync_enabled: false,
+  ops_pages_enabled: false,
+  more_drawer_enabled: false,
+  freshness_indicators: true,
+  _loaded: false
+};
+
+/** Check if a feature flag is enabled */
+function checkFlag(flagName) {
+  return LCC_FLAGS[flagName] === true;
+}
+
+/** Load feature flags from the server */
+async function loadFeatureFlags() {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const res = await fetch('/api/flags', { headers });
+    if (res.ok) {
+      const data = await res.json();
+      const flags = data.flags || {};
+      for (const [key, val] of Object.entries(flags)) {
+        if (key in LCC_FLAGS) LCC_FLAGS[key] = val;
+      }
+      LCC_FLAGS._loaded = true;
+    }
+  } catch {
+    // Flags stay at defaults — safe for rollout (most features off)
+  }
+}
+
 /** Load user context from /api/members?action=me (or fall back to defaults) */
 async function loadUserContext() {
   try {
@@ -71,6 +117,24 @@ function applyUserContext() {
   if (copilotWelcome && copilotWelcome.dataset.initialized !== 'true') {
     copilotWelcome.dataset.initialized = 'true';
     // Keep existing content but with correct name
+  }
+}
+
+/** Apply feature flags to UI — show/hide gated features */
+function applyFeatureFlags() {
+  // Ops pages: My Work, Queue, Inbox nav items
+  document.querySelectorAll('[data-flag]').forEach(el => {
+    const flag = el.dataset.flag;
+    el.style.display = checkFlag(flag) ? '' : 'none';
+  });
+
+  // More drawer: use 5+More layout or legacy full nav
+  const moreBtn = document.querySelector('.bnav[data-page="more"]');
+  if (moreBtn) moreBtn.style.display = checkFlag('more_drawer_enabled') ? '' : 'none';
+
+  // Queue v2 preference
+  if (typeof useV2 !== 'undefined') {
+    useV2 = checkFlag('queue_v2_enabled');
   }
 }
 
@@ -309,7 +373,13 @@ function toggleMoreDrawer() {
 function handlePageLoad(pageId) {
   switch(pageId) {
     case 'pageMyWork': if (typeof renderMyWork === 'function') renderMyWork(); break;
-    case 'pageTeamQueue': if (typeof renderTeamQueue === 'function') renderTeamQueue(); break;
+    case 'pageTeamQueue':
+      if (!checkFlag('team_queue_enabled')) {
+        const el = document.getElementById('teamQueueContent');
+        if (el) el.innerHTML = '<div class="ops-empty">Team Queue is not yet enabled for this workspace.</div>';
+        break;
+      }
+      if (typeof renderTeamQueue === 'function') renderTeamQueue(); break;
     case 'pageInbox': if (typeof renderInboxTriage === 'function') renderInboxTriage(); break;
     case 'pageEntities': if (typeof renderEntitiesPage === 'function') renderEntitiesPage(); break;
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
@@ -2739,12 +2809,15 @@ function updateGreeting() {
 document.getElementById('greeting').textContent = getGreeting();
 document.getElementById('greetingDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 
-// Load user context (non-blocking — falls back to defaults), then connect & load data
+// Load user context, then flags, then connect & load data
 loadUserContext().then(() => {
-  autoConnectCredentials().then(() => {
-    Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
-      .then(() => { updateGreeting(); triggerCanonicalSync(); })
-      .catch(() => { updateGreeting(); triggerCanonicalSync(); });
+  loadFeatureFlags().then(() => {
+    applyFeatureFlags();
+    autoConnectCredentials().then(() => {
+      Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
+        .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+        .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+    });
   });
 });
 

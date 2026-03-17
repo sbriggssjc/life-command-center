@@ -449,6 +449,13 @@ function mapSfPriority(sfPriority) {
 // ============================================================================
 
 async function handleOutbound(req, res, user, workspaceId) {
+  // Gate behind feature flag — outbound writes are disabled by default
+  const wsResult = await opsQuery('GET', `workspaces?id=eq.${workspaceId}&select=config`);
+  const flags = wsResult.data?.[0]?.config?.feature_flags || {};
+  if (flags.sync_outbound_enabled !== true) {
+    return res.status(403).json({ error: 'Outbound sync is not enabled for this workspace. Enable the sync_outbound_enabled flag.' });
+  }
+
   const { command, connector_id, payload, max_retries } = req.body || {};
 
   if (!command) return res.status(400).json({ error: 'command is required' });

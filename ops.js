@@ -51,7 +51,7 @@ let opsTeamDomainFilter = '';       // '' = all domains
 let opsTeamAssigneeFilter = '';     // '' = all, 'unassigned', or user_id
 let opsTeamVisFilter = '';          // '' = all, 'private', 'assigned', 'shared'
 
-// --- V2 endpoint preference (uses paginated queue-v2 when available) ---
+// --- V2 endpoint preference (uses paginated queue-v2 when flag is on) ---
 const V2_MAP = {
   '/api/queue?view=my_work': '/api/queue-v2?view=my_work',
   '/api/queue?view=team_queue': '/api/queue-v2?view=team_queue',
@@ -59,7 +59,7 @@ const V2_MAP = {
   '/api/queue?view=research_queue': '/api/queue-v2?view=research',
   '/api/queue?view=work_counts': '/api/queue-v2?view=work_counts'
 };
-let useV2 = true; // Auto-degrades to v1 if v2 returns 404
+let useV2 = false; // Controlled by queue_v2_enabled flag; auto-degrades to v1 if v2 returns 404
 
 // --- Pagination state for infinite scroll / page navigation ---
 let opsPagination = {};
@@ -125,6 +125,7 @@ function freshnessLabel(isoDate) {
 }
 
 function freshnessHTML(isoDate) {
+  if (typeof checkFlag === 'function' && !checkFlag('freshness_indicators')) return '';
   const f = freshnessLabel(isoDate);
   return `<span class="freshness"><span class="freshness-dot ${f.cls}"></span>${f.text}</span>`;
 }
@@ -474,9 +475,11 @@ async function renderInboxTriage() {
       <span>Select all</span>
       <span class="triage-count" id="triageCount">0 selected</span>
       <div class="triage-actions">
+        ${checkFlag('bulk_operations_enabled') ? `
         <button class="q-action" onclick="bulkTriageInbox('triaged')" title="Mark as triaged">Triage</button>
         <button class="q-action primary" onclick="bulkPromoteInbox()" title="Promote selected to shared actions">Promote</button>
         <button class="q-action danger" onclick="bulkTriageInbox('dismissed')" title="Dismiss selected">Dismiss</button>
+        ` : '<span style="font-size:11px;color:var(--text3)">Bulk ops disabled</span>'}
       </div>
     </div>`;
   }
@@ -1031,8 +1034,8 @@ function queueItemHTML(item, context, opts = {}) {
   } else if (context !== 'my_work') {
     html += `<button class="q-action" onclick="quickReassign('${item.id}','action')">Reassign</button>`;
   }
-  // Escalate on all non-completed items
-  if (item.status !== 'completed' && item.status !== 'cancelled') {
+  // Escalate on all non-completed items (gated by flag)
+  if (item.status !== 'completed' && item.status !== 'cancelled' && checkFlag('escalations_enabled')) {
     html += `<button class="q-action" onclick="quickEscalate('${item.id}')">Escalate</button>`;
   }
   html += '</div>';
