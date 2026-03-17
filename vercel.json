@@ -4,6 +4,16 @@
   "buildCommand": "",
   "outputDirectory": "",
   "rewrites": [
+    { "source": "/api/config", "destination": "/api/diagnostics?_route=config" },
+    { "source": "/api/diag", "destination": "/api/diagnostics?_route=diag" },
+    { "source": "/api/treasury", "destination": "/api/diagnostics?_route=treasury" },
+    { "source": "/api/gov-query", "destination": "/api/data-proxy?_source=gov" },
+    { "source": "/api/dia-query", "destination": "/api/data-proxy?_source=dia" },
+    { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
+    { "source": "/api/members", "destination": "/api/admin?_route=members" },
+    { "source": "/api/flags", "destination": "/api/admin?_route=flags" },
+    { "source": "/api/queue-v2", "destination": "/api/queue?_version=v2" },
+    { "source": "/api/connectors", "destination": "/api/sync?_route=connectors" },
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
   "headers": [
