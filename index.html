@@ -854,10 +854,10 @@ body.compact .greeting { font-size: 18px; }
 // CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
-// Weather — uses geolocation with Minneapolis fallback
-const WEATHER_FALLBACK_LAT = 44.98;
-const WEATHER_FALLBACK_LON = -93.27;
-const WEATHER_FALLBACK_CITY = 'Minneapolis, MN';
+// Weather — uses geolocation with Tulsa fallback
+const WEATHER_FALLBACK_LAT = 36.15;
+const WEATHER_FALLBACK_LON = -95.99;
+const WEATHER_FALLBACK_CITY = 'Tulsa, OK';
 function buildWeatherUrl(lat, lon) {
   return `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=1`;
 }
@@ -2360,7 +2360,7 @@ async function loadHealth() {
 
 async function loadWeather() {
   try {
-    // Try geolocation first, fall back to Minneapolis
+    // Try geolocation first, fall back to Tulsa
     let lat = WEATHER_FALLBACK_LAT, lon = WEATHER_FALLBACK_LON, cityLabel = WEATHER_FALLBACK_CITY;
     try {
       const pos = await new Promise((resolve, reject) => {
