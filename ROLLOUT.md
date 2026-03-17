@@ -44,9 +44,11 @@
 | `api/activities.js` | 100 | Activity events: append-only timeline logging |
 | `api/queue.js` | 155 | Unified queue: my work, team, inbox, counts, entity timeline |
 | `api/sync.js` | 380 | Sync orchestration: ingest emails/calendar/SF, outbound retries, health |
+| `api/workflows.js` | 420 | Workflow engine: promote, link SF, research follow-up, reassign, escalate, bulk ops |
 | `api/config.js` | 15 | Connection status endpoint |
 | `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
 | `schema/007_queue_views.sql` | 240 | Unified queue views for operational surfaces |
+| `schema/008_watchers_and_oversight.sql` | 180 | Watchers, escalations, manager overview, unassigned work views |
 | `sw.js` | 62 | Service worker for PWA |
 | `config.js` | 15 | Root config (duplicate of api/config.js) |
 | `flow-*.json` | 4 files | Power Automate flow definitions |
@@ -251,12 +253,16 @@
 - [x] Add background canonical sync trigger to frontend — `triggerCanonicalSync()` fires after initial load
 
 ### Phase 4: Shared Team Workflow Rollout
-- [ ] Private inbox → shared action workflow
-- [ ] Salesforce task → shared entity action workflow
-- [ ] Research item → assigned follow-up workflow
-- [ ] Team reassignment and escalation
-- [ ] Provenance, owner, assignee, watcher behavior
-- [ ] Manager-level queue oversight
+- [x] Private inbox → shared action workflow — `POST /api/workflows?action=promote_to_shared`
+- [x] Salesforce task → shared entity action workflow — `POST /api/workflows?action=sf_task_to_action`
+- [x] Research item → assigned follow-up workflow — `POST /api/workflows?action=research_followup`
+- [x] Team reassignment and escalation — `reassign` and `escalate` workflow actions
+- [x] Provenance, owner, assignee, watcher behavior — auto-watch on create/assign/escalate
+- [x] Manager-level queue oversight — `GET /api/workflows?action=oversight`
+- [x] Watcher/subscriber model — `schema/008_watchers_and_oversight.sql`
+- [x] Escalation tracking with resolution — `escalations` table
+- [x] Unassigned work view — `v_unassigned_work` + `v_manager_overview`
+- [x] Bulk operations — `bulk_assign` (manager+) and `bulk_triage`
 
 ### Phase 5: UX and Interaction Redesign
 - [ ] Rework nav: My Work, Team Queue, Inbox, Calendar, Entities, Research, Metrics, Sync Health, Settings
@@ -298,6 +304,8 @@
 | 2026-03-17 | Phase 3 implemented | Sync orchestration, per-user connectors, outbound retries, health dashboard |
 | 2026-03-17 | Dual data path during transition | Existing edge fn calls continue; canonical sync runs in background |
 | 2026-03-17 | Auto-resolve connectors | If no connector_account exists for user+type, one is auto-created |
+| 2026-03-17 | Phase 4 implemented | Workflow engine, watchers, escalation, bulk ops, manager oversight |
+| 2026-03-17 | Auto-watch pattern | Creators and assignees auto-subscribed; escalation adds both parties |
 
 ---
 
