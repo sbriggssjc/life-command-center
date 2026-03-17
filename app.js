@@ -157,6 +157,12 @@ let calEvents = [];
 let currentBizTab = 'dialysis';
 let bizSearch = '';
 let bizPage = 0;
+
+// Canonical model state — populated from ops DB when available
+let canonicalCounts = null;     // work_counts from queue-v2 API
+let canonicalMyWork = null;     // top items from my_work queue
+let canonicalInbox = null;      // recent inbox items (email source)
+let canonicalLoaded = false;    // true once canonical load attempted
 let logCallData = {};
 let govConnected = false;
 let diaConnected = false;
@@ -1636,6 +1642,56 @@ function triggerCanonicalSync() {
 }
 
 // ============================================================
+// CANONICAL DATA LOADING — Today page integration
+// Fetches work_counts, top my_work items, and inbox items from
+// the canonical ops model. Falls back silently to legacy data
+// when ops DB is not configured.
+// ============================================================
+async function loadCanonicalData() {
+  if (!LCC_USER._loaded) { canonicalLoaded = true; return; }
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+
+  try {
+    // Fire all three in parallel
+    const [countsRes, workRes, inboxRes] = await Promise.allSettled([
+      fetch('/api/queue-v2?view=work_counts', { headers }),
+      fetch('/api/queue-v2?view=my_work&per_page=5&sort=due_date', { headers }),
+      fetch('/api/queue-v2?view=inbox&per_page=6&status=new', { headers })
+    ]);
+
+    if (countsRes.status === 'fulfilled' && countsRes.value.ok) {
+      canonicalCounts = await countsRes.value.json();
+    }
+    if (workRes.status === 'fulfilled' && workRes.value.ok) {
+      canonicalMyWork = await workRes.value.json();
+    }
+    if (inboxRes.status === 'fulfilled' && inboxRes.value.ok) {
+      canonicalInbox = await inboxRes.value.json();
+    }
+  } catch {
+    // Ops DB not configured — canonical data stays null, legacy renders apply
+  }
+
+  canonicalLoaded = true;
+
+  // Update widget titles when canonical data is active
+  if (canonicalCounts || canonicalMyWork || canonicalInbox) {
+    const ptTitle = document.getElementById('priorityTasksTitle');
+    if (ptTitle && canonicalMyWork) ptTitle.textContent = 'My Work';
+    const reTitle = document.getElementById('recentEmailsTitle');
+    if (reTitle && canonicalInbox) reTitle.textContent = 'Inbox';
+  }
+
+  // Re-render Today page widgets with canonical data
+  renderHomeStats();
+  document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
+  document.getElementById('recentEmails').innerHTML = renderRecentEmails();
+  document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
+  renderTeamPulse();
+}
+
+// ============================================================
 // CANONICAL BRIDGE — call from legacy domain save functions
 // to keep canonical model in sync with domain writes.
 // Usage: canonicalBridge('log_activity', { title, domain, ... })
@@ -2023,14 +2079,22 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function renderHomeStats() {
-  // Only update activity-dependent stats once activities have loaded (prevents 0-flash)
-  if (activitiesLoaded) {
-    document.getElementById('statActivities').textContent = activities.length.toLocaleString();
-    const now = Date.now(); const week = 7 * 86400000;
-    const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
-    document.getElementById('statDue').textContent = due.length;
+  // Prefer canonical work_counts when available
+  if (canonicalCounts) {
+    document.getElementById('statActivities').textContent = (canonicalCounts.my_actions || 0).toLocaleString();
+    document.getElementById('statEmails').textContent = (canonicalCounts.inbox_new || 0).toLocaleString();
+    document.getElementById('statDue').textContent = (canonicalCounts.due_this_week || 0).toLocaleString();
+  } else {
+    // Legacy fallback — only update activity-dependent stats once loaded (prevents 0-flash)
+    if (activitiesLoaded) {
+      document.getElementById('statActivities').textContent = activities.length.toLocaleString();
+      const now = Date.now(); const week = 7 * 86400000;
+      const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
+      document.getElementById('statDue').textContent = due.length;
+    }
+    document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
   }
-  document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
+  // Calendar events always from edge function (individual calendar)
   const today = tzDateStr(new Date());
   const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
   document.getElementById('statEvents').textContent = todayEvents.length;
@@ -2103,6 +2167,32 @@ function renderTodaySchedule() {
 }
 
 function renderPriorityTasks() {
+  // Prefer canonical my_work items when available
+  if (canonicalMyWork && canonicalMyWork.items && canonicalMyWork.items.length > 0) {
+    let html = '';
+    for (const item of canonicalMyWork.items) {
+      const title = esc(item.title || '(Untitled)');
+      const statusCls = `status-${(item.status || '').replace(/ /g, '_')}`;
+      const statusLabel = (item.status || '').replace(/_/g, ' ');
+      const isOverdue = item.due_date && new Date(item.due_date) < new Date();
+      const dueLabel = item.due_date ? formatDate(item.due_date) : '';
+      html += `<div class="act-item canonical-task${isOverdue ? ' overdue' : ''}" onclick="navTo('pageMyWork')">
+        <div class="act-top"><div class="act-subject">${title}</div></div>
+        <div class="act-meta">
+          <span class="q-badge ${statusCls}">${statusLabel}</span>
+          ${item.domain ? `<span class="q-badge domain">${esc(item.domain)}</span>` : ''}
+          ${dueLabel ? `<span class="act-due${isOverdue ? ' text-overdue' : ''}">${dueLabel}</span>` : ''}
+        </div>
+      </div>`;
+    }
+    const total = canonicalMyWork.pagination?.total || 0;
+    if (total > 5) {
+      html += `<div class="widget-more" onclick="navTo('pageMyWork')">View all ${total} items</div>`;
+    }
+    return html;
+  }
+
+  // Legacy fallback — Salesforce activities
   const priority = activities.filter(a => (a.computed_category || '').includes('Priority'));
   const recent = activities.slice(0, 10);
   const items = priority.length > 0 ? priority.slice(0, 5) : recent.slice(0, 5);
@@ -2119,6 +2209,18 @@ function renderPriorityTasks() {
 }
 
 function renderCategoryMetrics() {
+  // Prefer canonical counts when available
+  if (canonicalCounts) {
+    let html = '<div class="cat-metrics">';
+    html += `<div class="cat-metric clickable" onclick="navTo('pageMyWork')"><div class="cat-metric-val" style="color:var(--accent)">${canonicalCounts.my_actions || 0}</div><div class="cat-metric-lbl">My Actions</div></div>`;
+    html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${canonicalCounts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
+    html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--green)">${canonicalCounts.completed_week || 0}</div><div class="cat-metric-lbl">Done This Week</div></div>`;
+    html += `<div class="cat-metric${(canonicalCounts.overdue || 0) > 0 ? ' overdue' : ''}"><div class="cat-metric-val" style="color:${(canonicalCounts.overdue || 0) > 0 ? 'var(--red)' : 'var(--yellow)'}">${canonicalCounts.overdue || 0}</div><div class="cat-metric-lbl">Overdue</div></div>`;
+    html += '</div>';
+    return html;
+  }
+
+  // Legacy fallback — Salesforce activity categories
   if (activities.length === 0) return '<div style="color:var(--text2);font-size:13px">No activities recorded yet</div>';
   const isDiaCategory = c => c.includes('dialysis') || c.includes('davita') || c.includes('fmc') || c.includes('fresenius') || c.includes('medical') || c.includes('healthcare');
   const isGovCategory = c => c.includes('government') || c.includes('gsa') || c.includes('va ') || c.includes('federal');
@@ -2141,6 +2243,26 @@ function renderCategoryMetrics() {
 }
 
 function renderRecentEmails() {
+  // Prefer canonical inbox items when available
+  if (canonicalInbox && canonicalInbox.items && canonicalInbox.items.length > 0) {
+    let html = '';
+    for (const item of canonicalInbox.items) {
+      const title = esc(item.title || '(No subject)');
+      const source = esc(item.source_ref || item.source_type || '');
+      const date = item.received_at ? formatDate(item.received_at) : '';
+      html += `<div class="email-card canonical-inbox-item" onclick="navTo('pageInbox')">
+        <div class="email-subj">${title}</div>
+        <div class="email-from"><span>${source}</span><span>${date}</span></div>
+      </div>`;
+    }
+    const total = canonicalInbox.pagination?.total || 0;
+    if (total > 6) {
+      html += `<div class="widget-more" onclick="navTo('pageInbox')">View all ${total} items</div>`;
+    }
+    return html;
+  }
+
+  // Legacy fallback — edge function flagged emails
   if (emails.length === 0) return '<div style="color:var(--text2);font-size:13px">No flagged emails.</div>';
   let html = '';
   for (const e of emails.slice(0, 6)) {
@@ -2151,6 +2273,63 @@ function renderRecentEmails() {
     </div>`;
   }
   return html;
+}
+
+// ============================================================
+// TEAM PULSE — manager/owner widget showing team health at a glance
+// ============================================================
+function renderTeamPulse() {
+  const widget = document.getElementById('teamPulseWidget');
+  const el = document.getElementById('teamPulseContent');
+  if (!widget || !el) return;
+
+  // Only show for managers/owners with canonical data
+  const isManager = LCC_USER.role === 'owner' || LCC_USER.role === 'manager';
+  if (!isManager || !canonicalCounts) {
+    widget.style.display = 'none';
+    return;
+  }
+
+  widget.style.display = '';
+  const c = canonicalCounts;
+
+  let html = '<div class="team-pulse-grid">';
+
+  // Unassigned work
+  const unassignedCount = (c.open_actions || 0) - (c.in_progress || 0);
+  html += `<div class="pulse-card${unassignedCount > 0 ? ' attention' : ''}" onclick="navTo('pageTeamQueue')">
+    <div class="pulse-val">${Math.max(0, unassignedCount)}</div>
+    <div class="pulse-label">Unassigned</div>
+  </div>`;
+
+  // Open escalations
+  html += `<div class="pulse-card${(c.open_escalations || 0) > 0 ? ' alert' : ''}" onclick="navTo('pageMetrics')">
+    <div class="pulse-val">${c.open_escalations || 0}</div>
+    <div class="pulse-label">Escalations</div>
+  </div>`;
+
+  // Sync errors
+  html += `<div class="pulse-card${(c.sync_errors || 0) > 0 ? ' attention' : ''}" onclick="navTo('pageSyncHealth')">
+    <div class="pulse-val">${c.sync_errors || 0}</div>
+    <div class="pulse-label">Sync Errors</div>
+  </div>`;
+
+  // Active research
+  html += `<div class="pulse-card" onclick="navTo('pageResearch')">
+    <div class="pulse-val">${c.research_active || 0}</div>
+    <div class="pulse-label">Research</div>
+  </div>`;
+
+  html += '</div>';
+
+  // Overdue alert bar
+  if ((c.overdue || 0) > 0) {
+    html += `<div class="pulse-alert" onclick="navTo('pageMyWork')">
+      ${c.overdue} overdue action${c.overdue !== 1 ? 's' : ''} across the team
+    </div>`;
+  }
+
+  el.innerHTML = html;
 }
 
 // ============================================================
@@ -2814,7 +2993,7 @@ loadUserContext().then(() => {
   loadFeatureFlags().then(() => {
     applyFeatureFlags();
     autoConnectCredentials().then(() => {
-      Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
+      Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData()])
         .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
         .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
     });
@@ -2837,6 +3016,7 @@ function startAutoRefresh() {
     loadHealth();
     loadWeather();
     loadMarket();
+    loadCanonicalData();
     updateGreeting();
   }, interval);
 }
@@ -2859,6 +3039,7 @@ document.addEventListener('visibilitychange', () => {
       loadCalendar();
       loadWeather();
       loadMarket();
+      loadCanonicalData();
       updateGreeting();
     }
   }
