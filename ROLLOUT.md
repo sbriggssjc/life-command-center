@@ -43,6 +43,7 @@
 | `api/actions.js` | 210 | Action items: CRUD with lifecycle state transitions |
 | `api/activities.js` | 100 | Activity events: append-only timeline logging |
 | `api/queue.js` | 155 | Unified queue: my work, team, inbox, counts, entity timeline |
+| `api/sync.js` | 380 | Sync orchestration: ingest emails/calendar/SF, outbound retries, health |
 | `api/config.js` | 15 | Connection status endpoint |
 | `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
 | `schema/007_queue_views.sql` | 240 | Unified queue views for operational surfaces |
@@ -238,13 +239,16 @@
 - [x] Create queue SQL views: v_my_work, v_team_queue, v_inbox_triage, v_sync_exceptions, v_entity_timeline, v_research_queue, v_work_counts
 
 ### Phase 3: Outlook and Salesforce Connector Rollout
-- [ ] Implement per-user connector binding storage
-- [ ] Per-user flagged email ingestion
-- [ ] Per-user calendar event ingestion
-- [ ] Per-user Salesforce activity ingestion
-- [ ] Link source artifacts to canonical entities
-- [ ] Add outbound command handling with retries
-- [ ] Add connector health dashboard
+- [x] Implement per-user connector binding storage — auto-resolves from connector_accounts
+- [x] Per-user flagged email ingestion — `POST /api/sync?action=ingest_emails` → inbox_items
+- [x] Per-user calendar event ingestion — `POST /api/sync?action=ingest_calendar` → activity_events
+- [x] Per-user Salesforce activity ingestion — `POST /api/sync?action=ingest_sf_activities` → activity_events + inbox_items (open tasks)
+- [x] Link source artifacts to canonical entities — external_id dedup, source_connector_id tracking
+- [x] Add outbound command handling with retries — `POST /api/sync?action=outbound` with exponential backoff
+- [x] Add connector health dashboard — `GET /api/sync?action=health` with per-user breakdown
+- [x] Add sync job tracking with correlation IDs — every sync creates a sync_job record
+- [x] Add sync error recording with retry support — `POST /api/sync?action=retry&error_id=`
+- [x] Add background canonical sync trigger to frontend — `triggerCanonicalSync()` fires after initial load
 
 ### Phase 4: Shared Team Workflow Rollout
 - [ ] Private inbox → shared action workflow
@@ -291,6 +295,9 @@
 | 2026-03-17 | Shared ops-db helper created | DRY Supabase PostgREST client used by all Phase 2+ endpoints |
 | 2026-03-17 | Inbox promotion workflow | Inbox items promote to action items with activity logging |
 | 2026-03-17 | Activity events are append-only | No PATCH/DELETE — immutable audit trail |
+| 2026-03-17 | Phase 3 implemented | Sync orchestration, per-user connectors, outbound retries, health dashboard |
+| 2026-03-17 | Dual data path during transition | Existing edge fn calls continue; canonical sync runs in background |
+| 2026-03-17 | Auto-resolve connectors | If no connector_account exists for user+type, one is auto-created |
 
 ---
 

@@ -2388,6 +2388,21 @@ async function submitLogCall() {
 // ============================================================
 // HOME PAGE DATA LOADING & RENDERING
 // ============================================================
+
+/**
+ * Trigger canonical sync ingestion in background (non-blocking).
+ * Falls back silently if ops DB not configured — existing edge function
+ * data loading continues to work independently.
+ */
+function triggerCanonicalSync() {
+  if (!LCC_USER._loaded) return;
+  const headers = { 'Content-Type': 'application/json' };
+  // Fire-and-forget — these populate the canonical model for Phase 4+ queue views
+  fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(() => {});
+  fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(() => {});
+  fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(() => {});
+}
+
 let activitiesLoaded = false;
 async function loadActivities() {
   try {
@@ -3543,8 +3558,8 @@ document.getElementById('greetingDate').textContent = new Date().toLocaleDateStr
 loadUserContext().then(() => {
   autoConnectCredentials().then(() => {
     Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
-      .then(() => updateGreeting())
-      .catch(() => updateGreeting());
+      .then(() => { updateGreeting(); triggerCanonicalSync(); })
+      .catch(() => { updateGreeting(); triggerCanonicalSync(); });
   });
 });
 
