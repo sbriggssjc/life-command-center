@@ -15,6 +15,9 @@ export default withErrorHandler(async function handler(req, res) {
     },
     dia: {
       connected: !!process.env.DIA_SUPABASE_KEY
+    },
+    ops: {
+      connected: !!(process.env.OPS_SUPABASE_URL && process.env.OPS_SUPABASE_KEY)
     }
   });
 });

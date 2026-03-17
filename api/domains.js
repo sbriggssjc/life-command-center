@@ -225,7 +225,9 @@ async function validateDomain(req, res, workspaceId) {
     if (src.source_type === 'supabase' && src.api_proxy_path) {
       try {
         // Probe the proxy endpoint
-        const probe = await fetch(`${req.headers.host ? 'https://' + req.headers.host : ''}${src.api_proxy_path}?table=_probe&limit=0`);
+        const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+        const protocol = req.headers['x-forwarded-proto'] || 'https';
+        const probe = await fetch(`${protocol}://${host}${src.api_proxy_path}?table=_probe&limit=0`);
         check.status = probe.ok || probe.status === 400 ? 'connected' : 'error';
         check.message = probe.ok ? 'Connected' : `HTTP ${probe.status}`;
       } catch (e) {
@@ -308,8 +310,11 @@ async function syncDomainEntities(req, res, user, workspaceId) {
     if (!source) { errors++; continue; }
 
     try {
-      // Query domain database through proxy
-      let proxyUrl = `${source.api_proxy_path}?table=${encodeURIComponent(mapping.source_table)}&limit=500`;
+      // Query domain database through proxy — need absolute URL for serverless fetch
+      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+      const protocol = req.headers['x-forwarded-proto'] || 'https';
+      const baseUrl = `${protocol}://${host}`;
+      let proxyUrl = `${baseUrl}${source.api_proxy_path}?table=${encodeURIComponent(mapping.source_table)}&limit=500`;
       if (mapping.filter_expression) proxyUrl += `&filter=${encodeURIComponent(mapping.filter_expression)}`;
 
       const proxyRes = await fetch(proxyUrl, {
@@ -339,6 +344,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
           const entityId = existingRes.data[0].entity_id;
           await opsQuery('PATCH', `entities?id=eq.${entityId}`, {
             name: mapped.name,
+            canonical_name: buildCanonicalName(mapped.name),
             entity_type: mapping.target_entity_type,
             domain: domain.slug,
             status: mapped.status || 'active',
@@ -354,6 +360,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
           const entityRes = await opsQuery('POST', 'entities', {
             workspace_id: workspaceId,
             name: mapped.name,
+            canonical_name: buildCanonicalName(mapped.name),
             entity_type: mapping.target_entity_type,
             domain: domain.slug,
             status: mapped.status || 'active',
@@ -495,6 +502,14 @@ function listTemplates(req, res) {
 // FIELD MAPPING — apply column mapping from domain record to canonical entity
 // ============================================================================
 
+function buildCanonicalName(name) {
+  return name.trim().toLowerCase()
+    .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function applyFieldMapping(record, mapping) {
   const result = {};
   for (const [canonicalField, sourceExpr] of Object.entries(mapping)) {
@@ -542,7 +557,7 @@ const DOMAIN_TEMPLATES = {
     entity_mappings: [
       {
         source_table: 'properties',
-        target_entity_type: 'property',
+        target_entity_type: 'asset',
         field_mapping: {
           name: '{address} - {city}, {state}',
           address: 'address',
@@ -556,7 +571,7 @@ const DOMAIN_TEMPLATES = {
       },
       {
         source_table: 'players',
-        target_entity_type: 'company',
+        target_entity_type: 'organization',
         field_mapping: {
           name: 'company_name',
           city: 'city',
@@ -606,7 +621,7 @@ const DOMAIN_TEMPLATES = {
     entity_mappings: [
       {
         source_table: 'clinics',
-        target_entity_type: 'property',
+        target_entity_type: 'asset',
         field_mapping: {
           name: '{provider_name} - {city}, {state}',
           address: 'address',
@@ -619,7 +634,7 @@ const DOMAIN_TEMPLATES = {
       },
       {
         source_table: 'providers',
-        target_entity_type: 'company',
+        target_entity_type: 'organization',
         field_mapping: {
           name: 'provider_name',
           status: 'status',
@@ -661,7 +676,7 @@ const DOMAIN_TEMPLATES = {
     entity_mappings: [
       {
         source_table: 'facilities',
-        target_entity_type: 'property',
+        target_entity_type: 'asset',
         field_mapping: {
           name: '{facility_name} - {city}, {state}',
           address: 'address',
@@ -674,7 +689,7 @@ const DOMAIN_TEMPLATES = {
       },
       {
         source_table: 'operators',
-        target_entity_type: 'company',
+        target_entity_type: 'organization',
         field_mapping: {
           name: 'operator_name',
           city: 'hq_city',
@@ -724,7 +739,7 @@ const DOMAIN_TEMPLATES = {
     entity_mappings: [
       {
         source_table: 'clinics',
-        target_entity_type: 'property',
+        target_entity_type: 'asset',
         field_mapping: {
           name: '{brand_name} - {city}, {state}',
           address: 'address',
@@ -737,7 +752,7 @@ const DOMAIN_TEMPLATES = {
       },
       {
         source_table: 'operators',
-        target_entity_type: 'company',
+        target_entity_type: 'organization',
         field_mapping: {
           name: 'operator_name',
           city: 'hq_city',
