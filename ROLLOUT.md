@@ -50,6 +50,8 @@
 | `app.js` | 2865 | Core JS: nav, calendar, weather, messages, settings, copilot (was inline in index.html) |
 | `api/queue-v2.js` | 250 | Paginated queue endpoints with server-side aggregation and perf logging |
 | `schema/009_performance.sql` | 200 | Materialized views, 25+ indexes, perf_metrics table, pg_trgm |
+| `api/domains.js` | 470 | Domain expansion API: register, sources, mappings, validate, templates, sync |
+| `schema/010_domain_seeds.sql` | 200 | Seed Gov and Dia domains with sources, entity mappings, queue configs |
 | `api/config.js` | 15 | Connection status endpoint |
 | `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
 | `schema/007_queue_views.sql` | 240 | Unified queue views for operational surfaces |
@@ -288,10 +290,12 @@
 - [x] Client/server performance instrumentation — `opsPerf()` timing, `perf_metrics` table, Server-Timing headers, sendBeacon reporting
 
 ### Phase 7: Domain Expansion Framework
-- [ ] Domain registry and onboarding contract
-- [ ] Standardize domain data source mapping
-- [ ] Apply framework to Gov and Dia
-- [ ] Template for education/daycare and urgent care
+- [x] Domain onboarding API — `api/domains.js`: register, add_source, add_entity_mapping, add_queue_config, validate, toggle
+- [x] Standardized domain data source mapping — generic field mapping engine (`applyFieldMapping`) with template interpolation
+- [x] Apply framework to Gov and Dia — `schema/010_domain_seeds.sql` bootstraps both domains with sources, entity mappings, queue configs
+- [x] Templates for education/daycare and urgent care — `apply_template` action with 4 built-in templates
+- [x] Generic domain entity sync — `sync_entities` reads mappings and materializes canonical entities via proxy endpoints
+- [x] Domain validation — `validate` checks data source connectivity, updates `last_verified_at`
 
 ---
 
@@ -319,6 +323,8 @@
 | 2026-03-17 | Frontend split | index.html 3955→372 LOC: CSS→styles.css (830 LOC), JS→app.js (2865 LOC) |
 | 2026-03-17 | Materialized views | mv_work_counts + mv_user_work_counts replace expensive joins; concurrent refresh |
 | 2026-03-17 | queue-v2 endpoint | Paginated queues with Server-Timing headers; auto-fallback to v1 in ops.js |
+| 2026-03-17 | Domain expansion framework | Generic domain onboarding with templates, field mapping engine, entity sync |
+| 2026-03-17 | 4 domain templates | government, dialysis (existing), education_daycare, urgent_care (new) |
 
 ---
 

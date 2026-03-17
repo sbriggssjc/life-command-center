@@ -11,6 +11,7 @@ This directory contains the canonical data model for the Life Command Center reb
 - `007_queue_views.sql` — Unified queue views: my_work, team_queue, inbox_triage, sync_exceptions, entity_timeline, research_queue, work_counts (Phase 2)
 - `008_watchers_and_oversight.sql` — Watchers/subscribers, escalations, manager overview, unassigned work views (Phase 4)
 - `009_performance.sql` — Materialized views (mv_work_counts, mv_user_work_counts), 25+ indexes, perf_metrics table, pg_trgm (Phase 6)
+- `010_domain_seeds.sql` — Bootstrap Government and Dialysis domains with sources, entity mappings, queue configs (Phase 7)
 
 These migrations are designed for a shared Supabase project that serves as the canonical operational backbone alongside the existing Gov and Dia domain databases.
 
