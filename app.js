@@ -71,16 +71,19 @@ async function loadUserContext() {
     const res = await fetch('/api/members?action=me');
     if (res.ok) {
       const data = await res.json();
-      LCC_USER.id = data.user.id;
-      LCC_USER.email = data.user.email;
-      LCC_USER.display_name = data.user.display_name;
-      LCC_USER.avatar_url = data.user.avatar_url;
-      LCC_USER.first_name = data.user.display_name?.split(' ')[0] || 'there';
-      LCC_USER.workspace_id = data.workspace_id;
-      LCC_USER.workspace_name = data.memberships?.[0]?.workspace_name;
-      LCC_USER.role = data.role;
-      LCC_USER.memberships = data.memberships || [];
-      LCC_USER._loaded = true;
+      // Skip transitional default user — prefer localStorage defaults
+      if (data.user.id !== 'default-dev-user') {
+        LCC_USER.id = data.user.id;
+        LCC_USER.email = data.user.email;
+        LCC_USER.display_name = data.user.display_name;
+        LCC_USER.avatar_url = data.user.avatar_url;
+        LCC_USER.first_name = data.user.display_name?.split(' ')[0] || 'there';
+        LCC_USER.workspace_id = data.workspace_id;
+        LCC_USER.workspace_name = data.memberships?.[0]?.workspace_name;
+        LCC_USER.role = data.role;
+        LCC_USER.memberships = data.memberships || [];
+        LCC_USER._loaded = true;
+      }
     }
   } catch (e) {
     // Silently fall back to defaults — ops DB may not be configured yet
