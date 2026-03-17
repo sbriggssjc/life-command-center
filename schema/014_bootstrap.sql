@@ -22,7 +22,7 @@ on conflict (slug) do nothing;
 insert into users (id, email, display_name)
 values (
   'b0000000-0000-0000-0000-000000000001',
-  'sbriggssjc@gmail.com',
+  'sabriggs@northmarq.com',
   'Scott Briggs'
 )
 on conflict (email) do update set

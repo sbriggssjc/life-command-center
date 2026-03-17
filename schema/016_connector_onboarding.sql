@@ -3,10 +3,12 @@
 -- Life Command Center — Run after 014 (bootstrap) and 015 (config)
 --
 -- Registers per-user connector accounts for the owner.
--- Both connectors use Power Automate mediation (not direct API).
+-- Work email: sabriggs@northmarq.com (Outlook work + Salesforce)
+-- Personal email: scottbriggs88@outlook.com (Outlook personal)
+-- Power Automate flows already configured for both.
 -- ============================================================================
 
--- 1. Outlook connector (email + calendar sync via Power Automate)
+-- 1. Outlook connector — Work (sabriggs@northmarq.com)
 insert into connector_accounts (
   workspace_id, user_id, connector_type, execution_method,
   display_name, status, external_user_id, config
@@ -16,30 +18,48 @@ values (
   'b0000000-0000-0000-0000-000000000001',
   'outlook',
   'power_automate',
-  'Outlook — sbriggssjc@gmail.com',
-  'pending_setup',
-  'sbriggssjc@gmail.com',
-  '{"sync_flagged_emails": true, "sync_calendar": true}'::jsonb
+  'Outlook — Work (NorthMarq)',
+  'healthy',
+  'sabriggs@northmarq.com',
+  '{"account": "work", "sync_flagged_emails": true, "sync_calendar": true}'::jsonb
 )
 on conflict do nothing;
 
--- 2. Salesforce connector (activity sync via Edge Function)
+-- 2. Outlook connector — Personal (scottbriggs88@outlook.com)
 insert into connector_accounts (
   workspace_id, user_id, connector_type, execution_method,
-  display_name, status, config
+  display_name, status, external_user_id, config
+)
+values (
+  'a0000000-0000-0000-0000-000000000001',
+  'b0000000-0000-0000-0000-000000000001',
+  'outlook',
+  'power_automate',
+  'Outlook — Personal',
+  'healthy',
+  'scottbriggs88@outlook.com',
+  '{"account": "personal", "sync_flagged_emails": true, "sync_calendar": true}'::jsonb
+)
+on conflict do nothing;
+
+-- 3. Salesforce connector (activity sync via Edge Function)
+insert into connector_accounts (
+  workspace_id, user_id, connector_type, execution_method,
+  display_name, status, external_user_id, config
 )
 values (
   'a0000000-0000-0000-0000-000000000001',
   'b0000000-0000-0000-0000-000000000001',
   'salesforce',
   'direct_api',
-  'Salesforce — Briggsland Capital',
-  'pending_setup',
+  'Salesforce — NorthMarq',
+  'healthy',
+  'sabriggs@northmarq.com',
   '{"sync_tasks": true, "sync_activities": true}'::jsonb
 )
 on conflict do nothing;
 
--- 3. Verify
+-- 4. Verify
 select
   connector_type,
   execution_method,
@@ -48,4 +68,4 @@ select
   external_user_id
 from connector_accounts
 where workspace_id = 'a0000000-0000-0000-0000-000000000001'
-order by connector_type;
+order by connector_type, display_name;
