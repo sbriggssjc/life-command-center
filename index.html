@@ -603,6 +603,138 @@ body.compact .greeting { font-size: 18px; }
   .widget-grid { grid-template-columns: repeat(4, 1fr); }
   .cat-metrics { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ============================================================
+   Phase 5: Operational UX — Queue-first redesign
+   ============================================================ */
+
+/* Bottom nav — now supports scrollable 5+more or swipe nav */
+.bottom-nav { overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.bottom-nav::-webkit-scrollbar { display: none; }
+.bottom-nav .bnav { min-width: 56px; flex-shrink: 0; }
+
+/* More drawer (slides up from bottom) */
+.more-drawer-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 180; }
+.more-drawer-overlay.open { display: block; }
+.more-drawer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--s1); border-top-left-radius: 16px; border-top-right-radius: 16px; z-index: 181; transform: translateY(100%); transition: transform 0.25s ease-out; padding: 16px 16px calc(16px + var(--safe-bottom)); }
+.more-drawer.open { transform: translateY(0); }
+.more-drawer-handle { width: 36px; height: 4px; background: var(--s3); border-radius: 2px; margin: 0 auto 16px; }
+.more-drawer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.more-drawer-item { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 10px; background: none; border: none; color: var(--text2); font-size: 11px; cursor: pointer; }
+.more-drawer-item:hover, .more-drawer-item.active { background: var(--s2); color: var(--accent); }
+.more-drawer-item svg { width: 22px; height: 22px; }
+
+/* Queue item cards — used by My Work, Team Queue, Inbox */
+.q-item { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; transition: border-color 0.15s; position: relative; }
+.q-item:hover { border-color: var(--accent); }
+.q-item.overdue { border-left: 3px solid var(--red); }
+.q-item.high-pri { border-left: 3px solid var(--orange); }
+.q-item.urgent { border-left: 3px solid var(--red); animation: pulse-border 2s infinite; }
+@keyframes pulse-border { 0%,100% { border-left-color: var(--red); } 50% { border-left-color: transparent; } }
+.q-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.q-item-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-item-badges { display: flex; gap: 4px; flex-shrink: 0; }
+.q-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 6px; white-space: nowrap; }
+.q-badge.type { background: var(--s2); color: var(--text2); }
+.q-badge.domain { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.q-badge.status-open { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.q-badge.status-waiting { background: color-mix(in srgb, var(--yellow) 15%, transparent); color: var(--yellow); }
+.q-badge.status-in_progress { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.q-badge.status-new { background: color-mix(in srgb, var(--cyan) 15%, transparent); color: var(--cyan); }
+.q-badge.pri-urgent { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+.q-badge.pri-high { background: color-mix(in srgb, var(--orange) 15%, transparent); color: var(--orange); }
+.q-item-meta { display: flex; gap: 12px; font-size: 12px; color: var(--text2); flex-wrap: wrap; align-items: center; }
+.q-item-meta .q-entity { color: var(--accent); cursor: pointer; }
+.q-item-meta .q-entity:hover { text-decoration: underline; }
+.q-item-meta .q-due { display: flex; align-items: center; gap: 3px; }
+.q-item-meta .q-due.overdue { color: var(--red); font-weight: 600; }
+.q-item-meta .q-assignee { display: flex; align-items: center; gap: 3px; }
+
+/* Quick-action bar on queue items */
+.q-actions { display: flex; gap: 4px; margin-top: 8px; }
+.q-action { font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--s2); color: var(--text2); cursor: pointer; display: flex; align-items: center; gap: 3px; }
+.q-action:hover { border-color: var(--accent); color: var(--text); }
+.q-action.primary { background: var(--accent2); border-color: var(--accent); color: #fff; }
+.q-action.danger { color: var(--red); }
+.q-action.danger:hover { border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, var(--s2)); }
+
+/* Freshness indicator — shows how stale data is */
+.freshness { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text3); }
+.freshness-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.freshness-dot.fresh { background: var(--green); }
+.freshness-dot.stale { background: var(--yellow); }
+.freshness-dot.old { background: var(--red); }
+.freshness-dot.unknown { background: var(--text3); }
+
+/* Sync warning banner */
+.sync-banner { background: color-mix(in srgb, var(--yellow) 10%, var(--s1)); border: 1px solid color-mix(in srgb, var(--yellow) 30%, var(--border)); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.sync-banner.error { background: color-mix(in srgb, var(--red) 10%, var(--s1)); border-color: color-mix(in srgb, var(--red) 30%, var(--border)); }
+.sync-banner .sync-icon { font-size: 16px; flex-shrink: 0; }
+.sync-banner .sync-msg { flex: 1; color: var(--text2); }
+.sync-banner .sync-action { font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 600; white-space: nowrap; }
+.sync-banner .sync-action:hover { text-decoration: underline; }
+
+/* Page header with freshness + filter */
+.ops-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+.ops-header h2 { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.ops-header .ops-controls { display: flex; gap: 6px; align-items: center; }
+
+/* Filter pills for ops pages */
+.ops-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.ops-filter { padding: 5px 12px; border-radius: 16px; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--s1); color: var(--text2); display: flex; align-items: center; gap: 4px; }
+.ops-filter.active { background: var(--accent2); border-color: var(--accent); color: #fff; }
+.ops-filter .count { font-weight: 700; }
+
+/* Entity cards */
+.entity-card { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s; }
+.entity-card:hover { border-color: var(--accent); }
+.entity-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.entity-card-name { font-size: 15px; font-weight: 600; }
+.entity-card-type { font-size: 10px; padding: 2px 8px; border-radius: 6px; background: var(--s2); color: var(--text2); text-transform: uppercase; }
+.entity-card-meta { font-size: 12px; color: var(--text2); display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* Metrics dashboard grid */
+.metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 700px) { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
+.metric-card-ops { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.metric-card-ops .mc-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
+.metric-card-ops .mc-value { font-size: 28px; font-weight: 700; }
+.metric-card-ops .mc-sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.metric-card-ops .mc-value.green { color: var(--green); }
+.metric-card-ops .mc-value.red { color: var(--red); }
+.metric-card-ops .mc-value.yellow { color: var(--yellow); }
+
+/* Sync health cards */
+.sync-card { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+.sync-card.healthy { border-left: 3px solid var(--green); }
+.sync-card.degraded { border-left: 3px solid var(--yellow); }
+.sync-card.error { border-left: 3px solid var(--red); }
+.sync-card-icon { font-size: 20px; flex-shrink: 0; }
+.sync-card-info { flex: 1; min-width: 0; }
+.sync-card-name { font-size: 14px; font-weight: 600; }
+.sync-card-status { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.sync-card-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* Team member row for manager oversight */
+.team-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--s1); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; }
+.team-row:hover { border-color: var(--accent); }
+.team-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent2); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #fff; flex-shrink: 0; }
+.team-info { flex: 1; min-width: 0; }
+.team-name { font-size: 14px; font-weight: 600; }
+.team-role { font-size: 11px; color: var(--text2); }
+.team-stats { display: flex; gap: 16px; font-size: 12px; color: var(--text2); }
+.team-stats .stat { display: flex; flex-direction: column; align-items: center; }
+.team-stats .stat-n { font-size: 16px; font-weight: 700; color: var(--text); }
+
+/* Empty state */
+.ops-empty { text-align: center; padding: 40px 16px; color: var(--text2); font-size: 14px; }
+.ops-empty svg { width: 48px; height: 48px; stroke: var(--text3); margin-bottom: 12px; display: block; margin-left: auto; margin-right: auto; }
+
+/* Triage select-all checkbox bar */
+.triage-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--s2); border-radius: 8px; margin-bottom: 10px; font-size: 12px; color: var(--text2); }
+.triage-bar input[type="checkbox"] { accent-color: var(--accent); }
+.triage-bar .triage-count { font-weight: 600; color: var(--text); }
+.triage-bar .triage-actions { margin-left: auto; display: flex; gap: 6px; }
 </style>
 </head>
 <body>
@@ -662,10 +794,10 @@ body.compact .greeting { font-size: 18px; }
           <div class="home-main">
             <!-- Stats -->
             <div class="widget-grid" id="homeStats">
-              <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Salesforce</div></div>
-              <div class="stat-card clickable" onclick="navTo('pageMessages')"><div class="stat-label">Flagged Emails</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Outlook</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageMyWork')"><div class="stat-label">My Actions</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Assigned to me</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageInbox')"><div class="stat-label">Inbox</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Needs triage</div></div>
               <div class="stat-card clickable" onclick="navTo('pageCal')"><div class="stat-label">Today's Events</div><div class="stat-value" id="statEvents">-</div><div class="stat-sub">Calendar</div></div>
-              <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
+              <div class="stat-card clickable" onclick="navTo('pageMyWork')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Actions</div></div>
             </div>
 
             <!-- Weather -->
@@ -728,6 +860,27 @@ body.compact .greeting { font-size: 18px; }
       </div>
     </div>
 
+    <!-- MY WORK — personal queue: assigned actions, owned items -->
+    <div class="page" id="pageMyWork">
+      <div class="page-inner">
+        <div id="myWorkContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- TEAM QUEUE — shared queue visible to all, unassigned + team items -->
+    <div class="page" id="pageTeamQueue">
+      <div class="page-inner">
+        <div id="teamQueueContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- INBOX — triage-first view with bulk actions -->
+    <div class="page" id="pageInbox">
+      <div class="page-inner">
+        <div id="inboxContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
     <!-- CALENDAR -->
     <div class="page" id="pageCal">
       <div class="page-inner">
@@ -736,31 +889,42 @@ body.compact .greeting { font-size: 18px; }
       </div>
     </div>
 
-    <!-- BUSINESS -->
+    <!-- ENTITIES — canonical model browser -->
+    <div class="page" id="pageEntities">
+      <div class="page-inner">
+        <div id="entitiesContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- RESEARCH — research task queue -->
+    <div class="page" id="pageResearch">
+      <div class="page-inner">
+        <div id="researchContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- METRICS — dashboard with work counts & team stats -->
+    <div class="page" id="pageMetrics">
+      <div class="page-inner">
+        <div id="metricsContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- SYNC HEALTH — connector status & sync job monitoring -->
+    <div class="page" id="pageSyncHealth">
+      <div class="page-inner">
+        <div id="syncHealthContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- BUSINESS (legacy — domain dashboards) -->
     <div class="page" id="pageBiz">
       <div class="page-inner" id="bizPageInner">
         <div id="bizContent"><div class="loading"><span class="spinner"></span></div></div>
       </div>
     </div>
 
-    <!-- PERSONAL -->
-    <div class="page" id="pagePersonal">
-      <div class="page-inner">
-        <h2 style="font-size:18px;margin-bottom:16px">Personal</h2>
-        <!-- Personal Calendar -->
-        <div class="widget">
-          <div class="widget-title">Personal Calendar</div>
-          <div id="personalCalendar"><div class="loading"><span class="spinner"></span></div></div>
-        </div>
-        <!-- Personal To Do Lists -->
-        <div class="widget">
-          <div class="widget-title">Personal Tasks</div>
-          <div id="personalTasks"><div class="loading"><span class="spinner"></span></div></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- MESSAGES -->
+    <!-- MESSAGES (legacy — email view) -->
     <div class="page" id="pageMessages">
       <div class="page-inner">
         <h2 style="font-size:18px;margin-bottom:16px">Messages</h2>
@@ -785,28 +949,68 @@ body.compact .greeting { font-size: 18px; }
     </div>
   </div>
 
-  <!-- Bottom Nav -->
+  <!-- Bottom Nav — 5 primary tabs + More -->
   <div class="bottom-nav">
     <button class="bnav active" data-page="pageHome">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       Today
     </button>
-    <button class="bnav" data-page="pageBiz">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
-      Business
+    <button class="bnav" data-page="pageMyWork">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+      My Work
     </button>
-    <button class="bnav" data-page="pageCal">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-      Calendar
+    <button class="bnav" data-page="pageTeamQueue">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      Queue
     </button>
-    <button class="bnav" data-page="pageMessages">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-      Messages
+    <button class="bnav" data-page="pageInbox">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
+      Inbox
     </button>
-    <button class="bnav" data-page="pageSettings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-      Settings
+    <button class="bnav" id="moreNavBtn" onclick="toggleMoreDrawer()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
+      More
     </button>
+  </div>
+
+  <!-- More Drawer — additional nav items -->
+  <div class="more-drawer-overlay" id="moreDrawerOverlay" onclick="toggleMoreDrawer()"></div>
+  <div class="more-drawer" id="moreDrawer">
+    <div class="more-drawer-handle"></div>
+    <div class="more-drawer-grid">
+      <button class="more-drawer-item" data-page="pageCal" onclick="navToFromMore('pageCal')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Calendar
+      </button>
+      <button class="more-drawer-item" data-page="pageEntities" onclick="navToFromMore('pageEntities')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
+        Entities
+      </button>
+      <button class="more-drawer-item" data-page="pageResearch" onclick="navToFromMore('pageResearch')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Research
+      </button>
+      <button class="more-drawer-item" data-page="pageMetrics" onclick="navToFromMore('pageMetrics')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Metrics
+      </button>
+      <button class="more-drawer-item" data-page="pageSyncHealth" onclick="navToFromMore('pageSyncHealth')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        Sync
+      </button>
+      <button class="more-drawer-item" data-page="pageBiz" onclick="navToFromMore('pageBiz')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+        Business
+      </button>
+      <button class="more-drawer-item" data-page="pageMessages" onclick="navToFromMore('pageMessages')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        Messages
+      </button>
+      <button class="more-drawer-item" data-page="pageSettings" onclick="navToFromMore('pageSettings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Settings
+      </button>
+    </div>
   </div>
 </div>
 
@@ -1150,10 +1354,69 @@ function dotClass(status) {
   return m[status]||"gov-dot dim";
 }
 
-// Programmatic page navigation — simulates clicking a bottom nav button
+// Programmatic page navigation — supports both bottom nav and more drawer items
 function navTo(pageId) {
+  // Try bottom nav button first
   const btn = document.querySelector(`.bnav[data-page="${pageId}"]`);
-  if (btn) btn.click();
+  if (btn) { btn.click(); return; }
+  // Fall back to more drawer navigation
+  navToFromMore(pageId);
+}
+
+function navToFromMore(pageId) {
+  // Close more drawer
+  document.getElementById('moreDrawerOverlay').classList.remove('open');
+  document.getElementById('moreDrawer').classList.remove('open');
+  // Deactivate all nav buttons
+  document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
+  // Activate the more drawer item
+  const moreItem = document.querySelector(`.more-drawer-item[data-page="${pageId}"]`);
+  if (moreItem) moreItem.classList.add('active');
+  // Show the page
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const page = document.getElementById(pageId);
+  if (page) page.classList.add('active');
+  // Hide biz sub-tabs unless on biz page
+  document.getElementById('bizSubTabs').style.display = pageId === 'pageBiz' ? 'flex' : 'none';
+  document.getElementById('govInnerTabs').style.display = 'none';
+  document.getElementById('diaInnerTabs').style.display = 'none';
+  // Trigger page-specific loading
+  handlePageLoad(pageId);
+}
+
+function toggleMoreDrawer() {
+  document.getElementById('moreDrawerOverlay').classList.toggle('open');
+  document.getElementById('moreDrawer').classList.toggle('open');
+}
+
+// Centralized page load handler — fires ops.js renderers for canonical model pages
+function handlePageLoad(pageId) {
+  switch(pageId) {
+    case 'pageMyWork': if (typeof renderMyWork === 'function') renderMyWork(); break;
+    case 'pageTeamQueue': if (typeof renderTeamQueue === 'function') renderTeamQueue(); break;
+    case 'pageInbox': if (typeof renderInboxTriage === 'function') renderInboxTriage(); break;
+    case 'pageEntities': if (typeof renderEntitiesPage === 'function') renderEntitiesPage(); break;
+    case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
+    case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
+    case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;
+    case 'pageCal': renderCalendarFull(); break;
+    case 'pageBiz':
+      if (currentBizTab === 'government') {
+        document.getElementById('govInnerTabs').style.display = 'flex';
+        if (govConnected && !govDataLoaded) loadGovData();
+        else renderBizContent();
+      } else if (currentBizTab === 'dialysis') {
+        document.getElementById('diaInnerTabs').style.display = 'flex';
+        if (diaConnected && !diaDataLoaded) loadDiaData();
+        else renderBizContent();
+      } else {
+        renderBizContent();
+      }
+      break;
+    case 'pageMessages': loadMessages(); break;
+    case 'pageSettings': renderSettings(); break;
+  }
 }
 
 function showToast(msg, type = '') {
@@ -1252,35 +1515,19 @@ function renderDiaTab(){
 // ============================================================
 // NAV & BIZ TAB HANDLING
 // ============================================================
-document.querySelectorAll('.bnav').forEach(btn => {
+document.querySelectorAll('.bnav[data-page]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(btn.dataset.page).classList.add('active');
+    const page = document.getElementById(btn.dataset.page);
+    if (page) page.classList.add('active');
+    // Hide all secondary tab bars unless on Biz page
     document.getElementById('bizSubTabs').style.display = btn.dataset.page === 'pageBiz' ? 'flex' : 'none';
-    if (btn.dataset.page === 'pageBiz') {
-      document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
-      document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
-      // Auto-load data on first navigation if connected
-      console.log('Business nav:', { currentBizTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded, currentDiaTab });
-      if (currentBizTab === 'government' && govConnected && !govDataLoaded) {
-        console.log('→ calling loadGovData()');
-        loadGovData();
-      } else if (currentBizTab === 'dialysis' && diaConnected && !diaDataLoaded && currentDiaTab !== 'activity') {
-        console.log('→ calling loadDiaData()');
-        loadDiaData();
-      } else {
-        console.log('→ calling renderBizContent()');
-        renderBizContent();
-      }
-    } else {
-      document.getElementById('govInnerTabs').style.display = 'none';
-      document.getElementById('diaInnerTabs').style.display = 'none';
-    }
-    if (btn.dataset.page === 'pageCal') renderCalendarFull();
-    if (btn.dataset.page === 'pageMessages') loadMessages();
-    if (btn.dataset.page === 'pageSettings') renderSettings();
+    document.getElementById('govInnerTabs').style.display = 'none';
+    document.getElementById('diaInnerTabs').style.display = 'none';
+    handlePageLoad(btn.dataset.page);
   });
 });
 
@@ -3696,5 +3943,6 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !is
 <script src="gov.js"></script>
 <script src="dialysis.js"></script>
 <script src="detail.js"></script>
+<script src="ops.js"></script>
 </body>
 </html>

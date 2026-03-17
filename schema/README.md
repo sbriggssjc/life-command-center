@@ -13,6 +13,9 @@ This directory contains the canonical data model for the Life Command Center reb
 
 These migrations are designed for a shared Supabase project that serves as the canonical operational backbone alongside the existing Gov and Dia domain databases.
 
+## Frontend Modules (Phase 5)
+- `ops.js` — Operational UI module rendering My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health
+
 ## Applying Migrations
 
 Run these in order against your ops Supabase project. Each migration is idempotent (`CREATE IF NOT EXISTS`). RLS policies in `006` depend on all prior tables existing.
