@@ -634,7 +634,7 @@ async function renderMetricsPage() {
         <div class="team-avatar">${initials}</div>
         <div class="team-info">
           <div class="team-name">${esc(member.display_name)}</div>
-          <div class="team-role">${member.role || 'member'}</div>
+          <div class="team-role">${member.role || 'viewer'}</div>
         </div>
         <div class="team-stats">
           <div class="stat"><span class="stat-n">${member.active_actions || 0}</span>Active</div>

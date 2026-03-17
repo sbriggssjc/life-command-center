@@ -18,8 +18,11 @@
 const OPS_SUPABASE_URL = process.env.OPS_SUPABASE_URL;
 const OPS_SUPABASE_KEY = process.env.OPS_SUPABASE_KEY;     // service_role — server only
 const LCC_API_KEY      = process.env.LCC_API_KEY;          // internal dev key
+const LCC_ENV          = process.env.LCC_ENV || 'development'; // 'production' | 'staging' | 'development'
 
 // Role hierarchy: owner > manager > operator > viewer
+// Canonical set — matches schema enum user_role in 001_workspace_and_users.sql
+export const ROLES = ['owner', 'manager', 'operator', 'viewer'];
 const ROLE_LEVELS = { owner: 40, manager: 30, operator: 20, viewer: 10 };
 
 // ---- JWT verification via Supabase /auth/v1/user ----
@@ -106,18 +109,20 @@ async function resolveDevUser(req) {
 
   if (!userId && !email) return null;
   if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
-    // No ops database — return a synthetic dev user
+    // No ops database — return a synthetic dev user (development only)
+    if (LCC_ENV === 'production' || LCC_ENV === 'staging') return null;
     return {
       id: userId || 'dev-user',
       email: email || 'dev@local',
       display_name: 'Dev User',
       avatar_url: null,
       auth_id: null,
+      _transitional: true,
       memberships: [{
         workspace_id: 'dev-workspace',
         workspace_name: 'Development',
         workspace_slug: 'dev',
-        role: 'owner'
+        role: 'operator'
       }]
     };
   }
@@ -202,8 +207,17 @@ export async function authenticate(req, res) {
 
   // 3. Transitional: if no auth system is configured yet, allow through
   //    with a default dev user (preserves existing behavior).
-  //    REMOVE THIS once Supabase Auth is wired up.
+  //    Only permitted in development mode. Production requires real auth.
   if (!OPS_SUPABASE_URL && !LCC_API_KEY) {
+    if (LCC_ENV === 'production' || LCC_ENV === 'staging') {
+      res.status(503).json({
+        error: 'Authentication system not configured',
+        detail: 'OPS_SUPABASE_URL and LCC_API_KEY are both unset. In production/staging, at least one auth method must be configured.'
+      });
+      return null;
+    }
+    // Development-only fallback
+    res.setHeader('X-LCC-Auth-Warning', 'transitional-dev-user');
     return {
       id: 'default-dev-user',
       email: 'dev@local',

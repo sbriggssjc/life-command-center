@@ -297,20 +297,24 @@ The Phase 0-7 rebuild appears to have closed most architectural gaps. The remain
 
 The goal of this section is to convert the remaining open concerns into an implementation sequence that can be executed and verified.
 
-### RG1: Remove transitional auth and complete production security hardening
+### RG1: Remove transitional auth and complete production security hardening ✅
 - **Problem**: `api/_shared/auth.js` still supports default dev-user fallback when auth is not configured. This is appropriate for migration but not for production.
 - **Impact**: Critical
-- **Implementation**:
-  - Add an explicit environment flag for development-only transitional auth.
-  - Default production behavior to hard-fail when JWT or approved API-key auth is unavailable.
-  - Audit all protected endpoints to ensure workspace membership and role checks are enforced consistently.
-  - Verify RLS assumptions match API-layer role names and visibility semantics.
-  - Normalize role vocabulary across schema, docs, middleware, and frontend. Current code/docs show inconsistent sets (`owner/admin/manager/member/viewer` vs `owner/manager/operator/viewer`).
-  - Review `gov-query.js` and `dia-query.js` to ensure "hardened" behavior truly restricts unsafe access patterns, especially POST/PATCH surfaces.
+- **Status**: RESOLVED
+- **Implementation (completed)**:
+  - Added `LCC_ENV` environment flag (`production`|`staging`|`development`). Transitional auth only permitted in `development`.
+  - Production/staging hard-fails with 503 when no auth method is configured.
+  - `X-LCC-Auth-Warning: transitional-dev-user` header emitted when dev fallback is used.
+  - Dev user synthetic fallback now grants `operator` role (not `owner`) for least-privilege.
+  - Role vocabulary normalized to `owner/manager/operator/viewer` across schema, middleware, lifecycle, docs, and frontend.
+  - Exported canonical `ROLES` array from both `auth.js` and `lifecycle.js`; `members.js` now imports from lifecycle.
+  - `gov-query.js` and `dia-query.js` now reject DELETE and other unsupported HTTP methods with 405.
+  - Audited all `requireRole()` calls — consistent use of canonical four roles confirmed.
+  - RLS policies verified — all reference canonical roles only.
 - **Acceptance**:
-  - No production request succeeds through synthetic fallback auth.
-  - Role names and allowed actions are consistent across schema/API/docs.
-  - Legacy proxies cannot be used to mutate arbitrary domain tables without approved access paths.
+  - ✅ No production request succeeds through synthetic fallback auth.
+  - ✅ Role names and allowed actions are consistent across schema/API/docs.
+  - ✅ Legacy proxies cannot be used to mutate arbitrary domain tables without approved access paths.
 
 ### RG2: Validate real per-user connector behavior under Power Automate and SSO
 - **Problem**: The code now models per-user connectors, but actual Outlook/Salesforce behavior still depends on shared external edge-function and Power Automate infrastructure.

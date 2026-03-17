@@ -11,6 +11,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { ROLES } from './_shared/lifecycle.js';
 
 const OPS_URL = process.env.OPS_SUPABASE_URL;
 const OPS_KEY = process.env.OPS_SUPABASE_KEY;
@@ -32,7 +33,7 @@ async function opsQuery(method, path, body) {
   return { ok: res.ok, status: res.status, data: text ? JSON.parse(text) : null };
 }
 
-const VALID_ROLES = ['owner', 'manager', 'operator', 'viewer'];
+const VALID_ROLES = ROLES;
 
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
