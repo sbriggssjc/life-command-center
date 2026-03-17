@@ -1253,25 +1253,25 @@ async function researchSave() {
 }
 
 async function saveOwnership(rec) {
-  const salePrice = parseFloat(q('#res-sale-price').value) || null;
-  const capRate = parseFloat(q('#res-cap-rate').value) || null;
-  
+  const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
+  const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
+
   const data = {
     sale_price: salePrice,
     cap_rate: capRate,
-    recorded_owner_name: q('#res-recorded-owner').value || null,
-    state_of_incorporation: q('#res-incorporation').value || null,
-    recorded_owner_phone: q('#res-phone').value || null,
-    recorded_owner_address: q('#res-mailing').value || null,
-    true_owner_name: q('#res-true-owner').value || null,
-    principal_names: q('#res-principal-names').value || null,
-    phone_2: q('#res-phone-2').value || null,
-    mailing_address_2: q('#res-mailing-2').value || null,
-    rba: parseFloat(q('#res-rba').value) || null,
-    land_acres: parseFloat(q('#res-land-acres').value) || null,
-    year_built: parseInt(q('#res-year-built').value) || null,
-    year_renovated: parseInt(q('#res-year-renovated').value) || null,
-    research_notes: q('#res-notes').value || null,
+    recorded_owner_name: q('#res-recorded-owner')?.value || null,
+    state_of_incorporation: q('#res-incorporation')?.value || null,
+    recorded_owner_phone: q('#res-phone')?.value || null,
+    recorded_owner_address: q('#res-mailing')?.value || null,
+    true_owner_name: q('#res-true-owner')?.value || null,
+    principal_names: q('#res-principal-names')?.value || null,
+    phone_2: q('#res-phone-2')?.value || null,
+    mailing_address_2: q('#res-mailing-2')?.value || null,
+    rba: parseFloat(q('#res-rba')?.value) || null,
+    land_acres: parseFloat(q('#res-land-acres')?.value) || null,
+    year_built: parseInt(q('#res-year-built')?.value) || null,
+    year_renovated: parseInt(q('#res-year-renovated')?.value) || null,
+    research_notes: q('#res-notes')?.value || null,
     research_status: 'completed'
   };
   
@@ -1283,9 +1283,9 @@ async function saveOwnership(rec) {
 }
 
 async function saveLead(rec) {
-  const salePrice = parseFloat(q('#res-sale-price').value) || null;
-  const capRate = parseFloat(q('#res-cap-rate').value) || null;
-  const quickStatus = q('#res-quick-status').value;
+  const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
+  const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
+  const quickStatus = q('#res-quick-status')?.value || null;
   
   const data = {
     recorded_owner: q('#res-recorded-owner')?.value || null,
@@ -1346,10 +1346,10 @@ async function patchRecord(table, idCol, idVal, data) {
 }
 
 async function saveLoanFields(rec) {
-  const lenderName = q('#res-lender').value;
-  const loanAmount = parseFloat(q('#res-loan-amount').value);
-  const loanType = q('#res-loan-type').value;
-  const loanStatus = q('#res-loan-status').value;
+  const lenderName = q('#res-lender')?.value || null;
+  const loanAmount = parseFloat(q('#res-loan-amount')?.value) || null;
+  const loanType = q('#res-loan-type')?.value || null;
+  const loanStatus = q('#res-loan-status')?.value || null;
   
   if (!lenderName && !loanAmount) return;
   
