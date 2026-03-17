@@ -119,75 +119,53 @@ async function loadDiaData() {
       reconciliation: {}
     };
     
-    // Load freshness
-    const freshness = await diaQuery('v_counts_freshness', '*');
-    if (freshness && freshness.length > 0) {
-      diaData.freshness = freshness[0];
-    }
-    
-    // Load inventory summary
-    const invSummary = await diaQuery('v_clinic_inventory_diff_summary', '*');
+    // ── BATCH 1: Core data (all independent, run in parallel) ──────────────
+    const [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw] = await Promise.all([
+      diaQuery('v_counts_freshness', '*').catch(e => { console.warn('Freshness view timeout', e); return []; }),
+      diaQuery('v_clinic_inventory_diff_summary', '*').catch(e => { console.warn('Inv summary timeout', e); return []; }),
+      diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 500 }).catch(e => { console.warn('Inv changes timeout', e); return []; }),
+      diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=gt.0', order: 'delta_patients.desc', limit: 10 }).catch(() => []),
+      diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=lt.0', order: 'delta_patients.asc', limit: 10 }).catch(() => [])
+    ]);
+    if (freshness && freshness.length > 0) diaData.freshness = freshness[0];
     if (invSummary && invSummary.length > 0) {
-      invSummary.forEach(row => {
-        diaData.inventorySummary[row.change_type] = row;
-      });
+      invSummary.forEach(row => { diaData.inventorySummary[row.change_type] = row; });
     }
-    
-    // Load latest inventory changes
-    const invChanges = await diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 500 });
     diaData.inventoryChanges = invChanges || [];
-    
-    // Load top movers from month-over-month patient counts
+
+    // Enrich movers with facility names
     try {
-      const [moversUpRaw, moversDownRaw] = await Promise.all([
-        diaQuery('v_facility_patient_counts_mom', '*', {
-          filter: 'delta_patients=gt.0',
-          order: 'delta_patients.desc',
-          limit: 10
-        }),
-        diaQuery('v_facility_patient_counts_mom', '*', {
-          filter: 'delta_patients=lt.0',
-          order: 'delta_patients.asc',
-          limit: 10
-        })
-      ]);
-      // Collect all mover clinic_ids and batch-lookup facility names
       const allMovers = [...(moversUpRaw || []), ...(moversDownRaw || [])];
       const moverIds = [...new Set(allMovers.map(r => r.clinic_id).filter(Boolean))];
       const nameMap = {};
       if (moverIds.length > 0) {
         try {
           const nameRows = await diaQuery('medicare_clinics', 'medicare_id,facility_name', {
-            filter: 'medicare_id=in.(' + moverIds.join(',') + ')',
-            limit: 30
+            filter: 'medicare_id=in.(' + moverIds.join(',') + ')', limit: 30
           });
           (nameRows || []).forEach(r => { if (r.medicare_id) nameMap[r.medicare_id] = r.facility_name; });
         } catch (e) { console.warn('name lookup failed', e); }
       }
-      // Also check inventory cache
       (diaData.inventoryChanges || []).forEach(r => {
         if (r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) nameMap[r.clinic_id] = r.facility_name;
       });
-      const enrich = (arr) => (arr || []).map(r => ({
-        ...r,
-        facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id)
-      }));
+      const enrich = (arr) => (arr || []).map(r => ({ ...r, facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id) }));
       diaData.moversUp = enrich(moversUpRaw);
       diaData.moversDown = enrich(moversDownRaw);
     } catch (e) {
-      console.warn('Failed to load movers MoM data', e);
+      console.warn('Failed to enrich movers data', e);
       diaData.moversUp = [];
       diaData.moversDown = [];
     }
-    
-    // Load NPI + research tab data in parallel (property review queue can timeout so don't block others)
+
+    // ── BATCH 2: NPI + research tab data (all independent, run in parallel) ──
     const [npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon] = await Promise.all([
-      diaQuery('v_npi_inventory_signal_summary', '*'),
-      diaQuery('v_npi_inventory_signals', '*', { limit: 300 }),
-      diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(e => { console.warn('Property review queue timeout/error', e); return []; }),
-      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }),
-      diaQuery('research_queue_outcomes', '*', { limit: 500 }),
-      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 })
+      diaQuery('v_npi_inventory_signal_summary', '*').catch(() => []),
+      diaQuery('v_npi_inventory_signals', '*', { limit: 300 }).catch(() => []),
+      diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(() => []),
+      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }).catch(() => []),
+      diaQuery('research_queue_outcomes', '*', { limit: 500 }).catch(() => []),
+      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(() => [])
     ]);
     if (npiSignalSummary && npiSignalSummary.length > 0) {
       npiSignalSummary.forEach(row => { diaData.npiSummary[row.signal_type] = row; });
