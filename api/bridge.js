@@ -16,10 +16,10 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps } from './_shared/ops-db.js';
+import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { buildTransitionActivity } from './_shared/lifecycle.js';
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
         error: `Invalid action. Use: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity`
       });
   }
-}
+});
 
 // ============================================================================
 // BRIDGE: Generic activity logging for any domain save operation

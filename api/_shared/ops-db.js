@@ -76,3 +76,28 @@ export function requireOps(res) {
   }
   return false;
 }
+
+/**
+ * Wrap an async handler with top-level error handling.
+ * Catches unhandled errors and returns a structured 500 response
+ * instead of crashing the serverless function.
+ *
+ * Usage:
+ *   import { withErrorHandler } from './_shared/ops-db.js';
+ *   export default withErrorHandler(async (req, res) => { ... });
+ */
+export function withErrorHandler(handler) {
+  return async (req, res) => {
+    try {
+      return await handler(req, res);
+    } catch (err) {
+      console.error(`[LCC API Error] ${req.method} ${req.url}:`, err.message || err);
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: 'Internal server error',
+          message: process.env.LCC_ENV === 'development' ? err.message : undefined
+        });
+      }
+    }
+  };
+}

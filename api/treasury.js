@@ -1,5 +1,9 @@
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+import { handleCors } from './_shared/auth.js';
+import { withErrorHandler } from './_shared/ops-db.js';
+
+export default withErrorHandler(async function handler(req, res) {
+  if (handleCors(req, res)) return;
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
 
   try {
@@ -107,4 +111,4 @@ export default async function handler(req, res) {
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
-}
+});

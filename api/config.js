@@ -1,7 +1,12 @@
 // Vercel serverless function: reports connection status
 // Keys stay server-side — never sent to browser
-export default function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+import { handleCors } from './_shared/auth.js';
+import { withErrorHandler } from './_shared/ops-db.js';
+
+export default withErrorHandler(async function handler(req, res) {
+  if (handleCors(req, res)) return;
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+
   res.setHeader('Cache-Control', 'no-store');
 
   res.status(200).json({
@@ -12,4 +17,4 @@ export default function handler(req, res) {
       connected: !!process.env.DIA_SUPABASE_KEY
     }
   });
-}
+});

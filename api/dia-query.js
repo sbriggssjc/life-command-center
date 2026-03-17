@@ -3,7 +3,7 @@
 // Hardened with table allowlist, input validation, and route-level auth
 import {
   DIA_READ_TABLES, DIA_WRITE_TABLES,
-  isAllowedTable, safeLimit, safeSelect
+  isAllowedTable, safeLimit, safeSelect, safeColumn
 } from './_shared/allowlist.js';
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
 
@@ -33,7 +33,8 @@ export default async function handler(req, res) {
   }
 
   const diaKey = process.env.DIA_SUPABASE_KEY;
-  const diaUrl = process.env.DIA_SUPABASE_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co';
+  const diaUrl = process.env.DIA_SUPABASE_URL;
+  if (!diaUrl) return res.status(500).json({ error: 'DIA_SUPABASE_URL not configured' });
 
   if (!diaKey) {
     return res.status(500).json({ error: 'DIA_SUPABASE_KEY not configured' });
@@ -62,7 +63,8 @@ export default async function handler(req, res) {
       if (filter) {
         const eqIdx = filter.indexOf('=');
         if (eqIdx > 0) {
-          const col = filter.substring(0, eqIdx);
+          const col = safeColumn(filter.substring(0, eqIdx));
+          if (!col) return res.status(400).json({ error: 'Invalid column name in filter' });
           const val = filter.substring(eqIdx + 1);
           patchUrl += `?${encodeURIComponent(col)}=${encodeURIComponent(val)}`;
         }
@@ -72,7 +74,8 @@ export default async function handler(req, res) {
       if (filter2) {
         const eqIdx = filter2.indexOf('=');
         if (eqIdx > 0) {
-          const col = filter2.substring(0, eqIdx);
+          const col = safeColumn(filter2.substring(0, eqIdx));
+          if (!col) return res.status(400).json({ error: 'Invalid column name in filter2' });
           const val = filter2.substring(eqIdx + 1);
           patchUrl += `${patchUrl.includes('?') ? '&' : '?'}${encodeURIComponent(col)}=${encodeURIComponent(val)}`;
         }
@@ -127,7 +130,8 @@ export default async function handler(req, res) {
   if (filter) {
     const eqIdx = filter.indexOf('=');
     if (eqIdx > 0) {
-      const col = filter.substring(0, eqIdx);
+      const col = safeColumn(filter.substring(0, eqIdx));
+      if (!col) return res.status(400).json({ error: 'Invalid column name in filter' });
       const val = filter.substring(eqIdx + 1);
       url.searchParams.set(col, val);
     }

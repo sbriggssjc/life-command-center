@@ -11,7 +11,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps } from './_shared/ops-db.js';
+import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -43,7 +43,7 @@ const DEFAULT_FLAGS = {
   freshness_indicators: true,      // true = show green/yellow/red freshness dots
 };
 
-export default async function handler(req, res) {
+export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -126,4 +126,4 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+});
