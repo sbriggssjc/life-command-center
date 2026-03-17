@@ -9,6 +9,7 @@ This directory contains the canonical data model for the Life Command Center reb
 - `005_domains.sql` — Domain registry and domain data source mapping
 - `006_rls_policies.sql` — Row-level security policies for all tables (Phase 1)
 - `007_queue_views.sql` — Unified queue views: my_work, team_queue, inbox_triage, sync_exceptions, entity_timeline, research_queue, work_counts (Phase 2)
+- `008_watchers_and_oversight.sql` — Watchers/subscribers, escalations, manager overview, unassigned work views (Phase 4)
 
 These migrations are designed for a shared Supabase project that serves as the canonical operational backbone alongside the existing Gov and Dia domain databases.
 
