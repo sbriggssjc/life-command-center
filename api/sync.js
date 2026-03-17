@@ -23,6 +23,24 @@ import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycl
 // Edge function base URL (existing ai-copilot deployment)
 const EDGE_FN_URL = process.env.EDGE_FUNCTION_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 
+/**
+ * Build per-user headers for edge function calls.
+ * Passes connector identity so edge functions can scope data to the correct user.
+ */
+function connectorHeaders(connector) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (connector.external_user_id) {
+    headers['X-LCC-External-User'] = connector.external_user_id;
+  }
+  if (connector.config?.flow_id) {
+    headers['X-LCC-Flow-Id'] = connector.config.flow_id;
+  }
+  if (connector.config?.tenant_id) {
+    headers['X-LCC-Tenant-Id'] = connector.config.tenant_id;
+  }
+  return headers;
+}
+
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
@@ -42,7 +60,8 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     if (action === 'health') return await handleHealth(req, res, user, workspaceId);
     if (action === 'jobs') return await handleJobs(req, res, user, workspaceId);
-    return res.status(400).json({ error: 'Invalid GET action. Use: health, jobs' });
+    if (action === 'isolation_check') return await handleIsolationCheck(req, res, user, workspaceId);
+    return res.status(400).json({ error: 'Invalid GET action. Use: health, jobs, isolation_check' });
   }
 
   // ---- POST endpoints ----
@@ -57,8 +76,9 @@ export default async function handler(req, res) {
       case 'ingest_sf_activities': return await ingestSfActivities(req, res, user, workspaceId);
       case 'outbound':            return await handleOutbound(req, res, user, workspaceId);
       case 'retry':               return await handleRetry(req, res, user, workspaceId);
+      case 'verify_connector':    return await handleVerifyConnector(req, res, user, workspaceId);
       default:
-        return res.status(400).json({ error: 'Invalid POST action. Use: ingest_emails, ingest_calendar, ingest_sf_activities, outbound, retry' });
+        return res.status(400).json({ error: 'Invalid POST action. Use: ingest_emails, ingest_calendar, ingest_sf_activities, outbound, retry, verify_connector' });
     }
   }
 
@@ -69,8 +89,8 @@ export default async function handler(req, res) {
 // SYNC JOB HELPERS
 // ============================================================================
 
-async function createSyncJob(workspaceId, connectorAccountId, direction, entityType, correlationId) {
-  const result = await opsQuery('POST', 'sync_jobs', {
+async function createSyncJob(workspaceId, connectorAccountId, direction, entityType, correlationId, connector) {
+  const jobData = {
     workspace_id: workspaceId,
     connector_account_id: connectorAccountId,
     direction,
@@ -78,7 +98,18 @@ async function createSyncJob(workspaceId, connectorAccountId, direction, entityT
     correlation_id: correlationId || `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     status: 'running',
     started_at: new Date().toISOString()
-  });
+  };
+  // Capture source user context for audit and isolation verification
+  if (connector) {
+    jobData.source_user_context = {
+      external_user_id: connector.external_user_id || null,
+      connector_type: connector.connector_type,
+      execution_method: connector.execution_method,
+      flow_id: connector.config?.flow_id || null,
+      tenant_id: connector.config?.tenant_id || null
+    };
+  }
+  const result = await opsQuery('POST', 'sync_jobs', jobData);
   return result.ok ? (Array.isArray(result.data) ? result.data[0] : result.data) : null;
 }
 
@@ -146,14 +177,16 @@ async function ingestEmails(req, res, user, workspaceId) {
   if (!connector) return res.status(500).json({ error: 'Could not resolve Outlook connector' });
 
   const correlationId = `email-${Date.now()}`;
-  const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'flagged_email', correlationId);
+  const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'flagged_email', correlationId, connector);
   if (!job) return res.status(500).json({ error: 'Could not create sync job' });
 
   let processed = 0, failed = 0, errors = [];
 
   try {
-    // Fetch from existing edge function
-    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/flagged-emails?limit=500`);
+    // Fetch from existing edge function with per-user connector context
+    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/flagged-emails?limit=500`, {
+      headers: connectorHeaders(connector)
+    });
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
@@ -226,13 +259,15 @@ async function ingestCalendar(req, res, user, workspaceId) {
   const { calendar } = req.body || {};
   const calendarParam = calendar || 'work';
   const correlationId = `cal-${calendarParam}-${Date.now()}`;
-  const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'calendar_event', correlationId);
+  const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'calendar_event', correlationId, connector);
   if (!job) return res.status(500).json({ error: 'Could not create sync job' });
 
   let processed = 0, failed = 0;
 
   try {
-    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=${calendarParam}`);
+    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=${calendarParam}`, {
+      headers: connectorHeaders(connector)
+    });
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
@@ -295,13 +330,15 @@ async function ingestSfActivities(req, res, user, workspaceId) {
   if (!connector) return res.status(500).json({ error: 'Could not resolve Salesforce connector' });
 
   const correlationId = `sf-${Date.now()}`;
-  const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'sf_activity', correlationId);
+  const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'sf_activity', correlationId, connector);
   if (!job) return res.status(500).json({ error: 'Could not create sync job' });
 
   let processed = 0, failed = 0;
 
   try {
-    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/sf-activities?limit=5000&sort_dir=desc&assigned_to=all`);
+    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/sf-activities?limit=5000&sort_dir=desc&assigned_to=all`, {
+      headers: connectorHeaders(connector)
+    });
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
@@ -431,7 +468,7 @@ async function handleOutbound(req, res, user, workspaceId) {
   if (!connector) return res.status(404).json({ error: 'Connector not found' });
 
   const correlationId = `out-${command}-${Date.now()}`;
-  const job = await createSyncJob(workspaceId, connector.id, 'outbound', command, correlationId);
+  const job = await createSyncJob(workspaceId, connector.id, 'outbound', command, correlationId, connector);
   if (!job) return res.status(500).json({ error: 'Could not create sync job' });
 
   // Map command to edge function endpoint
@@ -455,7 +492,7 @@ async function handleOutbound(req, res, user, workspaceId) {
 
       const edgeRes = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: connectorHeaders(connector),
         body: JSON.stringify({ ...payload, correlation_id: correlationId })
       });
 
@@ -589,12 +626,183 @@ async function handleHealth(req, res, user, workspaceId) {
     });
   }
 
+  // Per-user verification status
+  const verificationStatus = {};
+  for (const c of connectorList) {
+    if (!verificationStatus[c.user_id]) verificationStatus[c.user_id] = {};
+    verificationStatus[c.user_id][c.connector_type] = {
+      configured: !!c.external_user_id,
+      status: c.status,
+      last_sync: c.last_sync_at,
+      has_identity: !!c.external_user_id,
+      execution_method: c.execution_method
+    };
+  }
+
   return res.status(200).json({
     summary,
     connectors: connectorList,
     by_user: byUser,
+    verification_status: verificationStatus,
     recent_jobs: recentJobs.data || [],
     unresolved_errors: unresolvedErrors.data || [],
     checked_at: new Date().toISOString()
   });
+}
+
+// ============================================================================
+// VERIFY CONNECTOR: Probe a connector to confirm it works for this user
+// ============================================================================
+
+async function handleVerifyConnector(req, res, user, workspaceId) {
+  const { connector_id } = req.body || {};
+  if (!connector_id) return res.status(400).json({ error: 'connector_id is required' });
+
+  const result = await opsQuery('GET',
+    `connector_accounts?id=eq.${connector_id}&workspace_id=eq.${workspaceId}&select=*`
+  );
+  if (!result.ok || !result.data?.length) {
+    return res.status(404).json({ error: 'Connector not found' });
+  }
+
+  const connector = result.data[0];
+  const checks = {
+    connector_id: connector.id,
+    connector_type: connector.connector_type,
+    user_id: connector.user_id,
+    has_external_identity: !!connector.external_user_id,
+    execution_method: connector.execution_method,
+    edge_function_reachable: false,
+    edge_function_user_scoped: false,
+    verified_at: new Date().toISOString()
+  };
+
+  // Determine the probe endpoint based on connector type
+  const PROBE_MAP = {
+    outlook: '/sync/flagged-emails?limit=1',
+    salesforce: '/sync/sf-activities?limit=1&sort_dir=desc',
+  };
+
+  const probeEndpoint = PROBE_MAP[connector.connector_type];
+  if (!probeEndpoint) {
+    checks.skipped = `No probe available for connector type: ${connector.connector_type}`;
+    return res.status(200).json(checks);
+  }
+
+  try {
+    const probeRes = await fetch(`${EDGE_FN_URL}${probeEndpoint}`, {
+      headers: connectorHeaders(connector)
+    });
+    checks.edge_function_reachable = probeRes.ok || probeRes.status < 500;
+    checks.edge_function_status = probeRes.status;
+
+    if (probeRes.ok) {
+      const data = await probeRes.json();
+      // Check if the response appears user-scoped
+      // (has data and contains source identifiers matching our connector)
+      checks.edge_function_user_scoped = !!(
+        connector.external_user_id &&
+        probeRes.headers.get('x-user-context')
+      );
+      checks.probe_record_count = Array.isArray(data.emails)
+        ? data.emails.length
+        : Array.isArray(data.activities)
+          ? data.activities.length
+          : Array.isArray(data.events)
+            ? data.events.length
+            : 0;
+    }
+  } catch (e) {
+    checks.edge_function_error = e.message;
+  }
+
+  // Update connector verification metadata
+  await opsQuery('PATCH', `connector_accounts?id=eq.${connector_id}`, {
+    config: {
+      ...connector.config,
+      last_verified_at: checks.verified_at,
+      last_verification_result: {
+        reachable: checks.edge_function_reachable,
+        user_scoped: checks.edge_function_user_scoped,
+        status: checks.edge_function_status
+      }
+    },
+    updated_at: new Date().toISOString()
+  });
+
+  return res.status(200).json(checks);
+}
+
+// ============================================================================
+// ISOLATION CHECK: Verify no cross-user data leakage
+// Requires manager+ role — compares sync results across users
+// ============================================================================
+
+async function handleIsolationCheck(req, res, user, workspaceId) {
+  if (!requireRole(user, 'manager', workspaceId)) {
+    return res.status(403).json({ error: 'Manager role required for isolation check' });
+  }
+
+  // Get all connectors grouped by type
+  const connectors = await opsQuery('GET',
+    `connector_accounts?workspace_id=eq.${workspaceId}&select=id,user_id,connector_type,external_user_id,status&order=connector_type`
+  );
+
+  const connectorList = connectors.data || [];
+  const byType = {};
+  for (const c of connectorList) {
+    if (!byType[c.connector_type]) byType[c.connector_type] = [];
+    byType[c.connector_type].push(c);
+  }
+
+  const results = { checked_at: new Date().toISOString(), connector_types: {} };
+
+  for (const [type, typeConnectors] of Object.entries(byType)) {
+    const typeResult = {
+      user_count: typeConnectors.length,
+      all_have_identity: typeConnectors.every(c => !!c.external_user_id),
+      unique_identities: new Set(typeConnectors.map(c => c.external_user_id).filter(Boolean)).size,
+      identity_collision: false,
+      users: []
+    };
+
+    // Check for identity collisions (two users sharing same external_user_id)
+    const identityCounts = {};
+    for (const c of typeConnectors) {
+      if (c.external_user_id) {
+        identityCounts[c.external_user_id] = (identityCounts[c.external_user_id] || 0) + 1;
+      }
+    }
+    typeResult.identity_collision = Object.values(identityCounts).some(count => count > 1);
+
+    // Per-user check: recent inbox items should only belong to source_user_id
+    for (const c of typeConnectors) {
+      const sourceType = type === 'outlook' ? 'flagged_email' : type === 'salesforce' ? 'sf_task' : null;
+      let crossUserItems = 0;
+
+      if (sourceType) {
+        const itemCheck = await opsQuery('GET',
+          `inbox_items?workspace_id=eq.${workspaceId}&source_connector_id=eq.${c.id}&source_user_id=neq.${c.user_id}&select=id&limit=5`
+        );
+        crossUserItems = itemCheck.data?.length || 0;
+      }
+
+      typeResult.users.push({
+        user_id: c.user_id,
+        connector_id: c.id,
+        has_external_identity: !!c.external_user_id,
+        external_user_id: c.external_user_id,
+        status: c.status,
+        cross_user_items: crossUserItems,
+        isolated: crossUserItems === 0
+      });
+    }
+
+    results.connector_types[type] = typeResult;
+  }
+
+  results.fully_isolated = Object.values(results.connector_types)
+    .every(t => t.users.every(u => u.isolated));
+
+  return res.status(200).json(results);
 }

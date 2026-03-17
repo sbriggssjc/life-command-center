@@ -179,6 +179,7 @@ export function canTransitionSync(from, to) {
 // VALID ENUM VALUES (mirrors SQL enums)
 // ============================================================================
 
+export const ROLES = ['owner', 'manager', 'operator', 'viewer'];
 export const ENTITY_TYPES = ['person', 'organization', 'asset'];
 export const VISIBILITY_SCOPES = ['private', 'assigned', 'shared'];
 export const PRIORITIES = ['urgent', 'high', 'normal', 'low'];

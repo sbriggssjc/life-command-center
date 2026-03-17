@@ -1964,6 +1964,16 @@ async function saveClinicLeadResearch(rec) {
     await diaPatchRecord('properties', 'property_id', rec.property_id, propUpdate);
   }
 
+  // Bridge to canonical model
+  canonicalBridge('complete_research', {
+    domain: 'dialysis',
+    research_type: 'clinic_lead',
+    external_id: String(rec.medicare_id || rec.property_id),
+    source_system: 'dia_supabase',
+    outcome: 'completed',
+    notes: data.notes
+  });
+
   showToast('Clinic lead saved!', 'success');
 
   // Advance to next
@@ -1976,6 +1986,17 @@ async function saveClinicLeadResearch(rec) {
  */
 async function markClinicLead(rec, status) {
   await saveClinicLeadOutcome(rec.medicare_id, status, null, rec.property_id);
+
+  // Bridge to canonical model
+  canonicalBridge(status === 'not_applicable' ? 'dismiss_lead' : 'complete_research', {
+    domain: 'dialysis',
+    research_type: 'clinic_lead',
+    external_id: String(rec.medicare_id || rec.property_id),
+    source_system: 'dia_supabase',
+    outcome: status,
+    reason: status
+  });
+
   showToast(`Marked as ${status.replace('_', ' ')}`, 'success');
   diaClinicLeadFilter.selectedIdx = undefined;
   renderDiaTab();

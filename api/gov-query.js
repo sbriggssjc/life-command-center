@@ -14,6 +14,11 @@ export default async function handler(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
 
+  // Only allow GET, POST, PATCH
+  if (!['GET', 'POST', 'PATCH'].includes(req.method)) {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
   // Require at least viewer role
   const ws = primaryWorkspace(user);
   if (!ws || !requireRole(user, 'viewer', ws.workspace_id)) {

@@ -46,6 +46,11 @@ let opsEntityFilter = 'all';      // all | person | company | property | clinic
 let opsResearchFilter = 'active'; // active | completed | all
 let opsInboxSelected = new Set();
 
+// Advanced team queue filters
+let opsTeamDomainFilter = '';       // '' = all domains
+let opsTeamAssigneeFilter = '';     // '' = all, 'unassigned', or user_id
+let opsTeamVisFilter = '';          // '' = all, 'private', 'assigned', 'shared'
+
 // --- V2 endpoint preference (uses paginated queue-v2 when available) ---
 const V2_MAP = {
   '/api/queue?view=my_work': '/api/queue-v2?view=my_work',
@@ -180,6 +185,75 @@ function syncBannerHTML(connectors) {
   </div>`;
 }
 
+// --- Workspace context bar ---
+function workspaceContextHTML() {
+  if (!LCC_USER || !LCC_USER._loaded) return '';
+  const name = LCC_USER.display_name || 'Unknown User';
+  const role = LCC_USER.role || 'viewer';
+  const ws = LCC_USER.workspace_name || LCC_USER.workspace_id || '';
+  return `<div class="ws-context">
+    <span class="ws-context-name">${esc(name)}</span>
+    <span class="ws-context-role ${role}">${role}</span>
+    ${ws ? `<span class="ws-context-sep">&middot;</span><span>${esc(ws)}</span>` : ''}
+    <div class="ws-context-sync" id="wsContextSync"></div>
+  </div>`;
+}
+
+// --- Degraded state banners ---
+function degradedBannerHTML(type, detail) {
+  const configs = {
+    no_workspace: {
+      icon: '!', title: 'No workspace configured',
+      desc: 'Create or join a workspace to enable team features.',
+      action: 'Go to Settings', onclick: "navTo('pageSettings')"
+    },
+    no_connectors: {
+      icon: '~', title: 'No connectors configured',
+      desc: 'Set up Outlook, Salesforce, or calendar connectors to populate your queues.',
+      action: 'Set up connectors', onclick: "navTo('pageSyncHealth')"
+    },
+    sync_unhealthy: {
+      icon: '!', title: 'Sync issues detected',
+      desc: detail || 'One or more connectors are failing. Data may be stale.',
+      action: 'View sync health', onclick: "navTo('pageSyncHealth')"
+    },
+    auth_warning: {
+      icon: '!', title: 'Development mode',
+      desc: 'Running with transitional auth. Some features may be limited.',
+      action: null, onclick: null
+    }
+  };
+  const cfg = configs[type];
+  if (!cfg) return '';
+  return `<div class="degraded-banner">
+    <span class="degraded-icon">${cfg.icon}</span>
+    <div class="degraded-body">
+      <div class="degraded-title">${cfg.title}</div>
+      <div>${cfg.desc}</div>
+      ${cfg.action ? `<span class="degraded-action" onclick="${cfg.onclick}">${cfg.action}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+// --- Improved empty states ---
+function emptyStateHTML(icon, title, desc, actionLabel, actionFn) {
+  return `<div class="ops-empty-detailed">
+    ${icon ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${icon}</svg>` : ''}
+    <div class="empty-title">${title}</div>
+    <div class="empty-desc">${desc}</div>
+    ${actionLabel ? `<button class="empty-action" onclick="${actionFn}">${actionLabel}</button>` : ''}
+  </div>`;
+}
+
+// --- Visibility badge ---
+function visBadge(item) {
+  if (!item) return '';
+  if (item.visibility === 'private' || item.is_private) return '<span class="q-badge vis-private">Private</span>';
+  if (item.visibility === 'shared' || item.shared) return '<span class="q-badge vis-shared">Shared</span>';
+  if (item.assigned_to) return '<span class="q-badge vis-assigned">Assigned</span>';
+  return '';
+}
+
 // ============================================================================
 // MY WORK — personal queue of assigned/owned items
 // ============================================================================
@@ -210,9 +284,15 @@ async function renderMyWork(page) {
 function renderMyWorkList(el, connectors) {
   const items = filterMyWork(opsMyWorkData);
   const counts = countByStatus(opsMyWorkData);
+  const unhealthyConns = (connectors || []).filter(c => c.status === 'error' || c.status === 'degraded');
 
   let html = '';
+  html += workspaceContextHTML();
   html += syncBannerHTML(connectors);
+
+  // Degraded states
+  if (!LCC_USER.workspace_id) html += degradedBannerHTML('no_workspace');
+  else if (!connectors.length) html += degradedBannerHTML('no_connectors');
 
   html += `<div class="ops-header">
     <h2>My Work <span style="font-size:13px;color:var(--text2);font-weight:400">${opsMyWorkData.length} items</span></h2>
@@ -228,8 +308,16 @@ function renderMyWorkList(el, connectors) {
   html += filterPill('overdue', `Overdue (${countOverdue(opsMyWorkData)})`, opsMyWorkFilter, 'opsMyWorkFilter', 'renderMyWork');
   html += '</div>';
 
-  if (!items.length) {
-    html += '<div class="ops-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>No items match this filter</div>';
+  if (!items.length && opsMyWorkData.length === 0) {
+    html += emptyStateHTML(
+      '<path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/>',
+      'No work items yet',
+      connectors.length ? 'Sync your connectors or promote inbox items to populate your queue.' : 'Set up connectors to start receiving work items.',
+      connectors.length ? 'Go to Inbox' : 'Set up connectors',
+      connectors.length ? "navTo('pageInbox')" : "navTo('pageSyncHealth')"
+    );
+  } else if (!items.length) {
+    html += '<div class="ops-empty">No items match this filter</div>';
   } else {
     items.forEach(item => { html += queueItemHTML(item, 'my_work'); });
   }
@@ -268,30 +356,79 @@ async function renderTeamQueue() {
   opsTeamQueueData = qRes.data?.items || qRes.data || [];
   const unassigned = uRes.ok ? (uRes.data?.items || []) : [];
 
+  // Collect unique domains and assignees for filter dropdowns
+  const allTeamItems = [...opsTeamQueueData, ...unassigned];
+  const domains = [...new Set(allTeamItems.map(i => i.domain).filter(Boolean))].sort();
+  const assignees = [...new Set(allTeamItems.filter(i => i.assignee_name).map(i => ({ id: i.assigned_to, name: i.assignee_name })).map(a => JSON.stringify(a)))].map(s => JSON.parse(s));
+
   let html = '';
+  html += workspaceContextHTML();
+
   html += `<div class="ops-header">
     <h2>Team Queue</h2>
     <div class="ops-controls">${freshnessHTML(new Date().toISOString())}</div>
   </div>`;
 
+  // Advanced filter row
+  html += '<div class="ops-filters-row">';
+  html += '<span class="ops-filter-label">Filter:</span>';
+  html += `<select class="ops-filter-select" onchange="opsTeamDomainFilter=this.value;renderTeamQueue()">
+    <option value="">All domains</option>
+    ${domains.map(d => `<option value="${esc(d)}" ${opsTeamDomainFilter === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+  </select>`;
+  html += `<select class="ops-filter-select" onchange="opsTeamAssigneeFilter=this.value;renderTeamQueue()">
+    <option value="">All assignees</option>
+    <option value="unassigned" ${opsTeamAssigneeFilter === 'unassigned' ? 'selected' : ''}>Unassigned only</option>
+    ${assignees.map(a => `<option value="${esc(a.id)}" ${opsTeamAssigneeFilter === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+  </select>`;
+  html += `<select class="ops-filter-select" onchange="opsTeamVisFilter=this.value;renderTeamQueue()">
+    <option value="">All visibility</option>
+    <option value="private" ${opsTeamVisFilter === 'private' ? 'selected' : ''}>Private</option>
+    <option value="assigned" ${opsTeamVisFilter === 'assigned' ? 'selected' : ''}>Assigned</option>
+    <option value="shared" ${opsTeamVisFilter === 'shared' ? 'selected' : ''}>Shared</option>
+  </select>`;
+  html += '</div>';
+
+  // Apply advanced filters
+  const filterTeamItem = (item) => {
+    if (opsTeamDomainFilter && item.domain !== opsTeamDomainFilter) return false;
+    if (opsTeamAssigneeFilter === 'unassigned' && item.assigned_to) return false;
+    if (opsTeamAssigneeFilter && opsTeamAssigneeFilter !== 'unassigned' && item.assigned_to !== opsTeamAssigneeFilter) return false;
+    if (opsTeamVisFilter === 'private' && !item.is_private && item.visibility !== 'private') return false;
+    if (opsTeamVisFilter === 'shared' && !item.shared && item.visibility !== 'shared') return false;
+    if (opsTeamVisFilter === 'assigned' && !item.assigned_to) return false;
+    return true;
+  };
+  const filteredUnassigned = unassigned.filter(filterTeamItem);
+  const filteredTeam = opsTeamQueueData.filter(filterTeamItem);
+
   // Unassigned section
-  if (unassigned.length > 0) {
+  if (filteredUnassigned.length > 0) {
     html += `<div class="widget" style="border-color:var(--yellow)">
-      <div class="widget-title">Unassigned <span style="color:var(--yellow)">${unassigned.length} items need assignment</span></div>`;
-    unassigned.slice(0, 10).forEach(item => {
+      <div class="widget-title">Unassigned <span style="color:var(--yellow)">${filteredUnassigned.length} items need assignment</span></div>`;
+    filteredUnassigned.slice(0, 10).forEach(item => {
       html += queueItemHTML(item, 'team_queue', { showAssign: true });
     });
-    if (unassigned.length > 10) {
-      html += `<div style="text-align:center;padding:8px;font-size:12px;color:var(--text2)">+ ${unassigned.length - 10} more unassigned</div>`;
+    if (filteredUnassigned.length > 10) {
+      html += `<div style="text-align:center;padding:8px;font-size:12px;color:var(--text2)">+ ${filteredUnassigned.length - 10} more unassigned</div>`;
     }
     html += '</div>';
   }
 
   // Team queue items
-  if (opsTeamQueueData.length === 0 && unassigned.length === 0) {
-    html += '<div class="ops-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>Team queue is empty</div>';
+  if (filteredTeam.length === 0 && filteredUnassigned.length === 0) {
+    if (opsTeamQueueData.length === 0 && unassigned.length === 0) {
+      html += emptyStateHTML(
+        '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>',
+        'Team queue is empty',
+        'No shared work items yet. Promote inbox items or create actions to get started.',
+        'Go to Inbox', "navTo('pageInbox')"
+      );
+    } else {
+      html += '<div class="ops-empty">No items match the selected filters</div>';
+    }
   } else {
-    opsTeamQueueData.forEach(item => { html += queueItemHTML(item, 'team_queue'); });
+    filteredTeam.forEach(item => { html += queueItemHTML(item, 'team_queue'); });
   }
 
   el.innerHTML = html;
@@ -345,7 +482,12 @@ async function renderInboxTriage() {
   }
 
   if (!opsInboxData.length) {
-    html += '<div class="ops-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>Inbox is empty</div>';
+    html += emptyStateHTML(
+      '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>',
+      opsInboxFilter === 'new' ? 'Inbox is clear' : 'No items match this filter',
+      opsInboxFilter === 'new' ? 'All caught up! New items from connectors will appear here.' : 'Try changing your filter to see more items.',
+      null, null
+    );
   } else {
     opsInboxData.forEach((item, idx) => { html += inboxItemHTML(item, idx); });
   }
@@ -363,6 +505,7 @@ function inboxItemHTML(item, idx) {
   html += '<div class="q-item-badges">';
   html += statusBadge(item.status);
   if (item.priority && item.priority !== 'normal') html += priBadge(item.priority);
+  html += visBadge(item);
   if (item.source_type) html += typeBadge(item.source_type);
   if (item.domain) html += domainBadge(item.domain);
   html += '</div></div>';
@@ -372,12 +515,13 @@ function inboxItemHTML(item, idx) {
   html += `<span>${freshnessHTML(item.created_at)}</span>`;
   html += '</div>';
 
-  // Quick actions
+  // Normalized quick actions
   html += '<div class="q-actions">';
   if (item.status === 'new') {
     html += `<button class="q-action" onclick="triageSingle('${item.id}')">Triage</button>`;
   }
   html += `<button class="q-action primary" onclick="promoteSingle('${item.id}')">Promote</button>`;
+  html += `<button class="q-action" onclick="quickReassign('${item.id}','inbox')">Assign</button>`;
   html += `<button class="q-action danger" onclick="dismissSingle('${item.id}')">Dismiss</button>`;
   html += '</div>';
 
@@ -407,9 +551,11 @@ function updateTriageCount() {
 async function bulkTriageInbox(status) {
   if (!opsInboxSelected.size) { showToast('Select items first', 'error'); return; }
   const ids = Array.from(opsInboxSelected);
+  const statusLabel = status === 'dismissed' ? 'Dismissing' : 'Triaging';
+  showToast(`${statusLabel} ${ids.length} items...`, 'info');
   const res = await opsPost('/api/workflows?action=bulk_triage', { item_ids: ids, status });
   if (res.ok) {
-    showToast(`${ids.length} items ${status}`, 'success');
+    showToast(`${ids.length} item${ids.length > 1 ? 's' : ''} ${status}`, 'success');
     renderInboxTriage();
   } else {
     showToast(res.error || 'Bulk triage failed', 'error');
@@ -418,12 +564,14 @@ async function bulkTriageInbox(status) {
 
 async function bulkPromoteInbox() {
   if (!opsInboxSelected.size) { showToast('Select items first', 'error'); return; }
-  let promoted = 0;
+  showToast(`Promoting ${opsInboxSelected.size} items...`, 'info');
+  let promoted = 0, failed = 0;
   for (const id of opsInboxSelected) {
     const res = await opsPost('/api/workflows?action=promote_to_shared', { inbox_item_id: id });
-    if (res.ok) promoted++;
+    if (res.ok) promoted++; else failed++;
   }
-  showToast(`${promoted} items promoted to shared actions`, 'success');
+  if (failed) showToast(`${promoted} promoted, ${failed} failed`, promoted ? 'success' : 'error');
+  else showToast(`${promoted} item${promoted > 1 ? 's' : ''} promoted to shared actions`, 'success');
   renderInboxTriage();
 }
 
@@ -480,7 +628,12 @@ async function renderEntitiesPage() {
   const filtered = opsEntityFilter === 'all' ? opsEntitiesData : opsEntitiesData.filter(e => e.entity_type === opsEntityFilter);
 
   if (!filtered.length) {
-    html += '<div class="ops-empty">No entities found</div>';
+    html += emptyStateHTML(
+      '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>',
+      opsEntityFilter === 'all' ? 'No entities yet' : 'No matching entities',
+      opsEntityFilter === 'all' ? 'Entities are created when you sync connectors or import data.' : 'Try selecting a different entity type.',
+      null, null
+    );
   } else {
     filtered.forEach(entity => {
       html += `<div class="entity-card" onclick="viewEntity('${entity.id}')">
@@ -608,7 +761,9 @@ async function renderMetricsPage() {
     opsApi('/api/workflows?action=oversight')
   ]);
 
-  let html = '<div class="ops-header"><h2>Metrics</h2></div>';
+  let html = '';
+  html += workspaceContextHTML();
+  html += '<div class="ops-header"><h2>Metrics</h2></div>';
 
   // Work counts
   if (countsRes.ok) {
@@ -634,7 +789,7 @@ async function renderMetricsPage() {
         <div class="team-avatar">${initials}</div>
         <div class="team-info">
           <div class="team-name">${esc(member.display_name)}</div>
-          <div class="team-role">${member.role || 'member'}</div>
+          <div class="team-role">${member.role || 'viewer'}</div>
         </div>
         <div class="team-stats">
           <div class="stat"><span class="stat-n">${member.active_actions || 0}</span>Active</div>
@@ -695,7 +850,12 @@ async function renderSyncHealthPage() {
   const connectors = connRes.ok ? (connRes.data?.connectors || connRes.data || []) : [];
 
   if (connectors.length === 0) {
-    html += '<div class="ops-empty">No connectors configured</div>';
+    html += emptyStateHTML(
+      '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+      'No connectors configured',
+      'Connect Outlook, Salesforce, or calendar to start syncing data into your workspace.',
+      null, null
+    );
   } else {
     connectors.forEach(conn => {
       const statusCls = conn.status === 'active' ? 'healthy' : conn.status === 'degraded' ? 'degraded' : conn.status === 'error' ? 'error' : 'healthy';
@@ -753,6 +913,9 @@ async function renderSyncHealthPage() {
 
   el.innerHTML = html;
   perf.end();
+
+  // Append perf dashboard for managers
+  setTimeout(appendPerfToSyncHealth, 100);
 }
 
 async function triggerSync(connectorType) {
@@ -774,11 +937,12 @@ async function retrySync(errorId) {
 // ============================================================================
 
 async function quickTransition(itemId, newStatus, itemType) {
+  const statusLabels = { in_progress: 'Started', completed: 'Completed', waiting: 'Set to waiting', open: 'Reopened' };
   const table = itemType === 'inbox' ? 'inbox' : 'actions';
+  showToast(`Updating...`, 'info');
   const res = await opsPost(`/api/${table}?action=transition`, { id: itemId, status: newStatus });
   if (res.ok) {
-    showToast(`Status → ${newStatus}`, 'success');
-    // Refresh the current page
+    showToast(statusLabels[newStatus] || `Status → ${newStatus}`, 'success');
     const activePage = document.querySelector('.page.active');
     if (activePage) handlePageLoad(activePage.id);
   } else {
@@ -789,13 +953,14 @@ async function quickTransition(itemId, newStatus, itemType) {
 async function quickReassign(itemId, itemType) {
   const assignee = prompt('Enter user ID to assign to:');
   if (!assignee) return;
+  showToast('Assigning...', 'info');
   const res = await opsPost('/api/workflows?action=reassign', {
     item_type: itemType || 'action',
     item_id: itemId,
     assigned_to: assignee
   });
   if (res.ok) {
-    showToast('Reassigned', 'success');
+    showToast('Reassigned successfully', 'success');
     const activePage = document.querySelector('.page.active');
     if (activePage) handlePageLoad(activePage.id);
   } else {
@@ -808,12 +973,13 @@ async function quickEscalate(itemId) {
   if (!reason) return;
   const target = prompt('Escalate to (user ID):');
   if (!target) return;
+  showToast('Escalating...', 'info');
   const res = await opsPost('/api/workflows?action=escalate', {
     action_item_id: itemId,
     escalate_to: target,
     reason
   });
-  if (res.ok) showToast('Escalated', 'success');
+  if (res.ok) showToast('Escalated successfully — assignee notified', 'success');
   else showToast(res.error || 'Escalation failed', 'error');
 }
 
@@ -831,6 +997,7 @@ function queueItemHTML(item, context, opts = {}) {
   html += '<div class="q-item-badges">';
   html += statusBadge(item.status);
   html += priBadge(item.priority);
+  html += visBadge(item);
   if (item.action_type || item.item_type || item.sub_type) html += typeBadge(item.action_type || item.item_type || item.sub_type);
   if (item.domain) html += domainBadge(item.domain);
   html += '</div></div>';
@@ -850,17 +1017,22 @@ function queueItemHTML(item, context, opts = {}) {
   html += freshnessHTML(item.updated_at || item.created_at);
   html += '</div>';
 
-  // Quick actions
+  // Normalized quick actions — consistent across all contexts
   html += '<div class="q-actions">';
   if (item.status === 'open') html += `<button class="q-action primary" onclick="quickTransition('${item.id}','in_progress','action')">Start</button>`;
   if (item.status === 'in_progress') html += `<button class="q-action primary" onclick="quickTransition('${item.id}','completed','action')">Complete</button>`;
   if (item.status === 'open' || item.status === 'in_progress') {
     html += `<button class="q-action" onclick="quickTransition('${item.id}','waiting','action')">Wait</button>`;
   }
-  if (context === 'team_queue' && opts.showAssign) {
+  if (item.status === 'waiting') html += `<button class="q-action" onclick="quickTransition('${item.id}','in_progress','action')">Resume</button>`;
+  // Reassign available on all contexts for items that support it
+  if (!item.assigned_to || opts.showAssign || context === 'team_queue') {
     html += `<button class="q-action" onclick="quickReassign('${item.id}','action')">Assign</button>`;
+  } else if (context !== 'my_work') {
+    html += `<button class="q-action" onclick="quickReassign('${item.id}','action')">Reassign</button>`;
   }
-  if (context === 'my_work' || context === 'team_queue') {
+  // Escalate on all non-completed items
+  if (item.status !== 'completed' && item.status !== 'cancelled') {
     html += `<button class="q-action" onclick="quickEscalate('${item.id}')">Escalate</button>`;
   }
   html += '</div>';
@@ -898,6 +1070,164 @@ function paginationHTML(paginationKey, refreshFn) {
 function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ============================================================================
+// PERFORMANCE DASHBOARD — manager-only operational perf view
+// Accessible from Sync Health page or via navTo('pagePerfDashboard')
+// ============================================================================
+
+async function renderPerfDashboard(container) {
+  // Render inside sync health page as a collapsible section, or standalone
+  const el = container || document.getElementById('perfDashboardContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+  const [summaryRes, slowRes] = await Promise.all([
+    opsApi('/api/queue-v2?view=_perf&section=summary'),
+    opsApi('/api/queue-v2?view=_perf&section=slow')
+  ]);
+
+  if (!summaryRes.ok) {
+    el.innerHTML = `<div class="ops-empty">${summaryRes.data?.error || summaryRes.error || 'Could not load performance data'}</div>`;
+    return;
+  }
+
+  const data = summaryRes.data;
+  const slowData = slowRes.ok ? slowRes.data : {};
+  let html = '';
+
+  html += '<div class="ops-header"><h2>Performance Dashboard</h2></div>';
+
+  // MV freshness check
+  if (data.mv_freshness) {
+    const mv = data.mv_freshness;
+    const staleClass = mv.freshness_status === 'fresh' ? 'green'
+      : mv.freshness_status === 'acceptable' ? ''
+      : mv.freshness_status === 'stale' ? 'yellow' : 'red';
+    html += `<div class="degraded-banner" style="margin-bottom:12px">
+      <span class="degraded-icon">~</span>
+      <div class="degraded-body">
+        <div class="degraded-title">Materialized Views: <span class="${staleClass}">${mv.freshness_status}</span></div>
+        <div>Last refreshed ${Math.round(mv.minutes_stale)}m ago</div>
+      </div>
+    </div>`;
+  }
+
+  // Target compliance grid
+  if (data.compliance?.length) {
+    html += '<div class="widget"><div class="widget-title">Performance Target Compliance</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+      + '<th style="padding:6px">Endpoint</th>'
+      + '<th style="padding:6px;text-align:right">Requests</th>'
+      + '<th style="padding:6px;text-align:right">p50</th>'
+      + '<th style="padding:6px;text-align:right">p95</th>'
+      + '<th style="padding:6px;text-align:right">Target p95</th>'
+      + '<th style="padding:6px;text-align:center">Status</th>'
+      + '</tr></thead><tbody>';
+    data.compliance.forEach(c => {
+      const statusColor = c.compliance_status === 'passing' ? 'var(--green)'
+        : c.compliance_status === 'warning' ? 'var(--yellow)'
+        : c.compliance_status === 'failing' ? 'var(--red)' : 'var(--text3)';
+      const statusLabel = c.compliance_status === 'no_data' ? '--' : c.compliance_status;
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(c.description || '')}">${esc(c.endpoint_pattern)}</td>
+        <td style="padding:6px;text-align:right">${c.request_count}</td>
+        <td style="padding:6px;text-align:right">${c.actual_p50_ms != null ? Math.round(c.actual_p50_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right">${c.actual_p95_ms != null ? Math.round(c.actual_p95_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right">${c.target_p95_ms}ms</td>
+        <td style="padding:6px;text-align:center;color:${statusColor};font-weight:600">${statusLabel}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // Endpoint summary
+  if (data.endpoints?.length) {
+    html += '<div class="widget"><div class="widget-title">Endpoint Latency (24h)</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+      + '<th style="padding:6px">Endpoint</th>'
+      + '<th style="padding:6px;text-align:right">Count</th>'
+      + '<th style="padding:6px;text-align:right">Avg</th>'
+      + '<th style="padding:6px;text-align:right">p95</th>'
+      + '<th style="padding:6px;text-align:right">Max</th>'
+      + '<th style="padding:6px;text-align:right">Slow%</th>'
+      + '</tr></thead><tbody>';
+    data.endpoints.forEach(ep => {
+      const slowColor = ep.slow_pct > 10 ? 'color:var(--red)' : ep.slow_pct > 5 ? 'color:var(--yellow)' : '';
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px;max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(ep.endpoint)}</td>
+        <td style="padding:6px;text-align:right">${ep.request_count}</td>
+        <td style="padding:6px;text-align:right">${ep.avg_ms}ms</td>
+        <td style="padding:6px;text-align:right">${ep.p95_ms != null ? Math.round(ep.p95_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right">${ep.max_ms}ms</td>
+        <td style="padding:6px;text-align:right;${slowColor}">${ep.slow_pct}%</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // Slow requests
+  if (slowData.slow_requests?.length) {
+    html += `<div class="widget" style="border-color:var(--orange)"><div class="widget-title">Slow Requests (24h) — ${slowData.slow_requests.length} found</div>`;
+    slowData.slow_requests.slice(0, 20).forEach(sr => {
+      html += `<div class="q-item">
+        <div class="q-item-header">
+          <span class="q-item-title">${esc(sr.endpoint)}</span>
+          <div class="q-item-badges">
+            <span class="q-badge pri-high">${sr.duration_ms}ms</span>
+            <span class="q-badge type">${sr.metric_type}</span>
+          </div>
+        </div>
+        <div class="q-item-meta">
+          <span>Threshold: ${sr.threshold_ms}ms</span>
+          ${freshnessHTML(sr.recorded_at)}
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  } else {
+    html += '<div class="widget"><div class="widget-title">Slow Requests (24h)</div><div class="ops-empty">No slow requests detected</div></div>';
+  }
+
+  // Client-side perf log
+  if (opsPerfLog.length > 0) {
+    html += '<div class="widget"><div class="widget-title">Client-Side Timing (this session)</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+      + '<th style="padding:6px">Label</th>'
+      + '<th style="padding:6px;text-align:right">Duration</th>'
+      + '<th style="padding:6px;text-align:right">When</th>'
+      + '</tr></thead><tbody>';
+    [...opsPerfLog].reverse().slice(0, 30).forEach(entry => {
+      const color = entry.dur > 500 ? 'color:var(--red)' : entry.dur > 200 ? 'color:var(--yellow)' : '';
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px">${esc(entry.label)}</td>
+        <td style="padding:6px;text-align:right;${color}">${entry.dur}ms</td>
+        <td style="padding:6px;text-align:right">${freshnessHTML(new Date(entry.ts).toISOString())}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// Wire perf dashboard into sync health page (append as collapsible section)
+function appendPerfToSyncHealth() {
+  const syncEl = document.getElementById('syncHealthContent');
+  if (!syncEl) return;
+  // Only show for manager+ roles
+  const role = LCC_USER?.role || 'viewer';
+  if (!['owner', 'manager'].includes(role)) return;
+
+  const perfSection = document.createElement('div');
+  perfSection.id = 'perfDashboardContent';
+  perfSection.style.marginTop = '24px';
+  syncEl.appendChild(perfSection);
+  renderPerfDashboard(perfSection);
 }
 
 // ============================================================================

@@ -1276,7 +1276,17 @@ async function saveOwnership(rec) {
   };
   
   await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, data);
-  
+
+  // Bridge to canonical model
+  canonicalBridge('save_ownership', {
+    domain: 'government',
+    external_id: String(rec.property_id || rec.ownership_id),
+    source_system: 'gov_supabase',
+    owner_name: data.recorded_owner_name,
+    true_owner_name: data.true_owner_name,
+    notes: data.research_notes
+  });
+
   if (salePrice || capRate) {
     await saveLoanFields(rec);
   }
@@ -1309,7 +1319,17 @@ async function saveLead(rec) {
   }
   
   await patchRecord('prospect_leads', 'lead_id', rec.lead_id, data);
-  
+
+  // Bridge to canonical model
+  canonicalBridge('complete_research', {
+    domain: 'government',
+    research_type: 'ownership',
+    external_id: String(rec.property_id || rec.lead_id),
+    source_system: 'gov_supabase',
+    outcome: quickStatus === 'not_applicable' ? 'not_applicable' : 'completed',
+    notes: data.research_notes
+  });
+
   if (salePrice || capRate) {
     await saveLoanFields(rec);
   }

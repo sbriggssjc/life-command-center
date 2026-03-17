@@ -87,7 +87,7 @@ This session executed all 8 phases (Phase 0 through Phase 7) of a full-stack reb
 **Auth Middleware (`api/_shared/auth.js`)**:
 - JWT token verification with Supabase auth
 - API key authentication as fallback
-- Role-based access control: `owner`, `admin`, `manager`, `member`, `viewer`
+- Role-based access control: `owner`, `manager`, `operator`, `viewer`
 - Visibility enforcement: checks private/assigned/shared scopes
 - **Transitional mode**: Falls back to a dev user when `OPS_SUPABASE_URL` is not configured, preserving existing single-user behavior during migration
 
