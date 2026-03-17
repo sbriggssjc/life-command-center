@@ -2,14 +2,247 @@
 
 > **Date**: 2026-03-17
 > **Branch**: `claude/rebuild-command-center-X7uEd`
-> **Commits**: 7 phase commits (Phase 0 was completed in a prior session)
+> **Commits**: 8 phase commits (Phase 0 through Phase 7)
 > **Net impact**: +11,300 lines added, -3,435 lines removed across 34 files
 
 ---
 
 ## What Was Done
 
-This session executed Phases 4 through 7 of a full-stack rebuild that transforms the Life Command Center from a single-user operator dashboard into a shared team operational platform. Phases 0–3 were completed in prior sessions; this session picked up at Phase 4 and carried through to completion of all planned phases.
+This session executed all 8 phases (Phase 0 through Phase 7) of a full-stack rebuild that transforms the Life Command Center from a single-user operator dashboard into a shared team operational platform. The entire rebuild was planned, implemented, and committed in a single session.
+
+---
+
+## Phase 0: Program Setup and Baseline
+
+**Goal**: Audit the existing codebase, document the current state, identify all gaps, and lock architecture decisions before building anything.
+
+### Files Created
+| File | LOC | Purpose |
+|------|-----|---------|
+| `ROLLOUT.md` | 340 | Master rollout tracker — system map, gap register, architecture decisions, phase checklists |
+| `schema/001_workspace_and_users.sql` | ~120 | Workspace, users, roles, membership tables |
+| `schema/002_connectors.sql` | ~100 | Connector accounts, sync jobs, sync errors |
+| `schema/003_canonical_entities.sql` | ~100 | Canonical entities, external identities |
+| `schema/004_operations.sql` | ~120 | Inbox items, action items, activity events, research tasks |
+| `schema/005_domains.sql` | ~100 | Domain registry, data sources, entity mappings, queue configs |
+
+### What It Does
+
+**Current-State Audit**:
+- Full architecture inventory: Vanilla HTML/JS/CSS frontend, Vercel serverless API, two Supabase projects (Gov + Dia), Power Automate integration broker, external edge functions
+- File inventory with LOC counts for all 12+ files
+- Navigation structure documented (5 tabs, Business sub-tabs with 10 domain sections each)
+- All integration paths classified (Gov/Dia Supabase, Salesforce, Outlook, Power Automate, Open-Meteo, Treasury)
+- Data flow classification: shared vs. per-user vs. mixed vs. external
+
+**Gap Register (10 gaps identified)**:
+- **G1**: No multi-user model — hardcoded single user ("Scott"), no auth, no workspace concept
+- **G2**: Overly broad API proxy — arbitrary table/filter/select, allows POST/PATCH to any table
+- **G3**: No canonical operational model — activities, emails, tasks, research are separate silos
+- **G4**: Single-user connector bindings — no per-user Salesforce/Outlook identity
+- **G5**: No unified work queue — work organized by source system, not ownership/urgency
+- **G6**: Frontend monolith — 14,000+ LOC across 3 JS files + 3,600 LOC inline in index.html
+- **G7**: No domain expansion framework — Gov and Dia are independent parallel implementations
+- **G8**: Client-side data stitching — large dataset loads, client-side joins, limited pagination
+- **G9**: Power Automate opacity — no in-app visibility of flow health or errors
+- **G10**: Missing entity deduplication — known duplicates in entity names
+
+**Architecture Decisions (7 locked)**:
+- **AD1**: Workspace-first model — one shared workspace for 4-person team
+- **AD2**: Per-user connector accounts — each user gets own Outlook + Salesforce bindings
+- **AD3**: Visibility model — shared/assigned/private scopes with promotion workflow
+- **AD4**: Canonical operational types — all work normalizes to inbox_item, action_item, activity_event
+- **AD5**: Policy-aware connectors — respect SSO and enterprise policy constraints
+- **AD6**: Vercel serverless + Supabase backend — keep existing platform, add shared ops schema
+- **AD7**: Incremental migration — additive changes, no big-bang rewrite
+
+**Canonical Schema (migrations 001-005)**:
+- 5 SQL migration files defining the complete canonical data model
+- Workspace/user/membership/role tables with enum types
+- Connector accounts with execution methods (direct_api, power_automate, webhook)
+- Sync jobs and sync errors with correlation tracking
+- Canonical entities (person, organization, asset) with external identity linking
+- Operational tables: inbox_items, action_items, activity_events, research_tasks
+- Domain registry with data sources, entity mappings, and queue configurations
+
+---
+
+## Phase 1: Workspace, Roles, and Policy Foundation
+
+**Goal**: Build the auth and multi-user foundation — middleware, workspace management, RLS policies, and hardened API proxies.
+
+### Files Created
+| File | LOC | Purpose |
+|------|-----|---------|
+| `api/_shared/auth.js` | 240 | Auth middleware: JWT verification, API key auth, role checks, visibility enforcement |
+| `api/_shared/ops-db.js` | 75 | Shared Supabase PostgREST client for canonical ops tables |
+| `api/workspaces.js` | 115 | Workspace CRUD API |
+| `api/members.js` | 175 | User and membership management API |
+| `api/connectors.js` | 205 | Per-user connector account API |
+| `schema/006_rls_policies.sql` | 265 | Row-level security policies for all canonical tables |
+
+### What It Does
+
+**Auth Middleware (`api/_shared/auth.js`)**:
+- JWT token verification with Supabase auth
+- API key authentication as fallback
+- Role-based access control: `owner`, `admin`, `manager`, `member`, `viewer`
+- Visibility enforcement: checks private/assigned/shared scopes
+- **Transitional mode**: Falls back to a dev user when `OPS_SUPABASE_URL` is not configured, preserving existing single-user behavior during migration
+
+**Workspace Management (`api/workspaces.js`)**:
+- Create, read, update workspace with owner tracking
+- Workspace settings stored as JSONB
+
+**User/Membership API (`api/members.js`)**:
+- Invite users to workspace with role assignment
+- List workspace members with role filtering
+- Update roles, deactivate memberships
+- Enforces that workspace must always have at least one owner
+
+**Connector Accounts (`api/connectors.js`)**:
+- Per-user binding for Outlook, Salesforce, and other connectors
+- Execution method tracking: `direct_api`, `power_automate`, `webhook`
+- Health status tracking per connector
+- Auto-create connector account on first use
+
+**RLS Policies (`schema/006_rls_policies.sql`)**:
+- Row-level security on all canonical tables
+- Workspace-scoped isolation — users only see data from their workspace
+- Visibility-aware policies respecting private/assigned/shared scopes
+- Manager override for assigned-visibility items
+
+**Frontend User Context**:
+- Added `LCC_USER` global and `loadUserContext()` function
+- Replaced all hardcoded "Scott" references with dynamic user context
+- Auth token passed on all API calls to new endpoints
+
+**API Proxy Hardening**:
+- Added auth middleware to `gov-query.js` and `dia-query.js`
+- Non-breaking: auth passes through in transitional mode
+
+---
+
+## Phase 2: Canonical Data and Queue Model
+
+**Goal**: Build the canonical CRUD APIs, lifecycle state machines, and unified queue views that power the operational surfaces.
+
+### Files Created
+| File | LOC | Purpose |
+|------|-----|---------|
+| `api/_shared/lifecycle.js` | 200 | State machines, enum validators, transition effect definitions |
+| `api/entities.js` | 180 | Canonical entity CRUD with external identity linking |
+| `api/inbox.js` | 220 | Inbox items: list, triage, promote to action, assign |
+| `api/actions.js` | 210 | Action items: CRUD with lifecycle state transitions |
+| `api/activities.js` | 100 | Activity events: append-only timeline logging |
+| `api/queue.js` | 155 | Unified queue: my_work, team_queue, inbox_triage, work_counts, entity_timeline |
+| `schema/007_queue_views.sql` | 240 | 7 SQL views for unified queue |
+
+### What It Does
+
+**Lifecycle State Machines (`api/_shared/lifecycle.js`)**:
+- **Inbox lifecycle**: `new` → `triaged` → `promoted`/`dismissed`/`snoozed`
+- **Action lifecycle**: `open` → `in_progress` → `waiting`/`completed`/`cancelled`
+- **Sync lifecycle**: `pending` → `running` → `completed`/`failed`
+- Transition validator enforces legal state changes
+- Transition effects: auto-set `completed_at` on completion, etc.
+- Enum validators for entity types, priorities, visibility scopes, connector types
+
+**Entities API (`api/entities.js`)**:
+- CRUD for canonical entities (person, organization, asset)
+- External identity linking: connect canonical entities to source system records (Gov property ID, Dia clinic ID, SF account ID)
+- Dedup on external identity: prevents duplicate canonical entities for the same source record
+- Workspace-scoped with visibility enforcement
+
+**Inbox API (`api/inbox.js`)**:
+- List inbox items with filtering by status, source type, assignee
+- Triage: update status with activity logging
+- Promote: convert inbox item to action item (sets status to `promoted`, creates linked action)
+- Assign: set assignee with activity logging
+- All mutations log to activity_events
+
+**Actions API (`api/actions.js`)**:
+- Full CRUD with lifecycle state enforcement
+- Transition validation: only legal state changes allowed
+- Due date tracking with overdue detection
+- Entity linking: actions can be associated with canonical entities
+- Domain tagging: actions tagged with originating domain
+
+**Activities API (`api/activities.js`)**:
+- Append-only timeline: POST only, no PATCH or DELETE
+- Event types: status_change, assignment, note, sync, escalation, etc.
+- Linked to entities, actions, or inbox items
+- Immutable audit trail for compliance
+
+**Queue API (`api/queue.js`)**:
+- **my_work**: Current user's open actions + assigned inbox, sorted by priority/due date
+- **team_queue**: All shared actions across workspace
+- **inbox_triage**: New/triaged inbox items awaiting action
+- **research_queue**: Open research tasks
+- **work_counts**: Aggregated counts for dashboard cards
+- **entity_timeline**: Activity history for a specific entity
+
+**Queue SQL Views (`schema/007_queue_views.sql`)**:
+- `v_my_work`, `v_team_queue`, `v_inbox_triage`, `v_sync_exceptions`, `v_entity_timeline`, `v_research_queue`, `v_work_counts`
+- Pre-joined views with entity names, assignee info, domain labels
+- Overdue flagging via computed columns
+
+---
+
+## Phase 3: Outlook and Salesforce Connector Rollout
+
+**Goal**: Build per-user sync orchestration for email, calendar, and Salesforce data flowing into the canonical model.
+
+### Files Created
+| File | LOC | Purpose |
+|------|-----|---------|
+| `api/sync.js` | 380 | Sync orchestration: ingest emails/calendar/SF, outbound retries, health dashboard |
+
+### What It Does
+
+**Email Ingestion (`ingest_emails`)**:
+- Calls existing edge function `ai-copilot/sync/flagged-emails` with per-user connector credentials
+- Transforms flagged emails into `inbox_item` records with `source_type: 'email'`
+- Deduplicates via external identity (email message ID)
+- Creates sync job record with correlation ID for tracking
+- Logs sync errors on failure
+
+**Calendar Ingestion (`ingest_calendar`)**:
+- Calls existing edge function `ai-copilot/sync/calendar-events` with per-user credentials
+- Transforms calendar events into `activity_event` records
+- Handles work + personal calendar separation
+- Deduplicates via external identity (event ID)
+
+**Salesforce Activity Ingestion (`ingest_sf_activities`)**:
+- Calls existing edge function `ai-copilot/sync/sf-activities` with per-user credentials
+- Activities → `activity_event` records
+- Open SF tasks → `inbox_item` records with `source_type: 'salesforce'`
+- Links to canonical entities via external identity when SF account/contact IDs match
+
+**Outbound Command Handling (`outbound`)**:
+- Sends commands back to source systems (e.g., log call to Salesforce, complete To-Do in Outlook)
+- Exponential backoff retry: 1s, 2s, 4s on failure
+- Records sync job with success/failure status
+
+**Sync Health Dashboard (`health`)**:
+- Per-user connector health: last sync time, success rate, error count
+- Overall workspace sync summary
+- Lists recent sync errors with retry capability
+
+**Sync Error Retry (`retry`)**:
+- Retry a specific failed sync error by ID
+- Re-attempts the original operation
+- Updates error record with retry result
+
+**Connector Auto-Resolution**:
+- If no `connector_account` exists for a user+type combination, one is auto-created
+- Supports the transition period where existing users haven't explicitly set up connectors
+
+**Frontend Integration**:
+- `triggerCanonicalSync()` added to frontend — fires after initial page load
+- Runs email, calendar, and SF sync in background
+- Non-blocking: failures don't affect main app functionality
 
 ---
 
@@ -224,29 +457,62 @@ Idempotent SQL migration that bootstraps Government and Dialysis domains:
 
 ## Complete File Inventory (Created/Modified This Session)
 
-### New API Endpoints (5 files, ~1,760 LOC)
-| File | LOC | Endpoints |
-|------|-----|-----------|
-| `api/workflows.js` | 420 | 9 workflow operations (promote, SF link, research follow-up, reassign, escalate, watch, bulk assign/triage) |
-| `api/domains.js` | 470 | 12 domain management operations |
-| `api/queue-v2.js` | 250 | 6 paginated queue views |
-| `ops.js` | 520 | 7 operational page renderers |
-| `styles.css` | 830 | Complete extracted CSS |
-| `app.js` | 2,865 | Complete extracted core JS |
+### Schema Migrations (10 files, ~1,930 LOC)
+| File | LOC | Phase | Contents |
+|------|-----|-------|----------|
+| `schema/001_workspace_and_users.sql` | ~120 | 0 | Workspaces, users, roles, membership |
+| `schema/002_connectors.sql` | ~100 | 0 | Connector accounts, sync jobs, sync errors |
+| `schema/003_canonical_entities.sql` | ~100 | 0 | Entities (person/org/asset), external identities |
+| `schema/004_operations.sql` | ~120 | 0 | Inbox items, action items, activity events, research tasks |
+| `schema/005_domains.sql` | ~100 | 0 | Domain registry, data sources, entity mappings, queue configs |
+| `schema/006_rls_policies.sql` | 265 | 1 | Row-level security policies for all tables |
+| `schema/007_queue_views.sql` | 240 | 2 | 7 unified queue views |
+| `schema/008_watchers_and_oversight.sql` | 180 | 4 | Watchers, escalations, v_manager_overview, v_unassigned_work |
+| `schema/009_performance.sql` | 200 | 6 | Materialized views, 25+ indexes, perf_metrics |
+| `schema/010_domain_seeds.sql` | 200 | 7 | Gov and Dia domain bootstrap data |
 
-### New Schema Migrations (3 files, ~580 LOC)
-| File | LOC | Contents |
-|------|-----|----------|
-| `schema/008_watchers_and_oversight.sql` | 180 | watchers, escalations, v_manager_overview, v_unassigned_work |
-| `schema/009_performance.sql` | 200 | mv_work_counts, mv_user_work_counts, 25+ indexes, perf_metrics |
-| `schema/010_domain_seeds.sql` | 200 | Gov and Dia domain bootstrap data |
+### Shared Infrastructure (3 files, ~515 LOC)
+| File | LOC | Phase | Purpose |
+|------|-----|-------|---------|
+| `api/_shared/auth.js` | 240 | 1 | JWT + API key auth, role checks, visibility enforcement |
+| `api/_shared/lifecycle.js` | 200 | 2 | State machines, enum validators, transition effects |
+| `api/_shared/ops-db.js` | 75 | 1 | Shared Supabase PostgREST client |
+
+### API Endpoints (13 files, ~3,480 LOC)
+| File | LOC | Phase | Endpoints |
+|------|-----|-------|-----------|
+| `api/workspaces.js` | 115 | 1 | Workspace CRUD |
+| `api/members.js` | 175 | 1 | User/membership management |
+| `api/connectors.js` | 205 | 1 | Per-user connector accounts |
+| `api/entities.js` | 180 | 2 | Canonical entity CRUD + external identity |
+| `api/inbox.js` | 220 | 2 | Inbox triage, promote, assign |
+| `api/actions.js` | 210 | 2 | Action items with lifecycle transitions |
+| `api/activities.js` | 100 | 2 | Append-only activity timeline |
+| `api/queue.js` | 155 | 2 | Unified queue views (v1) |
+| `api/sync.js` | 380 | 3 | Sync orchestration, health, retries |
+| `api/workflows.js` | 420 | 4 | 9 workflow operations (promote, SF link, reassign, escalate, watch, bulk ops) |
+| `api/queue-v2.js` | 250 | 6 | 6 paginated queue views with instrumentation |
+| `api/domains.js` | 470 | 7 | 12 domain management operations |
+
+### Frontend Modules (3 new files, ~4,215 LOC)
+| File | LOC | Phase | Purpose |
+|------|-----|-------|---------|
+| `ops.js` | 520 | 5 | 7 operational page renderers |
+| `styles.css` | 830 | 6 | Complete extracted CSS |
+| `app.js` | 2,865 | 6 | Core JS: nav, calendar, weather, messages, settings, copilot |
+
+### Documentation (2 files)
+| File | Phase | Purpose |
+|------|-------|---------|
+| `ROLLOUT.md` | 0 | Master rollout tracker — created in Phase 0, updated every phase |
+| `schema/README.md` | 0+ | Schema documentation, updated incrementally |
 
 ### Modified Files
 | File | Change Summary |
 |------|---------------|
 | `index.html` | 3,955 → 372 LOC. Extracted CSS/JS, added 7 new page containers, reworked nav to 5+More, added More drawer |
-| `ROLLOUT.md` | Updated all phase checklists, decision log, file inventory |
-| `schema/README.md` | Added entries for migrations 008-010 and frontend modules |
+| `api/gov-query.js` | Added auth middleware (non-breaking, transitional mode) |
+| `api/dia-query.js` | Added auth middleware (non-breaking, transitional mode) |
 
 ---
 
