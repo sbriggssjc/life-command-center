@@ -612,7 +612,7 @@ body.compact .greeting { font-size: 18px; }
     <div class="app-logo">LCC <small>Life Command Center</small></div>
     <div class="app-status">
       <span class="dot" id="statusDot"></span>
-      <span class="app-user">Scott Briggs</span>
+      <span class="app-user" id="appUserName">Scott Briggs</span>
     </div>
   </div>
 
@@ -656,7 +656,7 @@ body.compact .greeting { font-size: 18px; }
     <!-- HOME / TODAY -->
     <div class="page active" id="pageHome">
       <div class="page-inner">
-        <div class="greeting" id="greeting">Good morning, Scott</div>
+        <div class="greeting" id="greeting">Good morning</div>
         <div class="greeting-date" id="greetingDate"></div>
         <div class="home-layout">
           <div class="home-main">
@@ -823,7 +823,7 @@ body.compact .greeting { font-size: 18px; }
   </div>
   <div class="copilot-messages" id="copilotMessages">
     <div class="copilot-msg bot">
-      Hey Scott! I'm your LCC Copilot. I can help you search properties, analyze deals, summarize activities, or answer questions about your portfolio. What can I help with?
+      Hey there! I'm your LCC Copilot. I can help you search properties, analyze deals, summarize activities, or answer questions about your portfolio. What can I help with?
       <div class="copilot-suggestions" style="margin-top:10px">
         <button class="copilot-suggestion" onclick="sendCopilotSuggestion('Summarize my activity this week')">This week's activity</button>
         <button class="copilot-suggestion" onclick="sendCopilotSuggestion('What government leases expire in the next 12 months?')">Expiring leases</button>
@@ -883,6 +883,78 @@ body.compact .greeting { font-size: 18px; }
 // CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
+
+// ============================================================
+// USER CONTEXT — Phase 1: Multi-user support
+// ============================================================
+const LCC_USER = {
+  id: null,
+  email: null,
+  display_name: null,
+  avatar_url: null,
+  first_name: null,
+  workspace_id: null,
+  workspace_name: null,
+  role: null,
+  memberships: [],
+  _loaded: false
+};
+
+/** Load user context from /api/members?action=me (or fall back to defaults) */
+async function loadUserContext() {
+  try {
+    const res = await fetch('/api/members?action=me');
+    if (res.ok) {
+      const data = await res.json();
+      LCC_USER.id = data.user.id;
+      LCC_USER.email = data.user.email;
+      LCC_USER.display_name = data.user.display_name;
+      LCC_USER.avatar_url = data.user.avatar_url;
+      LCC_USER.first_name = data.user.display_name?.split(' ')[0] || 'there';
+      LCC_USER.workspace_id = data.workspace_id;
+      LCC_USER.workspace_name = data.memberships?.[0]?.workspace_name;
+      LCC_USER.role = data.role;
+      LCC_USER.memberships = data.memberships || [];
+      LCC_USER._loaded = true;
+    }
+  } catch (e) {
+    // Silently fall back to defaults — ops DB may not be configured yet
+  }
+  // Apply defaults if not loaded from server
+  if (!LCC_USER._loaded) {
+    LCC_USER.display_name = localStorage.getItem('lcc-user-name') || 'Scott Briggs';
+    LCC_USER.first_name = LCC_USER.display_name.split(' ')[0];
+    LCC_USER.role = 'owner';
+    LCC_USER._loaded = true;
+  }
+  applyUserContext();
+}
+
+/** Update all UI elements that reference the current user */
+function applyUserContext() {
+  const name = LCC_USER.display_name || 'User';
+  const first = LCC_USER.first_name || name.split(' ')[0];
+
+  // Header user name
+  const userEl = document.getElementById('appUserName');
+  if (userEl) userEl.textContent = name;
+
+  // Greeting
+  const greetEl = document.getElementById('greeting');
+  if (greetEl) greetEl.textContent = getGreeting();
+
+  // Settings page user display
+  const settingsUser = document.getElementById('settingsUserName');
+  if (settingsUser) settingsUser.textContent = name;
+
+  // Copilot welcome
+  const copilotWelcome = document.querySelector('.copilot-msg.bot');
+  if (copilotWelcome && copilotWelcome.dataset.initialized !== 'true') {
+    copilotWelcome.dataset.initialized = 'true';
+    // Keep existing content but with correct name
+  }
+}
+
 // Weather — uses geolocation with Tulsa fallback
 const WEATHER_FALLBACK_LAT = 36.15;
 const WEATHER_FALLBACK_LON = -95.99;
@@ -1092,9 +1164,10 @@ function showToast(msg, type = '') {
 
 function getGreeting() {
   const h = parseInt(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Chicago' }));
-  if (h < 12) return 'Good morning, Scott';
-  if (h < 17) return 'Good afternoon, Scott';
-  return 'Good evening, Scott';
+  const name = LCC_USER.first_name || LCC_USER.display_name?.split(' ')[0] || 'there';
+  if (h < 12) return `Good morning, ${name}`;
+  if (h < 17) return `Good afternoon, ${name}`;
+  return `Good evening, ${name}`;
 }
 
 // ============================================================
@@ -1855,11 +1928,11 @@ function openMktEmail(email, contactName, dealName) {
   const subject = encodeURIComponent('Northmarq Investment Sales \u2014 ' + dealName);
   const body = encodeURIComponent(
     'Hi ' + (contactName.split(' ')[0] || 'there') + ',\n\n' +
-    'I hope this message finds you well. My name is Scott Briggs, and I am a Senior Vice President with Northmarq Investment Sales in Minneapolis.\n\n' +
+    'I hope this message finds you well. My name is ' + (LCC_USER.display_name || 'Scott Briggs') + ', and I am a Senior Vice President with Northmarq Investment Sales in Minneapolis.\n\n' +
     'I am reaching out regarding ' + dealName + '. Our team has been actively working in this market and I wanted to introduce myself as a resource for any future capital markets needs you may have.\n\n' +
     'I would welcome the opportunity to share some recent market activity and comparable transactions that may be relevant to your portfolio. Would you have a few minutes for a brief call this week?\n\n' +
     'Best regards,\n' +
-    'Scott Briggs\n' +
+    (LCC_USER.display_name || 'Scott Briggs') + '\n' +
     'Senior Vice President\n' +
     'Northmarq Investment Sales\n' +
     '(612) 555-0100'
@@ -3216,7 +3289,7 @@ function renderSettings() {
           <div class="settings-row-label">User</div>
           <div class="settings-row-desc">Northmarq Investment Sales</div>
         </div>
-        <div class="settings-val" style="color:var(--text)">Scott Briggs</div>
+        <div class="settings-val" style="color:var(--text)" id="settingsUserName">Scott Briggs</div>
       </div>
       <div class="settings-row" style="cursor:pointer" onclick="clearCacheAndReload()">
         <div class="settings-row-info">
@@ -3466,11 +3539,13 @@ function updateGreeting() {
 document.getElementById('greeting').textContent = getGreeting();
 document.getElementById('greetingDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 
-// Auto-connect credentials then load data
-autoConnectCredentials().then(() => {
-  Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
-    .then(() => updateGreeting())
-    .catch(() => updateGreeting());
+// Load user context (non-blocking — falls back to defaults), then connect & load data
+loadUserContext().then(() => {
+  autoConnectCredentials().then(() => {
+    Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks()])
+      .then(() => updateGreeting())
+      .catch(() => updateGreeting());
+  });
 });
 
 // ============================================================

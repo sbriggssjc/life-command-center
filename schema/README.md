@@ -7,5 +7,10 @@ This directory contains the canonical data model for the Life Command Center reb
 - `003_canonical_entities.sql` — Unified entity model (person, org, asset)
 - `004_operations.sql` — Inbox items, action items, activity events
 - `005_domains.sql` — Domain registry and domain data source mapping
+- `006_rls_policies.sql` — Row-level security policies for all tables (Phase 1)
 
 These migrations are designed for a shared Supabase project that serves as the canonical operational backbone alongside the existing Gov and Dia domain databases.
+
+## Applying Migrations
+
+Run these in order against your ops Supabase project. Each migration is idempotent (`CREATE IF NOT EXISTS`). RLS policies in `006` depend on all prior tables existing.
