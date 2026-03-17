@@ -25,6 +25,7 @@ export const GOV_READ_TABLES = new Set([
   'v_lease_detail',
   'v_property_operations',
   'v_ownership_chain',
+  'v_ownership_current',
   'v_property_intel',
   'v_property_history',
 ]);
@@ -77,6 +78,12 @@ export const DIA_READ_TABLES = new Set([
   'contacts',
   'sales_transactions',
   'loans',
+  // Detail panel views (shared with GOV)
+  'v_property_detail',
+  'v_lease_detail',
+  'v_ownership_current',
+  'v_ownership_chain',
+  'v_property_rankings',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)
