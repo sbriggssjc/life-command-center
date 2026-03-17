@@ -1,5 +1,11 @@
 // Serverless proxy for Dialysis Supabase queries
 // Keeps secret key server-side — never exposed to browser
+// Hardened with table allowlist and input validation
+import {
+  DIA_READ_TABLES, DIA_WRITE_TABLES,
+  isAllowedTable, safeLimit, safeSelect
+} from './_shared/allowlist.js';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
@@ -21,6 +27,11 @@ export default async function handler(req, res) {
 
   // Handle POST/PATCH requests (for inserts/upserts/updates and RPC calls)
   if (req.method === 'POST' || req.method === 'PATCH') {
+    // Validate table against write allowlist
+    if (!isAllowedTable(table, DIA_WRITE_TABLES)) {
+      return res.status(403).json({ error: `Write access denied for table: ${table}` });
+    }
+
     const isRpc = table.startsWith('rpc/');
     // Honor client's Prefer header — needed for POST return=representation (ownership save)
     const clientPrefer = req.headers['prefer'] || '';
@@ -84,9 +95,14 @@ export default async function handler(req, res) {
     }
   }
 
-  // GET requests (queries)
+  // Validate table against read allowlist
+  if (!isAllowedTable(table, DIA_READ_TABLES)) {
+    return res.status(403).json({ error: `Read access denied for table: ${table}` });
+  }
+
+  // GET requests (queries) with validated inputs
   const url = new URL(`${diaUrl}/rest/v1/${table}`);
-  url.searchParams.set('select', select || '*');
+  url.searchParams.set('select', safeSelect(select));
 
   if (filter) {
     const eqIdx = filter.indexOf('=');
@@ -98,7 +114,7 @@ export default async function handler(req, res) {
   }
 
   if (order) url.searchParams.set('order', order);
-  if (limit !== undefined) url.searchParams.set('limit', limit);
+  url.searchParams.set('limit', safeLimit(limit));
   if (offset !== undefined) url.searchParams.set('offset', offset);
 
   try {
