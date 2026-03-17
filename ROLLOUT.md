@@ -33,11 +33,19 @@
 | `api/dia-query.js` | 139 | Vercel serverless proxy for Dialysis Supabase (GET/POST/PATCH) |
 | `api/treasury.js` | 152 | Treasury yield data API (XML/CSV/Fiscal Data API fallbacks) |
 | `api/_shared/auth.js` | 240 | Auth middleware: JWT, API key, role checks, visibility |
+| `api/_shared/lifecycle.js` | 200 | State machines, enum validators, transition effects |
+| `api/_shared/ops-db.js` | 75 | Shared Supabase PostgREST client for canonical tables |
 | `api/workspaces.js` | 115 | Workspace CRUD API |
 | `api/members.js` | 175 | User/membership management API |
 | `api/connectors.js` | 205 | Per-user connector account API |
+| `api/entities.js` | 180 | Canonical entity CRUD + external identity linking |
+| `api/inbox.js` | 220 | Inbox items: triage, promote to action, assign |
+| `api/actions.js` | 210 | Action items: CRUD with lifecycle state transitions |
+| `api/activities.js` | 100 | Activity events: append-only timeline logging |
+| `api/queue.js` | 155 | Unified queue: my work, team, inbox, counts, entity timeline |
 | `api/config.js` | 15 | Connection status endpoint |
 | `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
+| `schema/007_queue_views.sql` | 240 | Unified queue views for operational surfaces |
 | `sw.js` | 62 | Service worker for PWA |
 | `config.js` | 15 | Root config (duplicate of api/config.js) |
 | `flow-*.json` | 4 files | Power Automate flow definitions |
@@ -214,13 +222,20 @@
 - [x] Replace hardcoded "Scott" references with dynamic user context
 
 ### Phase 2: Canonical Data and Queue Model
-- [ ] Design canonical entity schema (person, org, asset)
-- [ ] Design operational schema (inbox_item, action_item, activity_event)
-- [ ] Design external identity linking model
-- [ ] Design unified queue views (my work, team queue, inbox triage)
-- [ ] Define state transitions for inbox/action/sync lifecycle
-- [ ] Build canonical types as TypeScript/JS interfaces
-- [ ] Create Supabase migrations for canonical tables
+- [x] Design canonical entity schema (person, org, asset) — `schema/003`
+- [x] Design operational schema (inbox_item, action_item, activity_event) — `schema/004`
+- [x] Design external identity linking model — `schema/003` external_identities
+- [x] Design unified queue views (my work, team queue, inbox triage) — `schema/007_queue_views.sql`
+- [x] Define state transitions for inbox/action/sync lifecycle — `api/_shared/lifecycle.js`
+- [x] Build canonical types as JS constants and validators — `api/_shared/lifecycle.js`
+- [x] Create Supabase migrations for canonical tables — `schema/003-005`
+- [x] Create shared ops DB helper — `api/_shared/ops-db.js`
+- [x] Create entities API with external identity linking — `api/entities.js`
+- [x] Create inbox API with triage/promote/assign — `api/inbox.js`
+- [x] Create action items API with lifecycle transitions — `api/actions.js`
+- [x] Create activity events API (append-only timeline) — `api/activities.js`
+- [x] Create unified queue API (my work, team, inbox, counts) — `api/queue.js`
+- [x] Create queue SQL views: v_my_work, v_team_queue, v_inbox_triage, v_sync_exceptions, v_entity_timeline, v_research_queue, v_work_counts
 
 ### Phase 3: Outlook and Salesforce Connector Rollout
 - [ ] Implement per-user connector binding storage
@@ -272,6 +287,10 @@
 | 2026-03-17 | Phase 1 implemented | Auth middleware, scoped APIs, RLS policies, user context system |
 | 2026-03-17 | Transitional auth mode | Auth falls back to dev user when OPS_SUPABASE_URL not set — preserves existing behavior |
 | 2026-03-17 | API proxy auth added non-breaking | Existing proxies get auth checks but pass through in transitional mode |
+| 2026-03-17 | Phase 2 implemented | Queue views, lifecycle state machines, all canonical CRUD APIs |
+| 2026-03-17 | Shared ops-db helper created | DRY Supabase PostgREST client used by all Phase 2+ endpoints |
+| 2026-03-17 | Inbox promotion workflow | Inbox items promote to action items with activity logging |
+| 2026-03-17 | Activity events are append-only | No PATCH/DELETE — immutable audit trail |
 
 ---
 

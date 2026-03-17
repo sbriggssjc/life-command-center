@@ -1,0 +1,78 @@
+// ============================================================================
+// Ops Database Helper — shared Supabase PostgREST client for canonical tables
+// Life Command Center — Phase 2
+// ============================================================================
+
+const OPS_URL = process.env.OPS_SUPABASE_URL;
+const OPS_KEY = process.env.OPS_SUPABASE_KEY;
+
+export function isOpsConfigured() {
+  return !!(OPS_URL && OPS_KEY);
+}
+
+/**
+ * Execute a query against the ops Supabase database.
+ * @param {string} method - HTTP method (GET, POST, PATCH, DELETE)
+ * @param {string} path - PostgREST path (e.g., 'entities?id=eq.xxx')
+ * @param {object} [body] - Request body for POST/PATCH
+ * @param {object} [extraHeaders] - Additional headers
+ * @returns {{ ok: boolean, status: number, data: any, count?: number }}
+ */
+export async function opsQuery(method, path, body, extraHeaders = {}) {
+  if (!OPS_URL || !OPS_KEY) {
+    return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
+  }
+
+  const url = `${OPS_URL}/rest/v1/${path}`;
+  const headers = {
+    'apikey': OPS_KEY,
+    'Authorization': `Bearer ${OPS_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': method === 'GET' ? 'count=exact' : 'return=representation',
+    ...extraHeaders
+  };
+
+  const opts = { method, headers };
+  if (body && (method === 'POST' || method === 'PATCH')) {
+    opts.body = JSON.stringify(body);
+  }
+
+  const res = await fetch(url, opts);
+  const text = await res.text();
+
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+
+  let count = 0;
+  const contentRange = res.headers.get('content-range');
+  if (contentRange) {
+    const match = contentRange.match(/\/(\d+)/);
+    if (match) count = parseInt(match[1], 10);
+  }
+
+  return { ok: res.ok, status: res.status, data, count };
+}
+
+/**
+ * Build pagination query params.
+ * @param {object} query - Express-style query object with limit, offset, order
+ * @returns {string} - Query string fragment like '&limit=50&offset=0&order=created_at.desc'
+ */
+export function paginationParams(query) {
+  const limit = Math.min(Math.max(parseInt(query.limit) || 50, 1), 500);
+  const offset = Math.max(parseInt(query.offset) || 0, 0);
+  const order = query.order || 'created_at.desc';
+  return `&limit=${limit}&offset=${offset}&order=${order}`;
+}
+
+/**
+ * Require ops DB or send 503.
+ * Returns true if ops is NOT configured (handler should return).
+ */
+export function requireOps(res) {
+  if (!isOpsConfigured()) {
+    res.status(503).json({ error: 'Ops database not configured. Set OPS_SUPABASE_URL and OPS_SUPABASE_KEY.' });
+    return true;
+  }
+  return false;
+}
