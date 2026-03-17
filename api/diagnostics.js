@@ -87,88 +87,124 @@ async function handleDiag(req, res) {
 }
 
 // ---- /api/treasury ----
+
+function parseXmlEntry(entry) {
+  const dateMatch = entry.match(/<d:NEW_DATE[^>]*>([^<]+)/);
+  const tenYrMatch = entry.match(/<d:BC_10YEAR[^>]*>([^<]+)/);
+  const thirtyYrMatch = entry.match(/<d:BC_30YEAR[^>]*>([^<]+)/);
+  return {
+    date: dateMatch ? dateMatch[1].split('T')[0] : null,
+    ten_yr: tenYrMatch ? parseFloat(tenYrMatch[1]) : null,
+    thirty_yr: thirtyYrMatch ? parseFloat(thirtyYrMatch[1]) : null
+  };
+}
+
+async function fetchXmlYear(year) {
+  const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/xml', 'User-Agent': 'Mozilla/5.0 (compatible; LCC/1.0)' }
+    });
+    if (!res.ok) return [];
+    const text = await res.text();
+    const entries = text.split('<m:properties>').slice(1);
+    return entries.map(parseXmlEntry).filter(e => e.date && e.ten_yr !== null);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchCsvYear(year) {
+  const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/${year}?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&page&_format=csv`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    if (!res.ok) return [];
+    const csvText = await res.text();
+    const lines = csvText.trim().split('\n').filter(l => l.trim());
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+    const tenIdx = headers.findIndex(h => h === '10 Yr');
+    const thirtyIdx = headers.findIndex(h => h === '30 Yr');
+    if (tenIdx < 0) return [];
+    return lines.slice(1).map(line => {
+      const cols = line.split(',').map(v => v.replace(/"/g, '').trim());
+      const tenVal = parseFloat(cols[tenIdx]);
+      if (isNaN(tenVal)) return null;
+      // CSV date is MM/DD/YYYY — normalize to YYYY-MM-DD
+      const parts = cols[0].split('/');
+      const isoDate = parts.length === 3
+        ? `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`
+        : cols[0];
+      return {
+        date: isoDate,
+        ten_yr: tenVal,
+        thirty_yr: thirtyIdx >= 0 ? (parseFloat(cols[thirtyIdx]) || null) : null
+      };
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function handleTreasury(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
 
+  const wantHistory = req.query.history === 'true';
+  const numYears = Math.min(parseInt(req.query.years, 10) || 1, 5);
+  const currentYear = new Date().getFullYear();
+
   try {
-    const year = new Date().getFullYear();
-    const xmlUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`;
+    if (wantHistory) {
+      // Fetch XML for each requested year in parallel
+      const years = [];
+      for (let i = 0; i < numYears; i++) years.push(currentYear - i);
+      let allEntries = (await Promise.all(years.map(fetchXmlYear))).flat();
 
-    const xmlRes = await fetch(xmlUrl, {
-      headers: {
-        'Accept': 'application/xml',
-        'User-Agent': 'Mozilla/5.0 (compatible; LCC/1.0)'
+      // Fallback to CSV if XML returned nothing
+      if (allEntries.length === 0) {
+        allEntries = (await Promise.all(years.map(fetchCsvYear))).flat();
       }
-    });
 
-    if (xmlRes.ok) {
-      const text = await xmlRes.text();
-      const entries = text.split('<m:properties>').slice(1);
+      // Sort chronologically
+      allEntries.sort((a, b) => a.date.localeCompare(b.date));
 
-      if (entries.length > 0) {
-        const parseEntry = (entry) => {
-          const dateMatch = entry.match(/<d:NEW_DATE[^>]*>([^<]+)/);
-          const tenYrMatch = entry.match(/<d:BC_10YEAR[^>]*>([^<]+)/);
-          const thirtyYrMatch = entry.match(/<d:BC_30YEAR[^>]*>([^<]+)/);
-          return {
-            date: dateMatch ? dateMatch[1].split('T')[0] : null,
-            ten_yr: tenYrMatch ? parseFloat(tenYrMatch[1]) : null,
-            thirty_yr: thirtyYrMatch ? parseFloat(thirtyYrMatch[1]) : null
-          };
-        };
-
-        const latest = parseEntry(entries[entries.length - 1]);
-        const prev = entries.length > 1 ? parseEntry(entries[entries.length - 2]) : null;
-
-        if (latest.ten_yr !== null) {
-          return res.status(200).json({
-            date: latest.date,
-            ten_yr: latest.ten_yr,
-            thirty_yr: latest.thirty_yr,
-            prev_date: prev ? prev.date : null,
-            prev_ten_yr: prev ? prev.ten_yr : null,
-          });
-        }
-      }
+      return res.status(200).json({ history: allEntries });
     }
 
-    const csvUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/${year}?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&page&_format=csv`;
-
-    const csvRes = await fetch(csvUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-    });
-
-    if (csvRes.ok) {
-      const csvText = await csvRes.text();
-      const lines = csvText.trim().split('\n').filter(l => l.trim());
-
-      if (lines.length >= 2) {
-        const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
-        const tenIdx = headers.findIndex(h => h === '10 Yr');
-        const thirtyIdx = headers.findIndex(h => h === '30 Yr');
-
-        if (tenIdx >= 0) {
-          const lastRow = lines[lines.length - 1].split(',').map(v => v.replace(/"/g, '').trim());
-          const prevRow = lines.length > 2 ? lines[lines.length - 2].split(',').map(v => v.replace(/"/g, '').trim()) : null;
-
-          return res.status(200).json({
-            date: lastRow[0],
-            ten_yr: parseFloat(lastRow[tenIdx]) || null,
-            thirty_yr: thirtyIdx >= 0 ? (parseFloat(lastRow[thirtyIdx]) || null) : null,
-            prev_date: prevRow ? prevRow[0] : null,
-            prev_ten_yr: prevRow ? (parseFloat(prevRow[tenIdx]) || null) : null,
-          });
-        }
-      }
+    // --- Latest data point mode (unchanged logic) ---
+    const entries = await fetchXmlYear(currentYear);
+    if (entries.length > 0) {
+      const latest = entries[entries.length - 1];
+      const prev = entries.length > 1 ? entries[entries.length - 2] : null;
+      return res.status(200).json({
+        date: latest.date,
+        ten_yr: latest.ten_yr,
+        thirty_yr: latest.thirty_yr,
+        prev_date: prev ? prev.date : null,
+        prev_ten_yr: prev ? prev.ten_yr : null,
+      });
     }
 
+    // CSV fallback for latest
+    const csvEntries = await fetchCsvYear(currentYear);
+    if (csvEntries.length > 0) {
+      const latest = csvEntries[csvEntries.length - 1];
+      const prev = csvEntries.length > 1 ? csvEntries[csvEntries.length - 2] : null;
+      return res.status(200).json({
+        date: latest.date,
+        ten_yr: latest.ten_yr,
+        thirty_yr: latest.thirty_yr,
+        prev_date: prev ? prev.date : null,
+        prev_ten_yr: prev ? prev.ten_yr : null,
+      });
+    }
+
+    // Fiscal Data API last resort
     const fiscalUrl = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/avg_interest_rates?sort=-record_date&page[size]=2&fields=record_date,avg_interest_rate_amt,security_desc&filter=security_desc:eq:Treasury Notes';
-
-    const fiscalRes = await fetch(fiscalUrl, {
-      headers: { 'Accept': 'application/json' }
-    });
-
+    const fiscalRes = await fetch(fiscalUrl, { headers: { 'Accept': 'application/json' } });
     if (fiscalRes.ok) {
       const json = await fiscalRes.json();
       const rows = json.data || [];
