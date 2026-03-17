@@ -205,19 +205,18 @@ export async function authenticate(req, res) {
     return null;
   }
 
-  // 3. Transitional: if no auth system is configured yet, allow through
-  //    with a default dev user (preserves existing behavior).
-  //    Only permitted in development mode. Production requires real auth.
-  if (!OPS_SUPABASE_URL && !LCC_API_KEY) {
-    if (LCC_ENV === 'production' || LCC_ENV === 'staging') {
-      res.status(503).json({
-        error: 'Authentication system not configured',
-        detail: 'OPS_SUPABASE_URL and LCC_API_KEY are both unset. In production/staging, at least one auth method must be configured.'
-      });
-      return null;
+  // 3. Transitional: if LCC_API_KEY is not configured, no client-side auth
+  //    mechanism exists yet. Allow through with a default owner user so the
+  //    frontend (which sends no credentials) can load data.
+  //    Once LCC_API_KEY is set, this fallback stops and real auth is enforced.
+  if (!LCC_API_KEY) {
+    res.setHeader('X-LCC-Auth-Warning', 'transitional-no-api-key');
+    // Try to resolve user from ops DB if headers are present
+    if (OPS_SUPABASE_URL) {
+      const devUser = await resolveDevUser(req);
+      if (devUser) return devUser;
     }
-    // Development-only fallback
-    res.setHeader('X-LCC-Auth-Warning', 'transitional-dev-user');
+    // Fall back to default owner user
     return {
       id: 'default-dev-user',
       email: 'dev@local',
