@@ -37,13 +37,13 @@ select
   u.display_name,
   u.email,
   -- Outlook checks
-  max(case when ca.connector_type = 'outlook' then ca.id end) as outlook_connector_id,
+  max(case when ca.connector_type = 'outlook' then ca.id::text end)::uuid as outlook_connector_id,
   max(case when ca.connector_type = 'outlook' then ca.status::text end) as outlook_status,
   max(case when ca.connector_type = 'outlook' then ca.external_user_id end) as outlook_external_id,
   max(case when ca.connector_type = 'outlook' then ca.last_sync_at end) as outlook_last_sync,
   max(case when ca.connector_type = 'outlook' then ca.verified_at end) as outlook_verified_at,
   -- Salesforce checks
-  max(case when ca.connector_type = 'salesforce' then ca.id end) as sf_connector_id,
+  max(case when ca.connector_type = 'salesforce' then ca.id::text end)::uuid as sf_connector_id,
   max(case when ca.connector_type = 'salesforce' then ca.status::text end) as sf_status,
   max(case when ca.connector_type = 'salesforce' then ca.external_user_id end) as sf_external_id,
   max(case when ca.connector_type = 'salesforce' then ca.last_sync_at end) as sf_last_sync,
