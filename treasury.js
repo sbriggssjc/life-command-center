@@ -2,10 +2,67 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
 
+  const { history, years } = req.query || {};
+
   try {
-    // Primary: Treasury XML feed for daily yield curve rates
-    const year = new Date().getFullYear();
-    const xmlUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`;
+    const parseEntry = (entry) => {
+      const dateMatch = entry.match(/<d:NEW_DATE[^>]*>([^<]+)/);
+      const tenYrMatch = entry.match(/<d:BC_10YEAR[^>]*>([^<]+)/);
+      const thirtyYrMatch = entry.match(/<d:BC_30YEAR[^>]*>([^<]+)/);
+      return {
+        date: dateMatch ? dateMatch[1].split('T')[0] : null,
+        ten_yr: tenYrMatch ? parseFloat(tenYrMatch[1]) : null,
+        thirty_yr: thirtyYrMatch ? parseFloat(thirtyYrMatch[1]) : null
+      };
+    };
+
+    // Determine which years to fetch
+    const currentYear = new Date().getFullYear();
+    const numYears = Math.min(parseInt(years) || 1, 5); // max 5 years
+    const yearsToFetch = [];
+    for (let i = numYears - 1; i >= 0; i--) {
+      yearsToFetch.push(currentYear - i);
+    }
+
+    // If history mode, return all daily entries for charting
+    if (history === 'true') {
+      let allEntries = [];
+
+      for (const yr of yearsToFetch) {
+        const xmlUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${yr}`;
+        try {
+          const xmlRes = await fetch(xmlUrl, {
+            headers: {
+              'Accept': 'application/xml',
+              'User-Agent': 'Mozilla/5.0 (compatible; LCC/1.0)'
+            }
+          });
+          if (xmlRes.ok) {
+            const text = await xmlRes.text();
+            const entries = text.split('<m:properties>').slice(1);
+            for (const entry of entries) {
+              const parsed = parseEntry(entry);
+              if (parsed.date && parsed.ten_yr !== null) {
+                allEntries.push(parsed);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch year ${yr}:`, e.message);
+        }
+      }
+
+      // Sort by date ascending
+      allEntries.sort((a, b) => a.date.localeCompare(b.date));
+
+      return res.status(200).json({
+        history: allEntries,
+        count: allEntries.length
+      });
+    }
+
+    // Standard mode: return latest + previous
+    const xmlUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${currentYear}`;
 
     const xmlRes = await fetch(xmlUrl, {
       headers: {
@@ -16,24 +73,9 @@ export default async function handler(req, res) {
 
     if (xmlRes.ok) {
       const text = await xmlRes.text();
-
-      // Parse BC_10YEAR values from XML entries
-      // Each entry has <d:NEW_DATE> and <d:BC_10YEAR>
       const entries = text.split('<m:properties>').slice(1);
 
       if (entries.length > 0) {
-        // Entries are in chronological order; last entry is most recent
-        const parseEntry = (entry) => {
-          const dateMatch = entry.match(/<d:NEW_DATE[^>]*>([^<]+)/);
-          const tenYrMatch = entry.match(/<d:BC_10YEAR[^>]*>([^<]+)/);
-          const thirtyYrMatch = entry.match(/<d:BC_30YEAR[^>]*>([^<]+)/);
-          return {
-            date: dateMatch ? dateMatch[1].split('T')[0] : null,
-            ten_yr: tenYrMatch ? parseFloat(tenYrMatch[1]) : null,
-            thirty_yr: thirtyYrMatch ? parseFloat(thirtyYrMatch[1]) : null
-          };
-        };
-
         const latest = parseEntry(entries[entries.length - 1]);
         const prev = entries.length > 1 ? parseEntry(entries[entries.length - 2]) : null;
 
@@ -50,7 +92,7 @@ export default async function handler(req, res) {
     }
 
     // Fallback: Treasury CSV feed
-    const csvUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/${year}?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&page&_format=csv`;
+    const csvUrl = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/${currentYear}?type=daily_treasury_yield_curve&field_tdr_date_value=${currentYear}&page&_format=csv`;
 
     const csvRes = await fetch(csvUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
