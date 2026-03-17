@@ -36,8 +36,9 @@ export default async function handler(req, res) {
     case 'research':      result = await getResearch(req, user, workspaceId); break;
     case 'work_counts':   result = await getWorkCounts(req, user, workspaceId); break;
     case 'entity_timeline': result = await getEntityTimeline(req, user, workspaceId); break;
+    case '_perf':           result = await getPerfDashboard(req, user, workspaceId); break;
     default:
-      return res.status(400).json({ error: 'view must be: my_work, team_queue, inbox, research, work_counts, entity_timeline' });
+      return res.status(400).json({ error: 'view must be: my_work, team_queue, inbox, research, work_counts, entity_timeline, _perf' });
   }
 
   // Add server timing header for instrumentation
@@ -280,6 +281,61 @@ async function getEntityTimeline(req, user, workspaceId) {
     has_more: hasMore,
     next_cursor: items.length > 0 ? items[items.length - 1].occurred_at : null
   };
+}
+
+// ============================================================================
+// PERFORMANCE DASHBOARD — operational perf data (manager+ only)
+// ============================================================================
+
+async function getPerfDashboard(req, user, workspaceId) {
+  // Require manager+ role for perf dashboard access
+  const role = user.memberships?.find(m => m.workspace_id === workspaceId)?.role || 'viewer';
+  if (!['owner', 'manager'].includes(role)) {
+    return { view: '_perf', error: 'Manager role required for perf dashboard' };
+  }
+
+  const section = req.query.section || 'summary';
+
+  if (section === 'summary') {
+    // Endpoint latency summary
+    const endpoints = await opsQuery('GET', 'v_perf_endpoint_summary?limit=50');
+    // MV freshness
+    const mvFreshness = await opsQuery('GET', `v_mv_freshness?workspace_id=eq.${workspaceId}&limit=1`);
+    // Target compliance
+    const compliance = await opsQuery('GET', 'v_perf_target_compliance?limit=50');
+    // Hourly throughput
+    const throughput = await opsQuery('GET', 'v_perf_hourly_throughput?limit=48');
+
+    return {
+      view: '_perf',
+      section: 'summary',
+      endpoints: endpoints.data || [],
+      mv_freshness: mvFreshness.data?.[0] || null,
+      compliance: compliance.data || [],
+      throughput: throughput.data || []
+    };
+  }
+
+  if (section === 'slow') {
+    // Slow request log
+    const slow = await opsQuery('GET', 'v_perf_slow_requests?limit=100');
+    return {
+      view: '_perf',
+      section: 'slow',
+      slow_requests: slow.data || []
+    };
+  }
+
+  if (section === 'workspace') {
+    const ws = await opsQuery('GET', `v_perf_workspace_summary?workspace_id=eq.${workspaceId}&limit=1`);
+    return {
+      view: '_perf',
+      section: 'workspace',
+      workspace_perf: ws.data?.[0] || null
+    };
+  }
+
+  return { view: '_perf', error: 'section must be: summary, slow, workspace' };
 }
 
 // ============================================================================

@@ -913,6 +913,9 @@ async function renderSyncHealthPage() {
 
   el.innerHTML = html;
   perf.end();
+
+  // Append perf dashboard for managers
+  setTimeout(appendPerfToSyncHealth, 100);
 }
 
 async function triggerSync(connectorType) {
@@ -1067,6 +1070,164 @@ function paginationHTML(paginationKey, refreshFn) {
 function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ============================================================================
+// PERFORMANCE DASHBOARD — manager-only operational perf view
+// Accessible from Sync Health page or via navTo('pagePerfDashboard')
+// ============================================================================
+
+async function renderPerfDashboard(container) {
+  // Render inside sync health page as a collapsible section, or standalone
+  const el = container || document.getElementById('perfDashboardContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+  const [summaryRes, slowRes] = await Promise.all([
+    opsApi('/api/queue-v2?view=_perf&section=summary'),
+    opsApi('/api/queue-v2?view=_perf&section=slow')
+  ]);
+
+  if (!summaryRes.ok) {
+    el.innerHTML = `<div class="ops-empty">${summaryRes.data?.error || summaryRes.error || 'Could not load performance data'}</div>`;
+    return;
+  }
+
+  const data = summaryRes.data;
+  const slowData = slowRes.ok ? slowRes.data : {};
+  let html = '';
+
+  html += '<div class="ops-header"><h2>Performance Dashboard</h2></div>';
+
+  // MV freshness check
+  if (data.mv_freshness) {
+    const mv = data.mv_freshness;
+    const staleClass = mv.freshness_status === 'fresh' ? 'green'
+      : mv.freshness_status === 'acceptable' ? ''
+      : mv.freshness_status === 'stale' ? 'yellow' : 'red';
+    html += `<div class="degraded-banner" style="margin-bottom:12px">
+      <span class="degraded-icon">~</span>
+      <div class="degraded-body">
+        <div class="degraded-title">Materialized Views: <span class="${staleClass}">${mv.freshness_status}</span></div>
+        <div>Last refreshed ${Math.round(mv.minutes_stale)}m ago</div>
+      </div>
+    </div>`;
+  }
+
+  // Target compliance grid
+  if (data.compliance?.length) {
+    html += '<div class="widget"><div class="widget-title">Performance Target Compliance</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+      + '<th style="padding:6px">Endpoint</th>'
+      + '<th style="padding:6px;text-align:right">Requests</th>'
+      + '<th style="padding:6px;text-align:right">p50</th>'
+      + '<th style="padding:6px;text-align:right">p95</th>'
+      + '<th style="padding:6px;text-align:right">Target p95</th>'
+      + '<th style="padding:6px;text-align:center">Status</th>'
+      + '</tr></thead><tbody>';
+    data.compliance.forEach(c => {
+      const statusColor = c.compliance_status === 'passing' ? 'var(--green)'
+        : c.compliance_status === 'warning' ? 'var(--yellow)'
+        : c.compliance_status === 'failing' ? 'var(--red)' : 'var(--text3)';
+      const statusLabel = c.compliance_status === 'no_data' ? '--' : c.compliance_status;
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(c.description || '')}">${esc(c.endpoint_pattern)}</td>
+        <td style="padding:6px;text-align:right">${c.request_count}</td>
+        <td style="padding:6px;text-align:right">${c.actual_p50_ms != null ? Math.round(c.actual_p50_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right">${c.actual_p95_ms != null ? Math.round(c.actual_p95_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right">${c.target_p95_ms}ms</td>
+        <td style="padding:6px;text-align:center;color:${statusColor};font-weight:600">${statusLabel}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // Endpoint summary
+  if (data.endpoints?.length) {
+    html += '<div class="widget"><div class="widget-title">Endpoint Latency (24h)</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+      + '<th style="padding:6px">Endpoint</th>'
+      + '<th style="padding:6px;text-align:right">Count</th>'
+      + '<th style="padding:6px;text-align:right">Avg</th>'
+      + '<th style="padding:6px;text-align:right">p95</th>'
+      + '<th style="padding:6px;text-align:right">Max</th>'
+      + '<th style="padding:6px;text-align:right">Slow%</th>'
+      + '</tr></thead><tbody>';
+    data.endpoints.forEach(ep => {
+      const slowColor = ep.slow_pct > 10 ? 'color:var(--red)' : ep.slow_pct > 5 ? 'color:var(--yellow)' : '';
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px;max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(ep.endpoint)}</td>
+        <td style="padding:6px;text-align:right">${ep.request_count}</td>
+        <td style="padding:6px;text-align:right">${ep.avg_ms}ms</td>
+        <td style="padding:6px;text-align:right">${ep.p95_ms != null ? Math.round(ep.p95_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right">${ep.max_ms}ms</td>
+        <td style="padding:6px;text-align:right;${slowColor}">${ep.slow_pct}%</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // Slow requests
+  if (slowData.slow_requests?.length) {
+    html += `<div class="widget" style="border-color:var(--orange)"><div class="widget-title">Slow Requests (24h) — ${slowData.slow_requests.length} found</div>`;
+    slowData.slow_requests.slice(0, 20).forEach(sr => {
+      html += `<div class="q-item">
+        <div class="q-item-header">
+          <span class="q-item-title">${esc(sr.endpoint)}</span>
+          <div class="q-item-badges">
+            <span class="q-badge pri-high">${sr.duration_ms}ms</span>
+            <span class="q-badge type">${sr.metric_type}</span>
+          </div>
+        </div>
+        <div class="q-item-meta">
+          <span>Threshold: ${sr.threshold_ms}ms</span>
+          ${freshnessHTML(sr.recorded_at)}
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  } else {
+    html += '<div class="widget"><div class="widget-title">Slow Requests (24h)</div><div class="ops-empty">No slow requests detected</div></div>';
+  }
+
+  // Client-side perf log
+  if (opsPerfLog.length > 0) {
+    html += '<div class="widget"><div class="widget-title">Client-Side Timing (this session)</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+      + '<th style="padding:6px">Label</th>'
+      + '<th style="padding:6px;text-align:right">Duration</th>'
+      + '<th style="padding:6px;text-align:right">When</th>'
+      + '</tr></thead><tbody>';
+    [...opsPerfLog].reverse().slice(0, 30).forEach(entry => {
+      const color = entry.dur > 500 ? 'color:var(--red)' : entry.dur > 200 ? 'color:var(--yellow)' : '';
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px">${esc(entry.label)}</td>
+        <td style="padding:6px;text-align:right;${color}">${entry.dur}ms</td>
+        <td style="padding:6px;text-align:right">${freshnessHTML(new Date(entry.ts).toISOString())}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// Wire perf dashboard into sync health page (append as collapsible section)
+function appendPerfToSyncHealth() {
+  const syncEl = document.getElementById('syncHealthContent');
+  if (!syncEl) return;
+  // Only show for manager+ roles
+  const role = LCC_USER?.role || 'viewer';
+  if (!['owner', 'manager'].includes(role)) return;
+
+  const perfSection = document.createElement('div');
+  perfSection.id = 'perfDashboardContent';
+  perfSection.style.marginTop = '24px';
+  syncEl.appendChild(perfSection);
+  renderPerfDashboard(perfSection);
 }
 
 // ============================================================================

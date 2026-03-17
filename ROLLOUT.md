@@ -396,7 +396,7 @@ The goal of this section is to convert the remaining open concerns into an imple
   - Loading feedback on all workflow actions (transition, reassign, escalate, bulk triage, promote)
   - Metrics page wired to workspace context bar for manager overview
 
-### RG6: Expand performance work from infrastructure to real workload validation
+### RG6: Expand performance work from infrastructure to real workload validation ✅ RESOLVED
 - **Problem**: performance scaffolding exists, but real-world latency/load characteristics are not yet documented or validated.
 - **Impact**: Medium
 - **Implementation**:
@@ -416,6 +416,17 @@ The goal of this section is to convert the remaining open concerns into an imple
   - Performance targets are measured, not assumed.
   - Slow endpoints and views are identified with concrete remediation plans.
   - Queue-first workloads remain responsive under multi-user, multi-domain data volumes.
+- **Resolution**: Implemented via `schema/013_perf_dashboard.sql` + `api/queue-v2.js` + `ops.js`:
+  - `v_perf_endpoint_summary` — 24h endpoint latency with p50/p95/p99/slow%
+  - `v_perf_slow_requests` — filtered log of requests exceeding threshold (500ms API, 1s page, 30s sync)
+  - `v_mv_freshness` — materialized view staleness monitor (fresh/acceptable/stale/critical)
+  - `v_perf_hourly_throughput` — hourly request counts and latency for trend analysis
+  - `v_perf_workspace_summary` — per-workspace performance profiling
+  - `v_perf_target_compliance` — compares actual p50/p95 against defined targets per endpoint
+  - `perf_targets` table with 14 seeded targets for all key API + render paths
+  - `_perf` view endpoint in queue-v2.js (manager+ access) with summary/slow/workspace sections
+  - Client-side perf dashboard in ops.js: target compliance table, endpoint latency, slow request log, session timing
+  - Dashboard auto-appended to Sync Health page for manager+ roles
 
 ### RG7: Add rollout safety, migration, and operational readiness controls ✅
 - **Problem**: The build is large and additive, but still needs a controlled production rollout plan.

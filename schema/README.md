@@ -13,6 +13,8 @@ This directory contains the canonical data model for the Life Command Center reb
 - `009_performance.sql` — Materialized views (mv_work_counts, mv_user_work_counts), 25+ indexes, perf_metrics table, pg_trgm (Phase 6)
 - `010_domain_seeds.sql` — Bootstrap Government and Dialysis domains with sources, entity mappings, queue configs (Phase 7)
 - `011_connector_verification.sql` — Connector verification, isolation check support, v_connector_checklist (RG2)
+- `012_data_quality.sql` — Data quality views, duplicate candidates, entity completeness scoring, source precedence (RG3)
+- `013_perf_dashboard.sql` — Performance dashboard views, target compliance, slow request log, MV freshness (RG6)
 
 These migrations are designed for a shared Supabase project that serves as the canonical operational backbone alongside the existing Gov and Dia domain databases.
 
