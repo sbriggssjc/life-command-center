@@ -1,16 +1,31 @@
 // Serverless proxy for Dialysis Supabase queries
 // Keeps secret key server-side — never exposed to browser
-// Hardened with table allowlist and input validation
+// Hardened with table allowlist, input validation, and route-level auth
 import {
   DIA_READ_TABLES, DIA_WRITE_TABLES,
   isAllowedTable, safeLimit, safeSelect
 } from './_shared/allowlist.js';
+import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Prefer');
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (handleCors(req, res)) return;
+
+  // Authenticate — returns user or sends 401
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  // Require at least viewer role
+  const ws = primaryWorkspace(user);
+  if (!ws || !requireRole(user, 'viewer', ws.workspace_id)) {
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  }
+
+  // Write operations require operator role or higher
+  if (req.method === 'POST' || req.method === 'PATCH') {
+    if (!requireRole(user, 'operator', ws.workspace_id)) {
+      return res.status(403).json({ error: 'Write access requires operator role or higher' });
+    }
+  }
 
   const diaKey = process.env.DIA_SUPABASE_KEY;
   const diaUrl = process.env.DIA_SUPABASE_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co';

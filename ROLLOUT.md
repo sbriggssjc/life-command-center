@@ -32,7 +32,12 @@
 | `api/gov-query.js` | 143 | Vercel serverless proxy for Government Supabase (GET/POST/PATCH) |
 | `api/dia-query.js` | 139 | Vercel serverless proxy for Dialysis Supabase (GET/POST/PATCH) |
 | `api/treasury.js` | 152 | Treasury yield data API (XML/CSV/Fiscal Data API fallbacks) |
+| `api/_shared/auth.js` | 240 | Auth middleware: JWT, API key, role checks, visibility |
+| `api/workspaces.js` | 115 | Workspace CRUD API |
+| `api/members.js` | 175 | User/membership management API |
+| `api/connectors.js` | 205 | Per-user connector account API |
 | `api/config.js` | 15 | Connection status endpoint |
+| `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
 | `sw.js` | 62 | Service worker for PWA |
 | `config.js` | 15 | Root config (duplicate of api/config.js) |
 | `flow-*.json` | 4 files | Power Automate flow definitions |
@@ -193,13 +198,20 @@
 - [x] Lock architecture decisions
 
 ### Phase 1: Workspace, Roles, and Policy Foundation
-- [ ] Design workspace/user/membership/role schema
-- [ ] Design connector binding model with execution method
-- [ ] Define visibility scopes (private/assigned/shared)
-- [ ] Add route-level auth to API proxies
-- [ ] Harden API proxy — scoped command endpoints
-- [ ] Remove assumption of single global user
-- [ ] Add object-level access enforcement
+- [x] Design workspace/user/membership/role schema
+- [x] Design connector binding model with execution method
+- [x] Define visibility scopes (private/assigned/shared)
+- [x] Add route-level auth to API proxies
+- [x] Harden API proxy — scoped command endpoints
+- [x] Remove assumption of single global user
+- [x] Add object-level access enforcement (RLS policies)
+- [x] Create auth middleware (`api/_shared/auth.js`) with JWT + API key support
+- [x] Create workspace management API (`api/workspaces.js`)
+- [x] Create user/membership API (`api/members.js`)
+- [x] Create connector accounts API (`api/connectors.js`)
+- [x] Create RLS policies migration (`schema/006_rls_policies.sql`)
+- [x] Add user context system to frontend (`LCC_USER`, `loadUserContext()`)
+- [x] Replace hardcoded "Scott" references with dynamic user context
 
 ### Phase 2: Canonical Data and Queue Model
 - [ ] Design canonical entity schema (person, org, asset)
@@ -257,6 +269,9 @@
 | 2026-03-17 | AD1-AD7 locked | Based on full codebase audit and master plan analysis |
 | 2026-03-17 | Phase 0 started | Foundation must be documented before building |
 | 2026-03-17 | Incremental migration approach | Avoid big-bang rewrite risk; keep app functional throughout |
+| 2026-03-17 | Phase 1 implemented | Auth middleware, scoped APIs, RLS policies, user context system |
+| 2026-03-17 | Transitional auth mode | Auth falls back to dev user when OPS_SUPABASE_URL not set — preserves existing behavior |
+| 2026-03-17 | API proxy auth added non-breaking | Existing proxies get auth checks but pass through in transitional mode |
 
 ---
 
