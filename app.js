@@ -1565,6 +1565,20 @@ function triggerCanonicalSync() {
   fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(() => {});
 }
 
+// ============================================================
+// CANONICAL BRIDGE — call from legacy domain save functions
+// to keep canonical model in sync with domain writes.
+// Usage: canonicalBridge('log_activity', { title, domain, ... })
+// ============================================================
+function canonicalBridge(action, payload) {
+  if (!LCC_USER._loaded) return Promise.resolve(null);
+  return fetch(`/api/bridge?action=${encodeURIComponent(action)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(r => r.ok ? r.json() : null).catch(() => null);
+}
+
 let activitiesLoaded = false;
 async function loadActivities() {
   try {

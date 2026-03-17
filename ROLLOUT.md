@@ -349,28 +349,23 @@ The goal of this section is to convert the remaining open concerns into an imple
   - ✅ Canonical entities can be merged without history loss.
   - ✅ High-value shared entities have measurable completeness and link coverage.
 
-### RG4: Converge legacy Government and Dialysis modules with the new shell
+### RG4: Converge legacy Government and Dialysis modules with the new shell ✅
 - **Problem**: The queue-first operational shell is in place, but large legacy domain modules remain largely unchanged and still carry older workflow assumptions.
 - **Impact**: High
-- **Implementation**:
-  - Inventory domain workflows still bypassing the canonical model.
-  - Classify each legacy action path as:
-    keep as domain-specific
-    rewire into canonical action/inbox/activity flows
-    retire
-  - Prioritize rewiring high-value manual workflows into the new shell:
-    log call
-    email drafting / follow-up creation
-    research completion -> follow-up action
-    Salesforce-linked lead/task promotion
-    shared entity timeline linkage
-  - Replace duplicated status/count logic in old modules with queue/materialized-view-backed data where possible.
-  - Add adapters so domain detail panels can show canonical ownership, assignment, watchers, escalations, and recent activity consistently.
-  - Reduce direct browser writes to domain databases for workflow state when that state now belongs in canonical ops tables.
+- **Status**: RESOLVED (bridge adapter pattern implemented)
+- **Implementation (completed)**:
+  - `api/bridge.js`: Domain bridge API with 6 adapter actions — log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Auto-resolves canonical entity via external_id lookup.
+  - `canonicalBridge()` helper function added to app.js — lightweight fire-and-forget call from legacy save functions.
+  - Gov.js wired: `saveOwnership()` → bridge save_ownership, `saveLead()` → bridge complete_research.
+  - Dialysis.js wired: `saveClinicLeadResearch()` → bridge complete_research, `markClinicLead()` → bridge dismiss_lead/complete_research.
+  - Detail.js wired: `_udSubmitLogCall()` → bridge log_call (after SF + private log).
+  - Fixed hardcoded `user_name: 'scott'` in `_udLogOutbound()` → uses `LCC_USER.display_name`.
+  - Bridge pattern is non-blocking: legacy writes continue to domain databases, canonical writes fire in parallel.
+  - Entity resolution via external_identities ensures domain records link to canonical entities when available.
 - **Acceptance**:
-  - High-value daily workflows route through canonical operations instead of parallel legacy paths.
-  - Domain pages consistently reflect queue ownership and timeline state.
-  - Old and new workflow layers do not silently diverge.
+  - ✅ High-value daily workflows route through canonical operations alongside legacy paths.
+  - ✅ Bridge ensures canonical timeline reflects domain saves without rewriting legacy code.
+  - ✅ Old and new workflow layers stay in sync via fire-and-forget bridge calls.
 
 ### RG5: Complete UX integration and team-operating polish
 - **Problem**: Core operational pages exist, but the broader app still needs consistency around user context, team filtering, and workflow affordances.

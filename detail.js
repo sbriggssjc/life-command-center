@@ -1638,6 +1638,18 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
       try {
         await _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes);
       } catch (e) { console.warn('Outbound log fallback error:', e); }
+      // 3. Bridge to canonical model
+      canonicalBridge('log_call', {
+        subject: actType,
+        notes,
+        outcome,
+        domain: _udCache?.db || null,
+        external_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null,
+        source_system: _udCache?.db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+        sf_contact_id: sfContactId,
+        sf_company_id: sfCompanyId,
+        activity_date: actDate
+      });
     } else if (data.warning) {
       showToast(`Warning: ${data.message || 'Recent activity detected'}`, 'error');
     } else {
@@ -1666,7 +1678,7 @@ async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcom
       activity_date: actDate,
       status: outcome,
       notes: notes || null,
-      user_name: 'scott',
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       ref_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null
     })
   });
