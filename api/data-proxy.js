@@ -1,65 +1,83 @@
-// Serverless proxy for Government Supabase queries
-// Keeps service_role key server-side — never exposed to browser
-// Hardened with table allowlist, input validation, and route-level auth
+// ============================================================================
+// Data Proxy API — Consolidated: gov-query, dia-query
+// Life Command Center
+//
+// Routed via vercel.json rewrites:
+//   /api/gov-query → /api/data-proxy?_source=gov
+//   /api/dia-query → /api/data-proxy?_source=dia
+// ============================================================================
+
 import {
   GOV_READ_TABLES, GOV_WRITE_TABLES,
+  DIA_READ_TABLES, DIA_WRITE_TABLES,
   isAllowedTable, safeLimit, safeSelect, safeColumn
 } from './_shared/allowlist.js';
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
 
+const SOURCE_CONFIG = {
+  gov: {
+    urlEnv: 'GOV_SUPABASE_URL',
+    keyEnv: 'GOV_SUPABASE_KEY',
+    readTables: GOV_READ_TABLES,
+    writeTables: GOV_WRITE_TABLES,
+    label: 'GOV'
+  },
+  dia: {
+    urlEnv: 'DIA_SUPABASE_URL',
+    keyEnv: 'DIA_SUPABASE_KEY',
+    readTables: DIA_READ_TABLES,
+    writeTables: DIA_WRITE_TABLES,
+    label: 'DIA'
+  }
+};
+
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
 
-  // Authenticate — returns user or sends 401
   const user = await authenticate(req, res);
   if (!user) return;
 
-  // Only allow GET, POST, PATCH
   if (!['GET', 'POST', 'PATCH'].includes(req.method)) {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
 
-  // Require at least viewer role
   const ws = primaryWorkspace(user);
   if (!ws || !requireRole(user, 'viewer', ws.workspace_id)) {
     return res.status(403).json({ error: 'Insufficient permissions' });
   }
 
-  // Write operations require operator role or higher
   if (req.method === 'POST' || req.method === 'PATCH') {
     if (!requireRole(user, 'operator', ws.workspace_id)) {
       return res.status(403).json({ error: 'Write access requires operator role or higher' });
     }
   }
 
-  const govKey = process.env.GOV_SUPABASE_KEY;
-  const govUrl = process.env.GOV_SUPABASE_URL;
-  if (!govUrl) return res.status(500).json({ error: 'GOV_SUPABASE_URL not configured' });
-
-  if (!govKey) {
-    return res.status(500).json({ error: 'GOV_SUPABASE_KEY not configured' });
+  const source = req.query._source;
+  const cfg = SOURCE_CONFIG[source];
+  if (!cfg) {
+    return res.status(400).json({ error: 'Invalid _source. Must be gov or dia.' });
   }
+
+  const dbUrl = process.env[cfg.urlEnv];
+  const dbKey = process.env[cfg.keyEnv];
+  if (!dbUrl) return res.status(500).json({ error: `${cfg.label}_SUPABASE_URL not configured` });
+  if (!dbKey) return res.status(500).json({ error: `${cfg.label}_SUPABASE_KEY not configured` });
 
   const { table, select, filter, order, limit, offset } = req.query;
+  if (!table) return res.status(400).json({ error: 'table parameter required' });
 
-  if (!table) {
-    return res.status(400).json({ error: 'table parameter required' });
-  }
-
-  // Handle POST/PATCH requests (for inserts/upserts/updates and RPC calls)
+  // Handle POST/PATCH (writes and RPC)
   if (req.method === 'POST' || req.method === 'PATCH') {
-    // Validate table against write allowlist
-    if (!isAllowedTable(table, GOV_WRITE_TABLES)) {
+    if (!isAllowedTable(table, cfg.writeTables)) {
       return res.status(403).json({ error: `Write access denied for table: ${table}` });
     }
 
     const isRpc = table.startsWith('rpc/');
-    // Honor client's Prefer header — needed for POST return=representation (ownership save)
     const clientPrefer = req.headers['prefer'] || '';
     const wantsRepresentation = clientPrefer.includes('return=representation');
+
     try {
-      // Build URL with query filters for PATCH
-      let patchUrl = `${govUrl}/rest/v1/${table}`;
+      let patchUrl = `${dbUrl}/rest/v1/${table}`;
       if (filter) {
         const eqIdx = filter.indexOf('=');
         if (eqIdx > 0) {
@@ -69,7 +87,6 @@ export default async function handler(req, res) {
           patchUrl += `?${encodeURIComponent(col)}=${encodeURIComponent(val)}`;
         }
       }
-      // Support additional filters via query params
       const { filter2 } = req.query;
       if (filter2) {
         const eqIdx = filter2.indexOf('=');
@@ -81,15 +98,14 @@ export default async function handler(req, res) {
         }
       }
 
-      // Determine Prefer header: RPC and client-requested representation get return=representation
       let preferHeader = 'return=minimal';
       if (isRpc || wantsRepresentation) preferHeader = 'return=representation';
 
       const response = await fetch(patchUrl, {
         method: req.method,
         headers: {
-          'apikey': govKey,
-          'Authorization': `Bearer ${govKey}`,
+          'apikey': dbKey,
+          'Authorization': `Bearer ${dbKey}`,
           'Content-Type': 'application/json',
           'Prefer': preferHeader
         },
@@ -101,7 +117,6 @@ export default async function handler(req, res) {
         return res.status(response.status).json({ error: errBody });
       }
 
-      // If representation was requested (RPC or client), return the created/updated record
       if (isRpc || wantsRepresentation) {
         const body = await response.text();
         try {
@@ -118,17 +133,15 @@ export default async function handler(req, res) {
     }
   }
 
-  // Validate table against read allowlist
-  if (!isAllowedTable(table, GOV_READ_TABLES)) {
+  // GET (read queries)
+  if (!isAllowedTable(table, cfg.readTables)) {
     return res.status(403).json({ error: `Read access denied for table: ${table}` });
   }
 
-  // Build Supabase REST URL with validated inputs
-  const url = new URL(`${govUrl}/rest/v1/${table}`);
+  const url = new URL(`${dbUrl}/rest/v1/${table}`);
   url.searchParams.set('select', safeSelect(select));
 
   if (filter) {
-    // filter format: "column=eq.value" or "column=value"
     const eqIdx = filter.indexOf('=');
     if (eqIdx > 0) {
       const col = safeColumn(filter.substring(0, eqIdx));
@@ -146,16 +159,14 @@ export default async function handler(req, res) {
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: {
-        'apikey': govKey,
-        'Authorization': `Bearer ${govKey}`,
+        'apikey': dbKey,
+        'Authorization': `Bearer ${dbKey}`,
         'Content-Type': 'application/json',
         'Prefer': 'count=exact'
       }
     });
 
     const body = await response.text();
-
-    // Forward the content-range header for count info
     const contentRange = response.headers.get('content-range');
 
     if (!response.ok) {
@@ -168,7 +179,6 @@ export default async function handler(req, res) {
 
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
 
-    // Return data with count from content-range
     let count = 0;
     if (contentRange) {
       const match = contentRange.match(/\/(\d+)/);

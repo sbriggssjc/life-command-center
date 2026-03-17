@@ -1,14 +1,13 @@
 // ============================================================================
-// Unified Queue API — My Work, Team Queue, Inbox Triage, Work Counts
-// Life Command Center — Phase 2
+// Unified Queue API — Consolidated: queue (v1) + queue-v2
+// Life Command Center
 //
-// GET /api/queue?view=my_work         — actions + inbox + research for current user
-// GET /api/queue?view=team            — all shared active work
-// GET /api/queue?view=inbox           — inbox triage queue
-// GET /api/queue?view=sync_exceptions — failed syncs and errors
-// GET /api/queue?view=research        — prioritized research tasks
-// GET /api/queue?view=counts          — badge counts for nav
-// GET /api/queue?view=entity_timeline&entity_id=<uuid> — entity history
+// V1 (original):
+// GET /api/queue?view=my_work|team|inbox|sync_exceptions|research|entity_timeline|counts
+//
+// V2 (paginated, instrumented) — routed via vercel.json:
+//   /api/queue-v2 → /api/queue?_version=v2
+// GET /api/queue?_version=v2&view=my_work|team_queue|inbox|research|work_counts|entity_timeline|_perf
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
@@ -31,12 +30,15 @@ export default withErrorHandler(async function handler(req, res) {
     return res.status(405).json({ error: 'Only GET is supported on the queue endpoint' });
   }
 
+  // Dispatch to v2 if requested
+  if (req.query._version === 'v2') {
+    return handleV2(req, res, user, workspaceId);
+  }
+
   const { view, entity_id, domain } = req.query;
 
   switch (view) {
-    // ---- MY WORK ----
     case 'my_work': {
-      // Filter the v_my_work view to items owned/assigned to current user
       let path = `v_my_work?workspace_id=eq.${workspaceId}&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
       if (domain) path += `&domain=eq.${domain}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'sort_date.asc.nullslast' });
@@ -45,7 +47,6 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'my_work' });
     }
 
-    // ---- TEAM QUEUE ----
     case 'team': {
       let path = `v_team_queue?workspace_id=eq.${workspaceId}`;
       if (domain) path += `&domain=eq.${domain}`;
@@ -57,7 +58,6 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'team' });
     }
 
-    // ---- INBOX TRIAGE ----
     case 'inbox': {
       let path = `v_inbox_triage?workspace_id=eq.${workspaceId}`;
       if (domain) path += `&domain=eq.${domain}`;
@@ -69,7 +69,6 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'inbox' });
     }
 
-    // ---- SYNC EXCEPTIONS ----
     case 'sync_exceptions': {
       let path = `v_sync_exceptions?workspace_id=eq.${workspaceId}`;
       if (req.query.connector_type) path += `&connector_type=eq.${req.query.connector_type}`;
@@ -80,7 +79,6 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'sync_exceptions' });
     }
 
-    // ---- RESEARCH QUEUE ----
     case 'research': {
       let path = `v_research_queue?workspace_id=eq.${workspaceId}`;
       if (domain) path += `&domain=eq.${domain}`;
@@ -92,7 +90,6 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'research' });
     }
 
-    // ---- ENTITY TIMELINE ----
     case 'entity_timeline': {
       if (!entity_id) {
         return res.status(400).json({ error: 'entity_id is required for entity_timeline view' });
@@ -105,7 +102,6 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ events: result.data || [], count: result.count, view: 'entity_timeline' });
     }
 
-    // ---- WORK COUNTS (for badges) ----
     case 'counts': {
       const result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}`);
       const counts = result.data?.[0] || {
@@ -113,7 +109,6 @@ export default withErrorHandler(async function handler(req, res) {
         active_research: 0, unresolved_sync_errors: 0, overdue_actions: 0
       };
 
-      // Also get user-specific counts
       const myActions = await opsQuery('GET',
         `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
       );
@@ -137,3 +132,257 @@ export default withErrorHandler(async function handler(req, res) {
       });
   }
 });
+
+// ============================================================================
+// V2 HANDLER — Paginated, instrumented queue endpoints
+// ============================================================================
+
+async function handleV2(req, res, user, workspaceId) {
+  const start = Date.now();
+  const { view } = req.query;
+
+  let result;
+  switch (view) {
+    case 'my_work':       result = await v2GetMyWork(req, user, workspaceId); break;
+    case 'team_queue':    result = await v2GetTeamQueue(req, user, workspaceId); break;
+    case 'inbox':         result = await v2GetInbox(req, user, workspaceId); break;
+    case 'research':      result = await v2GetResearch(req, user, workspaceId); break;
+    case 'work_counts':   result = await v2GetWorkCounts(req, user, workspaceId); break;
+    case 'entity_timeline': result = await v2GetEntityTimeline(req, user, workspaceId); break;
+    case '_perf':           result = await v2GetPerfDashboard(req, user, workspaceId); break;
+    default:
+      return res.status(400).json({ error: 'view must be: my_work, team_queue, inbox, research, work_counts, entity_timeline, _perf' });
+  }
+
+  const duration = Date.now() - start;
+  res.setHeader('Server-Timing', `db;dur=${duration}`);
+  res.setHeader('X-Response-Time', `${duration}ms`);
+
+  logPerfMetric(workspaceId, user.id, 'api_latency', `/api/queue-v2?view=${view}`, duration, {
+    item_count: result.items?.length || 0,
+    page: req.query.page || 1
+  });
+
+  return res.status(200).json(result);
+}
+
+// ---- V2 PAGINATION HELPERS ----
+
+function v2PageParams(query) {
+  const page = Math.max(parseInt(query.page) || 1, 1);
+  const perPage = Math.min(Math.max(parseInt(query.per_page) || 25, 1), 100);
+  const offset = (page - 1) * perPage;
+  return { page, perPage, offset };
+}
+
+function v2PaginationMeta(page, perPage, totalCount) {
+  const totalPages = Math.ceil(totalCount / perPage);
+  return {
+    page, per_page: perPage, total: totalCount, total_pages: totalPages,
+    has_next: page < totalPages, has_prev: page > 1
+  };
+}
+
+function v2SortParam(query, defaultSort) {
+  const ALLOWED_SORTS = {
+    due_date: 'due_date.asc.nullslast',
+    created_at: 'created_at.desc',
+    updated_at: 'updated_at.desc',
+    priority: 'priority.asc,created_at.desc',
+    status: 'status.asc,created_at.desc',
+    title: 'title.asc'
+  };
+  return ALLOWED_SORTS[query.sort] || defaultSort;
+}
+
+// ---- V2 MY WORK ----
+
+async function v2GetMyWork(req, user, workspaceId) {
+  const { page, perPage, offset } = v2PageParams(req.query);
+  const { status, domain, priority } = req.query;
+  const order = v2SortParam(req.query, 'due_date.asc.nullslast,created_at.desc');
+
+  let path = `v_my_work?workspace_id=eq.${workspaceId}&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
+
+  if (status) {
+    if (status === 'overdue') {
+      path += `&status=in.(open,in_progress)&due_date=lt.${new Date().toISOString().split('T')[0]}`;
+    } else {
+      path += `&status=eq.${status}`;
+    }
+  }
+  if (domain) path += `&domain=eq.${domain}`;
+  if (priority) path += `&priority=eq.${priority}`;
+  path += `&limit=${perPage}&offset=${offset}&order=${order}`;
+
+  const result = await opsQuery('GET', path);
+  return { view: 'my_work', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+}
+
+// ---- V2 TEAM QUEUE ----
+
+async function v2GetTeamQueue(req, user, workspaceId) {
+  const { page, perPage, offset } = v2PageParams(req.query);
+  const { status, domain, assigned_to: assignee } = req.query;
+  const order = v2SortParam(req.query, 'due_date.asc.nullslast,created_at.desc');
+
+  let path = `v_team_queue?workspace_id=eq.${workspaceId}`;
+  if (status) path += `&status=eq.${status}`;
+  if (domain) path += `&domain=eq.${domain}`;
+  if (assignee === 'none') path += `&assigned_to=is.null`;
+  else if (assignee) path += `&assigned_to=eq.${assignee}`;
+  path += `&limit=${perPage}&offset=${offset}&order=${order}`;
+
+  const result = await opsQuery('GET', path);
+  return { view: 'team_queue', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+}
+
+// ---- V2 INBOX ----
+
+async function v2GetInbox(req, user, workspaceId) {
+  const { page, perPage, offset } = v2PageParams(req.query);
+  const { status, source_type, domain } = req.query;
+  const order = v2SortParam(req.query, 'received_at.desc');
+
+  let path = `v_inbox_triage?workspace_id=eq.${workspaceId}`;
+  if (status) path += `&status=eq.${status}`;
+  if (source_type) path += `&source_type=eq.${source_type}`;
+  if (domain) path += `&domain=eq.${domain}`;
+  path += `&limit=${perPage}&offset=${offset}&order=${order}`;
+
+  const result = await opsQuery('GET', path);
+  return { view: 'inbox', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+}
+
+// ---- V2 RESEARCH ----
+
+async function v2GetResearch(req, user, workspaceId) {
+  const { page, perPage, offset } = v2PageParams(req.query);
+  const { status, domain, research_type } = req.query;
+  const order = v2SortParam(req.query, 'priority.asc,created_at.asc');
+
+  let path = `v_research_queue?workspace_id=eq.${workspaceId}`;
+  if (status) {
+    if (status === 'active') path += `&status=in.(queued,in_progress)`;
+    else path += `&status=eq.${status}`;
+  }
+  if (domain) path += `&domain=eq.${domain}`;
+  if (research_type) path += `&research_type=eq.${research_type}`;
+  path += `&limit=${perPage}&offset=${offset}&order=${order}`;
+
+  const result = await opsQuery('GET', path);
+  return { view: 'research', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+}
+
+// ---- V2 WORK COUNTS ----
+
+async function v2GetWorkCounts(req, user, workspaceId) {
+  let result = await opsQuery('GET', `mv_work_counts?workspace_id=eq.${workspaceId}&limit=1`);
+  if (!result.ok || !result.data?.length) {
+    result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}&limit=1`);
+  }
+  const counts = result.data?.[0] || {};
+
+  let userResult = await opsQuery('GET',
+    `mv_user_work_counts?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&limit=1`
+  );
+  if (!userResult.ok || !userResult.data?.length) {
+    const myActions = await opsQuery('GET',
+      `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
+    );
+    userResult = { data: [{ my_actions: myActions.count || 0, my_inbox: 0 }] };
+  }
+  const userCounts = userResult.data?.[0] || {};
+
+  return {
+    view: 'work_counts',
+    my_actions: userCounts.my_actions || 0,
+    my_overdue: userCounts.my_overdue || 0,
+    my_inbox: userCounts.my_inbox || 0,
+    my_research: userCounts.my_research || 0,
+    my_completed_week: userCounts.my_completed_week || 0,
+    open_actions: counts.open_actions || 0,
+    in_progress: counts.in_progress_actions || 0,
+    team_actions: counts.open_actions || 0,
+    inbox_new: counts.inbox_new || 0,
+    inbox_triaged: counts.inbox_triaged || 0,
+    overdue: counts.overdue_actions || 0,
+    due_this_week: counts.due_this_week || 0,
+    completed_week: counts.completed_week || 0,
+    research_active: counts.research_active || 0,
+    sync_errors: counts.sync_errors || 0,
+    total_entities: counts.total_entities || 0,
+    open_escalations: counts.open_escalations || 0,
+    refreshed_at: counts.refreshed_at
+  };
+}
+
+// ---- V2 ENTITY TIMELINE (cursor-based) ----
+
+async function v2GetEntityTimeline(req, user, workspaceId) {
+  const { entity_id, cursor } = req.query;
+  if (!entity_id) return { error: 'entity_id required', view: 'entity_timeline' };
+
+  const perPage = Math.min(parseInt(req.query.per_page) || 25, 100);
+  let path = `v_entity_timeline?entity_id=eq.${entity_id}&workspace_id=eq.${workspaceId}`;
+  if (cursor) path += `&occurred_at=lt.${cursor}`;
+  path += `&limit=${perPage + 1}&order=occurred_at.desc`;
+
+  const result = await opsQuery('GET', path);
+  const items = result.data || [];
+  const hasMore = items.length > perPage;
+  if (hasMore) items.pop();
+
+  return {
+    view: 'entity_timeline', events: items, has_more: hasMore,
+    next_cursor: items.length > 0 ? items[items.length - 1].occurred_at : null
+  };
+}
+
+// ---- V2 PERF DASHBOARD ----
+
+async function v2GetPerfDashboard(req, user, workspaceId) {
+  const role = user.memberships?.find(m => m.workspace_id === workspaceId)?.role || 'viewer';
+  if (!['owner', 'manager'].includes(role)) {
+    return { view: '_perf', error: 'Manager role required for perf dashboard' };
+  }
+
+  const section = req.query.section || 'summary';
+
+  if (section === 'summary') {
+    const endpoints = await opsQuery('GET', 'v_perf_endpoint_summary?limit=50');
+    const mvFreshness = await opsQuery('GET', `v_mv_freshness?workspace_id=eq.${workspaceId}&limit=1`);
+    const compliance = await opsQuery('GET', 'v_perf_target_compliance?limit=50');
+    const throughput = await opsQuery('GET', 'v_perf_hourly_throughput?limit=48');
+    return {
+      view: '_perf', section: 'summary',
+      endpoints: endpoints.data || [], mv_freshness: mvFreshness.data?.[0] || null,
+      compliance: compliance.data || [], throughput: throughput.data || []
+    };
+  }
+
+  if (section === 'slow') {
+    const slow = await opsQuery('GET', 'v_perf_slow_requests?limit=100');
+    return { view: '_perf', section: 'slow', slow_requests: slow.data || [] };
+  }
+
+  if (section === 'workspace') {
+    const ws = await opsQuery('GET', `v_perf_workspace_summary?workspace_id=eq.${workspaceId}&limit=1`);
+    return { view: '_perf', section: 'workspace', workspace_perf: ws.data?.[0] || null };
+  }
+
+  return { view: '_perf', error: 'section must be: summary, slow, workspace' };
+}
+
+// ---- PERF METRIC LOGGING (fire-and-forget) ----
+
+async function logPerfMetric(workspaceId, userId, metricType, endpoint, durationMs, metadata) {
+  try {
+    await opsQuery('POST', 'perf_metrics', {
+      workspace_id: workspaceId, user_id: userId, metric_type: metricType,
+      endpoint, duration_ms: durationMs, metadata
+    });
+  } catch {
+    // Fire-and-forget
+  }
+}
