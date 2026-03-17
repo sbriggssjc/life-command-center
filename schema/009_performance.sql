@@ -6,6 +6,9 @@
 -- Performance indexes on key query patterns
 -- ============================================================================
 
+-- Enable pg_trgm extension (needed for entity name trigram search index below)
+create extension if not exists pg_trgm;
+
 -- ============================================================================
 -- MATERIALIZED VIEW: Work counts per workspace (replaces expensive v_work_counts)
 -- Refreshed by cron or after sync operations
@@ -203,11 +206,6 @@ create index if not exists idx_connectors_workspace_type
 -- Workspace memberships: user lookup
 create index if not exists idx_wm_user
   on workspace_memberships(user_id);
-
--- ============================================================================
--- ENABLE pg_trgm extension (needed for entity name search)
--- ============================================================================
-create extension if not exists pg_trgm;
 
 -- ============================================================================
 -- PERF LOGGING TABLE — client/server timing metrics
