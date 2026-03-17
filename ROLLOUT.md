@@ -417,30 +417,23 @@ The goal of this section is to convert the remaining open concerns into an imple
   - Slow endpoints and views are identified with concrete remediation plans.
   - Queue-first workloads remain responsive under multi-user, multi-domain data volumes.
 
-### RG7: Add rollout safety, migration, and operational readiness controls
+### RG7: Add rollout safety, migration, and operational readiness controls ✅
 - **Problem**: The build is large and additive, but still needs a controlled production rollout plan.
 - **Impact**: High
-- **Implementation**:
-  - Define environment rollout order:
-    local/dev -> staging ops DB -> pilot users -> full team rollout.
-  - Add migration runbook for schema 001-010 plus rollback considerations.
-  - Add feature flags or config gates for:
-    queue-v2 adoption
-    connector sync automation
-    team queue pages
-    domain template features
-    strict auth enforcement
-  - Create user onboarding/offboarding checklist for the four-person team.
-  - Create production support checklist:
-    who owns Power Automate flows
-    who owns edge functions
-    who refreshes materialized views
-    who handles sync failures
-  - Add acceptance test matrix before merge or deployment.
+- **Status**: RESOLVED
+- **Implementation (completed)**:
+  - `RUNBOOK.md`: Complete migration runbook with 5 phases — schema migration, workspace setup, connector onboarding, feature flag rollout, E2E validation.
+  - `api/flags.js`: Feature flags API with 14 boolean flags stored in workspace config. Manager+ can toggle. Safe defaults (most features off).
+  - Feature flag categories: auth (strict_auth), queue (v2_enabled, auto_fallback), sync (auto_sync, per-connector-type, outbound), team (queue, escalations, bulk ops), domain (templates, sync), UX (ops_pages, more_drawer, freshness).
+  - 5-stage rollout sequence defined: core pages → sync → team features → outbound/domains → auth lock.
+  - 3 end-to-end validation tests: email→inbox→action→complete, SF→inbox→assign→escalate, multi-user isolation.
+  - Production support ownership matrix: Power Automate, edge functions, materialized views, sync failures, schema migrations, feature flags.
+  - Rollback plan: per-migration, sync disable, auth fallback, full deployment revert.
+  - Migration verification SQL queries provided for each migration batch.
 - **Acceptance**:
-  - There is a documented pilot rollout path and support ownership model.
-  - Schema and connector rollout can be executed without guessing.
-  - The first two real users can be onboarded safely before full team expansion.
+  - ✅ Documented pilot rollout path with 5-stage feature flag sequence.
+  - ✅ Schema and connector rollout can be executed with runbook verification steps.
+  - ✅ First two real users can be onboarded via connector checklist and isolation check.
 
 ### Suggested implementation order
 1. RG1: auth, roles, and proxy hardening
