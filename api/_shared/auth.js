@@ -101,6 +101,51 @@ function verifyApiKey(key) {
   return mismatch === 0;
 }
 
+// ---- Look up first owner user from ops DB (transitional single-user mode) ----
+
+async function resolveFirstOwner() {
+  if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) return null;
+  try {
+    const url = new URL(`${OPS_SUPABASE_URL}/rest/v1/workspace_memberships`);
+    url.searchParams.set('select', 'role,workspace_id,workspaces(id,name,slug),users(id,email,display_name,avatar_url)');
+    url.searchParams.set('role', 'eq.owner');
+    url.searchParams.set('limit', '1');
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        'apikey': OPS_SUPABASE_KEY,
+        'Authorization': `Bearer ${OPS_SUPABASE_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!rows || rows.length === 0) return null;
+
+    const m = rows[0];
+    const u = m.users;
+    const w = m.workspaces;
+    if (!u) return null;
+
+    return {
+      id: u.id,
+      email: u.email,
+      display_name: u.display_name,
+      avatar_url: u.avatar_url,
+      auth_id: null,
+      _transitional: true,
+      memberships: [{
+        workspace_id: m.workspace_id,
+        workspace_name: w?.name || 'Default',
+        workspace_slug: w?.slug || 'default',
+        role: m.role
+      }]
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---- Dev-mode user lookup by X-LCC-User-Id or X-LCC-Email ----
 
 async function resolveDevUser(req) {
@@ -215,6 +260,9 @@ export async function authenticate(req, res) {
     if (OPS_SUPABASE_URL) {
       const devUser = await resolveDevUser(req);
       if (devUser) return devUser;
+      // No headers — look up the first owner in the ops DB (single-user setup)
+      const firstOwner = await resolveFirstOwner();
+      if (firstOwner) return firstOwner;
     }
     // Fall back to default owner user
     return {
