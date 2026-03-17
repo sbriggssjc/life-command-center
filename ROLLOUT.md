@@ -259,6 +259,30 @@
 - [x] Add sync error recording with retry support — `POST /api/sync?action=retry&error_id=`
 - [x] Add background canonical sync trigger to frontend — `triggerCanonicalSync()` fires after initial load
 
+---
+
+## Codex Audit Follow-Up (2026-03-17)
+
+### What this rebuild now appears to cover
+- Multi-user foundation exists in schema/API shape: workspaces, memberships, connector accounts, canonical entities, operational records, queue views, watchers, escalations, and domain registry are all present.
+- The UI has been materially shifted toward the target operating model: `My Work`, `Queue`, `Inbox`, `Research`, `Metrics`, and `Sync Health` now exist as first-class operational surfaces.
+- Performance work is materially improved versus the previous monolith: extracted CSS/JS, paginated queue endpoints, materialized count views, indexing, and perf instrumentation are all in place.
+- Domain scaling is no longer purely ad hoc: Government and Dialysis can now be represented through a common domain registration/mapping system, with starter templates for future verticals.
+
+### Remaining gaps or areas to verify before calling the master plan complete
+- Connector policy alignment is only partially closed. The current sync layer still targets a single shared `EDGE_FUNCTION_URL` and will need verification that Power Automate / SSO-mediated flows are truly per-user in production, not just per-user in the canonical model.
+- Auth is still transitional by design. `api/_shared/auth.js` intentionally allows a default dev user when auth is not configured; that is useful for migration, but the rebuild should not be considered production-complete until that fallback is removed or feature-flagged off outside development.
+- Existing Government and Dialysis domain modules remain largely intact and large. The operational shell is improved, but there is still substantial legacy domain UI/logic outside the new queue-first layer that should be rationalized over time.
+- Cross-system reconciliation quality still needs validation with live data. The code now has sync jobs, errors, retries, and health views, but successful real-world coverage for Outlook, Salesforce, and promoted/shared workflows should be verified with end-to-end testing across multiple users.
+- Data governance and visibility policies need a production checklist. The schema/RLS/auth model exists, but the final review should confirm private vs assigned vs shared behavior against actual organizational expectations before broad team rollout.
+
+### Recommended next verification pass
+- Run schema migrations 001-010 in a real ops database and verify queue/materialized views.
+- Validate per-user connector behavior with at least two real team members and confirm no cross-user leakage.
+- Test the full loop for: flagged email -> inbox -> promote -> assign -> resolve -> external system write-back.
+- Test the full loop for: Salesforce task -> inbox/shared action -> reassignment/escalation -> activity timeline.
+- Remove or gate transitional auth before production rollout.
+
 ### Phase 4: Shared Team Workflow Rollout
 - [x] Private inbox → shared action workflow — `POST /api/workflows?action=promote_to_shared`
 - [x] Salesforce task → shared entity action workflow — `POST /api/workflows?action=sf_task_to_action`
