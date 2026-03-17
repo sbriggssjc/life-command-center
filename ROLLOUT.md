@@ -45,6 +45,7 @@
 | `api/queue.js` | 155 | Unified queue: my work, team, inbox, counts, entity timeline |
 | `api/sync.js` | 380 | Sync orchestration: ingest emails/calendar/SF, outbound retries, health |
 | `api/workflows.js` | 420 | Workflow engine: promote, link SF, research follow-up, reassign, escalate, bulk ops |
+| `ops.js` | 480 | Operational UI: My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health |
 | `api/config.js` | 15 | Connection status endpoint |
 | `schema/006_rls_policies.sql` | 265 | Row-level security policies for all tables |
 | `schema/007_queue_views.sql` | 240 | Unified queue views for operational surfaces |
@@ -265,11 +266,14 @@
 - [x] Bulk operations — `bulk_assign` (manager+) and `bulk_triage`
 
 ### Phase 5: UX and Interaction Redesign
-- [ ] Rework nav: My Work, Team Queue, Inbox, Calendar, Entities, Research, Metrics, Sync Health, Settings
-- [ ] Queue-first triage UI
-- [ ] Assignment and quick-action controls
-- [ ] Visible freshness and sync warnings
-- [ ] Reduce tab-hopping and context switching
+- [x] Rework nav: 5 primary tabs (Today, My Work, Queue, Inbox, More) + drawer (Calendar, Entities, Research, Metrics, Sync, Business, Messages, Settings)
+- [x] Queue-first triage UI — inbox with select-all, bulk triage/promote/dismiss, per-item quick actions
+- [x] Assignment and quick-action controls — Start/Complete/Wait/Assign/Escalate on every queue item
+- [x] Visible freshness and sync warnings — freshness dots (green/yellow/red), sync warning banners, connector health cards
+- [x] Reduce tab-hopping — centralized `handlePageLoad()` router, `navTo()`/`navToFromMore()` supports all 11 pages
+- [x] Operational pages module (`ops.js`) — My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health
+- [x] Home page stat cards wired to canonical model via `work_counts` API
+- [x] Manager oversight view — team member stats, open escalations, unassigned work alert
 
 ### Phase 6: Performance and Operational Optimization
 - [ ] Split monolithic frontend into modules
@@ -306,6 +310,8 @@
 | 2026-03-17 | Auto-resolve connectors | If no connector_account exists for user+type, one is auto-created |
 | 2026-03-17 | Phase 4 implemented | Workflow engine, watchers, escalation, bulk ops, manager oversight |
 | 2026-03-17 | Auto-watch pattern | Creators and assignees auto-subscribed; escalation adds both parties |
+| 2026-03-17 | Phase 5 UX redesign | 5+More nav, queue-first pages, freshness indicators, quick-action controls |
+| 2026-03-17 | ops.js module | 480 LOC: My Work, Team Queue, Inbox Triage, Entities, Research, Metrics, Sync Health |
 
 ---
 
