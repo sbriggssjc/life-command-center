@@ -899,11 +899,32 @@ async function loadMarketing() {
       } else if (mktOwner !== 'all') {
         rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + mktOwner);
       }
-      const [rollupRes, leadsRaw] = await Promise.all([
-        fetch(rollupUrl.toString()).then(r => r.json()).then(d => d.data || []).catch(e => { console.error('Rollup fetch error:', e); return []; }),
+      // Fetch with auto-retry: Supabase often returns 57014 timeout during initial load burst
+      async function fetchRollupWithRetry(url, retries) {
+        for (var attempt = 0; attempt <= retries; attempt++) {
+          try {
+            var r = await fetch(url);
+            var d = await r.json();
+            if (d.data && d.data.length > 0) return d.data;
+            if (d.error && attempt < retries) {
+              console.warn('[Marketing] Rollup attempt ' + (attempt+1) + ' failed: ' + (d.error || d.detail) + ', retrying in 3s...');
+              await new Promise(function(ok) { setTimeout(ok, 3000); });
+              continue;
+            }
+            return d.data || [];
+          } catch(e) {
+            if (attempt < retries) {
+              console.warn('[Marketing] Rollup fetch error, retrying in 3s:', e.message);
+              await new Promise(function(ok) { setTimeout(ok, 3000); });
+            } else { return []; }
+          }
+        }
+        return [];
+      }
+      const [clientRollupRaw, leadsRaw] = await Promise.all([
+        fetchRollupWithRetry(rollupUrl.toString(), 3),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
-      const clientRollupRaw = rollupRes;
 
       // Load opportunities separately — this is a heavy query that can timeout during initial burst
       let opportunitiesRaw = [];
