@@ -885,12 +885,13 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup + leads first (fast), then opportunities (heavy — may timeout)
-      // Build rollup URL directly to handle assigned_to filter with spaces in names
+      // Load CRM client rollup — lean select (skip open_tasks JSON to keep payload small)
+      // open_tasks loaded on-demand when contact card is expanded
       const userName = LCC_USER.display_name || 'Scott Briggs';
+      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
-      rollupUrl.searchParams.set('select', '*');
+      rollupUrl.searchParams.set('select', leanFields);
       rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
       rollupUrl.searchParams.set('limit', '5000');
       if (mktOwner === 'mine') {
@@ -899,7 +900,7 @@ async function loadMarketing() {
         rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + mktOwner);
       }
       const [rollupRes, leadsRaw] = await Promise.all([
-        fetch(rollupUrl.toString()).then(r => r.json()).then(d => d.data || []).catch(() => []),
+        fetch(rollupUrl.toString()).then(r => r.json()).then(d => d.data || []).catch(e => { console.error('Rollup fetch error:', e); return []; }),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
       const clientRollupRaw = rollupRes;
@@ -1267,6 +1268,10 @@ function renderProspectCardsHTML(items, options = {}) {
       html += `</div>`;
       if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
       // Client rollup: open tasks with deal titles
+      // Show open task count — full task list loads on expand via toggleContactDetail
+      if (c.open_task_count > 0 && !c.open_tasks) {
+        html += `<div style="font-size:11px;color:var(--accent);margin-top:3px">${c.open_task_count} open task${c.open_task_count > 1 ? 's' : ''} — click to view</div>`;
+      }
       if (c.open_tasks && c.open_tasks.length > 0) {
         html += '<div style="margin-top:4px;font-size:11px">';
         html += '<span style="color:var(--text2);font-weight:600">Open Tasks (' + c.open_tasks.length + '):</span>';
