@@ -855,6 +855,7 @@ let mktData = [];              // CRM tasks (non-opportunity activities + leads)
 let mktLoaded = false;
 let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
+let mktSort = 'date';     // 'date' | 'deal' — sort by recent activity or group by deal
 let mktOwner = 'mine';    // 'mine' | 'all' | specific name
 let mktSearch = '';
 let mktPage = 0;
@@ -895,7 +896,7 @@ async function loadMarketing() {
       // Load CRM client rollup — lean select (skip open_tasks JSON to keep payload small)
       // open_tasks loaded on-demand when contact card is expanded
       const userName = LCC_USER.display_name || 'Scott Briggs';
-      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
+      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,open_tasks,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
       rollupUrl.searchParams.set('select', leanFields);
@@ -1207,10 +1208,73 @@ function renderMarketing() {
   if (unmatched > 0) html += `<span class="pill ${mktFilter==='unmatched'?'active':''}" onclick="mktFilter='unmatched';mktPage=0;renderMarketing()">Unmatched <span class="pill-ct" style="background:var(--red);color:#fff">${unmatched}</span></span>`;
   html += '</div>';
 
+  // Sort toggle
+  html += '<div class="pills" style="margin-bottom:8px">';
+  html += '<span style="font-size:11px;color:var(--text3);margin-right:6px">Sort:</span>';
+  html += `<span class="pill ${mktSort==='date'?'active':''}" onclick="mktSort='date';mktPage=0;renderMarketing()">Recent Activity</span>`;
+  html += `<span class="pill ${mktSort==='deal'?'active':''}" onclick="mktSort='deal';mktPage=0;renderMarketing()">By Deal</span>`;
+  html += '</div>';
+
   // Search
   html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search tasks, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
 
-  // Render cards using the shared function
+  // Sort by deal: group contacts under their primary deal subject
+  if (mktSort === 'deal') {
+    const dealGroups = {};
+    const noDeal = [];
+    filtered.forEach(function(c) {
+      const tasks = c.open_tasks || [];
+      const oppTasks = tasks.filter(function(t) { return t.type === 'Opportunity'; });
+      if (oppTasks.length > 0) {
+        oppTasks.forEach(function(t) {
+          var dealKey = t.subject || '(Untitled Deal)';
+          if (!dealGroups[dealKey]) dealGroups[dealKey] = { deal: dealKey, date: t.date, contacts: [] };
+          dealGroups[dealKey].contacts.push(c);
+          if (t.date && t.date > (dealGroups[dealKey].date || '')) dealGroups[dealKey].date = t.date;
+        });
+      } else {
+        noDeal.push(c);
+      }
+    });
+    // Sort deal groups by most recent date
+    const sortedDeals = Object.values(dealGroups).sort(function(a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    // Paginate at deal level
+    const start = mktPage * MKT_PAGE;
+    const pageDeals = sortedDeals.slice(start, start + MKT_PAGE);
+    const totalPages = Math.ceil((sortedDeals.length + (noDeal.length > 0 ? 1 : 0)) / MKT_PAGE);
+
+    pageDeals.forEach(function(group) {
+      html += `<div class="widget" style="padding:14px">`;
+      html += `<div style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--accent)">${esc(group.deal)} <span style="font-size:12px;color:var(--text3)">(${group.contacts.length} contact${group.contacts.length > 1 ? 's' : ''}${group.date ? ' · Due: ' + esc(group.date) : ''})</span></div>`;
+      group.contacts.forEach(function(c) {
+        html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border)">`;
+        html += `<div style="flex:1;min-width:0">`;
+        html += `<div style="font-size:13px;font-weight:500">${esc(c.contact_name || '—')}</div>`;
+        html += `<div style="font-size:11px;color:var(--text2)">${esc(c.company_name || '')}`;
+        if (c.email) html += ` · ${esc(c.email)}`;
+        if (c.phone) html += ` · ${esc(c.phone)}`;
+        html += '</div>';
+        if (c.last_call_notes) html += `<div style="font-size:11px;color:var(--text3);font-style:italic">Last: ${esc(c.last_call_notes)}</div>`;
+        html += '</div>';
+        html += `<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px" onclick="event.stopPropagation()">`;
+        if (c.email) html += `<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.deal)}')">Email</button>`;
+        if (c.phone) html += `<a href="webexteams://call?uri=${encodeURIComponent((c.phone||'').replace(/[^+0-9]/g,''))}" class="act-btn" style="font-size:10px;padding:3px 6px">WebEx</a>`;
+        var logData = JSON.stringify({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||''}).replace(/'/g,"\\'");
+        html += `<button class="act-btn primary" style="font-size:10px;padding:3px 6px" onclick="openLogCall(JSON.parse('${logData}'))">Log</button>`;
+        html += '</div></div>';
+      });
+      html += '</div>';
+    });
+
+    if (totalPages > 1) {
+      html += `<div class="pager"><button onclick="mktPage--;renderMarketing()" ${mktPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${mktPage+1} of ${totalPages} · ${sortedDeals.length} deals</span><button onclick="mktPage++;renderMarketing()" ${mktPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
+    }
+
+    el.innerHTML = html;
+    return;
+  }
+
+  // Render cards using the shared function (date sort — default)
   html += renderProspectCardsHTML(filtered, { showDomainDropdown: false, showReassign: true, showEmailTemplates: true, showCallHistory: true, page: mktPage, pageSize: MKT_PAGE, pagerFn: 'mktPage', renderFn: 'renderMarketing' });
 
   el.innerHTML = html;
