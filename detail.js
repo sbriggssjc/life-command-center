@@ -145,8 +145,10 @@ async function openUnifiedDetail(db, ids, fallback) {
         </div>`;
     }
 
-    // Render first tab
-    document.getElementById('detailBody').innerHTML = _udRenderTab('Property');
+    // Render active tab (preserve on refresh) or default to Property
+    const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
+    const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Property';
+    document.getElementById('detailBody').innerHTML = _udRenderTab(activeTab);
 
   } catch (err) {
     console.error('Unified detail load error:', err);
@@ -1896,6 +1898,13 @@ function refreshDetailPanel() {
   const ids = _udCache.ids;
   const fallback = _udCache.fallback || _udCache;
   if (db && ids) {
+    // Brief flash to signal data refresh
+    const body = document.getElementById('detailBody');
+    if (body) {
+      body.style.opacity = '0.3';
+      body.style.transition = 'opacity 0.15s ease-out';
+      setTimeout(() => { body.style.opacity = '1'; }, 150);
+    }
     openUnifiedDetail(db, ids, fallback);
   }
 }
@@ -2150,6 +2159,7 @@ async function _intelSavePriorSale() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { sale_date: saleDate, sale_price: salePrice, buyer: buyer, seller: seller }
     });
+    refreshDetailPanel();
   } catch (e) {
     console.error('Prior sale save error:', e);
     showToast('Error: ' + e.message, 'error');
@@ -2204,6 +2214,7 @@ async function _intelSaveLoan() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { lender: lender, loan_amount: loanAmount, loan_type: loanType, maturity_date: matDate }
     });
+    refreshDetailPanel();
   } catch (e) {
     console.error('Loan save error:', e);
     showToast('Error: ' + e.message, 'error');
@@ -2247,6 +2258,7 @@ async function _intelSaveCashFlow() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { annual_rent: annualRent, estimated_value: estValue, cap_rate: currentCapRate }
     });
+    refreshDetailPanel();
   } catch (e) {
     console.error('Cash flow save error:', e);
     showToast('Error: ' + e.message, 'error');
@@ -2298,6 +2310,7 @@ async function _intelSaveNotes() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { notes: notes, source: source, date_found: dateFound }
     });
+    refreshDetailPanel();
   } catch (e) {
     console.error('Notes save error:', e);
     showToast('Error: ' + e.message, 'error');
