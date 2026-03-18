@@ -885,11 +885,9 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      const [opportunitiesRaw, crmTasksRaw, leadsRaw] = await Promise.all([
+      const [opportunitiesRaw, clientRollupRaw, leadsRaw] = await Promise.all([
         diaQuery('v_opportunity_domain_classified', '*', { order: 'activity_date.desc.nullslast', limit: 5000 }),
-        diaQuery('v_marketing_crm_tasks', '*', {
-          limit: 1500
-        }),
+        diaQuery('v_crm_client_rollup', '*', { limit: 1000 }),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
 
@@ -927,14 +925,14 @@ async function loadMarketing() {
       };
       _mktOpportunitiesLoaded = true;
 
-      // Normalize CRM tasks to pipeline schema
-      const tasks = (crmTasksRaw || []).map(d => ({
+      // Normalize client rollup to pipeline schema (one row per contact)
+      const tasks = (clientRollupRaw || []).map(d => ({
         pipeline_source: 'sf_deal',
-        item_id: String(d.activity_id || ''),
-        deal_name: d.subject || '(No subject)',
-        deal_display_name: d.subject || '(No subject)',
+        item_id: d.sf_contact_id || '',
+        deal_name: d.contact_name || '(Unknown)',
+        deal_display_name: d.contact_name || '(Unknown)',
         deal_priority: null,
-        contact_name: [d.first_name, d.last_name].filter(Boolean).join(' ') || '',
+        contact_name: d.contact_name || '',
         first_name: d.first_name,
         last_name: d.last_name,
         company_name: d.company_name,
@@ -942,17 +940,21 @@ async function loadMarketing() {
         phone: d.phone,
         sf_contact_id: d.sf_contact_id,
         sf_company_id: d.sf_company_id,
-        due_date: d.activity_date,
-        notes: d.nm_notes,
-        status: d.status,
+        due_date: d.last_activity_date,
+        notes: d.task_notes,
+        status: 'Open',
         assigned_to: d.assigned_to,
-        activity_type: d.nm_type || d.task_subtype || 'Task',
+        activity_type: 'CRM',
         lead_source: null,
         sf_match_status: null,
-        touchpoint_count: null,
-        ingested_at: d.created_at,
-        nm_type: d.nm_type,
-        task_subtype: d.task_subtype
+        touchpoint_count: d.open_task_count,
+        ingested_at: d.first_activity_date,
+        // Client rollup fields
+        opportunity_deals: d.opportunity_deals,
+        total_deal_count: d.total_deal_count || 0,
+        completed_activity_count: d.completed_activity_count || 0,
+        last_call_notes: d.last_call_notes,
+        open_task_count: d.open_task_count || 0
       }));
 
       // Normalize leads to pipeline schema
@@ -1214,7 +1216,19 @@ function renderProspectCardsHTML(items, options = {}) {
       if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
       html += `</div>`;
       if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
-      if (c.notes) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px;font-style:italic">${esc(c.notes)}</div>`;
+      // Client rollup: show deal associations and activity summary inline
+      if (c.opportunity_deals) {
+        html += `<div style="font-size:11px;color:var(--accent);margin-top:3px">Deals: ${esc(c.opportunity_deals)}</div>`;
+      }
+      if (c.notes) {
+        html += `<div style="font-size:11px;color:var(--text3);margin-top:2px;font-style:italic">Next: ${esc(c.notes)}</div>`;
+      }
+      if (c.last_call_notes) {
+        html += `<div style="font-size:11px;color:var(--text3);margin-top:1px">Last call: ${esc(c.last_call_notes)}</div>`;
+      }
+      if (c.completed_activity_count > 0 || c.open_task_count > 0) {
+        html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${c.open_task_count || 0} open tasks · ${c.completed_activity_count || 0} completed activities${c.total_deal_count ? ' · ' + c.total_deal_count + ' deal' + (c.total_deal_count > 1 ? 's' : '') : ''}</div>`;
+      }
 
       // Lead-specific metadata
       if (c.pipeline_source !== 'sf_deal') {

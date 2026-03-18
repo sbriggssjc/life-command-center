@@ -66,6 +66,7 @@ export const DIA_READ_TABLES = new Set([
   'v_sf_activity_feed',
   'v_marketing_deals',
   'v_marketing_crm_tasks',
+  'v_crm_client_rollup',
   'v_opportunity_domain_classified',
   'salesforce_activities',
   'medicare_clinics',
