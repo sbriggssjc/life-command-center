@@ -132,7 +132,7 @@ async function loadGovData() {
     
     // Load ALL prospect leads (paginated to overcome PostgREST 1000-row cap)
     const leadsRes = await govQueryAll('prospect_leads',
-      'lead_id, lease_number, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
+      'lead_id, lease_number, location_code, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
       {
         order: 'priority_score.desc'
       }
@@ -158,7 +158,7 @@ async function loadGovData() {
     
     // Load GSA lease events
     const gsaEventsRes = await govQuery('gsa_lease_events',
-      'lease_number, event_type, event_date, annual_rent, lease_rsf, lessor_name, changed_fields',
+      'lease_number, location_code, event_type, event_date, annual_rent, lease_rsf, lessor_name, changed_fields',
       {
         order: 'event_date.desc',
         limit: 500
@@ -872,9 +872,9 @@ function renderOwnershipResearchCard(rec) {
   html += `<div class="context-block">
     <div class="context-label">Lease / Annual Rent</div>
     <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${fmt(rec.annual_rent || 0)}/yr</div>
+    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
   </div>`;
-  
+
   html += `<div class="context-block">
     <div class="context-label">Prior Owner → New Owner</div>
     <div class="context-value">${esc(rec.prior_owner || '')}</div>
@@ -1065,9 +1065,9 @@ function renderLeadResearchCard(rec) {
   html += `<div class="context-block">
     <div class="context-label">Lease / Annual Rent</div>
     <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${fmt(rec.annual_rent || 0)}/yr</div>
+    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
   </div>`;
-  
+
   html += `<div class="context-block">
     <div class="context-label">Lessor / Owner</div>
     <div class="context-value">${esc(rec.lessor_name || '')}</div>
@@ -2204,6 +2204,7 @@ function renderOwnershipOverview(record) {
   html += '<div class="detail-grid">';
   
   html += createDetailRow('Lease Number', esc(record.lease_number || '—'));
+  if (record.location_code) html += createDetailRow('Location Code', esc(record.location_code));
   html += createDetailRow('Address', esc(norm(record.address) || '—'));
   html += createDetailRow('City / State',
     esc((norm(record.city) || '') + (record.state ? ', ' + record.state : '') || '—'));
@@ -2397,6 +2398,7 @@ function renderLeadProperty(record) {
   html += createDetailRow('Address', esc(norm(record.address) || '—'));
   html += createDetailRow('City / State',
     esc((norm(record.city) || '') + (record.state ? ', ' + record.state : '') || '—'));
+  if (record.location_code) html += createDetailRow('Location Code', esc(record.location_code));
   html += createDetailRow('Agency', esc(norm(record.agency_full_name) || '—'));
   html += createDetailRow('Tenant', esc(norm(record.tenant_agency) || '—'));
   html += createDetailRow('Lease Effective', esc(record.lease_effective || '—'));

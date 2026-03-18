@@ -12,6 +12,7 @@ export const GOV_READ_TABLES = new Set([
   'available_listings',
   'gsa_lease_events',
   'gsa_snapshots',
+  'location_code_reference',
   'frpp_records',
   'county_authorities',
   'loans',
