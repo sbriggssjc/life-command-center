@@ -893,7 +893,7 @@ async function loadMarketing() {
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
       rollupUrl.searchParams.set('select', leanFields);
       rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
-      rollupUrl.searchParams.set('limit', '5000');
+      rollupUrl.searchParams.set('limit', '200');
       if (mktOwner === 'mine') {
         rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + userName);
       } else if (mktOwner !== 'all') {
