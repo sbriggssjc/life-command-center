@@ -80,6 +80,13 @@ async function bridgeLogActivity(req, res, user, workspaceId) {
     if (lookup.data?.length) resolvedEntityId = lookup.data[0].entity_id;
   }
 
+  // Carry government write service metadata for cross-system traceability
+  const activityMetadata = { ...metadata, bridge_source: 'domain_save' };
+  if (req.body.gov_change_event_id) activityMetadata.gov_change_event_id = req.body.gov_change_event_id;
+  if (req.body.gov_correlation_id) activityMetadata.gov_correlation_id = req.body.gov_correlation_id;
+  if (req.body.source_record_id) activityMetadata.source_record_id = req.body.source_record_id;
+  if (req.body.source_table) activityMetadata.source_table = req.body.source_table;
+
   const result = await opsQuery('POST', 'activity_events', {
     workspace_id: workspaceId,
     actor_id: user.id,
@@ -90,7 +97,7 @@ async function bridgeLogActivity(req, res, user, workspaceId) {
     source_type: source_system || 'system',
     domain: domain || null,
     visibility: 'shared',
-    metadata: { ...metadata, bridge_source: 'domain_save' },
+    metadata: activityMetadata,
     occurred_at: new Date().toISOString()
   });
 
@@ -131,6 +138,13 @@ async function bridgeCompleteResearch(req, res, user, workspaceId) {
     if (lookup.data?.length) resolvedEntityId = lookup.data[0].entity_id;
   }
 
+  // Carry government write service metadata for cross-system traceability
+  const researchMetadata = { research_type, outcome, bridge_source: 'research_completion' };
+  if (req.body.gov_change_event_id) researchMetadata.gov_change_event_id = req.body.gov_change_event_id;
+  if (req.body.gov_correlation_id) researchMetadata.gov_correlation_id = req.body.gov_correlation_id;
+  if (req.body.source_record_id) researchMetadata.source_record_id = req.body.source_record_id;
+  if (req.body.source_table) researchMetadata.source_table = req.body.source_table;
+
   // Log research completion activity
   await opsQuery('POST', 'activity_events', {
     workspace_id: workspaceId,
@@ -142,7 +156,7 @@ async function bridgeCompleteResearch(req, res, user, workspaceId) {
     source_type: source_system || 'system',
     domain: domain || null,
     visibility: 'shared',
-    metadata: { research_type, outcome, bridge_source: 'research_completion' },
+    metadata: researchMetadata,
     occurred_at: new Date().toISOString()
   });
 
@@ -258,6 +272,13 @@ async function bridgeSaveOwnership(req, res, user, workspaceId) {
     ? `Ownership resolved: ${true_owner_name}${owner_name ? ` (recorded: ${owner_name})` : ''}`
     : `Ownership data saved${owner_name ? `: ${owner_name}` : ''}`;
 
+  // Carry government write service metadata for cross-system traceability
+  const ownershipMetadata = { owner_name, true_owner_name, bridge_source: 'ownership_save' };
+  if (req.body.gov_change_event_id) ownershipMetadata.gov_change_event_id = req.body.gov_change_event_id;
+  if (req.body.gov_correlation_id) ownershipMetadata.gov_correlation_id = req.body.gov_correlation_id;
+  if (req.body.source_record_id) ownershipMetadata.source_record_id = req.body.source_record_id;
+  if (req.body.source_table) ownershipMetadata.source_table = req.body.source_table;
+
   await opsQuery('POST', 'activity_events', {
     workspace_id: workspaceId,
     actor_id: user.id,
@@ -268,7 +289,7 @@ async function bridgeSaveOwnership(req, res, user, workspaceId) {
     source_type: source_system || 'system',
     domain: domain || null,
     visibility: 'shared',
-    metadata: { owner_name, true_owner_name, bridge_source: 'ownership_save' },
+    metadata: ownershipMetadata,
     occurred_at: new Date().toISOString()
   });
 

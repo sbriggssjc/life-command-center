@@ -10,6 +10,7 @@
 import {
   GOV_READ_TABLES, GOV_WRITE_TABLES,
   DIA_READ_TABLES, DIA_WRITE_TABLES,
+  GOV_WRITE_SERVICE_TABLES,
   isAllowedTable, safeLimit, safeSelect, safeColumn
 } from './_shared/allowlist.js';
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
@@ -70,6 +71,18 @@ export default async function handler(req, res) {
   if (req.method === 'POST' || req.method === 'PATCH') {
     if (!isAllowedTable(table, cfg.writeTables)) {
       return res.status(403).json({ error: `Write access denied for table: ${table}` });
+    }
+
+    // Government domain tables must use write services instead of raw proxy writes
+    if (source === 'gov' && GOV_WRITE_SERVICE_TABLES.has(table)) {
+      const serviceHint = table === 'prospect_leads' || table === 'rpc/upsert_lead'
+        ? 'lead-research' : table === 'research_queue_outcomes' || table === 'rpc/save_research_outcome'
+        ? 'lead-research' : 'ownership';
+      return res.status(400).json({
+        error: `Government domain writes to "${table}" must use the write service endpoint.`,
+        hint: `POST /api/gov-write?endpoint=${serviceHint}`,
+        docs: 'Government closed-loop write services handle propagation, provenance, and change journaling.'
+      });
     }
 
     const isRpc = table.startsWith('rpc/');
