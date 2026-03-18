@@ -990,7 +990,8 @@ async function loadMarketing() {
         total_deal_count: d.total_deal_count || 0,
         completed_activity_count: d.completed_activity_count || 0,
         last_call_notes: d.last_call_notes,
-        open_task_count: d.open_task_count || 0
+        open_task_count: d.open_task_count || 0,
+        open_tasks: d.open_tasks || []
       }));
 
       // Normalize leads to pipeline schema
@@ -1252,18 +1253,33 @@ function renderProspectCardsHTML(items, options = {}) {
       if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
       html += `</div>`;
       if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
-      // Client rollup: show deal associations and activity summary inline
+      // Client rollup: open tasks with deal titles
+      if (c.open_tasks && c.open_tasks.length > 0) {
+        html += '<div style="margin-top:4px;font-size:11px">';
+        html += '<span style="color:var(--text2);font-weight:600">Open Tasks (' + c.open_tasks.length + '):</span>';
+        c.open_tasks.slice(0, 5).forEach(function(t) {
+          var subj = t.subject || 'Task';
+          var isOpp = t.type === 'Opportunity';
+          var icon = isOpp ? '<span style="color:var(--yellow)">&#9733;</span> ' : '<span style="color:var(--text3)">&#8226;</span> ';
+          html += '<div style="padding:1px 0 1px 8px">' + icon;
+          html += '<span style="color:' + (isOpp ? 'var(--accent)' : 'var(--text)') + '">' + esc(subj) + '</span>';
+          if (t.date) html += ' <span style="color:var(--text3)">(' + esc(t.date) + ')</span>';
+          if (t.notes) html += ' <span style="color:var(--text3);font-style:italic">— ' + esc(t.notes) + '</span>';
+          html += '</div>';
+        });
+        if (c.open_tasks.length > 5) html += '<div style="padding:1px 0 1px 8px;color:var(--text3)">+ ' + (c.open_tasks.length - 5) + ' more...</div>';
+        html += '</div>';
+      }
+      // Deal associations (from Opportunity records across all statuses)
       if (c.opportunity_deals) {
-        html += `<div style="font-size:11px;color:var(--accent);margin-top:3px">Deals: ${esc(c.opportunity_deals)}</div>`;
+        html += `<div style="font-size:11px;color:var(--accent);margin-top:3px">Related Deals: ${esc(c.opportunity_deals)}</div>`;
       }
-      if (c.notes) {
-        html += `<div style="font-size:11px;color:var(--text3);margin-top:2px;font-style:italic">Next: ${esc(c.notes)}</div>`;
-      }
+      // Activity summary line
       if (c.last_call_notes) {
-        html += `<div style="font-size:11px;color:var(--text3);margin-top:1px">Last call: ${esc(c.last_call_notes)}</div>`;
+        html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Last call: ${esc(c.last_call_notes)}</div>`;
       }
-      if (c.completed_activity_count > 0 || c.open_task_count > 0) {
-        html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${c.open_task_count || 0} open tasks · ${c.completed_activity_count || 0} completed activities${c.total_deal_count ? ' · ' + c.total_deal_count + ' deal' + (c.total_deal_count > 1 ? 's' : '') : ''}</div>`;
+      if (c.completed_activity_count > 0) {
+        html += `<div style="font-size:11px;color:var(--text3);margin-top:1px">${c.completed_activity_count} completed activities${c.total_deal_count ? ' · ' + c.total_deal_count + ' deal' + (c.total_deal_count > 1 ? 's' : '') : ''}</div>`;
       }
 
       // Lead-specific metadata
