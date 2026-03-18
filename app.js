@@ -2438,6 +2438,38 @@ function canonicalBridge(action, payload) {
   }).then(r => r.ok ? r.json() : null).catch(() => null);
 }
 
+// ============================================================
+// GOVERNMENT WRITE SERVICE — call from gov domain save functions
+// instead of raw Supabase proxy writes. The server-side proxy
+// (/api/gov-write) forwards to the Gov FastAPI write endpoints
+// and handles source_app/actor injection.
+//
+// Usage:
+//   const result = await govWriteService('ownership', { property_id, recorded_owner, ... });
+//   // result: { status, change_event_id, correlation_id, ... }
+//
+//   const result = await govWriteService('lead-research', { lead_id, ... });
+//   const result = await govWriteService('financial', { property_id, noi, ... });
+//   const result = await govWriteService('resolve-pending', { action, resolved_by }, updateId);
+// ============================================================
+async function govWriteService(endpoint, payload, updateId) {
+  let url = `/api/gov-write?endpoint=${encodeURIComponent(endpoint)}`;
+  if (updateId) url += `&update_id=${encodeURIComponent(updateId)}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    throw new Error(err.error || err.detail || `Gov write service returned ${res.status}`);
+  }
+
+  return res.json();
+}
+
 let activitiesLoaded = false;
 async function loadActivities() {
   try {

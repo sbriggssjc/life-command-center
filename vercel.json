@@ -8,6 +8,7 @@
     { "source": "/api/diag", "destination": "/api/diagnostics?_route=diag" },
     { "source": "/api/treasury", "destination": "/api/diagnostics?_route=treasury" },
     { "source": "/api/gov-query", "destination": "/api/data-proxy?_source=gov" },
+    { "source": "/api/gov-write", "destination": "/api/gov-write" },
     { "source": "/api/dia-query", "destination": "/api/data-proxy?_source=dia" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
