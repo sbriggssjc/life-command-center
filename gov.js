@@ -2032,14 +2032,25 @@ function renderGovPipeline() {
   html += '<h3>Top Prospects</h3>';
   html += leadsTable(dedupedLeads.slice(0, 100));
   html += '</div>';
-  
+
+  // SF Opportunity Prospects (domain-classified)
+  if (typeof window._mktOpportunities !== 'undefined' && window._mktOpportunities.government && window._mktOpportunities.government.length > 0) {
+    html += '<div style="margin-top:24px;border-top:2px solid var(--border);padding-top:16px">';
+    html += '<div id="govSfProspectsContainer"></div>';
+    html += '</div>';
+  }
+
   setTimeout(() => {
     if (sourceLabels.length > 0) {
       renderPieChart('chart-leads-source', sourceLabels, sourceData);
     }
     renderHBarChart('chart-leads-temp', tempLabels, tempData, tempColors);
+    // Render SF Prospects after DOM is ready
+    if (typeof renderDomainProspects === 'function' && window._mktOpportunities && window._mktOpportunities.government.length > 0) {
+      renderDomainProspects('government', 'govSfProspectsContainer');
+    }
   }, 100);
-  
+
   return html;
 }
 
