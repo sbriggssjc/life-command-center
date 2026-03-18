@@ -1261,11 +1261,18 @@ function renderProspectCardsHTML(items, options = {}) {
           var subj = t.subject || 'Task';
           var isOpp = t.type === 'Opportunity';
           var icon = isOpp ? '<span style="color:var(--yellow)">&#9733;</span> ' : '<span style="color:var(--text3)">&#8226;</span> ';
-          html += '<div style="padding:1px 0 1px 8px">' + icon;
+          html += '<div style="padding:2px 0 2px 8px;display:flex;align-items:center;justify-content:space-between;gap:6px" onclick="event.stopPropagation()">';
+          html += '<div style="flex:1;min-width:0">' + icon;
           html += '<span style="color:' + (isOpp ? 'var(--accent)' : 'var(--text)') + '">' + esc(subj) + '</span>';
           if (t.date) html += ' <span style="color:var(--text3)">(' + esc(t.date) + ')</span>';
           if (t.notes) html += ' <span style="color:var(--text3);font-style:italic">— ' + esc(t.notes) + '</span>';
           html += '</div>';
+          // Task action buttons: complete, edit date, snooze
+          html += '<div style="display:flex;gap:3px;flex-shrink:0">';
+          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="completeTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\')" title="Mark complete">&#x2713;</button>';
+          html += '<input type="date" style="font-size:10px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:1px 3px;width:110px" value="' + esc(t.date || '') + '" onchange="rescheduleTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\',this.value)" title="Change due date">';
+          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="dismissTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\')" title="Dismiss/archive">&#x2715;</button>';
+          html += '</div></div>';
         });
         if (c.open_tasks.length > 5) html += '<div style="padding:1px 0 1px 8px;color:var(--text3)">+ ' + (c.open_tasks.length - 5) + ' more...</div>';
         html += '</div>';
@@ -1631,6 +1638,91 @@ async function mktReassignDeal(activityId, newOwner, sfContactId) {
     renderMarketing();
   } catch (e) {
     showToast('Error reassigning: ' + e.message, 'error');
+  }
+}
+
+// ── Task management: complete, reschedule, dismiss ──
+async function completeTask(sfContactId, subject) {
+  showToast('Marking task complete...', 'success');
+  try {
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'salesforce_activities');
+    url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
+    url.searchParams.set('filter2', 'subject=eq.' + subject);
+    await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Completed' })
+    });
+    showToast('Task completed!', 'success');
+    // Remove from local data and re-render
+    mktData = mktData.filter(function(d) { return !(d.sf_contact_id === sfContactId && d.open_tasks && d.open_tasks.length <= 1); });
+    mktData.forEach(function(d) {
+      if (d.sf_contact_id === sfContactId && d.open_tasks) {
+        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        d.open_task_count = d.open_tasks.length;
+        d.completed_activity_count = (d.completed_activity_count || 0) + 1;
+      }
+    });
+    renderMarketing();
+  } catch (e) {
+    showToast('Error completing task: ' + e.message, 'error');
+  }
+}
+
+async function rescheduleTask(sfContactId, subject, newDate) {
+  if (!newDate) return;
+  showToast('Rescheduling to ' + newDate + '...', 'success');
+  try {
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'salesforce_activities');
+    url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
+    url.searchParams.set('filter2', 'subject=eq.' + subject);
+    await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activity_date: newDate })
+    });
+    showToast('Rescheduled to ' + newDate, 'success');
+    // Update local data
+    mktData.forEach(function(d) {
+      if (d.sf_contact_id === sfContactId && d.open_tasks) {
+        d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
+        d.due_date = newDate;
+      }
+    });
+    renderMarketing();
+  } catch (e) {
+    showToast('Error rescheduling: ' + e.message, 'error');
+  }
+}
+
+async function dismissTask(sfContactId, subject) {
+  if (!confirm('Dismiss "' + subject + '"? This will mark it as Abandoned.')) return;
+  showToast('Dismissing task...', 'success');
+  try {
+    const url = new URL('/api/dia-query', window.location.origin);
+    url.searchParams.set('table', 'salesforce_activities');
+    url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
+    url.searchParams.set('filter2', 'subject=eq.' + subject);
+    await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Abandoned' })
+    });
+    showToast('Task dismissed', 'success');
+    // Remove from local data
+    mktData.forEach(function(d) {
+      if (d.sf_contact_id === sfContactId && d.open_tasks) {
+        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        d.open_task_count = d.open_tasks.length;
+      }
+    });
+    // Remove contacts with no remaining tasks
+    mktData = mktData.filter(function(d) { return !d.open_tasks || d.open_tasks.length > 0 || d.completed_activity_count > 0; });
+    renderMarketing();
+  } catch (e) {
+    showToast('Error dismissing task: ' + e.message, 'error');
   }
 }
 
