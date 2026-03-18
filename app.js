@@ -1203,14 +1203,18 @@ function renderProspectCardsHTML(items, options = {}) {
 
     // Contact rows
     contacts.forEach(c => {
+      const cId = esc(c.sf_contact_id || c.item_id || '');
       const logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
-      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border)">`;
+      // Clickable contact row — expands to show deals + history
+      html += `<div style="cursor:pointer;padding:8px 0;border-top:1px solid var(--border)" onclick="toggleContactDetail('${cId}')">`;
+      html += `<div style="display:flex;align-items:center;justify-content:space-between">`;
       html += `<div style="flex:1;min-width:0">`;
-      html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')}</div>`;
+      html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
       html += `<div style="font-size:12px;color:var(--text2)">${esc(c.company_name || '')}`;
-      if (c.email) html += ` · <a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`;
+      if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
       html += `</div>`;
       if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
+      if (c.notes) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px;font-style:italic">${esc(c.notes)}</div>`;
 
       // Lead-specific metadata
       if (c.pipeline_source !== 'sf_deal') {
@@ -1223,7 +1227,7 @@ function renderProspectCardsHTML(items, options = {}) {
       html += '</div>';
 
       // Action buttons
-      html += `<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end">`;
+      html += `<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end" onclick="event.stopPropagation()">`;
       if (showEmailTemplates && c.email) {
         html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
         html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
@@ -1234,12 +1238,11 @@ function renderProspectCardsHTML(items, options = {}) {
         html += '</div></div>';
       }
       if (c.phone) {
-        html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()">&#x1F4DE;</a>`;
+        const cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
+        html += `<a href="webexteams://call?uri=${encodeURIComponent(cleanPhone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()" title="Call via WebEx">&#x1F4DE; WebEx</a>`;
+        html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()" title="Direct dial">&#x260E;</a>`;
       }
       html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
-      if (showCallHistory && c.sf_contact_id) {
-        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleCallHistory('${esc(c.sf_contact_id)}','${esc(c.contact_name||'')}',this)">History</button>`;
-      }
       // Lead management buttons
       if (c.pipeline_source !== 'sf_deal' && c.sf_match_status === 'unmatched') {
         html += `<button class="act-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:#fff" onclick="event.stopPropagation();mktMatchLead('${esc(c.item_id)}')">Match</button>`;
@@ -1247,11 +1250,11 @@ function renderProspectCardsHTML(items, options = {}) {
       if (c.pipeline_source !== 'sf_deal') {
         html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();mktUpdateStatus('${esc(c.item_id)}','contacted')">&#x2713;</button>`;
       }
-      html += '</div></div>';
-      // Call history expansion area (hidden by default)
-      if (showCallHistory && c.sf_contact_id) {
-        html += `<div id="callhist-${esc(c.sf_contact_id)}" style="display:none;padding:6px 0 6px 20px;font-size:12px;color:var(--text2);border-top:1px dashed var(--border)"></div>`;
-      }
+      html += '</div></div></div>';
+      // Expandable detail panel (hidden by default) — shows deals + call history
+      html += `<div id="contact-detail-${cId}" style="display:none;padding:8px 0 8px 16px;font-size:12px;color:var(--text2);border-top:1px dashed var(--border);background:rgba(255,255,255,.02)">`;
+      html += '<div style="color:var(--text3)"><span class="spinner" style="width:12px;height:12px"></span> Loading contact details...</div>';
+      html += '</div>';
     });
 
     html += '</div>';
@@ -1387,48 +1390,118 @@ document.addEventListener('click', closeEmailMenus);
 
 function openMktFollowUp(email, name, deal) {
   const first = name.split(' ')[0] || 'there';
-  const user = LCC_USER.display_name || 'Scott Briggs';
-  const subject = encodeURIComponent('Following Up — ' + deal);
-  const body = encodeURIComponent(
+  _composeOutlook(email,
+    'Following Up \u2014 ' + deal,
     'Hi ' + first + ',\n\n' +
     'I wanted to follow up on my previous outreach regarding ' + deal + '. I understand these decisions take time, and I am happy to work on your schedule.\n\n' +
     'If you have a few minutes this week, I would love to share some recent market data and comparable transactions that may be useful as you evaluate your options.\n\n' +
-    'Please let me know if there is a good time to connect.\n\n' +
-    'Best regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales'
+    'Please let me know if there is a good time to connect.' +
+    _sig()
   );
-  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
 }
 
 function openMktMarketUpdate(email, name, deal) {
   const first = name.split(' ')[0] || 'there';
-  const user = LCC_USER.display_name || 'Scott Briggs';
-  const subject = encodeURIComponent('Net Lease Market Update — ' + deal);
-  const body = encodeURIComponent(
+  _composeOutlook(email,
+    'Net Lease Market Update \u2014 ' + deal,
     'Hi ' + first + ',\n\n' +
     'I wanted to share a quick update on the net lease market as it relates to ' + deal + '.\n\n' +
     'The 10-year Treasury is currently at [X.XX]%, and we are seeing [cap rate trends / buyer activity / pricing observations]. For government-leased properties in particular, [specific insight].\n\n' +
-    'I have attached our latest Dialysis Capital Markets Report for your review. Happy to walk through the data if helpful.\n\n' +
-    'Best regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales'
+    'Investment Highlights:\n' +
+    '  - Tenant: [Agency / Operator]\n' +
+    '  - Location: [City, State]\n' +
+    '  - Building Size: [XX,XXX SF]\n' +
+    '  - Lease Term Remaining: [X.X years]\n' +
+    '  - Annual Rent: [$X,XXX,XXX]\n' +
+    '  - Cap Rate: [X.XX%]\n\n' +
+    'Happy to walk through the offering memorandum if helpful.' +
+    _sig()
   );
-  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
 }
 
 function openMktMeetingReq(email, name, deal) {
   const first = name.split(' ')[0] || 'there';
-  const user = LCC_USER.display_name || 'Scott Briggs';
-  const subject = encodeURIComponent('Meeting Request — ' + deal);
-  const body = encodeURIComponent(
+  _composeOutlook(email,
+    'Meeting Request \u2014 ' + deal,
     'Hi ' + first + ',\n\n' +
     'I would appreciate the opportunity to meet briefly to discuss ' + deal + ' and how Northmarq can be a resource for your capital markets needs.\n\n' +
     'Would any of the following times work for a 15-minute call?\n\n' +
-    '• [Day, Time]\n• [Day, Time]\n• [Day, Time]\n\n' +
-    'Alternatively, feel free to suggest a time that works best for you.\n\n' +
-    'Best regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales'
+    '  - [Day, Time]\n  - [Day, Time]\n  - [Day, Time]\n\n' +
+    'Alternatively, feel free to suggest a time that works best for you.' +
+    _sig()
   );
-  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
 }
 
 // ── Call history ──
+// ── Expandable contact detail — shows deal associations + call history ──
+async function toggleContactDetail(contactId) {
+  const el = document.getElementById('contact-detail-' + contactId);
+  if (!el) return;
+  if (el.style.display !== 'none' && el.dataset.loaded) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  if (el.dataset.loaded) return; // already loaded, just re-show
+
+  try {
+    // Fetch all activities for this contact (deals they're associated with + call history)
+    const activities = await diaQuery('salesforce_activities', 'subject,nm_type,task_subtype,status,activity_date,nm_notes,assigned_to', {
+      filter: 'sf_contact_id=eq.' + contactId,
+      order: 'activity_date.desc.nullslast',
+      limit: 50
+    });
+
+    let h = '';
+
+    // Section 1: Deal associations (Opportunity records)
+    const deals = [];
+    const seen = new Set();
+    (activities || []).forEach(function(a) {
+      if (a.nm_type === 'Opportunity' && !seen.has(a.subject)) {
+        seen.add(a.subject);
+        deals.push(a);
+      }
+    });
+    if (deals.length) {
+      h += '<div style="margin-bottom:8px"><div style="font-weight:600;color:var(--text);margin-bottom:4px">Associated Deals (' + deals.length + ')</div>';
+      deals.forEach(function(d) {
+        var statusColor = d.status === 'Completed' ? 'var(--green)' : d.status === 'Abandoned' ? 'var(--text3)' : 'var(--accent)';
+        h += '<div style="padding:3px 0;display:flex;justify-content:space-between">';
+        h += '<span>' + esc(d.subject) + '</span>';
+        h += '<span style="color:' + statusColor + ';font-size:11px">' + esc(d.status || '—') + '</span>';
+        h += '</div>';
+      });
+      h += '</div>';
+    } else {
+      h += '<div style="margin-bottom:8px;color:var(--text3)">No deal associations found</div>';
+    }
+
+    // Section 2: Call / activity history (non-Opportunity completed activities)
+    const history = (activities || []).filter(function(a) {
+      return a.status === 'Completed' || (a.nm_type !== 'Opportunity');
+    });
+    const callHistory = history.filter(function(a) { return a.status === 'Completed'; });
+    if (callHistory.length) {
+      h += '<div style="margin-bottom:4px"><div style="font-weight:600;color:var(--text);margin-bottom:4px">Call History (' + callHistory.length + ')</div>';
+      callHistory.slice(0, 15).forEach(function(r) {
+        var type = r.nm_type || r.subject || r.task_subtype || '—';
+        h += '<div style="padding:3px 0;border-bottom:1px solid var(--border)">';
+        h += '<span style="color:var(--accent);font-weight:500">' + esc(r.activity_date || '—') + '</span>';
+        h += ' · <span>' + esc(type) + '</span>';
+        if (r.nm_notes) h += '<div style="color:var(--text3);margin-top:1px;font-size:11px">' + esc(r.nm_notes) + '</div>';
+        h += '</div>';
+      });
+      if (callHistory.length > 15) h += '<div style="color:var(--text3);padding:4px 0">+ ' + (callHistory.length - 15) + ' more...</div>';
+      h += '</div>';
+    } else {
+      h += '<div style="color:var(--text3)">No call history found</div>';
+    }
+
+    el.innerHTML = h;
+    el.dataset.loaded = '1';
+  } catch (e) {
+    el.innerHTML = '<span style="color:var(--red)">Error loading details: ' + esc(e.message) + '</span>';
+  }
+}
+
 async function toggleCallHistory(sfContactId, contactName, btn) {
   const el = document.getElementById('callhist-' + sfContactId);
   if (!el) return;
@@ -1601,20 +1674,29 @@ async function mktUpdateStatus(leadId, newStatus) {
 }
 
 /** Open email template for a marketing deal contact */
+// Open email in Outlook desktop via mailto (Outlook intercepts when set as default mail client)
+function _composeOutlook(email, subjectText, bodyText) {
+  const subject = encodeURIComponent(subjectText);
+  const body = encodeURIComponent(bodyText);
+  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
+}
+
+function _sig() {
+  const user = LCC_USER.display_name || 'Scott Briggs';
+  return '\n\nBest regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales\n(612) 555-0100';
+}
+
 function openMktEmail(email, contactName, dealName) {
-  const subject = encodeURIComponent('Northmarq Investment Sales \u2014 ' + dealName);
-  const body = encodeURIComponent(
-    'Hi ' + (contactName.split(' ')[0] || 'there') + ',\n\n' +
-    'I hope this message finds you well. My name is ' + (LCC_USER.display_name || 'Scott Briggs') + ', and I am a Senior Vice President with Northmarq Investment Sales in Minneapolis.\n\n' +
+  const first = contactName.split(' ')[0] || 'there';
+  const user = LCC_USER.display_name || 'Scott Briggs';
+  _composeOutlook(email,
+    'Northmarq Investment Sales \u2014 ' + dealName,
+    'Hi ' + first + ',\n\n' +
+    'I hope this message finds you well. My name is ' + user + ', and I am a Senior Vice President with Northmarq Investment Sales.\n\n' +
     'I am reaching out regarding ' + dealName + '. Our team has been actively working in this market and I wanted to introduce myself as a resource for any future capital markets needs you may have.\n\n' +
-    'I would welcome the opportunity to share some recent market activity and comparable transactions that may be relevant to your portfolio. Would you have a few minutes for a brief call this week?\n\n' +
-    'Best regards,\n' +
-    (LCC_USER.display_name || 'Scott Briggs') + '\n' +
-    'Senior Vice President\n' +
-    'Northmarq Investment Sales\n' +
-    '(612) 555-0100'
+    'I would welcome the opportunity to share some recent market activity and comparable transactions that may be relevant to your portfolio. Would you have a few minutes for a brief call this week?' +
+    _sig()
   );
-  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
 }
 
 // ============================================================
