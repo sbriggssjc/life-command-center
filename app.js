@@ -885,11 +885,47 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      const [opportunitiesRaw, clientRollupRaw, leadsRaw] = await Promise.all([
-        diaQuery('v_opportunity_domain_classified', '*', { order: 'activity_date.desc.nullslast', limit: 5000 }),
+      // Load CRM client rollup + leads first (fast), then opportunities (heavy — may timeout)
+      const [clientRollupRaw, leadsRaw] = await Promise.all([
         diaQuery('v_crm_client_rollup', '*', { limit: 1000 }),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
+
+      // Load opportunities separately — this is a heavy query that can timeout during initial burst
+      let opportunitiesRaw = [];
+      try {
+        opportunitiesRaw = await diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 });
+      } catch (e) {
+        console.warn('Opportunity domain query failed, will retry in 10s:', e.message);
+      }
+      // If empty (timeout), schedule a deferred retry
+      if (!opportunitiesRaw || opportunitiesRaw.length === 0) {
+        setTimeout(async () => {
+          try {
+            const retry = await diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 });
+            if (retry && retry.length > 0) {
+              const retryOpps = retry.map(d => ({
+                pipeline_source: 'sf_deal', item_id: String(d.activity_id || ''), deal_name: d.deal_name,
+                deal_display_name: d.deal_display_name || d.deal_name, deal_priority: d.deal_priority,
+                contact_name: d.contact_name, first_name: d.first_name, last_name: d.last_name,
+                company_name: d.company_name, email: d.email, phone: d.phone,
+                sf_contact_id: d.sf_contact_id, sf_company_id: d.sf_company_id,
+                due_date: d.activity_date, notes: d.nm_notes, status: d.status,
+                assigned_to: d.assigned_to, activity_type: 'opportunity',
+                lead_source: null, sf_match_status: null, touchpoint_count: null,
+                ingested_at: d.created_at, domain: d.domain, prospect_domain: d.prospect_domain
+              }));
+              window._mktOpportunities = {
+                government: retryOpps.filter(d => d.domain === 'government'),
+                dialysis: retryOpps.filter(d => d.domain === 'dialysis'),
+                all_other: retryOpps.filter(d => d.domain === 'all_other')
+              };
+              _mktOpportunitiesLoaded = true;
+              console.log('[Marketing] Deferred opportunity load succeeded:', retryOpps.length, 'records');
+            }
+          } catch (e2) { console.warn('Deferred opportunity retry also failed:', e2.message); }
+        }, 10000);
+      }
 
       // Store domain-classified opportunities globally for domain tabs
       const opps = (opportunitiesRaw || []).map(d => ({
