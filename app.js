@@ -879,8 +879,15 @@ async function loadMarketing() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
 
+  // If called just for domain prospects (not Marketing tab), only load opportunities
+  if (currentBizTab !== 'marketing' && _mktOpportunitiesLoaded) {
+    return; // opportunities already loaded, nothing else needed
+  }
+
   if (!mktLoaded) {
-    el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CRM activity hub...</p></div>';
+    if (currentBizTab === 'marketing') {
+      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CRM activity hub...</p></div>';
+    }
     try {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
@@ -921,10 +928,18 @@ async function loadMarketing() {
         }
         return [];
       }
-      const [clientRollupRaw, leadsRaw] = await Promise.all([
-        fetchRollupWithRetry(rollupUrl.toString(), 3),
-        diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
-      ]);
+      // Only load CRM client rollup if we're on the Marketing tab
+      // Skip the heavy query when called from domain Prospects tabs (they only need opportunities)
+      let clientRollupRaw = [];
+      let leadsRaw = [];
+      if (currentBizTab === 'marketing') {
+        const results = await Promise.all([
+          fetchRollupWithRetry(rollupUrl.toString(), 3),
+          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
+        ]);
+        clientRollupRaw = results[0];
+        leadsRaw = results[1];
+      }
 
       // Load opportunities separately — this is a heavy query that can timeout during initial burst
       let opportunitiesRaw = [];
