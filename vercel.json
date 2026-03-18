@@ -15,6 +15,7 @@
     { "source": "/api/flags", "destination": "/api/admin?_route=flags" },
     { "source": "/api/queue-v2", "destination": "/api/queue?_version=v2" },
     { "source": "/api/connectors", "destination": "/api/sync?_route=connectors" },
+    { "source": "/api/apply-change", "destination": "/api/apply-change" },
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
   "headers": [
