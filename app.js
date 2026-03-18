@@ -836,8 +836,11 @@ let mktData = [];
 let mktLoaded = false;
 let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
+let mktOwner = 'mine';    // 'mine' | 'all' | specific name
 let mktSearch = '';
 let mktPage = 0;
+let mktCallHistoryCache = {};  // sf_contact_id → [{date, notes, type}]
+let mktExpandedDeal = null;    // deal name currently expanded to show call history
 const MKT_PAGE = 20;
 let mktSearchTimeout;
 
@@ -872,6 +875,7 @@ async function loadMarketing() {
         due_date: d.activity_date,
         notes: d.nm_notes,
         status: d.status,
+        assigned_to: d.assigned_to,
         activity_type: 'opportunity',
         lead_source: null,
         sf_match_status: null,
@@ -927,9 +931,17 @@ function renderMarketing() {
   if (!el) return;
 
   const today = new Date().toISOString().split('T')[0];
+  const userName = LCC_USER.display_name || 'Scott Briggs';
+
+  // Owner filter
+  let filtered = mktData;
+  if (mktOwner === 'mine') {
+    filtered = filtered.filter(d => d.assigned_to === userName);
+  } else if (mktOwner !== 'all') {
+    filtered = filtered.filter(d => d.assigned_to === mktOwner);
+  }
 
   // Source filter
-  let filtered = mktData;
   if (mktSource === 'sf_deal') {
     filtered = filtered.filter(d => d.pipeline_source === 'sf_deal');
   } else if (mktSource === 'leads') {
@@ -961,30 +973,47 @@ function renderMarketing() {
     );
   }
 
-  // Stats from full dataset
-  const sfDeals = mktData.filter(d => d.pipeline_source === 'sf_deal');
-  const inboundLeads = mktData.filter(d => d.pipeline_source !== 'sf_deal');
-  const overdue = mktData.filter(d => d.due_date && d.due_date < today).length;
+  // Collect unique owners for dropdown
+  const ownerSet = new Set();
+  mktData.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
+  const owners = Array.from(ownerSet).sort();
+
+  // Stats from owner-filtered dataset (not full — so stats reflect the view)
+  const ownerFiltered = mktOwner === 'all' ? mktData : mktOwner === 'mine' ? mktData.filter(d => d.assigned_to === userName) : mktData.filter(d => d.assigned_to === mktOwner);
+  const sfDeals = ownerFiltered.filter(d => d.pipeline_source === 'sf_deal');
+  const inboundLeads = ownerFiltered.filter(d => d.pipeline_source !== 'sf_deal');
+  const overdue = ownerFiltered.filter(d => d.due_date && d.due_date < today).length;
   const unmatched = inboundLeads.filter(d => d.sf_match_status === 'unmatched').length;
   const totalDeals = new Set(sfDeals.map(d => d.deal_name)).size;
 
   let html = '';
 
+  // Owner toggle (My Deals / All Deals / Assign)
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
+  html += `<span class="pill ${mktOwner==='mine'?'active':''}" onclick="mktOwner='mine';mktPage=0;renderMarketing()">My Deals</span>`;
+  html += `<span class="pill ${mktOwner==='all'?'active':''}" onclick="mktOwner='all';mktPage=0;renderMarketing()">All Deals</span>`;
+  html += '<select style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px" onchange="mktOwner=this.value;mktPage=0;renderMarketing()">';
+  html += `<option value="mine" ${mktOwner==='mine'?'selected':''}>My Deals</option>`;
+  html += `<option value="all" ${mktOwner==='all'?'selected':''}>All Team</option>`;
+  owners.forEach(o => { html += `<option value="${esc(o)}" ${mktOwner===o?'selected':''}>${esc(o)}</option>`; });
+  html += '</select>';
+  html += '</div>';
+
   // Metrics row
   html += '<div class="widget-grid">';
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='sf_deal';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">SF Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${sfDeals.length} contacts</div></div>`;
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='leads';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Inbound Leads</div><div class="stat-value" style="color:var(--purple)">${inboundLeads.length}</div><div class="stat-sub">${unmatched ? unmatched + ' unmatched' : 'All matched'}</div></div>`;
-  const overduePct = mktData.length > 0 ? Math.round((overdue / mktData.length) * 100) : 0;
+  const overduePct = ownerFiltered.length > 0 ? Math.round((overdue / ownerFiltered.length) * 100) : 0;
   const overdueSub = overduePct > 80 ? 'Likely stale dates' : 'Past due date';
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:${overduePct > 80 ? 'var(--yellow)' : 'var(--red)'}">${overdue}</div><div class="stat-sub">${overdueSub}</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Total Pipeline</div><div class="stat-value" style="color:var(--green)">${mktData.length}</div><div class="stat-sub">All sources</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Total Pipeline</div><div class="stat-value" style="color:var(--green)">${ownerFiltered.length}</div><div class="stat-sub">All sources</div></div>`;
   html += '</div>';
 
   // Source tabs
   const srcCounts = {};
-  mktData.forEach(d => { srcCounts[d.pipeline_source] = (srcCounts[d.pipeline_source] || 0) + 1; });
+  ownerFiltered.forEach(d => { srcCounts[d.pipeline_source] = (srcCounts[d.pipeline_source] || 0) + 1; });
   html += '<div class="pills" style="margin-bottom:4px">';
-  html += `<span class="pill ${mktSource==='all'?'active':''}" onclick="mktSource='all';mktPage=0;renderMarketing()">All <span class="pill-ct">${mktData.length}</span></span>`;
+  html += `<span class="pill ${mktSource==='all'?'active':''}" onclick="mktSource='all';mktPage=0;renderMarketing()">All <span class="pill-ct">${ownerFiltered.length}</span></span>`;
   html += `<span class="pill ${mktSource==='sf_deal'?'active':''}" onclick="mktSource='sf_deal';mktPage=0;renderMarketing()">SF Deals <span class="pill-ct">${srcCounts['sf_deal']||0}</span></span>`;
   if (srcCounts['rcm']) html += `<span class="pill ${mktSource==='rcm'?'active':''}" onclick="mktSource='rcm';mktPage=0;renderMarketing()">RCM <span class="pill-ct">${srcCounts['rcm']}</span></span>`;
   if (srcCounts['crexi']) html += `<span class="pill ${mktSource==='crexi'?'active':''}" onclick="mktSource='crexi';mktPage=0;renderMarketing()">CREXi <span class="pill-ct">${srcCounts['crexi']}</span></span>`;
@@ -1039,8 +1068,14 @@ function renderMarketing() {
     html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">`;
     html += `<div style="flex:1;min-width:0">`;
     html += `<div style="font-size:15px;font-weight:600;display:flex;align-items:center;flex-wrap:wrap;gap:4px">${priorityBadge}${isStarred ? '<span style="color:var(--yellow);margin-right:4px">&#9733;</span>' : ''}${esc(group.displayName)}${dueBadge}${sourceBadge}${matchBadge}</div>`;
-    html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">Due: ${esc(first.due_date || '—')} · ${contacts.length} contact${contacts.length > 1 ? 's' : ''}${isLead && first.activity_type ? ' · ' + esc(cleanLabel(first.activity_type)) : ''}</div>`;
-    html += '</div></div>';
+    html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">Due: ${esc(first.due_date || '—')} · ${contacts.length} contact${contacts.length > 1 ? 's' : ''}${first.assigned_to ? ' · <span style="color:var(--accent)">' + esc(first.assigned_to) + '</span>' : ''}${isLead && first.activity_type ? ' · ' + esc(cleanLabel(first.activity_type)) : ''}</div>`;
+    html += '</div>';
+    // Reassign dropdown
+    html += '<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;flex-shrink:0;margin-left:8px" title="Reassign deal" onchange="mktReassignDeal(\'' + esc(first.item_id) + '\',this.value,\'' + esc(first.sf_contact_id || '') + '\')">';
+    html += `<option value="">Assign to...</option>`;
+    owners.forEach(o => { html += `<option value="${esc(o)}" ${first.assigned_to===o?'selected':''}>${esc(o)}</option>`; });
+    html += '</select>';
+    html += '</div>';
 
     // Contact rows
     contacts.forEach(c => {
@@ -1064,14 +1099,23 @@ function renderMarketing() {
       html += '</div>';
 
       // Action buttons
-      html += `<div style="display:flex;gap:6px;flex-shrink:0;margin-left:8px">`;
+      html += `<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end">`;
       if (c.email) {
-        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">&#x2709;</button>`;
+        html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
+        html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Initial Outreach</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktFollowUp('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Follow-Up</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMarketUpdate('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Market Update</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMeetingReq('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Meeting Request</div>`;
+        html += '</div></div>';
       }
       if (c.phone) {
         html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()">&#x1F4DE;</a>`;
       }
       html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
+      if (c.sf_contact_id) {
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleCallHistory('${esc(c.sf_contact_id)}','${esc(c.contact_name||'')}',this)">History</button>`;
+      }
       // Lead management buttons
       if (c.pipeline_source !== 'sf_deal' && c.sf_match_status === 'unmatched') {
         html += `<button class="act-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:#fff" onclick="event.stopPropagation();mktMatchLead('${esc(c.item_id)}')">Match</button>`;
@@ -1080,6 +1124,10 @@ function renderMarketing() {
         html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();mktUpdateStatus('${esc(c.item_id)}','contacted')">&#x2713;</button>`;
       }
       html += '</div></div>';
+      // Call history expansion area (hidden by default)
+      if (c.sf_contact_id) {
+        html += `<div id="callhist-${esc(c.sf_contact_id)}" style="display:none;padding:6px 0 6px 20px;font-size:12px;color:var(--text2);border-top:1px dashed var(--border)"></div>`;
+      }
     });
 
     html += '</div>';
@@ -1096,6 +1144,125 @@ function renderMarketing() {
 function debounceMktSearch(val) {
   clearTimeout(mktSearchTimeout);
   mktSearchTimeout = setTimeout(() => { mktSearch = val; mktPage = 0; renderMarketing(); }, 250);
+}
+
+// ── Email template menus ──
+function toggleEmailMenu(btn) {
+  const menu = btn.parentElement.querySelector('.email-tpl-menu');
+  const wasOpen = menu.style.display !== 'none';
+  closeEmailMenus();
+  if (!wasOpen) menu.style.display = 'block';
+}
+function closeEmailMenus() {
+  document.querySelectorAll('.email-tpl-menu').forEach(m => m.style.display = 'none');
+}
+document.addEventListener('click', closeEmailMenus);
+
+function openMktFollowUp(email, name, deal) {
+  const first = name.split(' ')[0] || 'there';
+  const user = LCC_USER.display_name || 'Scott Briggs';
+  const subject = encodeURIComponent('Following Up — ' + deal);
+  const body = encodeURIComponent(
+    'Hi ' + first + ',\n\n' +
+    'I wanted to follow up on my previous outreach regarding ' + deal + '. I understand these decisions take time, and I am happy to work on your schedule.\n\n' +
+    'If you have a few minutes this week, I would love to share some recent market data and comparable transactions that may be useful as you evaluate your options.\n\n' +
+    'Please let me know if there is a good time to connect.\n\n' +
+    'Best regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales'
+  );
+  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
+}
+
+function openMktMarketUpdate(email, name, deal) {
+  const first = name.split(' ')[0] || 'there';
+  const user = LCC_USER.display_name || 'Scott Briggs';
+  const subject = encodeURIComponent('Net Lease Market Update — ' + deal);
+  const body = encodeURIComponent(
+    'Hi ' + first + ',\n\n' +
+    'I wanted to share a quick update on the net lease market as it relates to ' + deal + '.\n\n' +
+    'The 10-year Treasury is currently at [X.XX]%, and we are seeing [cap rate trends / buyer activity / pricing observations]. For government-leased properties in particular, [specific insight].\n\n' +
+    'I have attached our latest Dialysis Capital Markets Report for your review. Happy to walk through the data if helpful.\n\n' +
+    'Best regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales'
+  );
+  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
+}
+
+function openMktMeetingReq(email, name, deal) {
+  const first = name.split(' ')[0] || 'there';
+  const user = LCC_USER.display_name || 'Scott Briggs';
+  const subject = encodeURIComponent('Meeting Request — ' + deal);
+  const body = encodeURIComponent(
+    'Hi ' + first + ',\n\n' +
+    'I would appreciate the opportunity to meet briefly to discuss ' + deal + ' and how Northmarq can be a resource for your capital markets needs.\n\n' +
+    'Would any of the following times work for a 15-minute call?\n\n' +
+    '• [Day, Time]\n• [Day, Time]\n• [Day, Time]\n\n' +
+    'Alternatively, feel free to suggest a time that works best for you.\n\n' +
+    'Best regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales'
+  );
+  window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank');
+}
+
+// ── Call history ──
+async function toggleCallHistory(sfContactId, contactName, btn) {
+  const el = document.getElementById('callhist-' + sfContactId);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = '<span class="spinner" style="width:14px;height:14px"></span> Loading call history...';
+
+  if (mktCallHistoryCache[sfContactId]) {
+    renderCallHistory(el, mktCallHistoryCache[sfContactId], contactName);
+    return;
+  }
+
+  try {
+    const history = await diaQuery('salesforce_activities', 'subject,nm_type,task_subtype,activity_date,nm_notes,status', {
+      filter: `sf_contact_id=eq.${sfContactId},status=eq.Completed`,
+      order: 'activity_date.desc.nullslast',
+      limit: 25
+    });
+    mktCallHistoryCache[sfContactId] = history || [];
+    renderCallHistory(el, mktCallHistoryCache[sfContactId], contactName);
+  } catch (e) {
+    el.innerHTML = '<span style="color:var(--red)">Error loading history</span>';
+  }
+}
+
+function renderCallHistory(el, history, contactName) {
+  if (!history.length) {
+    el.innerHTML = '<div style="padding:4px 0;color:var(--text3)">No completed activities found for ' + esc(contactName) + '</div>';
+    return;
+  }
+  let h = '<div style="font-weight:600;margin-bottom:4px;color:var(--text)">Activity History — ' + esc(contactName) + ' (' + history.length + ')</div>';
+  history.forEach(r => {
+    const type = r.nm_type || r.subject || r.task_subtype || '—';
+    const date = r.activity_date || '—';
+    const notes = r.nm_notes || '';
+    h += `<div style="padding:3px 0;border-bottom:1px solid var(--border)">`;
+    h += `<span style="color:var(--accent);font-weight:500">${esc(date)}</span> · <span>${esc(type)}</span>`;
+    if (notes) h += `<div style="color:var(--text3);margin-top:1px;font-size:11px">${esc(notes)}</div>`;
+    h += '</div>';
+  });
+  el.innerHTML = h;
+}
+
+// ── Reassign deal ──
+async function mktReassignDeal(activityId, newOwner, sfContactId) {
+  if (!newOwner) return;
+  showToast('Reassigning to ' + newOwner + '...', 'success');
+  try {
+    // Update in Supabase — this will need a SF sync to push back
+    const res = await diaQuery('salesforce_activities', '*', {
+      method: 'PATCH',
+      filter: `activity_id=eq.${activityId}`,
+      body: { assigned_to: newOwner }
+    });
+    // Update local data
+    mktData.forEach(d => { if (d.item_id === activityId) d.assigned_to = newOwner; });
+    showToast('Reassigned to ' + newOwner, 'success');
+    renderMarketing();
+  } catch (e) {
+    showToast('Error reassigning: ' + e.message, 'error');
+  }
 }
 
 /** Trigger SF matching for an inbound lead */
