@@ -1936,6 +1936,49 @@ async function _udSaveOwnership() {
   let contactId = _udCache.ids?.contact_id || null;
 
   try {
+    // ── Government domain: use closed-loop write service ──
+    if (db === 'gov') {
+      const writeResult = await govWriteService('ownership', {
+        property_id: propertyId,
+        recorded_owner: recordedOwner,
+        true_owner: trueOwner,
+        owner_type: ownerType
+      });
+
+      showToast('Ownership resolution saved!', 'success');
+
+      // Bridge to canonical model with gov change metadata
+      canonicalBridge('save_ownership', {
+        domain: 'government',
+        external_id: String(propertyId),
+        source_system: 'gov_supabase',
+        user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+        owner_name: recordedOwner,
+        true_owner_name: trueOwner,
+        owner_type: ownerType,
+        contact_name: contactName,
+        notes: notes,
+        gov_change_event_id: writeResult.change_event_id,
+        gov_correlation_id: writeResult.correlation_id,
+        source_record_id: propertyId,
+        source_table: 'properties'
+      });
+
+      // Ensure canonical entity link exists for this gov property
+      canonicalBridge('update_entity', {
+        external_id: String(propertyId),
+        source_system: 'gov_supabase',
+        source_type: 'asset',
+        fields: {
+          name: trueOwner || recordedOwner || null
+        }
+      });
+
+      refreshDetailPanel();
+      return;
+    }
+
+    // ── Dialysis domain: keep existing direct-write flow ──
     // 1. Upsert recorded_owners table
     if (recordedOwner) {
       const recordedOwnerPayload = {
@@ -1943,7 +1986,7 @@ async function _udSaveOwnership() {
         state_of_incorporation: incState || null,
         normalized_name: recordedOwner.toLowerCase()
       };
-      
+
       if (recordedOwnerId) {
         // PATCH existing via mutation service
         const patchResult = await applyChangeWithFallback({
@@ -1956,13 +1999,12 @@ async function _udSaveOwnership() {
         });
         if (!patchResult.ok) console.error('Error patching recorded_owner:', (patchResult.errors || []).join(', '));
       } else {
-        // INSERT new
         const url = new URL(proxyBase, window.location.origin);
         url.searchParams.set('table', 'recorded_owners');
-        const res = await fetch(url.toString(), { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, 
-          body: JSON.stringify(recordedOwnerPayload) 
+        const res = await fetch(url.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+          body: JSON.stringify(recordedOwnerPayload)
         });
         if (res.ok) {
           const [created] = await res.json();
@@ -1981,7 +2023,7 @@ async function _udSaveOwnership() {
         contact_1_name: contactName || null,
         notes: notes || null
       };
-      
+
       if (trueOwnerId) {
         // PATCH existing via mutation service
         const patchResult = await applyChangeWithFallback({
@@ -1994,13 +2036,12 @@ async function _udSaveOwnership() {
         });
         if (!patchResult.ok) console.error('Error patching true_owner:', (patchResult.errors || []).join(', '));
       } else {
-        // INSERT new
         const url = new URL(proxyBase, window.location.origin);
         url.searchParams.set('table', 'true_owners');
-        const res = await fetch(url.toString(), { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, 
-          body: JSON.stringify(trueOwnerPayload) 
+        const res = await fetch(url.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+          body: JSON.stringify(trueOwnerPayload)
         });
         if (res.ok) {
           const [created] = await res.json();
@@ -2019,7 +2060,7 @@ async function _udSaveOwnership() {
         phone: contactPhone || null,
         contact_type: 'owner'
       };
-      
+
       if (contactId) {
         // PATCH existing via mutation service
         const patchResult = await applyChangeWithFallback({
@@ -2032,13 +2073,12 @@ async function _udSaveOwnership() {
         });
         if (!patchResult.ok) console.error('Error patching contact:', (patchResult.errors || []).join(', '));
       } else {
-        // INSERT new
         const url = new URL(proxyBase, window.location.origin);
         url.searchParams.set('table', 'contacts');
-        const res = await fetch(url.toString(), { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, 
-          body: JSON.stringify(contactPayload) 
+        const res = await fetch(url.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+          body: JSON.stringify(contactPayload)
         });
         if (res.ok) {
           const [created] = await res.json();
@@ -2089,19 +2129,19 @@ async function _udSaveOwnership() {
         selected_property_id: propertyId,
         assigned_at: new Date().toISOString()
       };
-      const res = await fetch(url.toString(), { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify(payload) 
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
       if (!res.ok) console.error('Error creating research_queue_outcome:', res.status);
     }
 
     showToast('Ownership resolution saved!', 'success');
     canonicalBridge('save_ownership', {
-      domain: db === 'gov' ? 'government' : 'dialysis',
+      domain: 'dialysis',
       external_id: String(propertyId),
-      source_system: db === 'gov' ? 'gov_supabase' : 'dia_supabase',
+      source_system: 'dia_supabase',
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       owner_name: recordedOwner,
       true_owner_name: trueOwner,
@@ -2109,7 +2149,6 @@ async function _udSaveOwnership() {
       contact_name: contactName,
       notes: notes
     });
-    // Refresh the detail panel
     refreshDetailPanel();
   } catch (e) {
     console.error('Ownership save error:', e);
