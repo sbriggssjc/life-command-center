@@ -1583,7 +1583,7 @@ function renderDiaClinicLeads() {
         diaClinicLeadQueue = all;
       } catch (e) {
         console.error('Clinic leads queue load error:', e);
-        diaClinicLeadQueue = [];
+        diaClinicLeadQueue = null; // keep null so next visit retries
       }
       diaClinicLeadLoading = false;
       renderDiaTab();
