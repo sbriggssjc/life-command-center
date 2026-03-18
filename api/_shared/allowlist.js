@@ -110,6 +110,19 @@ export const DIA_WRITE_TABLES = new Set([
   'rpc/match_marketing_lead_to_sf',
 ]);
 
+// Government tables where writes MUST go through Gov write services (not raw proxy).
+// Reads via the data proxy are still allowed — only POST/PATCH is blocked here.
+export const GOV_WRITE_SERVICE_TABLES = new Set([
+  'properties',
+  'prospect_leads',
+  'recorded_owners',
+  'true_owners',
+  'contacts',
+  'research_queue_outcomes',
+  'rpc/upsert_lead',
+  'rpc/save_research_outcome',
+]);
+
 // Maximum allowed limits per request
 export const MAX_LIMIT = 5000;
 export const DEFAULT_LIMIT = 1000;

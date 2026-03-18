@@ -1285,14 +1285,37 @@ async function saveOwnership(rec) {
   const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
   const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
 
-  const data = {
+  const recordedOwner = q('#res-recorded-owner')?.value || null;
+  const trueOwner = q('#res-true-owner')?.value || null;
+  const researchNotes = q('#res-notes')?.value || null;
+
+  // Use Gov write service for ownership updates
+  const propertyId = rec.matched_property_id || rec.property_id;
+  let writeResult = null;
+  if (propertyId) {
+    try {
+      writeResult = await govWriteService('ownership', {
+        property_id: propertyId,
+        recorded_owner: recordedOwner,
+        true_owner: trueOwner,
+        owner_type: null
+      });
+    } catch (err) {
+      console.error('Gov ownership write service error:', err);
+      showToast('Error saving ownership via write service: ' + err.message, 'error');
+    }
+  }
+
+  // ownership_history is not a write-service-protected table — patch directly for
+  // sale price, cap rate, and other research fields that live on the history row
+  await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, {
     sale_price: salePrice,
     cap_rate: capRate,
-    recorded_owner_name: q('#res-recorded-owner')?.value || null,
+    recorded_owner_name: recordedOwner,
     state_of_incorporation: q('#res-incorporation')?.value || null,
     recorded_owner_phone: q('#res-phone')?.value || null,
     recorded_owner_address: q('#res-mailing')?.value || null,
-    true_owner_name: q('#res-true-owner')?.value || null,
+    true_owner_name: trueOwner,
     principal_names: q('#res-principal-names')?.value || null,
     phone_2: q('#res-phone-2')?.value || null,
     mailing_address_2: q('#res-mailing-2')?.value || null,
@@ -1300,21 +1323,35 @@ async function saveOwnership(rec) {
     land_acres: parseFloat(q('#res-land-acres')?.value) || null,
     year_built: parseInt(q('#res-year-built')?.value) || null,
     year_renovated: parseInt(q('#res-year-renovated')?.value) || null,
-    research_notes: q('#res-notes')?.value || null,
+    research_notes: researchNotes,
     research_status: 'completed'
-  };
-  
-  await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, data);
+  });
 
-  // Bridge to canonical model
+  // Bridge to canonical model with gov change metadata
   canonicalBridge('save_ownership', {
     domain: 'government',
-    external_id: String(rec.property_id || rec.ownership_id),
+    external_id: String(propertyId || rec.ownership_id),
     source_system: 'gov_supabase',
-    owner_name: data.recorded_owner_name,
-    true_owner_name: data.true_owner_name,
-    notes: data.research_notes
+    owner_name: recordedOwner,
+    true_owner_name: trueOwner,
+    notes: researchNotes,
+    gov_change_event_id: writeResult?.change_event_id || null,
+    gov_correlation_id: writeResult?.correlation_id || null,
+    source_record_id: propertyId,
+    source_table: 'properties'
   });
+
+  // Ensure canonical entity link exists for this gov property
+  if (propertyId) {
+    canonicalBridge('update_entity', {
+      external_id: String(propertyId),
+      source_system: 'gov_supabase',
+      source_type: 'asset',
+      fields: {
+        name: trueOwner || recordedOwner || null
+      }
+    });
+  }
 
   if (salePrice || capRate) {
     await saveLoanFields(rec);
@@ -1325,39 +1362,59 @@ async function saveLead(rec) {
   const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
   const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
   const quickStatus = q('#res-quick-status')?.value || null;
-  
-  const data = {
+
+  const leadData = {
+    lead_id: rec.lead_id,
+    lease_number: rec.lease_number || null,
     recorded_owner: q('#res-recorded-owner')?.value || null,
     true_owner: q('#res-true-owner')?.value || null,
-    state_of_incorporation: q('#res-incorporation')?.value || null,
-    principal_names: q('#res-principal-names')?.value || null,
     contact_email: q('#res-principal-email')?.value || null,
     contact_phone: q('#res-phone')?.value || null,
-    mailing_address: q('#res-mailing')?.value || null,
-    phone_2: q('#res-phone-2')?.value || null,
-    mailing_address_2: q('#res-mailing-2')?.value || null,
-    rba: parseFloat(q('#res-rba')?.value) || null,
-    land_acres: parseFloat(q('#res-land-acres')?.value) || null,
-    year_renovated: parseInt(q('#res-year-renovated')?.value) || null,
+    contact_mailing: q('#res-mailing')?.value || null,
     research_notes: q('#res-notes')?.value || null,
     research_status: 'completed'
   };
-  
-  if (quickStatus) {
-    data.pipeline_status = quickStatus;
-  }
-  
-  await patchRecord('prospect_leads', 'lead_id', rec.lead_id, data);
 
-  // Bridge to canonical model
+  if (quickStatus) {
+    leadData.pipeline_status = quickStatus;
+  }
+
+  // Use Gov write service for lead research updates
+  let writeResult = null;
+  try {
+    writeResult = await govWriteService('lead-research', leadData);
+  } catch (err) {
+    console.error('Gov lead-research write service error:', err);
+    showToast('Error saving lead via write service: ' + err.message, 'error');
+  }
+
+  // Bridge to canonical model with gov change metadata
   canonicalBridge('complete_research', {
     domain: 'government',
     research_type: 'ownership',
     external_id: String(rec.property_id || rec.lead_id),
     source_system: 'gov_supabase',
     outcome: quickStatus === 'not_applicable' ? 'not_applicable' : 'completed',
-    notes: data.research_notes
+    notes: leadData.research_notes,
+    gov_change_event_id: writeResult?.change_event_id || null,
+    gov_correlation_id: writeResult?.correlation_id || null,
+    source_record_id: rec.lead_id,
+    source_table: 'prospect_leads'
   });
+
+  // Ensure canonical entity link exists for this gov lead
+  if (rec.lead_id) {
+    canonicalBridge('update_entity', {
+      external_id: String(rec.lead_id),
+      source_system: 'gov_supabase',
+      source_type: 'lead',
+      fields: {
+        name: leadData.true_owner || leadData.recorded_owner || null,
+        email: leadData.contact_email || null,
+        phone: leadData.contact_phone || null
+      }
+    });
+  }
 
   if (salePrice || capRate) {
     await saveLoanFields(rec);
@@ -1365,23 +1422,19 @@ async function saveLead(rec) {
 }
 
 async function patchRecord(table, idCol, idVal, data) {
-  // Use proxy endpoint instead of direct Supabase connection
-  const url = new URL('/api/gov-query', window.location.origin);
-  url.searchParams.set('table', table);
-  url.searchParams.set('filter', `${idCol}=eq.${idVal}`);
-
+  // Route through closed-loop mutation service with fallback to direct PATCH
   try {
-    const response = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/gov-query',
+      table,
+      idColumn: idCol,
+      idValue: idVal,
+      data,
+      source_surface: 'gov_workspace'
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`PATCH error: ${response.status}`, errText);
+    if (!result.ok) {
+      console.error(`patchRecord error: ${(result.errors || []).join(', ')}`);
       showToast('Error saving data', 'error');
       return false;
     }
@@ -1449,11 +1502,23 @@ async function researchMark(mark) {
   if (mark === 'spe_rename') status = 'spe_rename';
   if (mark === 'na') status = 'not_applicable';
 
-  const table = researchMode === 'ownership' ? 'ownership_history' : 'prospect_leads';
-  const idCol = researchMode === 'ownership' ? 'ownership_id' : 'lead_id';
-
-  const ok = await patchRecord(table, idCol, rec[idCol], { research_status: status });
-  if (!ok) return; // patchRecord already shows toast on error
+  if (researchMode === 'ownership') {
+    // ownership_history is not write-service-protected — patch directly
+    const ok = await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, { research_status: status });
+    if (!ok) return;
+  } else {
+    // prospect_leads must use Gov write service
+    try {
+      await govWriteService('lead-research', {
+        lead_id: rec.lead_id,
+        research_status: status
+      });
+    } catch (err) {
+      console.error('Error marking lead via write service:', err);
+      showToast('Error saving: ' + err.message, 'error');
+      return;
+    }
+  }
 
   researchIdx++;
   renderGovTab();
@@ -2754,30 +2819,40 @@ function createDetailRow(label, value) {
 
 /**
  * Save changes to a gov lead record
- * Updates pipeline_status, research_status, and research_notes
+ * Updates pipeline_status, research_status, and research_notes via Gov write service
  */
 function saveGovDetailLead(leadId) {
   const pipelineStatus = document.getElementById('govDetailPipeline')?.value;
   const researchStatus = document.getElementById('govDetailResearch')?.value;
   const researchNotes = document.getElementById('govDetailNotes')?.value;
-  
+
   if (!pipelineStatus || !researchStatus) {
     showToast('Please select pipeline and research status');
     return;
   }
-  
-  const data = {
+
+  // Use Gov write service instead of direct prospect_leads PATCH
+  govWriteService('lead-research', {
+    lead_id: leadId,
     pipeline_status: pipelineStatus,
     research_status: researchStatus,
     research_notes: researchNotes || null
-  };
-  
-  // Patch the prospect_leads table — args: table, idCol, idVal, data
-  patchRecord('prospect_leads', 'lead_id', leadId, data)
-    .then((ok) => {
-      if (ok !== false) {
-        showToast('Lead updated successfully', 'success');
-      }
+  })
+    .then((writeResult) => {
+      showToast('Lead updated successfully', 'success');
+      // Bridge with gov change metadata
+      canonicalBridge('complete_research', {
+        domain: 'government',
+        research_type: 'ownership',
+        external_id: String(leadId),
+        source_system: 'gov_supabase',
+        outcome: researchStatus === 'complete' ? 'completed' : researchStatus,
+        notes: researchNotes,
+        gov_change_event_id: writeResult?.change_event_id || null,
+        gov_correlation_id: writeResult?.correlation_id || null,
+        source_record_id: leadId,
+        source_table: 'prospect_leads'
+      });
     })
     .catch(err => {
       console.error('Error saving lead:', err);
