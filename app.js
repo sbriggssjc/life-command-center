@@ -1865,7 +1865,7 @@ async function loadMarket() {
     document.getElementById('mktTreasuryChg').innerHTML = '<div class="widget-error"><div class="err-msg">Market data unavailable</div><button class="retry-btn" onclick="loadMarket()">Retry</button></div>';
   }
   // Load chart after market data
-  loadYieldChart('5D');
+  loadYieldChart('1D');
 }
 
 function yearsForRange(range) {
@@ -1893,17 +1893,19 @@ async function fetchYieldHistory(numYears) {
 
 function filterByRange(data, range) {
   if (!data.length) return data;
+  // 1D: show last 10 trading days for context (Treasury only has daily closes)
+  if (range === '1D') return data.slice(-10);
   const now = new Date();
   let cutoff;
   switch (range) {
-    case '5D': cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 7); break; // 7 calendar = ~5 trading
+    case '5D': cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 10); break; // 10 calendar ≈ 5-7 trading
     case '1M': cutoff = new Date(now); cutoff.setMonth(cutoff.getMonth() - 1); break;
     case '3M': cutoff = new Date(now); cutoff.setMonth(cutoff.getMonth() - 3); break;
     case '6M': cutoff = new Date(now); cutoff.setMonth(cutoff.getMonth() - 6); break;
     case 'YTD': cutoff = new Date(now.getFullYear(), 0, 1); break;
     case '1Y': cutoff = new Date(now); cutoff.setFullYear(cutoff.getFullYear() - 1); break;
     case '3Y': cutoff = new Date(now); cutoff.setFullYear(cutoff.getFullYear() - 3); break;
-    default: cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 7);
+    default: return data.slice(-10);
   }
   const cutStr = cutoff.toISOString().split('T')[0];
   return data.filter(d => d.date >= cutStr);
@@ -1934,7 +1936,7 @@ async function loadYieldChart(range) {
 function renderYieldSVG(container, data, range) {
   const W = container.clientWidth || 320;
   const H = container.clientHeight || 160;
-  const pad = { top: 10, right: 10, bottom: 24, left: 42 };
+  const pad = { top: 10, right: 10, bottom: 24, left: 54 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
 
