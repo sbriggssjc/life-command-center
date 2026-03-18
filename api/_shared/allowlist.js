@@ -65,6 +65,9 @@ export const DIA_READ_TABLES = new Set([
   'v_loans',
   'v_sf_activity_feed',
   'v_marketing_deals',
+  'v_marketing_crm_tasks',
+  'v_opportunity_domain_classified',
+  'salesforce_activities',
   'medicare_clinics',
   'available_listings',
   'marketing_leads',
@@ -99,6 +102,7 @@ export const DIA_WRITE_TABLES = new Set([
   'sales_transactions',
   'loans',
   'v_clinic_property_link_review_queue',
+  'salesforce_activities',
   // RPC calls
   'rpc/upsert_research_outcome',
   'rpc/save_outbound_activity',
