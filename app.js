@@ -886,19 +886,23 @@ async function loadMarketing() {
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
       // Load CRM client rollup + leads first (fast), then opportunities (heavy — may timeout)
-      // Filter server-side by user to avoid loading 12K rows for all users
+      // Build rollup URL directly to handle assigned_to filter with spaces in names
       const userName = LCC_USER.display_name || 'Scott Briggs';
-      const rollupParams = { order: 'last_activity_date.desc.nullslast', limit: 5000 };
+      const rollupUrl = new URL('/api/dia-query', window.location.origin);
+      rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
+      rollupUrl.searchParams.set('select', '*');
+      rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
+      rollupUrl.searchParams.set('limit', '5000');
       if (mktOwner === 'mine') {
-        rollupParams.filter = 'assigned_to=eq.' + userName;
+        rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + userName);
       } else if (mktOwner !== 'all') {
-        rollupParams.filter = 'assigned_to=eq.' + mktOwner;
+        rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + mktOwner);
       }
-      // All Tasks mode: no filter (loads all team, capped at 5000)
-      const [clientRollupRaw, leadsRaw] = await Promise.all([
-        diaQuery('v_crm_client_rollup', '*', rollupParams),
+      const [rollupRes, leadsRaw] = await Promise.all([
+        fetch(rollupUrl.toString()).then(r => r.json()).then(d => d.data || []).catch(() => []),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
+      const clientRollupRaw = rollupRes;
 
       // Load opportunities separately — this is a heavy query that can timeout during initial burst
       let opportunitiesRaw = [];
