@@ -31,6 +31,10 @@
 - Three fresh `git.exe` processes were again present, all started at `2026-03-18 11:15:32` local time.
 - There was no active `MERGE_HEAD`, `REBASE_HEAD`, or related in-progress Git operation metadata at that time.
 - After terminating those processes and removing `.git/HEAD.lock`, the next `git pull --tags origin main` failure in this environment was a network connection error to GitHub, not a ref-lock error.
+- The `HEAD.lock` issue recurred again later on 2026-03-18 during another GUI-driven commit attempt.
+- On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-18 11:30:56` and `LastWriteTime` `2026-03-18 16:51:58` local time.
+- Three fresh `git.exe` processes were again present, all started at `2026-03-18 17:01:54` local time.
+- After terminating those processes and removing `.git/HEAD.lock`, Git again reported `All conflicts fixed but you are still merging.`
 
 ## What This Means
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.
@@ -53,9 +57,9 @@
 ## Latest Status
 - `HEAD.lock` has been removed.
 - Git can now prepare a commit again.
-- Current branch state is `main...origin/main [behind 2]`.
-- Current staged changes are `api/entities.js`, `app.js`, `gov.js`, `styles.css`, and `sw.js`.
-- Current unstaged changes are `app.js` and `sw.js`.
+- Current branch state is `main...origin/main [ahead 1, behind 5]`.
+- Git reports: `All conflicts fixed but you are still merging.`
+- Current staged merge-result changes are `.env.example`, `api/_shared/allowlist.js`, `api/apply-change.js`, `api/bridge.js`, `api/data-proxy.js`, `api/gov-write.js`, `app.js`, `detail.js`, `dialysis.js`, `gov.js`, and `vercel.json`.
 
 ## Likely Cause
 - The repeated command shape matches a GUI-driven Git sync/commit flow rather than a manual CLI command.
