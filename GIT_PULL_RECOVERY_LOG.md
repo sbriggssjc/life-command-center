@@ -26,6 +26,11 @@
 - On this later recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-18 10:29:02` local time.
 - Three fresh `git.exe` processes were again present, all started at `2026-03-18 10:46:35` local time.
 - After terminating those processes and removing `.git/HEAD.lock`, Git reported that the repository is in a merge state with all conflicts already fixed.
+- The `HEAD.lock` issue recurred again during a `git pull --tags origin main` attempt on 2026-03-18.
+- On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-18 11:09:07` local time.
+- Three fresh `git.exe` processes were again present, all started at `2026-03-18 11:15:32` local time.
+- There was no active `MERGE_HEAD`, `REBASE_HEAD`, or related in-progress Git operation metadata at that time.
+- After terminating those processes and removing `.git/HEAD.lock`, the next `git pull --tags origin main` failure in this environment was a network connection error to GitHub, not a ref-lock error.
 
 ## What This Means
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.
@@ -34,6 +39,8 @@
 - The remaining sync blocker is now branch divergence plus local staged/unstaged changes, not the `HEAD.lock` error itself.
 - The recurring lock strongly suggests an external Git client is repeatedly starting a commit/sync flow and leaving orphaned `git.exe` processes behind.
 - The current Git client is likely trying to create the merge commit and getting interrupted or orphaned before it can finish, which explains why the same `HEAD.lock` error keeps returning on a commit command.
+- Even when the lock is cleared, a pull cannot be completed cleanly until local staged/unstaged work is either committed or stashed.
+- In this Codex environment, outbound GitHub access is also currently blocked, so pull verification from here is limited without escalation.
 
 ## Safe Recovery Path
 1. End any stuck Git/editor process that is holding the repository lock.
@@ -46,9 +53,9 @@
 ## Latest Status
 - `HEAD.lock` has been removed.
 - Git can now prepare a commit again.
-- Current branch state is `main...origin/main [ahead 1, behind 2]`.
-- Git reports: `All conflicts fixed but you are still merging.`
-- Current staged merge-result changes are `app.js`, `dialysis.js`, `gov.js`, `index.html`, and `sql/20260318_opportunity_domain_classification.sql`.
+- Current branch state is `main...origin/main [behind 2]`.
+- Current staged changes are `api/entities.js`, `app.js`, `gov.js`, `styles.css`, and `sw.js`.
+- Current unstaged changes are `app.js` and `sw.js`.
 
 ## Likely Cause
 - The repeated command shape matches a GUI-driven Git sync/commit flow rather than a manual CLI command.
