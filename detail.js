@@ -318,24 +318,25 @@ async function _udSubmitDismiss() {
       return;
     }
 
-    // 2. Update property record if we have a property_id and any property data was entered
+    // 2. Update property record via mutation service if we have a property_id and any property data
     if (propertyId && (rba || occupancy || trueOwner)) {
-      const propUrl = new URL('/api/dia-query', window.location.origin);
-      propUrl.searchParams.set('table', 'properties');
-      propUrl.searchParams.set('filter', `property_id=eq.${propertyId}`);
       const propPayload = {};
       if (rba) propPayload.building_sf = parseInt(rba);
       if (occupancy === 'multi') propPayload.is_single_tenant = false;
       if (occupancy === 'single') propPayload.is_single_tenant = true;
       if (trueOwner) propPayload.tenant = trueOwner; // tenant field used for owner display
 
-      const propRes = await fetch(propUrl.toString(), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(propPayload)
+      const propResult = await applyChangeWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'properties',
+        idColumn: 'property_id',
+        idValue: propertyId,
+        data: propPayload,
+        source_surface: 'clinic_workspace',
+        notes: 'Property update during lead dismiss'
       });
-      if (!propRes.ok) {
-        console.warn('Property update warning:', await propRes.text());
+      if (!propResult.ok) {
+        console.warn('Property update warning:', (propResult.errors || []).join(', '));
         // Non-fatal — the lead is still dismissed
       }
     }
@@ -1944,16 +1945,16 @@ async function _udSaveOwnership() {
       };
       
       if (recordedOwnerId) {
-        // PATCH existing
-        const url = new URL(proxyBase, window.location.origin);
-        url.searchParams.set('table', 'recorded_owners');
-        url.searchParams.set('filter', `recorded_owner_id=eq.${recordedOwnerId}`);
-        const res = await fetch(url.toString(), { 
-          method: 'PATCH', 
-          headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify(recordedOwnerPayload) 
+        // PATCH existing via mutation service
+        const patchResult = await applyChangeWithFallback({
+          proxyBase,
+          table: 'recorded_owners',
+          idColumn: 'recorded_owner_id',
+          idValue: recordedOwnerId,
+          data: recordedOwnerPayload,
+          source_surface: 'clinic_workspace'
         });
-        if (!res.ok) console.error('Error patching recorded_owner:', res.status);
+        if (!patchResult.ok) console.error('Error patching recorded_owner:', (patchResult.errors || []).join(', '));
       } else {
         // INSERT new
         const url = new URL(proxyBase, window.location.origin);
@@ -1982,16 +1983,16 @@ async function _udSaveOwnership() {
       };
       
       if (trueOwnerId) {
-        // PATCH existing
-        const url = new URL(proxyBase, window.location.origin);
-        url.searchParams.set('table', 'true_owners');
-        url.searchParams.set('filter', `true_owner_id=eq.${trueOwnerId}`);
-        const res = await fetch(url.toString(), { 
-          method: 'PATCH', 
-          headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify(trueOwnerPayload) 
+        // PATCH existing via mutation service
+        const patchResult = await applyChangeWithFallback({
+          proxyBase,
+          table: 'true_owners',
+          idColumn: 'true_owner_id',
+          idValue: trueOwnerId,
+          data: trueOwnerPayload,
+          source_surface: 'clinic_workspace'
         });
-        if (!res.ok) console.error('Error patching true_owner:', res.status);
+        if (!patchResult.ok) console.error('Error patching true_owner:', (patchResult.errors || []).join(', '));
       } else {
         // INSERT new
         const url = new URL(proxyBase, window.location.origin);
@@ -2020,16 +2021,16 @@ async function _udSaveOwnership() {
       };
       
       if (contactId) {
-        // PATCH existing
-        const url = new URL(proxyBase, window.location.origin);
-        url.searchParams.set('table', 'contacts');
-        url.searchParams.set('filter', `contact_id=eq.${contactId}`);
-        const res = await fetch(url.toString(), { 
-          method: 'PATCH', 
-          headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify(contactPayload) 
+        // PATCH existing via mutation service
+        const patchResult = await applyChangeWithFallback({
+          proxyBase,
+          table: 'contacts',
+          idColumn: 'contact_id',
+          idValue: contactId,
+          data: contactPayload,
+          source_surface: 'clinic_workspace'
         });
-        if (!res.ok) console.error('Error patching contact:', res.status);
+        if (!patchResult.ok) console.error('Error patching contact:', (patchResult.errors || []).join(', '));
       } else {
         // INSERT new
         const url = new URL(proxyBase, window.location.origin);
@@ -2048,21 +2049,22 @@ async function _udSaveOwnership() {
       }
     }
 
-    // 4. PATCH properties to link the owner IDs
+    // 4. PATCH properties to link the owner IDs via mutation service
     if (recordedOwnerId || trueOwnerId) {
       const propertyPayload = {};
       if (recordedOwnerId) propertyPayload.recorded_owner_id = recordedOwnerId;
       if (trueOwnerId) propertyPayload.true_owner_id = trueOwnerId;
-      
-      const url = new URL(proxyBase, window.location.origin);
-      url.searchParams.set('table', 'properties');
-      url.searchParams.set('filter', `property_id=eq.${propertyId}`);
-      const res = await fetch(url.toString(), { 
-        method: 'PATCH', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify(propertyPayload) 
+
+      const propResult = await applyChangeWithFallback({
+        proxyBase,
+        table: 'properties',
+        idColumn: 'property_id',
+        idValue: propertyId,
+        data: propertyPayload,
+        source_surface: 'clinic_workspace',
+        notes: 'Ownership resolution — linking owner IDs'
       });
-      if (!res.ok) console.error('Error patching property owner links:', res.status);
+      if (!propResult.ok) console.error('Error patching property owner links:', (propResult.errors || []).join(', '));
     }
 
     // 5. Save to research_queue_outcomes as a log entry
@@ -2235,19 +2237,20 @@ async function _intelSaveCashFlow() {
   const currentCapRate = document.getElementById('intelCurrentCapRate')?.value || null;
 
   try {
-    const url = new URL(proxyBase, window.location.origin);
-    url.searchParams.set('table', 'properties');
-    url.searchParams.set('filter', `property_id=eq.${propertyId}`);
     const payload = {
       last_known_rent: annualRent ? parseFloat(annualRent) : null,
       current_value_estimate: estValue ? parseFloat(estValue) : null
     };
-    const res = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const result = await applyChangeWithFallback({
+      proxyBase,
+      table: 'properties',
+      idColumn: 'property_id',
+      idValue: propertyId,
+      data: payload,
+      source_surface: 'clinic_workspace',
+      notes: 'Cash flow / valuation update'
     });
-    if (!res.ok) { const err = await res.text(); console.error('Cash flow update error:', err); showToast('Error saving cash flow: ' + res.status, 'error'); return; }
+    if (!result.ok) { console.error('Cash flow update error:', (result.errors || []).join(', ')); showToast('Error saving cash flow', 'error'); return; }
     showToast('Cash flow / valuation saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Cash flow estimate saved',
