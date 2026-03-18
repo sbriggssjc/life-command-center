@@ -241,6 +241,16 @@ function renderDiaTab() {
     case 'research':
       inner.innerHTML = renderDiaResearch();
       break;
+    case 'prospects':
+      // Render dialysis-domain prospects from domain-classified opportunities
+      if (typeof renderDomainProspects === 'function' && window._mktOpportunities) {
+        renderDomainProspects('dialysis');
+      } else {
+        inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)">Loading prospects... (Marketing data not yet loaded)</div>';
+        // Trigger marketing load if not done
+        if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('dialysis'));
+      }
+      return;
     case 'activity':
       inner.innerHTML = renderDiaActivity();
       break;

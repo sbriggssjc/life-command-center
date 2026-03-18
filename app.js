@@ -454,7 +454,7 @@ function renderDiaSales(){return '<div style="color:var(--text2)">Loading dia sa
 function renderDiaPlayers(){return '<div style="color:var(--text2)">Loading dia players...</div>';}
 function renderDiaLeases(){return '<div style="color:var(--text2)">Loading dia leases...</div>';}
 function renderDiaLoans(){return '<div style="color:var(--text2)">Loading dia loans...</div>';}
-function renderProspects(){return '<div style="color:var(--text2)">Loading prospects...</div>';}
+// renderProspects — defined below in PROSPECTS section
 function renderGovTab(){
   const el=document.getElementById('bizPageInner');
   if(!el)return;
@@ -573,6 +573,13 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
         loadDiaData();
       }
     }
+  } else if (currentBizTab === 'other') {
+    // All Other tab — show domain prospects if loaded, else activity stream
+    if (_mktOpportunitiesLoaded && window._mktOpportunities.all_other.length > 0) {
+      renderDomainProspects('all_other');
+    } else {
+      renderBizContent();
+    }
   } else {
     renderBizContent();
   }
@@ -595,6 +602,13 @@ document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   currentDiaTab = tab.dataset.diaTab;
   if (currentDiaTab === 'activity') {
     renderBizContent();
+  } else if (currentDiaTab === 'prospects') {
+    // Prospects tab uses marketing data, not dia data
+    if (_mktOpportunitiesLoaded) {
+      renderDomainProspects('dialysis');
+    } else if (typeof loadMarketing === 'function') {
+      loadMarketing().then(() => renderDomainProspects('dialysis'));
+    }
   } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
     renderDiaTab();
   } else {
@@ -707,6 +721,11 @@ function renderBizContent() {
     const el = document.getElementById('bizPageInner');
     if (el) el.innerHTML = renderProspects();
     setTimeout(() => { if (typeof initProspectsSearch === 'function') initProspectsSearch(); }, 0);
+    return;
+  }
+  // If "other" tab and prospects loaded, show domain prospects
+  if (currentBizTab === 'other' && _mktOpportunitiesLoaded && window._mktOpportunities.all_other.length > 0) {
+    renderDomainProspects('all_other');
     return;
   }
   // If government tab, route to gov.js
@@ -829,10 +848,10 @@ function renderBizSubset(subset) {
 }
 
 // ============================================================
-// MARKETING — Unified Pipeline (SF Deals + Inbound Leads)
+// MARKETING — CRM Activity Hub + Domain-Classified Prospects
 // ============================================================
 
-let mktData = [];
+let mktData = [];              // CRM tasks (non-opportunity activities + leads)
 let mktLoaded = false;
 let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
@@ -844,21 +863,40 @@ let mktExpandedDeal = null;    // deal name currently expanded to show call hist
 const MKT_PAGE = 20;
 let mktSearchTimeout;
 
+// Domain-classified opportunities stored globally for domain tabs
+window._mktOpportunities = { government: [], dialysis: [], all_other: [] };
+let _mktOpportunitiesLoaded = false;
+
+// Prospect tab state per domain
+let prospectPage = { government: 0, dialysis: 0, all_other: 0 };
+let prospectOwner = { government: 'mine', dialysis: 'mine', all_other: 'mine' };
+let prospectFilter = { government: 'all', dialysis: 'all', all_other: 'all' };
+let prospectSearch = { government: '', dialysis: '', all_other: '' };
+let prospectSearchTimeout;
+const PROSPECT_PAGE = 20;
+
 async function loadMarketing() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
 
   if (!mktLoaded) {
-    el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading marketing pipeline...</p></div>';
+    el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CRM activity hub...</p></div>';
     try {
-      // Split query: fetch v_marketing_deals and marketing_leads separately
-      // to avoid v_marketing_pipeline UNION ALL + ORDER BY timeout
-      const [dealsRaw, leadsRaw] = await Promise.all([
-        diaQuery('v_marketing_deals', '*', { order: 'activity_date.desc.nullslast', limit: 1000 }),
+      // Fetch domain-classified opportunities (for routing to domain tabs)
+      // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
+      // Fetch inbound leads
+      const [opportunitiesRaw, crmTasksRaw, leadsRaw] = await Promise.all([
+        diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 }),
+        diaQuery('salesforce_activities', '*', {
+          filter: 'status=eq.Open,nm_type=neq.Opportunity',
+          order: 'activity_date.asc.nullslast',
+          limit: 500
+        }),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
-      // Normalize deals to pipeline schema
-      const deals = (dealsRaw || []).map(d => ({
+
+      // Store domain-classified opportunities globally for domain tabs
+      const opps = (opportunitiesRaw || []).map(d => ({
         pipeline_source: 'sf_deal',
         item_id: String(d.activity_id || ''),
         deal_name: d.deal_name,
@@ -880,8 +918,45 @@ async function loadMarketing() {
         lead_source: null,
         sf_match_status: null,
         touchpoint_count: null,
-        ingested_at: d.created_at
+        ingested_at: d.created_at,
+        domain: d.domain,
+        prospect_domain: d.prospect_domain
       }));
+      window._mktOpportunities = {
+        government: opps.filter(d => d.domain === 'government'),
+        dialysis: opps.filter(d => d.domain === 'dialysis'),
+        all_other: opps.filter(d => d.domain === 'all_other')
+      };
+      _mktOpportunitiesLoaded = true;
+
+      // Normalize CRM tasks to pipeline schema
+      const tasks = (crmTasksRaw || []).map(d => ({
+        pipeline_source: 'sf_deal',
+        item_id: String(d.activity_id || ''),
+        deal_name: d.subject || '(No subject)',
+        deal_display_name: d.subject || '(No subject)',
+        deal_priority: null,
+        contact_name: [d.first_name, d.last_name].filter(Boolean).join(' ') || '',
+        first_name: d.first_name,
+        last_name: d.last_name,
+        company_name: d.company_name,
+        email: d.email,
+        phone: d.phone,
+        sf_contact_id: d.sf_contact_id,
+        sf_company_id: d.sf_company_id,
+        due_date: d.activity_date,
+        notes: d.nm_notes,
+        status: d.status,
+        assigned_to: d.assigned_to,
+        activity_type: d.nm_type || d.task_subtype || 'Task',
+        lead_source: null,
+        sf_match_status: null,
+        touchpoint_count: null,
+        ingested_at: d.created_at,
+        nm_type: d.nm_type,
+        task_subtype: d.task_subtype
+      }));
+
       // Normalize leads to pipeline schema
       const leads = (leadsRaw || []).map(l => ({
         pipeline_source: l.source,
@@ -906,16 +981,24 @@ async function loadMarketing() {
         touchpoint_count: l.touchpoint_count,
         ingested_at: l.ingested_at
       }));
-      // Merge and sort by due_date desc (nulls last)
-      mktData = [...deals, ...leads].sort((a, b) => {
+
+      // Marketing tab only renders CRM tasks + leads (NOT opportunities)
+      mktData = [...tasks, ...leads].sort((a, b) => {
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
-        return b.due_date.localeCompare(a.due_date);
+        return a.due_date.localeCompare(b.due_date); // ASC for tasks — soonest first
       });
       mktLoaded = true;
+
+      // Badge: actionable CRM tasks due (calls due today + overdue follow-ups)
+      const today = new Date().toISOString().split('T')[0];
+      const actionableCount = mktData.filter(d => d.pipeline_source === 'sf_deal' && d.due_date && d.due_date <= today).length;
       const badge = document.getElementById('bizBadgeMkt');
-      if (badge) badge.textContent = mktData.length;
+      if (badge) badge.textContent = actionableCount || mktData.length;
+      // Update All Other badge with prospect count
+      const otherBadge = document.getElementById('bizBadgeOther');
+      if (otherBadge) otherBadge.textContent = window._mktOpportunities.all_other.length || '—';
     } catch (e) {
       console.error('Marketing load error:', e);
       el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading marketing pipeline.</div>';
@@ -978,35 +1061,41 @@ function renderMarketing() {
   mktData.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
   const owners = Array.from(ownerSet).sort();
 
-  // Stats from owner-filtered dataset (not full — so stats reflect the view)
+  // Stats from owner-filtered dataset
   const ownerFiltered = mktOwner === 'all' ? mktData : mktOwner === 'mine' ? mktData.filter(d => d.assigned_to === userName) : mktData.filter(d => d.assigned_to === mktOwner);
-  const sfDeals = ownerFiltered.filter(d => d.pipeline_source === 'sf_deal');
+  const crmTasks = ownerFiltered.filter(d => d.pipeline_source === 'sf_deal');
   const inboundLeads = ownerFiltered.filter(d => d.pipeline_source !== 'sf_deal');
+  const callsDueToday = crmTasks.filter(d => d.due_date === today).length;
   const overdue = ownerFiltered.filter(d => d.due_date && d.due_date < today).length;
   const unmatched = inboundLeads.filter(d => d.sf_match_status === 'unmatched').length;
-  const totalDeals = new Set(sfDeals.map(d => d.deal_name)).size;
+
+  // Domain prospect counts for quick reference
+  const govCount = window._mktOpportunities.government.length;
+  const diaCount = window._mktOpportunities.dialysis.length;
+  const otherCount = window._mktOpportunities.all_other.length;
 
   let html = '';
 
-  // Owner toggle (My Deals / All Deals / Assign)
+  // Header
+  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">CRM Activity Hub</h3><div style="font-size:12px;color:var(--text3)">Calls, follow-ups & tasks — Opportunities routed to domain Prospects tabs</div></div>';
+
+  // Owner toggle (My Tasks / All Tasks)
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
-  html += `<span class="pill ${mktOwner==='mine'?'active':''}" onclick="mktOwner='mine';mktPage=0;renderMarketing()">My Deals</span>`;
-  html += `<span class="pill ${mktOwner==='all'?'active':''}" onclick="mktOwner='all';mktPage=0;renderMarketing()">All Deals</span>`;
+  html += `<span class="pill ${mktOwner==='mine'?'active':''}" onclick="mktOwner='mine';mktPage=0;renderMarketing()">My Tasks</span>`;
+  html += `<span class="pill ${mktOwner==='all'?'active':''}" onclick="mktOwner='all';mktPage=0;renderMarketing()">All Tasks</span>`;
   html += '<select style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px" onchange="mktOwner=this.value;mktPage=0;renderMarketing()">';
-  html += `<option value="mine" ${mktOwner==='mine'?'selected':''}>My Deals</option>`;
+  html += `<option value="mine" ${mktOwner==='mine'?'selected':''}>My Tasks</option>`;
   html += `<option value="all" ${mktOwner==='all'?'selected':''}>All Team</option>`;
   owners.forEach(o => { html += `<option value="${esc(o)}" ${mktOwner===o?'selected':''}>${esc(o)}</option>`; });
   html += '</select>';
   html += '</div>';
 
-  // Metrics row
+  // Metrics row — CRM focused
   html += '<div class="widget-grid">';
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='sf_deal';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">SF Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${sfDeals.length} contacts</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='all';mktSource='sf_deal';mktPage=0;renderMarketing()"><div class="stat-label">Calls Due Today</div><div class="stat-value" style="color:var(--accent)">${callsDueToday}</div><div class="stat-sub">CRM tasks</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="mktFilter='overdue';mktSource='all';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
   html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='leads';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Inbound Leads</div><div class="stat-value" style="color:var(--purple)">${inboundLeads.length}</div><div class="stat-sub">${unmatched ? unmatched + ' unmatched' : 'All matched'}</div></div>`;
-  const overduePct = ownerFiltered.length > 0 ? Math.round((overdue / ownerFiltered.length) * 100) : 0;
-  const overdueSub = overduePct > 80 ? 'Likely stale dates' : 'Past due date';
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='overdue';mktPage=0;renderMarketing()"><div class="stat-label">Overdue</div><div class="stat-value" style="color:${overduePct > 80 ? 'var(--yellow)' : 'var(--red)'}">${overdue}</div><div class="stat-sub">${overdueSub}</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="mktSource='all';mktFilter='all';mktPage=0;renderMarketing()"><div class="stat-label">Total Pipeline</div><div class="stat-value" style="color:var(--green)">${ownerFiltered.length}</div><div class="stat-sub">All sources</div></div>`;
+  html += `<div class="stat-card"><div class="stat-label">Prospects</div><div class="stat-value" style="color:var(--green)">${govCount + diaCount + otherCount}</div><div class="stat-sub">Gov ${govCount} · Dia ${diaCount} · Other ${otherCount}</div></div>`;
   html += '</div>';
 
   // Source tabs
@@ -1014,7 +1103,7 @@ function renderMarketing() {
   ownerFiltered.forEach(d => { srcCounts[d.pipeline_source] = (srcCounts[d.pipeline_source] || 0) + 1; });
   html += '<div class="pills" style="margin-bottom:4px">';
   html += `<span class="pill ${mktSource==='all'?'active':''}" onclick="mktSource='all';mktPage=0;renderMarketing()">All <span class="pill-ct">${ownerFiltered.length}</span></span>`;
-  html += `<span class="pill ${mktSource==='sf_deal'?'active':''}" onclick="mktSource='sf_deal';mktPage=0;renderMarketing()">SF Deals <span class="pill-ct">${srcCounts['sf_deal']||0}</span></span>`;
+  html += `<span class="pill ${mktSource==='sf_deal'?'active':''}" onclick="mktSource='sf_deal';mktPage=0;renderMarketing()">CRM Tasks <span class="pill-ct">${srcCounts['sf_deal']||0}</span></span>`;
   if (srcCounts['rcm']) html += `<span class="pill ${mktSource==='rcm'?'active':''}" onclick="mktSource='rcm';mktPage=0;renderMarketing()">RCM <span class="pill-ct">${srcCounts['rcm']}</span></span>`;
   if (srcCounts['crexi']) html += `<span class="pill ${mktSource==='crexi'?'active':''}" onclick="mktSource='crexi';mktPage=0;renderMarketing()">CREXi <span class="pill-ct">${srcCounts['crexi']}</span></span>`;
   if (srcCounts['loopnet']) html += `<span class="pill ${mktSource==='loopnet'?'active':''}" onclick="mktSource='loopnet';mktPage=0;renderMarketing()">LoopNet <span class="pill-ct">${srcCounts['loopnet']}</span></span>`;
@@ -1032,15 +1121,40 @@ function renderMarketing() {
   html += '</div>';
 
   // Search
-  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search deals, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
+  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search tasks, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
 
-  // Paginated list
-  const start = mktPage * MKT_PAGE;
-  const pageItems = filtered.slice(start, start + MKT_PAGE);
-  const totalPages = Math.ceil(filtered.length / MKT_PAGE);
+  // Render cards using the shared function
+  html += renderProspectCardsHTML(filtered, { showDomainDropdown: false, showReassign: true, showEmailTemplates: true, showCallHistory: true, page: mktPage, pageSize: MKT_PAGE, pagerFn: 'mktPage', renderFn: 'renderMarketing' });
 
-  if (filtered.length === 0) {
+  el.innerHTML = html;
+}
+
+// ============================================================
+// SHARED PROSPECT CARD RENDERING
+// ============================================================
+
+/**
+ * Render deal-grouped prospect/task cards as HTML string.
+ * Used by Marketing CRM hub, Dialysis Prospects, Government Pipeline, All Other Prospects.
+ */
+function renderProspectCardsHTML(items, options = {}) {
+  const { showDomainDropdown = false, showReassign = true, showEmailTemplates = true, showCallHistory = true, page = 0, pageSize = 20, pagerFn, renderFn, domain } = options;
+  const today = new Date().toISOString().split('T')[0];
+
+  // Collect owners for reassign dropdown
+  const ownerSet = new Set();
+  items.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
+  const owners = Array.from(ownerSet).sort();
+
+  const start = page * pageSize;
+  const pageItems = items.slice(start, start + pageSize);
+  const totalPages = Math.ceil(items.length / pageSize);
+
+  let html = '';
+
+  if (items.length === 0) {
     html += '<div style="text-align:center;padding:32px;color:var(--text2)">No items match your filters.</div>';
+    return html;
   }
 
   // Group by deal for display
@@ -1070,11 +1184,23 @@ function renderMarketing() {
     html += `<div style="font-size:15px;font-weight:600;display:flex;align-items:center;flex-wrap:wrap;gap:4px">${priorityBadge}${isStarred ? '<span style="color:var(--yellow);margin-right:4px">&#9733;</span>' : ''}${esc(group.displayName)}${dueBadge}${sourceBadge}${matchBadge}</div>`;
     html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">Due: ${esc(first.due_date || '—')} · ${contacts.length} contact${contacts.length > 1 ? 's' : ''}${first.assigned_to ? ' · <span style="color:var(--accent)">' + esc(first.assigned_to) + '</span>' : ''}${isLead && first.activity_type ? ' · ' + esc(cleanLabel(first.activity_type)) : ''}</div>`;
     html += '</div>';
-    // Reassign dropdown
-    html += '<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;flex-shrink:0;margin-left:8px" title="Reassign deal" onchange="mktReassignDeal(\'' + esc(first.item_id) + '\',this.value,\'' + esc(first.sf_contact_id || '') + '\')">';
-    html += `<option value="">Assign to...</option>`;
-    owners.forEach(o => { html += `<option value="${esc(o)}" ${first.assigned_to===o?'selected':''}>${esc(o)}</option>`; });
-    html += '</select>';
+    // Reassign dropdown + domain dropdown
+    html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
+    if (showDomainDropdown) {
+      const curDomain = first.domain || 'all_other';
+      html += `<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px" title="Reclassify domain" onchange="mktReclassifyDeal('${esc(first.item_id)}',this.value)">`;
+      html += `<option value="government" ${curDomain==='government'?'selected':''}>Government</option>`;
+      html += `<option value="dialysis" ${curDomain==='dialysis'?'selected':''}>Dialysis</option>`;
+      html += `<option value="all_other" ${curDomain==='all_other'?'selected':''}>All Other</option>`;
+      html += '</select>';
+    }
+    if (showReassign) {
+      html += '<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px" title="Reassign deal" onchange="mktReassignDeal(\'' + esc(first.item_id) + '\',this.value,\'' + esc(first.sf_contact_id || '') + '\')">';
+      html += `<option value="">Assign to...</option>`;
+      owners.forEach(o => { html += `<option value="${esc(o)}" ${first.assigned_to===o?'selected':''}>${esc(o)}</option>`; });
+      html += '</select>';
+    }
+    html += '</div>';
     html += '</div>';
 
     // Contact rows
@@ -1100,7 +1226,7 @@ function renderMarketing() {
 
       // Action buttons
       html += `<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end">`;
-      if (c.email) {
+      if (showEmailTemplates && c.email) {
         html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
         html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Initial Outreach</div>`;
@@ -1113,7 +1239,7 @@ function renderMarketing() {
         html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()">&#x1F4DE;</a>`;
       }
       html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
-      if (c.sf_contact_id) {
+      if (showCallHistory && c.sf_contact_id) {
         html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleCallHistory('${esc(c.sf_contact_id)}','${esc(c.contact_name||'')}',this)">History</button>`;
       }
       // Lead management buttons
@@ -1125,7 +1251,7 @@ function renderMarketing() {
       }
       html += '</div></div>';
       // Call history expansion area (hidden by default)
-      if (c.sf_contact_id) {
+      if (showCallHistory && c.sf_contact_id) {
         html += `<div id="callhist-${esc(c.sf_contact_id)}" style="display:none;padding:6px 0 6px 20px;font-size:12px;color:var(--text2);border-top:1px dashed var(--border)"></div>`;
       }
     });
@@ -1134,11 +1260,114 @@ function renderMarketing() {
   });
 
   // Pager
-  if (totalPages > 1) {
-    html += `<div class="pager"><button onclick="mktPage--;renderMarketing()" ${mktPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${mktPage+1} of ${totalPages} · ${filtered.length} results</span><button onclick="mktPage++;renderMarketing()" ${mktPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
+  if (totalPages > 1 && pagerFn && renderFn) {
+    html += `<div class="pager"><button onclick="${pagerFn}--;${renderFn}()" ${page===0?'disabled':''}>&#x2190; Prev</button><span>Page ${page+1} of ${totalPages} · ${items.length} results</span><button onclick="${pagerFn}++;${renderFn}()" ${page>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
   }
 
-  el.innerHTML = html;
+  return html;
+}
+
+// ============================================================
+// DOMAIN PROSPECT RENDERING (shared by Dialysis, Gov, All Other)
+// ============================================================
+
+/**
+ * Render a full prospect subtab for a given domain.
+ * Called by dialysis.js, gov.js, and the All Other section.
+ */
+function renderDomainProspects(domain, containerId) {
+  const el = containerId ? document.getElementById(containerId) : document.getElementById('bizPageInner');
+  if (!el) return '';
+
+  const today = new Date().toISOString().split('T')[0];
+  const userName = LCC_USER.display_name || 'Scott Briggs';
+  const prospects = window._mktOpportunities[domain] || [];
+
+  // Apply filters
+  let filtered = prospects;
+  if (prospectOwner[domain] === 'mine') {
+    filtered = filtered.filter(d => d.assigned_to === userName);
+  } else if (prospectOwner[domain] !== 'all') {
+    filtered = filtered.filter(d => d.assigned_to === prospectOwner[domain]);
+  }
+
+  if (prospectFilter[domain] === 'upcoming') {
+    filtered = filtered.filter(d => d.due_date && d.due_date >= today);
+  } else if (prospectFilter[domain] === 'overdue') {
+    filtered = filtered.filter(d => d.due_date && d.due_date < today);
+  } else if (prospectFilter[domain] === 'starred') {
+    filtered = filtered.filter(d => d.deal_name && d.deal_name.startsWith('****'));
+  }
+
+  if (prospectSearch[domain]) {
+    const q = prospectSearch[domain].toLowerCase();
+    filtered = filtered.filter(d =>
+      (d.deal_display_name || '').toLowerCase().includes(q) ||
+      (d.contact_name || '').toLowerCase().includes(q) ||
+      (d.company_name || '').toLowerCase().includes(q) ||
+      (d.email || '').toLowerCase().includes(q)
+    );
+  }
+
+  // Collect owners
+  const ownerSet = new Set();
+  prospects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
+  const owners = Array.from(ownerSet).sort();
+  const overdue = prospects.filter(d => d.due_date && d.due_date < today).length;
+  const totalDeals = new Set(prospects.map(d => d.deal_name)).size;
+  const domainLabel = domain === 'government' ? 'Government' : domain === 'dialysis' ? 'Dialysis' : 'All Other';
+  const renderCall = `renderDomainProspects('${domain}')`;
+
+  let html = '';
+  html += `<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">${domainLabel} Prospects</h3><div style="font-size:12px;color:var(--text3)">${totalDeals} deals · ${prospects.length} contacts</div></div>`;
+
+  // Owner toggle
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
+  html += `<span class="pill ${prospectOwner[domain]==='mine'?'active':''}" onclick="prospectOwner['${domain}']='mine';prospectPage['${domain}']=0;${renderCall}">My Deals</span>`;
+  html += `<span class="pill ${prospectOwner[domain]==='all'?'active':''}" onclick="prospectOwner['${domain}']='all';prospectPage['${domain}']=0;${renderCall}">All Deals</span>`;
+  html += `<select style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px" onchange="prospectOwner['${domain}']=this.value;prospectPage['${domain}']=0;${renderCall}">`;
+  html += `<option value="mine" ${prospectOwner[domain]==='mine'?'selected':''}>My Deals</option>`;
+  html += `<option value="all" ${prospectOwner[domain]==='all'?'selected':''}>All Team</option>`;
+  owners.forEach(o => { html += `<option value="${esc(o)}" ${prospectOwner[domain]===o?'selected':''}>${esc(o)}</option>`; });
+  html += '</select>';
+  html += '</div>';
+
+  // Metrics
+  html += '<div class="widget-grid">';
+  html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${prospects.length} contacts</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
+  html += '</div>';
+
+  // Status filters
+  html += '<div class="pills" style="margin-bottom:8px">';
+  html += `<span class="pill ${prospectFilter[domain]==='all'?'active':''}" onclick="prospectFilter['${domain}']='all';prospectPage['${domain}']=0;${renderCall}">All</span>`;
+  html += `<span class="pill ${prospectFilter[domain]==='upcoming'?'active':''}" onclick="prospectFilter['${domain}']='upcoming';prospectPage['${domain}']=0;${renderCall}">Upcoming</span>`;
+  html += `<span class="pill ${prospectFilter[domain]==='overdue'?'active':''}" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}">Overdue</span>`;
+  html += `<span class="pill ${prospectFilter[domain]==='starred'?'active':''}" onclick="prospectFilter['${domain}']='starred';prospectPage['${domain}']=0;${renderCall}">Starred</span>`;
+  html += '</div>';
+
+  // Search
+  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search prospects..." value="${esc(prospectSearch[domain] || '')}" oninput="clearTimeout(prospectSearchTimeout);prospectSearchTimeout=setTimeout(()=>{prospectSearch['${domain}']=this.value;prospectPage['${domain}']=0;${renderCall}},250)"></div>`;
+
+  // Cards
+  html += renderProspectCardsHTML(filtered, {
+    showDomainDropdown: true,
+    showReassign: true,
+    showEmailTemplates: true,
+    showCallHistory: true,
+    page: prospectPage[domain],
+    pageSize: PROSPECT_PAGE,
+    pagerFn: `prospectPage['${domain}']`,
+    renderFn: `renderDomainProspects.bind(null,'${domain}')`,
+    domain: domain
+  });
+
+  if (containerId) {
+    el.innerHTML = html;
+  } else {
+    el.innerHTML = html;
+  }
+  return html;
 }
 
 function debounceMktSearch(val) {
@@ -1256,12 +1485,54 @@ async function mktReassignDeal(activityId, newOwner, sfContactId) {
       filter: `activity_id=eq.${activityId}`,
       body: { assigned_to: newOwner }
     });
-    // Update local data
+    // Update local data across all stores
     mktData.forEach(d => { if (d.item_id === activityId) d.assigned_to = newOwner; });
+    ['government', 'dialysis', 'all_other'].forEach(dom => {
+      (window._mktOpportunities[dom] || []).forEach(d => { if (d.item_id === activityId) d.assigned_to = newOwner; });
+    });
     showToast('Reassigned to ' + newOwner, 'success');
     renderMarketing();
   } catch (e) {
     showToast('Error reassigning: ' + e.message, 'error');
+  }
+}
+
+// ── Reclassify deal domain ──
+async function mktReclassifyDeal(activityId, newDomain) {
+  if (!activityId || !newDomain) return;
+  showToast('Reclassifying deal to ' + newDomain + '...', 'success');
+  try {
+    await diaQuery('salesforce_activities', '*', {
+      method: 'PATCH',
+      filter: `activity_id=eq.${activityId}`,
+      body: { prospect_domain: newDomain }
+    });
+    // Move item between domain buckets locally
+    let movedItem = null;
+    ['government', 'dialysis', 'all_other'].forEach(dom => {
+      const idx = window._mktOpportunities[dom].findIndex(d => d.item_id === activityId);
+      if (idx !== -1) {
+        movedItem = window._mktOpportunities[dom].splice(idx, 1)[0];
+      }
+    });
+    if (movedItem) {
+      movedItem.domain = newDomain;
+      movedItem.prospect_domain = newDomain;
+      window._mktOpportunities[newDomain].push(movedItem);
+    }
+    showToast('Deal moved to ' + newDomain, 'success');
+    // Re-render whichever view is active
+    if (currentBizTab === 'dialysis' && currentDiaTab === 'prospects') {
+      renderDomainProspects('dialysis');
+    } else if (currentBizTab === 'government' && currentGovTab === 'pipeline') {
+      renderGovTab();
+    } else if (currentBizTab === 'other') {
+      renderDomainProspects('all_other');
+    } else {
+      renderMarketing();
+    }
+  } catch (e) {
+    showToast('Error reclassifying: ' + e.message, 'error');
   }
 }
 
