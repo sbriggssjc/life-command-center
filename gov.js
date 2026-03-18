@@ -679,11 +679,11 @@ async function searchEntities(query, dropId, inputId, onSelect) {
     q(`#${dropId}`).style.display = 'none';
     return;
   }
-  
+
   const q_lower = query.toLowerCase();
   let results = [];
-  
-  // Search contacts
+
+  // Search local contacts
   for (const contact of govData.contacts) {
     if (contact.name.toLowerCase().includes(q_lower)) {
       results.push({
@@ -694,7 +694,7 @@ async function searchEntities(query, dropId, inputId, onSelect) {
       });
     }
   }
-  
+
   // Search ownership history (true owners, new owners/SPEs)
   for (const own of govData.ownership) {
     if (own.true_owner_name && own.true_owner_name.toLowerCase().includes(q_lower)) {
@@ -714,7 +714,7 @@ async function searchEntities(query, dropId, inputId, onSelect) {
       });
     }
   }
-  
+
   // Search prospect leads
   for (const lead of govData.leads) {
     if (lead.true_owner && lead.true_owner.toLowerCase().includes(q_lower)) {
@@ -726,7 +726,42 @@ async function searchEntities(query, dropId, inputId, onSelect) {
       });
     }
   }
-  
+
+  // Search canonical entities (includes SF-linked records)
+  if (query.length >= 3) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      const res = await fetch(`/api/entities?action=search&q=${encodeURIComponent(query)}&limit=15`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        for (const ent of (data.entities || [])) {
+          const sfIds = (ent.external_identities || []).filter(x => x.source_system === 'salesforce');
+          const sfTag = sfIds.length > 0 ? ' \u2022 SF' : '';
+          const typeTag = ent.entity_type === 'person' ? 'Contact' : ent.entity_type === 'organization' ? 'Company' : 'Asset';
+          results.push({
+            type: 'canonical',
+            label: `${ent.name} (${typeTag}${sfTag})`,
+            value: ent.name,
+            data: {
+              canonical_id: ent.id,
+              name: ent.name,
+              email: ent.email,
+              phone: ent.phone,
+              address: ent.address,
+              city: ent.city,
+              state: ent.state,
+              entity_type: ent.entity_type,
+              sf_ids: sfIds
+            }
+          });
+        }
+      }
+    } catch (e) {
+      // Canonical search is best-effort; local results still show
+    }
+  }
+
   // Deduplicate and limit
   const seen = new Set();
   results = results.filter(r => {
@@ -734,19 +769,24 @@ async function searchEntities(query, dropId, inputId, onSelect) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 10);
-  
+  }).slice(0, 15);
+
   const dropEl = q(`#${dropId}`);
-  
+
   if (results.length === 0) {
     dropEl.style.display = 'none';
     return;
   }
-  
-  dropEl.innerHTML = results.map((r, i) => `
-    <div class="ac-item" onclick='selectAC(${safeJSON(inputId)}, ${safeJSON(r.value)}, ${safeJSON(dropId)})'>${esc(r.label)}</div>
-  `).join('');
-  
+
+  // Store results for selection lookup
+  window._acResults = window._acResults || {};
+  window._acResults[dropId] = results;
+
+  dropEl.innerHTML = results.map((r, i) => {
+    const cls = r.type === 'canonical' ? 'ac-item ac-canonical' : 'ac-item';
+    return `<div class="${cls}" onclick='selectAC(${safeJSON(inputId)}, ${safeJSON(r.value)}, ${safeJSON(dropId)}, ${i})'>${esc(r.label)}</div>`;
+  }).join('');
+
   dropEl.style.display = 'block';
 }
 
@@ -779,9 +819,30 @@ function setupAutocomplete(inputId, onSelect) {
   });
 }
 
-function selectAC(inputId, value, dropId) {
+function selectAC(inputId, value, dropId, resultIdx) {
   q(`#${inputId}`).value = value;
   q(`#${dropId}`).style.display = 'none';
+
+  // Auto-fill related fields from canonical entity data
+  const results = window._acResults && window._acResults[dropId];
+  if (results && resultIdx != null && results[resultIdx] && results[resultIdx].type === 'canonical') {
+    const d = results[resultIdx].data;
+    // Fill email if available and field exists
+    const emailEl = q('#res-principal-email');
+    if (emailEl && d.email && !emailEl.value) emailEl.value = d.email;
+    // Fill phone
+    const phoneEl = q('#res-phone');
+    if (phoneEl && d.phone && !phoneEl.value) phoneEl.value = d.phone;
+    // Fill state of incorporation from entity state
+    const incEl = q('#res-incorporation');
+    if (incEl && d.state && !incEl.value) incEl.value = d.state;
+
+    // Show SF link badge if SF IDs exist
+    if (d.sf_ids && d.sf_ids.length > 0) {
+      const sfTypes = d.sf_ids.map(s => `${s.source_type}:${s.external_id}`).join(', ');
+      showToast(`Linked to Salesforce: ${sfTypes}`, 'success');
+    }
+  }
 }
 
 function attachAutocomplete() {

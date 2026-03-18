@@ -158,7 +158,7 @@ export default withErrorHandler(async function handler(req, res) {
         return res.status(400).json({ error: 'Search term must be at least 2 characters' });
       }
 
-      let path = `entities?workspace_id=eq.${workspaceId}&or=(name.ilike.*${encodeURIComponent(searchTerm)}*,canonical_name.ilike.*${encodeURIComponent(searchTerm.toLowerCase())}*)&select=id,entity_type,name,domain,city,state,email,org_type,asset_type`;
+      let path = `entities?workspace_id=eq.${workspaceId}&or=(name.ilike.*${encodeURIComponent(searchTerm)}*,canonical_name.ilike.*${encodeURIComponent(searchTerm.toLowerCase())}*)&select=id,entity_type,name,domain,city,state,email,phone,address,org_type,asset_type,external_identities(source_system,source_type,external_id)`;
       if (entity_type && isValidEnum(entity_type, ENTITY_TYPES)) {
         path += `&entity_type=eq.${entity_type}`;
       }
