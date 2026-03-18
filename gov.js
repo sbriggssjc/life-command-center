@@ -6,7 +6,8 @@ let govCharts = {};
 let researchQueue = [];
 let researchIdx = 0;
 let researchCompleted = 0;
-let researchMode = "ownership";
+let researchMode = "leads";
+let researchFilter = "pending";
 let countyCache = {};
 let acTimeout = null;
 
@@ -798,59 +799,43 @@ async function loadResearchQueue() {
   researchQueue = [];
   researchIdx = 0;
   researchCompleted = 0;
-  
+
+  let filtered;
   if (researchMode === 'ownership') {
-    // Load ownership changes with research_status = pending or 'needs_research'
-    const pending = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending'));
-    
-    for (const rec of pending.slice(0, 50)) {
-      // Enrich with GSA snapshots
-      const snapshot = govData.gsaSnapshots.find(s => s.lease_number === rec.lease_number);
-      if (snapshot) {
-        rec.gsa_snapshot = snapshot;
-      }
-      
-      // Enrich with GSA events
-      rec.gsa_events = govData.gsaEvents.filter(e => e.lease_number === rec.lease_number).slice(0, 10);
-      
-      // Enrich with FRPP
-      const frpp = govData.frppRecords.find(f => 
-        f.street_address && f.street_address.includes(rec.address) &&
-        f.city_name === rec.city &&
-        f.state_name === STATE_FULL[rec.state]
-      );
-      if (frpp) {
-        rec.frpp = frpp;
-      }
-      
-      researchQueue.push(rec);
+    if (researchFilter === 'all') {
+      filtered = govData.ownership.slice();
+    } else {
+      filtered = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending'));
     }
   } else {
-    // Load leads with research_status = pending
-    const pending = govData.leads.filter(l => !l.research_status || l.research_status === 'pending');
-    
-    for (const rec of pending.slice(0, 50)) {
-      // Enrich with GSA snapshots
-      const snapshot = govData.gsaSnapshots.find(s => s.lease_number === rec.lease_number);
-      if (snapshot) {
-        rec.gsa_snapshot = snapshot;
-      }
-      
-      // Enrich with GSA events
-      rec.gsa_events = govData.gsaEvents.filter(e => e.lease_number === rec.lease_number).slice(0, 10);
-      
-      // Enrich with FRPP
-      const frpp = govData.frppRecords.find(f =>
-        f.street_address && f.street_address.includes(rec.address) &&
-        f.city_name === rec.city &&
-        f.state_name === STATE_FULL[rec.state]
-      );
-      if (frpp) {
-        rec.frpp = frpp;
-      }
-      
-      researchQueue.push(rec);
+    if (researchFilter === 'all') {
+      filtered = govData.leads.slice();
+    } else {
+      filtered = govData.leads.filter(l => !l.research_status || l.research_status === 'pending');
     }
+  }
+
+  for (const rec of filtered.slice(0, 50)) {
+    // Enrich with GSA snapshots
+    const snapshot = govData.gsaSnapshots.find(s => s.lease_number === rec.lease_number);
+    if (snapshot) {
+      rec.gsa_snapshot = snapshot;
+    }
+
+    // Enrich with GSA events
+    rec.gsa_events = govData.gsaEvents.filter(e => e.lease_number === rec.lease_number).slice(0, 10);
+
+    // Enrich with FRPP
+    const frpp = govData.frppRecords.find(f =>
+      f.street_address && f.street_address.includes(rec.address) &&
+      f.city_name === rec.city &&
+      f.state_name === STATE_FULL[rec.state]
+    );
+    if (frpp) {
+      rec.frpp = frpp;
+    }
+
+    researchQueue.push(rec);
   }
 }
 
@@ -1424,6 +1409,14 @@ function researchNav(dir) {
 
 function setResearchMode(mode) {
   researchMode = mode;
+  researchIdx = 0;
+  loadResearchQueue().then(() => {
+    renderGovTab();
+  });
+}
+
+function setResearchFilter(filter) {
+  researchFilter = filter;
   researchIdx = 0;
   loadResearchQueue().then(() => {
     renderGovTab();
@@ -2084,18 +2077,23 @@ function renderGovResearch() {
     <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
   </div>`;
 
-  if (researchQueue.length === 0) {
-    const otherMode = researchMode === 'ownership' ? 'leads' : 'ownership';
-    const otherLabel = researchMode === 'ownership' ? 'Leads' : 'Ownership Changes';
-    const pendingOwnership = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
-    const pendingLeads = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
-    const otherCount = researchMode === 'ownership' ? pendingLeads : pendingOwnership;
+  // Filter toggle — pending vs all
+  const totalRecords = researchMode === 'ownership' ? govData.ownership.length : govData.leads.length;
+  const pendingCount = researchMode === 'ownership'
+    ? govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length
+    : govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
 
+  html += `<div class="research-mode-toggle" style="margin-top:4px">
+    <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
+    <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
+  </div>`;
+
+  if (researchQueue.length === 0) {
     html += `<div class="research-empty">
-      <div class="empty-icon">${researchMode === 'ownership' ? '✓' : '✓'}</div>
-      <div class="empty-title">No pending ${researchMode} items</div>
-      <div class="empty-desc">${govData[researchMode === 'ownership' ? 'ownership' : 'leads'].length} total records loaded, all researched or filtered</div>
-      ${otherCount > 0 ? `<button class="btn-primary" onclick="setResearchMode('${otherMode}')">${otherLabel} (${otherCount} pending)</button>` : ''}
+      <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
+      <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
+      <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
+      ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
       <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
     </div>`;
     html += '</div>';
