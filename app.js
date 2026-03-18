@@ -886,11 +886,9 @@ async function loadMarketing() {
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
       const [opportunitiesRaw, crmTasksRaw, leadsRaw] = await Promise.all([
-        diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 }),
-        diaQuery('salesforce_activities', '*', {
-          filter: 'status=eq.Open,nm_type=neq.Opportunity',
-          order: 'activity_date.asc.nullslast',
-          limit: 500
+        diaQuery('v_opportunity_domain_classified', '*', { order: 'activity_date.desc.nullslast', limit: 5000 }),
+        diaQuery('v_marketing_crm_tasks', '*', {
+          limit: 1500
         }),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
