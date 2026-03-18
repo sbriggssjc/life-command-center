@@ -1192,42 +1192,25 @@ function renderLeadResearchCard(rec) {
   return html;
 }
 
-function renderResearch() {
-  if (researchQueue.length === 0) {
-    return `<div class="research-empty">
-      <div class="empty-icon">✓</div>
-      <div class="empty-title">Research Complete!</div>
-      <div class="empty-desc">All ${researchMode} items researched</div>
-      <button class="btn-primary" onclick="location.reload()">Reload</button>
-    </div>`;
-  }
-  
+function renderResearchInner() {
   const rec = researchQueue[researchIdx];
   const progress = Math.round((researchIdx / researchQueue.length) * 100);
-  
-  let html = '<div class="research-workbench">';
-  
+
+  let html = '';
+
   // Progress bar
   html += `<div class="research-progress">
     <div class="progress-bar" style="width: ${progress}%"></div>
     <div class="progress-text">${researchIdx + 1} / ${researchQueue.length}</div>
   </div>`;
-  
-  // Mode toggle
-  html += `<div class="research-mode-toggle">
-    <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
-    <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
-  </div>`;
-  
+
   // Render card
   if (researchMode === 'ownership') {
     html += renderOwnershipResearchCard(rec);
   } else {
     html += renderLeadResearchCard(rec);
   }
-  
-  html += '</div>';
-  
+
   return html;
 }
 
@@ -2092,8 +2075,37 @@ function renderGovResearch() {
   if (researchQueue.length === 0) {
     loadResearchQueue();
   }
-  
-  return renderResearch();
+
+  let html = '<div class="research-workbench">';
+
+  // Mode toggle — always visible so user can switch modes
+  html += `<div class="research-mode-toggle">
+    <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
+    <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
+  </div>`;
+
+  if (researchQueue.length === 0) {
+    const otherMode = researchMode === 'ownership' ? 'leads' : 'ownership';
+    const otherLabel = researchMode === 'ownership' ? 'Leads' : 'Ownership Changes';
+    const pendingOwnership = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
+    const pendingLeads = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
+    const otherCount = researchMode === 'ownership' ? pendingLeads : pendingOwnership;
+
+    html += `<div class="research-empty">
+      <div class="empty-icon">${researchMode === 'ownership' ? '✓' : '✓'}</div>
+      <div class="empty-title">No pending ${researchMode} items</div>
+      <div class="empty-desc">${govData[researchMode === 'ownership' ? 'ownership' : 'leads'].length} total records loaded, all researched or filtered</div>
+      ${otherCount > 0 ? `<button class="btn-primary" onclick="setResearchMode('${otherMode}')">${otherLabel} (${otherCount} pending)</button>` : ''}
+      <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
+    </div>`;
+    html += '</div>';
+    return html;
+  }
+
+  // Render the research card (progress + card)
+  html += renderResearchInner();
+  html += '</div>';
+  return html;
 }
 
 function renderGovTab() {
