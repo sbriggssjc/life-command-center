@@ -886,8 +886,17 @@ async function loadMarketing() {
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
       // Load CRM client rollup + leads first (fast), then opportunities (heavy — may timeout)
+      // Filter server-side by user to avoid loading 12K rows for all users
+      const userName = LCC_USER.display_name || 'Scott Briggs';
+      const rollupParams = { order: 'last_activity_date.desc.nullslast', limit: 5000 };
+      if (mktOwner === 'mine') {
+        rollupParams.filter = 'assigned_to=eq.' + userName;
+      } else if (mktOwner !== 'all') {
+        rollupParams.filter = 'assigned_to=eq.' + mktOwner;
+      }
+      // All Tasks mode: no filter (loads all team, capped at 5000)
       const [clientRollupRaw, leadsRaw] = await Promise.all([
-        diaQuery('v_crm_client_rollup', '*', { order: 'last_activity_date.desc.nullslast', limit: 5000 }),
+        diaQuery('v_crm_client_rollup', '*', rollupParams),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
 
@@ -1118,8 +1127,8 @@ function renderMarketing() {
 
   // Owner toggle (My Tasks / All Tasks)
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
-  html += `<span class="pill ${mktOwner==='mine'?'active':''}" onclick="mktOwner='mine';mktPage=0;renderMarketing()">My Tasks</span>`;
-  html += `<span class="pill ${mktOwner==='all'?'active':''}" onclick="mktOwner='all';mktPage=0;renderMarketing()">All Tasks</span>`;
+  html += `<span class="pill ${mktOwner==='mine'?'active':''}" onclick="mktOwner='mine';mktPage=0;mktLoaded=false;loadMarketing()">My Tasks</span>`;
+  html += `<span class="pill ${mktOwner==='all'?'active':''}" onclick="mktOwner='all';mktPage=0;mktLoaded=false;loadMarketing()">All Tasks</span>`;
   html += '<select style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px" onchange="mktOwner=this.value;mktPage=0;renderMarketing()">';
   html += `<option value="mine" ${mktOwner==='mine'?'selected':''}>My Tasks</option>`;
   html += `<option value="all" ${mktOwner==='all'?'selected':''}>All Team</option>`;
