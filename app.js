@@ -887,7 +887,7 @@ async function loadMarketing() {
       // Fetch inbound leads
       // Load CRM client rollup + leads first (fast), then opportunities (heavy — may timeout)
       const [clientRollupRaw, leadsRaw] = await Promise.all([
-        diaQuery('v_crm_client_rollup', '*', { order: 'last_activity_date.desc.nullslast', limit: 1000 }),
+        diaQuery('v_crm_client_rollup', '*', { order: 'last_activity_date.desc.nullslast', limit: 5000 }),
         diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
       ]);
 
