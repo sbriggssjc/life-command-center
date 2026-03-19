@@ -13,19 +13,12 @@
 //   POST  /api/contacts?action=classify&id=    — reclassify personal/business
 //   POST  /api/contacts?action=merge           — merge two contacts
 //   POST  /api/contacts?action=dismiss_merge   — dismiss a merge suggestion
-//
-// Messaging endpoints (proxied through contacts to stay within Vercel function limit):
-//   GET  /api/contacts?action=messages_teams&id=  — Teams chat history with contact
-//   POST /api/contacts?action=send_teams&id=      — Send Teams message to contact
-//   GET  /api/contacts?action=messages_webex&id=  — WebEx 1:1 messages with contact
-//   POST /api/contacts?action=send_webex&id=      — Send WebEx message to contact
-//   GET  /api/contacts?action=messages_sms&id=    — SMS history with contact
-//   POST /api/contacts?action=send_sms&id=        — Send SMS via WebEx Calling
-//   GET  /api/contacts?action=message_templates   — Get message templates
+//   POST  /api/contacts?action=ingest_calendar_contacts — extract attendees from calendar events
+//   POST  /api/contacts?action=detect_duplicates — run fuzzy match to populate merge queue
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, withErrorHandler } from './_shared/ops-db.js';
 
 const GOV_URL = process.env.GOV_SUPABASE_URL;
 const GOV_KEY = process.env.GOV_SUPABASE_KEY;
@@ -227,16 +220,15 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(403).json({ error: 'Operator role required' });
     }
     switch (action) {
-      case 'ingest':            return ingestContact(req, res, user);
-      case 'ingest_webex_calls': return ingestWebexCalls(req, res, user);
-      case 'classify':          return classifyContact(req, res, user, id);
-      case 'merge':             return mergeContacts(req, res, user);
-      case 'dismiss_merge':     return dismissMerge(req, res, user);
-      case 'send_teams':        return sendTeamsMessage(req, res, user, id);
-      case 'send_webex':        return sendWebexMessage(req, res, user, id);
-      case 'send_sms':          return sendSmsMessage(req, res, user, id);
+      case 'ingest':                  return ingestContact(req, res, user);
+      case 'ingest_webex_calls':      return ingestWebexCalls(req, res, user);
+      case 'ingest_calendar_contacts': return ingestCalendarContacts(req, res, user, workspaceId);
+      case 'detect_duplicates':       return detectDuplicates(req, res, user);
+      case 'classify':                return classifyContact(req, res, user, id);
+      case 'merge':                   return mergeContacts(req, res, user);
+      case 'dismiss_merge':           return dismissMerge(req, res, user);
       default:
-        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, classify, merge, dismiss_merge, send_teams, send_webex, send_sms' });
+        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, ingest_calendar_contacts, detect_duplicates, classify, merge, dismiss_merge' });
     }
   }
 
@@ -1121,6 +1113,287 @@ async function ingestWebexCalls(req, res, user) {
     skipped,
     failed
   });
+}
+
+// ============================================================================
+// INGEST CALENDAR CONTACTS — extract meeting attendees into unified contacts
+// ============================================================================
+
+async function ingestCalendarContacts(req, res, user, workspaceId) {
+  const { days_back = 90, limit: maxEvents = 500 } = req.body || {};
+
+  // Pull calendar events from OPS Supabase (already synced by /api/sync?action=ingest_calendar)
+  const eventsResult = await opsQuery('GET',
+    `activity_events?category=eq.meeting&source_type=eq.outlook&workspace_id=eq.${workspaceId}&order=occurred_at.desc&limit=${maxEvents}&select=metadata,occurred_at`
+  );
+
+  if (!eventsResult.ok) {
+    return res.status(500).json({ error: 'Failed to fetch calendar events', detail: eventsResult.data });
+  }
+
+  const events = eventsResult.data || [];
+  const cutoff = new Date(Date.now() - days_back * 86400000);
+  let matched = 0, created = 0, skipped = 0, failed = 0;
+  const seen = new Set(); // dedupe by email within this batch
+
+  for (const event of events) {
+    const eventDate = event.occurred_at;
+    if (new Date(eventDate) < cutoff) continue;
+
+    const attendees = event.metadata?.attendees || [];
+    for (const att of attendees) {
+      try {
+        const email = (att.emailAddress?.address || att.email || '').trim().toLowerCase();
+        const name = att.emailAddress?.name || att.name || '';
+
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+
+        // Skip the user's own email
+        if (email === user.email?.toLowerCase()) continue;
+
+        // Skip noreply/resource addresses
+        if (email.includes('noreply') || email.includes('resource') || email.includes('room@') || email.includes('conf-')) {
+          skipped++;
+          continue;
+        }
+
+        // Check if contact already exists by email
+        const existing = await govQuery('GET',
+          `unified_contacts?email=ilike.${encodeURIComponent(email)}&limit=1`
+        );
+
+        if (existing.ok && existing.data?.length > 0) {
+          // Update meeting engagement on existing contact
+          const contact = existing.data[0];
+          const meetingDate = new Date(eventDate).toISOString();
+          const newLastMeeting = !contact.last_meeting_date || meetingDate > contact.last_meeting_date
+            ? meetingDate : contact.last_meeting_date;
+
+          const newScore = computeEngagementScore(
+            contact.last_call_date, contact.last_email_date, newLastMeeting,
+            contact.total_calls || 0, contact.total_emails_sent || 0
+          );
+
+          await govQuery('PATCH', `unified_contacts?unified_id=eq.${contact.unified_id}`, {
+            last_meeting_date: newLastMeeting,
+            engagement_score: newScore
+          });
+          matched++;
+        } else {
+          // Create new contact from attendee
+          const nameParts = name.trim().split(/\s+/);
+          const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(' ') : nameParts[0] || null;
+          const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
+          const contactClass = autoClassify('calendar', email);
+          const meetingDate = new Date(eventDate).toISOString();
+          const now = new Date().toISOString();
+
+          const newContact = {
+            contact_class: contactClass,
+            first_name: firstName,
+            last_name: lastName,
+            email,
+            last_meeting_date: meetingDate,
+            last_synced_calendar: now,
+            engagement_score: computeEngagementScore(null, null, meetingDate, 0, 0),
+            field_sources: {
+              email: { source: 'calendar', updated_at: now },
+              first_name: { source: 'calendar', updated_at: now }
+            },
+            match_confidence: 0.7,
+            match_method: 'calendar_attendee'
+          };
+
+          const result = await govQuery('POST', 'unified_contacts', newContact);
+          if (result.ok) {
+            const createdContact = Array.isArray(result.data) ? result.data[0] : result.data;
+            await govQuery('POST', 'contact_change_log', {
+              unified_id: createdContact.unified_id,
+              change_type: 'create',
+              source: 'calendar',
+              fields_changed: { email, name, meeting_date: meetingDate },
+              changed_by: 'system'
+            });
+            created++;
+          } else {
+            failed++;
+          }
+        }
+      } catch (e) {
+        failed++;
+      }
+    }
+  }
+
+  return res.status(200).json({
+    action: 'calendar_contact_ingest',
+    events_scanned: events.length,
+    unique_attendees: seen.size,
+    matched,
+    created,
+    skipped,
+    failed
+  });
+}
+
+// ============================================================================
+// DETECT DUPLICATES — fuzzy match contacts and populate merge queue
+// ============================================================================
+
+async function detectDuplicates(req, res, user) {
+  const { batch_size = 200, min_score = 0.7 } = req.body || {};
+
+  // Fetch contacts that haven't been checked recently (or all for first run)
+  const contactsResult = await govQuery('GET',
+    `unified_contacts?contact_class=eq.business&order=updated_at.desc&limit=${batch_size}&select=unified_id,first_name,last_name,full_name,email,phone,company_name`
+  );
+
+  if (!contactsResult.ok) {
+    return res.status(500).json({ error: 'Failed to fetch contacts', detail: contactsResult.data });
+  }
+
+  const contacts = contactsResult.data || [];
+  let duplicatesFound = 0, alreadyQueued = 0;
+
+  // Get existing pending queue entries to avoid re-queuing
+  const existingQueue = await govQuery('GET',
+    'contact_merge_queue?status=eq.pending&select=contact_a,contact_b&limit=5000'
+  );
+  const queuedPairs = new Set();
+  if (existingQueue.ok && existingQueue.data) {
+    for (const q of existingQueue.data) {
+      queuedPairs.add(`${q.contact_a}|${q.contact_b}`);
+      queuedPairs.add(`${q.contact_b}|${q.contact_a}`);
+    }
+  }
+
+  for (let i = 0; i < contacts.length; i++) {
+    const a = contacts[i];
+
+    for (let j = i + 1; j < contacts.length; j++) {
+      const b = contacts[j];
+      if (a.unified_id === b.unified_id) continue;
+
+      // Skip if already in queue
+      if (queuedPairs.has(`${a.unified_id}|${b.unified_id}`)) {
+        alreadyQueued++;
+        continue;
+      }
+
+      let score = 0;
+      let reason = '';
+
+      // 1. Duplicate email (exact match, different records)
+      if (a.email && b.email && a.email.toLowerCase() === b.email.toLowerCase()) {
+        score = 1.0;
+        reason = 'duplicate_email';
+      }
+
+      // 2. Phone match (last 7+ digits)
+      if (!reason && a.phone && b.phone) {
+        const aDigits = a.phone.replace(/[^0-9]/g, '');
+        const bDigits = b.phone.replace(/[^0-9]/g, '');
+        if (aDigits.length >= 7 && bDigits.length >= 7 && aDigits.slice(-10) === bDigits.slice(-10)) {
+          score = 0.9;
+          reason = 'phone_match';
+        }
+      }
+
+      // 3. Name + Company fuzzy match
+      if (!reason && a.last_name && b.last_name && a.company_name && b.company_name) {
+        const nameA = (a.full_name || '').toLowerCase();
+        const nameB = (b.full_name || '').toLowerCase();
+        const companyA = a.company_name.toLowerCase();
+        const companyB = b.company_name.toLowerCase();
+
+        // Same company, similar names
+        if (companyA === companyB || companyA.includes(companyB) || companyB.includes(companyA)) {
+          const nameSim = jaroWinkler(nameA, nameB);
+          if (nameSim >= min_score) {
+            score = nameSim;
+            reason = 'name_company_fuzzy';
+          }
+        }
+      }
+
+      // 4. Exact name match (different records, no email/phone to distinguish)
+      if (!reason && a.full_name && b.full_name) {
+        const nameA = a.full_name.toLowerCase().trim();
+        const nameB = b.full_name.toLowerCase().trim();
+        if (nameA === nameB && nameA.length > 3) {
+          score = 0.85;
+          reason = 'exact_name_match';
+        }
+      }
+
+      if (score >= min_score && reason) {
+        await govQuery('POST', 'contact_merge_queue', {
+          contact_a: a.unified_id,
+          contact_b: b.unified_id,
+          match_score: score,
+          match_reason: reason,
+          status: 'pending'
+        });
+        queuedPairs.add(`${a.unified_id}|${b.unified_id}`);
+        duplicatesFound++;
+      }
+    }
+  }
+
+  return res.status(200).json({
+    action: 'detect_duplicates',
+    contacts_scanned: contacts.length,
+    duplicates_found: duplicatesFound,
+    already_queued: alreadyQueued
+  });
+}
+
+/**
+ * Jaro-Winkler similarity (0..1). Used for fuzzy name matching.
+ */
+function jaroWinkler(s1, s2) {
+  if (s1 === s2) return 1.0;
+  if (!s1.length || !s2.length) return 0.0;
+
+  const maxDist = Math.floor(Math.max(s1.length, s2.length) / 2) - 1;
+  const s1Matches = new Array(s1.length).fill(false);
+  const s2Matches = new Array(s2.length).fill(false);
+
+  let matches = 0, transpositions = 0;
+
+  for (let i = 0; i < s1.length; i++) {
+    const start = Math.max(0, i - maxDist);
+    const end = Math.min(i + maxDist + 1, s2.length);
+    for (let j = start; j < end; j++) {
+      if (s2Matches[j] || s1[i] !== s2[j]) continue;
+      s1Matches[i] = true;
+      s2Matches[j] = true;
+      matches++;
+      break;
+    }
+  }
+
+  if (matches === 0) return 0.0;
+
+  let k = 0;
+  for (let i = 0; i < s1.length; i++) {
+    if (!s1Matches[i]) continue;
+    while (!s2Matches[k]) k++;
+    if (s1[i] !== s2[k]) transpositions++;
+    k++;
+  }
+
+  const jaro = (matches / s1.length + matches / s2.length + (matches - transpositions / 2) / matches) / 3;
+
+  // Winkler: boost for common prefix (up to 4 chars)
+  let prefix = 0;
+  for (let i = 0; i < Math.min(4, s1.length, s2.length); i++) {
+    if (s1[i] === s2[i]) prefix++;
+    else break;
+  }
+
+  return jaro + prefix * 0.1 * (1 - jaro);
 }
 
 // ============================================================================
