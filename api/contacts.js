@@ -807,38 +807,62 @@ async function ingestWebexCalls(req, res, user) {
     return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
   }
 
-  const { max = 200, type = 'placed,received' } = req.body || {};
+  const { max = 200 } = req.body || {};
 
-  let callHistory;
+  // WebEx API requires separate calls for placed vs received
+  let callHistory = [];
   try {
-    const webexRes = await fetch(
-      `${WEBEX_API_URL}/telephony/calls/history?type=${type}&max=${max}`,
-      { headers: { 'Authorization': `Bearer ${webexToken}`, 'Content-Type': 'application/json' } }
-    );
-    if (!webexRes.ok) {
-      const errText = await webexRes.text().catch(() => '');
-      return res.status(webexRes.status).json({ error: 'WebEx API error', detail: errText });
+    const [placedRes, receivedRes] = await Promise.all([
+      fetch(`${WEBEX_API_URL}/telephony/calls/history?type=placed&max=${max}`, {
+        headers: { 'Authorization': `Bearer ${webexToken}` }
+      }),
+      fetch(`${WEBEX_API_URL}/telephony/calls/history?type=received&max=${max}`, {
+        headers: { 'Authorization': `Bearer ${webexToken}` }
+      })
+    ]);
+
+    if (!placedRes.ok && !receivedRes.ok) {
+      const errText = await placedRes.text().catch(() => '');
+      return res.status(placedRes.status).json({ error: 'WebEx API error', detail: errText });
     }
-    const data = await webexRes.json();
-    callHistory = data.items || [];
+
+    if (placedRes.ok) {
+      const placed = await placedRes.json();
+      callHistory.push(...(placed.items || []));
+    }
+    if (receivedRes.ok) {
+      const received = await receivedRes.json();
+      callHistory.push(...(received.items || []));
+    }
   } catch (e) {
     return res.status(502).json({ error: 'Failed to fetch WebEx call history', detail: e.message });
   }
 
-  let matched = 0, created = 0, failed = 0;
+  // Deduplicate by number+time (same call can appear in both placed/received for internal)
+  const seen = new Set();
+  callHistory = callHistory.filter(call => {
+    const key = `${call.number}|${call.time}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  let matched = 0, created = 0, skipped = 0, failed = 0;
   const now = new Date().toISOString();
 
   for (const call of callHistory) {
     try {
-      // Extract phone number (caller for received, callee for placed)
-      const phone = call.direction === 'RECEIVED'
-        ? (call.callingNumber || call.callerNumber)
-        : (call.calledNumber || call.callingNumber);
-      const name = call.callerName || call.calledName || call.name || '';
-      const callDate = call.startTime || call.time || now;
-      const duration = call.duration || call.durationSecs || 0;
+      // Actual WebEx API format: { type, name, number, time, privacyEnabled }
+      const phone = call.number;
+      const name = call.name || '';
+      const callDate = call.time || now;
+      const direction = call.type; // 'placed' or 'received'
 
       if (!phone) continue;
+
+      // Skip generic/unknown callers like "WIRELESS CALLER"
+      const skipNames = ['WIRELESS CALLER', 'UNKNOWN', 'ANONYMOUS', 'PRIVATE'];
+      const isUnknownName = !name || skipNames.includes(name.toUpperCase());
 
       // Try to find existing contact by phone
       const digits = phone.replace(/[^0-9]/g, '');
@@ -902,8 +926,7 @@ async function ingestWebexCalls(req, res, user) {
             source: 'webex',
             fields_changed: {
               call_date: callTimestamp,
-              duration,
-              direction: call.direction,
+              direction,
               new_total_calls: newTotalCalls,
               new_score: newScore
             },
@@ -912,9 +935,14 @@ async function ingestWebexCalls(req, res, user) {
 
           matched++;
         }
+      } else if (isUnknownName) {
+        // Don't create stubs for "WIRELESS CALLER" etc. with no match
+        skipped++;
       } else {
         // Create a new contact stub from WebEx call
-        const nameParts = name.trim().split(/\s+/);
+        // Parse name: WebEx returns "FIRST LAST" in uppercase for caller ID
+        const titleCaseName = name.replace(/\b\w+/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+        const nameParts = titleCaseName.trim().split(/\s+/);
         const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(' ') : nameParts[0] || null;
         const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
         const callTimestamp = new Date(callDate).toISOString();
@@ -939,7 +967,7 @@ async function ingestWebexCalls(req, res, user) {
             unified_id: createdContact.unified_id,
             change_type: 'create',
             source: 'webex',
-            fields_changed: { phone, name, call_date: callTimestamp, duration },
+            fields_changed: { phone, name: titleCaseName, call_date: callTimestamp, direction },
             changed_by: 'system'
           });
           created++;
@@ -955,6 +983,7 @@ async function ingestWebexCalls(req, res, user) {
     total_calls: callHistory.length,
     matched,
     created,
+    skipped,
     failed
   });
 }
