@@ -2080,10 +2080,10 @@ function renderProspectCardsHTML(items, options = {}) {
           if (t.date) html += ' <span style="color:var(--text3)">(' + esc(t.date) + ')</span>';
           if (t.notes) html += ' <span style="color:var(--text3);font-style:italic">— ' + esc(t.notes) + '</span>';
           html += '</div>';
-          // Task action buttons: complete, edit date, snooze
+          // Task action buttons: complete, log & reschedule, dismiss
           html += '<div style="display:flex;gap:3px;flex-shrink:0">';
           html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="completeTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\')" title="Mark complete">&#x2713;</button>';
-          html += '<input type="date" style="font-size:10px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:1px 3px;width:110px" value="' + esc(t.date || '') + '" onchange="rescheduleTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\',this.value)" title="Change due date">';
+          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="openLogAndReschedule(\'' + esc(c.sf_contact_id) + '\',\'' + esc(c.sf_company_id || '') + '\',\'' + esc(c.contact_name || c.company_name || '') + '\',\'' + esc(subj) + '\',\'' + esc(t.date || '') + '\')" title="Log touchpoint &amp; reschedule">&#x1F4C5;</button>';
           html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="dismissTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\')" title="Dismiss/archive">&#x2715;</button>';
           html += '</div></div>';
         });
@@ -3202,6 +3202,81 @@ async function submitLogCall() {
   } catch (e) {
     showToast(`Network error: ${e.message}`, 'error');
     btn.disabled = false; btn.textContent = 'Log Activity';
+  }
+}
+
+// ── Log & Reschedule: log today's touchpoint + push task date out ──
+var _lrData = {};
+
+function openLogAndReschedule(sfContactId, sfCompanyId, contactName, taskSubject, currentDate) {
+  _lrData = { sfContactId: sfContactId, sfCompanyId: sfCompanyId, contactName: contactName, taskSubject: taskSubject, currentDate: currentDate };
+  document.getElementById('lrContext').textContent = 'Contact: ' + (contactName || 'Unknown');
+  document.getElementById('lrTaskInfo').innerHTML = 'Task: <strong>' + (taskSubject || '—') + '</strong>' + (currentDate ? ' (current date: ' + currentDate + ')' : '');
+  document.getElementById('lrNotes').value = '';
+  // Default next date: 2 weeks from today
+  var next = new Date();
+  next.setDate(next.getDate() + 14);
+  document.getElementById('lrNextDate').value = next.toISOString().split('T')[0];
+  document.getElementById('lrSubmit').disabled = false;
+  document.getElementById('lrSubmit').textContent = 'Log & Reschedule';
+  document.getElementById('logRescheduleModal').classList.add('open');
+}
+
+function closeLogReschedule() {
+  document.getElementById('logRescheduleModal').classList.remove('open');
+}
+
+async function submitLogReschedule() {
+  var btn = document.getElementById('lrSubmit');
+  btn.disabled = true; btn.textContent = 'Logging...';
+
+  var nextDate = document.getElementById('lrNextDate').value;
+  var notes = document.getElementById('lrNotes').value || '';
+  var actType = document.getElementById('lrType').value;
+
+  if (!nextDate) {
+    showToast('Please pick a next touchpoint date.', 'error');
+    btn.disabled = false; btn.textContent = 'Log & Reschedule';
+    return;
+  }
+
+  try {
+    // 1. Log the activity to Salesforce (non-blocking but we await for feedback)
+    var logPayload = {
+      sf_contact_id: _lrData.sfContactId || undefined,
+      sf_company_id: _lrData.sfCompanyId || undefined,
+      activity_type: actType,
+      activity_date: new Date().toISOString().split('T')[0],
+      notes: (_lrData.taskSubject ? '[' + _lrData.taskSubject + '] ' : '') + notes,
+      force: true
+    };
+
+    var logRes = await fetch(API + '/sync/log-to-sf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(logPayload)
+    });
+    var logData = await logRes.json();
+
+    if (logData.warning) {
+      showToast('Warning: ' + (logData.message || 'Recent activity detected'), 'error');
+      btn.disabled = false; btn.textContent = 'Log & Reschedule';
+      return;
+    }
+    if (!logData.success && logData.error) {
+      showToast('SF log error: ' + logData.error, 'error');
+      btn.disabled = false; btn.textContent = 'Log & Reschedule';
+      return;
+    }
+
+    // 2. Reschedule the task date in Supabase
+    await rescheduleTask(_lrData.sfContactId, _lrData.taskSubject, nextDate);
+
+    showToast('Logged to SF & rescheduled to ' + nextDate, 'success');
+    closeLogReschedule();
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+    btn.disabled = false; btn.textContent = 'Log & Reschedule';
   }
 }
 
