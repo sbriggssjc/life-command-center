@@ -901,13 +901,14 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup — lean query (no limit) then enrich with open_tasks
+      // Load CRM client rollup — lean query (high limit) then enrich with open_tasks
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
       rollupUrl.searchParams.set('select', leanFields);
       rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
+      rollupUrl.searchParams.set('limit', '10000');
       if (mktOwner === 'mine') {
         rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + userName);
       } else if (mktOwner !== 'all') {
@@ -947,17 +948,14 @@ async function loadMarketing() {
         clientRollupRaw = results[0];
         leadsRaw = results[1];
         // Enrich contacts with open_tasks JSON in a separate lightweight query
+        // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
         if (clientRollupRaw && clientRollupRaw.length > 0) {
           try {
             const tasksUrl = new URL('/api/dia-query', window.location.origin);
             tasksUrl.searchParams.set('table', 'v_crm_client_rollup');
             tasksUrl.searchParams.set('select', 'sf_contact_id,open_tasks');
             tasksUrl.searchParams.set('filter', 'open_task_count=gt.0');
-            if (mktOwner === 'mine') {
-              tasksUrl.searchParams.set('filter2', 'assigned_to=eq.' + userName);
-            } else if (mktOwner !== 'all') {
-              tasksUrl.searchParams.set('filter2', 'assigned_to=eq.' + mktOwner);
-            }
+            tasksUrl.searchParams.set('limit', '10000');
             const tasksData = await fetchRollupWithRetry(tasksUrl.toString(), 2);
             if (tasksData && tasksData.length > 0) {
               const taskMap = {};

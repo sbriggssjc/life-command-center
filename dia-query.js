@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'DIA_SUPABASE_KEY not configured' });
   }
 
-  const { table, select, filter, order, limit, offset } = req.query;
+  const { table, select, filter, filter2, order, limit, offset } = req.query;
 
   if (!table) {
     return res.status(400).json({ error: 'table parameter required' });
@@ -74,6 +74,15 @@ export default async function handler(req, res) {
     if (eqIdx > 0) {
       const col = filter.substring(0, eqIdx);
       const val = filter.substring(eqIdx + 1);
+      url.searchParams.set(col, val);
+    }
+  }
+
+  if (filter2) {
+    const eqIdx = filter2.indexOf('=');
+    if (eqIdx > 0) {
+      const col = filter2.substring(0, eqIdx);
+      const val = filter2.substring(eqIdx + 1);
       url.searchParams.set(col, val);
     }
   }
