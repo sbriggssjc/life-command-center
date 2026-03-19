@@ -364,3 +364,32 @@ ON CONFLICT (LOWER(email)) DO UPDATE SET
   last_synced_sf = now(),
   updated_at = now();
 */
+
+-- ============================================================================
+-- 8. system_tokens — persistent token storage for OAuth integrations
+-- ============================================================================
+-- Stores refreshable OAuth tokens (WebEx, etc.) so serverless functions
+-- can auto-refresh without relying solely on env vars.
+
+CREATE TABLE IF NOT EXISTS system_tokens (
+  token_key TEXT PRIMARY KEY,          -- e.g. 'webex'
+  access_token TEXT NOT NULL,
+  refresh_token TEXT,
+  expires_at TIMESTAMPTZ,              -- when the access_token expires
+  refresh_expires_at TIMESTAMPTZ,      -- when the refresh_token expires
+  metadata JSONB DEFAULT '{}',         -- extra info (scopes, token_type, etc.)
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION update_system_tokens_timestamp()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_system_tokens_updated ON system_tokens;
+CREATE TRIGGER trg_system_tokens_updated
+  BEFORE UPDATE ON system_tokens
+  FOR EACH ROW EXECUTE FUNCTION update_system_tokens_timestamp();

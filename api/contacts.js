@@ -44,6 +44,107 @@ const FIELD_PRIORITY = {
 const WEBEX_API_URL = 'https://webexapis.com/v1';
 
 /**
+ * Get a valid WebEx access token, auto-refreshing if expired.
+ * Priority: DB-stored token → env var token → refresh flow.
+ */
+async function getWebexToken() {
+  // 1. Check DB for a stored token
+  const dbToken = await govQuery('GET', 'system_tokens?token_key=eq.webex&limit=1');
+  if (dbToken.ok && dbToken.data?.length > 0) {
+    const row = dbToken.data[0];
+    const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+    // If token is still valid (with 5-min buffer), use it
+    if (expiresAt && expiresAt.getTime() > Date.now() + 5 * 60 * 1000) {
+      return row.access_token;
+    }
+    // Token expired — try to refresh using DB-stored refresh token
+    const refreshToken = row.refresh_token || process.env.WEBEX_REFRESH_TOKEN;
+    if (refreshToken) {
+      const refreshed = await refreshWebexToken(refreshToken);
+      if (refreshed) return refreshed.access_token;
+    }
+  }
+
+  // 2. No DB token — try env var
+  const envToken = process.env.WEBEX_ACCESS_TOKEN;
+  if (envToken) {
+    // Test if env token is still valid
+    const testRes = await fetch(`${WEBEX_API_URL}/people/me`, {
+      headers: { 'Authorization': `Bearer ${envToken}` }
+    });
+    if (testRes.ok) {
+      // Seed DB with env token (no known expiry, assume 14 days from now)
+      const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      await upsertWebexToken(envToken, process.env.WEBEX_REFRESH_TOKEN || null, expires);
+      return envToken;
+    }
+    // Env token expired — try refresh
+    const refreshToken = process.env.WEBEX_REFRESH_TOKEN;
+    if (refreshToken) {
+      const refreshed = await refreshWebexToken(refreshToken);
+      if (refreshed) return refreshed.access_token;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Refresh WebEx token using OAuth2 refresh_token grant.
+ */
+async function refreshWebexToken(refreshToken) {
+  const clientId = process.env.WEBEX_CLIENT_ID;
+  const clientSecret = process.env.WEBEX_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken
+  });
+
+  const res = await fetch('https://webexapis.com/v1/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString()
+  });
+
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  const expiresAt = new Date(Date.now() + (data.expires_in || 1209599) * 1000).toISOString();
+  const refreshExpiresAt = data.refresh_token_expires_in
+    ? new Date(Date.now() + data.refresh_token_expires_in * 1000).toISOString()
+    : null;
+
+  await upsertWebexToken(data.access_token, data.refresh_token || refreshToken, expiresAt, refreshExpiresAt);
+  return data;
+}
+
+/**
+ * Store/update WebEx token in system_tokens table.
+ */
+async function upsertWebexToken(accessToken, refreshToken, expiresAt, refreshExpiresAt) {
+  // Try update first
+  const existing = await govQuery('GET', 'system_tokens?token_key=eq.webex&limit=1');
+  if (existing.ok && existing.data?.length > 0) {
+    const updates = { access_token: accessToken, expires_at: expiresAt };
+    if (refreshToken) updates.refresh_token = refreshToken;
+    if (refreshExpiresAt) updates.refresh_expires_at = refreshExpiresAt;
+    await govQuery('PATCH', 'system_tokens?token_key=eq.webex', updates);
+  } else {
+    await govQuery('POST', 'system_tokens', {
+      token_key: 'webex',
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: expiresAt,
+      refresh_expires_at: refreshExpiresAt
+    });
+  }
+}
+
+/**
  * Query Gov Supabase via PostgREST.
  */
 async function govQuery(method, path, body, extraHeaders = {}) {
@@ -802,9 +903,9 @@ async function getHotLeads(req, res) {
 // ============================================================================
 
 async function ingestWebexCalls(req, res, user) {
-  const webexToken = process.env.WEBEX_ACCESS_TOKEN;
+  const webexToken = await getWebexToken();
   if (!webexToken) {
-    return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
+    return res.status(503).json({ error: 'WebEx token not configured or refresh failed. Set WEBEX_ACCESS_TOKEN, WEBEX_REFRESH_TOKEN, WEBEX_CLIENT_ID, WEBEX_CLIENT_SECRET.' });
   }
 
   const { max = 200 } = req.body || {};
