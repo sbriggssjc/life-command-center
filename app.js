@@ -861,6 +861,7 @@ let mktSearch = '';
 let mktPage = 0;
 let mktCallHistoryCache = {};  // sf_contact_id → [{date, notes, type}]
 let mktExpandedDeal = null;    // deal name currently expanded to show call history
+let mktSort = 'date';          // 'date' | 'deal'
 const MKT_PAGE = 20;
 let mktSearchTimeout;
 
@@ -893,8 +894,7 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup — lean select (skip open_tasks JSON to keep payload small)
-      // open_tasks loaded on-demand when contact card is expanded
+      // Load CRM client rollup — includes open_tasks JSON for inline task display
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,open_tasks,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
@@ -1075,7 +1075,7 @@ async function loadMarketing() {
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
-        return a.due_date.localeCompare(b.due_date); // ASC for tasks — soonest first
+        return b.due_date.localeCompare(a.due_date); // DESC — most recent first
       });
       mktLoaded = true;
 
@@ -1218,64 +1218,67 @@ function renderMarketing() {
   // Search
   html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search tasks, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
 
-  // Sort by deal: group contacts under their primary deal subject
   if (mktSort === 'deal') {
-    const dealGroups = {};
-    const noDeal = [];
+    // Group contacts by their Opportunity deal subjects
+    var dealGroups = {};
     filtered.forEach(function(c) {
-      const tasks = c.open_tasks || [];
-      const oppTasks = tasks.filter(function(t) { return t.type === 'Opportunity'; });
+      var tasks = c.open_tasks || [];
+      var oppTasks = tasks.filter(function(t) { return t.type === 'Opportunity'; });
       if (oppTasks.length > 0) {
         oppTasks.forEach(function(t) {
-          var dealKey = t.subject || '(Untitled Deal)';
-          if (!dealGroups[dealKey]) dealGroups[dealKey] = { deal: dealKey, date: t.date, contacts: [] };
-          dealGroups[dealKey].contacts.push(c);
-          if (t.date && t.date > (dealGroups[dealKey].date || '')) dealGroups[dealKey].date = t.date;
+          var key = t.subject || '(Untitled)';
+          if (!dealGroups[key]) dealGroups[key] = { deal: key, date: t.date, contacts: [] };
+          if (t.date && (!dealGroups[key].date || t.date > dealGroups[key].date)) dealGroups[key].date = t.date;
+          dealGroups[key].contacts.push(c);
         });
-      } else {
-        noDeal.push(c);
       }
     });
-    // Sort deal groups by most recent date
-    const sortedDeals = Object.values(dealGroups).sort(function(a, b) { return (b.date || '').localeCompare(a.date || ''); });
-    // Paginate at deal level
-    const start = mktPage * MKT_PAGE;
-    const pageDeals = sortedDeals.slice(start, start + MKT_PAGE);
-    const totalPages = Math.ceil((sortedDeals.length + (noDeal.length > 0 ? 1 : 0)) / MKT_PAGE);
-
-    pageDeals.forEach(function(group) {
-      html += `<div class="widget" style="padding:14px">`;
-      html += `<div style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--accent)">${esc(group.deal)} <span style="font-size:12px;color:var(--text3)">(${group.contacts.length} contact${group.contacts.length > 1 ? 's' : ''}${group.date ? ' · Due: ' + esc(group.date) : ''})</span></div>`;
-      group.contacts.forEach(function(c) {
-        html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border)">`;
-        html += `<div style="flex:1;min-width:0">`;
-        html += `<div style="font-size:13px;font-weight:500">${esc(c.contact_name || '—')}</div>`;
-        html += `<div style="font-size:11px;color:var(--text2)">${esc(c.company_name || '')}`;
-        if (c.email) html += ` · ${esc(c.email)}`;
-        if (c.phone) html += ` · ${esc(c.phone)}`;
-        html += '</div>';
-        if (c.last_call_notes) html += `<div style="font-size:11px;color:var(--text3);font-style:italic">Last: ${esc(c.last_call_notes)}</div>`;
-        html += '</div>';
-        html += `<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px" onclick="event.stopPropagation()">`;
-        if (c.email) html += `<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.deal)}')">Email</button>`;
-        if (c.phone) html += `<a href="webexteams://call?uri=${encodeURIComponent((c.phone||'').replace(/[^+0-9]/g,''))}" class="act-btn" style="font-size:10px;padding:3px 6px">WebEx</a>`;
-        var logData = JSON.stringify({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||''}).replace(/'/g,"\\'");
-        html += `<button class="act-btn primary" style="font-size:10px;padding:3px 6px" onclick="openLogCall(JSON.parse('${logData}'))">Log</button>`;
-        html += '</div></div>';
-      });
-      html += '</div>';
+    var sortedDeals = Object.values(dealGroups).sort(function(a, b) {
+      return (b.date || '').localeCompare(a.date || '');
     });
 
-    if (totalPages > 1) {
-      html += `<div class="pager"><button onclick="mktPage--;renderMarketing()" ${mktPage===0?'disabled':''}>&#x2190; Prev</button><span>Page ${mktPage+1} of ${totalPages} · ${sortedDeals.length} deals</span><button onclick="mktPage++;renderMarketing()" ${mktPage>=totalPages-1?'disabled':''}>Next &#x2192;</button></div>`;
+    if (sortedDeals.length === 0) {
+      html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts with Opportunity deals found. Try "Recent Activity" sort.</div>';
+    } else {
+      var dealStart = mktPage * MKT_PAGE;
+      var dealPageItems = sortedDeals.slice(dealStart, dealStart + MKT_PAGE);
+      var dealTotalPages = Math.ceil(sortedDeals.length / MKT_PAGE);
+
+      dealPageItems.forEach(function(group) {
+        html += '<div class="widget" style="padding:14px">';
+        html += '<div style="font-size:15px;font-weight:600;margin-bottom:6px"><span style="color:var(--yellow)">&#9733;</span> ' + esc(group.deal) + '</div>';
+        html += '<div style="font-size:12px;color:var(--text3);margin-bottom:8px">' + group.contacts.length + ' contact' + (group.contacts.length > 1 ? 's' : '') + ' · Due: ' + esc(group.date || '—') + '</div>';
+        group.contacts.forEach(function(c) {
+          var cId = esc(c.sf_contact_id || c.item_id || '');
+          var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
+          html += '<div style="padding:6px 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
+          html += '<div style="flex:1;min-width:0">';
+          html += '<div style="font-size:13px;font-weight:500">' + esc(c.contact_name || '—') + '</div>';
+          html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
+          if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
+          html += '</div>';
+          if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + '</div>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
+          if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+          if (c.phone) {
+            var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
+            html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px" title="Call via WebEx">&#x1F4DE;</a>';
+          }
+          html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      });
+
+      if (dealTotalPages > 1) {
+        html += '<div class="pager"><button onclick="mktPage--;renderMarketing()" ' + (mktPage===0?'disabled':'') + '>&#x2190; Prev</button><span>Page ' + (mktPage+1) + ' of ' + dealTotalPages + ' · ' + sortedDeals.length + ' deals</span><button onclick="mktPage++;renderMarketing()" ' + (mktPage>=dealTotalPages-1?'disabled':'') + '>Next &#x2192;</button></div>';
+      }
     }
-
-    el.innerHTML = html;
-    return;
+  } else {
+    // Render cards using the shared function
+    html += renderProspectCardsHTML(filtered, { showDomainDropdown: false, showReassign: true, showEmailTemplates: true, showCallHistory: true, page: mktPage, pageSize: MKT_PAGE, pagerFn: 'mktPage', renderFn: 'renderMarketing' });
   }
-
-  // Render cards using the shared function (date sort — default)
-  html += renderProspectCardsHTML(filtered, { showDomainDropdown: false, showReassign: true, showEmailTemplates: true, showCallHistory: true, page: mktPage, pageSize: MKT_PAGE, pagerFn: 'mktPage', renderFn: 'renderMarketing' });
 
   el.innerHTML = html;
 }
