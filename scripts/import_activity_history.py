@@ -103,12 +103,19 @@ def parse_csv(filepath):
 
 def insert_supabase(rows):
     """Insert rows using Supabase client."""
-    url = os.environ.get('SUPABASE_URL') or os.environ.get('NEXT_PUBLIC_SUPABASE_URL')
-    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_KEY')
+    url = (os.environ.get('SUPABASE_URL')
+           or os.environ.get('GOV_SUPABASE_URL')
+           or 'https://scknotsqkcheojiaewwh.supabase.co')
+    key = (os.environ.get('SUPABASE_SERVICE_KEY')
+           or os.environ.get('GOV_SUPABASE_KEY')
+           or os.environ.get('SUPABASE_SERVICE_ROLE_KEY'))
 
-    if not url or not key:
-        print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env")
+    if not key:
+        print("ERROR: Set SUPABASE_SERVICE_KEY or GOV_SUPABASE_KEY env var")
+        print("  PowerShell:  $env:SUPABASE_SERVICE_KEY='your_key'")
         sys.exit(1)
+
+    print(f"  Connecting to: {url}")
 
     client = create_client(url, key)
     total = len(rows)
