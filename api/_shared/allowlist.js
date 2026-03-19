@@ -29,6 +29,10 @@ export const GOV_READ_TABLES = new Set([
   'v_ownership_current',
   'v_property_intel',
   'v_property_history',
+  // Unified Contact Hub
+  'unified_contacts',
+  'contact_change_log',
+  'contact_merge_queue',
 ]);
 
 // Government Supabase — allowed tables for write (POST/PATCH)
@@ -42,9 +46,14 @@ export const GOV_WRITE_TABLES = new Set([
   'sales_transactions',
   'loans',
   'research_queue_outcomes',
+  // Unified Contact Hub
+  'unified_contacts',
+  'contact_change_log',
+  'contact_merge_queue',
   // RPC calls
   'rpc/upsert_lead',
   'rpc/save_research_outcome',
+  'rpc/resolve_contact',
 ]);
 
 // Dialysis Supabase — allowed tables and views for read (GET)
