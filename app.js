@@ -575,7 +575,7 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
     }
   } else if (currentBizTab === 'other') {
     // All Other tab — show domain prospects if loaded, else activity stream
-    if (_mktOpportunitiesLoaded && window._mktOpportunities.all_other.length > 0) {
+    if (_mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
       renderDomainProspects('all_other');
     } else {
       renderBizContent();
@@ -724,7 +724,7 @@ function renderBizContent() {
     return;
   }
   // If "other" tab and prospects loaded, show domain prospects
-  if (currentBizTab === 'other' && _mktOpportunitiesLoaded && window._mktOpportunities.all_other.length > 0) {
+  if (currentBizTab === 'other' && _mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
     renderDomainProspects('all_other');
     return;
   }
@@ -1235,15 +1235,15 @@ function renderMarketing() {
   const overdue = ownerFiltered.filter(d => d.due_date && d.due_date < today).length;
   const unmatched = inboundLeads.filter(d => d.sf_match_status === 'unmatched').length;
 
-  // Domain prospect counts for quick reference
-  const govCount = window._mktOpportunities.government.length;
-  const diaCount = window._mktOpportunities.dialysis.length;
-  const otherCount = window._mktOpportunities.all_other.length;
+  // Domain prospect counts for quick reference (opportunities + prospect contacts)
+  const govCount = (window._mktOpportunities.government.length || 0) + (window._mktProspectContacts.government.length || 0);
+  const diaCount = (window._mktOpportunities.dialysis.length || 0) + (window._mktProspectContacts.dialysis.length || 0);
+  const otherCount = (window._mktOpportunities.all_other.length || 0) + (window._mktProspectContacts.all_other.length || 0);
 
   let html = '';
 
   // Header
-  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">CRM Activity Hub</h3><div style="font-size:12px;color:var(--text3)">Calls, follow-ups & tasks — Opportunities routed to domain Prospects tabs</div></div>';
+  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Marketing</h3><div style="font-size:12px;color:var(--text3)">Calls, follow-ups & marketing tasks — Prospecting calls routed to domain tabs</div></div>';
 
   // Owner toggle (My Tasks / All Tasks)
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
@@ -1298,13 +1298,12 @@ function renderMarketing() {
   html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search tasks, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
 
   if (mktSort === 'deal') {
-    // Group contacts by their Opportunity deal subjects
+    // Group contacts by their open task subjects (non-Opportunity tasks only on marketing tab)
     var dealGroups = {};
     filtered.forEach(function(c) {
       var tasks = c.open_tasks || [];
-      var oppTasks = tasks.filter(function(t) { return t.type === 'Opportunity'; });
-      if (oppTasks.length > 0) {
-        oppTasks.forEach(function(t) {
+      if (tasks.length > 0) {
+        tasks.forEach(function(t) {
           var key = t.subject || '(Untitled)';
           if (!dealGroups[key]) dealGroups[key] = { deal: key, date: t.date, contacts: [] };
           if (t.date && (!dealGroups[key].date || t.date > dealGroups[key].date)) dealGroups[key].date = t.date;
@@ -1317,7 +1316,7 @@ function renderMarketing() {
     });
 
     if (sortedDeals.length === 0) {
-      html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts with Opportunity deals found. Try "Recent Activity" sort.</div>';
+      html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts with open tasks found. Try "Recent Activity" sort.</div>';
     } else {
       var dealStart = mktPage * MKT_PAGE;
       var dealPageItems = sortedDeals.slice(dealStart, dealStart + MKT_PAGE);
@@ -2143,6 +2142,54 @@ async function mktReassignDeal(activityId, newOwner, sfContactId) {
   }
 }
 
+// ── Shared task store helpers (works across marketing + domain prospect views) ──
+function _updateTaskInAllStores(sfContactId, subject, action, newDate) {
+  // Update a task across mktData and all _mktProspectContacts domains
+  var stores = [mktData];
+  ['government', 'dialysis', 'all_other'].forEach(function(dom) {
+    if (window._mktProspectContacts && window._mktProspectContacts[dom]) {
+      stores.push(window._mktProspectContacts[dom]);
+    }
+  });
+
+  stores.forEach(function(store) {
+    for (var i = store.length - 1; i >= 0; i--) {
+      var d = store[i];
+      if (d.sf_contact_id !== sfContactId || !d.open_tasks) continue;
+
+      if (action === 'complete') {
+        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        d.open_task_count = d.open_tasks.length;
+        d.completed_activity_count = (d.completed_activity_count || 0) + 1;
+        if (d.open_tasks.length === 0 && !d.completed_activity_count) store.splice(i, 1);
+      } else if (action === 'reschedule') {
+        d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
+        d.due_date = newDate;
+      } else if (action === 'dismiss') {
+        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        d.open_task_count = d.open_tasks.length;
+        if (d.open_tasks.length === 0 && !(d.completed_activity_count > 0)) store.splice(i, 1);
+      }
+    }
+  });
+}
+
+function _rerenderCurrentView() {
+  if (typeof currentBizTab !== 'undefined') {
+    if (currentBizTab === 'marketing') { renderMarketing(); return; }
+    if (currentBizTab === 'other') { renderDomainProspects('all_other'); return; }
+  }
+  // Check if we're on a domain sub-tab
+  if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
+    renderDomainProspects('dialysis'); return;
+  }
+  // Government renders into a container
+  var govContainer = document.getElementById('govSfProspectsContainer');
+  if (govContainer) { renderDomainProspects('government', 'govSfProspectsContainer'); return; }
+  // Fallback: re-render marketing
+  renderMarketing();
+}
+
 // ── Task management: complete, reschedule, dismiss ──
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
@@ -2157,16 +2204,9 @@ async function completeTask(sfContactId, subject) {
       body: JSON.stringify({ status: 'Completed' })
     });
     showToast('Task completed!', 'success');
-    // Remove from local data and re-render
-    mktData = mktData.filter(function(d) { return !(d.sf_contact_id === sfContactId && d.open_tasks && d.open_tasks.length <= 1); });
-    mktData.forEach(function(d) {
-      if (d.sf_contact_id === sfContactId && d.open_tasks) {
-        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
-        d.open_task_count = d.open_tasks.length;
-        d.completed_activity_count = (d.completed_activity_count || 0) + 1;
-      }
-    });
-    renderMarketing();
+    // Remove from local data (marketing + prospect contacts) and re-render
+    _updateTaskInAllStores(sfContactId, subject, 'complete');
+    _rerenderCurrentView();
   } catch (e) {
     showToast('Error completing task: ' + e.message, 'error');
   }
@@ -2186,14 +2226,9 @@ async function rescheduleTask(sfContactId, subject, newDate) {
       body: JSON.stringify({ activity_date: newDate })
     });
     showToast('Rescheduled to ' + newDate, 'success');
-    // Update local data
-    mktData.forEach(function(d) {
-      if (d.sf_contact_id === sfContactId && d.open_tasks) {
-        d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
-        d.due_date = newDate;
-      }
-    });
-    renderMarketing();
+    // Update local data (marketing + prospect contacts)
+    _updateTaskInAllStores(sfContactId, subject, 'reschedule', newDate);
+    _rerenderCurrentView();
   } catch (e) {
     showToast('Error rescheduling: ' + e.message, 'error');
   }
@@ -2213,16 +2248,9 @@ async function dismissTask(sfContactId, subject) {
       body: JSON.stringify({ status: 'Abandoned' })
     });
     showToast('Task dismissed', 'success');
-    // Remove from local data
-    mktData.forEach(function(d) {
-      if (d.sf_contact_id === sfContactId && d.open_tasks) {
-        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
-        d.open_task_count = d.open_tasks.length;
-      }
-    });
-    // Remove contacts with no remaining tasks
-    mktData = mktData.filter(function(d) { return !d.open_tasks || d.open_tasks.length > 0 || d.completed_activity_count > 0; });
-    renderMarketing();
+    // Remove from local data (marketing + prospect contacts)
+    _updateTaskInAllStores(sfContactId, subject, 'dismiss');
+    _rerenderCurrentView();
   } catch (e) {
     showToast('Error dismissing task: ' + e.message, 'error');
   }
