@@ -1411,6 +1411,11 @@ function renderUnifiedContacts() {
     html += '<div class="stat-card"><div class="stat-label">Stale Data</div><div class="stat-value" style="color:' + ((ucDataQuality.stale_emails + ucDataQuality.stale_phones) > 0 ? 'var(--orange)' : 'var(--green)') + '">' + ((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) + '</div><div class="stat-sub">' + (ucDataQuality.stale_emails || 0) + ' email · ' + (ucDataQuality.stale_phones || 0) + ' phone</div></div>';
     html += '<div class="stat-card" style="cursor:pointer" onclick="loadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
     html += '</div>';
+    // Sync action buttons
+    html += '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+    html += '<button class="btn btn-sm" onclick="runCalendarContactSync()" id="btn-cal-sync" style="font-size:11px;padding:4px 10px;cursor:pointer">Sync Calendar Contacts</button>';
+    html += '<button class="btn btn-sm" onclick="runDuplicateDetection()" id="btn-dedup" style="font-size:11px;padding:4px 10px;cursor:pointer">Run Duplicate Detection</button>';
+    html += '</div>';
   }
 
   // Search
@@ -1712,6 +1717,48 @@ async function ucSendMessage(unifiedId, channel) {
     input.value = message;
   }
   input.disabled = false;
+}
+
+async function runCalendarContactSync() {
+  const btn = document.getElementById('btn-cal-sync');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=ingest_calendar_contacts', {
+      method: 'POST', headers, body: JSON.stringify({ days_back: 90 })
+    });
+    const data = await r.json();
+    if (r.ok) {
+      alert('Calendar sync complete: ' + (data.created || 0) + ' new, ' + (data.matched || 0) + ' updated, ' + (data.skipped || 0) + ' skipped');
+      ucDataQuality = null;
+      loadAndRenderUC();
+    } else {
+      alert('Calendar sync failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Calendar sync error: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Sync Calendar Contacts'; }
+}
+
+async function runDuplicateDetection() {
+  const btn = document.getElementById('btn-dedup');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=detect_duplicates', {
+      method: 'POST', headers, body: JSON.stringify({ batch_size: 200 })
+    });
+    const data = await r.json();
+    if (r.ok) {
+      alert('Duplicate scan complete: ' + (data.duplicates_found || 0) + ' new duplicates found, ' + (data.contacts_scanned || 0) + ' contacts scanned');
+      ucDataQuality = null;
+      loadAndRenderUC();
+    } else {
+      alert('Duplicate detection failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Duplicate detection error: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Run Duplicate Detection'; }
 }
 
 // Placeholder for merge queue viewer

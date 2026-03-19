@@ -3,11 +3,6 @@
 // Life Command Center
 //
 // POST /api/apply-change
-//
-// All analyst edits to business/canonical tables should flow through this
-// endpoint instead of direct supabase .update() calls. This creates an audit
-// trail (data_corrections), resolves linked pending items, and enqueues
-// propagation when requested.
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
