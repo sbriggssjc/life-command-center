@@ -901,12 +901,13 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup — includes open_tasks JSON for inline task display
+      // Load CRM client rollup — try with open_tasks JSON, fall back to lean query if timeout
       const userName = LCC_USER.display_name || 'Scott Briggs';
-      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,open_tasks,last_activity_date,completed_activity_count,last_call_notes';
+      const fullFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,open_tasks,last_activity_date,completed_activity_count,last_call_notes';
+      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
-      rollupUrl.searchParams.set('select', leanFields);
+      rollupUrl.searchParams.set('select', fullFields);
       rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
       rollupUrl.searchParams.set('limit', '1000');
       if (mktOwner === 'mine') {
@@ -942,11 +943,18 @@ async function loadMarketing() {
       let leadsRaw = [];
       if (currentBizTab === 'marketing') {
         const results = await Promise.all([
-          fetchRollupWithRetry(rollupUrl.toString(), 3),
+          fetchRollupWithRetry(rollupUrl.toString(), 2),
           diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
+        // If full query (with open_tasks) returned empty, fall back to lean query without open_tasks
+        if ((!clientRollupRaw || clientRollupRaw.length === 0) && leanFields !== fullFields) {
+          console.warn('[Marketing] Full rollup query returned empty, retrying without open_tasks...');
+          const leanUrl = new URL(rollupUrl.toString());
+          leanUrl.searchParams.set('select', leanFields);
+          clientRollupRaw = await fetchRollupWithRetry(leanUrl.toString(), 3);
+        }
       }
 
       // Load opportunities separately — this is a heavy query that can timeout during initial burst
@@ -1049,7 +1057,7 @@ async function loadMarketing() {
         completed_activity_count: d.completed_activity_count || 0,
         last_call_notes: d.last_call_notes,
         open_task_count: d.open_task_count || 0,
-        open_tasks: d.open_tasks || []
+        open_tasks: (typeof d.open_tasks === 'string' ? (function() { try { return JSON.parse(d.open_tasks); } catch(e) { return []; } })() : d.open_tasks) || []
       }));
 
       // Normalize leads to pipeline schema
