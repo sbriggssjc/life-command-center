@@ -31,14 +31,17 @@ const PERSONAL_DOMAINS = new Set([
 
 // Field-level authority: which source wins for each field
 const FIELD_PRIORITY = {
-  email:        ['salesforce', 'outlook', 'calendar', 'manual'],
-  phone:        ['salesforce', 'outlook', 'manual'],
-  mobile_phone: ['salesforce', 'outlook', 'manual'],
+  email:        ['salesforce', 'outlook', 'calendar', 'iphone', 'manual'],
+  phone:        ['salesforce', 'outlook', 'webex', 'iphone', 'manual'],
+  mobile_phone: ['iphone', 'outlook', 'salesforce', 'manual'],
   title:        ['salesforce', 'outlook', 'manual'],
   company_name: ['salesforce', 'gov_contacts', 'dia_activities', 'outlook', 'manual'],
   city:         ['salesforce', 'gov_contacts', 'manual'],
   state:        ['salesforce', 'gov_contacts', 'manual'],
 };
+
+// WebEx API base URL
+const WEBEX_API_URL = 'https://webexapis.com/v1';
 
 /**
  * Query Gov Supabase via PostgREST.
@@ -95,8 +98,9 @@ export default withErrorHandler(async function handler(req, res) {
       case 'history':      return getHistory(req, res, id);
       case 'merge_queue':  return getMergeQueue(req, res);
       case 'data_quality': return getDataQuality(req, res);
+      case 'hot_leads':    return getHotLeads(req, res);
       default:
-        return res.status(400).json({ error: 'GET action: list, get, history, merge_queue, data_quality' });
+        return res.status(400).json({ error: 'GET action: list, get, history, merge_queue, data_quality, hot_leads' });
     }
   }
 
@@ -106,12 +110,13 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(403).json({ error: 'Operator role required' });
     }
     switch (action) {
-      case 'ingest':        return ingestContact(req, res, user);
-      case 'classify':      return classifyContact(req, res, user, id);
-      case 'merge':         return mergeContacts(req, res, user);
-      case 'dismiss_merge': return dismissMerge(req, res, user);
+      case 'ingest':            return ingestContact(req, res, user);
+      case 'ingest_webex_calls': return ingestWebexCalls(req, res, user);
+      case 'classify':          return classifyContact(req, res, user, id);
+      case 'merge':             return mergeContacts(req, res, user);
+      case 'dismiss_merge':     return dismissMerge(req, res, user);
       default:
-        return res.status(400).json({ error: 'POST action: ingest, classify, merge, dismiss_merge' });
+        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, classify, merge, dismiss_merge' });
     }
   }
 
@@ -137,7 +142,8 @@ async function listContacts(req, res) {
     search,
     limit: limitParam,
     offset: offsetParam,
-    order
+    order,
+    min_engagement
   } = req.query;
 
   const limit = Math.min(Math.max(parseInt(limitParam) || 50, 1), 500);
@@ -145,6 +151,12 @@ async function listContacts(req, res) {
   const orderBy = order || 'updated_at.desc';
 
   let path = `unified_contacts?contact_class=eq.${contact_class}&limit=${limit}&offset=${offset}&order=${orderBy}`;
+
+  // Filter by minimum engagement score if specified
+  if (min_engagement) {
+    const minScore = parseInt(min_engagement);
+    if (minScore > 0) path += `&engagement_score=gte.${minScore}`;
+  }
 
   if (search) {
     // Search across name, email, company using OR filter
@@ -180,10 +192,26 @@ async function getContact(req, res, id) {
   if (contact.sf_contact_id) sources.push({ system: 'salesforce', id: contact.sf_contact_id, synced: contact.last_synced_sf });
   if (contact.outlook_contact_id) sources.push({ system: 'outlook', id: contact.outlook_contact_id, synced: contact.last_synced_outlook });
   if (contact.last_synced_calendar) sources.push({ system: 'calendar', synced: contact.last_synced_calendar });
+  if (contact.webex_person_id) sources.push({ system: 'webex', id: contact.webex_person_id });
+  if (contact.icloud_contact_id) sources.push({ system: 'icloud', id: contact.icloud_contact_id });
   if (contact.gov_contact_id) sources.push({ system: 'gov_db', id: contact.gov_contact_id });
   if (contact.dia_contact_id) sources.push({ system: 'dia_db', id: contact.dia_contact_id });
 
-  return res.status(200).json({ contact, sources });
+  // Engagement summary
+  const engagementSummary = {
+    score: contact.engagement_score || 0,
+    last_call: contact.last_call_date,
+    last_email: contact.last_email_date,
+    last_meeting: contact.last_meeting_date,
+    total_calls: contact.total_calls || 0,
+    total_emails: contact.total_emails_sent || 0,
+    heat: contact.engagement_score >= 60 ? 'hot'
+      : contact.engagement_score >= 30 ? 'warm'
+      : contact.engagement_score > 0 ? 'cool'
+      : 'cold'
+  };
+
+  return res.status(200).json({ contact, sources, engagement: engagementSummary });
 }
 
 // ============================================================================
@@ -210,12 +238,17 @@ async function ingestContact(req, res, user) {
     first_name, last_name, email, phone, mobile_phone,
     company_name, title, city, state, website,
     sf_contact_id, sf_account_id, outlook_contact_id,
-    entity_type, contact_type, industry
+    webex_person_id, icloud_contact_id,
+    entity_type, contact_type, industry,
+    engagement  // optional: { call_date, call_duration, email_date, meeting_date }
   } = req.body || {};
 
-  if (!source) return res.status(400).json({ error: 'source is required (salesforce, outlook, calendar, manual)' });
-  if (!first_name && !last_name && !email) {
-    return res.status(400).json({ error: 'At least first_name, last_name, or email is required' });
+  const VALID_SOURCES = ['salesforce', 'outlook', 'calendar', 'webex', 'iphone', 'icloud', 'manual'];
+  if (!source || !VALID_SOURCES.includes(source)) {
+    return res.status(400).json({ error: `source is required, one of: ${VALID_SOURCES.join(', ')}` });
+  }
+  if (!first_name && !last_name && !email && !phone) {
+    return res.status(400).json({ error: 'At least first_name, last_name, email, or phone is required' });
   }
 
   // Auto-classify if not specified
@@ -288,6 +321,30 @@ async function ingestContact(req, res, user) {
     }
   }
 
+  // Tier 3b: WebEx person ID match
+  if (!existingId && webex_person_id) {
+    const webexMatch = await govQuery('GET',
+      `unified_contacts?webex_person_id=eq.${webex_person_id}&limit=1`
+    );
+    if (webexMatch.ok && webexMatch.data?.length > 0) {
+      existingId = webexMatch.data[0].unified_id;
+      matchTier = 0;
+      matchScore = 1.0;
+    }
+  }
+
+  // Tier 3c: iCloud contact ID match
+  if (!existingId && icloud_contact_id) {
+    const icloudMatch = await govQuery('GET',
+      `unified_contacts?icloud_contact_id=eq.${icloud_contact_id}&limit=1`
+    );
+    if (icloudMatch.ok && icloudMatch.data?.length > 0) {
+      existingId = icloudMatch.data[0].unified_id;
+      matchTier = 0;
+      matchScore = 1.0;
+    }
+  }
+
   const now = new Date().toISOString();
   const syncField = source === 'salesforce' ? 'last_synced_sf'
     : source === 'outlook' ? 'last_synced_outlook'
@@ -340,10 +397,44 @@ async function ingestContact(req, res, user) {
     if (sf_contact_id && !existing.sf_contact_id) updates.sf_contact_id = sf_contact_id;
     if (sf_account_id && !existing.sf_account_id) updates.sf_account_id = sf_account_id;
     if (outlook_contact_id && !existing.outlook_contact_id) updates.outlook_contact_id = outlook_contact_id;
+    if (webex_person_id && !existing.webex_person_id) updates.webex_person_id = webex_person_id;
+    if (icloud_contact_id && !existing.icloud_contact_id) updates.icloud_contact_id = icloud_contact_id;
     if (entity_type && !existing.entity_type) updates.entity_type = entity_type;
     if (contact_type && !existing.contact_type) updates.contact_type = contact_type;
     if (industry && !existing.industry) updates.industry = industry;
     if (syncField) updates[syncField] = now;
+
+    // Update engagement signals if provided
+    if (engagement) {
+      if (engagement.call_date) {
+        const callDate = new Date(engagement.call_date).toISOString();
+        if (!existing.last_call_date || callDate > existing.last_call_date) {
+          updates.last_call_date = callDate;
+        }
+        updates.total_calls = (existing.total_calls || 0) + 1;
+      }
+      if (engagement.email_date) {
+        const emailDate = new Date(engagement.email_date).toISOString();
+        if (!existing.last_email_date || emailDate > existing.last_email_date) {
+          updates.last_email_date = emailDate;
+        }
+        updates.total_emails_sent = (existing.total_emails_sent || 0) + 1;
+      }
+      if (engagement.meeting_date) {
+        const meetingDate = new Date(engagement.meeting_date).toISOString();
+        if (!existing.last_meeting_date || meetingDate > existing.last_meeting_date) {
+          updates.last_meeting_date = meetingDate;
+        }
+      }
+      // Recompute engagement score
+      updates.engagement_score = computeEngagementScore(
+        updates.last_call_date || existing.last_call_date,
+        updates.last_email_date || existing.last_email_date,
+        updates.last_meeting_date || existing.last_meeting_date,
+        updates.total_calls ?? existing.total_calls ?? 0,
+        updates.total_emails_sent ?? existing.total_emails_sent ?? 0
+      );
+    }
 
     // Merge field_sources
     const mergedFieldSources = { ...(existing.field_sources || {}), ...fieldSources };
@@ -391,11 +482,33 @@ async function ingestContact(req, res, user) {
       sf_contact_id: sf_contact_id || null,
       sf_account_id: sf_account_id || null,
       outlook_contact_id: outlook_contact_id || null,
+      webex_person_id: webex_person_id || null,
+      icloud_contact_id: icloud_contact_id || null,
       field_sources: fieldSources,
       match_confidence: 1.0,
       match_method: source === 'manual' ? 'manual' : `${source}_import`
     };
     if (syncField) newContact[syncField] = now;
+
+    // Set initial engagement signals if provided
+    if (engagement) {
+      if (engagement.call_date) {
+        newContact.last_call_date = new Date(engagement.call_date).toISOString();
+        newContact.total_calls = 1;
+      }
+      if (engagement.email_date) {
+        newContact.last_email_date = new Date(engagement.email_date).toISOString();
+        newContact.total_emails_sent = 1;
+      }
+      if (engagement.meeting_date) {
+        newContact.last_meeting_date = new Date(engagement.meeting_date).toISOString();
+      }
+      newContact.engagement_score = computeEngagementScore(
+        newContact.last_call_date, newContact.last_email_date,
+        newContact.last_meeting_date, newContact.total_calls || 0,
+        newContact.total_emails_sent || 0
+      );
+    }
 
     const result = await govQuery('POST', 'unified_contacts', newContact);
     if (!result.ok) {
@@ -545,7 +658,8 @@ async function mergeContacts(req, res, user) {
     'title', 'company_name', 'city', 'state', 'website',
     'entity_type', 'contact_type', 'industry',
     'sf_contact_id', 'sf_account_id', 'gov_contact_id', 'dia_contact_id',
-    'true_owner_id', 'recorded_owner_id', 'outlook_contact_id'
+    'true_owner_id', 'recorded_owner_id', 'outlook_contact_id',
+    'webex_person_id', 'icloud_contact_id'
   ];
 
   for (const field of fillableFields) {
@@ -642,19 +756,255 @@ async function getMergeQueue(req, res) {
 // ============================================================================
 
 async function getDataQuality(req, res) {
-  const [staleEmail, stalePhone, mergeQueueCount, totalContacts] = await Promise.all([
+  const [staleEmail, stalePhone, mergeQueueCount, totalContacts, hotLeads, withWebex] = await Promise.all([
     govQuery('GET', 'unified_contacts?email_stale=eq.true&select=unified_id&limit=0'),
     govQuery('GET', 'unified_contacts?phone_stale=eq.true&select=unified_id&limit=0'),
     govQuery('GET', 'contact_merge_queue?status=eq.pending&select=queue_id&limit=0'),
-    govQuery('GET', 'unified_contacts?select=unified_id&limit=0')
+    govQuery('GET', 'unified_contacts?select=unified_id&limit=0'),
+    govQuery('GET', 'unified_contacts?contact_class=eq.business&engagement_score=gte.60&select=unified_id&limit=0'),
+    govQuery('GET', 'unified_contacts?webex_person_id=not.is.null&select=unified_id&limit=0')
   ]);
 
   return res.status(200).json({
     total_contacts: totalContacts.count || 0,
     stale_emails: staleEmail.count || 0,
     stale_phones: stalePhone.count || 0,
-    pending_merges: mergeQueueCount.count || 0
+    pending_merges: mergeQueueCount.count || 0,
+    hot_leads: hotLeads.count || 0,
+    webex_linked: withWebex.count || 0
   });
+}
+
+// ============================================================================
+// HOT LEADS — top engaged business contacts
+// ============================================================================
+
+async function getHotLeads(req, res) {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+  const result = await govQuery('GET',
+    `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent,sf_contact_id,webex_person_id`
+  );
+
+  const contacts = (result.data || []).map(c => ({
+    ...c,
+    heat: c.engagement_score >= 60 ? 'hot'
+      : c.engagement_score >= 30 ? 'warm'
+      : c.engagement_score > 0 ? 'cool'
+      : 'cold'
+  }));
+
+  return res.status(200).json({ hot_leads: contacts, total: result.count });
+}
+
+// ============================================================================
+// INGEST WEBEX CALLS — bulk ingest call history from WebEx API
+// ============================================================================
+
+async function ingestWebexCalls(req, res, user) {
+  const webexToken = process.env.WEBEX_ACCESS_TOKEN;
+  if (!webexToken) {
+    return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
+  }
+
+  const { max = 200, type = 'placed,received' } = req.body || {};
+
+  let callHistory;
+  try {
+    const webexRes = await fetch(
+      `${WEBEX_API_URL}/telephony/calls/history?type=${type}&max=${max}`,
+      { headers: { 'Authorization': `Bearer ${webexToken}`, 'Content-Type': 'application/json' } }
+    );
+    if (!webexRes.ok) {
+      const errText = await webexRes.text().catch(() => '');
+      return res.status(webexRes.status).json({ error: 'WebEx API error', detail: errText });
+    }
+    const data = await webexRes.json();
+    callHistory = data.items || [];
+  } catch (e) {
+    return res.status(502).json({ error: 'Failed to fetch WebEx call history', detail: e.message });
+  }
+
+  let matched = 0, created = 0, failed = 0;
+  const now = new Date().toISOString();
+
+  for (const call of callHistory) {
+    try {
+      // Extract phone number (caller for received, callee for placed)
+      const phone = call.direction === 'RECEIVED'
+        ? (call.callingNumber || call.callerNumber)
+        : (call.calledNumber || call.callingNumber);
+      const name = call.callerName || call.calledName || call.name || '';
+      const callDate = call.startTime || call.time || now;
+      const duration = call.duration || call.durationSecs || 0;
+
+      if (!phone) continue;
+
+      // Try to find existing contact by phone
+      const digits = phone.replace(/[^0-9]/g, '');
+      let existingId = null;
+
+      if (digits.length >= 7) {
+        const phoneMatch = await govQuery('GET',
+          `unified_contacts?phone=ilike.*${digits.slice(-7)}*&limit=5`
+        );
+        if (phoneMatch.ok && phoneMatch.data?.length > 0) {
+          for (const candidate of phoneMatch.data) {
+            const candidateDigits = (candidate.phone || '').replace(/[^0-9]/g, '');
+            if (candidateDigits === digits || candidateDigits.endsWith(digits.slice(-10))) {
+              existingId = candidate.unified_id;
+              break;
+            }
+          }
+        }
+      }
+
+      // Also try mobile_phone
+      if (!existingId && digits.length >= 7) {
+        const mobileMatch = await govQuery('GET',
+          `unified_contacts?mobile_phone=ilike.*${digits.slice(-7)}*&limit=5`
+        );
+        if (mobileMatch.ok && mobileMatch.data?.length > 0) {
+          for (const candidate of mobileMatch.data) {
+            const candidateDigits = (candidate.mobile_phone || '').replace(/[^0-9]/g, '');
+            if (candidateDigits === digits || candidateDigits.endsWith(digits.slice(-10))) {
+              existingId = candidate.unified_id;
+              break;
+            }
+          }
+        }
+      }
+
+      if (existingId) {
+        // Update engagement signals on existing contact
+        const existing = (await govQuery('GET', `unified_contacts?unified_id=eq.${existingId}&select=last_call_date,total_calls,last_email_date,last_meeting_date,total_emails_sent,engagement_score&limit=1`)).data?.[0];
+        if (existing) {
+          const callTimestamp = new Date(callDate).toISOString();
+          const newTotalCalls = (existing.total_calls || 0) + 1;
+          const newLastCall = !existing.last_call_date || callTimestamp > existing.last_call_date
+            ? callTimestamp : existing.last_call_date;
+
+          const newScore = computeEngagementScore(
+            newLastCall, existing.last_email_date, existing.last_meeting_date,
+            newTotalCalls, existing.total_emails_sent || 0
+          );
+
+          await govQuery('PATCH', `unified_contacts?unified_id=eq.${existingId}`, {
+            last_call_date: newLastCall,
+            total_calls: newTotalCalls,
+            engagement_score: newScore
+          });
+
+          // Log engagement update
+          await govQuery('POST', 'contact_change_log', {
+            unified_id: existingId,
+            change_type: 'engagement',
+            source: 'webex',
+            fields_changed: {
+              call_date: callTimestamp,
+              duration,
+              direction: call.direction,
+              new_total_calls: newTotalCalls,
+              new_score: newScore
+            },
+            changed_by: 'system'
+          });
+
+          matched++;
+        }
+      } else {
+        // Create a new contact stub from WebEx call
+        const nameParts = name.trim().split(/\s+/);
+        const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(' ') : nameParts[0] || null;
+        const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
+        const callTimestamp = new Date(callDate).toISOString();
+
+        const newContact = {
+          contact_class: 'business',
+          first_name: firstName,
+          last_name: lastName,
+          phone,
+          last_call_date: callTimestamp,
+          total_calls: 1,
+          engagement_score: computeEngagementScore(callTimestamp, null, null, 1, 0),
+          field_sources: { phone: { source: 'webex', updated_at: now } },
+          match_confidence: 0.5,
+          match_method: 'webex_call'
+        };
+
+        const result = await govQuery('POST', 'unified_contacts', newContact);
+        if (result.ok) {
+          const createdContact = Array.isArray(result.data) ? result.data[0] : result.data;
+          await govQuery('POST', 'contact_change_log', {
+            unified_id: createdContact.unified_id,
+            change_type: 'create',
+            source: 'webex',
+            fields_changed: { phone, name, call_date: callTimestamp, duration },
+            changed_by: 'system'
+          });
+          created++;
+        }
+      }
+    } catch (e) {
+      failed++;
+    }
+  }
+
+  return res.status(200).json({
+    action: 'webex_call_ingest',
+    total_calls: callHistory.length,
+    matched,
+    created,
+    failed
+  });
+}
+
+// ============================================================================
+// ENGAGEMENT SCORE COMPUTATION (JavaScript mirror of SQL function)
+// ============================================================================
+
+function computeEngagementScore(lastCallDate, lastEmailDate, lastMeetingDate, totalCalls, totalEmailsSent) {
+  let score = 0;
+  const now = Date.now();
+
+  // Call recency (max 30)
+  if (lastCallDate) {
+    const daysSinceCall = (now - new Date(lastCallDate).getTime()) / 86400000;
+    if (daysSinceCall < 7) score += 30;
+    else if (daysSinceCall < 30) score += 20;
+    else if (daysSinceCall < 90) score += 10;
+    else if (daysSinceCall < 365) score += 3;
+  }
+
+  // Email recency (max 20)
+  if (lastEmailDate) {
+    const daysSinceEmail = (now - new Date(lastEmailDate).getTime()) / 86400000;
+    if (daysSinceEmail < 7) score += 20;
+    else if (daysSinceEmail < 30) score += 15;
+    else if (daysSinceEmail < 90) score += 5;
+    else if (daysSinceEmail < 365) score += 2;
+  }
+
+  // Call frequency (max 20)
+  if (totalCalls > 10) score += 20;
+  else if (totalCalls > 5) score += 15;
+  else if (totalCalls > 0) score += 10;
+
+  // Meeting recency (max 15)
+  if (lastMeetingDate) {
+    const daysSinceMeeting = (now - new Date(lastMeetingDate).getTime()) / 86400000;
+    if (daysSinceMeeting < 7) score += 15;
+    else if (daysSinceMeeting < 30) score += 10;
+    else if (daysSinceMeeting < 90) score += 5;
+    else if (daysSinceMeeting < 365) score += 2;
+  }
+
+  // Email frequency bonus (max 15)
+  if (totalEmailsSent > 20) score += 15;
+  else if (totalEmailsSent > 10) score += 10;
+  else if (totalEmailsSent > 3) score += 5;
+
+  return Math.min(score, 100);
 }
 
 // ============================================================================
@@ -665,10 +1015,25 @@ function autoClassify(source, email) {
   // Salesforce contacts are always business
   if (source === 'salesforce') return 'business';
 
+  // WebEx contacts are always business (org calls)
+  if (source === 'webex') return 'business';
+
+  // iCloud-only contacts default to personal
+  if (source === 'icloud') return 'personal';
+
+  // iPhone contacts: check email domain, default business (Exchange sync path)
+  if (source === 'iphone') {
+    if (email) {
+      const domain = email.split('@')[1]?.toLowerCase();
+      if (domain && PERSONAL_DOMAINS.has(domain)) return 'personal';
+    }
+    return 'business';
+  }
+
   // Check email domain for personal detection
   if (email) {
     const domain = email.split('@')[1]?.toLowerCase();
-    if (domain && PERSONAL_DOMAINS.has(domain) && source !== 'salesforce') {
+    if (domain && PERSONAL_DOMAINS.has(domain)) {
       return 'personal';
     }
   }

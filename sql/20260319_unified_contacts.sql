@@ -4,7 +4,8 @@
 --
 -- Creates the unified_contacts table and contact_change_log audit table.
 -- Provides a single contact graph across Salesforce, Outlook, Calendar,
--- and Supabase domain databases with personal/business classification.
+-- WebEx, iPhone/iCloud, and Supabase domain databases with personal/business
+-- classification and engagement scoring.
 -- ============================================================================
 
 -- Enable pg_trgm for fuzzy name matching (idempotent)
@@ -54,6 +55,16 @@ CREATE TABLE IF NOT EXISTS unified_contacts (
   true_owner_id UUID,
   recorded_owner_id UUID,
   outlook_contact_id TEXT,
+  webex_person_id TEXT,           -- WebEx People API person ID
+  icloud_contact_id TEXT,         -- Apple iCloud contact ID (via CardDAV or Exchange sync)
+
+  -- Engagement signals (auto-updated from WebEx, Outlook, Calendar)
+  last_call_date TIMESTAMPTZ,     -- most recent WebEx or logged call
+  last_email_date TIMESTAMPTZ,    -- most recent email exchange (sent or received)
+  last_meeting_date TIMESTAMPTZ,  -- most recent calendar meeting as attendee
+  total_calls INTEGER DEFAULT 0,  -- lifetime call count from WebEx + logged calls
+  total_emails_sent INTEGER DEFAULT 0,
+  engagement_score NUMERIC DEFAULT 0, -- computed: recency + frequency + depth
 
   -- Field provenance: which source provided each canonical field
   -- Format: {"field_name": {"source": "salesforce", "updated_at": "2026-03-18T..."}}
@@ -105,6 +116,18 @@ CREATE INDEX IF NOT EXISTS idx_uc_updated
 CREATE INDEX IF NOT EXISTS idx_uc_full_name_trgm
   ON unified_contacts USING gin (full_name gin_trgm_ops);
 
+-- WebEx person ID index
+CREATE INDEX IF NOT EXISTS idx_uc_webex
+  ON unified_contacts (webex_person_id) WHERE webex_person_id IS NOT NULL;
+
+-- iCloud contact ID index
+CREATE INDEX IF NOT EXISTS idx_uc_icloud
+  ON unified_contacts (icloud_contact_id) WHERE icloud_contact_id IS NOT NULL;
+
+-- Engagement score index (business contacts sorted by engagement for hot leads)
+CREATE INDEX IF NOT EXISTS idx_uc_engagement
+  ON unified_contacts (engagement_score DESC) WHERE contact_class = 'business';
+
 -- ============================================================================
 -- 2. contact_change_log — audit trail for every change
 -- ============================================================================
@@ -113,8 +136,8 @@ CREATE TABLE IF NOT EXISTS contact_change_log (
   log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   unified_id UUID REFERENCES unified_contacts(unified_id) ON DELETE SET NULL,
   change_type TEXT NOT NULL
-    CHECK (change_type IN ('create', 'merge', 'update', 'classify', 'delete', 'stale_flag')),
-  source TEXT NOT NULL,  -- 'salesforce' | 'outlook' | 'calendar' | 'manual' | 'system'
+    CHECK (change_type IN ('create', 'merge', 'update', 'classify', 'delete', 'stale_flag', 'engagement')),
+  source TEXT NOT NULL,  -- 'salesforce' | 'outlook' | 'calendar' | 'webex' | 'iphone' | 'manual' | 'system'
   fields_changed JSONB,  -- {"email": {"old": "x@y.com", "new": "x@z.com"}}
   merged_from UUID,      -- if merge, which contact was absorbed
   changed_by TEXT,       -- user who initiated
@@ -227,7 +250,74 @@ END;
 $$;
 
 -- ============================================================================
--- 5. Auto-update updated_at trigger
+-- 5. Engagement score computation function
+-- ============================================================================
+-- Recency-weighted scoring: recent activity scores higher.
+-- Score components: call recency + email recency + meeting recency + call frequency
+-- Max score = 30 + 20 + 15 + 20 + 15 = 100
+
+CREATE OR REPLACE FUNCTION compute_engagement_score(
+  p_last_call_date TIMESTAMPTZ,
+  p_last_email_date TIMESTAMPTZ,
+  p_last_meeting_date TIMESTAMPTZ,
+  p_total_calls INTEGER,
+  p_total_emails_sent INTEGER DEFAULT 0
+)
+RETURNS NUMERIC LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  score NUMERIC := 0;
+  days_call NUMERIC;
+  days_email NUMERIC;
+  days_meeting NUMERIC;
+BEGIN
+  -- Call recency (max 30 points)
+  IF p_last_call_date IS NOT NULL THEN
+    days_call := EXTRACT(EPOCH FROM (now() - p_last_call_date)) / 86400.0;
+    IF days_call < 7 THEN score := score + 30;
+    ELSIF days_call < 30 THEN score := score + 20;
+    ELSIF days_call < 90 THEN score := score + 10;
+    ELSIF days_call < 365 THEN score := score + 3;
+    END IF;
+  END IF;
+
+  -- Email recency (max 20 points)
+  IF p_last_email_date IS NOT NULL THEN
+    days_email := EXTRACT(EPOCH FROM (now() - p_last_email_date)) / 86400.0;
+    IF days_email < 7 THEN score := score + 20;
+    ELSIF days_email < 30 THEN score := score + 15;
+    ELSIF days_email < 90 THEN score := score + 5;
+    ELSIF days_email < 365 THEN score := score + 2;
+    END IF;
+  END IF;
+
+  -- Call frequency (max 20 points)
+  IF p_total_calls > 10 THEN score := score + 20;
+  ELSIF p_total_calls > 5 THEN score := score + 15;
+  ELSIF p_total_calls > 0 THEN score := score + 10;
+  END IF;
+
+  -- Meeting recency (max 15 points)
+  IF p_last_meeting_date IS NOT NULL THEN
+    days_meeting := EXTRACT(EPOCH FROM (now() - p_last_meeting_date)) / 86400.0;
+    IF days_meeting < 7 THEN score := score + 15;
+    ELSIF days_meeting < 30 THEN score := score + 10;
+    ELSIF days_meeting < 90 THEN score := score + 5;
+    ELSIF days_meeting < 365 THEN score := score + 2;
+    END IF;
+  END IF;
+
+  -- Email frequency bonus (max 15 points)
+  IF p_total_emails_sent > 20 THEN score := score + 15;
+  ELSIF p_total_emails_sent > 10 THEN score := score + 10;
+  ELSIF p_total_emails_sent > 3 THEN score := score + 5;
+  END IF;
+
+  RETURN LEAST(score, 100);
+END;
+$$;
+
+-- ============================================================================
+-- 6. Auto-update updated_at trigger
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION update_unified_contacts_timestamp()
@@ -244,7 +334,7 @@ CREATE TRIGGER trg_unified_contacts_updated
   FOR EACH ROW EXECUTE FUNCTION update_unified_contacts_timestamp();
 
 -- ============================================================================
--- 6. Seed from sf_contacts_import (initial 34K business contacts)
+-- 7. Seed from sf_contacts_import (initial 34K business contacts)
 -- ============================================================================
 -- Run this AFTER creating the table. It inserts SF contacts as the baseline.
 -- ON CONFLICT handles duplicates by email.

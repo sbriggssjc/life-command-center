@@ -1340,14 +1340,15 @@ async function loadUnifiedContacts(search) {
 function renderUnifiedContacts() {
   let html = '';
   html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Unified Contact Hub</h3>';
-  html += '<div style="font-size:12px;color:var(--text3)">Contacts synced across Salesforce, Outlook, Calendar — business contacts only</div></div>';
+  html += '<div style="font-size:12px;color:var(--text3)">Contacts synced across Salesforce, Outlook, Calendar, WebEx, iPhone — business contacts only</div></div>';
 
-  // Data quality widget
+  // Data quality + engagement widget
   if (ucDataQuality) {
     html += '<div class="widget-grid" style="margin-bottom:12px">';
     html += '<div class="stat-card"><div class="stat-label">Total Contacts</div><div class="stat-value" style="color:var(--accent)">' + (ucDataQuality.total_contacts || 0) + '</div></div>';
-    html += '<div class="stat-card"><div class="stat-label">Stale Emails</div><div class="stat-value" style="color:' + (ucDataQuality.stale_emails > 0 ? 'var(--orange)' : 'var(--green)') + '">' + (ucDataQuality.stale_emails || 0) + '</div></div>';
-    html += '<div class="stat-card"><div class="stat-label">Stale Phones</div><div class="stat-value" style="color:' + (ucDataQuality.stale_phones > 0 ? 'var(--orange)' : 'var(--green)') + '">' + (ucDataQuality.stale_phones || 0) + '</div></div>';
+    html += '<div class="stat-card" style="cursor:pointer" onclick="loadHotLeads()"><div class="stat-label">Hot Leads</div><div class="stat-value" style="color:var(--red)">' + (ucDataQuality.hot_leads || 0) + '</div><div class="stat-sub">Score &ge; 60</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">WebEx Linked</div><div class="stat-value" style="color:var(--green)">' + (ucDataQuality.webex_linked || 0) + '</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">Stale Data</div><div class="stat-value" style="color:' + ((ucDataQuality.stale_emails + ucDataQuality.stale_phones) > 0 ? 'var(--orange)' : 'var(--green)') + '">' + ((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) + '</div><div class="stat-sub">' + (ucDataQuality.stale_emails || 0) + ' email · ' + (ucDataQuality.stale_phones || 0) + ' phone</div></div>';
     html += '<div class="stat-card" style="cursor:pointer" onclick="loadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
     html += '</div>';
   }
@@ -1371,15 +1372,25 @@ function renderUnifiedContacts() {
     if (c.sf_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1a73e8;color:#fff">SF</span>');
     if (c.outlook_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0078d4;color:#fff">Outlook</span>');
     if (c.last_synced_calendar) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0b8043;color:#fff">Calendar</span>');
+    if (c.webex_person_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#00b140;color:#fff">WebEx</span>');
+    if (c.icloud_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#a2aaad;color:#fff">iPhone</span>');
     if (c.gov_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#5f6368;color:#fff">Gov</span>');
     var staleFlags = [];
     if (c.email_stale) staleFlags.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--orange);color:#fff">Email Stale</span>');
     if (c.phone_stale) staleFlags.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--orange);color:#fff">Phone Stale</span>');
 
+    // Engagement score heat badge
+    var engScore = c.engagement_score || 0;
+    var heatBadge = '';
+    if (engScore >= 60) heatBadge = '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#d32f2f;color:#fff;font-weight:700" title="Engagement: ' + engScore + '/100">HOT ' + engScore + '</span>';
+    else if (engScore >= 30) heatBadge = '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#f57c00;color:#fff;font-weight:700" title="Engagement: ' + engScore + '/100">WARM ' + engScore + '</span>';
+    else if (engScore > 0) heatBadge = '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1565c0;color:#fff" title="Engagement: ' + engScore + '/100">COOL ' + engScore + '</span>';
+
     html += '<div class="widget" style="padding:12px">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between">';
     html += '<div style="flex:1;min-width:0">';
-    html += '<div style="font-size:14px;font-weight:500">' + esc(c.full_name || c.first_name || c.last_name || '—');
+    html += '<div style="font-size:14px;font-weight:500;display:flex;align-items:center;gap:6px">' + esc(c.full_name || c.first_name || c.last_name || '—');
+    if (heatBadge) html += ' ' + heatBadge;
     if (c.title) html += ' <span style="font-size:11px;color:var(--text3)">' + esc(c.title) + '</span>';
     html += '</div>';
     html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
@@ -1387,9 +1398,19 @@ function renderUnifiedContacts() {
     html += '</div>';
     if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + (c.mobile_phone && c.mobile_phone !== c.phone ? ' · Mobile: ' + esc(c.mobile_phone) : '') + '</div>';
     if (c.city || c.state) html += '<div style="font-size:11px;color:var(--text3)">' + esc([c.city, c.state].filter(Boolean).join(', ')) + '</div>';
-    // Source badges
+    // Source badges + stale flags
     if (sources.length > 0 || staleFlags.length > 0) {
       html += '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' + sources.join('') + staleFlags.join('') + '</div>';
+    }
+    // Engagement activity summary
+    if (c.total_calls > 0 || c.total_emails_sent > 0 || c.last_meeting_date) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:3px">';
+      var engParts = [];
+      if (c.total_calls > 0) engParts.push(c.total_calls + ' call' + (c.total_calls > 1 ? 's' : '') + (c.last_call_date ? ' (last: ' + c.last_call_date.split('T')[0] + ')' : ''));
+      if (c.total_emails_sent > 0) engParts.push(c.total_emails_sent + ' email' + (c.total_emails_sent > 1 ? 's' : ''));
+      if (c.last_meeting_date) engParts.push('Last meeting: ' + c.last_meeting_date.split('T')[0]);
+      html += engParts.join(' · ');
+      html += '</div>';
     }
     // Contact type / entity type
     if (c.contact_type || c.entity_type) {
@@ -1494,6 +1515,57 @@ async function loadMergeQueue() {
     }
   } catch (e) {
     el.innerHTML = '<div style="color:var(--red);padding:24px">Error loading merge queue: ' + esc(e.message) + '</div>';
+  }
+}
+
+// Load hot leads (sorted by engagement score)
+async function loadHotLeads() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading hot leads...</p></div>';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=hot_leads&limit=50', { headers });
+    if (r.ok) {
+      const d = await r.json();
+      const leads = d.hot_leads || [];
+      let html = '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Hot Leads</h3><div style="font-size:12px;color:var(--text3)">Business contacts ranked by engagement score (calls + emails + meetings)</div></div>';
+      html += '<button class="act-btn" style="margin-bottom:12px" onclick="mktSource=\'unified\';ucPage=0;loadAndRenderUC()">&#x2190; Back to Contacts</button>';
+      if (leads.length === 0) {
+        html += '<div style="text-align:center;padding:32px;color:var(--text2)">No engaged contacts yet. WebEx call history and email activity will populate this view.</div>';
+      } else {
+        leads.forEach(function(c) {
+          var heatColor = c.heat === 'hot' ? '#d32f2f' : c.heat === 'warm' ? '#f57c00' : '#1565c0';
+          var heatLabel = c.heat.toUpperCase();
+          html += '<div class="widget" style="padding:12px;border-left:3px solid ' + heatColor + '">';
+          html += '<div style="display:flex;align-items:center;justify-content:space-between">';
+          html += '<div style="flex:1;min-width:0">';
+          html += '<div style="font-size:14px;font-weight:500">' + esc(c.full_name || '—') + ' <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:' + heatColor + ';color:#fff;font-weight:700">' + heatLabel + ' ' + (c.engagement_score || 0) + '</span></div>';
+          html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '') + (c.title ? ' · ' + esc(c.title) : '') + '</div>';
+          var stats = [];
+          if (c.total_calls > 0) stats.push(c.total_calls + ' calls' + (c.last_call_date ? ' (last: ' + c.last_call_date.split('T')[0] + ')' : ''));
+          if (c.total_emails_sent > 0) stats.push(c.total_emails_sent + ' emails');
+          if (c.last_meeting_date) stats.push('Meeting: ' + c.last_meeting_date.split('T')[0]);
+          if (stats.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + stats.join(' · ') + '</div>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
+          if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+          if (c.phone) {
+            var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
+            html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x1F4DE;</a>';
+          }
+          if (c.sf_contact_id) {
+            var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:'',name:c.full_name||''});
+            html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
+          }
+          html += '</div></div></div>';
+        });
+      }
+      el.innerHTML = html;
+    }
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--red);padding:24px">Error loading hot leads: ' + esc(e.message) + '</div>';
   }
 }
 
