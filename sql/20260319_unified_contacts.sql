@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS unified_contacts (
   recorded_owner_id UUID,
   outlook_contact_id TEXT,
   webex_person_id TEXT,           -- WebEx People API person ID
+  teams_user_id TEXT,             -- Microsoft Teams user ID (from Graph API)
   icloud_contact_id TEXT,         -- Apple iCloud contact ID (via CardDAV or Exchange sync)
 
   -- Engagement signals (auto-updated from WebEx, Outlook, Calendar)
@@ -119,6 +120,10 @@ CREATE INDEX IF NOT EXISTS idx_uc_full_name_trgm
 -- WebEx person ID index
 CREATE INDEX IF NOT EXISTS idx_uc_webex
   ON unified_contacts (webex_person_id) WHERE webex_person_id IS NOT NULL;
+
+-- Teams user ID index
+CREATE INDEX IF NOT EXISTS idx_uc_teams
+  ON unified_contacts (teams_user_id) WHERE teams_user_id IS NOT NULL;
 
 -- iCloud contact ID index
 CREATE INDEX IF NOT EXISTS idx_uc_icloud
@@ -366,30 +371,16 @@ ON CONFLICT (LOWER(email)) DO UPDATE SET
 */
 
 -- ============================================================================
--- 8. system_tokens — persistent token storage for OAuth integrations
+-- 8. Add teams_user_id column (idempotent migration for existing deployments)
 -- ============================================================================
--- Stores refreshable OAuth tokens (WebEx, etc.) so serverless functions
--- can auto-refresh without relying solely on env vars.
-
-CREATE TABLE IF NOT EXISTS system_tokens (
-  token_key TEXT PRIMARY KEY,          -- e.g. 'webex'
-  access_token TEXT NOT NULL,
-  refresh_token TEXT,
-  expires_at TIMESTAMPTZ,              -- when the access_token expires
-  refresh_expires_at TIMESTAMPTZ,      -- when the refresh_token expires
-  metadata JSONB DEFAULT '{}',         -- extra info (scopes, token_type, etc.)
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE OR REPLACE FUNCTION update_system_tokens_timestamp()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+-- If unified_contacts already exists without teams_user_id, add it:
+DO $$
 BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_system_tokens_updated ON system_tokens;
-CREATE TRIGGER trg_system_tokens_updated
-  BEFORE UPDATE ON system_tokens
-  FOR EACH ROW EXECUTE FUNCTION update_system_tokens_timestamp();
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'unified_contacts' AND column_name = 'teams_user_id'
+  ) THEN
+    ALTER TABLE unified_contacts ADD COLUMN teams_user_id TEXT;
+    CREATE INDEX idx_uc_teams ON unified_contacts (teams_user_id) WHERE teams_user_id IS NOT NULL;
+  END IF;
+END $$;

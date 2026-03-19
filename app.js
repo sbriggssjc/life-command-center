@@ -575,7 +575,7 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
     }
   } else if (currentBizTab === 'other') {
     // All Other tab — show domain prospects if loaded, else activity stream
-    if (_mktOpportunitiesLoaded && window._mktOpportunities.all_other.length > 0) {
+    if (_mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
       renderDomainProspects('all_other');
     } else {
       renderBizContent();
@@ -724,7 +724,7 @@ function renderBizContent() {
     return;
   }
   // If "other" tab and prospects loaded, show domain prospects
-  if (currentBizTab === 'other' && _mktOpportunitiesLoaded && window._mktOpportunities.all_other.length > 0) {
+  if (currentBizTab === 'other' && _mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
     renderDomainProspects('all_other');
     return;
   }
@@ -874,6 +874,8 @@ let mktSearchTimeout;
 
 // Domain-classified opportunities stored globally for domain tabs
 window._mktOpportunities = { government: [], dialysis: [], all_other: [] };
+// Contact cards with Opportunity-type tasks, routed to domain prospecting sections
+window._mktProspectContacts = { government: [], dialysis: [], all_other: [] };
 let _mktOpportunitiesLoaded = false;
 
 // Prospect tab state per domain
@@ -901,14 +903,14 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup — includes open_tasks JSON for inline task display
+      // Load CRM client rollup — lean query (high limit) then enrich with open_tasks
       const userName = LCC_USER.display_name || 'Scott Briggs';
-      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,open_tasks,last_activity_date,completed_activity_count,last_call_notes';
+      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
       rollupUrl.searchParams.set('select', leanFields);
       rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
-      rollupUrl.searchParams.set('limit', '1000');
+      rollupUrl.searchParams.set('limit', '10000');
       if (mktOwner === 'mine') {
         rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + userName);
       } else if (mktOwner !== 'all') {
@@ -947,6 +949,31 @@ async function loadMarketing() {
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
+        // Enrich contacts with open_tasks JSON in a separate lightweight query
+        // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
+        if (clientRollupRaw && clientRollupRaw.length > 0) {
+          try {
+            const tasksUrl = new URL('/api/dia-query', window.location.origin);
+            tasksUrl.searchParams.set('table', 'v_crm_client_rollup');
+            tasksUrl.searchParams.set('select', 'sf_contact_id,open_tasks');
+            tasksUrl.searchParams.set('filter', 'open_task_count=gt.0');
+            tasksUrl.searchParams.set('limit', '10000');
+            const tasksData = await fetchRollupWithRetry(tasksUrl.toString(), 2);
+            if (tasksData && tasksData.length > 0) {
+              const taskMap = {};
+              tasksData.forEach(function(t) {
+                var parsed = t.open_tasks;
+                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch(e) { parsed = []; } }
+                taskMap[t.sf_contact_id] = parsed || [];
+              });
+              clientRollupRaw.forEach(function(c) {
+                if (taskMap[c.sf_contact_id]) c.open_tasks = taskMap[c.sf_contact_id];
+              });
+            }
+          } catch(e) {
+            console.warn('[Marketing] open_tasks enrichment failed, tasks will load on-demand:', e.message);
+          }
+        }
       }
 
       // Load opportunities separately — this is a heavy query that can timeout during initial burst
@@ -1019,38 +1046,72 @@ async function loadMarketing() {
       };
       _mktOpportunitiesLoaded = true;
 
-      // Normalize client rollup to pipeline schema (one row per contact)
-      const tasks = (clientRollupRaw || []).map(d => ({
-        pipeline_source: 'sf_deal',
-        item_id: d.sf_contact_id || '',
-        deal_name: d.contact_name || '(Unknown)',
-        deal_display_name: d.contact_name || '(Unknown)',
-        deal_priority: null,
-        contact_name: d.contact_name || '',
-        first_name: d.first_name,
-        last_name: d.last_name,
-        company_name: d.company_name,
-        email: d.email,
-        phone: d.phone,
-        sf_contact_id: d.sf_contact_id,
-        sf_company_id: d.sf_company_id,
-        due_date: d.last_activity_date,
-        notes: d.task_notes,
-        status: 'Open',
-        assigned_to: d.assigned_to,
-        activity_type: 'CRM',
-        lead_source: null,
-        sf_match_status: null,
-        touchpoint_count: d.open_task_count,
-        ingested_at: d.first_activity_date,
-        // Client rollup fields
-        opportunity_deals: d.opportunity_deals,
-        total_deal_count: d.total_deal_count || 0,
-        completed_activity_count: d.completed_activity_count || 0,
-        last_call_notes: d.last_call_notes,
-        open_task_count: d.open_task_count || 0,
-        open_tasks: d.open_tasks || []
-      }));
+      // Build sf_contact_id → domain map from domain-classified opportunities
+      const contactDomainMap = {};
+      opps.forEach(function(o) {
+        if (o.sf_contact_id && o.domain) contactDomainMap[o.sf_contact_id] = o.domain;
+      });
+
+      // Normalize client rollup to pipeline schema and split by task type:
+      // - Opportunity-type tasks → route to domain prospect sections
+      // - Non-Opportunity tasks → stay on marketing tab
+      window._mktProspectContacts = { government: [], dialysis: [], all_other: [] };
+      const tasks = [];
+      (clientRollupRaw || []).forEach(function(d) {
+        var allTasks = d.open_tasks || [];
+        var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity'; });
+        var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity'; });
+
+        // Base contact fields shared by both routes
+        var base = {
+          pipeline_source: 'sf_deal',
+          item_id: d.sf_contact_id || '',
+          deal_name: d.contact_name || '(Unknown)',
+          deal_display_name: d.contact_name || '(Unknown)',
+          deal_priority: null,
+          contact_name: d.contact_name || '',
+          first_name: d.first_name,
+          last_name: d.last_name,
+          company_name: d.company_name,
+          email: d.email,
+          phone: d.phone,
+          sf_contact_id: d.sf_contact_id,
+          sf_company_id: d.sf_company_id,
+          due_date: d.last_activity_date,
+          notes: d.task_notes,
+          status: 'Open',
+          assigned_to: d.assigned_to,
+          activity_type: 'CRM',
+          lead_source: null,
+          sf_match_status: null,
+          ingested_at: d.first_activity_date,
+          opportunity_deals: d.opportunity_deals,
+          total_deal_count: d.total_deal_count || 0,
+          completed_activity_count: d.completed_activity_count || 0,
+          last_call_notes: d.last_call_notes
+        };
+
+        // Route Opportunity tasks to domain prospecting sections
+        if (oppTasks.length > 0) {
+          var domain = contactDomainMap[d.sf_contact_id] || 'all_other';
+          var prospectContact = Object.assign({}, base, {
+            open_task_count: oppTasks.length,
+            open_tasks: oppTasks,
+            touchpoint_count: oppTasks.length
+          });
+          window._mktProspectContacts[domain].push(prospectContact);
+        }
+
+        // Keep non-Opportunity tasks on the marketing tab
+        if (nonOppTasks.length > 0 || (d.completed_activity_count || 0) > 0) {
+          var mktContact = Object.assign({}, base, {
+            open_task_count: nonOppTasks.length,
+            open_tasks: nonOppTasks,
+            touchpoint_count: nonOppTasks.length
+          });
+          tasks.push(mktContact);
+        }
+      });
 
       // Normalize leads to pipeline schema
       const leads = (leadsRaw || []).map(l => ({
@@ -1101,9 +1162,9 @@ async function loadMarketing() {
       const actionableCount = mktData.filter(d => d.pipeline_source === 'sf_deal' && d.due_date && d.due_date <= today).length;
       const badge = document.getElementById('bizBadgeMkt');
       if (badge) badge.textContent = actionableCount || mktData.length;
-      // Update All Other badge with prospect count
+      // Update domain badges with combined prospect + opportunity counts
       const otherBadge = document.getElementById('bizBadgeOther');
-      if (otherBadge) otherBadge.textContent = window._mktOpportunities.all_other.length || '—';
+      if (otherBadge) otherBadge.textContent = (window._mktOpportunities.all_other.length + window._mktProspectContacts.all_other.length) || '—';
     } catch (e) {
       console.error('Marketing load error:', e);
       el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading marketing pipeline.</div>';
@@ -1174,15 +1235,15 @@ function renderMarketing() {
   const overdue = ownerFiltered.filter(d => d.due_date && d.due_date < today).length;
   const unmatched = inboundLeads.filter(d => d.sf_match_status === 'unmatched').length;
 
-  // Domain prospect counts for quick reference
-  const govCount = window._mktOpportunities.government.length;
-  const diaCount = window._mktOpportunities.dialysis.length;
-  const otherCount = window._mktOpportunities.all_other.length;
+  // Domain prospect counts for quick reference (opportunities + prospect contacts)
+  const govCount = (window._mktOpportunities.government.length || 0) + (window._mktProspectContacts.government.length || 0);
+  const diaCount = (window._mktOpportunities.dialysis.length || 0) + (window._mktProspectContacts.dialysis.length || 0);
+  const otherCount = (window._mktOpportunities.all_other.length || 0) + (window._mktProspectContacts.all_other.length || 0);
 
   let html = '';
 
   // Header
-  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">CRM Activity Hub</h3><div style="font-size:12px;color:var(--text3)">Calls, follow-ups & tasks — Opportunities routed to domain Prospects tabs</div></div>';
+  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Marketing</h3><div style="font-size:12px;color:var(--text3)">Calls, follow-ups & marketing tasks — Prospecting calls routed to domain tabs</div></div>';
 
   // Owner toggle (My Tasks / All Tasks)
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
@@ -1237,13 +1298,12 @@ function renderMarketing() {
   html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search tasks, contacts, companies, emails..." value="${esc(mktSearch)}" oninput="debounceMktSearch(this.value)"></div>`;
 
   if (mktSort === 'deal') {
-    // Group contacts by their Opportunity deal subjects
+    // Group contacts by their open task subjects (non-Opportunity tasks only on marketing tab)
     var dealGroups = {};
     filtered.forEach(function(c) {
       var tasks = c.open_tasks || [];
-      var oppTasks = tasks.filter(function(t) { return t.type === 'Opportunity'; });
-      if (oppTasks.length > 0) {
-        oppTasks.forEach(function(t) {
+      if (tasks.length > 0) {
+        tasks.forEach(function(t) {
           var key = t.subject || '(Untitled)';
           if (!dealGroups[key]) dealGroups[key] = { deal: key, date: t.date, contacts: [] };
           if (t.date && (!dealGroups[key].date || t.date > dealGroups[key].date)) dealGroups[key].date = t.date;
@@ -1256,7 +1316,7 @@ function renderMarketing() {
     });
 
     if (sortedDeals.length === 0) {
-      html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts with Opportunity deals found. Try "Recent Activity" sort.</div>';
+      html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts with open tasks found. Try "Recent Activity" sort.</div>';
     } else {
       var dealStart = mktPage * MKT_PAGE;
       var dealPageItems = sortedDeals.slice(dealStart, dealStart + MKT_PAGE);
@@ -1373,6 +1433,7 @@ function renderUnifiedContacts() {
     if (c.outlook_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0078d4;color:#fff">Outlook</span>');
     if (c.last_synced_calendar) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0b8043;color:#fff">Calendar</span>');
     if (c.webex_person_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#00b140;color:#fff">WebEx</span>');
+    if (c.teams_user_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#6264a7;color:#fff">Teams</span>');
     if (c.icloud_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#a2aaad;color:#fff">iPhone</span>');
     if (c.gov_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#5f6368;color:#fff">Gov</span>');
     var staleFlags = [];
@@ -1435,7 +1496,27 @@ function renderUnifiedContacts() {
       var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_account_id||'',name:c.full_name||c.company_name||''});
       html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
     }
-    html += '</div></div></div>';
+    html += '</div></div>';
+
+    // Messaging section — expandable, loads on demand
+    var hasTeams = !!(c.email || c.teams_user_id);
+    var hasWebex = !!(c.email || c.webex_person_id);
+    var hasSms = !!(c.phone || c.mobile_phone);
+    if (hasTeams || hasWebex || hasSms) {
+      html += '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px">';
+      html += '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="ucToggleMessages(\'' + c.unified_id + '\')">';
+      html += '<span style="font-size:11px;color:var(--text2);font-weight:500">Messages</span>';
+      html += '<span id="ucMsgArrow_' + c.unified_id + '" style="font-size:9px;color:var(--text3);transition:transform .2s">&#x25B6;</span>';
+      // Channel tabs (shown as small badges)
+      if (hasTeams) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#6264a7;color:#fff;opacity:0.7">Teams</span>';
+      if (hasWebex) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#00b140;color:#fff;opacity:0.7">WebEx</span>';
+      if (hasSms) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#555;color:#fff;opacity:0.7">SMS</span>';
+      html += '</div>';
+      html += '<div id="ucMsgPanel_' + c.unified_id + '" style="display:none;margin-top:6px" data-loaded="false" data-channel="" data-teams="' + (hasTeams?1:0) + '" data-webex="' + (hasWebex?1:0) + '" data-sms="' + (hasSms?1:0) + '" data-email="' + esc(c.email||'') + '" data-phone="' + esc(c.mobile_phone||c.phone||'') + '" data-name="' + esc(c.first_name||'') + '"></div>';
+      html += '</div>';
+    }
+
+    html += '</div>';
   });
 
   // Pager
@@ -1482,6 +1563,155 @@ async function ucToggleClass(unifiedId, newClass) {
   } catch (e) {
     console.error('Classify error:', e.message);
   }
+}
+
+// ============================================================
+// CONTACT MESSAGING — in-app Teams, WebEx, SMS
+// ============================================================
+
+// Cached message templates
+let ucMsgTemplates = null;
+
+function ucToggleMessages(unifiedId) {
+  var panel = document.getElementById('ucMsgPanel_' + unifiedId);
+  var arrow = document.getElementById('ucMsgArrow_' + unifiedId);
+  if (!panel) return;
+  var isHidden = panel.style.display === 'none';
+  panel.style.display = isHidden ? 'block' : 'none';
+  if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : '';
+  // Load on first expand
+  if (isHidden && panel.dataset.loaded === 'false') {
+    // Determine default channel
+    var ch = panel.dataset.teams === '1' ? 'teams' : panel.dataset.webex === '1' ? 'webex' : 'sms';
+    ucLoadChannelMessages(unifiedId, ch);
+  }
+}
+
+async function ucLoadChannelMessages(unifiedId, channel) {
+  var panel = document.getElementById('ucMsgPanel_' + unifiedId);
+  if (!panel) return;
+  panel.dataset.channel = channel;
+  panel.dataset.loaded = 'true';
+
+  // Load templates if not cached
+  if (!ucMsgTemplates) {
+    try {
+      var headers = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      var tr = await fetch('/api/contacts?action=message_templates', { headers });
+      if (tr.ok) { var td = await tr.json(); ucMsgTemplates = td.templates || []; }
+    } catch(e) { ucMsgTemplates = []; }
+  }
+
+  // Render channel tabs + loading state
+  var hasTeams = panel.dataset.teams === '1';
+  var hasWebex = panel.dataset.webex === '1';
+  var hasSms = panel.dataset.sms === '1';
+  var contactName = panel.dataset.name || '';
+
+  var tabsHtml = '<div style="display:flex;gap:4px;margin-bottom:6px">';
+  if (hasTeams) tabsHtml += '<button class="act-btn' + (channel === 'teams' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'teams\')">Teams</button>';
+  if (hasWebex) tabsHtml += '<button class="act-btn' + (channel === 'webex' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'webex\')">WebEx</button>';
+  if (hasSms) tabsHtml += '<button class="act-btn' + (channel === 'sms' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'sms\')">SMS</button>';
+  tabsHtml += '</div>';
+
+  panel.innerHTML = tabsHtml + '<div style="text-align:center;padding:12px;color:var(--text3);font-size:11px"><span class="spinner" style="width:14px;height:14px"></span> Loading messages...</div>';
+
+  // Fetch messages
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var action = channel === 'teams' ? 'messages_teams' : channel === 'webex' ? 'messages_webex' : 'messages_sms';
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId + '&limit=10', { headers });
+    var data = r.ok ? await r.json() : { messages: [], error: 'Failed to load' };
+    var msgs = data.messages || [];
+
+    var msgsHtml = tabsHtml;
+
+    // Message list
+    if (msgs.length === 0) {
+      msgsHtml += '<div style="text-align:center;padding:8px;color:var(--text3);font-size:11px">' + (data.note || data.error || 'No messages yet') + '</div>';
+    } else {
+      msgsHtml += '<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;margin-bottom:6px;background:var(--bg2)">';
+      // Reverse to show oldest first (API returns newest first)
+      msgs.reverse().forEach(function(m) {
+        var isMe = m.is_from_me || m.direction === 'outbound';
+        var time = m.created_at ? new Date(m.created_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+        var content = m.content_type === 'html' ? m.content.replace(/<[^>]+>/g, '') : (m.content || '');
+        if (content.length > 200) content = content.substring(0, 200) + '...';
+        msgsHtml += '<div style="margin-bottom:4px;text-align:' + (isMe ? 'right' : 'left') + '">';
+        msgsHtml += '<div style="display:inline-block;max-width:80%;padding:4px 8px;border-radius:8px;font-size:11px;background:' + (isMe ? 'var(--accent)' : 'var(--bg3)') + ';color:' + (isMe ? '#fff' : 'var(--text)') + '">' + esc(content) + '</div>';
+        msgsHtml += '<div style="font-size:9px;color:var(--text3);margin-top:1px">' + (isMe ? 'You' : esc(m.from || '')) + ' · ' + time + '</div>';
+        msgsHtml += '</div>';
+      });
+      msgsHtml += '</div>';
+    }
+
+    // Compose area with template selector
+    var channelTemplates = (ucMsgTemplates || []).filter(function(t) { return t.channels.indexOf(channel) >= 0; });
+    msgsHtml += '<div style="display:flex;gap:4px;align-items:flex-end">';
+    if (channelTemplates.length > 0) {
+      msgsHtml += '<select style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);max-width:120px" onchange="ucApplyTemplate(\'' + unifiedId + '\',this.value,\'' + esc(contactName) + '\')">';
+      msgsHtml += '<option value="">Template...</option>';
+      channelTemplates.forEach(function(t) {
+        msgsHtml += '<option value="' + esc(t.id) + '">' + esc(t.name) + '</option>';
+      });
+      msgsHtml += '</select>';
+    }
+    msgsHtml += '<input id="ucMsgInput_' + unifiedId + '" type="text" placeholder="Type a message..." style="flex:1;font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" onkeydown="if(event.key===\'Enter\')ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">';
+    var sendLabel = channel === 'teams' ? 'Send via Teams' : channel === 'webex' ? 'Send via WebEx' : 'Send SMS';
+    msgsHtml += '<button class="act-btn primary" style="font-size:10px;padding:4px 8px;white-space:nowrap" onclick="ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">' + sendLabel + '</button>';
+    msgsHtml += '</div>';
+
+    panel.innerHTML = msgsHtml;
+  } catch (e) {
+    panel.innerHTML = tabsHtml + '<div style="color:var(--red);font-size:11px;padding:8px">Error loading messages: ' + esc(e.message) + '</div>';
+  }
+}
+
+function ucApplyTemplate(unifiedId, templateId, contactName) {
+  if (!templateId) return;
+  var tpl = (ucMsgTemplates || []).find(function(t) { return t.id === templateId; });
+  if (!tpl) return;
+  var input = document.getElementById('ucMsgInput_' + unifiedId);
+  if (!input) return;
+  // Simple token replacement
+  var msg = tpl.template
+    .replace('{first_name}', contactName || 'there')
+    .replace('{deal_name}', 'your property')
+    .replace('{rate}', '4.25')
+    .replace('{deal_type}', 'multifamily');
+  input.value = msg;
+  input.focus();
+}
+
+async function ucSendMessage(unifiedId, channel) {
+  var input = document.getElementById('ucMsgInput_' + unifiedId);
+  if (!input || !input.value.trim()) return;
+  var message = input.value.trim();
+  input.value = '';
+  input.disabled = true;
+
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var action = channel === 'teams' ? 'send_teams' : channel === 'webex' ? 'send_webex' : 'send_sms';
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId, {
+      method: 'POST', headers, body: JSON.stringify({ message: message })
+    });
+    if (r.ok) {
+      // Reload messages to show the sent message
+      ucLoadChannelMessages(unifiedId, channel);
+    } else {
+      var err = await r.json().catch(function() { return {}; });
+      alert('Send failed: ' + (err.error || 'Unknown error'));
+      input.value = message;
+    }
+  } catch (e) {
+    alert('Send error: ' + e.message);
+    input.value = message;
+  }
+  input.disabled = false;
 }
 
 // Placeholder for merge queue viewer
@@ -1787,9 +2017,18 @@ function renderDomainProspects(domain, containerId) {
   const today = new Date().toISOString().split('T')[0];
   const userName = LCC_USER.display_name || 'Scott Briggs';
   const prospects = window._mktOpportunities[domain] || [];
+  const prospectContacts = window._mktProspectContacts[domain] || [];
 
-  // Apply filters
-  let filtered = prospects;
+  // Merge opportunity deals with prospect contacts for a unified view
+  // De-duplicate by sf_contact_id — prefer prospect contacts (have richer data)
+  const seenContacts = new Set();
+  prospectContacts.forEach(function(c) { if (c.sf_contact_id) seenContacts.add(c.sf_contact_id); });
+  const combinedProspects = [].concat(prospectContacts, prospects.filter(function(d) {
+    return !d.sf_contact_id || !seenContacts.has(d.sf_contact_id);
+  }));
+
+  // Apply filters to combined list
+  let filtered = combinedProspects;
   if (prospectOwner[domain] === 'mine') {
     filtered = filtered.filter(d => d.assigned_to === userName);
   } else if (prospectOwner[domain] !== 'all') {
@@ -1814,17 +2053,18 @@ function renderDomainProspects(domain, containerId) {
     );
   }
 
-  // Collect owners
+  // Collect owners from combined list
   const ownerSet = new Set();
-  prospects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
+  combinedProspects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
   const owners = Array.from(ownerSet).sort();
-  const overdue = prospects.filter(d => d.due_date && d.due_date < today).length;
-  const totalDeals = new Set(prospects.map(d => d.deal_name)).size;
+  const overdue = combinedProspects.filter(d => d.due_date && d.due_date < today).length;
+  const totalDeals = new Set(combinedProspects.map(d => d.deal_name)).size;
+  const totalContacts = combinedProspects.length;
   const domainLabel = domain === 'government' ? 'Government' : domain === 'dialysis' ? 'Dialysis' : 'All Other';
   const renderCall = `renderDomainProspects('${domain}')`;
 
   let html = '';
-  html += `<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">${domainLabel} Prospects</h3><div style="font-size:12px;color:var(--text3)">${totalDeals} deals · ${prospects.length} contacts</div></div>`;
+  html += `<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">${domainLabel} Prospecting</h3><div style="font-size:12px;color:var(--text3)">${totalDeals} deals · ${totalContacts} contacts</div></div>`;
 
   // Owner toggle
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
@@ -1839,7 +2079,7 @@ function renderDomainProspects(domain, containerId) {
 
   // Metrics
   html += '<div class="widget-grid">';
-  html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${prospects.length} contacts</div></div>`;
+  html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${totalContacts} contacts</div></div>`;
   html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
   html += '</div>';
 
@@ -2072,6 +2312,54 @@ async function mktReassignDeal(activityId, newOwner, sfContactId) {
   }
 }
 
+// ── Shared task store helpers (works across marketing + domain prospect views) ──
+function _updateTaskInAllStores(sfContactId, subject, action, newDate) {
+  // Update a task across mktData and all _mktProspectContacts domains
+  var stores = [mktData];
+  ['government', 'dialysis', 'all_other'].forEach(function(dom) {
+    if (window._mktProspectContacts && window._mktProspectContacts[dom]) {
+      stores.push(window._mktProspectContacts[dom]);
+    }
+  });
+
+  stores.forEach(function(store) {
+    for (var i = store.length - 1; i >= 0; i--) {
+      var d = store[i];
+      if (d.sf_contact_id !== sfContactId || !d.open_tasks) continue;
+
+      if (action === 'complete') {
+        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        d.open_task_count = d.open_tasks.length;
+        d.completed_activity_count = (d.completed_activity_count || 0) + 1;
+        if (d.open_tasks.length === 0 && !d.completed_activity_count) store.splice(i, 1);
+      } else if (action === 'reschedule') {
+        d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
+        d.due_date = newDate;
+      } else if (action === 'dismiss') {
+        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        d.open_task_count = d.open_tasks.length;
+        if (d.open_tasks.length === 0 && !(d.completed_activity_count > 0)) store.splice(i, 1);
+      }
+    }
+  });
+}
+
+function _rerenderCurrentView() {
+  if (typeof currentBizTab !== 'undefined') {
+    if (currentBizTab === 'marketing') { renderMarketing(); return; }
+    if (currentBizTab === 'other') { renderDomainProspects('all_other'); return; }
+  }
+  // Check if we're on a domain sub-tab
+  if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
+    renderDomainProspects('dialysis'); return;
+  }
+  // Government renders into a container
+  var govContainer = document.getElementById('govSfProspectsContainer');
+  if (govContainer) { renderDomainProspects('government', 'govSfProspectsContainer'); return; }
+  // Fallback: re-render marketing
+  renderMarketing();
+}
+
 // ── Task management: complete, reschedule, dismiss ──
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
@@ -2086,16 +2374,9 @@ async function completeTask(sfContactId, subject) {
       body: JSON.stringify({ status: 'Completed' })
     });
     showToast('Task completed!', 'success');
-    // Remove from local data and re-render
-    mktData = mktData.filter(function(d) { return !(d.sf_contact_id === sfContactId && d.open_tasks && d.open_tasks.length <= 1); });
-    mktData.forEach(function(d) {
-      if (d.sf_contact_id === sfContactId && d.open_tasks) {
-        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
-        d.open_task_count = d.open_tasks.length;
-        d.completed_activity_count = (d.completed_activity_count || 0) + 1;
-      }
-    });
-    renderMarketing();
+    // Remove from local data (marketing + prospect contacts) and re-render
+    _updateTaskInAllStores(sfContactId, subject, 'complete');
+    _rerenderCurrentView();
   } catch (e) {
     showToast('Error completing task: ' + e.message, 'error');
   }
@@ -2115,14 +2396,9 @@ async function rescheduleTask(sfContactId, subject, newDate) {
       body: JSON.stringify({ activity_date: newDate })
     });
     showToast('Rescheduled to ' + newDate, 'success');
-    // Update local data
-    mktData.forEach(function(d) {
-      if (d.sf_contact_id === sfContactId && d.open_tasks) {
-        d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
-        d.due_date = newDate;
-      }
-    });
-    renderMarketing();
+    // Update local data (marketing + prospect contacts)
+    _updateTaskInAllStores(sfContactId, subject, 'reschedule', newDate);
+    _rerenderCurrentView();
   } catch (e) {
     showToast('Error rescheduling: ' + e.message, 'error');
   }
@@ -2142,16 +2418,9 @@ async function dismissTask(sfContactId, subject) {
       body: JSON.stringify({ status: 'Abandoned' })
     });
     showToast('Task dismissed', 'success');
-    // Remove from local data
-    mktData.forEach(function(d) {
-      if (d.sf_contact_id === sfContactId && d.open_tasks) {
-        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
-        d.open_task_count = d.open_tasks.length;
-      }
-    });
-    // Remove contacts with no remaining tasks
-    mktData = mktData.filter(function(d) { return !d.open_tasks || d.open_tasks.length > 0 || d.completed_activity_count > 0; });
-    renderMarketing();
+    // Remove from local data (marketing + prospect contacts)
+    _updateTaskInAllStores(sfContactId, subject, 'dismiss');
+    _rerenderCurrentView();
   } catch (e) {
     showToast('Error dismissing task: ' + e.message, 'error');
   }
