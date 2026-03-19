@@ -47,6 +47,10 @@
 - On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-18 20:33:35` local time.
 - Three fresh `git.exe` processes were again present, all started at `2026-03-18 20:40:28` local time.
 - After terminating those processes and removing `.git/HEAD.lock`, the next `git pull --tags origin main` failure in this environment was again GitHub network connectivity, not a ref-lock failure.
+- The `HEAD.lock` issue recurred again on 2026-03-19 during another GUI-driven commit attempt.
+- On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-19 07:47:51` and `LastWriteTime` `2026-03-19 07:58:51` local time.
+- One fresh `git.exe` process was present, started at `2026-03-19 08:02:13` local time.
+- After terminating that process and removing `.git/HEAD.lock`, the same `git commit --dry-run --allow-empty-message --file - --allow-empty` no longer failed with a ref-lock error.
 
 ## What This Means
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.
@@ -69,8 +73,9 @@
 ## Latest Status
 - `HEAD.lock` has been removed.
 - Git can now prepare a commit again.
-- Current branch state is `main...origin/main [behind 2]`.
-- Current staged changes are `api/_shared/allowlist.js`, `api/contacts.js`, `app.js`, `sql/20260319_unified_contacts.sql`, and `vercel.json`.
+- Current branch state is `main...origin/main [ahead 1, behind 4]`.
+- Current staged changes are `api/actions.js`, `api/data-proxy.js`, `api/rcm-ingest.js`, `sql/20260319_rcm_dedup_index.sql`, and `vercel.json`.
+- Current staged deletions are `api/activities.js` and `api/gov-write.js`.
 
 ## Likely Cause
 - The repeated command shape matches a GUI-driven Git sync/commit flow rather than a manual CLI command.
