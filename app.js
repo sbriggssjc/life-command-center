@@ -1454,9 +1454,19 @@ async function loadUnifiedContacts(search) {
       ucData = d.contacts || [];
       ucTotal = d.total || 0;
       ucLoaded = true;
+      window._ucLoadError = null;
+    } else {
+      const errData = await r.json().catch(() => ({}));
+      console.warn('[UnifiedContacts] API error:', r.status, errData);
+      ucData = [];
+      ucLoaded = true;
+      window._ucLoadError = errData.error || `API returned ${r.status}`;
     }
   } catch (e) {
     console.warn('[UnifiedContacts] Load error:', e.message);
+    ucData = [];
+    ucLoaded = true;
+    window._ucLoadError = 'Network error: ' + e.message;
   }
   // Load data quality stats once
   if (!ucDataQuality) {
@@ -1491,10 +1501,19 @@ function renderUnifiedContacts() {
   }
 
   // Search
-  html += '<div class="search-bar" style="margin-bottom:8px"><input class="search-input" type="text" placeholder="Search unified contacts by name, email, company, phone..." value="' + esc(ucSearch) + '" oninput="debounceUcSearch(this.value)"></div>';
+  html += '<div class="search-bar" style="margin-bottom:8px"><input class="search-input" type="text" autocomplete="off" placeholder="Search unified contacts by name, email, company, phone..." value="' + esc(ucSearch) + '" oninput="debounceUcSearch(this.value)"></div>';
 
   if (!ucLoaded) {
     html += '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
+    return html;
+  }
+
+  if (window._ucLoadError) {
+    html += '<div style="text-align:center;padding:32px;color:var(--red)">';
+    html += '<div style="font-size:14px;font-weight:600;margin-bottom:8px">Failed to load contacts</div>';
+    html += '<div style="font-size:12px;color:var(--text3);margin-bottom:12px">' + esc(window._ucLoadError) + '</div>';
+    html += '<button class="btn btn-sm" onclick="ucLoaded=false;window._ucLoadError=null;loadAndRenderUC()" style="font-size:11px;padding:4px 12px;cursor:pointer">Retry</button>';
+    html += '</div>';
     return html;
   }
 
@@ -1620,7 +1639,12 @@ async function loadAndRenderUC() {
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
   await loadUnifiedContacts(ucSearch);
-  el.innerHTML = renderUnifiedContacts();
+  try {
+    el.innerHTML = renderUnifiedContacts();
+  } catch (e) {
+    console.error('[UnifiedContacts] Render error:', e);
+    el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><div style="font-size:14px;font-weight:600;margin-bottom:8px">Render error</div><div style="font-size:12px;color:var(--text3)">' + esc(e.message) + '</div><button class="btn btn-sm" onclick="ucLoaded=false;window._ucLoadError=null;loadAndRenderUC()" style="margin-top:12px;font-size:11px;padding:4px 12px;cursor:pointer">Retry</button></div>';
+  }
 }
 
 // Reclassify a contact between personal and business
