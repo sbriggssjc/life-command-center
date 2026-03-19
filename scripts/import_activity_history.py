@@ -103,16 +103,16 @@ def parse_csv(filepath):
 
 def insert_supabase(rows):
     """Insert rows using Supabase client."""
-    url = (os.environ.get('SUPABASE_URL')
-           or os.environ.get('GOV_SUPABASE_URL')
-           or 'https://scknotsqkcheojiaewwh.supabase.co')
-    key = (os.environ.get('SUPABASE_SERVICE_KEY')
-           or os.environ.get('GOV_SUPABASE_KEY')
-           or os.environ.get('SUPABASE_SERVICE_ROLE_KEY'))
+    # Hardcoded to gov/NM Supabase project — override with GOV_SUPABASE_URL if needed
+    url = os.environ.get('GOV_SUPABASE_URL', 'https://scknotsqkcheojiaewwh.supabase.co')
+    key = (os.environ.get('GOV_SUPABASE_KEY')
+           or os.environ.get('SUPABASE_SERVICE_KEY')
+           or os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')).strip()
 
-    if not key:
-        print("ERROR: Set SUPABASE_SERVICE_KEY or GOV_SUPABASE_KEY env var")
-        print("  PowerShell:  $env:SUPABASE_SERVICE_KEY='your_key'")
+    if not key or not key.startswith('eyJ'):
+        print("ERROR: Need the service_role API key (starts with 'eyJ...')")
+        print("  Find it: Supabase Dashboard → Settings → API → service_role")
+        print("  PowerShell:  $env:GOV_SUPABASE_KEY='eyJ...'")
         sys.exit(1)
 
     print(f"  Connecting to: {url}")
