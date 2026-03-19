@@ -2528,13 +2528,15 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
   }
 
   var today = new Date().toISOString().split('T')[0];
-  var activityType = action === 'complete' ? 'Task Completed' : action === 'dismiss' ? 'Task Dismissed' : 'Task Updated';
+  // Use a valid SF activity_type (edge function validates against 6 allowed categories)
+  // and include the task subject + action context in notes
+  var actionLabel = action === 'complete' ? 'Completed' : action === 'dismiss' ? 'Dismissed' : 'Updated';
   var payload = {
     sf_contact_id: sfContactId,
     sf_company_id: sfCompanyId || undefined,
-    activity_type: activityType,
+    activity_type: 'Follow-up',
     activity_date: today,
-    notes: subject,
+    notes: '[' + actionLabel + '] ' + subject,
     force: true
   };
 
