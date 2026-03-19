@@ -408,6 +408,7 @@ function handlePageLoad(pageId) {
         renderBizContent();
       }
       break;
+    case 'pageContacts': if (typeof renderContactsPage === 'function') renderContactsPage(); break;
     case 'pageMessages': loadMessages(); break;
     case 'pageSettings': renderSettings(); break;
   }
