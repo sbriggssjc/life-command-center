@@ -867,6 +867,8 @@ let mktSearchTimeout;
 
 // Domain-classified opportunities stored globally for domain tabs
 window._mktOpportunities = { government: [], dialysis: [], all_other: [] };
+// Contact cards with Opportunity-type tasks, routed to domain prospecting sections
+window._mktProspectContacts = { government: [], dialysis: [], all_other: [] };
 let _mktOpportunitiesLoaded = false;
 
 // Prospect tab state per domain
@@ -1037,38 +1039,72 @@ async function loadMarketing() {
       };
       _mktOpportunitiesLoaded = true;
 
-      // Normalize client rollup to pipeline schema (one row per contact)
-      const tasks = (clientRollupRaw || []).map(d => ({
-        pipeline_source: 'sf_deal',
-        item_id: d.sf_contact_id || '',
-        deal_name: d.contact_name || '(Unknown)',
-        deal_display_name: d.contact_name || '(Unknown)',
-        deal_priority: null,
-        contact_name: d.contact_name || '',
-        first_name: d.first_name,
-        last_name: d.last_name,
-        company_name: d.company_name,
-        email: d.email,
-        phone: d.phone,
-        sf_contact_id: d.sf_contact_id,
-        sf_company_id: d.sf_company_id,
-        due_date: d.last_activity_date,
-        notes: d.task_notes,
-        status: 'Open',
-        assigned_to: d.assigned_to,
-        activity_type: 'CRM',
-        lead_source: null,
-        sf_match_status: null,
-        touchpoint_count: d.open_task_count,
-        ingested_at: d.first_activity_date,
-        // Client rollup fields
-        opportunity_deals: d.opportunity_deals,
-        total_deal_count: d.total_deal_count || 0,
-        completed_activity_count: d.completed_activity_count || 0,
-        last_call_notes: d.last_call_notes,
-        open_task_count: d.open_task_count || 0,
-        open_tasks: d.open_tasks || []
-      }));
+      // Build sf_contact_id → domain map from domain-classified opportunities
+      const contactDomainMap = {};
+      opps.forEach(function(o) {
+        if (o.sf_contact_id && o.domain) contactDomainMap[o.sf_contact_id] = o.domain;
+      });
+
+      // Normalize client rollup to pipeline schema and split by task type:
+      // - Opportunity-type tasks → route to domain prospect sections
+      // - Non-Opportunity tasks → stay on marketing tab
+      window._mktProspectContacts = { government: [], dialysis: [], all_other: [] };
+      const tasks = [];
+      (clientRollupRaw || []).forEach(function(d) {
+        var allTasks = d.open_tasks || [];
+        var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity'; });
+        var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity'; });
+
+        // Base contact fields shared by both routes
+        var base = {
+          pipeline_source: 'sf_deal',
+          item_id: d.sf_contact_id || '',
+          deal_name: d.contact_name || '(Unknown)',
+          deal_display_name: d.contact_name || '(Unknown)',
+          deal_priority: null,
+          contact_name: d.contact_name || '',
+          first_name: d.first_name,
+          last_name: d.last_name,
+          company_name: d.company_name,
+          email: d.email,
+          phone: d.phone,
+          sf_contact_id: d.sf_contact_id,
+          sf_company_id: d.sf_company_id,
+          due_date: d.last_activity_date,
+          notes: d.task_notes,
+          status: 'Open',
+          assigned_to: d.assigned_to,
+          activity_type: 'CRM',
+          lead_source: null,
+          sf_match_status: null,
+          ingested_at: d.first_activity_date,
+          opportunity_deals: d.opportunity_deals,
+          total_deal_count: d.total_deal_count || 0,
+          completed_activity_count: d.completed_activity_count || 0,
+          last_call_notes: d.last_call_notes
+        };
+
+        // Route Opportunity tasks to domain prospecting sections
+        if (oppTasks.length > 0) {
+          var domain = contactDomainMap[d.sf_contact_id] || 'all_other';
+          var prospectContact = Object.assign({}, base, {
+            open_task_count: oppTasks.length,
+            open_tasks: oppTasks,
+            touchpoint_count: oppTasks.length
+          });
+          window._mktProspectContacts[domain].push(prospectContact);
+        }
+
+        // Keep non-Opportunity tasks on the marketing tab
+        if (nonOppTasks.length > 0 || (d.completed_activity_count || 0) > 0) {
+          var mktContact = Object.assign({}, base, {
+            open_task_count: nonOppTasks.length,
+            open_tasks: nonOppTasks,
+            touchpoint_count: nonOppTasks.length
+          });
+          tasks.push(mktContact);
+        }
+      });
 
       // Normalize leads to pipeline schema
       const leads = (leadsRaw || []).map(l => ({
@@ -1109,9 +1145,9 @@ async function loadMarketing() {
       const actionableCount = mktData.filter(d => d.pipeline_source === 'sf_deal' && d.due_date && d.due_date <= today).length;
       const badge = document.getElementById('bizBadgeMkt');
       if (badge) badge.textContent = actionableCount || mktData.length;
-      // Update All Other badge with prospect count
+      // Update domain badges with combined prospect + opportunity counts
       const otherBadge = document.getElementById('bizBadgeOther');
-      if (otherBadge) otherBadge.textContent = window._mktOpportunities.all_other.length || '—';
+      if (otherBadge) otherBadge.textContent = (window._mktOpportunities.all_other.length + window._mktProspectContacts.all_other.length) || '—';
     } catch (e) {
       console.error('Marketing load error:', e);
       el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading marketing pipeline.</div>';
@@ -1502,9 +1538,18 @@ function renderDomainProspects(domain, containerId) {
   const today = new Date().toISOString().split('T')[0];
   const userName = LCC_USER.display_name || 'Scott Briggs';
   const prospects = window._mktOpportunities[domain] || [];
+  const prospectContacts = window._mktProspectContacts[domain] || [];
 
-  // Apply filters
-  let filtered = prospects;
+  // Merge opportunity deals with prospect contacts for a unified view
+  // De-duplicate by sf_contact_id — prefer prospect contacts (have richer data)
+  const seenContacts = new Set();
+  prospectContacts.forEach(function(c) { if (c.sf_contact_id) seenContacts.add(c.sf_contact_id); });
+  const combinedProspects = [].concat(prospectContacts, prospects.filter(function(d) {
+    return !d.sf_contact_id || !seenContacts.has(d.sf_contact_id);
+  }));
+
+  // Apply filters to combined list
+  let filtered = combinedProspects;
   if (prospectOwner[domain] === 'mine') {
     filtered = filtered.filter(d => d.assigned_to === userName);
   } else if (prospectOwner[domain] !== 'all') {
@@ -1529,17 +1574,18 @@ function renderDomainProspects(domain, containerId) {
     );
   }
 
-  // Collect owners
+  // Collect owners from combined list
   const ownerSet = new Set();
-  prospects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
+  combinedProspects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
   const owners = Array.from(ownerSet).sort();
-  const overdue = prospects.filter(d => d.due_date && d.due_date < today).length;
-  const totalDeals = new Set(prospects.map(d => d.deal_name)).size;
+  const overdue = combinedProspects.filter(d => d.due_date && d.due_date < today).length;
+  const totalDeals = new Set(combinedProspects.map(d => d.deal_name)).size;
+  const totalContacts = combinedProspects.length;
   const domainLabel = domain === 'government' ? 'Government' : domain === 'dialysis' ? 'Dialysis' : 'All Other';
   const renderCall = `renderDomainProspects('${domain}')`;
 
   let html = '';
-  html += `<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">${domainLabel} Prospects</h3><div style="font-size:12px;color:var(--text3)">${totalDeals} deals · ${prospects.length} contacts</div></div>`;
+  html += `<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">${domainLabel} Prospecting</h3><div style="font-size:12px;color:var(--text3)">${totalDeals} deals · ${totalContacts} contacts</div></div>`;
 
   // Owner toggle
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
@@ -1554,7 +1600,7 @@ function renderDomainProspects(domain, containerId) {
 
   // Metrics
   html += '<div class="widget-grid">';
-  html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${prospects.length} contacts</div></div>`;
+  html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${totalContacts} contacts</div></div>`;
   html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
   html += '</div>';
 
