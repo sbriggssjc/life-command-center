@@ -896,19 +896,28 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup — lean query (high limit) then enrich with open_tasks
+      // Load CRM client rollup — paginated fetch (Supabase caps at 1000 rows per request)
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
-      const rollupUrl = new URL('/api/dia-query', window.location.origin);
-      rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
-      rollupUrl.searchParams.set('select', leanFields);
-      rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
-      rollupUrl.searchParams.set('limit', '10000');
-      if (mktOwner === 'mine') {
-        rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + userName);
-      } else if (mktOwner !== 'all') {
-        rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + mktOwner);
+      const BATCH_SIZE = 1000;
+
+      function buildRollupUrl(selectFields, extraFilter, batchOffset) {
+        var url = new URL('/api/dia-query', window.location.origin);
+        url.searchParams.set('table', 'v_crm_client_rollup');
+        url.searchParams.set('select', selectFields);
+        url.searchParams.set('order', 'last_activity_date.desc.nullslast');
+        url.searchParams.set('limit', String(BATCH_SIZE));
+        if (batchOffset > 0) url.searchParams.set('offset', String(batchOffset));
+        if (extraFilter) {
+          url.searchParams.set('filter', extraFilter);
+        } else if (mktOwner === 'mine') {
+          url.searchParams.set('filter', 'assigned_to=eq.' + userName);
+        } else if (mktOwner !== 'all') {
+          url.searchParams.set('filter', 'assigned_to=eq.' + mktOwner);
+        }
+        return url;
       }
+
       // Fetch with auto-retry: Supabase often returns 57014 timeout during initial load burst
       async function fetchRollupWithRetry(url, retries) {
         for (var attempt = 0; attempt <= retries; attempt++) {
@@ -936,22 +945,34 @@ async function loadMarketing() {
       let clientRollupRaw = [];
       let leadsRaw = [];
       if (currentBizTab === 'marketing') {
+        // Paginated fetch: load all contacts in batches of BATCH_SIZE
+        async function fetchAllPages(selectFields, extraFilter) {
+          var allRows = [];
+          var batchOffset = 0;
+          for (var page = 0; page < 20; page++) { // safety cap: 20 pages = 20,000 rows max
+            var url = buildRollupUrl(selectFields, extraFilter, batchOffset);
+            var batch = await fetchRollupWithRetry(url.toString(), 2);
+            if (!batch || batch.length === 0) break;
+            allRows = allRows.concat(batch);
+            console.log('[Marketing] Loaded page ' + (page + 1) + ': ' + batch.length + ' rows (total: ' + allRows.length + ')');
+            if (batch.length < BATCH_SIZE) break; // last page
+            batchOffset += BATCH_SIZE;
+          }
+          return allRows;
+        }
+
         const results = await Promise.all([
-          fetchRollupWithRetry(rollupUrl.toString(), 3),
+          fetchAllPages(leanFields, null),
           diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
-        // Enrich contacts with open_tasks JSON in a separate lightweight query
+        console.log('[Marketing] Total contacts loaded: ' + clientRollupRaw.length);
+        // Enrich contacts with open_tasks JSON via paginated fetch
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
         if (clientRollupRaw && clientRollupRaw.length > 0) {
           try {
-            const tasksUrl = new URL('/api/dia-query', window.location.origin);
-            tasksUrl.searchParams.set('table', 'v_crm_client_rollup');
-            tasksUrl.searchParams.set('select', 'sf_contact_id,open_tasks');
-            tasksUrl.searchParams.set('filter', 'open_task_count=gt.0');
-            tasksUrl.searchParams.set('limit', '10000');
-            const tasksData = await fetchRollupWithRetry(tasksUrl.toString(), 2);
+            const tasksData = await fetchAllPages('sf_contact_id,open_tasks', 'open_task_count=gt.0');
             if (tasksData && tasksData.length > 0) {
               const taskMap = {};
               tasksData.forEach(function(t) {
@@ -962,6 +983,7 @@ async function loadMarketing() {
               clientRollupRaw.forEach(function(c) {
                 if (taskMap[c.sf_contact_id]) c.open_tasks = taskMap[c.sf_contact_id];
               });
+              console.log('[Marketing] Enriched ' + tasksData.length + ' contacts with open_tasks');
             }
           } catch(e) {
             console.warn('[Marketing] open_tasks enrichment failed, tasks will load on-demand:', e.message);
