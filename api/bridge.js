@@ -1,11 +1,6 @@
 // ============================================================================
-// Domain Bridge API — Canonical model adapter for legacy domain workflows
-// Life Command Center — RG4: Legacy domain convergence
-//
-// This endpoint receives notifications from legacy domain save operations
-// and creates corresponding canonical records (activity events, action items).
-// The legacy modules continue to write to their domain databases directly,
-// but ALSO call the bridge to keep the canonical model in sync.
+// Domain Bridge & Activities API — Consolidated
+// Life Command Center
 //
 // POST /api/bridge?action=log_activity      — log domain activity to canonical timeline
 // POST /api/bridge?action=complete_research  — mark research complete + optional follow-up
