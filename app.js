@@ -3268,8 +3268,20 @@ async function submitLogReschedule() {
       return;
     }
 
-    // 2. Reschedule the task date in Supabase
-    await rescheduleTask(_lrData.sfContactId, _lrData.taskSubject, nextDate);
+    // 2. Reschedule the task date in Supabase (task stays open with new date)
+    var rescheduleUrl = new URL('/api/dia-query', window.location.origin);
+    rescheduleUrl.searchParams.set('table', 'salesforce_activities');
+    rescheduleUrl.searchParams.set('filter', 'sf_contact_id=eq.' + _lrData.sfContactId);
+    rescheduleUrl.searchParams.set('filter2', 'subject=eq.' + _lrData.taskSubject);
+    await fetch(rescheduleUrl.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activity_date: nextDate })
+    });
+
+    // 3. Remove this task from the current view (it'll reappear on next load with future date)
+    _updateTaskInAllStores(_lrData.sfContactId, _lrData.taskSubject, 'complete');
+    _rerenderCurrentView();
 
     showToast('Logged to SF & rescheduled to ' + nextDate, 'success');
     closeLogReschedule();
