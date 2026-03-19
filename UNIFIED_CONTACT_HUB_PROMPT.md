@@ -15,6 +15,9 @@ Build a self-learning, self-healing unified contact graph that syncs across Sale
 | Recorded owners (Gov DB) | 13,060 | — | owner name from county records |
 | Outlook contacts | unknown | all | via Microsoft Graph API / Power Automate |
 | Calendar attendees | unknown | most | extracted from Exchange calendar events |
+| WebEx call history | unknown | by phone | via WebEx REST API — caller/callee, duration, timestamps |
+| WebEx people directory | org-wide | varies | via WebEx People API — org contacts |
+| iPhone contacts | unknown | most | via Exchange sync (business) or iCloud CardDAV (personal) |
 
 ## Architecture
 
@@ -63,6 +66,16 @@ CREATE TABLE unified_contacts (
   true_owner_id UUID,       -- true_owners match
   recorded_owner_id UUID,   -- recorded_owners match
   outlook_contact_id TEXT,  -- Microsoft Graph contact ID
+  webex_person_id TEXT,     -- WebEx People API person ID
+  icloud_contact_id TEXT,   -- Apple iCloud contact ID (via CardDAV or Exchange sync)
+
+  -- Engagement signals (auto-updated from WebEx, Outlook, Calendar)
+  last_call_date TIMESTAMPTZ,       -- most recent WebEx or logged call
+  last_email_date TIMESTAMPTZ,      -- most recent email exchange (sent or received)
+  last_meeting_date TIMESTAMPTZ,    -- most recent calendar meeting as attendee
+  total_calls INTEGER DEFAULT 0,    -- lifetime call count from WebEx + logged calls
+  total_emails_sent INTEGER DEFAULT 0,
+  engagement_score NUMERIC DEFAULT 0, -- computed: recency + frequency + depth
 
   -- Field provenance: which source provided each canonical field
   -- Format: {"field_name": {"source": "salesforce", "updated_at": "2026-03-18T..."}}
@@ -89,6 +102,8 @@ CREATE INDEX idx_uc_name_company ON unified_contacts (LOWER(last_name), LOWER(co
 CREATE INDEX idx_uc_phone ON unified_contacts (phone) WHERE phone IS NOT NULL;
 CREATE INDEX idx_uc_class ON unified_contacts (contact_class);
 CREATE INDEX idx_uc_updated ON unified_contacts (updated_at DESC);
+CREATE INDEX idx_uc_webex ON unified_contacts (webex_person_id) WHERE webex_person_id IS NOT NULL;
+CREATE INDEX idx_uc_engagement ON unified_contacts (engagement_score DESC) WHERE contact_class = 'business';
 
 -- Audit log for every change
 CREATE TABLE contact_change_log (
@@ -159,12 +174,14 @@ ORDER BY name_sim DESC LIMIT 3
 When merging, each field uses a priority hierarchy:
 
 ```
-email:        SF > Outlook > Calendar > Supabase
-phone:        SF > Outlook > Supabase
-mobile_phone: SF > Outlook
-title:        SF > Outlook
-company_name: SF > Gov contacts > Dia activities > Outlook
-city/state:   SF > Gov contacts
+email:          SF > Outlook > Calendar > Supabase
+phone:          SF > Outlook > WebEx > iPhone > Supabase
+mobile_phone:   iPhone > Outlook > SF
+title:          SF > Outlook
+company_name:   SF > Gov contacts > Dia activities > Outlook
+city/state:     SF > Gov contacts
+last_call_date: WebEx > SF logged calls (most recent wins)
+engagement:     Auto-computed from WebEx + Outlook + Calendar signals
 ```
 
 **"Most recent wins" tiebreaker:** If two sources have the same priority level, take the most recently updated value.
@@ -188,7 +205,81 @@ city/state:   SF > Gov contacts
 - **Action:** Extract attendee names + emails from calendar events. Run entity resolution.
 - **Classification:** If meeting subject references a deal (pattern match against SF subjects) → `business`. If meeting is in personal calendar category → `personal`.
 
-#### D. Unified Contacts → Salesforce (propagate back)
+#### D. WebEx → Unified Contacts (call history + contacts)
+
+WebEx Calling exposes call history and contact data via the Webex REST API (`https://webexapis.com/v1/`).
+
+**Call History Ingest:**
+- **Trigger:** Scheduled Edge Function or Power Automate flow runs every 2 hours
+- **API:** `GET https://webexapis.com/v1/telephony/calls/history?type=placed,received&max=200`
+  - Requires a WebEx Integration token with `spark:calls_read` scope
+  - Returns caller/callee phone number, name, duration, timestamp, direction
+- **Action:** For each call record:
+  1. Match the phone number against `unified_contacts` (Tier 1 phone match)
+  2. If matched: update `last_call_date`, increment `total_calls`, recalculate `engagement_score`
+  3. If not matched: create a new contact stub with phone number and name from WebEx
+  4. Log in `contact_change_log` with `source = 'webex'`
+
+**WebEx People Directory Sync:**
+- **API:** `GET https://webexapis.com/v1/people?max=500` (org directory)
+- **Action:** Cross-reference org contacts with unified hub. Useful for matching internal Northmarq team members and distinguishing them from external contacts.
+
+**WebEx Authentication:**
+- Create a WebEx Integration at `developer.webex.com` for the Northmarq org
+- Store the access token in Vercel env var `WEBEX_ACCESS_TOKEN`
+- Token refresh handled by the integration's OAuth flow
+- Scopes needed: `spark:calls_read`, `spark:people_read`
+
+**Engagement Signal from WebEx:**
+```sql
+-- When a call is logged from WebEx:
+UPDATE unified_contacts SET
+  last_call_date = :call_timestamp,
+  total_calls = total_calls + 1,
+  engagement_score = compute_engagement_score(last_call_date, last_email_date, last_meeting_date, total_calls),
+  updated_at = now()
+WHERE unified_id = :matched_contact_id;
+
+-- Engagement score formula (recency-weighted):
+-- score = (days_since_last_call < 7 ? 30 : days < 30 ? 20 : days < 90 ? 10 : 0)
+--       + (days_since_last_email < 7 ? 20 : days < 30 ? 15 : days < 90 ? 5 : 0)
+--       + (total_calls > 10 ? 20 : total_calls > 5 ? 15 : total_calls > 0 ? 10 : 0)
+--       + (days_since_last_meeting < 7 ? 15 : days < 30 ? 10 : days < 90 ? 5 : 0)
+```
+
+#### E. iPhone/iCloud → Unified Contacts
+
+iPhone contacts reach the unified hub through two paths:
+
+**Path 1: Exchange ActiveSync (recommended — already working)**
+If the iPhone is configured with the Northmarq Exchange/M365 account (which it likely is), all business contacts already sync to Outlook/Exchange. The Outlook sync flow (Section B above) captures these automatically. No additional integration needed for business contacts.
+
+**Path 2: iCloud Personal Contacts (for personal contact separation)**
+Personal contacts stored only in iCloud need a separate sync path:
+
+- **Option A — CardDAV Sync (simplest):**
+  - iCloud exposes contacts via CardDAV at `https://contacts.icloud.com`
+  - A scheduled Edge Function authenticates with app-specific password and fetches vCards
+  - Parse vCard format → extract name, email, phone, company
+  - All iCloud-only contacts default to `contact_class = 'personal'`
+
+- **Option B — Shortcut + Power Automate (no-code):**
+  - Create an iOS Shortcut that exports contacts as JSON and POSTs to a webhook
+  - Power Automate receives the webhook and calls `/api/sync/contact-ingest` for each
+  - Run manually or on a weekly schedule via iOS automation
+
+- **Option C — Exchange sync covers everything (easiest):**
+  - Configure iPhone to sync ALL contacts (not just business) to Exchange
+  - The Outlook flow captures everything
+  - Use domain-based classification to separate personal from business
+  - This is the recommended approach unless you specifically want iCloud contacts isolated
+
+**iPhone-specific considerations:**
+- Contacts edited on iPhone → synced to Exchange → picked up by Outlook flow → merged into hub
+- New contacts added on iPhone during calls → same path
+- Contact photos from iPhone can be synced if the hub stores `photo_url` (optional, adds complexity)
+
+#### F. Unified Contacts → Salesforce (propagate back)
 - **Trigger:** When a business contact is updated in Supabase (phone change, email correction, etc.)
 - **Action:** Push update to SF via the existing `/api/sync/log-to-sf` endpoint
 - **NEVER:** push personal contacts to SF
@@ -217,7 +308,19 @@ Action 2: For each attendee:
   - POST to /api/sync/contact-ingest with body: { source: 'calendar', ... }
 ```
 
-**Flow 3: Contact Update Propagation (outbound)**
+**Flow 3: WebEx Call History Sync**
+```
+Trigger: Recurrence (every 2 hours)
+Action 1: HTTP GET to https://webexapis.com/v1/telephony/calls/history
+  Headers: Authorization: Bearer {WEBEX_ACCESS_TOKEN}
+  Query: type=placed,received&max=200
+Action 2: For each call record:
+  - Extract: callerNumber, calledNumber, name, duration, startTime, direction
+  - POST to /api/sync/contact-ingest with body:
+    { source: 'webex', phone: callerNumber, first_name: ..., engagement: { call_date: startTime, duration: duration } }
+```
+
+**Flow 4: Contact Update Propagation (outbound)**
 ```
 Trigger: When an HTTP request is received (webhook from Supabase)
 Condition: If source != 'outlook' AND outlook_contact_id IS NOT NULL
@@ -284,18 +387,23 @@ In `app.js`, the Marketing tab should:
 3. **Entity resolution function** — PostgreSQL function or Edge Function that matches incoming contacts
 4. **Contact ingest API** — `/api/sync/contact-ingest` endpoint
 5. **Outlook sync flow** — Power Automate flow for inbound Outlook contacts
-6. **Personal/business classification** — Auto-classify + manual override in LCC
-7. **Propagation** — Push changes back to SF and Outlook
-8. **Self-healing** — Stale detection, duplicate detection, merge suggestions
+6. **WebEx call history sync** — Power Automate flow pulling call records every 2 hours
+7. **iPhone/iCloud path** — Configure Exchange sync to capture all contacts; add domain-based personal/business classification
+8. **Personal/business classification** — Auto-classify + manual override in LCC
+9. **Engagement scoring** — Compute scores from WebEx calls, emails, meetings; surface "hot contacts" in Marketing tab
+10. **Propagation** — Push changes back to SF and Outlook
+11. **Self-healing** — Stale detection, duplicate detection, merge suggestions
 
 ### Files to create/modify
 
 | File | Change |
 |------|--------|
-| `sql/unified_contacts.sql` | Schema for unified_contacts + contact_change_log |
-| `api/sync.js` | Add contact-ingest and unified contact endpoints |
-| `app.js` | Update Marketing/Prospects to query unified_contacts |
-| Power Automate | New flows for Outlook sync + calendar attendee extraction |
+| `sql/unified_contacts.sql` | Schema for unified_contacts + contact_change_log + engagement score function |
+| `api/sync.js` | Add contact-ingest, unified contact endpoints, WebEx call history handler |
+| `app.js` | Update Marketing/Prospects to query unified_contacts; add engagement score badges |
+| Power Automate | New flows: Outlook sync, calendar attendee extraction, WebEx call history |
+| Vercel env vars | Add `WEBEX_ACCESS_TOKEN` for WebEx API authentication |
+| iPhone Settings | Ensure all contacts sync to Exchange (not iCloud-only) for full capture |
 
 ### SQL Migration (ready to apply)
 
