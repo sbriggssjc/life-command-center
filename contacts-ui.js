@@ -61,8 +61,9 @@ async function contactsApi(method, action, params = {}, body = null) {
 
 // ---- Main page render ----
 function renderContactsPage() {
-  if (!_cui.loaded) {
+  if (!_cui.loaded && !_cui.loading) {
     loadContactsList();
+    return; // loadContactsList will call renderContactsPage when done
   }
   const el = document.getElementById('contactsContent');
   if (!el) return;
@@ -242,7 +243,9 @@ function relativeDate(dateStr) {
 // ---- List actions ----
 async function loadContactsList() {
   _cui.loading = true;
-  renderContactsPage();
+  // Show spinner without re-entering renderContactsPage
+  const el = document.getElementById('contactsContent');
+  if (el) el.innerHTML = '<div class="uc-tabs">' + ucTab('list', 'All Contacts') + ucTab('hot_leads', 'Hot Leads') + ucTab('merge_queue', 'Merge Queue') + ucTab('data_quality', 'Data Quality') + '</div><div class="loading"><span class="spinner"></span></div>';
   try {
     const params = {
       contact_class: _cui.classFilter,
