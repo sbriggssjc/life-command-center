@@ -13,6 +13,15 @@
 //   POST  /api/contacts?action=classify&id=    — reclassify personal/business
 //   POST  /api/contacts?action=merge           — merge two contacts
 //   POST  /api/contacts?action=dismiss_merge   — dismiss a merge suggestion
+//
+// Messaging endpoints (proxied through contacts to stay within Vercel function limit):
+//   GET  /api/contacts?action=messages_teams&id=  — Teams chat history with contact
+//   POST /api/contacts?action=send_teams&id=      — Send Teams message to contact
+//   GET  /api/contacts?action=messages_webex&id=  — WebEx 1:1 messages with contact
+//   POST /api/contacts?action=send_webex&id=      — Send WebEx message to contact
+//   GET  /api/contacts?action=messages_sms&id=    — SMS history with contact
+//   POST /api/contacts?action=send_sms&id=        — Send SMS via WebEx Calling
+//   GET  /api/contacts?action=message_templates   — Get message templates
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
@@ -42,6 +51,9 @@ const FIELD_PRIORITY = {
 
 // WebEx API base URL
 const WEBEX_API_URL = 'https://webexapis.com/v1';
+
+// Microsoft Graph API base URL
+const GRAPH_API_URL = 'https://graph.microsoft.com/v1.0';
 
 /**
  * Get a valid WebEx access token, auto-refreshing if expired.
@@ -199,9 +211,13 @@ export default withErrorHandler(async function handler(req, res) {
       case 'history':      return getHistory(req, res, id);
       case 'merge_queue':  return getMergeQueue(req, res);
       case 'data_quality': return getDataQuality(req, res);
-      case 'hot_leads':    return getHotLeads(req, res);
+      case 'hot_leads':       return getHotLeads(req, res);
+      case 'messages_teams':  return getTeamsMessages(req, res, id);
+      case 'messages_webex':  return getWebexMessages(req, res, id);
+      case 'messages_sms':    return getSmsMessages(req, res, id);
+      case 'message_templates': return getMessageTemplates(req, res);
       default:
-        return res.status(400).json({ error: 'GET action: list, get, history, merge_queue, data_quality, hot_leads' });
+        return res.status(400).json({ error: 'GET action: list, get, history, merge_queue, data_quality, hot_leads, messages_teams, messages_webex, messages_sms, message_templates' });
     }
   }
 
@@ -216,8 +232,11 @@ export default withErrorHandler(async function handler(req, res) {
       case 'classify':          return classifyContact(req, res, user, id);
       case 'merge':             return mergeContacts(req, res, user);
       case 'dismiss_merge':     return dismissMerge(req, res, user);
+      case 'send_teams':        return sendTeamsMessage(req, res, user, id);
+      case 'send_webex':        return sendWebexMessage(req, res, user, id);
+      case 'send_sms':          return sendSmsMessage(req, res, user, id);
       default:
-        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, classify, merge, dismiss_merge' });
+        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, classify, merge, dismiss_merge, send_teams, send_webex, send_sms' });
     }
   }
 
@@ -294,6 +313,7 @@ async function getContact(req, res, id) {
   if (contact.outlook_contact_id) sources.push({ system: 'outlook', id: contact.outlook_contact_id, synced: contact.last_synced_outlook });
   if (contact.last_synced_calendar) sources.push({ system: 'calendar', synced: contact.last_synced_calendar });
   if (contact.webex_person_id) sources.push({ system: 'webex', id: contact.webex_person_id });
+  if (contact.teams_user_id) sources.push({ system: 'teams', id: contact.teams_user_id });
   if (contact.icloud_contact_id) sources.push({ system: 'icloud', id: contact.icloud_contact_id });
   if (contact.gov_contact_id) sources.push({ system: 'gov_db', id: contact.gov_contact_id });
   if (contact.dia_contact_id) sources.push({ system: 'dia_db', id: contact.dia_contact_id });
@@ -339,12 +359,12 @@ async function ingestContact(req, res, user) {
     first_name, last_name, email, phone, mobile_phone,
     company_name, title, city, state, website,
     sf_contact_id, sf_account_id, outlook_contact_id,
-    webex_person_id, icloud_contact_id,
+    webex_person_id, teams_user_id, icloud_contact_id,
     entity_type, contact_type, industry,
     engagement  // optional: { call_date, call_duration, email_date, meeting_date }
   } = req.body || {};
 
-  const VALID_SOURCES = ['salesforce', 'outlook', 'calendar', 'webex', 'iphone', 'icloud', 'manual'];
+  const VALID_SOURCES = ['salesforce', 'outlook', 'calendar', 'webex', 'teams', 'teams_call', 'iphone', 'icloud', 'iphone_call', 'manual'];
   if (!source || !VALID_SOURCES.includes(source)) {
     return res.status(400).json({ error: `source is required, one of: ${VALID_SOURCES.join(', ')}` });
   }
@@ -434,7 +454,19 @@ async function ingestContact(req, res, user) {
     }
   }
 
-  // Tier 3c: iCloud contact ID match
+  // Tier 3c: Teams user ID match
+  if (!existingId && teams_user_id) {
+    const teamsMatch = await govQuery('GET',
+      `unified_contacts?teams_user_id=eq.${teams_user_id}&limit=1`
+    );
+    if (teamsMatch.ok && teamsMatch.data?.length > 0) {
+      existingId = teamsMatch.data[0].unified_id;
+      matchTier = 0;
+      matchScore = 1.0;
+    }
+  }
+
+  // Tier 3d: iCloud contact ID match
   if (!existingId && icloud_contact_id) {
     const icloudMatch = await govQuery('GET',
       `unified_contacts?icloud_contact_id=eq.${icloud_contact_id}&limit=1`
@@ -449,7 +481,7 @@ async function ingestContact(req, res, user) {
   const now = new Date().toISOString();
   const syncField = source === 'salesforce' ? 'last_synced_sf'
     : source === 'outlook' ? 'last_synced_outlook'
-    : source === 'calendar' ? 'last_synced_calendar'
+    : (source === 'calendar' || source === 'teams' || source === 'teams_call') ? 'last_synced_calendar'
     : null;
 
   // Build field_sources provenance
@@ -499,6 +531,7 @@ async function ingestContact(req, res, user) {
     if (sf_account_id && !existing.sf_account_id) updates.sf_account_id = sf_account_id;
     if (outlook_contact_id && !existing.outlook_contact_id) updates.outlook_contact_id = outlook_contact_id;
     if (webex_person_id && !existing.webex_person_id) updates.webex_person_id = webex_person_id;
+    if (teams_user_id && !existing.teams_user_id) updates.teams_user_id = teams_user_id;
     if (icloud_contact_id && !existing.icloud_contact_id) updates.icloud_contact_id = icloud_contact_id;
     if (entity_type && !existing.entity_type) updates.entity_type = entity_type;
     if (contact_type && !existing.contact_type) updates.contact_type = contact_type;
@@ -584,6 +617,7 @@ async function ingestContact(req, res, user) {
       sf_account_id: sf_account_id || null,
       outlook_contact_id: outlook_contact_id || null,
       webex_person_id: webex_person_id || null,
+      teams_user_id: teams_user_id || null,
       icloud_contact_id: icloud_contact_id || null,
       field_sources: fieldSources,
       match_confidence: 1.0,
@@ -760,7 +794,7 @@ async function mergeContacts(req, res, user) {
     'entity_type', 'contact_type', 'industry',
     'sf_contact_id', 'sf_account_id', 'gov_contact_id', 'dia_contact_id',
     'true_owner_id', 'recorded_owner_id', 'outlook_contact_id',
-    'webex_person_id', 'icloud_contact_id'
+    'webex_person_id', 'teams_user_id', 'icloud_contact_id'
   ];
 
   for (const field of fillableFields) {
@@ -1148,6 +1182,12 @@ function autoClassify(source, email) {
   // WebEx contacts are always business (org calls)
   if (source === 'webex') return 'business';
 
+  // Teams contacts/calls are always business (org communications)
+  if (source === 'teams' || source === 'teams_call') return 'business';
+
+  // iPhone call log: default business unless personal domain detected
+  if (source === 'iphone_call') return 'business';
+
   // iCloud-only contacts default to personal
   if (source === 'icloud') return 'personal';
 
@@ -1170,4 +1210,494 @@ function autoClassify(source, email) {
 
   // Default to business (don't lose potential deals)
   return 'business';
+}
+
+// ============================================================================
+// MESSAGE TEMPLATES — shorter variants for chat/SMS channels
+// ============================================================================
+
+const MESSAGE_TEMPLATES = [
+  {
+    id: 'quick_followup',
+    name: 'Quick Follow-Up',
+    channels: ['teams', 'webex'],
+    template: 'Hi {first_name}, wanted to follow up on {deal_name}. Do you have a few minutes this week to connect? I can share some recent market data that may be relevant.'
+  },
+  {
+    id: 'market_update',
+    name: 'Market Update',
+    channels: ['sms', 'teams', 'webex'],
+    template: 'Hi {first_name}, 10Y Treasury at {rate}%. Seeing interesting activity in the {deal_type} space. Happy to discuss — Scott Briggs, Northmarq'
+  },
+  {
+    id: 'meeting_invite',
+    name: 'Meeting Invite',
+    channels: ['teams', 'webex'],
+    template: 'Hi {first_name}, would you be available for a quick call about {deal_name}? I have some comps and market insights to share. Let me know what works.'
+  },
+  {
+    id: 'intro_sms',
+    name: 'Introduction',
+    channels: ['sms'],
+    template: 'Hi {first_name}, this is Scott Briggs from Northmarq. I wanted to reach out regarding {deal_name}. Would you have time for a brief call?'
+  },
+  {
+    id: 'thank_you',
+    name: 'Thank You',
+    channels: ['teams', 'webex', 'sms'],
+    template: 'Hi {first_name}, thanks for taking the time to connect today. I\'ll follow up with the details we discussed. Looking forward to next steps.'
+  }
+];
+
+function getMessageTemplates(req, res) {
+  const { channel } = req.query;
+  const templates = channel
+    ? MESSAGE_TEMPLATES.filter(t => t.channels.includes(channel))
+    : MESSAGE_TEMPLATES;
+  return res.status(200).json({ templates });
+}
+
+// ============================================================================
+// TEAMS MESSAGING — read & send via Microsoft Graph API
+// ============================================================================
+
+async function getTeamsMessages(req, res, id) {
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const graphToken = process.env.MS_GRAPH_TOKEN;
+  if (!graphToken) {
+    return res.status(503).json({ error: 'MS_GRAPH_TOKEN not configured. Set up delegated OAuth for Teams messaging.' });
+  }
+
+  // Look up the contact to get their email or teams_user_id
+  const contact = await getContactForMessaging(id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (!contact.email && !contact.teams_user_id) {
+    return res.status(400).json({ error: 'Contact has no email or Teams user ID for messaging' });
+  }
+
+  try {
+    // Find the 1:1 chat with this contact
+    const chatId = await findTeamsChat(graphToken, contact.email || contact.teams_user_id);
+    if (!chatId) {
+      return res.status(200).json({ messages: [], chat_id: null, note: 'No existing Teams chat with this contact' });
+    }
+
+    // Fetch messages from the chat
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const msgRes = await fetch(
+      `${GRAPH_API_URL}/me/chats/${chatId}/messages?$top=${limit}&$orderby=createdDateTime desc`,
+      { headers: { 'Authorization': `Bearer ${graphToken}` } }
+    );
+
+    if (!msgRes.ok) {
+      const errText = await msgRes.text().catch(() => '');
+      return res.status(msgRes.status).json({ error: 'Failed to fetch Teams messages', detail: errText });
+    }
+
+    const msgData = await msgRes.json();
+    const messages = (msgData.value || []).map(m => ({
+      id: m.id,
+      from: m.from?.user?.displayName || 'Unknown',
+      from_email: m.from?.user?.email || null,
+      content: m.body?.content || '',
+      content_type: m.body?.contentType || 'text',
+      created_at: m.createdDateTime,
+      is_from_me: m.from?.user?.id === 'me' || false
+    }));
+
+    return res.status(200).json({ messages, chat_id: chatId, channel: 'teams' });
+  } catch (e) {
+    return res.status(502).json({ error: 'Teams API error', detail: e.message });
+  }
+}
+
+async function sendTeamsMessage(req, res, user, id) {
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const graphToken = process.env.MS_GRAPH_TOKEN;
+  if (!graphToken) {
+    return res.status(503).json({ error: 'MS_GRAPH_TOKEN not configured' });
+  }
+
+  const { message, template_id } = req.body || {};
+  if (!message) return res.status(400).json({ error: 'message is required' });
+
+  const contact = await getContactForMessaging(id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (!contact.email && !contact.teams_user_id) {
+    return res.status(400).json({ error: 'Contact has no email or Teams user ID' });
+  }
+
+  try {
+    // Find or create a 1:1 chat
+    let chatId = await findTeamsChat(graphToken, contact.email || contact.teams_user_id);
+
+    if (!chatId) {
+      // Create a new 1:1 chat
+      const createRes = await fetch(`${GRAPH_API_URL}/me/chats`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${graphToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          chatType: 'oneOnOne',
+          members: [
+            { '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner'], 'user@odata.bind': `${GRAPH_API_URL}/users('me')` },
+            { '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner'], 'user@odata.bind': `${GRAPH_API_URL}/users('${contact.email || contact.teams_user_id}')` }
+          ]
+        })
+      });
+      if (!createRes.ok) {
+        const errText = await createRes.text().catch(() => '');
+        return res.status(createRes.status).json({ error: 'Failed to create Teams chat', detail: errText });
+      }
+      const chatData = await createRes.json();
+      chatId = chatData.id;
+    }
+
+    // Send the message
+    const sendRes = await fetch(`${GRAPH_API_URL}/me/chats/${chatId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${graphToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ body: { content: message } })
+    });
+
+    if (!sendRes.ok) {
+      const errText = await sendRes.text().catch(() => '');
+      return res.status(sendRes.status).json({ error: 'Failed to send Teams message', detail: errText });
+    }
+
+    const sentMsg = await sendRes.json();
+
+    // Update engagement: Teams messages count as digital correspondence
+    await updateEngagementOnMessage(id, 'teams', user);
+
+    // Log in change log
+    await govQuery('POST', 'contact_change_log', {
+      unified_id: id,
+      change_type: 'engagement',
+      source: 'teams',
+      fields_changed: { message_sent: { channel: 'teams', template_id: template_id || null, timestamp: new Date().toISOString() } },
+      changed_by: user.display_name || user.id
+    });
+
+    return res.status(200).json({ sent: true, message_id: sentMsg.id, chat_id: chatId, channel: 'teams' });
+  } catch (e) {
+    return res.status(502).json({ error: 'Teams send error', detail: e.message });
+  }
+}
+
+async function findTeamsChat(graphToken, contactIdentifier) {
+  // List 1:1 chats and find the one with this contact
+  const res = await fetch(
+    `${GRAPH_API_URL}/me/chats?$filter=chatType eq 'oneOnOne'&$expand=members&$top=50`,
+    { headers: { 'Authorization': `Bearer ${graphToken}` } }
+  );
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  const identifier = contactIdentifier.toLowerCase();
+
+  for (const chat of (data.value || [])) {
+    const members = chat.members || [];
+    for (const member of members) {
+      const email = (member.email || '').toLowerCase();
+      const userId = (member.userId || '').toLowerCase();
+      if (email === identifier || userId === identifier) {
+        return chat.id;
+      }
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// WEBEX MESSAGING — read & send via WebEx REST API
+// ============================================================================
+
+async function getWebexMessages(req, res, id) {
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const webexToken = process.env.WEBEX_ACCESS_TOKEN;
+  if (!webexToken) {
+    return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
+  }
+
+  const contact = await getContactForMessaging(id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (!contact.email && !contact.webex_person_id) {
+    return res.status(400).json({ error: 'Contact has no email or WebEx person ID for messaging' });
+  }
+
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+    // WebEx: list direct messages with a person by email
+    const personEmail = contact.email;
+    if (!personEmail) {
+      return res.status(200).json({ messages: [], note: 'WebEx messaging requires email' });
+    }
+
+    // List 1:1 rooms, then get messages from the direct room
+    const roomsRes = await fetch(
+      `${WEBEX_API_URL}/rooms?type=direct&max=50`,
+      { headers: { 'Authorization': `Bearer ${webexToken}` } }
+    );
+
+    if (!roomsRes.ok) {
+      return res.status(roomsRes.status).json({ error: 'Failed to list WebEx rooms' });
+    }
+
+    const roomsData = await roomsRes.json();
+    let targetRoomId = null;
+
+    // Find the room with this contact — check memberships
+    for (const room of (roomsData.items || [])) {
+      const memberRes = await fetch(
+        `${WEBEX_API_URL}/memberships?roomId=${room.id}&max=10`,
+        { headers: { 'Authorization': `Bearer ${webexToken}` } }
+      );
+      if (memberRes.ok) {
+        const memberData = await memberRes.json();
+        const hasContact = (memberData.items || []).some(m =>
+          m.personEmail?.toLowerCase() === personEmail.toLowerCase()
+        );
+        if (hasContact) {
+          targetRoomId = room.id;
+          break;
+        }
+      }
+    }
+
+    if (!targetRoomId) {
+      return res.status(200).json({ messages: [], room_id: null, note: 'No existing WebEx conversation with this contact' });
+    }
+
+    // Fetch messages from the room
+    const msgRes = await fetch(
+      `${WEBEX_API_URL}/messages?roomId=${targetRoomId}&max=${limit}`,
+      { headers: { 'Authorization': `Bearer ${webexToken}` } }
+    );
+
+    if (!msgRes.ok) {
+      return res.status(msgRes.status).json({ error: 'Failed to fetch WebEx messages' });
+    }
+
+    const msgData = await msgRes.json();
+    const messages = (msgData.items || []).map(m => ({
+      id: m.id,
+      from: m.personEmail || 'Unknown',
+      content: m.text || m.html || '',
+      content_type: m.html ? 'html' : 'text',
+      created_at: m.created,
+      is_from_me: m.personEmail?.toLowerCase() !== personEmail.toLowerCase()
+    }));
+
+    return res.status(200).json({ messages, room_id: targetRoomId, channel: 'webex' });
+  } catch (e) {
+    return res.status(502).json({ error: 'WebEx API error', detail: e.message });
+  }
+}
+
+async function sendWebexMessage(req, res, user, id) {
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const webexToken = process.env.WEBEX_ACCESS_TOKEN;
+  if (!webexToken) {
+    return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
+  }
+
+  const { message, template_id } = req.body || {};
+  if (!message) return res.status(400).json({ error: 'message is required' });
+
+  const contact = await getContactForMessaging(id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (!contact.email) {
+    return res.status(400).json({ error: 'Contact has no email for WebEx messaging' });
+  }
+
+  try {
+    // Send directly — WebEx auto-creates a 1:1 space when sending to an email
+    const sendRes = await fetch(`${WEBEX_API_URL}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${webexToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        toPersonEmail: contact.email,
+        text: message
+      })
+    });
+
+    if (!sendRes.ok) {
+      const errText = await sendRes.text().catch(() => '');
+      return res.status(sendRes.status).json({ error: 'Failed to send WebEx message', detail: errText });
+    }
+
+    const sentMsg = await sendRes.json();
+
+    await updateEngagementOnMessage(id, 'webex', user);
+
+    await govQuery('POST', 'contact_change_log', {
+      unified_id: id,
+      change_type: 'engagement',
+      source: 'webex',
+      fields_changed: { message_sent: { channel: 'webex', template_id: template_id || null, timestamp: new Date().toISOString() } },
+      changed_by: user.display_name || user.id
+    });
+
+    return res.status(200).json({ sent: true, message_id: sentMsg.id, room_id: sentMsg.roomId, channel: 'webex' });
+  } catch (e) {
+    return res.status(502).json({ error: 'WebEx send error', detail: e.message });
+  }
+}
+
+// ============================================================================
+// SMS MESSAGING — read & send via WebEx Calling SMS
+// ============================================================================
+
+async function getSmsMessages(req, res, id) {
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const webexToken = process.env.WEBEX_ACCESS_TOKEN;
+  if (!webexToken) {
+    return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
+  }
+
+  const contact = await getContactForMessaging(id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (!contact.phone && !contact.mobile_phone) {
+    return res.status(400).json({ error: 'Contact has no phone number for SMS' });
+  }
+
+  try {
+    // WebEx Calling SMS endpoint — availability depends on org plan
+    const phone = contact.mobile_phone || contact.phone;
+    const digits = phone.replace(/[^0-9+]/g, '');
+
+    const smsRes = await fetch(
+      `${WEBEX_API_URL}/telephony/sms?address=${encodeURIComponent(digits)}&max=20`,
+      { headers: { 'Authorization': `Bearer ${webexToken}` } }
+    );
+
+    if (!smsRes.ok) {
+      // SMS may not be available on all org plans
+      if (smsRes.status === 404 || smsRes.status === 403) {
+        return res.status(200).json({ messages: [], note: 'SMS not available on this WebEx Calling plan', channel: 'sms' });
+      }
+      return res.status(smsRes.status).json({ error: 'Failed to fetch SMS history' });
+    }
+
+    const smsData = await smsRes.json();
+    const messages = (smsData.items || []).map(m => ({
+      id: m.id,
+      from: m.from || m.sender || 'Unknown',
+      to: m.to || m.destination || '',
+      content: m.message || m.text || '',
+      created_at: m.created || m.timestamp,
+      direction: m.direction || (m.from === digits ? 'outbound' : 'inbound')
+    }));
+
+    return res.status(200).json({ messages, channel: 'sms' });
+  } catch (e) {
+    return res.status(502).json({ error: 'SMS API error', detail: e.message });
+  }
+}
+
+async function sendSmsMessage(req, res, user, id) {
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const webexToken = process.env.WEBEX_ACCESS_TOKEN;
+  if (!webexToken) {
+    return res.status(503).json({ error: 'WEBEX_ACCESS_TOKEN not configured' });
+  }
+
+  const { message, template_id } = req.body || {};
+  if (!message) return res.status(400).json({ error: 'message is required' });
+
+  const contact = await getContactForMessaging(id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+
+  const phone = contact.mobile_phone || contact.phone;
+  if (!phone) {
+    return res.status(400).json({ error: 'Contact has no phone number for SMS' });
+  }
+
+  try {
+    const digits = phone.replace(/[^0-9+]/g, '');
+    // Ensure we have a proper E.164 format
+    const destination = digits.startsWith('+') ? digits : (digits.length === 10 ? '+1' + digits : '+' + digits);
+
+    const sendRes = await fetch(`${WEBEX_API_URL}/telephony/sms`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${webexToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        destination,
+        message
+      })
+    });
+
+    if (!sendRes.ok) {
+      const errText = await sendRes.text().catch(() => '');
+      if (sendRes.status === 403 || sendRes.status === 404) {
+        return res.status(sendRes.status).json({ error: 'SMS not available on this WebEx Calling plan', detail: errText });
+      }
+      return res.status(sendRes.status).json({ error: 'Failed to send SMS', detail: errText });
+    }
+
+    const sentData = await sendRes.json().catch(() => ({}));
+
+    await updateEngagementOnMessage(id, 'webex', user);
+
+    await govQuery('POST', 'contact_change_log', {
+      unified_id: id,
+      change_type: 'engagement',
+      source: 'webex',
+      fields_changed: { sms_sent: { destination, template_id: template_id || null, timestamp: new Date().toISOString() } },
+      changed_by: user.display_name || user.id
+    });
+
+    return res.status(200).json({ sent: true, destination, channel: 'sms', detail: sentData });
+  } catch (e) {
+    return res.status(502).json({ error: 'SMS send error', detail: e.message });
+  }
+}
+
+// ============================================================================
+// MESSAGING HELPERS
+// ============================================================================
+
+async function getContactForMessaging(id) {
+  const result = await govQuery('GET',
+    `unified_contacts?unified_id=eq.${id}&select=unified_id,email,phone,mobile_phone,first_name,last_name,full_name,company_name,webex_person_id,teams_user_id,outlook_contact_id,last_email_date,total_emails_sent,engagement_score,last_call_date,last_meeting_date,total_calls&limit=1`
+  );
+  return result.ok && result.data?.length > 0 ? result.data[0] : null;
+}
+
+async function updateEngagementOnMessage(unifiedId, _source, _user) {
+  const contact = await getContactForMessaging(unifiedId);
+  if (!contact) return;
+
+  const now = new Date().toISOString();
+  const newTotalEmails = (contact.total_emails_sent || 0) + 1;
+  const newLastEmail = now;
+  const newScore = computeEngagementScore(
+    contact.last_call_date, newLastEmail, contact.last_meeting_date,
+    contact.total_calls || 0, newTotalEmails
+  );
+
+  await govQuery('PATCH', `unified_contacts?unified_id=eq.${unifiedId}`, {
+    last_email_date: newLastEmail,
+    total_emails_sent: newTotalEmails,
+    engagement_score: newScore
+  });
 }
