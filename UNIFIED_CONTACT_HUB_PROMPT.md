@@ -67,6 +67,7 @@ CREATE TABLE unified_contacts (
   recorded_owner_id UUID,   -- recorded_owners match
   outlook_contact_id TEXT,  -- Microsoft Graph contact ID
   webex_person_id TEXT,     -- WebEx People API person ID
+  teams_user_id TEXT,       -- Microsoft Teams user ID (from Graph API)
   icloud_contact_id TEXT,   -- Apple iCloud contact ID (via CardDAV or Exchange sync)
 
   -- Engagement signals (auto-updated from WebEx, Outlook, Calendar)
@@ -279,7 +280,69 @@ Personal contacts stored only in iCloud need a separate sync path:
 - New contacts added on iPhone during calls → same path
 - Contact photos from iPhone can be synced if the hub stores `photo_url` (optional, adds complexity)
 
-#### F. Unified Contacts → Salesforce (propagate back)
+#### F. Microsoft Teams → Unified Contacts (messages + calls)
+
+Teams is in the M365 ecosystem so it's accessible via Microsoft Graph API and Power Automate connectors.
+
+**Teams Chat Message Tracking:**
+- **Trigger:** Power Automate "When a new chat message is received" (Teams connector)
+- **Action:** For each message from a non-internal sender:
+  1. Extract sender name and email from the message metadata
+  2. Match against `unified_contacts` by email
+  3. If matched: update `last_email_date` (Teams messages count as digital correspondence), recalculate `engagement_score`
+  4. If not matched: create a contact stub
+  5. Log in `contact_change_log` with `source = 'teams'`
+- **Classification:** Teams messages from external contacts → `business`. Internal Northmarq team members → skip (or track separately for team collaboration metrics)
+- **Note:** Only track 1:1 and group chats with external participants. Ignore internal-only channels.
+
+**Teams Call Records:**
+- **API:** Microsoft Graph `GET /communications/callRecords` (requires `CallRecords.Read.All` permission)
+- **Trigger:** Power Automate scheduled flow (every 2 hours) or webhook subscription via Graph
+- **Action:** For each call record:
+  1. Extract participant phone numbers or Teams user IDs
+  2. Match against `unified_contacts` by phone or email
+  3. Update `last_call_date`, increment `total_calls`, recalculate `engagement_score`
+  4. Track call duration for engagement depth scoring
+- **Authentication:** Uses the same M365 OAuth token as the Outlook connector — no separate setup needed
+- **Important:** Teams calls and WebEx calls may overlap if both systems are used. Deduplicate by timestamp + phone number to avoid double-counting.
+
+**Teams Presence Awareness (bonus):**
+- Microsoft Graph Presence API (`/users/{id}/presence`) can show who's currently available
+- Could surface in the LCC Marketing tab: "Available on Teams" badge next to contacts who are online
+- Low priority but a nice-to-have for knowing the best time to reach someone
+
+#### G. iPhone Calls & Texts → Unified Contacts
+
+iOS does not expose call logs or iMessage/SMS history to external APIs. There are several practical workarounds:
+
+**Path 1: Teams/WebEx as Primary Calling App (recommended)**
+If all business calls go through Teams or WebEx (which have API access), iPhone native call logs are redundant for business contacts. Personal calls stay private by default since the LCC never sees them.
+
+**Path 2: iOS Shortcuts for Call Log Export**
+- Create an iOS Shortcut that runs after each call:
+  - Trigger: "When phone call ends" automation (requires iOS 16+)
+  - Action: Get details of the last call (contact name, phone number, duration)
+  - Action: POST to a Power Automate webhook URL with the call data
+  - Power Automate ingests to `/api/sync/contact-ingest` with `source = 'iphone_call'`
+- **Limitation:** iOS prompts for confirmation before running call-triggered automations, so it's not fully silent. The user must tap "Run" after each call.
+- **Personal wall:** The Shortcut can check the contact's group — if they're in a "Personal" contact group, skip the POST.
+
+**Path 3: iPhone Call Forwarding to Teams**
+- Configure iPhone to forward all calls through Teams Phone (if using Teams Calling)
+- All call records then appear in the Teams call log → captured by the Teams Call Records flow
+- This effectively merges iPhone and Teams calling into a single source
+
+**Path 4: iMessage/SMS via Mac Continuity**
+- If the user has a Mac with Messages synced via iCloud:
+  - The Messages database is stored locally at `~/Library/Messages/chat.db` (SQLite)
+  - A scheduled script could query recent messages, extract sender phone numbers
+  - POST to the contact hub for engagement tracking
+- **Privacy consideration:** This captures iMessage/SMS content — should only extract metadata (sender, timestamp, direction) not message text
+- **Personal wall:** Filter by contact group or phone number pattern to exclude personal conversations
+
+**Recommended approach:** Use Path 1 (Teams/WebEx for business calls) + Path 2 (iOS Shortcut for any calls that go through native dialer). This captures all business call activity without exposing personal communications.
+
+#### H. Unified Contacts → Salesforce (propagate back)
 - **Trigger:** When a business contact is updated in Supabase (phone change, email correction, etc.)
 - **Action:** Push update to SF via the existing `/api/sync/log-to-sf` endpoint
 - **NEVER:** push personal contacts to SF
@@ -320,7 +383,32 @@ Action 2: For each call record:
     { source: 'webex', phone: callerNumber, first_name: ..., engagement: { call_date: startTime, duration: duration } }
 ```
 
-**Flow 4: Contact Update Propagation (outbound)**
+**Flow 4: Teams Chat & Call Tracking**
+```
+Trigger A: When a new chat message is received (Teams connector)
+Condition: Sender is external (not @northmarq.com)
+Action: POST to /api/sync/contact-ingest with body:
+  { source: 'teams', email: senderEmail, first_name: ..., engagement: { message_date: timestamp } }
+
+Trigger B: Recurrence (every 2 hours) — poll call records
+Action 1: HTTP GET to Microsoft Graph /communications/callRecords
+Action 2: For each call with external participants:
+  - POST to /api/sync/contact-ingest with body:
+    { source: 'teams_call', phone: participantPhone, engagement: { call_date: startTime, duration: duration } }
+```
+
+**Flow 5: iPhone Call Log via iOS Shortcut (optional)**
+```
+Trigger: iOS Shortcut "When phone call ends" automation
+Action: Shortcut extracts contact name, phone number, duration
+Action: POST to Power Automate webhook URL
+Power Automate: POST to /api/sync/contact-ingest with body:
+  { source: 'iphone_call', phone: callerNumber, first_name: contactName,
+    engagement: { call_date: now, duration: callDuration } }
+Note: User must tap "Run" on the iOS prompt after each call
+```
+
+**Flow 6: Contact Update Propagation (outbound)**
 ```
 Trigger: When an HTTP request is received (webhook from Supabase)
 Condition: If source != 'outlook' AND outlook_contact_id IS NOT NULL
@@ -388,22 +476,24 @@ In `app.js`, the Marketing tab should:
 4. **Contact ingest API** — `/api/sync/contact-ingest` endpoint
 5. **Outlook sync flow** — Power Automate flow for inbound Outlook contacts
 6. **WebEx call history sync** — Power Automate flow pulling call records every 2 hours
-7. **iPhone/iCloud path** — Configure Exchange sync to capture all contacts; add domain-based personal/business classification
-8. **Personal/business classification** — Auto-classify + manual override in LCC
-9. **Engagement scoring** — Compute scores from WebEx calls, emails, meetings; surface "hot contacts" in Marketing tab
-10. **Propagation** — Push changes back to SF and Outlook
-11. **Self-healing** — Stale detection, duplicate detection, merge suggestions
+7. **Teams chat & call tracking** — Power Automate flows for Teams messages + Graph API call records
+8. **iPhone/iCloud path** — Configure Exchange sync to capture all contacts; iOS Shortcut for native call log export
+9. **Personal/business classification** — Auto-classify + manual override in LCC
+10. **Engagement scoring** — Compute scores from WebEx + Teams + Outlook + Calendar signals; surface "hot contacts" in Marketing tab
+11. **Propagation** — Push changes back to SF and Outlook
+12. **Self-healing** — Stale detection, duplicate detection, merge suggestions
 
 ### Files to create/modify
 
 | File | Change |
 |------|--------|
 | `sql/unified_contacts.sql` | Schema for unified_contacts + contact_change_log + engagement score function |
-| `api/sync.js` | Add contact-ingest, unified contact endpoints, WebEx call history handler |
+| `api/sync.js` | Add contact-ingest, unified contact endpoints, WebEx/Teams handlers |
 | `app.js` | Update Marketing/Prospects to query unified_contacts; add engagement score badges |
-| Power Automate | New flows: Outlook sync, calendar attendee extraction, WebEx call history |
+| Power Automate | New flows: Outlook sync, calendar attendees, WebEx calls, Teams chat/calls, iPhone shortcut webhook |
 | Vercel env vars | Add `WEBEX_ACCESS_TOKEN` for WebEx API authentication |
-| iPhone Settings | Ensure all contacts sync to Exchange (not iCloud-only) for full capture |
+| iPhone Settings | Ensure contacts sync to Exchange; install iOS Shortcut for call log export |
+| M365 Admin | Grant `CallRecords.Read.All` permission for Teams call record API access |
 
 ### SQL Migration (ready to apply)
 
