@@ -857,11 +857,39 @@ let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | '
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
 let mktSort = 'date';     // 'date' | 'deal' — sort by recent activity or group by deal
 let mktOwner = 'mine';    // 'mine' | 'all' | specific name
+let mktDomain = 'all';    // 'all' | 'government' | 'dialysis' | 'all_other'
 let mktSearch = '';
 let mktPage = 0;
 let mktCallHistoryCache = {};  // sf_contact_id → [{date, notes, type}]
 let mktExpandedDeal = null;    // deal name currently expanded to show call history
-let mktSort = 'date';          // 'date' | 'deal'
+
+// Client-side domain classifier — mirrors SQL regex from v_opportunity_domain_classified
+function classifyTaskDomain(subject, notes) {
+  var text = ((subject || '') + ' ' + (notes || '')).trim();
+  if (!text) return 'all_other';
+  // Government patterns
+  if (/(\bVA\b|veterans affairs|\bGSA\b|USDA|\bFBI\b|\bCBP\b|\bIRS\b|\bSSA\b|\bDOJ\b|\bDEA\b|\bUSPS\b|\bHHS\b|\bHUD\b|\bDOL\b|\bEPA\b|\bFAA\b|\bFEMA\b|\bFWS\b|Army|Navy|Air Force|Coast Guard|\bDHS\b|Homeland Security|\bACOE\b|Bureau of|Census|Customs|Federal |USCIS|\bICE\b|Secret Service|Marshal|Corps of Eng|Reclamation|\bBLM\b|Fish.*Wildlife|Forest Service|National Guard|National Preserve|\bNPS\b)/i.test(text)) return 'government';
+  if (/(Dept\.?\s*of|Department of|County\s|City of\s|State of\s|Municipal|Probation|Corrections|\bDMV\b|Motor Vehicles|State Police|\bDOT\b|Dept of Health|\bDCFS\b|Public Safety|Sheriff|District Attorney)/i.test(text)) return 'government';
+  if (/^[A-Z]{2}\s+Dept/i.test(subject || '')) return 'government';
+  // Dialysis patterns
+  if (/(dialysis|DaVita|Fresenius|\bFMC\b|kidney|renal|nephrology|Innovative Renal|\bDCI\b|Satellite Dial|U\.?S\.?\s*Renal|American Renal|Greenfield Renal)/i.test(text)) return 'dialysis';
+  return 'all_other';
+}
+
+// Classify a contact by looking at all their tasks + company name
+function classifyContactDomain(contact) {
+  var tasks = contact.open_tasks || [];
+  // Check each task subject + notes
+  for (var i = 0; i < tasks.length; i++) {
+    var d = classifyTaskDomain(tasks[i].subject, tasks[i].notes);
+    if (d !== 'all_other') return d;
+  }
+  // Also check company name as fallback
+  var compDomain = classifyTaskDomain(contact.company_name, null);
+  if (compDomain !== 'all_other') return compDomain;
+  // Check from opportunity domain map if available
+  return contact._opp_domain || 'all_other';
+}
 const MKT_PAGE = 20;
 let mktSearchTimeout;
 
@@ -1122,8 +1150,10 @@ async function loadMarketing() {
           var mktContact = Object.assign({}, base, {
             open_task_count: nonOppTasks.length,
             open_tasks: nonOppTasks,
-            touchpoint_count: nonOppTasks.length
+            touchpoint_count: nonOppTasks.length,
+            _opp_domain: domain || contactDomainMap[d.sf_contact_id] || null
           });
+          mktContact.task_domain = classifyContactDomain(mktContact);
           tasks.push(mktContact);
         }
       });
@@ -1204,6 +1234,11 @@ function renderMarketing() {
     filtered = filtered.filter(d => d.pipeline_source === mktSource);
   }
 
+  // Domain filter
+  if (mktDomain !== 'all') {
+    filtered = filtered.filter(d => d.task_domain === mktDomain);
+  }
+
   // Status/timing filter
   if (mktFilter === 'upcoming') {
     filtered = filtered.filter(d => d.due_date && d.due_date >= today);
@@ -1244,6 +1279,10 @@ function renderMarketing() {
   const govCount = (window._mktOpportunities.government.length || 0) + (window._mktProspectContacts.government.length || 0);
   const diaCount = (window._mktOpportunities.dialysis.length || 0) + (window._mktProspectContacts.dialysis.length || 0);
   const otherCount = (window._mktOpportunities.all_other.length || 0) + (window._mktProspectContacts.all_other.length || 0);
+
+  // Task domain counts (from classified marketing contacts)
+  const domainCounts = { government: 0, dialysis: 0, all_other: 0 };
+  ownerFiltered.forEach(d => { if (d.task_domain) domainCounts[d.task_domain] = (domainCounts[d.task_domain] || 0) + 1; });
 
   let html = '';
 
@@ -1289,6 +1328,15 @@ function renderMarketing() {
   html += `<span class="pill ${mktFilter==='overdue'?'active':''}" onclick="mktFilter='overdue';mktPage=0;renderMarketing()">Overdue</span>`;
   html += `<span class="pill ${mktFilter==='starred'?'active':''}" onclick="mktFilter='starred';mktPage=0;renderMarketing()">Starred</span>`;
   if (unmatched > 0) html += `<span class="pill ${mktFilter==='unmatched'?'active':''}" onclick="mktFilter='unmatched';mktPage=0;renderMarketing()">Unmatched <span class="pill-ct" style="background:var(--red);color:#fff">${unmatched}</span></span>`;
+  html += '</div>';
+
+  // Domain filter
+  html += '<div class="pills" style="margin-bottom:4px">';
+  html += '<span style="font-size:11px;color:var(--text3);margin-right:6px">Domain:</span>';
+  html += `<span class="pill ${mktDomain==='all'?'active':''}" onclick="mktDomain='all';mktPage=0;renderMarketing()">All</span>`;
+  if (domainCounts.government > 0) html += `<span class="pill ${mktDomain==='government'?'active':''}" onclick="mktDomain='government';mktPage=0;renderMarketing()" style="${mktDomain==='government'?'':'border-color:var(--blue)'}">Gov <span class="pill-ct" style="background:var(--blue);color:#fff">${domainCounts.government}</span></span>`;
+  if (domainCounts.dialysis > 0) html += `<span class="pill ${mktDomain==='dialysis'?'active':''}" onclick="mktDomain='dialysis';mktPage=0;renderMarketing()" style="${mktDomain==='dialysis'?'':'border-color:var(--green)'}">Dialysis <span class="pill-ct" style="background:var(--green);color:#fff">${domainCounts.dialysis}</span></span>`;
+  if (domainCounts.all_other > 0) html += `<span class="pill ${mktDomain==='all_other'?'active':''}" onclick="mktDomain='all_other';mktPage=0;renderMarketing()">Other <span class="pill-ct">${domainCounts.all_other}</span></span>`;
   html += '</div>';
 
   // Sort toggle
@@ -1447,7 +1495,10 @@ function renderProspectCardsHTML(items, options = {}) {
       html += `<div style="cursor:pointer;padding:8px 0;border-top:1px solid var(--border)" onclick="toggleContactDetail('${cId}')">`;
       html += `<div style="display:flex;align-items:center;justify-content:space-between">`;
       html += `<div style="flex:1;min-width:0">`;
-      html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
+      var domainBadge = '';
+      if (c.task_domain === 'government') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--blue);color:#fff;font-weight:600;vertical-align:middle">GOV</span>';
+      else if (c.task_domain === 'dialysis') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600;vertical-align:middle">DIA</span>';
+      html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')}${domainBadge} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
       html += `<div style="font-size:12px;color:var(--text2)">${esc(c.company_name || '')}`;
       if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
       html += `</div>`;
