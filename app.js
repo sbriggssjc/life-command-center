@@ -901,15 +901,13 @@ async function loadMarketing() {
       // Fetch domain-classified opportunities (for routing to domain tabs)
       // Fetch CRM tasks (calls, follow-ups — NOT opportunities)
       // Fetch inbound leads
-      // Load CRM client rollup — try with open_tasks JSON, fall back to lean query if timeout
+      // Load CRM client rollup — lean query (no limit) then enrich with open_tasks
       const userName = LCC_USER.display_name || 'Scott Briggs';
-      const fullFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,open_tasks,last_activity_date,completed_activity_count,last_call_notes';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
       const rollupUrl = new URL('/api/dia-query', window.location.origin);
       rollupUrl.searchParams.set('table', 'v_crm_client_rollup');
-      rollupUrl.searchParams.set('select', fullFields);
+      rollupUrl.searchParams.set('select', leanFields);
       rollupUrl.searchParams.set('order', 'last_activity_date.desc.nullslast');
-      rollupUrl.searchParams.set('limit', '1000');
       if (mktOwner === 'mine') {
         rollupUrl.searchParams.set('filter', 'assigned_to=eq.' + userName);
       } else if (mktOwner !== 'all') {
@@ -943,17 +941,38 @@ async function loadMarketing() {
       let leadsRaw = [];
       if (currentBizTab === 'marketing') {
         const results = await Promise.all([
-          fetchRollupWithRetry(rollupUrl.toString(), 2),
+          fetchRollupWithRetry(rollupUrl.toString(), 3),
           diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
-        // If full query (with open_tasks) returned empty, fall back to lean query without open_tasks
-        if ((!clientRollupRaw || clientRollupRaw.length === 0) && leanFields !== fullFields) {
-          console.warn('[Marketing] Full rollup query returned empty, retrying without open_tasks...');
-          const leanUrl = new URL(rollupUrl.toString());
-          leanUrl.searchParams.set('select', leanFields);
-          clientRollupRaw = await fetchRollupWithRetry(leanUrl.toString(), 3);
+        // Enrich contacts with open_tasks JSON in a separate lightweight query
+        if (clientRollupRaw && clientRollupRaw.length > 0) {
+          try {
+            const tasksUrl = new URL('/api/dia-query', window.location.origin);
+            tasksUrl.searchParams.set('table', 'v_crm_client_rollup');
+            tasksUrl.searchParams.set('select', 'sf_contact_id,open_tasks');
+            tasksUrl.searchParams.set('filter', 'open_task_count=gt.0');
+            if (mktOwner === 'mine') {
+              tasksUrl.searchParams.set('filter2', 'assigned_to=eq.' + userName);
+            } else if (mktOwner !== 'all') {
+              tasksUrl.searchParams.set('filter2', 'assigned_to=eq.' + mktOwner);
+            }
+            const tasksData = await fetchRollupWithRetry(tasksUrl.toString(), 2);
+            if (tasksData && tasksData.length > 0) {
+              const taskMap = {};
+              tasksData.forEach(function(t) {
+                var parsed = t.open_tasks;
+                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch(e) { parsed = []; } }
+                taskMap[t.sf_contact_id] = parsed || [];
+              });
+              clientRollupRaw.forEach(function(c) {
+                if (taskMap[c.sf_contact_id]) c.open_tasks = taskMap[c.sf_contact_id];
+              });
+            }
+          } catch(e) {
+            console.warn('[Marketing] open_tasks enrichment failed, tasks will load on-demand:', e.message);
+          }
         }
       }
 
@@ -1057,7 +1076,7 @@ async function loadMarketing() {
         completed_activity_count: d.completed_activity_count || 0,
         last_call_notes: d.last_call_notes,
         open_task_count: d.open_task_count || 0,
-        open_tasks: (typeof d.open_tasks === 'string' ? (function() { try { return JSON.parse(d.open_tasks); } catch(e) { return []; } })() : d.open_tasks) || []
+        open_tasks: d.open_tasks || []
       }));
 
       // Normalize leads to pipeline schema
