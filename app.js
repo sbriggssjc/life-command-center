@@ -887,7 +887,7 @@ async function loadMarketing() {
 
   if (!mktLoaded) {
     if (currentBizTab === 'marketing') {
-      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading your CRM activity hub...</p></div>';
+      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CRM activity hub...</p></div>';
     }
     try {
       // Fetch domain-classified opportunities (for routing to domain tabs)
