@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS unified_contacts (
   recorded_owner_id UUID,
   outlook_contact_id TEXT,
   webex_person_id TEXT,           -- WebEx People API person ID
+  teams_user_id TEXT,             -- Microsoft Teams user ID (from Graph API)
   icloud_contact_id TEXT,         -- Apple iCloud contact ID (via CardDAV or Exchange sync)
 
   -- Engagement signals (auto-updated from WebEx, Outlook, Calendar)
@@ -119,6 +120,10 @@ CREATE INDEX IF NOT EXISTS idx_uc_full_name_trgm
 -- WebEx person ID index
 CREATE INDEX IF NOT EXISTS idx_uc_webex
   ON unified_contacts (webex_person_id) WHERE webex_person_id IS NOT NULL;
+
+-- Teams user ID index
+CREATE INDEX IF NOT EXISTS idx_uc_teams
+  ON unified_contacts (teams_user_id) WHERE teams_user_id IS NOT NULL;
 
 -- iCloud contact ID index
 CREATE INDEX IF NOT EXISTS idx_uc_icloud
@@ -364,3 +369,18 @@ ON CONFLICT (LOWER(email)) DO UPDATE SET
   last_synced_sf = now(),
   updated_at = now();
 */
+
+-- ============================================================================
+-- 8. Add teams_user_id column (idempotent migration for existing deployments)
+-- ============================================================================
+-- If unified_contacts already exists without teams_user_id, add it:
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'unified_contacts' AND column_name = 'teams_user_id'
+  ) THEN
+    ALTER TABLE unified_contacts ADD COLUMN teams_user_id TEXT;
+    CREATE INDEX idx_uc_teams ON unified_contacts (teams_user_id) WHERE teams_user_id IS NOT NULL;
+  END IF;
+END $$;

@@ -1433,6 +1433,7 @@ function renderUnifiedContacts() {
     if (c.outlook_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0078d4;color:#fff">Outlook</span>');
     if (c.last_synced_calendar) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0b8043;color:#fff">Calendar</span>');
     if (c.webex_person_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#00b140;color:#fff">WebEx</span>');
+    if (c.teams_user_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#6264a7;color:#fff">Teams</span>');
     if (c.icloud_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#a2aaad;color:#fff">iPhone</span>');
     if (c.gov_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#5f6368;color:#fff">Gov</span>');
     var staleFlags = [];
@@ -1495,7 +1496,27 @@ function renderUnifiedContacts() {
       var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_account_id||'',name:c.full_name||c.company_name||''});
       html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
     }
-    html += '</div></div></div>';
+    html += '</div></div>';
+
+    // Messaging section — expandable, loads on demand
+    var hasTeams = !!(c.email || c.teams_user_id);
+    var hasWebex = !!(c.email || c.webex_person_id);
+    var hasSms = !!(c.phone || c.mobile_phone);
+    if (hasTeams || hasWebex || hasSms) {
+      html += '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px">';
+      html += '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="ucToggleMessages(\'' + c.unified_id + '\')">';
+      html += '<span style="font-size:11px;color:var(--text2);font-weight:500">Messages</span>';
+      html += '<span id="ucMsgArrow_' + c.unified_id + '" style="font-size:9px;color:var(--text3);transition:transform .2s">&#x25B6;</span>';
+      // Channel tabs (shown as small badges)
+      if (hasTeams) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#6264a7;color:#fff;opacity:0.7">Teams</span>';
+      if (hasWebex) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#00b140;color:#fff;opacity:0.7">WebEx</span>';
+      if (hasSms) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#555;color:#fff;opacity:0.7">SMS</span>';
+      html += '</div>';
+      html += '<div id="ucMsgPanel_' + c.unified_id + '" style="display:none;margin-top:6px" data-loaded="false" data-channel="" data-teams="' + (hasTeams?1:0) + '" data-webex="' + (hasWebex?1:0) + '" data-sms="' + (hasSms?1:0) + '" data-email="' + esc(c.email||'') + '" data-phone="' + esc(c.mobile_phone||c.phone||'') + '" data-name="' + esc(c.first_name||'') + '"></div>';
+      html += '</div>';
+    }
+
+    html += '</div>';
   });
 
   // Pager
@@ -1542,6 +1563,155 @@ async function ucToggleClass(unifiedId, newClass) {
   } catch (e) {
     console.error('Classify error:', e.message);
   }
+}
+
+// ============================================================
+// CONTACT MESSAGING — in-app Teams, WebEx, SMS
+// ============================================================
+
+// Cached message templates
+let ucMsgTemplates = null;
+
+function ucToggleMessages(unifiedId) {
+  var panel = document.getElementById('ucMsgPanel_' + unifiedId);
+  var arrow = document.getElementById('ucMsgArrow_' + unifiedId);
+  if (!panel) return;
+  var isHidden = panel.style.display === 'none';
+  panel.style.display = isHidden ? 'block' : 'none';
+  if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : '';
+  // Load on first expand
+  if (isHidden && panel.dataset.loaded === 'false') {
+    // Determine default channel
+    var ch = panel.dataset.teams === '1' ? 'teams' : panel.dataset.webex === '1' ? 'webex' : 'sms';
+    ucLoadChannelMessages(unifiedId, ch);
+  }
+}
+
+async function ucLoadChannelMessages(unifiedId, channel) {
+  var panel = document.getElementById('ucMsgPanel_' + unifiedId);
+  if (!panel) return;
+  panel.dataset.channel = channel;
+  panel.dataset.loaded = 'true';
+
+  // Load templates if not cached
+  if (!ucMsgTemplates) {
+    try {
+      var headers = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      var tr = await fetch('/api/contacts?action=message_templates', { headers });
+      if (tr.ok) { var td = await tr.json(); ucMsgTemplates = td.templates || []; }
+    } catch(e) { ucMsgTemplates = []; }
+  }
+
+  // Render channel tabs + loading state
+  var hasTeams = panel.dataset.teams === '1';
+  var hasWebex = panel.dataset.webex === '1';
+  var hasSms = panel.dataset.sms === '1';
+  var contactName = panel.dataset.name || '';
+
+  var tabsHtml = '<div style="display:flex;gap:4px;margin-bottom:6px">';
+  if (hasTeams) tabsHtml += '<button class="act-btn' + (channel === 'teams' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'teams\')">Teams</button>';
+  if (hasWebex) tabsHtml += '<button class="act-btn' + (channel === 'webex' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'webex\')">WebEx</button>';
+  if (hasSms) tabsHtml += '<button class="act-btn' + (channel === 'sms' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'sms\')">SMS</button>';
+  tabsHtml += '</div>';
+
+  panel.innerHTML = tabsHtml + '<div style="text-align:center;padding:12px;color:var(--text3);font-size:11px"><span class="spinner" style="width:14px;height:14px"></span> Loading messages...</div>';
+
+  // Fetch messages
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var action = channel === 'teams' ? 'messages_teams' : channel === 'webex' ? 'messages_webex' : 'messages_sms';
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId + '&limit=10', { headers });
+    var data = r.ok ? await r.json() : { messages: [], error: 'Failed to load' };
+    var msgs = data.messages || [];
+
+    var msgsHtml = tabsHtml;
+
+    // Message list
+    if (msgs.length === 0) {
+      msgsHtml += '<div style="text-align:center;padding:8px;color:var(--text3);font-size:11px">' + (data.note || data.error || 'No messages yet') + '</div>';
+    } else {
+      msgsHtml += '<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;margin-bottom:6px;background:var(--bg2)">';
+      // Reverse to show oldest first (API returns newest first)
+      msgs.reverse().forEach(function(m) {
+        var isMe = m.is_from_me || m.direction === 'outbound';
+        var time = m.created_at ? new Date(m.created_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+        var content = m.content_type === 'html' ? m.content.replace(/<[^>]+>/g, '') : (m.content || '');
+        if (content.length > 200) content = content.substring(0, 200) + '...';
+        msgsHtml += '<div style="margin-bottom:4px;text-align:' + (isMe ? 'right' : 'left') + '">';
+        msgsHtml += '<div style="display:inline-block;max-width:80%;padding:4px 8px;border-radius:8px;font-size:11px;background:' + (isMe ? 'var(--accent)' : 'var(--bg3)') + ';color:' + (isMe ? '#fff' : 'var(--text)') + '">' + esc(content) + '</div>';
+        msgsHtml += '<div style="font-size:9px;color:var(--text3);margin-top:1px">' + (isMe ? 'You' : esc(m.from || '')) + ' · ' + time + '</div>';
+        msgsHtml += '</div>';
+      });
+      msgsHtml += '</div>';
+    }
+
+    // Compose area with template selector
+    var channelTemplates = (ucMsgTemplates || []).filter(function(t) { return t.channels.indexOf(channel) >= 0; });
+    msgsHtml += '<div style="display:flex;gap:4px;align-items:flex-end">';
+    if (channelTemplates.length > 0) {
+      msgsHtml += '<select style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);max-width:120px" onchange="ucApplyTemplate(\'' + unifiedId + '\',this.value,\'' + esc(contactName) + '\')">';
+      msgsHtml += '<option value="">Template...</option>';
+      channelTemplates.forEach(function(t) {
+        msgsHtml += '<option value="' + esc(t.id) + '">' + esc(t.name) + '</option>';
+      });
+      msgsHtml += '</select>';
+    }
+    msgsHtml += '<input id="ucMsgInput_' + unifiedId + '" type="text" placeholder="Type a message..." style="flex:1;font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" onkeydown="if(event.key===\'Enter\')ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">';
+    var sendLabel = channel === 'teams' ? 'Send via Teams' : channel === 'webex' ? 'Send via WebEx' : 'Send SMS';
+    msgsHtml += '<button class="act-btn primary" style="font-size:10px;padding:4px 8px;white-space:nowrap" onclick="ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">' + sendLabel + '</button>';
+    msgsHtml += '</div>';
+
+    panel.innerHTML = msgsHtml;
+  } catch (e) {
+    panel.innerHTML = tabsHtml + '<div style="color:var(--red);font-size:11px;padding:8px">Error loading messages: ' + esc(e.message) + '</div>';
+  }
+}
+
+function ucApplyTemplate(unifiedId, templateId, contactName) {
+  if (!templateId) return;
+  var tpl = (ucMsgTemplates || []).find(function(t) { return t.id === templateId; });
+  if (!tpl) return;
+  var input = document.getElementById('ucMsgInput_' + unifiedId);
+  if (!input) return;
+  // Simple token replacement
+  var msg = tpl.template
+    .replace('{first_name}', contactName || 'there')
+    .replace('{deal_name}', 'your property')
+    .replace('{rate}', '4.25')
+    .replace('{deal_type}', 'multifamily');
+  input.value = msg;
+  input.focus();
+}
+
+async function ucSendMessage(unifiedId, channel) {
+  var input = document.getElementById('ucMsgInput_' + unifiedId);
+  if (!input || !input.value.trim()) return;
+  var message = input.value.trim();
+  input.value = '';
+  input.disabled = true;
+
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var action = channel === 'teams' ? 'send_teams' : channel === 'webex' ? 'send_webex' : 'send_sms';
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId, {
+      method: 'POST', headers, body: JSON.stringify({ message: message })
+    });
+    if (r.ok) {
+      // Reload messages to show the sent message
+      ucLoadChannelMessages(unifiedId, channel);
+    } else {
+      var err = await r.json().catch(function() { return {}; });
+      alert('Send failed: ' + (err.error || 'Unknown error'));
+      input.value = message;
+    }
+  } catch (e) {
+    alert('Send error: ' + e.message);
+    input.value = message;
+  }
+  input.disabled = false;
 }
 
 // Placeholder for merge queue viewer
