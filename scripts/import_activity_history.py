@@ -77,7 +77,7 @@ def clean_value(val):
 def parse_csv(filepath):
     """Parse CSV file and return list of row dicts."""
     rows = []
-    with open(filepath, 'r', encoding='utf-8-sig') as f:
+    with open(filepath, 'r', encoding='cp1252', errors='replace') as f:
         reader = csv.reader(f)
         header = next(reader)  # skip header row
         print(f"CSV headers ({len(header)} cols): {header[:5]}...")
