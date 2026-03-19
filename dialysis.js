@@ -3761,20 +3761,19 @@ window.renderDiaOverview = renderDiaOverview;
 // ============================================================================
 
 async function diaPatchRecord(table, idCol, idVal, data) {
-  const url = new URL('/api/dia-query', window.location.origin);
-  url.searchParams.set('table', table);
-  url.searchParams.set('filter', `${idCol}=eq.${idVal}`);
-
+  // Route through closed-loop mutation service with fallback to direct PATCH
   try {
-    const response = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table,
+      idColumn: idCol,
+      idValue: idVal,
+      data,
+      source_surface: 'dia_workspace'
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`PATCH error: ${response.status}`, errText);
+    if (!result.ok) {
+      console.error(`diaPatchRecord error: ${(result.errors || []).join(', ')}`);
       showToast('Error saving data', 'error');
       return false;
     }

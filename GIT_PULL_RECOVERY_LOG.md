@@ -31,6 +31,14 @@
 - Three fresh `git.exe` processes were again present, all started at `2026-03-18 11:15:32` local time.
 - There was no active `MERGE_HEAD`, `REBASE_HEAD`, or related in-progress Git operation metadata at that time.
 - After terminating those processes and removing `.git/HEAD.lock`, the next `git pull --tags origin main` failure in this environment was a network connection error to GitHub, not a ref-lock error.
+- The `HEAD.lock` issue recurred again later on 2026-03-18 during another GUI-driven commit attempt.
+- On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-18 11:30:56` and `LastWriteTime` `2026-03-18 16:51:58` local time.
+- Three fresh `git.exe` processes were again present, all started at `2026-03-18 17:01:54` local time.
+- After terminating those processes and removing `.git/HEAD.lock`, Git again reported `All conflicts fixed but you are still merging.`
+- The `HEAD.lock` issue recurred again later on 2026-03-18 during another GUI-driven commit attempt.
+- On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-18 17:32:17` and `LastWriteTime` `2026-03-18 19:32:56` local time.
+- Three fresh `git.exe` processes were again present, all started at `2026-03-18 19:49:54` local time.
+- After terminating those processes and removing `.git/HEAD.lock`, `git commit --dry-run --allow-empty-message --file - --allow-empty` succeeded and Git reported the branch was up to date with `origin/main`.
 
 ## What This Means
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.
@@ -53,14 +61,16 @@
 ## Latest Status
 - `HEAD.lock` has been removed.
 - Git can now prepare a commit again.
-- Current branch state is `main...origin/main [behind 2]`.
-- Current staged changes are `api/entities.js`, `app.js`, `gov.js`, `styles.css`, and `sw.js`.
+- Current branch is up to date with `origin/main`.
+- Current staged change is deletion of `MARKETING_TAB_FIXES_PROMPT.md`.
 - Current unstaged changes are `app.js` and `sw.js`.
+- `MARKETING_TAB_FIXES_PROMPT.md` also exists as an untracked file, so the working tree currently has a staged delete plus a new untracked copy of the same path.
 
 ## Likely Cause
 - The repeated command shape matches a GUI-driven Git sync/commit flow rather than a manual CLI command.
 - Because no custom hooks or `core.editor` setting were found in this repository, the most likely source is the active Git client integration rather than repo-local Git configuration.
 - The active Git client is most likely retrying a merge-conclusion commit from the UI and leaving a stale `HEAD.lock` behind whenever that flow hangs or gets interrupted.
+- The most recent recurrence happened even after the branch returned to a normal up-to-date state, which further points to the Git client integration itself rather than merge state as the root cause of the recurring stale lock.
 
 ## Notes
 - Local diffs indicate user work is present; do not discard changes unless explicitly requested.

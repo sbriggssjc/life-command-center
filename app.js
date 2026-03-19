@@ -855,6 +855,7 @@ let mktData = [];              // CRM tasks (non-opportunity activities + leads)
 let mktLoaded = false;
 let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
+let mktSort = 'date';     // 'date' | 'deal' — sort by recent activity or group by deal
 let mktOwner = 'mine';    // 'mine' | 'all' | specific name
 let mktSearch = '';
 let mktPage = 0;
@@ -887,7 +888,7 @@ async function loadMarketing() {
 
   if (!mktLoaded) {
     if (currentBizTab === 'marketing') {
-      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading CRM activity hub...</p></div>';
+      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading your CRM activity hub...</p></div>';
     }
     try {
       // Fetch domain-classified opportunities (for routing to domain tabs)
@@ -2502,6 +2503,105 @@ function canonicalBridge(action, payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }).then(r => r.ok ? r.json() : null).catch(() => null);
+}
+
+// ============================================================
+// MUTATION SERVICE — closed-loop change application
+// Routes business table writes through /api/apply-change for
+// audit trail, pending resolution, and propagation.
+//
+// Usage: const result = await applyManualChange({ ... });
+//        if (!result.ok) handle errors...
+//
+// Falls back to direct Supabase write if bridge is unavailable.
+// ============================================================
+
+/**
+ * Apply a manual change through the mutation service.
+ * @param {object} payload
+ * @param {string} payload.actor - Who is making the change
+ * @param {string} payload.source_surface - UI surface originating the change
+ * @param {string} payload.target_table - Table to update
+ * @param {string} payload.target_source - 'gov' or 'dia'
+ * @param {string} payload.record_identifier - Value of the ID column
+ * @param {string} payload.id_column - Column name to filter on
+ * @param {object} payload.changed_fields - Fields to update
+ * @param {string|null} [payload.notes] - Optional notes
+ * @param {string|null} [payload.linked_pending_id] - Optional linked pending_updates row
+ * @param {string|null} [payload.propagation_scope] - Optional propagation scope
+ * @returns {Promise<{ok: boolean, applied_mode: string, errors?: string[]}>}
+ */
+async function applyManualChange(payload) {
+  try {
+    const res = await fetch('/api/apply-change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    // Network error — bridge unavailable
+    return { ok: false, errors: ['bridge_unavailable', err.message] };
+  }
+}
+
+/**
+ * Apply a change via mutation service, falling back to direct proxy PATCH
+ * if the bridge is unavailable.
+ * @param {object} opts
+ * @param {string} opts.proxyBase - '/api/gov-query' or '/api/dia-query'
+ * @param {string} opts.table - Target table name
+ * @param {string} opts.idColumn - Column to filter on
+ * @param {string} opts.idValue - Value of that column
+ * @param {object} opts.data - Fields to update
+ * @param {string} opts.source_surface - UI surface name
+ * @param {string|null} [opts.notes]
+ * @param {string|null} [opts.linked_pending_id]
+ * @param {string|null} [opts.propagation_scope]
+ * @returns {Promise<{ok: boolean, applied_mode: string, errors?: string[]}>}
+ */
+async function applyChangeWithFallback(opts) {
+  const targetSource = opts.proxyBase.includes('gov') ? 'gov' : 'dia';
+  const actor = (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'lcc_analyst';
+
+  // Try mutation service first
+  const result = await applyManualChange({
+    actor,
+    source_surface: opts.source_surface || 'workspace',
+    target_table: opts.table,
+    target_source: targetSource,
+    record_identifier: String(opts.idValue),
+    id_column: opts.idColumn,
+    changed_fields: opts.data,
+    notes: opts.notes || null,
+    linked_pending_id: opts.linked_pending_id || null,
+    propagation_scope: opts.propagation_scope || null
+  });
+
+  // If bridge is unavailable, fall back to direct proxy PATCH
+  if (!result.ok && result.errors && result.errors.includes('bridge_unavailable')) {
+    console.warn('[applyChange] Bridge unavailable, falling back to direct PATCH');
+    try {
+      const url = new URL(opts.proxyBase, window.location.origin);
+      url.searchParams.set('table', opts.table);
+      url.searchParams.set('filter', `${opts.idColumn}=eq.${opts.idValue}`);
+      const res = await fetch(url.toString(), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts.data)
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return { ok: false, applied_mode: 'fallback_failed', errors: [`Direct PATCH failed (${res.status}): ${errText}`] };
+      }
+      return { ok: true, applied_mode: 'direct_fallback' };
+    } catch (err) {
+      return { ok: false, applied_mode: 'fallback_failed', errors: [err.message] };
+    }
+  }
+
+  return result;
 }
 
 let activitiesLoaded = false;
