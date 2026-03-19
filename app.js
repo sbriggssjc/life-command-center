@@ -1149,27 +1149,40 @@ async function loadMarketing() {
           last_call_notes: d.last_call_notes
         };
 
+        // Determine contact's domain from opportunities or keyword classification
+        var domain = contactDomainMap[d.sf_contact_id] || null;
+        // If no domain from opportunities, classify from task subjects/notes/company
+        if (!domain) {
+          var tempContact = Object.assign({}, base, { open_tasks: allTasks, _opp_domain: null });
+          domain = classifyContactDomain(tempContact);
+        }
+
         // Route Opportunity tasks to domain prospecting sections
         if (oppTasks.length > 0) {
-          var domain = contactDomainMap[d.sf_contact_id] || 'all_other';
           var prospectContact = Object.assign({}, base, {
             open_task_count: oppTasks.length,
             open_tasks: oppTasks,
             touchpoint_count: oppTasks.length
           });
-          window._mktProspectContacts[domain].push(prospectContact);
+          window._mktProspectContacts[domain || 'all_other'].push(prospectContact);
         }
 
-        // Keep non-Opportunity tasks on the marketing tab
+        // Route non-Opportunity tasks: gov/dialysis → domain sections, all_other → marketing
         if (nonOppTasks.length > 0 || (d.completed_activity_count || 0) > 0) {
-          var mktContact = Object.assign({}, base, {
+          var contactRecord = Object.assign({}, base, {
             open_task_count: nonOppTasks.length,
             open_tasks: nonOppTasks,
             touchpoint_count: nonOppTasks.length,
-            _opp_domain: domain || contactDomainMap[d.sf_contact_id] || null
+            _opp_domain: domain,
+            task_domain: domain || 'all_other'
           });
-          mktContact.task_domain = classifyContactDomain(mktContact);
-          tasks.push(mktContact);
+          if (domain === 'government' || domain === 'dialysis') {
+            // Gov/dialysis contacts go to their domain prospect section
+            window._mktProspectContacts[domain].push(contactRecord);
+          } else {
+            // Marketing only gets all_other / unclassified contacts
+            tasks.push(contactRecord);
+          }
         }
       });
 
@@ -2480,16 +2493,30 @@ function _updateTaskInAllStores(sfContactId, subject, action, newDate) {
       if (d.sf_contact_id !== sfContactId || !d.open_tasks) continue;
 
       if (action === 'complete') {
-        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        // Remove only the FIRST task matching this subject (not all with same subject)
+        var removed = false;
+        d.open_tasks = d.open_tasks.filter(function(t) {
+          if (!removed && t.subject === subject) { removed = true; return false; }
+          return true;
+        });
         d.open_task_count = d.open_tasks.length;
         d.completed_activity_count = (d.completed_activity_count || 0) + 1;
         // Remove from active view when no open tasks remain
         if (d.open_tasks.length === 0) store.splice(i, 1);
       } else if (action === 'reschedule') {
-        d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
+        // Only reschedule the FIRST matching task
+        var rescheduled = false;
+        d.open_tasks.forEach(function(t) {
+          if (!rescheduled && t.subject === subject) { t.date = newDate; rescheduled = true; }
+        });
         d.due_date = newDate;
       } else if (action === 'dismiss') {
-        d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
+        // Remove only the FIRST task matching this subject
+        var dismissed = false;
+        d.open_tasks = d.open_tasks.filter(function(t) {
+          if (!dismissed && t.subject === subject) { dismissed = true; return false; }
+          return true;
+        });
         d.open_task_count = d.open_tasks.length;
         // Remove from active view when no open tasks remain
         if (d.open_tasks.length === 0) store.splice(i, 1);
