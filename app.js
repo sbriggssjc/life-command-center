@@ -936,7 +936,7 @@ async function loadMarketing() {
       // Load CRM client rollup — paginated fetch (Supabase caps at 1000 rows per request)
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
-      const BATCH_SIZE = 1000;
+      const BATCH_SIZE = 500;
 
       function buildRollupUrl(selectFields, extraFilter, batchOffset) {
         var url = new URL('/api/dia-query', window.location.origin);
@@ -944,6 +944,7 @@ async function loadMarketing() {
         url.searchParams.set('select', selectFields);
         url.searchParams.set('order', 'last_activity_date.desc.nullslast');
         url.searchParams.set('limit', String(BATCH_SIZE));
+        url.searchParams.set('count', 'false');
         if (batchOffset > 0) url.searchParams.set('offset', String(batchOffset));
         if (extraFilter) {
           url.searchParams.set('filter', extraFilter);
@@ -960,6 +961,11 @@ async function loadMarketing() {
         for (var attempt = 0; attempt <= retries; attempt++) {
           try {
             var r = await fetch(url);
+            if (!r.ok && attempt < retries) {
+              console.warn('[Marketing] Rollup attempt ' + (attempt+1) + ' HTTP ' + r.status + ', retrying in 3s...');
+              await new Promise(function(ok) { setTimeout(ok, 3000); });
+              continue;
+            }
             var d = await r.json();
             if (d.data && d.data.length > 0) return d.data;
             if (d.error && attempt < retries) {
