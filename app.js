@@ -2483,14 +2483,16 @@ function _updateTaskInAllStores(sfContactId, subject, action, newDate) {
         d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
         d.open_task_count = d.open_tasks.length;
         d.completed_activity_count = (d.completed_activity_count || 0) + 1;
-        if (d.open_tasks.length === 0 && !d.completed_activity_count) store.splice(i, 1);
+        // Remove from active view when no open tasks remain
+        if (d.open_tasks.length === 0) store.splice(i, 1);
       } else if (action === 'reschedule') {
         d.open_tasks.forEach(function(t) { if (t.subject === subject) t.date = newDate; });
         d.due_date = newDate;
       } else if (action === 'dismiss') {
         d.open_tasks = d.open_tasks.filter(function(t) { return t.subject !== subject; });
         d.open_task_count = d.open_tasks.length;
-        if (d.open_tasks.length === 0 && !(d.completed_activity_count > 0)) store.splice(i, 1);
+        // Remove from active view when no open tasks remain
+        if (d.open_tasks.length === 0) store.splice(i, 1);
       }
     }
   });
@@ -2512,6 +2514,51 @@ function _rerenderCurrentView() {
   renderMarketing();
 }
 
+// ── Salesforce outbound sync helper ──
+// Fire-and-forget: log task completion to Salesforce via the outbound sync pipeline
+function _syncTaskToSalesforce(sfContactId, subject, action) {
+  // Look up sf_company_id from local stores
+  var sfCompanyId = null;
+  var stores = [mktData];
+  ['government', 'dialysis', 'all_other'].forEach(function(dom) {
+    if (window._mktProspectContacts && window._mktProspectContacts[dom]) stores.push(window._mktProspectContacts[dom]);
+  });
+  for (var s = 0; s < stores.length; s++) {
+    for (var i = 0; i < stores[s].length; i++) {
+      if (stores[s][i].sf_contact_id === sfContactId) { sfCompanyId = stores[s][i].sf_company_id; break; }
+    }
+    if (sfCompanyId) break;
+  }
+
+  var today = new Date().toISOString().split('T')[0];
+  var activityType = action === 'complete' ? 'Task Completed' : action === 'dismiss' ? 'Task Dismissed' : 'Task Updated';
+  var payload = {
+    sf_contact_id: sfContactId,
+    sf_company_id: sfCompanyId || undefined,
+    activity_type: activityType,
+    activity_date: today,
+    notes: subject,
+    force: true
+  };
+
+  // Non-blocking: fire the sync, log errors but don't block UI
+  fetch(API + '/sync/log-to-sf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      console.log('[SF Sync] ' + activityType + ' logged for ' + sfContactId + ': ' + subject);
+    } else if (data.warning) {
+      console.warn('[SF Sync] Warning: ' + (data.message || 'Recent activity detected'));
+    } else {
+      console.error('[SF Sync] Error: ' + (data.error || 'Unknown'));
+    }
+  }).catch(function(e) {
+    console.error('[SF Sync] Network error:', e.message);
+  });
+}
+
 // ── Task management: complete, reschedule, dismiss ──
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
@@ -2526,6 +2573,8 @@ async function completeTask(sfContactId, subject) {
       body: JSON.stringify({ status: 'Completed' })
     });
     showToast('Task completed!', 'success');
+    // Sync completion to Salesforce (non-blocking)
+    _syncTaskToSalesforce(sfContactId, subject, 'complete');
     // Remove from local data (marketing + prospect contacts) and re-render
     _updateTaskInAllStores(sfContactId, subject, 'complete');
     _rerenderCurrentView();
@@ -2570,6 +2619,8 @@ async function dismissTask(sfContactId, subject) {
       body: JSON.stringify({ status: 'Abandoned' })
     });
     showToast('Task dismissed', 'success');
+    // Sync dismissal to Salesforce (non-blocking)
+    _syncTaskToSalesforce(sfContactId, subject, 'dismiss');
     // Remove from local data (marketing + prospect contacts)
     _updateTaskInAllStores(sfContactId, subject, 'dismiss');
     _rerenderCurrentView();
