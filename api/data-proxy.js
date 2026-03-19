@@ -32,11 +32,97 @@ const SOURCE_CONFIG = {
   }
 };
 
+// ── Gov Write Service sub-handler ──
+const GOV_API_URL = process.env.GOV_API_URL;
+const GOV_WRITE_ENDPOINT_MAP = {
+  'ownership':        '/api/write/ownership',
+  'lead-research':    '/api/write/lead-research',
+  'financial':        '/api/write/financial',
+  'resolve-pending':  '/api/pending-updates'
+};
+
+async function handleGovWrite(req, res, user) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const ws = primaryWorkspace(user);
+  if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+    return res.status(403).json({ error: 'Operator role required for government writes' });
+  }
+
+  if (!GOV_API_URL) {
+    return res.status(503).json({ error: 'GOV_API_URL not configured' });
+  }
+
+  const { endpoint, update_id } = req.query;
+  if (!endpoint || !GOV_WRITE_ENDPOINT_MAP[endpoint]) {
+    return res.status(400).json({
+      error: `Invalid endpoint. Use: ${Object.keys(GOV_WRITE_ENDPOINT_MAP).join(', ')}`
+    });
+  }
+
+  let govPath = GOV_WRITE_ENDPOINT_MAP[endpoint];
+  if (endpoint === 'resolve-pending') {
+    if (!update_id) {
+      return res.status(400).json({ error: 'update_id query parameter required for resolve-pending' });
+    }
+    govPath = `${govPath}/${encodeURIComponent(update_id)}/resolve`;
+  }
+
+  const govUrl = `${GOV_API_URL.replace(/\/+$/, '')}${govPath}`;
+  const body = {
+    ...req.body,
+    source_app: 'lcc',
+    actor: user.email || user.display_name || user.id
+  };
+
+  try {
+    const response = await fetch(govUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Source-App': 'lcc',
+        'X-LCC-User': user.id
+      },
+      body: JSON.stringify(body)
+    });
+
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = { raw: responseText };
+    }
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: `Gov write service returned ${response.status}`,
+        detail: data
+      });
+    }
+
+    return res.status(200).json(data);
+  } catch (err) {
+    console.error(`[gov-write] Error calling ${govUrl}:`, err.message);
+    return res.status(502).json({
+      error: 'Failed to reach government write service',
+      message: process.env.LCC_ENV === 'development' ? err.message : undefined
+    });
+  }
+}
+
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
 
   const user = await authenticate(req, res);
   if (!user) return;
+
+  // Route to gov-write sub-handler if requested
+  if (req.query._route === 'gov-write') {
+    return handleGovWrite(req, res, user);
+  }
 
   if (!['GET', 'POST', 'PATCH'].includes(req.method)) {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
