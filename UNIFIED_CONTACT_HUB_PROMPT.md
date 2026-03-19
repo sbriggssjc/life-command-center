@@ -415,7 +415,120 @@ Condition: If source != 'outlook' AND outlook_contact_id IS NOT NULL
 Action: HTTP PATCH to Microsoft Graph /me/contacts/{id}
 ```
 
-### 7. API Endpoints
+### 7. In-App Messaging — Read & Send from the LCC
+
+The LCC should let users read and send messages (Teams chat, WebEx SMS/messages) directly from within the app, without switching to another application. Messages are sent FROM the user's own account/number so recipients see the real sender.
+
+#### A. Teams Messages — Read & Send
+
+**Read messages (conversation history with a contact):**
+- **API:** `GET https://graph.microsoft.com/v1.0/me/chats?$filter=chatType eq 'oneOnOne'` to list chats
+- Then `GET /me/chats/{chatId}/messages?$top=20&$orderby=createdDateTime desc` for message history
+- Match the chat to a `unified_contact` by the other participant's email
+- **Auth:** Delegated permission `Chat.Read` — uses the user's OAuth token so messages come from their account
+- **Display in LCC:** On each contact card, show a "Messages" expandable section with the last 5-10 Teams messages
+
+**Send messages:**
+- **API:** `POST https://graph.microsoft.com/v1.0/me/chats/{chatId}/messages`
+  ```json
+  { "body": { "content": "Hi, following up on the DaVita deal..." } }
+  ```
+- **Auth:** Delegated permission `Chat.ReadWrite` — sends as the logged-in user (Scott Briggs), not a bot
+- **Display in LCC:** Text input box on the contact card with a "Send via Teams" button
+- If no existing chat with the contact, create one: `POST /me/chats` with `chatType: 'oneOnOne'` and the contact's Teams user ID or email
+
+**Template integration:** The existing email templates (Initial Outreach, Follow-Up, Market Update, Meeting Request) should have Teams message versions — shorter, more conversational variants that fit the chat format.
+
+#### B. WebEx Messages — Read & Send
+
+**WebEx Spaces (1:1 messaging):**
+- **API:** `GET https://webexapis.com/v1/messages?roomId={roomId}&max=20` for message history
+- **API:** `POST https://webexapis.com/v1/messages` to send:
+  ```json
+  { "toPersonEmail": "contact@example.com", "text": "Hi, following up on..." }
+  ```
+- **Auth:** User token with `spark:messages_read` and `spark:messages_write` scopes — sends as the user's WebEx identity
+- If no existing 1:1 space with the contact, WebEx auto-creates one when you send to their email
+
+**WebEx SMS (if WebEx Calling with SMS is enabled):**
+- **API:** WebEx Connect SMS API or Webex Calling SMS endpoints
+- `POST https://webexapis.com/v1/telephony/calls/sms` (if available on the org plan)
+  ```json
+  { "destination": "+15551234567", "message": "Hi, this is Scott from Northmarq..." }
+  ```
+- **Auth:** User token with `spark-admin:telephony_config_write` or `spark:calls_write` — sends from the user's WebEx Calling phone number
+- **Important:** SMS sends from the user's actual WebEx phone number so the recipient sees the real caller ID
+- **Limitation:** WebEx SMS availability depends on the org's Webex Calling plan — verify with IT that SMS is enabled
+
+**Read WebEx SMS:**
+- `GET https://webexapis.com/v1/telephony/calls/sms?max=20` to list recent SMS
+- Match by phone number against `unified_contacts`
+
+#### C. LCC Frontend — Messaging UI
+
+Add a messaging panel to the contact card in the Marketing tab:
+
+```
+Contact Card
+├── Contact info (name, company, email, phone)
+├── Open Tasks (deal titles)
+├── Activity Summary (last call, completed count)
+├── ▼ Messages                          [New expanded section]
+│   ├── [Teams] [WebEx] [SMS] tabs      [Channel selector]
+│   ├── Message history (last 10)       [Scrollable list]
+│   │   ├── "Hi Scott, I got the OM..." (Mar 15, 2:30 PM) — from contact
+│   │   ├── "Great, let me know..." (Mar 15, 3:00 PM) — from you
+│   │   └── ...
+│   ├── [Template ▼] text input         [Compose area]
+│   │   └── Templates: Quick Follow-Up, Market Update, Meeting Invite
+│   └── [Send via Teams] [Send via WebEx] [Send SMS]
+│
+└── Action buttons (Email, WebEx Call, Log)
+```
+
+**Key behaviors:**
+- Messages load on-demand when the "Messages" section is expanded (not on page load)
+- Channel tabs (Teams/WebEx/SMS) only show if the contact has a corresponding ID/number
+- Sent messages automatically update `last_email_date` and `engagement_score`
+- Template messages adapt to the channel — shorter for SMS, markdown-enabled for Teams
+- All messages sent through the LCC are logged in `contact_change_log` for audit
+
+#### D. OAuth Token Management
+
+Since both Teams and WebEx APIs need delegated (user-level) tokens to send as the user:
+
+**Teams/M365:**
+- Use the existing Power Automate OAuth connection to get a delegated token
+- OR implement MSAL (Microsoft Authentication Library) in the Vercel API with `Chat.Read` + `Chat.ReadWrite` permissions
+- Token stored server-side, refreshed automatically
+- The user authenticates once via OAuth consent flow in the LCC settings
+
+**WebEx:**
+- The WebEx Integration OAuth flow provides a user-level token
+- Store `WEBEX_ACCESS_TOKEN` and `WEBEX_REFRESH_TOKEN` in Vercel env vars
+- Implement token refresh in the API before each request
+- The user authenticates once via WebEx OAuth consent in LCC settings
+
+#### E. Message Templates for Chat/SMS
+
+Shorter variants of the existing email templates:
+
+**Quick Follow-Up (Teams/WebEx):**
+```
+Hi {first_name}, wanted to follow up on {deal_name}. Do you have a few minutes this week to connect? I can share some recent market data that may be relevant.
+```
+
+**Market Update (SMS):**
+```
+Hi {first_name}, 10Y Treasury at {rate}%. Seeing interesting activity in the {deal_type} space. Happy to discuss — Scott Briggs, Northmarq
+```
+
+**Meeting Invite (Teams):**
+```
+Hi {first_name}, would you be available for a quick call about {deal_name}? I have some comps and market insights to share. Let me know what works.
+```
+
+### 8. API Endpoints
 
 Add to the existing Vercel API:
 
@@ -442,9 +555,38 @@ Add to the existing Vercel API:
 
 // GET /api/contacts/unified/:unified_id/history
 // Returns the change log for a contact
+
+// ── Messaging endpoints ──
+
+// GET /api/messages/teams/:unified_id
+// Returns Teams chat messages with this contact (last 20)
+// Proxies to Microsoft Graph: GET /me/chats?$filter=members/any(m:m/email eq '{email}')
+// Then GET /me/chats/{chatId}/messages?$top=20
+
+// POST /api/messages/teams/:unified_id
+// Sends a Teams message to this contact
+// Proxies to Graph: POST /me/chats/{chatId}/messages
+{ message: "Hi, following up on..." }
+
+// GET /api/messages/webex/:unified_id
+// Returns WebEx 1:1 messages with this contact (last 20)
+// Proxies to WebEx: GET /messages?roomType=direct&personEmail={email}&max=20
+
+// POST /api/messages/webex/:unified_id
+// Sends a WebEx message to this contact
+// Proxies to WebEx: POST /messages { toPersonEmail: email, text: message }
+{ message: "Hi, following up on..." }
+
+// POST /api/messages/sms/:unified_id
+// Sends an SMS via WebEx Calling (if SMS enabled on org plan)
+// Proxies to WebEx: POST /telephony/calls/sms { destination: phone, message: text }
+{ message: "Hi, this is Scott from Northmarq..." }
+
+// GET /api/messages/sms/:unified_id
+// Returns SMS history with this contact's phone number
 ```
 
-### 8. LCC Frontend Integration
+### 9. LCC Frontend Integration
 
 In `app.js`, the Marketing tab should:
 - Only show contacts where `contact_class = 'business'`
