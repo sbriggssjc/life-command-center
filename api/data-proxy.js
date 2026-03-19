@@ -255,13 +255,14 @@ export default async function handler(req, res) {
   if (offset !== undefined) url.searchParams.set('offset', offset);
 
   try {
+    const wantCount = req.query.count !== 'false';
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: {
         'apikey': dbKey,
         'Authorization': `Bearer ${dbKey}`,
         'Content-Type': 'application/json',
-        'Prefer': 'count=exact'
+        ...(wantCount ? { 'Prefer': 'count=exact' } : {})
       }
     });
 
