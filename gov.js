@@ -2159,8 +2159,10 @@ function renderGovPipeline() {
   html += leadsTable(dedupedLeads.slice(0, 100));
   html += '</div>';
 
-  // SF Opportunity Prospects (domain-classified)
-  if (typeof window._mktOpportunities !== 'undefined' && window._mktOpportunities.government && window._mktOpportunities.government.length > 0) {
+  // SF Opportunity Prospects (domain-classified opportunities + prospect contacts)
+  var hasGovProspects = (typeof window._mktOpportunities !== 'undefined' && window._mktOpportunities.government && window._mktOpportunities.government.length > 0)
+    || (typeof window._mktProspectContacts !== 'undefined' && window._mktProspectContacts.government && window._mktProspectContacts.government.length > 0);
+  if (hasGovProspects) {
     html += '<div style="margin-top:24px;border-top:2px solid var(--border);padding-top:16px">';
     html += '<div id="govSfProspectsContainer"></div>';
     html += '</div>';
@@ -2172,7 +2174,7 @@ function renderGovPipeline() {
     }
     renderHBarChart('chart-leads-temp', tempLabels, tempData, tempColors);
     // Render SF Prospects after DOM is ready
-    if (typeof renderDomainProspects === 'function' && window._mktOpportunities && window._mktOpportunities.government.length > 0) {
+    if (typeof renderDomainProspects === 'function' && hasGovProspects) {
       renderDomainProspects('government', 'govSfProspectsContainer');
     }
   }, 100);
