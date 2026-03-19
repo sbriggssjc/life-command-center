@@ -15,8 +15,10 @@
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
     { "source": "/api/flags", "destination": "/api/admin?_route=flags" },
     { "source": "/api/queue-v2", "destination": "/api/queue?_version=v2" },
+    { "source": "/api/rcm-ingest", "destination": "/api/sync?_route=rcm-ingest" },
     { "source": "/api/connectors", "destination": "/api/sync?_route=connectors" },
-    { "source": "/api/apply-change", "destination": "/api/apply-change" },
+    { "source": "/api/unified-contacts", "destination": "/api/contacts" },
+    { "source": "/api/inbox", "destination": "/api/queue?_route=inbox" },
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
   "headers": [

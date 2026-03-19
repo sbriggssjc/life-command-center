@@ -408,6 +408,7 @@ function handlePageLoad(pageId) {
         renderBizContent();
       }
       break;
+    case 'pageContacts': if (typeof renderContactsPage === 'function') renderContactsPage(); break;
     case 'pageMessages': loadMessages(); break;
     case 'pageSettings': renderSettings(); break;
   }
@@ -853,7 +854,7 @@ function renderBizSubset(subset) {
 
 let mktData = [];              // CRM tasks (non-opportunity activities + leads)
 let mktLoaded = false;
-let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
+let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads' | 'unified'
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
 let mktSort = 'date';     // 'date' | 'deal' — sort by recent activity or group by deal
 let mktOwner = 'mine';    // 'mine' | 'all' | specific name
@@ -891,6 +892,14 @@ function classifyContactDomain(contact) {
   return contact._opp_domain || 'all_other';
 }
 const MKT_PAGE = 20;
+
+// Unified Contact Hub state
+let ucLoaded = false;
+let ucData = [];               // unified_contacts from Gov DB
+let ucPage = 0;
+let ucSearch = '';
+let ucTotal = 0;
+let ucDataQuality = null;      // {total_contacts, stale_emails, stale_phones, pending_merges}
 let mktSearchTimeout;
 
 // Domain-classified opportunities stored globally for domain tabs
@@ -1192,6 +1201,16 @@ async function loadMarketing() {
       });
       mktLoaded = true;
 
+      // Preload unified contact data quality stats for badge display
+      if (!ucDataQuality) {
+        try {
+          const ucHeaders = { 'Content-Type': 'application/json' };
+          if (LCC_USER.workspace_id) ucHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
+          const ucR = await fetch('/api/contacts?action=data_quality', { headers: ucHeaders });
+          if (ucR.ok) ucDataQuality = await ucR.json();
+        } catch { /* ignore — unified contacts may not be set up yet */ }
+      }
+
       // Badge: actionable CRM tasks due (calls due today + overdue follow-ups)
       const today = new Date().toISOString().split('T')[0];
       const actionableCount = mktData.filter(d => d.pipeline_source === 'sf_deal' && d.due_date && d.due_date <= today).length;
@@ -1314,6 +1333,7 @@ function renderMarketing() {
   html += '<div class="pills" style="margin-bottom:4px">';
   html += `<span class="pill ${mktSource==='all'?'active':''}" onclick="mktSource='all';mktPage=0;renderMarketing()">All <span class="pill-ct">${ownerFiltered.length}</span></span>`;
   html += `<span class="pill ${mktSource==='sf_deal'?'active':''}" onclick="mktSource='sf_deal';mktPage=0;renderMarketing()">CRM Tasks <span class="pill-ct">${srcCounts['sf_deal']||0}</span></span>`;
+  html += `<span class="pill ${mktSource==='unified'?'active':''}" onclick="mktSource='unified';ucPage=0;loadAndRenderUC()">Unified Contacts <span class="pill-ct">${ucDataQuality ? ucDataQuality.total_contacts || '—' : '—'}</span></span>`;
   if (srcCounts['rcm']) html += `<span class="pill ${mktSource==='rcm'?'active':''}" onclick="mktSource='rcm';mktPage=0;renderMarketing()">RCM <span class="pill-ct">${srcCounts['rcm']}</span></span>`;
   if (srcCounts['crexi']) html += `<span class="pill ${mktSource==='crexi'?'active':''}" onclick="mktSource='crexi';mktPage=0;renderMarketing()">CREXi <span class="pill-ct">${srcCounts['crexi']}</span></span>`;
   if (srcCounts['loopnet']) html += `<span class="pill ${mktSource==='loopnet'?'active':''}" onclick="mktSource='loopnet';mktPage=0;renderMarketing()">LoopNet <span class="pill-ct">${srcCounts['loopnet']}</span></span>`;
@@ -1411,6 +1431,515 @@ function renderMarketing() {
   }
 
   el.innerHTML = html;
+}
+
+// ============================================================
+// UNIFIED CONTACT HUB — load, render, classify
+// ============================================================
+
+async function loadUnifiedContacts(search) {
+  const params = new URLSearchParams({
+    action: 'list',
+    contact_class: 'business',
+    limit: '50',
+    offset: String(ucPage * 50)
+  });
+  if (search) params.set('search', search);
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?' + params.toString(), { headers });
+    if (r.ok) {
+      const d = await r.json();
+      ucData = d.contacts || [];
+      ucTotal = d.total || 0;
+      ucLoaded = true;
+    }
+  } catch (e) {
+    console.warn('[UnifiedContacts] Load error:', e.message);
+  }
+  // Load data quality stats once
+  if (!ucDataQuality) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      const r2 = await fetch('/api/contacts?action=data_quality', { headers });
+      if (r2.ok) ucDataQuality = await r2.json();
+    } catch { /* ignore */ }
+  }
+}
+
+function renderUnifiedContacts() {
+  let html = '';
+  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Unified Contact Hub</h3>';
+  html += '<div style="font-size:12px;color:var(--text3)">Contacts synced across Salesforce, Outlook, Calendar, WebEx, iPhone — business contacts only</div></div>';
+
+  // Data quality + engagement widget
+  if (ucDataQuality) {
+    html += '<div class="widget-grid" style="margin-bottom:12px">';
+    html += '<div class="stat-card"><div class="stat-label">Total Contacts</div><div class="stat-value" style="color:var(--accent)">' + (ucDataQuality.total_contacts || 0) + '</div></div>';
+    html += '<div class="stat-card" style="cursor:pointer" onclick="loadHotLeads()"><div class="stat-label">Hot Leads</div><div class="stat-value" style="color:var(--red)">' + (ucDataQuality.hot_leads || 0) + '</div><div class="stat-sub">Score &ge; 60</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">WebEx Linked</div><div class="stat-value" style="color:var(--green)">' + (ucDataQuality.webex_linked || 0) + '</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">Stale Data</div><div class="stat-value" style="color:' + ((ucDataQuality.stale_emails + ucDataQuality.stale_phones) > 0 ? 'var(--orange)' : 'var(--green)') + '">' + ((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) + '</div><div class="stat-sub">' + (ucDataQuality.stale_emails || 0) + ' email · ' + (ucDataQuality.stale_phones || 0) + ' phone</div></div>';
+    html += '<div class="stat-card" style="cursor:pointer" onclick="loadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
+    html += '</div>';
+    // Sync action buttons
+    html += '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+    html += '<button class="btn btn-sm" onclick="runCalendarContactSync()" id="btn-cal-sync" style="font-size:11px;padding:4px 10px;cursor:pointer">Sync Calendar Contacts</button>';
+    html += '<button class="btn btn-sm" onclick="runDuplicateDetection()" id="btn-dedup" style="font-size:11px;padding:4px 10px;cursor:pointer">Run Duplicate Detection</button>';
+    html += '</div>';
+  }
+
+  // Search
+  html += '<div class="search-bar" style="margin-bottom:8px"><input class="search-input" type="text" placeholder="Search unified contacts by name, email, company, phone..." value="' + esc(ucSearch) + '" oninput="debounceUcSearch(this.value)"></div>';
+
+  if (!ucLoaded) {
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
+    return html;
+  }
+
+  if (ucData.length === 0) {
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts found.' + (ucSearch ? ' Try a different search.' : '') + '</div>';
+    return html;
+  }
+
+  // Contact cards
+  ucData.forEach(function(c) {
+    var sources = [];
+    if (c.sf_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1a73e8;color:#fff">SF</span>');
+    if (c.outlook_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0078d4;color:#fff">Outlook</span>');
+    if (c.last_synced_calendar) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0b8043;color:#fff">Calendar</span>');
+    if (c.webex_person_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#00b140;color:#fff">WebEx</span>');
+    if (c.teams_user_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#6264a7;color:#fff">Teams</span>');
+    if (c.icloud_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#a2aaad;color:#fff">iPhone</span>');
+    if (c.gov_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#5f6368;color:#fff">Gov</span>');
+    var staleFlags = [];
+    if (c.email_stale) staleFlags.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--orange);color:#fff">Email Stale</span>');
+    if (c.phone_stale) staleFlags.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--orange);color:#fff">Phone Stale</span>');
+
+    // Engagement score heat badge
+    var engScore = c.engagement_score || 0;
+    var heatBadge = '';
+    if (engScore >= 60) heatBadge = '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#d32f2f;color:#fff;font-weight:700" title="Engagement: ' + engScore + '/100">HOT ' + engScore + '</span>';
+    else if (engScore >= 30) heatBadge = '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#f57c00;color:#fff;font-weight:700" title="Engagement: ' + engScore + '/100">WARM ' + engScore + '</span>';
+    else if (engScore > 0) heatBadge = '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1565c0;color:#fff" title="Engagement: ' + engScore + '/100">COOL ' + engScore + '</span>';
+
+    html += '<div class="widget" style="padding:12px">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between">';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-size:14px;font-weight:500;display:flex;align-items:center;gap:6px">' + esc(c.full_name || c.first_name || c.last_name || '—');
+    if (heatBadge) html += ' ' + heatBadge;
+    if (c.title) html += ' <span style="font-size:11px;color:var(--text3)">' + esc(c.title) + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
+    if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
+    html += '</div>';
+    if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + (c.mobile_phone && c.mobile_phone !== c.phone ? ' · Mobile: ' + esc(c.mobile_phone) : '') + '</div>';
+    if (c.city || c.state) html += '<div style="font-size:11px;color:var(--text3)">' + esc([c.city, c.state].filter(Boolean).join(', ')) + '</div>';
+    // Source badges + stale flags
+    if (sources.length > 0 || staleFlags.length > 0) {
+      html += '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' + sources.join('') + staleFlags.join('') + '</div>';
+    }
+    // Engagement activity summary
+    if (c.total_calls > 0 || c.total_emails_sent > 0 || c.last_meeting_date) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:3px">';
+      var engParts = [];
+      if (c.total_calls > 0) engParts.push(c.total_calls + ' call' + (c.total_calls > 1 ? 's' : '') + (c.last_call_date ? ' (last: ' + c.last_call_date.split('T')[0] + ')' : ''));
+      if (c.total_emails_sent > 0) engParts.push(c.total_emails_sent + ' email' + (c.total_emails_sent > 1 ? 's' : ''));
+      if (c.last_meeting_date) engParts.push('Last meeting: ' + c.last_meeting_date.split('T')[0]);
+      html += engParts.join(' · ');
+      html += '</div>';
+    }
+    // Contact type / entity type
+    if (c.contact_type || c.entity_type) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">';
+      if (c.contact_type) html += esc(c.contact_type);
+      if (c.contact_type && c.entity_type) html += ' · ';
+      if (c.entity_type) html += esc(c.entity_type);
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Actions
+    html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center">';
+    // Personal/Business toggle
+    html += '<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="ucToggleClass(\'' + c.unified_id + '\',\'' + (c.contact_class === 'business' ? 'personal' : 'business') + '\')" title="Reclassify">' + (c.contact_class === 'business' ? 'Move to Personal' : 'Move to Business') + '</button>';
+    if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+    if (c.phone) {
+      var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
+      html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px" title="Call via WebEx">&#x1F4DE;</a>';
+    }
+    if (c.sf_contact_id) {
+      var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_account_id||'',name:c.full_name||c.company_name||''});
+      html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
+    }
+    html += '</div></div>';
+
+    // Messaging section — expandable, loads on demand
+    var hasTeams = !!(c.email || c.teams_user_id);
+    var hasWebex = !!(c.email || c.webex_person_id);
+    var hasSms = !!(c.phone || c.mobile_phone);
+    if (hasTeams || hasWebex || hasSms) {
+      html += '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px">';
+      html += '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="ucToggleMessages(\'' + c.unified_id + '\')">';
+      html += '<span style="font-size:11px;color:var(--text2);font-weight:500">Messages</span>';
+      html += '<span id="ucMsgArrow_' + c.unified_id + '" style="font-size:9px;color:var(--text3);transition:transform .2s">&#x25B6;</span>';
+      // Channel tabs (shown as small badges)
+      if (hasTeams) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#6264a7;color:#fff;opacity:0.7">Teams</span>';
+      if (hasWebex) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#00b140;color:#fff;opacity:0.7">WebEx</span>';
+      if (hasSms) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#555;color:#fff;opacity:0.7">SMS</span>';
+      html += '</div>';
+      html += '<div id="ucMsgPanel_' + c.unified_id + '" style="display:none;margin-top:6px" data-loaded="false" data-channel="" data-teams="' + (hasTeams?1:0) + '" data-webex="' + (hasWebex?1:0) + '" data-sms="' + (hasSms?1:0) + '" data-email="' + esc(c.email||'') + '" data-phone="' + esc(c.mobile_phone||c.phone||'') + '" data-name="' + esc(c.first_name||'') + '"></div>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+  });
+
+  // Pager
+  var totalPages = Math.ceil(ucTotal / 50);
+  if (totalPages > 1) {
+    html += '<div class="pager"><button onclick="ucPage--;loadAndRenderUC()" ' + (ucPage === 0 ? 'disabled' : '') + '>&#x2190; Prev</button><span>Page ' + (ucPage + 1) + ' of ' + totalPages + ' · ' + ucTotal + ' contacts</span><button onclick="ucPage++;loadAndRenderUC()" ' + (ucPage >= totalPages - 1 ? 'disabled' : '') + '>Next &#x2192;</button></div>';
+  }
+
+  return html;
+}
+
+// Debounce for unified contacts search
+let ucSearchTimeout;
+function debounceUcSearch(val) {
+  ucSearch = val;
+  ucPage = 0;
+  clearTimeout(ucSearchTimeout);
+  ucSearchTimeout = setTimeout(function() { loadAndRenderUC(); }, 300);
+}
+
+// Load and render unified contacts into the marketing panel
+async function loadAndRenderUC() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
+  await loadUnifiedContacts(ucSearch);
+  el.innerHTML = renderUnifiedContacts();
+}
+
+// Reclassify a contact between personal and business
+async function ucToggleClass(unifiedId, newClass) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=classify&id=' + unifiedId, {
+      method: 'POST', headers, body: JSON.stringify({ contact_class: newClass })
+    });
+    if (r.ok) {
+      // Refresh the list
+      await loadAndRenderUC();
+    } else {
+      console.error('Classify failed:', await r.text());
+    }
+  } catch (e) {
+    console.error('Classify error:', e.message);
+  }
+}
+
+// ============================================================
+// CONTACT MESSAGING — in-app Teams, WebEx, SMS
+// ============================================================
+
+// Cached message templates
+let ucMsgTemplates = null;
+
+function ucToggleMessages(unifiedId) {
+  var panel = document.getElementById('ucMsgPanel_' + unifiedId);
+  var arrow = document.getElementById('ucMsgArrow_' + unifiedId);
+  if (!panel) return;
+  var isHidden = panel.style.display === 'none';
+  panel.style.display = isHidden ? 'block' : 'none';
+  if (arrow) arrow.style.transform = isHidden ? 'rotate(90deg)' : '';
+  // Load on first expand
+  if (isHidden && panel.dataset.loaded === 'false') {
+    // Determine default channel
+    var ch = panel.dataset.teams === '1' ? 'teams' : panel.dataset.webex === '1' ? 'webex' : 'sms';
+    ucLoadChannelMessages(unifiedId, ch);
+  }
+}
+
+async function ucLoadChannelMessages(unifiedId, channel) {
+  var panel = document.getElementById('ucMsgPanel_' + unifiedId);
+  if (!panel) return;
+  panel.dataset.channel = channel;
+  panel.dataset.loaded = 'true';
+
+  // Load templates if not cached
+  if (!ucMsgTemplates) {
+    try {
+      var headers = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      var tr = await fetch('/api/contacts?action=message_templates', { headers });
+      if (tr.ok) { var td = await tr.json(); ucMsgTemplates = td.templates || []; }
+    } catch(e) { ucMsgTemplates = []; }
+  }
+
+  // Render channel tabs + loading state
+  var hasTeams = panel.dataset.teams === '1';
+  var hasWebex = panel.dataset.webex === '1';
+  var hasSms = panel.dataset.sms === '1';
+  var contactName = panel.dataset.name || '';
+
+  var tabsHtml = '<div style="display:flex;gap:4px;margin-bottom:6px">';
+  if (hasTeams) tabsHtml += '<button class="act-btn' + (channel === 'teams' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'teams\')">Teams</button>';
+  if (hasWebex) tabsHtml += '<button class="act-btn' + (channel === 'webex' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'webex\')">WebEx</button>';
+  if (hasSms) tabsHtml += '<button class="act-btn' + (channel === 'sms' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'sms\')">SMS</button>';
+  tabsHtml += '</div>';
+
+  panel.innerHTML = tabsHtml + '<div style="text-align:center;padding:12px;color:var(--text3);font-size:11px"><span class="spinner" style="width:14px;height:14px"></span> Loading messages...</div>';
+
+  // Fetch messages
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var action = channel === 'teams' ? 'messages_teams' : channel === 'webex' ? 'messages_webex' : 'messages_sms';
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId + '&limit=10', { headers });
+    var data = r.ok ? await r.json() : { messages: [], error: 'Failed to load' };
+    var msgs = data.messages || [];
+
+    var msgsHtml = tabsHtml;
+
+    // Message list
+    if (msgs.length === 0) {
+      msgsHtml += '<div style="text-align:center;padding:8px;color:var(--text3);font-size:11px">' + (data.note || data.error || 'No messages yet') + '</div>';
+    } else {
+      msgsHtml += '<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;margin-bottom:6px;background:var(--bg2)">';
+      // Reverse to show oldest first (API returns newest first)
+      msgs.reverse().forEach(function(m) {
+        var isMe = m.is_from_me || m.direction === 'outbound';
+        var time = m.created_at ? new Date(m.created_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+        var content = m.content_type === 'html' ? m.content.replace(/<[^>]+>/g, '') : (m.content || '');
+        if (content.length > 200) content = content.substring(0, 200) + '...';
+        msgsHtml += '<div style="margin-bottom:4px;text-align:' + (isMe ? 'right' : 'left') + '">';
+        msgsHtml += '<div style="display:inline-block;max-width:80%;padding:4px 8px;border-radius:8px;font-size:11px;background:' + (isMe ? 'var(--accent)' : 'var(--bg3)') + ';color:' + (isMe ? '#fff' : 'var(--text)') + '">' + esc(content) + '</div>';
+        msgsHtml += '<div style="font-size:9px;color:var(--text3);margin-top:1px">' + (isMe ? 'You' : esc(m.from || '')) + ' · ' + time + '</div>';
+        msgsHtml += '</div>';
+      });
+      msgsHtml += '</div>';
+    }
+
+    // Compose area with template selector
+    var channelTemplates = (ucMsgTemplates || []).filter(function(t) { return t.channels.indexOf(channel) >= 0; });
+    msgsHtml += '<div style="display:flex;gap:4px;align-items:flex-end">';
+    if (channelTemplates.length > 0) {
+      msgsHtml += '<select style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);max-width:120px" onchange="ucApplyTemplate(\'' + unifiedId + '\',this.value,\'' + esc(contactName) + '\')">';
+      msgsHtml += '<option value="">Template...</option>';
+      channelTemplates.forEach(function(t) {
+        msgsHtml += '<option value="' + esc(t.id) + '">' + esc(t.name) + '</option>';
+      });
+      msgsHtml += '</select>';
+    }
+    msgsHtml += '<input id="ucMsgInput_' + unifiedId + '" type="text" placeholder="Type a message..." style="flex:1;font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" onkeydown="if(event.key===\'Enter\')ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">';
+    var sendLabel = channel === 'teams' ? 'Send via Teams' : channel === 'webex' ? 'Send via WebEx' : 'Send SMS';
+    msgsHtml += '<button class="act-btn primary" style="font-size:10px;padding:4px 8px;white-space:nowrap" onclick="ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">' + sendLabel + '</button>';
+    msgsHtml += '</div>';
+
+    panel.innerHTML = msgsHtml;
+  } catch (e) {
+    panel.innerHTML = tabsHtml + '<div style="color:var(--red);font-size:11px;padding:8px">Error loading messages: ' + esc(e.message) + '</div>';
+  }
+}
+
+function ucApplyTemplate(unifiedId, templateId, contactName) {
+  if (!templateId) return;
+  var tpl = (ucMsgTemplates || []).find(function(t) { return t.id === templateId; });
+  if (!tpl) return;
+  var input = document.getElementById('ucMsgInput_' + unifiedId);
+  if (!input) return;
+  // Simple token replacement
+  var msg = tpl.template
+    .replace('{first_name}', contactName || 'there')
+    .replace('{deal_name}', 'your property')
+    .replace('{rate}', '4.25')
+    .replace('{deal_type}', 'multifamily');
+  input.value = msg;
+  input.focus();
+}
+
+async function ucSendMessage(unifiedId, channel) {
+  var input = document.getElementById('ucMsgInput_' + unifiedId);
+  if (!input || !input.value.trim()) return;
+  var message = input.value.trim();
+  input.value = '';
+  input.disabled = true;
+
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var action = channel === 'teams' ? 'send_teams' : channel === 'webex' ? 'send_webex' : 'send_sms';
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId, {
+      method: 'POST', headers, body: JSON.stringify({ message: message })
+    });
+    if (r.ok) {
+      // Reload messages to show the sent message
+      ucLoadChannelMessages(unifiedId, channel);
+    } else {
+      var err = await r.json().catch(function() { return {}; });
+      alert('Send failed: ' + (err.error || 'Unknown error'));
+      input.value = message;
+    }
+  } catch (e) {
+    alert('Send error: ' + e.message);
+    input.value = message;
+  }
+  input.disabled = false;
+}
+
+async function runCalendarContactSync() {
+  const btn = document.getElementById('btn-cal-sync');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=ingest_calendar_contacts', {
+      method: 'POST', headers, body: JSON.stringify({ days_back: 90 })
+    });
+    const data = await r.json();
+    if (r.ok) {
+      alert('Calendar sync complete: ' + (data.created || 0) + ' new, ' + (data.matched || 0) + ' updated, ' + (data.skipped || 0) + ' skipped');
+      ucDataQuality = null;
+      loadAndRenderUC();
+    } else {
+      alert('Calendar sync failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Calendar sync error: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Sync Calendar Contacts'; }
+}
+
+async function runDuplicateDetection() {
+  const btn = document.getElementById('btn-dedup');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=detect_duplicates', {
+      method: 'POST', headers, body: JSON.stringify({ batch_size: 200 })
+    });
+    const data = await r.json();
+    if (r.ok) {
+      alert('Duplicate scan complete: ' + (data.duplicates_found || 0) + ' new duplicates found, ' + (data.contacts_scanned || 0) + ' contacts scanned');
+      ucDataQuality = null;
+      loadAndRenderUC();
+    } else {
+      alert('Duplicate detection failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Duplicate detection error: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Run Duplicate Detection'; }
+}
+
+// Placeholder for merge queue viewer
+async function loadMergeQueue() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading merge queue...</p></div>';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=merge_queue', { headers });
+    if (r.ok) {
+      const d = await r.json();
+      const queue = d.queue || [];
+      let html = '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Merge Queue</h3><div style="font-size:12px;color:var(--text3)">Review and resolve potential duplicate contacts</div></div>';
+      html += '<button class="act-btn" style="margin-bottom:12px" onclick="mktSource=\'unified\';ucPage=0;loadAndRenderUC()">&#x2190; Back to Contacts</button>';
+      if (queue.length === 0) {
+        html += '<div style="text-align:center;padding:32px;color:var(--text2)">No pending merge suggestions. Great data hygiene!</div>';
+      } else {
+        queue.forEach(function(item) {
+          html += '<div class="widget" style="padding:12px">';
+          html += '<div style="font-size:13px;font-weight:500">Score: ' + (item.match_score || 0).toFixed(2) + ' — ' + esc(item.match_reason || 'Unknown') + '</div>';
+          html += '<div style="font-size:12px;color:var(--text2)">Contact A: ' + esc(item.contact_a) + ' · Contact B: ' + esc(item.contact_b) + '</div>';
+          html += '<div style="display:flex;gap:6px;margin-top:8px">';
+          html += '<button class="act-btn primary" style="font-size:11px;padding:4px 10px" onclick="ucMerge(\'' + item.contact_a + '\',\'' + item.contact_b + '\',\'' + item.queue_id + '\')">Merge (keep A)</button>';
+          html += '<button class="act-btn" style="font-size:11px;padding:4px 10px" onclick="ucDismissMerge(\'' + item.queue_id + '\')">Dismiss</button>';
+          html += '</div></div>';
+        });
+      }
+      el.innerHTML = html;
+    }
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--red);padding:24px">Error loading merge queue: ' + esc(e.message) + '</div>';
+  }
+}
+
+// Load hot leads (sorted by engagement score)
+async function loadHotLeads() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading hot leads...</p></div>';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=hot_leads&limit=50', { headers });
+    if (r.ok) {
+      const d = await r.json();
+      const leads = d.hot_leads || [];
+      let html = '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Hot Leads</h3><div style="font-size:12px;color:var(--text3)">Business contacts ranked by engagement score (calls + emails + meetings)</div></div>';
+      html += '<button class="act-btn" style="margin-bottom:12px" onclick="mktSource=\'unified\';ucPage=0;loadAndRenderUC()">&#x2190; Back to Contacts</button>';
+      if (leads.length === 0) {
+        html += '<div style="text-align:center;padding:32px;color:var(--text2)">No engaged contacts yet. WebEx call history and email activity will populate this view.</div>';
+      } else {
+        leads.forEach(function(c) {
+          var heatColor = c.heat === 'hot' ? '#d32f2f' : c.heat === 'warm' ? '#f57c00' : '#1565c0';
+          var heatLabel = c.heat.toUpperCase();
+          html += '<div class="widget" style="padding:12px;border-left:3px solid ' + heatColor + '">';
+          html += '<div style="display:flex;align-items:center;justify-content:space-between">';
+          html += '<div style="flex:1;min-width:0">';
+          html += '<div style="font-size:14px;font-weight:500">' + esc(c.full_name || '—') + ' <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:' + heatColor + ';color:#fff;font-weight:700">' + heatLabel + ' ' + (c.engagement_score || 0) + '</span></div>';
+          html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '') + (c.title ? ' · ' + esc(c.title) : '') + '</div>';
+          var stats = [];
+          if (c.total_calls > 0) stats.push(c.total_calls + ' calls' + (c.last_call_date ? ' (last: ' + c.last_call_date.split('T')[0] + ')' : ''));
+          if (c.total_emails_sent > 0) stats.push(c.total_emails_sent + ' emails');
+          if (c.last_meeting_date) stats.push('Meeting: ' + c.last_meeting_date.split('T')[0]);
+          if (stats.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + stats.join(' · ') + '</div>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
+          if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+          if (c.phone) {
+            var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
+            html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x1F4DE;</a>';
+          }
+          if (c.sf_contact_id) {
+            var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:'',name:c.full_name||''});
+            html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
+          }
+          html += '</div></div></div>';
+        });
+      }
+      el.innerHTML = html;
+    }
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--red);padding:24px">Error loading hot leads: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function ucMerge(keepId, mergeId, queueId) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    await fetch('/api/contacts?action=merge', {
+      method: 'POST', headers,
+      body: JSON.stringify({ keep_id: keepId, merge_id: mergeId, queue_id: queueId })
+    });
+    loadMergeQueue();
+  } catch (e) { console.error('Merge error:', e.message); }
+}
+
+async function ucDismissMerge(queueId) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    await fetch('/api/contacts?action=dismiss_merge', {
+      method: 'POST', headers,
+      body: JSON.stringify({ queue_id: queueId })
+    });
+    loadMergeQueue();
+  } catch (e) { console.error('Dismiss merge error:', e.message); }
 }
 
 // ============================================================

@@ -229,6 +229,13 @@
       </div>
     </div>
 
+    <!-- CONTACTS — Unified Contact Hub -->
+    <div class="page" id="pageContacts">
+      <div class="page-inner" id="contactsPageInner">
+        <div id="contactsContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
     <!-- SETTINGS -->
     <div class="page" id="pageSettings">
       <div class="page-inner">
@@ -294,6 +301,10 @@
       <button class="more-drawer-item" data-page="pageSyncHealth" onclick="navToFromMore('pageSyncHealth')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
         Sync
+      </button>
+      <button class="more-drawer-item" data-page="pageContacts" onclick="navToFromMore('pageContacts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Contacts
       </button>
       <button class="more-drawer-item" data-page="pageSettings" onclick="navToFromMore('pageSettings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
@@ -375,6 +386,7 @@
 <script src="gov.js"></script>
 <script src="dialysis.js"></script>
 <script src="detail.js"></script>
+<script src="contacts-ui.js"></script>
 <script src="ops.js"></script>
 </body>
 </html>
