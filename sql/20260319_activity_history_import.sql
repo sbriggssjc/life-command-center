@@ -35,8 +35,8 @@ SELECT DISTINCT ON (h.sf_activity_id)
   h.sf_activity_id,                                    -- sf_task_id
   h.sf_contact_id,                                     -- sf_who_id
   h.sf_company_id,                                     -- sf_what_id (account)
-  LOWER(h.subject),                                    -- activity_type: 'call', 'email'
-  CONCAT(h.subject, ' - ', h.nm_type),                 -- subject with deal context
+  LOWER(COALESCE(NULLIF(h.subject, ''), 'other')),      -- activity_type: 'call', 'email', 'other'
+  CONCAT(COALESCE(h.subject, 'Activity'), ' - ', COALESCE(h.nm_type, '')),  -- subject with deal context
   CASE
     WHEN h.date_completed ~ '^\d{1,2}/\d{1,2}/\d{4}$'
     THEN TO_DATE(h.date_completed, 'MM/DD/YYYY')
