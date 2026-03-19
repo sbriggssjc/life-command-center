@@ -853,7 +853,7 @@ function renderBizSubset(subset) {
 
 let mktData = [];              // CRM tasks (non-opportunity activities + leads)
 let mktLoaded = false;
-let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads'
+let mktSource = 'all';    // 'all' | 'sf_deal' | 'rcm' | 'crexi' | 'loopnet' | 'leads' | 'unified'
 let mktFilter = 'new';    // 'all' | 'upcoming' | 'overdue' | 'starred' | 'new' | 'unmatched'
 let mktSort = 'date';     // 'date' | 'deal' — sort by recent activity or group by deal
 let mktOwner = 'mine';    // 'mine' | 'all' | specific name
@@ -861,8 +861,15 @@ let mktSearch = '';
 let mktPage = 0;
 let mktCallHistoryCache = {};  // sf_contact_id → [{date, notes, type}]
 let mktExpandedDeal = null;    // deal name currently expanded to show call history
-let mktSort = 'date';          // 'date' | 'deal'
 const MKT_PAGE = 20;
+
+// Unified Contact Hub state
+let ucLoaded = false;
+let ucData = [];               // unified_contacts from Gov DB
+let ucPage = 0;
+let ucSearch = '';
+let ucTotal = 0;
+let ucDataQuality = null;      // {total_contacts, stale_emails, stale_phones, pending_merges}
 let mktSearchTimeout;
 
 // Domain-classified opportunities stored globally for domain tabs
@@ -1079,6 +1086,16 @@ async function loadMarketing() {
       });
       mktLoaded = true;
 
+      // Preload unified contact data quality stats for badge display
+      if (!ucDataQuality) {
+        try {
+          const ucHeaders = { 'Content-Type': 'application/json' };
+          if (LCC_USER.workspace_id) ucHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
+          const ucR = await fetch('/api/contacts?action=data_quality', { headers: ucHeaders });
+          if (ucR.ok) ucDataQuality = await ucR.json();
+        } catch { /* ignore — unified contacts may not be set up yet */ }
+      }
+
       // Badge: actionable CRM tasks due (calls due today + overdue follow-ups)
       const today = new Date().toISOString().split('T')[0];
       const actionableCount = mktData.filter(d => d.pipeline_source === 'sf_deal' && d.due_date && d.due_date <= today).length;
@@ -1192,6 +1209,7 @@ function renderMarketing() {
   html += '<div class="pills" style="margin-bottom:4px">';
   html += `<span class="pill ${mktSource==='all'?'active':''}" onclick="mktSource='all';mktPage=0;renderMarketing()">All <span class="pill-ct">${ownerFiltered.length}</span></span>`;
   html += `<span class="pill ${mktSource==='sf_deal'?'active':''}" onclick="mktSource='sf_deal';mktPage=0;renderMarketing()">CRM Tasks <span class="pill-ct">${srcCounts['sf_deal']||0}</span></span>`;
+  html += `<span class="pill ${mktSource==='unified'?'active':''}" onclick="mktSource='unified';ucPage=0;loadAndRenderUC()">Unified Contacts <span class="pill-ct">${ucDataQuality ? ucDataQuality.total_contacts || '—' : '—'}</span></span>`;
   if (srcCounts['rcm']) html += `<span class="pill ${mktSource==='rcm'?'active':''}" onclick="mktSource='rcm';mktPage=0;renderMarketing()">RCM <span class="pill-ct">${srcCounts['rcm']}</span></span>`;
   if (srcCounts['crexi']) html += `<span class="pill ${mktSource==='crexi'?'active':''}" onclick="mktSource='crexi';mktPage=0;renderMarketing()">CREXi <span class="pill-ct">${srcCounts['crexi']}</span></span>`;
   if (srcCounts['loopnet']) html += `<span class="pill ${mktSource==='loopnet'?'active':''}" onclick="mktSource='loopnet';mktPage=0;renderMarketing()">LoopNet <span class="pill-ct">${srcCounts['loopnet']}</span></span>`;
@@ -1281,6 +1299,226 @@ function renderMarketing() {
   }
 
   el.innerHTML = html;
+}
+
+// ============================================================
+// UNIFIED CONTACT HUB — load, render, classify
+// ============================================================
+
+async function loadUnifiedContacts(search) {
+  const params = new URLSearchParams({
+    action: 'list',
+    contact_class: 'business',
+    limit: '50',
+    offset: String(ucPage * 50)
+  });
+  if (search) params.set('search', search);
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?' + params.toString(), { headers });
+    if (r.ok) {
+      const d = await r.json();
+      ucData = d.contacts || [];
+      ucTotal = d.total || 0;
+      ucLoaded = true;
+    }
+  } catch (e) {
+    console.warn('[UnifiedContacts] Load error:', e.message);
+  }
+  // Load data quality stats once
+  if (!ucDataQuality) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      const r2 = await fetch('/api/contacts?action=data_quality', { headers });
+      if (r2.ok) ucDataQuality = await r2.json();
+    } catch { /* ignore */ }
+  }
+}
+
+function renderUnifiedContacts() {
+  let html = '';
+  html += '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Unified Contact Hub</h3>';
+  html += '<div style="font-size:12px;color:var(--text3)">Contacts synced across Salesforce, Outlook, Calendar — business contacts only</div></div>';
+
+  // Data quality widget
+  if (ucDataQuality) {
+    html += '<div class="widget-grid" style="margin-bottom:12px">';
+    html += '<div class="stat-card"><div class="stat-label">Total Contacts</div><div class="stat-value" style="color:var(--accent)">' + (ucDataQuality.total_contacts || 0) + '</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">Stale Emails</div><div class="stat-value" style="color:' + (ucDataQuality.stale_emails > 0 ? 'var(--orange)' : 'var(--green)') + '">' + (ucDataQuality.stale_emails || 0) + '</div></div>';
+    html += '<div class="stat-card"><div class="stat-label">Stale Phones</div><div class="stat-value" style="color:' + (ucDataQuality.stale_phones > 0 ? 'var(--orange)' : 'var(--green)') + '">' + (ucDataQuality.stale_phones || 0) + '</div></div>';
+    html += '<div class="stat-card" style="cursor:pointer" onclick="loadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
+    html += '</div>';
+  }
+
+  // Search
+  html += '<div class="search-bar" style="margin-bottom:8px"><input class="search-input" type="text" placeholder="Search unified contacts by name, email, company, phone..." value="' + esc(ucSearch) + '" oninput="debounceUcSearch(this.value)"></div>';
+
+  if (!ucLoaded) {
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
+    return html;
+  }
+
+  if (ucData.length === 0) {
+    html += '<div style="text-align:center;padding:32px;color:var(--text2)">No contacts found.' + (ucSearch ? ' Try a different search.' : '') + '</div>';
+    return html;
+  }
+
+  // Contact cards
+  ucData.forEach(function(c) {
+    var sources = [];
+    if (c.sf_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1a73e8;color:#fff">SF</span>');
+    if (c.outlook_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0078d4;color:#fff">Outlook</span>');
+    if (c.last_synced_calendar) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#0b8043;color:#fff">Calendar</span>');
+    if (c.gov_contact_id) sources.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#5f6368;color:#fff">Gov</span>');
+    var staleFlags = [];
+    if (c.email_stale) staleFlags.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--orange);color:#fff">Email Stale</span>');
+    if (c.phone_stale) staleFlags.push('<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--orange);color:#fff">Phone Stale</span>');
+
+    html += '<div class="widget" style="padding:12px">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between">';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-size:14px;font-weight:500">' + esc(c.full_name || c.first_name || c.last_name || '—');
+    if (c.title) html += ' <span style="font-size:11px;color:var(--text3)">' + esc(c.title) + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
+    if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
+    html += '</div>';
+    if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + (c.mobile_phone && c.mobile_phone !== c.phone ? ' · Mobile: ' + esc(c.mobile_phone) : '') + '</div>';
+    if (c.city || c.state) html += '<div style="font-size:11px;color:var(--text3)">' + esc([c.city, c.state].filter(Boolean).join(', ')) + '</div>';
+    // Source badges
+    if (sources.length > 0 || staleFlags.length > 0) {
+      html += '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' + sources.join('') + staleFlags.join('') + '</div>';
+    }
+    // Contact type / entity type
+    if (c.contact_type || c.entity_type) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">';
+      if (c.contact_type) html += esc(c.contact_type);
+      if (c.contact_type && c.entity_type) html += ' · ';
+      if (c.entity_type) html += esc(c.entity_type);
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Actions
+    html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center">';
+    // Personal/Business toggle
+    html += '<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="ucToggleClass(\'' + c.unified_id + '\',\'' + (c.contact_class === 'business' ? 'personal' : 'business') + '\')" title="Reclassify">' + (c.contact_class === 'business' ? 'Move to Personal' : 'Move to Business') + '</button>';
+    if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+    if (c.phone) {
+      var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
+      html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px" title="Call via WebEx">&#x1F4DE;</a>';
+    }
+    if (c.sf_contact_id) {
+      var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_account_id||'',name:c.full_name||c.company_name||''});
+      html += '<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="openLogCall(' + logData + ')">Log</button>';
+    }
+    html += '</div></div></div>';
+  });
+
+  // Pager
+  var totalPages = Math.ceil(ucTotal / 50);
+  if (totalPages > 1) {
+    html += '<div class="pager"><button onclick="ucPage--;loadAndRenderUC()" ' + (ucPage === 0 ? 'disabled' : '') + '>&#x2190; Prev</button><span>Page ' + (ucPage + 1) + ' of ' + totalPages + ' · ' + ucTotal + ' contacts</span><button onclick="ucPage++;loadAndRenderUC()" ' + (ucPage >= totalPages - 1 ? 'disabled' : '') + '>Next &#x2192;</button></div>';
+  }
+
+  return html;
+}
+
+// Debounce for unified contacts search
+let ucSearchTimeout;
+function debounceUcSearch(val) {
+  ucSearch = val;
+  ucPage = 0;
+  clearTimeout(ucSearchTimeout);
+  ucSearchTimeout = setTimeout(function() { loadAndRenderUC(); }, 300);
+}
+
+// Load and render unified contacts into the marketing panel
+async function loadAndRenderUC() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
+  await loadUnifiedContacts(ucSearch);
+  el.innerHTML = renderUnifiedContacts();
+}
+
+// Reclassify a contact between personal and business
+async function ucToggleClass(unifiedId, newClass) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=classify&id=' + unifiedId, {
+      method: 'POST', headers, body: JSON.stringify({ contact_class: newClass })
+    });
+    if (r.ok) {
+      // Refresh the list
+      await loadAndRenderUC();
+    } else {
+      console.error('Classify failed:', await r.text());
+    }
+  } catch (e) {
+    console.error('Classify error:', e.message);
+  }
+}
+
+// Placeholder for merge queue viewer
+async function loadMergeQueue() {
+  const el = document.getElementById('bizPageInner');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading merge queue...</p></div>';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    const r = await fetch('/api/contacts?action=merge_queue', { headers });
+    if (r.ok) {
+      const d = await r.json();
+      const queue = d.queue || [];
+      let html = '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Merge Queue</h3><div style="font-size:12px;color:var(--text3)">Review and resolve potential duplicate contacts</div></div>';
+      html += '<button class="act-btn" style="margin-bottom:12px" onclick="mktSource=\'unified\';ucPage=0;loadAndRenderUC()">&#x2190; Back to Contacts</button>';
+      if (queue.length === 0) {
+        html += '<div style="text-align:center;padding:32px;color:var(--text2)">No pending merge suggestions. Great data hygiene!</div>';
+      } else {
+        queue.forEach(function(item) {
+          html += '<div class="widget" style="padding:12px">';
+          html += '<div style="font-size:13px;font-weight:500">Score: ' + (item.match_score || 0).toFixed(2) + ' — ' + esc(item.match_reason || 'Unknown') + '</div>';
+          html += '<div style="font-size:12px;color:var(--text2)">Contact A: ' + esc(item.contact_a) + ' · Contact B: ' + esc(item.contact_b) + '</div>';
+          html += '<div style="display:flex;gap:6px;margin-top:8px">';
+          html += '<button class="act-btn primary" style="font-size:11px;padding:4px 10px" onclick="ucMerge(\'' + item.contact_a + '\',\'' + item.contact_b + '\',\'' + item.queue_id + '\')">Merge (keep A)</button>';
+          html += '<button class="act-btn" style="font-size:11px;padding:4px 10px" onclick="ucDismissMerge(\'' + item.queue_id + '\')">Dismiss</button>';
+          html += '</div></div>';
+        });
+      }
+      el.innerHTML = html;
+    }
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--red);padding:24px">Error loading merge queue: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function ucMerge(keepId, mergeId, queueId) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    await fetch('/api/contacts?action=merge', {
+      method: 'POST', headers,
+      body: JSON.stringify({ keep_id: keepId, merge_id: mergeId, queue_id: queueId })
+    });
+    loadMergeQueue();
+  } catch (e) { console.error('Merge error:', e.message); }
+}
+
+async function ucDismissMerge(queueId) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    await fetch('/api/contacts?action=dismiss_merge', {
+      method: 'POST', headers,
+      body: JSON.stringify({ queue_id: queueId })
+    });
+    loadMergeQueue();
+  } catch (e) { console.error('Dismiss merge error:', e.message); }
 }
 
 // ============================================================
