@@ -1179,12 +1179,19 @@ async function loadMarketing() {
         // Route non-Opportunity tasks: gov/dialysis → domain sections, all_other → marketing
         // Only include contacts that have actionable open tasks (skip completed-history-only contacts)
         if (nonOppTasks.length > 0) {
+          // Use earliest open task date as due_date (not last_activity_date which includes completed)
+          var earliestTaskDate = nonOppTasks.reduce(function(earliest, t) {
+            if (!t.date) return earliest;
+            if (!earliest) return t.date;
+            return t.date < earliest ? t.date : earliest;
+          }, null);
           var contactRecord = Object.assign({}, base, {
             open_task_count: nonOppTasks.length,
             open_tasks: nonOppTasks,
             touchpoint_count: nonOppTasks.length,
             _opp_domain: domain,
-            task_domain: domain || 'all_other'
+            task_domain: domain || 'all_other',
+            due_date: earliestTaskDate || base.due_date
           });
           if (domain === 'government' || domain === 'dialysis') {
             // Gov/dialysis contacts go to their domain prospect section
