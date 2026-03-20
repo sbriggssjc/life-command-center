@@ -1120,7 +1120,7 @@ async function handleRcmIngest(req, res) {
     if (parsed.lead_email) {
       try {
         const sfUrl = new URL(`${DIA_SUPABASE_URL}/rest/v1/salesforce_activities`);
-        sfUrl.searchParams.set('select', 'sf_contact_id,first_name,last_name,company_name');
+        sfUrl.searchParams.set('select', 'sf_contact_id,sf_company_id,first_name,last_name,company_name,assigned_to');
         sfUrl.searchParams.set('email', `eq.${parsed.lead_email}`);
         sfUrl.searchParams.set('limit', '1');
 
@@ -1157,9 +1157,78 @@ async function handleRcmIngest(req, res) {
       }
     }
 
+    // ── Create salesforce_activities task so the lead appears in CRM hub ──
+    // Matched leads attach to existing SF contact; unmatched get a synthetic ID
+    let sfActivityId = null;
+    try {
+      const contactId = sfMatch ? sfMatch.sf_contact_id : `rcm-lead-${lead.lead_id}`;
+      const taskSubject = parsed.deal_name
+        ? `RCM: ${parsed.deal_name}`
+        : `RCM Inquiry – ${parsed.lead_name || parsed.lead_email || 'New Lead'}`;
+      const noteSnippet = parsed.activity_detail
+        || (raw_body || '').substring(0, 300) + ((raw_body || '').length > 300 ? '…' : '');
+
+      const sfActivityPayload = {
+        subject: taskSubject,
+        first_name: sfMatch?.first_name || parsed.lead_first_name || null,
+        last_name: sfMatch?.last_name || parsed.lead_last_name || null,
+        contact_name: sfMatch
+          ? `${sfMatch.first_name || ''} ${sfMatch.last_name || ''}`.trim()
+          : parsed.lead_name || null,
+        company_name: sfMatch?.company_name || parsed.lead_company || null,
+        email: parsed.lead_email,
+        phone: parsed.lead_phone,
+        sf_contact_id: contactId,
+        sf_company_id: sfMatch?.sf_company_id || null,
+        nm_type: 'Task',
+        task_subtype: 'Task',
+        status: 'Open',
+        activity_date: new Date().toISOString().split('T')[0],
+        nm_notes: noteSnippet,
+        assigned_to: sfMatch?.assigned_to || 'Scott Briggs',
+        source_ref: `rcm:${source_ref || lead.lead_id}`
+      };
+
+      const sfActRes = await fetch(`${DIA_SUPABASE_URL}/rest/v1/salesforce_activities`, {
+        method: 'POST',
+        headers: {
+          'apikey': DIA_SUPABASE_KEY,
+          'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation,resolution=ignore-duplicates'
+        },
+        body: JSON.stringify(sfActivityPayload)
+      });
+
+      if (sfActRes.ok) {
+        const sfActData = await sfActRes.json();
+        const sfAct = Array.isArray(sfActData) ? sfActData[0] : sfActData;
+        sfActivityId = sfAct?.activity_id || null;
+
+        // Link the marketing lead back to the SF activity
+        if (sfActivityId) {
+          await fetch(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads?lead_id=eq.${lead.lead_id}`, {
+            method: 'PATCH',
+            headers: {
+              'apikey': DIA_SUPABASE_KEY,
+              'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify({ sf_activity_id: sfActivityId })
+          });
+        }
+      } else {
+        console.error('SF activity creation failed:', await sfActRes.text().catch(() => ''));
+      }
+    } catch (sfActErr) {
+      console.error('SF activity creation error:', sfActErr.message);
+    }
+
     return res.status(201).json({
       ok: true,
       lead_id: lead.lead_id,
+      sf_activity_id: sfActivityId,
       parsed: {
         lead_name: parsed.lead_name,
         lead_email: parsed.lead_email,

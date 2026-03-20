@@ -250,6 +250,18 @@ export default async function handler(req, res) {
     }
   }
 
+  // Support a second filter condition on GET queries (same logic as POST/PATCH filter2)
+  const { filter2 } = req.query;
+  if (filter2) {
+    const eqIdx = filter2.indexOf('=');
+    if (eqIdx > 0) {
+      const col = safeColumn(filter2.substring(0, eqIdx));
+      if (!col) return res.status(400).json({ error: 'Invalid column name in filter2' });
+      const val = filter2.substring(eqIdx + 1);
+      url.searchParams.set(col, val);
+    }
+  }
+
   if (order) url.searchParams.set('order', order);
   url.searchParams.set('limit', safeLimit(limit));
   if (offset !== undefined) url.searchParams.set('offset', offset);
