@@ -1222,6 +1222,7 @@ async function loadMarketing() {
         task_domain: 'all_other'
       }));
 
+<<<<<<< HEAD
       // Merge deal-linked contacts from v_sf_tasks_contact_rollup
       // This view pre-joins salesforce_tasks (18-char who_id truncated to 15) with
       // salesforce_activities Opportunity contacts, enriching names/company/deal info.
@@ -1277,6 +1278,58 @@ async function loadMarketing() {
 
       // Marketing tab only renders CRM tasks + leads (NOT opportunities)
       mktData = [...tasks, ...sfTasksMerged, ...leads].sort((a, b) => {
+=======
+      // Fetch deal-linked tasks from salesforce_tasks (bridged via 15-char contact ID)
+      let dealLinkedTasks = [];
+      try {
+        const sfTasksRaw = await diaQuery('v_sf_tasks_contact_rollup', '*', { limit: 2000 });
+        if (sfTasksRaw && sfTasksRaw.length > 0) {
+          // Deduplicate: skip contacts already in tasks from v_crm_client_rollup
+          var existingContactIds = new Set();
+          tasks.forEach(function(t) { if (t.sf_contact_id) existingContactIds.add(t.sf_contact_id); });
+
+          sfTasksRaw.forEach(function(d) {
+            if (existingContactIds.has(d.sf_contact_id)) return;
+            var parsedTasks = d.open_tasks;
+            if (typeof parsedTasks === 'string') { try { parsedTasks = JSON.parse(parsedTasks); } catch(e) { parsedTasks = []; } }
+            dealLinkedTasks.push({
+              pipeline_source: 'sf_deal',
+              item_id: d.sf_contact_id || '',
+              deal_name: d.contact_name || '(Unknown)',
+              deal_display_name: d.contact_name || '(Unknown)',
+              deal_priority: null,
+              contact_name: d.contact_name || '',
+              first_name: d.first_name,
+              last_name: d.last_name,
+              company_name: d.company_name,
+              email: d.email,
+              phone: d.phone,
+              sf_contact_id: d.sf_contact_id,
+              sf_company_id: d.sf_company_id,
+              due_date: d.last_activity_date,
+              notes: '',
+              status: 'Open',
+              assigned_to: d.assigned_to,
+              activity_type: 'CRM',
+              lead_source: null,
+              sf_match_status: null,
+              ingested_at: null,
+              open_task_count: d.open_task_count || (parsedTasks || []).length,
+              open_tasks: parsedTasks || [],
+              touchpoint_count: d.open_task_count || (parsedTasks || []).length,
+              task_domain: 'all_other',
+              _source: 'sf_tasks'
+            });
+          });
+          console.log('[Marketing] Loaded ' + dealLinkedTasks.length + ' deal-linked contacts from salesforce_tasks');
+        }
+      } catch(e) {
+        console.warn('[Marketing] Deal-linked tasks load failed:', e.message);
+      }
+
+      // Marketing tab only renders CRM tasks + leads + deal-linked tasks (NOT opportunities)
+      mktData = [...tasks, ...leads, ...dealLinkedTasks].sort((a, b) => {
+>>>>>>> 547cf361c6c5592efff5f0d782bb27353b76fb34
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
