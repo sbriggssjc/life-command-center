@@ -80,7 +80,6 @@ export const DIA_READ_TABLES = new Set([
   'v_opportunity_domain_classified',
   'salesforce_activities',
   'salesforce_tasks',
-  'v_sf_tasks_contact_rollup',
   'medicare_clinics',
   'available_listings',
   'marketing_leads',
