@@ -1213,7 +1213,8 @@ async function loadMarketing() {
         lead_source: l.source,
         sf_match_status: l.sf_match_status,
         touchpoint_count: l.touchpoint_count,
-        ingested_at: l.ingested_at
+        ingested_at: l.ingested_at,
+        task_domain: 'all_other'
       }));
 
       // Marketing tab only renders CRM tasks + leads (NOT opportunities)
