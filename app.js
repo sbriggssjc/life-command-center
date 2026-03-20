@@ -1047,17 +1047,21 @@ async function loadMarketing() {
           try {
             const retry = await diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 });
             if (retry && retry.length > 0) {
-              const retryOpps = retry.map(d => ({
-                pipeline_source: 'sf_deal', item_id: String(d.activity_id || ''), deal_name: d.deal_name,
-                deal_display_name: d.deal_display_name || d.deal_name, deal_priority: d.deal_priority,
-                contact_name: d.contact_name, first_name: d.first_name, last_name: d.last_name,
-                company_name: d.company_name, email: d.email, phone: d.phone,
-                sf_contact_id: d.sf_contact_id, sf_company_id: d.sf_company_id,
-                due_date: d.activity_date, notes: d.nm_notes, status: d.status,
-                assigned_to: d.assigned_to, activity_type: 'opportunity',
-                lead_source: null, sf_match_status: null, touchpoint_count: null,
-                ingested_at: d.created_at, domain: d.domain, prospect_domain: d.prospect_domain
-              }));
+              const retryOpps = retry.map(d => {
+                var te = { subject: d.deal_display_name || d.deal_name || 'Opportunity', date: d.activity_date, notes: d.nm_notes, type: 'Opportunity' };
+                return {
+                  pipeline_source: 'sf_deal', item_id: String(d.activity_id || ''), deal_name: d.deal_name,
+                  deal_display_name: d.deal_display_name || d.deal_name, deal_priority: d.deal_priority,
+                  contact_name: d.contact_name, first_name: d.first_name, last_name: d.last_name,
+                  company_name: d.company_name, email: d.email, phone: d.phone,
+                  sf_contact_id: d.sf_contact_id, sf_company_id: d.sf_company_id,
+                  due_date: d.activity_date, notes: d.nm_notes, status: d.status,
+                  assigned_to: d.assigned_to, activity_type: 'opportunity',
+                  lead_source: null, sf_match_status: null, touchpoint_count: null,
+                  ingested_at: d.created_at, domain: d.domain, prospect_domain: d.prospect_domain,
+                  open_task_count: 1, open_tasks: [te]
+                };
+              });
               window._mktOpportunities = {
                 government: retryOpps.filter(d => d.domain === 'government'),
                 dialysis: retryOpps.filter(d => d.domain === 'dialysis'),
@@ -1071,32 +1075,37 @@ async function loadMarketing() {
       }
 
       // Store domain-classified opportunities globally for domain tabs
-      const opps = (opportunitiesRaw || []).map(d => ({
-        pipeline_source: 'sf_deal',
-        item_id: String(d.activity_id || ''),
-        deal_name: d.deal_name,
-        deal_display_name: d.deal_display_name || d.deal_name,
-        deal_priority: d.deal_priority,
-        contact_name: d.contact_name,
-        first_name: d.first_name,
-        last_name: d.last_name,
-        company_name: d.company_name,
-        email: d.email,
-        phone: d.phone,
-        sf_contact_id: d.sf_contact_id,
-        sf_company_id: d.sf_company_id,
-        due_date: d.activity_date,
-        notes: d.nm_notes,
-        status: d.status,
-        assigned_to: d.assigned_to,
-        activity_type: 'opportunity',
-        lead_source: null,
-        sf_match_status: null,
-        touchpoint_count: null,
-        ingested_at: d.created_at,
-        domain: d.domain,
-        prospect_domain: d.prospect_domain
-      }));
+      const opps = (opportunitiesRaw || []).map(d => {
+        var taskEntry = { subject: d.deal_display_name || d.deal_name || 'Opportunity', date: d.activity_date, notes: d.nm_notes, type: 'Opportunity' };
+        return {
+          pipeline_source: 'sf_deal',
+          item_id: String(d.activity_id || ''),
+          deal_name: d.deal_name,
+          deal_display_name: d.deal_display_name || d.deal_name,
+          deal_priority: d.deal_priority,
+          contact_name: d.contact_name,
+          first_name: d.first_name,
+          last_name: d.last_name,
+          company_name: d.company_name,
+          email: d.email,
+          phone: d.phone,
+          sf_contact_id: d.sf_contact_id,
+          sf_company_id: d.sf_company_id,
+          due_date: d.activity_date,
+          notes: d.nm_notes,
+          status: d.status,
+          assigned_to: d.assigned_to,
+          activity_type: 'opportunity',
+          lead_source: null,
+          sf_match_status: null,
+          touchpoint_count: null,
+          ingested_at: d.created_at,
+          domain: d.domain,
+          prospect_domain: d.prospect_domain,
+          open_task_count: 1,
+          open_tasks: [taskEntry]
+        };
+      });
       window._mktOpportunities = {
         government: opps.filter(d => d.domain === 'government'),
         dialysis: opps.filter(d => d.domain === 'dialysis'),
