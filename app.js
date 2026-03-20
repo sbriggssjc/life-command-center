@@ -1191,7 +1191,8 @@ async function loadMarketing() {
       });
 
       // Normalize leads to pipeline schema
-      const leads = (leadsRaw || []).map(l => ({
+      // Exclude leads already promoted to salesforce_activities (they show as CRM tasks instead)
+      const leads = (leadsRaw || []).filter(l => !l.sf_activity_id).map(l => ({
         pipeline_source: l.source,
         item_id: String(l.lead_id || ''),
         deal_name: l.deal_name,
