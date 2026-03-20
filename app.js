@@ -987,6 +987,7 @@ async function loadMarketing() {
       // Skip the heavy query when called from domain Prospects tabs (they only need opportunities)
       let clientRollupRaw = [];
       let leadsRaw = [];
+      let sfDealTasks = [];
       if (currentBizTab === 'marketing') {
         // Paginated fetch: load all contacts in batches of BATCH_SIZE
         async function fetchAllPages(selectFields, extraFilter) {
@@ -1006,10 +1007,12 @@ async function loadMarketing() {
 
         const results = await Promise.all([
           fetchAllPages(leanFields, null),
-          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
+          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 }),
+          diaQuery('v_sf_tasks_contact_rollup', '*', { order: 'open_task_count.desc.nullslast', limit: 500 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
+        sfDealTasks = results[2] || [];
         console.log('[Marketing] Total contacts loaded: ' + clientRollupRaw.length);
         // Enrich contacts with open_tasks JSON via paginated fetch
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
@@ -1219,8 +1222,61 @@ async function loadMarketing() {
         task_domain: 'all_other'
       }));
 
+      // Merge deal-linked contacts from v_sf_tasks_contact_rollup
+      // This view pre-joins salesforce_tasks (18-char who_id truncated to 15) with
+      // salesforce_activities Opportunity contacts, enriching names/company/deal info.
+      const sfTasksMerged = [];
+      if (sfDealTasks && sfDealTasks.length > 0) {
+        // Build set of contacts already in clientRollupRaw to avoid duplicates
+        // Both sources use 15-char sf_contact_id (the view normalizes this)
+        const existingContactIds = new Set();
+        (clientRollupRaw || []).forEach(function(c) { if (c.sf_contact_id) existingContactIds.add(c.sf_contact_id); });
+
+        sfDealTasks.forEach(function(c) {
+          if (!c.sf_contact_id || existingContactIds.has(c.sf_contact_id)) return;
+          var dealName = '';
+          var openTaskEntries = [];
+          try {
+            var ot = typeof c.open_tasks === 'string' ? JSON.parse(c.open_tasks) : c.open_tasks;
+            if (Array.isArray(ot) && ot.length > 0) {
+              dealName = ot[0].deal_name || '';
+              openTaskEntries = ot;
+            }
+          } catch(e) { /* ignore parse errors */ }
+
+          sfTasksMerged.push({
+            pipeline_source: 'sf_deal',
+            item_id: c.sf_contact_id,
+            deal_name: dealName || '(Deal Task)',
+            deal_display_name: dealName || c.contact_name || '(Deal Task)',
+            deal_priority: null,
+            contact_name: c.contact_name || '',
+            first_name: c.first_name || '',
+            last_name: c.last_name || '',
+            company_name: c.company_name || '',
+            email: c.email || '',
+            phone: c.phone || '',
+            sf_contact_id: c.sf_contact_id,
+            sf_company_id: c.sf_company_id || null,
+            due_date: c.last_activity_date,
+            notes: '',
+            status: 'Open',
+            assigned_to: c.assigned_to || LCC_USER.display_name || 'Scott Briggs',
+            activity_type: 'CRM',
+            lead_source: null,
+            sf_match_status: null,
+            touchpoint_count: c.open_task_count || 0,
+            ingested_at: null,
+            open_task_count: c.open_task_count || 0,
+            open_tasks: openTaskEntries,
+            task_domain: 'all_other'
+          });
+        });
+        console.log('[Marketing] Merged ' + sfTasksMerged.length + ' deal-linked contacts from v_sf_tasks_contact_rollup');
+      }
+
       // Marketing tab only renders CRM tasks + leads (NOT opportunities)
-      mktData = [...tasks, ...leads].sort((a, b) => {
+      mktData = [...tasks, ...sfTasksMerged, ...leads].sort((a, b) => {
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
