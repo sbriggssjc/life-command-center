@@ -1077,7 +1077,7 @@ async function handleRcmIngest(req, res) {
     deal_name: parsed.deal_name,
     activity_type: parsed.activity_type,
     activity_detail: parsed.activity_detail,
-    raw_body: raw_body,
+    notes: raw_body,
     status: status || 'new',
     ingested_at: new Date().toISOString()
   };
@@ -1172,9 +1172,6 @@ async function handleRcmIngest(req, res) {
         subject: taskSubject,
         first_name: sfMatch?.first_name || parsed.lead_first_name || null,
         last_name: sfMatch?.last_name || parsed.lead_last_name || null,
-        contact_name: sfMatch
-          ? `${sfMatch.first_name || ''} ${sfMatch.last_name || ''}`.trim()
-          : parsed.lead_name || null,
         company_name: sfMatch?.company_name || parsed.lead_company || null,
         email: parsed.lead_email,
         phone: parsed.lead_phone,
@@ -1223,6 +1220,21 @@ async function handleRcmIngest(req, res) {
       }
     } catch (sfActErr) {
       console.error('SF activity creation error:', sfActErr.message);
+    }
+
+    // Refresh materialized view so new RCM task appears immediately in CRM hub
+    try {
+      await fetch(`${DIA_SUPABASE_URL}/rest/v1/rpc/refresh_crm_rollup`, {
+        method: 'POST',
+        headers: {
+          'apikey': DIA_SUPABASE_KEY,
+          'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: '{}'
+      });
+    } catch (refreshErr) {
+      console.warn('CRM rollup refresh skipped:', refreshErr.message);
     }
 
     return res.status(201).json({
