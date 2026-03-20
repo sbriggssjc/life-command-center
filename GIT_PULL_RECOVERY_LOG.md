@@ -55,6 +55,12 @@
 - On this recurrence, `.git/HEAD.lock` had `CreationTime` `2026-03-19 08:17:24` local time.
 - Three fresh `git.exe` processes were present, all started at `2026-03-19 08:29:26` local time.
 - After terminating those processes and removing `.git/HEAD.lock`, the next `git pull --tags origin main` failure in this environment was again GitHub network connectivity, not a ref-lock failure.
+- On 2026-03-20, the failure mode changed from `HEAD.lock` to unresolved merge conflicts.
+- The repository has active merge metadata (`MERGE_HEAD` and `MERGE_MSG` are present).
+- `git diff --name-only --diff-filter=U` reports two unresolved files: `app.js` and `sql/20260320_crm_rollup_sf_tasks_union.sql`.
+- Conflict marker locations found:
+  - `app.js`: lines `1225`, `1281`, `1332`
+  - `sql/20260320_crm_rollup_sf_tasks_union.sql`: lines `2`, `37`, `46`, `59`, `61`, `62`, `67`, `136`, `175`
 
 ## What This Means
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.
@@ -77,8 +83,9 @@
 ## Latest Status
 - `HEAD.lock` has been removed.
 - Git can now prepare a commit again.
-- Current branch state is `main...origin/main [behind 4]`.
-- Current staged changes are `api/contacts.js`, `sql/20260319_rcm_dedup_index.sql`, and `sql/20260319_unified_contacts.sql`.
+- Current branch state is `main...origin/main [ahead 1, behind 2]`.
+- Current staged clean change is `api/_shared/allowlist.js`.
+- Current unmerged files are `app.js` and `sql/20260320_crm_rollup_sf_tasks_union.sql`.
 
 ## Likely Cause
 - The repeated command shape matches a GUI-driven Git sync/commit flow rather than a manual CLI command.
