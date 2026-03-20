@@ -1171,7 +1171,8 @@ async function loadMarketing() {
         }
 
         // Route non-Opportunity tasks: gov/dialysis → domain sections, all_other → marketing
-        if (nonOppTasks.length > 0 || (d.completed_activity_count || 0) > 0) {
+        // Only include contacts that have actionable open tasks (skip completed-history-only contacts)
+        if (nonOppTasks.length > 0) {
           var contactRecord = Object.assign({}, base, {
             open_task_count: nonOppTasks.length,
             open_tasks: nonOppTasks,
