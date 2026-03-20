@@ -117,6 +117,7 @@ export const DIA_WRITE_TABLES = new Set([
   'rpc/upsert_research_outcome',
   'rpc/save_outbound_activity',
   'rpc/match_marketing_lead_to_sf',
+  'rpc/refresh_crm_rollup',
 ]);
 
 // Government tables where writes MUST go through Gov write services (not raw proxy).
