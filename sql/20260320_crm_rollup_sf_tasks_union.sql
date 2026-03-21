@@ -1,24 +1,18 @@
 -- ============================================================================
--- SF Tasks → Deal-Linked Contact Rollup View
--- Surfaces Opportunity-linked tasks from salesforce_tasks in the CRM hub.
---
--- PREREQUISITE: The Power Automate flow must be updated to include
--- WhatId, What.Name, What.Type in its SOQL query (via raw HTTP/SOQL,
--- not the OData connector which doesn't support relationship fields).
--- After updating, a full re-sync must be triggered so existing tasks
--- get what_id/what_name/what_type populated.
---
--- ID FORMAT NOTE: salesforce_tasks stores 18-char Salesforce IDs,
--- salesforce_activities stores 15-char IDs. The view uses
--- left(who_id, 15) to bridge the gap for contact enrichment.
+-- SF Tasks Contact Rollup View
+-- Surfaces ALL open tasks from salesforce_tasks (which has ~2,600 contacts
+-- with virtually zero overlap with salesforce_activities).
+-- Uses who_name from salesforce_tasks directly; LEFT JOINs to
+-- salesforce_activities only for optional enrichment (email, phone, company).
+-- Deduplication with v_crm_client_rollup happens in app.js (line ~1222).
 -- ============================================================================
 
 CREATE OR REPLACE VIEW v_sf_tasks_contact_rollup AS
 WITH task_contacts AS (
   SELECT
     who_id,
-    who_name,
-    what_name AS deal_name,
+    max(who_name) AS who_name,
+    max(owner_id) AS owner_id,
     count(*) AS open_task_count,
     max(activity_date) AS last_activity_date,
     jsonb_agg(
@@ -27,30 +21,35 @@ WITH task_contacts AS (
         'date', activity_date,
         'notes', COALESCE(description, ''),
         'type', COALESCE(task_type, subject),
-        'deal_name', COALESCE(what_name, '(Deal Task)')
+        'deal_name', COALESCE(what_name, '')
       )
       ORDER BY activity_date DESC NULLS LAST
     ) AS open_tasks
   FROM salesforce_tasks
   WHERE status IN ('Open', 'Not Started', 'In Progress')
     AND who_id IS NOT NULL
-    AND what_type = 'Opportunity'
-  GROUP BY who_id, who_name, what_name
+  GROUP BY who_id
 )
 SELECT
   left(tc.who_id, 15) AS sf_contact_id,
-  NULL AS sf_company_id,
+  sa.sf_company_id,
   COALESCE(sa.first_name, split_part(tc.who_name, ' ', 1)) AS first_name,
   COALESCE(sa.last_name, NULLIF(substring(tc.who_name from position(' ' in tc.who_name) + 1), '')) AS last_name,
   COALESCE(
-    TRIM(CONCAT(sa.first_name, ' ', sa.last_name)),
+    NULLIF(TRIM(BOTH FROM concat(sa.first_name, ' ', sa.last_name)), ''),
     tc.who_name,
     '(Unknown)'
   ) AS contact_name,
   sa.company_name,
   COALESCE(sa.email, '') AS email,
   COALESCE(sa.phone, '') AS phone,
-  sa.assigned_to,
+  COALESCE(
+    sa.assigned_to,
+    CASE tc.owner_id
+      WHEN '0051I000001vHJbQAM' THEN 'Scott Briggs'
+      ELSE NULL
+    END
+  ) AS assigned_to,
   tc.open_task_count,
   tc.last_activity_date,
   0 AS completed_activity_count,
