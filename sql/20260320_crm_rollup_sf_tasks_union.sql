@@ -1,63 +1,69 @@
 -- ============================================================================
--- SF Tasks → Deal-Linked Contact Rollup View
--- Bridges salesforce_tasks to salesforce_activities via 15-char ID truncation
--- (salesforce_tasks stores 18-char IDs, salesforce_activities stores 15-char)
+-- SF Tasks Contact Rollup View
+-- Surfaces ALL open tasks from salesforce_tasks (which has ~2,600 contacts
+-- with virtually zero overlap with salesforce_activities).
+-- Uses who_name from salesforce_tasks directly; LEFT JOINs to
+-- salesforce_activities only for optional enrichment (email, phone, company).
+-- Deduplication with v_crm_client_rollup happens in app.js (line ~1222).
 -- ============================================================================
 
 CREATE OR REPLACE VIEW v_sf_tasks_contact_rollup AS
-WITH deal_contacts AS (
-  SELECT DISTINCT sa.sf_contact_id,
-    sa.first_name,
-    sa.last_name,
-    sa.company_name,
-    sa.email,
-    sa.phone,
-    sa.sf_company_id,
-    sa.assigned_to
-  FROM salesforce_activities sa
-  WHERE sa.nm_type = 'Opportunity'
-    AND sa.sf_contact_id IS NOT NULL
-),
-deal_names AS (
-  SELECT DISTINCT ON (sf_contact_id)
-    sf_contact_id,
-    subject AS deal_name
-  FROM salesforce_activities
-  WHERE nm_type = 'Opportunity'
-    AND sf_contact_id IS NOT NULL
-  ORDER BY sf_contact_id, activity_date DESC NULLS LAST
+WITH task_contacts AS (
+  SELECT
+    who_id,
+    max(who_name) AS who_name,
+    max(owner_id) AS owner_id,
+    count(*) AS open_task_count,
+    max(activity_date) AS last_activity_date,
+    jsonb_agg(
+      jsonb_build_object(
+        'subject', COALESCE(subject, 'Task'),
+        'date', activity_date,
+        'notes', COALESCE(description, ''),
+        'type', COALESCE(task_type, subject),
+        'deal_name', COALESCE(what_name, '')
+      )
+      ORDER BY activity_date DESC NULLS LAST
+    ) AS open_tasks
+  FROM salesforce_tasks
+  WHERE status IN ('Open', 'Not Started', 'In Progress')
+    AND who_id IS NOT NULL
+  GROUP BY who_id
 )
 SELECT
-  dc.sf_contact_id,
-  dc.sf_company_id,
-  dc.first_name,
-  dc.last_name,
-  concat_ws(' ', dc.first_name, dc.last_name) AS contact_name,
-  dc.company_name,
-  dc.email,
-  dc.phone,
-  dc.assigned_to,
-  count(*) AS open_task_count,
-  max(st.activity_date) AS last_activity_date,
+  left(tc.who_id, 15) AS sf_contact_id,
+  sa.sf_company_id,
+  COALESCE(sa.first_name, split_part(tc.who_name, ' ', 1)) AS first_name,
+  COALESCE(sa.last_name, NULLIF(substring(tc.who_name from position(' ' in tc.who_name) + 1), '')) AS last_name,
+  COALESCE(
+    NULLIF(TRIM(BOTH FROM concat(sa.first_name, ' ', sa.last_name)), ''),
+    tc.who_name,
+    '(Unknown)'
+  ) AS contact_name,
+  sa.company_name,
+  COALESCE(sa.email, '') AS email,
+  COALESCE(sa.phone, '') AS phone,
+  COALESCE(
+    sa.assigned_to,
+    CASE tc.owner_id
+      WHEN '0051I000001vHJbQAM' THEN 'Scott Briggs'
+      ELSE NULL
+    END
+  ) AS assigned_to,
+  tc.open_task_count,
+  tc.last_activity_date,
   0 AS completed_activity_count,
   '' AS last_call_notes,
-  jsonb_agg(
-    jsonb_build_object(
-      'subject', COALESCE(st.subject, 'Task'),
-      'date', st.activity_date,
-      'notes', '',
-      'type', 'Opportunity',
-      'deal_name', COALESCE(dn.deal_name, st.what_name, '(Deal Task)')
-    )
-    ORDER BY st.activity_date DESC NULLS LAST
-  ) AS open_tasks
-FROM salesforce_tasks st
-JOIN deal_contacts dc ON left(st.who_id, 15) = dc.sf_contact_id
-LEFT JOIN deal_names dn ON dc.sf_contact_id = dn.sf_contact_id
-WHERE st.status IN ('Open', 'Not Started', 'In Progress')
-  AND st.who_id IS NOT NULL
-GROUP BY dc.sf_contact_id, dc.sf_company_id, dc.first_name, dc.last_name,
-         dc.company_name, dc.email, dc.phone, dc.assigned_to, dn.deal_name;
+  tc.open_tasks
+FROM task_contacts tc
+LEFT JOIN LATERAL (
+  SELECT DISTINCT ON (sf_contact_id)
+    first_name, last_name, company_name, email, phone, assigned_to, sf_company_id
+  FROM salesforce_activities
+  WHERE sf_contact_id = left(tc.who_id, 15)
+  ORDER BY sf_contact_id, activity_date DESC NULLS LAST
+  LIMIT 1
+) sa ON true;
 
 -- Grant read access
 GRANT SELECT ON v_sf_tasks_contact_rollup TO anon, authenticated;
