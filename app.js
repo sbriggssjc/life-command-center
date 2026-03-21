@@ -936,7 +936,7 @@ async function loadMarketing() {
       // Load CRM client rollup — paginated fetch (Supabase caps at 1000 rows per request)
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
-      const BATCH_SIZE = 1000;
+      const BATCH_SIZE = 500;
 
       function buildRollupUrl(selectFields, extraFilter, batchOffset) {
         var url = new URL('/api/dia-query', window.location.origin);
@@ -944,6 +944,7 @@ async function loadMarketing() {
         url.searchParams.set('select', selectFields);
         url.searchParams.set('order', 'last_activity_date.desc.nullslast');
         url.searchParams.set('limit', String(BATCH_SIZE));
+        url.searchParams.set('count', 'false');
         if (batchOffset > 0) url.searchParams.set('offset', String(batchOffset));
         if (extraFilter) {
           url.searchParams.set('filter', extraFilter);
@@ -960,6 +961,11 @@ async function loadMarketing() {
         for (var attempt = 0; attempt <= retries; attempt++) {
           try {
             var r = await fetch(url);
+            if (!r.ok && attempt < retries) {
+              console.warn('[Marketing] Rollup attempt ' + (attempt+1) + ' HTTP ' + r.status + ', retrying in 3s...');
+              await new Promise(function(ok) { setTimeout(ok, 3000); });
+              continue;
+            }
             var d = await r.json();
             if (d.data && d.data.length > 0) return d.data;
             if (d.error && attempt < retries) {
@@ -981,6 +987,7 @@ async function loadMarketing() {
       // Skip the heavy query when called from domain Prospects tabs (they only need opportunities)
       let clientRollupRaw = [];
       let leadsRaw = [];
+      let sfDealTasks = [];
       if (currentBizTab === 'marketing') {
         // Paginated fetch: load all contacts in batches of BATCH_SIZE
         async function fetchAllPages(selectFields, extraFilter) {
@@ -1000,10 +1007,12 @@ async function loadMarketing() {
 
         const results = await Promise.all([
           fetchAllPages(leanFields, null),
-          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
+          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 }),
+          diaQuery('v_sf_tasks_contact_rollup', '*', { order: 'open_task_count.desc.nullslast', limit: 500 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
+        sfDealTasks = results[2] || [];
         console.log('[Marketing] Total contacts loaded: ' + clientRollupRaw.length);
         // Enrich contacts with open_tasks JSON via paginated fetch
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
@@ -1213,6 +1222,63 @@ async function loadMarketing() {
         task_domain: 'all_other'
       }));
 
+<<<<<<< HEAD
+      // Merge deal-linked contacts from v_sf_tasks_contact_rollup
+      // This view pre-joins salesforce_tasks (18-char who_id truncated to 15) with
+      // salesforce_activities Opportunity contacts, enriching names/company/deal info.
+      const sfTasksMerged = [];
+      if (sfDealTasks && sfDealTasks.length > 0) {
+        // Build set of contacts already in clientRollupRaw to avoid duplicates
+        // Both sources use 15-char sf_contact_id (the view normalizes this)
+        const existingContactIds = new Set();
+        (clientRollupRaw || []).forEach(function(c) { if (c.sf_contact_id) existingContactIds.add(c.sf_contact_id); });
+
+        sfDealTasks.forEach(function(c) {
+          if (!c.sf_contact_id || existingContactIds.has(c.sf_contact_id)) return;
+          var dealName = '';
+          var openTaskEntries = [];
+          try {
+            var ot = typeof c.open_tasks === 'string' ? JSON.parse(c.open_tasks) : c.open_tasks;
+            if (Array.isArray(ot) && ot.length > 0) {
+              dealName = ot[0].deal_name || '';
+              openTaskEntries = ot;
+            }
+          } catch(e) { /* ignore parse errors */ }
+
+          sfTasksMerged.push({
+            pipeline_source: 'sf_deal',
+            item_id: c.sf_contact_id,
+            deal_name: dealName || '(Deal Task)',
+            deal_display_name: dealName || c.contact_name || '(Deal Task)',
+            deal_priority: null,
+            contact_name: c.contact_name || '',
+            first_name: c.first_name || '',
+            last_name: c.last_name || '',
+            company_name: c.company_name || '',
+            email: c.email || '',
+            phone: c.phone || '',
+            sf_contact_id: c.sf_contact_id,
+            sf_company_id: c.sf_company_id || null,
+            due_date: c.last_activity_date,
+            notes: '',
+            status: 'Open',
+            assigned_to: c.assigned_to || LCC_USER.display_name || 'Scott Briggs',
+            activity_type: 'CRM',
+            lead_source: null,
+            sf_match_status: null,
+            touchpoint_count: c.open_task_count || 0,
+            ingested_at: null,
+            open_task_count: c.open_task_count || 0,
+            open_tasks: openTaskEntries,
+            task_domain: 'all_other'
+          });
+        });
+        console.log('[Marketing] Merged ' + sfTasksMerged.length + ' deal-linked contacts from v_sf_tasks_contact_rollup');
+      }
+
+      // Marketing tab only renders CRM tasks + leads (NOT opportunities)
+      mktData = [...tasks, ...sfTasksMerged, ...leads].sort((a, b) => {
+=======
       // Fetch deal-linked tasks from salesforce_tasks (bridged via 15-char contact ID)
       let dealLinkedTasks = [];
       try {
@@ -1263,6 +1329,7 @@ async function loadMarketing() {
 
       // Marketing tab only renders CRM tasks + leads + deal-linked tasks (NOT opportunities)
       mktData = [...tasks, ...leads, ...dealLinkedTasks].sort((a, b) => {
+>>>>>>> 547cf361c6c5592efff5f0d782bb27353b76fb34
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
@@ -1523,9 +1590,19 @@ async function loadUnifiedContacts(search) {
       ucData = d.contacts || [];
       ucTotal = d.total || 0;
       ucLoaded = true;
+      window._ucLoadError = null;
+    } else {
+      const errData = await r.json().catch(() => ({}));
+      console.warn('[UnifiedContacts] API error:', r.status, errData);
+      ucData = [];
+      ucLoaded = true;
+      window._ucLoadError = errData.error || `API returned ${r.status}`;
     }
   } catch (e) {
     console.warn('[UnifiedContacts] Load error:', e.message);
+    ucData = [];
+    ucLoaded = true;
+    window._ucLoadError = 'Network error: ' + e.message;
   }
   // Load data quality stats once
   if (!ucDataQuality) {
@@ -1560,10 +1637,19 @@ function renderUnifiedContacts() {
   }
 
   // Search
-  html += '<div class="search-bar" style="margin-bottom:8px"><input class="search-input" type="text" placeholder="Search unified contacts by name, email, company, phone..." value="' + esc(ucSearch) + '" oninput="debounceUcSearch(this.value)"></div>';
+  html += '<div class="search-bar" style="margin-bottom:8px"><input class="search-input" type="text" autocomplete="off" placeholder="Search unified contacts by name, email, company, phone..." value="' + esc(ucSearch) + '" oninput="debounceUcSearch(this.value)"></div>';
 
   if (!ucLoaded) {
     html += '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
+    return html;
+  }
+
+  if (window._ucLoadError) {
+    html += '<div style="text-align:center;padding:32px;color:var(--red)">';
+    html += '<div style="font-size:14px;font-weight:600;margin-bottom:8px">Failed to load contacts</div>';
+    html += '<div style="font-size:12px;color:var(--text3);margin-bottom:12px">' + esc(window._ucLoadError) + '</div>';
+    html += '<button class="btn btn-sm" onclick="ucLoaded=false;window._ucLoadError=null;loadAndRenderUC()" style="font-size:11px;padding:4px 12px;cursor:pointer">Retry</button>';
+    html += '</div>';
     return html;
   }
 
@@ -1689,7 +1775,12 @@ async function loadAndRenderUC() {
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading unified contacts...</p></div>';
   await loadUnifiedContacts(ucSearch);
-  el.innerHTML = renderUnifiedContacts();
+  try {
+    el.innerHTML = renderUnifiedContacts();
+  } catch (e) {
+    console.error('[UnifiedContacts] Render error:', e);
+    el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><div style="font-size:14px;font-weight:600;margin-bottom:8px">Render error</div><div style="font-size:12px;color:var(--text3)">' + esc(e.message) + '</div><button class="btn btn-sm" onclick="ucLoaded=false;window._ucLoadError=null;loadAndRenderUC()" style="margin-top:12px;font-size:11px;padding:4px 12px;cursor:pointer">Retry</button></div>';
+  }
 }
 
 // Reclassify a contact between personal and business
