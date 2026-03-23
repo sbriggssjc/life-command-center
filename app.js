@@ -2698,7 +2698,7 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
     body: JSON.stringify(payload)
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
-      console.log('[SF Sync] ' + activityType + ' logged for ' + sfContactId + ': ' + subject);
+      console.log('[SF Sync] ' + actionLabel + ' logged for ' + sfContactId + ': ' + subject);
     } else if (data.warning) {
       console.warn('[SF Sync] Warning: ' + (data.message || 'Recent activity detected'));
     } else {
