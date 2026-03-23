@@ -1128,6 +1128,9 @@ async function loadMarketing() {
       window._mktProspectContacts = { government: [], dialysis: [], all_other: [] };
       const tasks = [];
       (clientRollupRaw || []).forEach(function(d) {
+        // Skip contacts with no name — these show as "(Unknown)" and clutter the list
+        if (!d.contact_name || !d.contact_name.trim()) return;
+
         var allTasks = d.open_tasks || [];
         var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity'; });
         var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity'; });
@@ -1136,8 +1139,8 @@ async function loadMarketing() {
         var base = {
           pipeline_source: 'sf_deal',
           item_id: d.sf_contact_id || '',
-          deal_name: d.contact_name || '(Unknown)',
-          deal_display_name: d.contact_name || '(Unknown)',
+          deal_name: d.contact_name,
+          deal_display_name: d.contact_name,
           deal_priority: null,
           contact_name: d.contact_name || '',
           first_name: d.first_name,
@@ -1150,7 +1153,7 @@ async function loadMarketing() {
           due_date: d.last_activity_date,
           notes: d.task_notes,
           status: 'Open',
-          assigned_to: d.assigned_to,
+          assigned_to: d.assigned_to || 'Unassigned',
           activity_type: 'CRM',
           lead_source: null,
           sf_match_status: null,
@@ -1234,6 +1237,8 @@ async function loadMarketing() {
 
         sfDealTasks.forEach(function(c) {
           if (!c.sf_contact_id || existingContactIds.has(c.sf_contact_id)) return;
+          // Skip contacts with no name
+          if (!c.contact_name || !c.contact_name.trim()) return;
           var dealName = '';
           var openTaskEntries = [];
           try {
@@ -1250,7 +1255,7 @@ async function loadMarketing() {
             deal_name: dealName || '(Deal Task)',
             deal_display_name: dealName || c.contact_name || '(Deal Task)',
             deal_priority: null,
-            contact_name: c.contact_name || '',
+            contact_name: c.contact_name,
             first_name: c.first_name || '',
             last_name: c.last_name || '',
             company_name: c.company_name || '',
@@ -1261,7 +1266,7 @@ async function loadMarketing() {
             due_date: c.last_activity_date,
             notes: '',
             status: 'Open',
-            assigned_to: c.assigned_to || LCC_USER.display_name || 'Scott Briggs',
+            assigned_to: c.assigned_to || 'Unassigned',
             activity_type: 'CRM',
             lead_source: null,
             sf_match_status: null,
