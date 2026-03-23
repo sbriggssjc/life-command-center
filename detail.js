@@ -1325,7 +1325,7 @@ const _STATE_NAMES = {
 };
 
 /** Salesforce Lightning base URL */
-const _SF_BASE = 'https://northmarq.lightning.force.com/lightning/r';
+const _SF_BASE = 'https://northmarqcapital.lightning.force.com/lightning/r';
 
 /** Build a styled quick-link button */
 function _qlBtn(label, url, icon, color) {
