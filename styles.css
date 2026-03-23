@@ -528,6 +528,9 @@ body.compact .greeting { font-size: 18px; }
 }
 .form-group textarea { resize: vertical; min-height: 80px; }
 
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 600px) { .form-row { grid-template-columns: 1fr; } }
+
 .form-divider { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin: 16px 0 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 
 .ac-dropdown { position: absolute; left: 0; right: 0; background: var(--s2); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; max-height: 200px; overflow-y: auto; z-index: 100; display: none; }
