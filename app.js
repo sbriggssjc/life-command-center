@@ -2798,6 +2798,28 @@ function _closeOriginalSfTask(sfContactId, subject) {
   });
 }
 
+// Fire-and-forget: push new task date to SF via Power Automate
+function _updateSfTaskDate(sfContactId, subject, newDate) {
+  fetch('/api/sync?action=complete_sf_task', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sf_contact_id: sfContactId, subject: subject, action: 'reschedule', new_date: newDate })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      var action = data.pa_response && data.pa_response.action;
+      if (action === 'rescheduled') {
+        console.log('[SF Reschedule] Task date updated to ' + newDate + ' for ' + sfContactId + ': ' + subject);
+      } else {
+        console.log('[SF Reschedule] Original task not found for ' + sfContactId + ' (may need manual update in SF)');
+      }
+    } else {
+      console.error('[SF Reschedule] Error: ' + (data.error || 'Unknown'));
+    }
+  }).catch(function(e) {
+    console.error('[SF Reschedule] Network error:', e.message);
+  });
+}
+
 // ── Task management: complete, reschedule, dismiss ──
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
@@ -2842,6 +2864,8 @@ async function rescheduleTask(sfContactId, subject, newDate) {
       body: JSON.stringify({ activity_date: newDate })
     });
     showToast('Rescheduled to ' + newDate, 'success');
+    // Push new date to SF via Power Automate (non-blocking)
+    _updateSfTaskDate(sfContactId, subject, newDate);
     // Update local data (marketing + prospect contacts)
     _updateTaskInAllStores(sfContactId, subject, 'reschedule', newDate);
     _rerenderCurrentView();
@@ -3528,7 +3552,10 @@ async function submitLogReschedule() {
       body: JSON.stringify({ activity_date: nextDate })
     });
 
-    // 3. Remove this task from the current view (it'll reappear on next load with future date)
+    // 3. Push the new date to the original SF task via Power Automate (non-blocking)
+    _updateSfTaskDate(_lrData.sfContactId, _lrData.taskSubject, nextDate);
+
+    // 4. Remove this task from the current view (it'll reappear on next load with future date)
     _updateTaskInAllStores(_lrData.sfContactId, _lrData.taskSubject, 'complete');
     _rerenderCurrentView();
 
