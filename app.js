@@ -592,7 +592,16 @@ document.getElementById('govInnerTabs').addEventListener('click', (e) => {
   document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
   currentGovTab = tab.dataset.govTab;
-  renderGovTab();
+  if (currentGovTab === 'prospects') {
+    // Prospects tab uses marketing data, not gov data
+    if (_mktOpportunitiesLoaded) {
+      renderDomainProspects('government');
+    } else if (typeof loadMarketing === 'function') {
+      loadMarketing().then(() => renderDomainProspects('government'));
+    }
+  } else {
+    renderGovTab();
+  }
 });
 
 document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
@@ -1402,12 +1411,10 @@ async function loadMarketing() {
   var ptEl = document.getElementById('priorityTasks');
   if (ptEl) ptEl.innerHTML = renderPriorityTasks();
 
-  // If gov pipeline tab is visible, populate the prospects section now that marketing data is ready
-  var govContainer = document.getElementById('govSfProspectsContainer');
-  if (govContainer && typeof renderDomainProspects === 'function') {
-    renderDomainProspects('government', 'govSfProspectsContainer');
+  // If gov or dialysis prospects tab is active, populate now that marketing data is ready
+  if (typeof currentGovTab !== 'undefined' && currentGovTab === 'prospects') {
+    renderDomainProspects('government');
   }
-  // Same for dialysis prospects tab
   if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
     renderDomainProspects('dialysis');
   }
@@ -2697,13 +2704,13 @@ function _rerenderCurrentView() {
     if (currentBizTab === 'marketing') { renderMarketing(); return; }
     if (currentBizTab === 'other') { renderDomainProspects('all_other'); return; }
   }
-  // Check if we're on a domain sub-tab
+  // Check if we're on a domain sub-tab (prospects)
+  if (typeof currentGovTab !== 'undefined' && currentGovTab === 'prospects') {
+    renderDomainProspects('government'); return;
+  }
   if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
     renderDomainProspects('dialysis'); return;
   }
-  // Government renders into a container
-  var govContainer = document.getElementById('govSfProspectsContainer');
-  if (govContainer) { renderDomainProspects('government', 'govSfProspectsContainer'); return; }
   // Fallback: re-render marketing
   renderMarketing();
 }
