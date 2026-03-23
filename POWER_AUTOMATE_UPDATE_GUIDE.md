@@ -6,13 +6,15 @@
 
 ---
 
-## Overview of Changes Needed
+## Status: ALL CHANGES COMPLETE (Mar 23, 2026)
 
-| # | Flow | Change | Priority |
-|---|------|--------|----------|
-| 1 | RCM Email Watcher | Update endpoint URL | **High** — RCM leads not parsing |
-| 2 | Sync SF Activities to Supabase | Convert from one-time to recurring schedule | **High** — tasks go stale |
+| # | Flow | Change | Status |
+|---|------|--------|--------|
+| 1 | RCM Email Watcher | Updated endpoint from `/api/dia-query` → `/api/rcm-ingest` | **DONE** (Mar 23, 10:47 AM) |
+| 2 | Sync SF Activities to Supabase | Filter query updated to rolling 7-day window; recurrence already set to 4h | **DONE** (Mar 23) |
 | 3 | (No change) | `salesforce_tasks` table — ignore | Info only |
+
+Both flows are **On** and running on their configured schedules. Next RCM email arrival triggers the new `/api/rcm-ingest` endpoint. SF sync pulls fresh activities within the next 4 hours.
 
 ---
 
