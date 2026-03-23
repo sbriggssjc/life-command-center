@@ -1132,9 +1132,9 @@ function renderLeadResearchCard(rec) {
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = govData.loans.find(l => l.property_id === rec.matched_property_id) || {};
-  
+
   let html = '<div class="research-card">';
-  
+
   // Context panel
   html += '<div class="research-context">';
   html += `<div class="context-block">
@@ -1142,7 +1142,7 @@ function renderLeadResearchCard(rec) {
     <div class="context-value">${esc(rec.address || '')}</div>
     <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')}</div>
   </div>`;
-  
+
   html += `<div class="context-block">
     <div class="context-label">Lease / Annual Rent</div>
     <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
@@ -1154,13 +1154,13 @@ function renderLeadResearchCard(rec) {
     <div class="context-value">${esc(rec.lessor_name || '')}</div>
     <div class="context-sub">True Owner: ${esc(rec.true_owner || '')}</div>
   </div>`;
-  
+
   html += `<div class="context-block">
     <div class="context-label">Lead Temperature</div>
     <div class="context-value">${rec.lead_temperature || 'cool'}</div>
     <div class="context-sub">Score: ${rec.priority_score || 0}</div>
   </div>`;
-  
+
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
@@ -1168,7 +1168,7 @@ function renderLeadResearchCard(rec) {
       <div class="context-sub">Firm: ${rec.firm_term_remaining || 'TBD'}</div>
     </div>`;
   }
-  
+
   if (frpp.street_address) {
     html += `<div class="context-block">
       <div class="context-label">FRPP Type</div>
@@ -1176,68 +1176,285 @@ function renderLeadResearchCard(rec) {
       <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
     </div>`;
   }
-  
+
+  if (loan.index_name) {
+    html += `<div class="context-block">
+      <div class="context-label">Known Lender</div>
+      <div class="context-value">${esc(loan.index_name)}</div>
+      <div class="context-sub">${loan.loan_amount ? fmt(loan.loan_amount) : ''} ${loan.loan_type ? '· ' + esc(loan.loan_type) : ''}</div>
+    </div>`;
+  }
+
   html += '</div>';
-  
+
   // Research form
   html += '<div class="research-form">';
-  
+
+  // ── PRIOR SALE / TRANSACTION ──
+  html += '<div class="form-divider">Prior Sale / Transaction</div>';
+
+  html += '<div class="form-row">';
   html += '<div class="form-group">';
-  html += '<label>Sale Price</label>';
+  html += '<label>Sale Date</label>';
+  html += `<input type="date" id="res-sale-date" value="">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Sale Price ($)</label>';
   html += `<input type="number" id="res-sale-price" value="" placeholder="e.g. 5000000">`;
   html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate (%)</label>';
-  html += `<input type="number" id="res-cap-rate" value="" placeholder="e.g. 4.5" step="0.1">`;
   html += '</div>';
-  
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Cap Rate at Sale (%)</label>';
+  html += `<input type="number" id="res-cap-rate" value="" placeholder="e.g. 6.25" step="0.01">`;
+  html += '</div>';
   html += '<div class="form-group">';
   html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-price-source" value="" placeholder="CoStar, CBRE, etc.">`;
+  html += `<input type="text" id="res-price-source" value="" placeholder="CoStar, County Records, etc.">`;
   html += '</div>';
-  
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Buyer</label>';
+  html += `<input type="text" id="res-buyer" value="" placeholder="Purchasing entity">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Seller</label>';
+  html += `<input type="text" id="res-seller" value="${esc(rec.lessor_name || '')}" placeholder="Selling entity">`;
+  html += '</div>';
+  html += '</div>';
+
+  // ── OWNERSHIP RESEARCH ──
   html += '<div class="form-divider">Ownership Research</div>';
-  
+
+  html += '<div class="form-row">';
   html += '<div class="form-group">';
   html += '<label>Recorded Owner</label>';
-  html += `<input type="text" id="res-recorded-owner" value="${esc(rec.recorded_owner || '')}" placeholder="">`;
+  html += `<input type="text" id="res-recorded-owner" value="${esc(rec.recorded_owner || '')}" placeholder="From deed / public records">`;
   html += '<div id="res-recorded-owner-drop" class="ac-dropdown"></div>';
   html += '</div>';
-  
   html += '<div class="form-group">';
   html += '<label>True Owner / Parent</label>';
-  html += `<input type="text" id="res-true-owner" value="${esc(rec.true_owner || '')}" placeholder="">`;
+  html += `<input type="text" id="res-true-owner" value="${esc(rec.true_owner || '')}" placeholder="Beneficial owner">`;
   html += '<div id="res-true-owner-drop" class="ac-dropdown"></div>';
   html += '</div>';
-  
+  html += '</div>';
+
+  html += '<div class="form-row">';
   html += '<div class="form-group">';
   html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-incorporation" value="${esc(rec.state_of_incorporation || '')}" placeholder="">`;
+  html += `<input type="text" id="res-incorporation" value="${esc(rec.state_of_incorporation || '')}" placeholder="e.g. DE">`;
   html += '</div>';
-  
+  html += '<div class="form-group">';
+  html += '<label>Owner Type</label>';
+  html += `<select id="res-owner-type">
+    <option value="">—</option>
+    <option value="Private">Private</option>
+    <option value="Institutional">Institutional</option>
+    <option value="REIT">REIT</option>
+    <option value="Government">Government</option>
+    <option value="Non-Profit">Non-Profit</option>
+    <option value="SPE / LLC">SPE / LLC</option>
+  </select>`;
+  html += '</div>';
+  html += '</div>';
+
   html += '<div class="form-group">';
   html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-principal-names" value="${esc(rec.principal_names || '')}" placeholder="">`;
+  html += `<input type="text" id="res-principal-names" value="${esc(rec.principal_names || '')}" placeholder="CEO, Managing Member, etc.">`;
   html += '<div id="res-principal-names-drop" class="ac-dropdown"></div>';
   html += '</div>';
-  
+
+  html += '<div class="form-row">';
   html += '<div class="form-group">';
   html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-principal-email" value="" placeholder="">`;
+  html += `<input type="email" id="res-principal-email" value="" placeholder="contact@example.com">`;
   html += '</div>';
-  
   html += '<div class="form-group">';
   html += '<label>Phone</label>';
-  html += `<input type="text" id="res-phone" value="${esc(rec.phone_2 || '')}" placeholder="">`;
+  html += `<input type="text" id="res-phone" value="${esc(rec.phone_2 || '')}" placeholder="(555) 123-4567">`;
   html += '</div>';
-  
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Mailing Address</label>';
+  html += `<input type="text" id="res-mailing" value="" placeholder="">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Mailing Address 2</label>';
+  html += `<input type="text" id="res-mailing-2" value="" placeholder="">`;
+  html += '</div>';
+  html += '</div>';
+
+  // ── PROPERTY DETAILS ──
+  html += '<div class="form-divider">Property Details</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>RBA (Rentable Building Area)</label>';
+  html += `<input type="number" id="res-rba" value="${rec.square_feet || ''}" placeholder="SF">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Land Size (Acres)</label>';
+  html += `<input type="number" id="res-land-acres" value="" placeholder="" step="0.01">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Year Built</label>';
+  html += `<input type="number" id="res-year-built" value="" placeholder="YYYY">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Year Renovated</label>';
+  html += `<input type="number" id="res-year-renovated" value="" placeholder="YYYY">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Building Class</label>';
+  html += `<select id="res-building-class">
+    <option value="">—</option>
+    <option value="A">Class A</option>
+    <option value="B">Class B</option>
+    <option value="C">Class C</option>
+  </select>`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Stories / Floors</label>';
+  html += `<input type="number" id="res-stories" value="" placeholder="">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Parking Spaces</label>';
+  html += `<input type="number" id="res-parking" value="" placeholder="">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Zoning</label>';
+  html += `<input type="text" id="res-zoning" value="" placeholder="e.g. C-2, Industrial">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-group">';
+  html += '<label>Property Condition</label>';
+  html += `<select id="res-condition">
+    <option value="">—</option>
+    <option value="Excellent">Excellent</option>
+    <option value="Good">Good</option>
+    <option value="Average">Average</option>
+    <option value="Fair">Fair</option>
+    <option value="Poor">Poor</option>
+  </select>`;
+  html += '</div>';
+
+  // ── LOAN / DEBT ──
+  html += '<div class="form-divider">Loan / Debt</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Lender</label>';
+  html += `<input type="text" id="res-lender" value="${esc(loan.index_name || '')}" placeholder="Bank or fund name">`;
+  html += '<div id="res-lender-drop" class="ac-dropdown"></div>';
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Loan Amount ($)</label>';
+  html += `<input type="number" id="res-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Interest Rate (%)</label>';
+  html += `<input type="number" id="res-interest-rate" value="${loan.interest_rate_percent || ''}" placeholder="" step="0.01">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Loan Type</label>';
+  html += `<select id="res-loan-type">
+    <option value="">—</option>
+    ${['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Construction', 'SBA', 'Other'].map(t =>
+      `<option value="${t}" ${(loan.loan_type || '') === t ? 'selected' : ''}>${t}</option>`
+    ).join('')}
+  </select>`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Origination Date</label>';
+  html += `<input type="date" id="res-loan-orig" value="${loan.origination_date ? loan.origination_date.substring(0, 10) : ''}">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Maturity Date</label>';
+  html += `<input type="date" id="res-loan-maturity" value="${loan.maturity_date ? loan.maturity_date.substring(0, 10) : ''}">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>LTV (%)</label>';
+  html += `<input type="number" id="res-ltv" value="${loan.loan_to_value || ''}" placeholder="" step="0.01">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Recourse</label>';
+  html += `<select id="res-recourse">
+    <option value="">—</option>
+    ${['Recourse', 'Non-Recourse', 'Partial'].map(t =>
+      `<option value="${t}" ${(loan.recourse || '') === t ? 'selected' : ''}>${t}</option>`
+    ).join('')}
+  </select>`;
+  html += '</div>';
+  html += '</div>';
+
+  // ── CASH FLOW / VALUATION ──
+  html += '<div class="form-divider">Cash Flow / Valuation</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Annual Rent / NOI ($)</label>';
+  html += `<input type="number" id="res-annual-rent" value="${rec.annual_rent || ''}" placeholder="">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Rent Per SF ($/SF)</label>';
+  html += `<input type="number" id="res-rent-psf" value="" placeholder="" step="0.01">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Expense Type</label>';
+  html += `<select id="res-expense-type">
+    <option value="">—</option>
+    ${['NNN', 'Modified Gross', 'Full Service Gross', 'Industrial Gross', 'Ground Lease'].map(t =>
+      `<option value="${t}">${t}</option>`
+    ).join('')}
+  </select>`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Estimated Property Value ($)</label>';
+  html += `<input type="number" id="res-est-value" value="${rec.estimated_value || ''}" placeholder="">`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="form-group">';
+  html += '<label>Current Cap Rate (%)</label>';
+  html += `<input type="number" id="res-current-cap" value="" placeholder="" step="0.01">`;
+  html += '</div>';
+
+  // ── PIPELINE STATUS ──
   html += '<div class="form-divider">Pipeline Status</div>';
-  
+
   html += '<div class="form-group">';
   html += '<label>Quick Status</label>';
   html += `<select id="res-quick-status">
     <option value="">Select status...</option>
+    <option value="new_lead">New Lead</option>
+    <option value="researching">Researching</option>
     <option value="contacted">Contacted</option>
     <option value="meeting_set">Meeting Set</option>
     <option value="proposal_sent">Proposal Sent</option>
@@ -1245,31 +1462,46 @@ function renderLeadResearchCard(rec) {
     <option value="dead">Dead</option>
   </select>`;
   html += '</div>';
-  
+
+  // ── RESEARCH NOTES ──
+  html += '<div class="form-divider">Research Notes</div>';
+
   html += '<div class="form-group">';
-  html += '<label>Research Notes</label>';
-  html += `<textarea id="res-notes" placeholder="Key findings..." rows="4">${esc(rec.research_notes || '')}</textarea>`;
+  html += `<textarea id="res-notes" placeholder="Key findings, data sources, observations..." rows="4">${esc(rec.research_notes || '')}</textarea>`;
   html += '</div>';
-  
+
+  html += '<div class="form-row">';
+  html += '<div class="form-group">';
+  html += '<label>Research Source</label>';
+  html += `<input type="text" id="res-source" value="" placeholder="CoStar, County, Call, Loopnet">`;
+  html += '</div>';
+  html += '<div class="form-group">';
+  html += '<label>Research Date</label>';
+  html += `<input type="date" id="res-date" value="${new Date().toISOString().substring(0, 10)}">`;
+  html += '</div>';
+  html += '</div>';
+
+  // ── QUICK ACTIONS ──
   html += '<div class="form-divider">Quick Actions</div>';
-  
+
   html += '<div class="quick-actions">';
   html += searchBtn('Google Search', `${rec.lessor_name} ${rec.address} ${rec.city}`);
+  html += searchBtn('Property Search', `${rec.address} ${rec.city} ${rec.state} sale owner`);
   html += sosBtns(rec.state, rec.state_of_incorporation);
   html += countyBtns(rec.city, rec.state);
   html += '</div>';
-  
+
   html += '</div>';
-  
+
   html += '<div class="research-actions">';
   html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
   html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
   html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
   html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
-  
+
   html += '</div>';
-  
+
   return html;
 }
 
@@ -1758,8 +1990,11 @@ async function saveOwnership(rec) {
 }
 
 async function saveLead(rec) {
+  const saleDate = q('#res-sale-date')?.value || null;
   const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
   const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
+  const buyer = q('#res-buyer')?.value || null;
+  const seller = q('#res-seller')?.value || null;
   const quickStatus = q('#res-quick-status')?.value || null;
 
   const leadData = {
@@ -1767,6 +2002,7 @@ async function saveLead(rec) {
     lease_number: rec.lease_number || null,
     recorded_owner: q('#res-recorded-owner')?.value || null,
     true_owner: q('#res-true-owner')?.value || null,
+    owner_type: q('#res-owner-type')?.value || null,
     contact_email: q('#res-principal-email')?.value || null,
     contact_phone: q('#res-phone')?.value || null,
     contact_mailing: q('#res-mailing')?.value || null,
@@ -1785,6 +2021,102 @@ async function saveLead(rec) {
   } catch (err) {
     console.error('Gov lead-research write service error:', err);
     showToast('Error saving lead via write service: ' + err.message, 'error');
+  }
+
+  // ── Prior Sale → sales_transactions ──
+  const propertyId = rec.matched_property_id || rec.property_id;
+  if ((saleDate || salePrice || buyer || seller) && propertyId) {
+    try {
+      const url = new URL('/api/gov-query', window.location.origin);
+      url.searchParams.set('table', 'sales_transactions');
+      await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          property_id: propertyId,
+          sale_date: saleDate,
+          sold_price: salePrice,
+          cap_rate: capRate,
+          buyer_name: buyer,
+          seller_name: seller
+        })
+      });
+    } catch (err) {
+      console.error('Error saving sale transaction from lead:', err);
+    }
+  }
+
+  // ── Property Details → properties table ──
+  if (propertyId) {
+    const propPatch = {};
+    const rba = parseFloat(q('#res-rba')?.value) || null;
+    const landAcres = parseFloat(q('#res-land-acres')?.value) || null;
+    const yearBuilt = parseInt(q('#res-year-built')?.value) || null;
+    const yearRenovated = parseInt(q('#res-year-renovated')?.value) || null;
+    const buildingClass = q('#res-building-class')?.value || null;
+    const stories = parseInt(q('#res-stories')?.value) || null;
+    const parking = parseInt(q('#res-parking')?.value) || null;
+    const zoning = q('#res-zoning')?.value || null;
+    const condition = q('#res-condition')?.value || null;
+    const annualRent = parseFloat(q('#res-annual-rent')?.value) || null;
+    const estValue = parseFloat(q('#res-est-value')?.value) || null;
+
+    if (rba) propPatch.rba = rba;
+    if (landAcres) propPatch.land_acres = landAcres;
+    if (yearBuilt) propPatch.year_built = yearBuilt;
+    if (yearRenovated) propPatch.year_renovated = yearRenovated;
+    if (buildingClass) propPatch.building_class = buildingClass;
+    if (stories) propPatch.stories = stories;
+    if (parking) propPatch.parking_spaces = parking;
+    if (zoning) propPatch.zoning = zoning;
+    if (condition) propPatch.property_condition = condition;
+    if (annualRent) propPatch.last_known_rent = annualRent;
+    if (estValue) propPatch.current_value_estimate = estValue;
+
+    if (Object.keys(propPatch).length > 0) {
+      await patchRecord('properties', 'property_id', propertyId, propPatch);
+    }
+  }
+
+  // ── Loan / Debt ──
+  const lender = q('#res-lender')?.value || null;
+  const loanAmount = parseFloat(q('#res-loan-amount')?.value) || null;
+  const interestRate = parseFloat(q('#res-interest-rate')?.value) || null;
+  const loanType = q('#res-loan-type')?.value || null;
+  const loanOrig = q('#res-loan-orig')?.value || null;
+  const loanMaturity = q('#res-loan-maturity')?.value || null;
+  const ltv = parseFloat(q('#res-ltv')?.value) || null;
+  const recourse = q('#res-recourse')?.value || null;
+
+  if ((lender || loanAmount) && propertyId) {
+    const loanData = {
+      property_id: propertyId,
+      index_name: lender,
+      loan_amount: loanAmount,
+      interest_rate_percent: interestRate,
+      loan_type: loanType,
+      origination_date: loanOrig,
+      maturity_date: loanMaturity,
+      loan_to_value: ltv,
+      recourse: recourse
+    };
+
+    const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+    if (existingLoan) {
+      await patchRecord('loans', 'property_id', propertyId, loanData);
+    } else {
+      try {
+        const url = new URL('/api/gov-query', window.location.origin);
+        url.searchParams.set('table', 'loans');
+        await fetch(url.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(loanData)
+        });
+      } catch (err) {
+        console.error('Error saving loan from lead:', err);
+      }
+    }
   }
 
   // Bridge to canonical model with gov change metadata
@@ -1813,10 +2145,6 @@ async function saveLead(rec) {
         phone: leadData.contact_phone || null
       }
     });
-  }
-
-  if (salePrice || capRate) {
-    await saveLoanFields(rec);
   }
 }
 
