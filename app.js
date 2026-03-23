@@ -90,7 +90,7 @@ async function loadUserContext() {
   }
   // Apply defaults if not loaded from server
   if (!LCC_USER._loaded) {
-    LCC_USER.display_name = localStorage.getItem('lcc-user-name') || 'Scott Briggs';
+    try { LCC_USER.display_name = localStorage.getItem('lcc-user-name') || 'Scott Briggs'; } catch(e) { LCC_USER.display_name = 'Scott Briggs'; }
     LCC_USER.first_name = LCC_USER.display_name.split(' ')[0];
     LCC_USER.role = 'owner';
     LCC_USER._loaded = true;
@@ -1539,7 +1539,8 @@ function renderMarketing() {
           var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
           html += '<div style="padding:6px 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
           html += '<div style="flex:1;min-width:0">';
-          html += '<div style="font-size:13px;font-weight:500">' + esc(c.contact_name || '—') + '</div>';
+          var sfLnk = c.sf_contact_id ? '<a href="https://northmarq.lightning.force.com/lightning/r/Contact/' + esc(c.sf_contact_id) + '/view" target="_blank" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">' + esc(c.contact_name || '—') + '</a>' : esc(c.contact_name || '—');
+          html += '<div style="font-size:13px;font-weight:500">' + sfLnk + '</div>';
           html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
           if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
           html += '</div>';
@@ -2187,7 +2188,8 @@ function renderProspectCardsHTML(items, options = {}) {
       var domainBadge = '';
       if (c.task_domain === 'government') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--blue);color:#fff;font-weight:600;vertical-align:middle">GOV</span>';
       else if (c.task_domain === 'dialysis') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600;vertical-align:middle">DIA</span>';
-      html += `<div style="font-size:14px;font-weight:500">${esc(c.contact_name || '—')}${domainBadge} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
+      var sfLink = c.sf_contact_id ? `<a href="https://northmarq.lightning.force.com/lightning/r/Contact/${esc(c.sf_contact_id)}/view" target="_blank" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">${esc(c.contact_name || '—')}</a>` : esc(c.contact_name || '—');
+      html += `<div style="font-size:14px;font-weight:500">${sfLink}${domainBadge} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
       html += `<div style="font-size:12px;color:var(--text2)">${esc(c.company_name || '')}`;
       if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
       html += `</div>`;
@@ -4947,7 +4949,9 @@ document.addEventListener('visibilitychange', () => {
 });
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').catch(function(err) {
+    console.warn('[SW] Registration failed:', err.message);
+  });
 }
 
 // ============================================================

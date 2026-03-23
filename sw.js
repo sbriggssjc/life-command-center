@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v112';
+const CACHE_NAME = 'lcc-v113';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -29,15 +29,41 @@ self.addEventListener('activate', event => {
   );
 });
 
+// Network fetch with timeout — falls back to cache if network is slow or fails
+function fetchWithTimeout(request, timeoutMs) {
+  return new Promise(function(resolve, reject) {
+    var timedOut = false;
+    var timer = setTimeout(function() {
+      timedOut = true;
+      reject(new Error('Network timeout'));
+    }, timeoutMs);
+
+    fetch(request).then(function(response) {
+      if (!timedOut) {
+        clearTimeout(timer);
+        resolve(response);
+      }
+    }).catch(function(err) {
+      if (!timedOut) {
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+  });
+}
+
 // Fetch handler
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Network-first for everything except manifest/icons (which rarely change)
-  // This ensures users always get the latest code after deploys
+  // Skip non-GET requests (POST to APIs, etc.)
+  if (event.request.method !== 'GET') return;
+
+  // Network-first with 4s timeout for same-origin resources
+  // Falls back to cache if network is slow or unavailable (critical for mobile)
   if (url.origin === self.location.origin) {
     event.respondWith(
-      fetch(event.request)
+      fetchWithTimeout(event.request, 4000)
         .then(response => {
           if (response.ok) {
             const clone = response.clone();
@@ -50,9 +76,9 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // External APIs: network with cache fallback
+  // External APIs: network with cache fallback (longer timeout)
   event.respondWith(
-    fetch(event.request)
+    fetchWithTimeout(event.request, 6000)
       .then(response => {
         if (response.ok) {
           const clone = response.clone();
