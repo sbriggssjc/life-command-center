@@ -1146,12 +1146,13 @@ async function loadMarketing() {
       window._mktProspectContacts = { government: [], dialysis: [], all_other: [] };
       const tasks = [];
       (clientRollupRaw || []).forEach(function(d) {
-        // Skip contacts with no name — these show as "(Unknown)" and clutter the list
-        if (!d.contact_name || !d.contact_name.trim()) return;
+        // Skip contacts with no name or placeholder — these show as "(Unknown)" and clutter the list
+        if (!d.contact_name || !d.contact_name.trim() || d.contact_name.trim() === '(Unknown)') return;
 
         var allTasks = d.open_tasks || [];
-        var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity'; });
-        var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity'; });
+        // Detect opportunity tasks: explicit type OR tasks with a deal_name (what_name from SF)
+        var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity' || (t.deal_name && t.deal_name.trim()); });
+        var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity' && (!t.deal_name || !t.deal_name.trim()); });
 
         // Base contact fields shared by both routes
         var base = {
@@ -1259,23 +1260,25 @@ async function loadMarketing() {
 
         sfDealTasks.forEach(function(c) {
           if (!c.sf_contact_id || existingContactIds.has(c.sf_contact_id)) return;
-          // Skip contacts with no name
-          if (!c.contact_name || !c.contact_name.trim()) return;
-          var dealName = '';
+          // Skip contacts with no name or placeholder
+          if (!c.contact_name || !c.contact_name.trim() || c.contact_name.trim() === '(Unknown)') return;
           var openTaskEntries = [];
           try {
             var ot = typeof c.open_tasks === 'string' ? JSON.parse(c.open_tasks) : c.open_tasks;
-            if (Array.isArray(ot) && ot.length > 0) {
-              dealName = ot[0].deal_name || '';
-              openTaskEntries = ot;
-            }
+            if (Array.isArray(ot) && ot.length > 0) openTaskEntries = ot;
           } catch(e) { /* ignore parse errors */ }
 
-          sfTasksMerged.push({
+          // Split tasks: those with a deal_name (what_name from SF) are opportunity-linked
+          var oppTasks = openTaskEntries.filter(function(t) {
+            return t.type === 'Opportunity' || (t.deal_name && t.deal_name.trim());
+          });
+          var nonOppTasks = openTaskEntries.filter(function(t) {
+            return t.type !== 'Opportunity' && (!t.deal_name || !t.deal_name.trim());
+          });
+
+          var sfBase = {
             pipeline_source: 'sf_deal',
             item_id: c.sf_contact_id,
-            deal_name: dealName || '(Deal Task)',
-            deal_display_name: dealName || c.contact_name || '(Deal Task)',
             deal_priority: null,
             contact_name: c.contact_name,
             first_name: c.first_name || '',
@@ -1292,13 +1295,35 @@ async function loadMarketing() {
             activity_type: 'CRM',
             lead_source: null,
             sf_match_status: null,
-            touchpoint_count: c.open_task_count || 0,
             ingested_at: null,
-            open_task_count: c.open_task_count || 0,
-            open_tasks: openTaskEntries,
-            task_domain: 'all_other',
             _source: 'sf_tasks'
-          });
+          };
+
+          // Route opportunity-linked tasks to domain prospect sections
+          if (oppTasks.length > 0) {
+            var oppDealName = oppTasks[0].deal_name || '';
+            var prospectContact = Object.assign({}, sfBase, {
+              deal_name: oppDealName,
+              deal_display_name: oppDealName || c.contact_name,
+              open_task_count: oppTasks.length,
+              open_tasks: oppTasks,
+              touchpoint_count: oppTasks.length
+            });
+            var domain = contactDomainMap[c.sf_contact_id] || classifyContactDomain(prospectContact) || 'all_other';
+            window._mktProspectContacts[domain].push(prospectContact);
+          }
+
+          // Non-opportunity tasks stay on marketing tab
+          if (nonOppTasks.length > 0) {
+            sfTasksMerged.push(Object.assign({}, sfBase, {
+              deal_name: c.contact_name,
+              deal_display_name: c.contact_name,
+              open_task_count: nonOppTasks.length,
+              open_tasks: nonOppTasks,
+              touchpoint_count: nonOppTasks.length,
+              task_domain: 'all_other'
+            }));
+          }
         });
         console.log('[Marketing] Merged ' + sfTasksMerged.length + ' deal-linked contacts from v_sf_tasks_contact_rollup');
       }

@@ -20,7 +20,7 @@ WITH task_contacts AS (
         'subject', COALESCE(subject, 'Task'),
         'date', activity_date,
         'notes', COALESCE(description, ''),
-        'type', COALESCE(task_type, subject),
+        'type', COALESCE(task_type, 'Task'),
         'deal_name', COALESCE(what_name, '')
       )
       ORDER BY activity_date DESC NULLS LAST
