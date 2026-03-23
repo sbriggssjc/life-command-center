@@ -61,6 +61,11 @@ export default withErrorHandler(async function handler(req, res) {
     return handleRcmIngest(req, res);
   }
 
+  // Dispatch to RCM backfill if routed via _route=rcm-backfill
+  if (req.query._route === 'rcm-backfill') {
+    return handleRcmBackfill(req, res);
+  }
+
   const user = await authenticate(req, res);
   if (!user) return;
 
@@ -1182,7 +1187,7 @@ async function handleRcmIngest(req, res) {
         status: 'Open',
         activity_date: new Date().toISOString().split('T')[0],
         nm_notes: noteSnippet,
-        assigned_to: sfMatch?.assigned_to || 'Scott Briggs',
+        assigned_to: sfMatch?.assigned_to || 'Unassigned',
         source_ref: `rcm:${source_ref || lead.lead_id}`
       };
 
@@ -1253,6 +1258,202 @@ async function handleRcmIngest(req, res) {
         sf_contact_id: sfMatch.sf_contact_id,
         name: `${sfMatch.first_name || ''} ${sfMatch.last_name || ''}`.trim()
       } : null
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ============================================================================
+// RCM BACKFILL — Re-parse existing raw RCM leads that were inserted via
+// dia-query without parsing, and create missing SF activities
+// POST /api/rcm-backfill
+// ============================================================================
+
+async function handleRcmBackfill(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const ws = primaryWorkspace(user);
+  if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+    return res.status(403).json({ error: 'Operator role required' });
+  }
+
+  if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
+    return res.status(500).json({ error: 'DIA Supabase not configured' });
+  }
+
+  const headers = {
+    'apikey': DIA_SUPABASE_KEY,
+    'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+    'Content-Type': 'application/json'
+  };
+
+  try {
+    // Fetch all RCM leads that have raw_body but are missing parsed fields
+    // (inserted via dia-query without parsing)
+    const fetchUrl = new URL(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads`);
+    fetchUrl.searchParams.set('source', 'eq.rcm');
+    fetchUrl.searchParams.set('select', '*');
+    fetchUrl.searchParams.set('order', 'ingested_at.desc.nullslast');
+    fetchUrl.searchParams.set('limit', '1000');
+
+    const fetchRes = await fetch(fetchUrl.toString(), { headers });
+    if (!fetchRes.ok) {
+      return res.status(fetchRes.status).json({ error: 'Failed to fetch RCM leads', detail: await fetchRes.text() });
+    }
+
+    const leads = await fetchRes.json();
+    if (!Array.isArray(leads) || leads.length === 0) {
+      return res.status(200).json({ ok: true, message: 'No RCM leads found', processed: 0 });
+    }
+
+    let reparsed = 0;
+    let sfActivitiesCreated = 0;
+    let sfMatched = 0;
+    const errors = [];
+
+    for (const lead of leads) {
+      try {
+        // Re-parse if raw_body exists and lead_name is missing (wasn't parsed)
+        const needsParsing = lead.raw_body && !lead.lead_name;
+        // Also process leads missing SF activity linkage
+        const needsSfActivity = !lead.sf_activity_id;
+
+        if (!needsParsing && !needsSfActivity) continue;
+
+        let parsed = null;
+        if (needsParsing && lead.raw_body) {
+          parsed = parseRcmEmail(lead.raw_body, lead.deal_name);
+
+          // Update lead with parsed fields
+          const patchPayload = {};
+          if (parsed.lead_name) patchPayload.lead_name = parsed.lead_name;
+          if (parsed.lead_first_name) patchPayload.lead_first_name = parsed.lead_first_name;
+          if (parsed.lead_last_name) patchPayload.lead_last_name = parsed.lead_last_name;
+          if (parsed.lead_email) patchPayload.lead_email = parsed.lead_email;
+          if (parsed.lead_phone) patchPayload.lead_phone = parsed.lead_phone;
+          if (parsed.lead_company) patchPayload.lead_company = parsed.lead_company;
+          if (parsed.activity_type) patchPayload.activity_type = parsed.activity_type;
+          if (parsed.activity_detail) patchPayload.activity_detail = parsed.activity_detail;
+          if (parsed.deal_name && !lead.deal_name) patchPayload.deal_name = parsed.deal_name;
+
+          if (Object.keys(patchPayload).length > 0) {
+            await fetch(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads?lead_id=eq.${lead.lead_id}`, {
+              method: 'PATCH',
+              headers: { ...headers, 'Prefer': 'return=minimal' },
+              body: JSON.stringify(patchPayload)
+            });
+            reparsed++;
+          }
+        }
+
+        // Use existing parsed data or freshly parsed data
+        const email = parsed?.lead_email || lead.lead_email;
+        const leadName = parsed?.lead_name || lead.lead_name;
+        const leadCompany = parsed?.lead_company || lead.lead_company;
+        const dealName = parsed?.deal_name || lead.deal_name;
+
+        // Auto-match to Salesforce by email (if not already matched)
+        if (email && !lead.sf_contact_id) {
+          try {
+            const sfUrl = new URL(`${DIA_SUPABASE_URL}/rest/v1/salesforce_activities`);
+            sfUrl.searchParams.set('select', 'sf_contact_id,sf_company_id,first_name,last_name,company_name,assigned_to');
+            sfUrl.searchParams.set('email', `eq.${email}`);
+            sfUrl.searchParams.set('limit', '1');
+
+            const sfRes = await fetch(sfUrl.toString(), { headers });
+            if (sfRes.ok) {
+              const sfData = await sfRes.json();
+              if (Array.isArray(sfData) && sfData.length > 0 && sfData[0].sf_contact_id) {
+                await fetch(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads?lead_id=eq.${lead.lead_id}`, {
+                  method: 'PATCH',
+                  headers: { ...headers, 'Prefer': 'return=minimal' },
+                  body: JSON.stringify({
+                    sf_contact_id: sfData[0].sf_contact_id,
+                    sf_match_status: 'matched'
+                  })
+                });
+                sfMatched++;
+              }
+            }
+          } catch (sfErr) {
+            // Non-fatal — continue processing
+          }
+        }
+
+        // Create SF activity if missing
+        if (needsSfActivity) {
+          const contactId = lead.sf_contact_id || `rcm-lead-${lead.lead_id}`;
+          const taskSubject = dealName
+            ? `RCM: ${dealName}`
+            : `RCM Inquiry – ${leadName || email || 'New Lead'}`;
+          const rawBody = lead.raw_body || lead.notes || '';
+          const noteSnippet = (rawBody).substring(0, 300) + (rawBody.length > 300 ? '…' : '');
+
+          const sfActivityPayload = {
+            subject: taskSubject,
+            first_name: parsed?.lead_first_name || lead.lead_first_name || null,
+            last_name: parsed?.lead_last_name || lead.lead_last_name || null,
+            company_name: leadCompany || null,
+            email: email || null,
+            phone: parsed?.lead_phone || lead.lead_phone || null,
+            sf_contact_id: contactId,
+            nm_type: 'Task',
+            task_subtype: 'Task',
+            status: 'Open',
+            activity_date: lead.ingested_at ? lead.ingested_at.split('T')[0] : new Date().toISOString().split('T')[0],
+            nm_notes: noteSnippet,
+            assigned_to: 'Unassigned',
+            source_ref: `rcm:${lead.source_ref || lead.lead_id}`
+          };
+
+          const sfActRes = await fetch(`${DIA_SUPABASE_URL}/rest/v1/salesforce_activities`, {
+            method: 'POST',
+            headers: { ...headers, 'Prefer': 'return=representation,resolution=ignore-duplicates' },
+            body: JSON.stringify(sfActivityPayload)
+          });
+
+          if (sfActRes.ok) {
+            const sfActData = await sfActRes.json();
+            const sfAct = Array.isArray(sfActData) ? sfActData[0] : sfActData;
+            if (sfAct?.activity_id) {
+              await fetch(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads?lead_id=eq.${lead.lead_id}`, {
+                method: 'PATCH',
+                headers: { ...headers, 'Prefer': 'return=minimal' },
+                body: JSON.stringify({ sf_activity_id: sfAct.activity_id })
+              });
+              sfActivitiesCreated++;
+            }
+          }
+        }
+      } catch (leadErr) {
+        errors.push({ lead_id: lead.lead_id, error: leadErr.message });
+      }
+    }
+
+    // Refresh materialized view
+    try {
+      await fetch(`${DIA_SUPABASE_URL}/rest/v1/rpc/refresh_crm_rollup`, {
+        method: 'POST',
+        headers,
+        body: '{}'
+      });
+    } catch (refreshErr) {
+      console.warn('CRM rollup refresh skipped:', refreshErr.message);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      total_rcm_leads: leads.length,
+      reparsed,
+      sf_activities_created: sfActivitiesCreated,
+      sf_matched: sfMatched,
+      errors: errors.length > 0 ? errors : undefined
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });

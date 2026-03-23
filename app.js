@@ -1200,7 +1200,11 @@ async function loadMarketing() {
 
       // Normalize leads to pipeline schema
       // Exclude leads already promoted to salesforce_activities (they show as CRM tasks instead)
-      const leads = (leadsRaw || []).filter(l => !l.sf_activity_id).map(l => ({
+      // Exclude leads with no identifiable name (show as Unknown)
+      const leads = (leadsRaw || []).filter(l => !l.sf_activity_id).filter(l => {
+        const name = l.lead_name || [l.lead_first_name, l.lead_last_name].filter(Boolean).join(' ');
+        return name && name.trim();
+      }).map(l => ({
         pipeline_source: l.source,
         item_id: String(l.lead_id || ''),
         deal_name: l.deal_name,

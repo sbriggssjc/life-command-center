@@ -16,6 +16,7 @@
     { "source": "/api/flags", "destination": "/api/admin?_route=flags" },
     { "source": "/api/queue-v2", "destination": "/api/queue?_version=v2" },
     { "source": "/api/rcm-ingest", "destination": "/api/sync?_route=rcm-ingest" },
+    { "source": "/api/rcm-backfill", "destination": "/api/sync?_route=rcm-backfill" },
     { "source": "/api/connectors", "destination": "/api/sync?_route=connectors" },
     { "source": "/api/unified-contacts", "destination": "/api/contacts" },
     { "source": "/api/inbox", "destination": "/api/queue?_route=inbox" },
