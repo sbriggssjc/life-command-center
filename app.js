@@ -4334,10 +4334,13 @@ function renderRecentEmails() {
   if (emails.length === 0) return '<div style="color:var(--text2);font-size:13px">No flagged emails.</div>';
   let html = '';
   for (const e of emails.slice(0, 6)) {
-    const link = e.outlook_link || e.web_link || '#';
-    html += `<div class="email-card" onclick="window.open(${safeJSON(link)},'_blank')">
+    const link = e.web_link || e.outlook_link || '';
+    const preview = (e.body_preview || '').substring(0, 120);
+    html += `<div class="email-card">
       <div class="email-subj">${esc(e.subject || '(No subject)')}</div>
       <div class="email-from"><span>${esc(e.sender_name || e.sender_email || '')}</span><span>${formatDate(e.received_date)}</span></div>
+      ${preview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(preview)}</div>` : ''}
+      ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
     </div>`;
   }
   return html;
@@ -4615,7 +4618,7 @@ function renderMessages() {
       subject: e.subject || '(No subject)',
       preview: e.body_preview || '',
       time: e.received_date,
-      link: e.outlook_link || e.web_link,
+      link: e.web_link || e.outlook_link,
       unread: e.is_read === false,
     }));
   } else if (currentMsgTab === 'recent') {
@@ -4657,13 +4660,14 @@ function renderMessages() {
 
   let html = '';
   for (const m of items.slice(0, 50)) {
-    html += `<div class="msg-item${m.unread ? ' unread' : ''}" ${m.link ? `onclick="window.open(${safeJSON(m.link)},'_blank')"` : ''}>
+    html += `<div class="msg-item${m.unread ? ' unread' : ''}">
       <div class="msg-header">
         <div class="msg-sender">${esc(m.sender)}</div>
         <div class="msg-time">${formatDate(m.time)}</div>
       </div>
       <div class="msg-subject">${esc(m.subject)}</div>
       ${m.preview ? `<div class="msg-preview">${esc(m.preview)}</div>` : ''}
+      ${m.link ? `<a href="${esc(m.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
     </div>`;
   }
   if (items.length > 50) html += `<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 50 of ${items.length} messages</div>`;
