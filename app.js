@@ -2677,31 +2677,45 @@ function _rerenderCurrentView() {
 }
 
 // ── Salesforce outbound sync helper ──
-// Fire-and-forget: log task completion to Salesforce via the outbound sync pipeline
+// Fire-and-forget: log task action to Salesforce via the outbound sync pipeline
 function _syncTaskToSalesforce(sfContactId, subject, action) {
-  // Look up sf_company_id from local stores
+  // Look up sf_company_id and deal context from local stores
   var sfCompanyId = null;
+  var dealName = '';
   var stores = [mktData];
   ['government', 'dialysis', 'all_other'].forEach(function(dom) {
     if (window._mktProspectContacts && window._mktProspectContacts[dom]) stores.push(window._mktProspectContacts[dom]);
   });
   for (var s = 0; s < stores.length; s++) {
     for (var i = 0; i < stores[s].length; i++) {
-      if (stores[s][i].sf_contact_id === sfContactId) { sfCompanyId = stores[s][i].sf_company_id; break; }
+      if (stores[s][i].sf_contact_id === sfContactId) {
+        sfCompanyId = stores[s][i].sf_company_id;
+        // Find the deal_name from the matching task
+        var tasks = stores[s][i].open_tasks || [];
+        for (var j = 0; j < tasks.length; j++) {
+          if (tasks[j].subject === subject && tasks[j].deal_name) {
+            dealName = tasks[j].deal_name;
+            break;
+          }
+        }
+        break;
+      }
     }
     if (sfCompanyId) break;
   }
 
   var today = new Date().toISOString().split('T')[0];
-  // Use a valid SF activity_type (edge function validates against 6 allowed categories)
-  // and include the task subject + action context in notes
   var actionLabel = action === 'complete' ? 'Completed' : action === 'dismiss' ? 'Dismissed' : 'Updated';
+  // Map action to appropriate SF activity_type
+  var activityType = action === 'complete' ? 'Call' : 'Follow-up';
   var payload = {
     sf_contact_id: sfContactId,
     sf_company_id: sfCompanyId || undefined,
-    activity_type: 'Follow-up',
+    activity_type: activityType,
     activity_date: today,
-    notes: '[' + actionLabel + '] ' + subject,
+    subject: subject,
+    deal_name: dealName || undefined,
+    notes: '[' + actionLabel + '] ' + subject + (dealName ? ' | Deal: ' + dealName : ''),
     force: true
   };
 
@@ -2727,17 +2741,21 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
   try {
+    // PATCH salesforce_activities: mark matching open activity as Completed
     const url = new URL('/api/dia-query', window.location.origin);
     url.searchParams.set('table', 'salesforce_activities');
     url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
     url.searchParams.set('filter2', 'subject=eq.' + subject);
-    await fetch(url.toString(), {
+    const patchRes = await fetch(url.toString(), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'Completed' })
     });
+    if (!patchRes.ok) {
+      console.error('[Complete] PATCH failed:', patchRes.status, await patchRes.text().catch(function() { return ''; }));
+    }
     showToast('Task completed!', 'success');
-    // Sync completion to Salesforce (non-blocking)
+    // Sync completion to Salesforce (non-blocking) — includes deal context
     _syncTaskToSalesforce(sfContactId, subject, 'complete');
     // Remove from local data (marketing + prospect contacts) and re-render
     _updateTaskInAllStores(sfContactId, subject, 'complete');
@@ -2777,13 +2795,16 @@ async function dismissTask(sfContactId, subject) {
     url.searchParams.set('table', 'salesforce_activities');
     url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
     url.searchParams.set('filter2', 'subject=eq.' + subject);
-    await fetch(url.toString(), {
+    const patchRes = await fetch(url.toString(), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'Abandoned' })
     });
+    if (!patchRes.ok) {
+      console.error('[Dismiss] PATCH failed:', patchRes.status, await patchRes.text().catch(function() { return ''; }));
+    }
     showToast('Task dismissed', 'success');
-    // Sync dismissal to Salesforce (non-blocking)
+    // Sync dismissal to Salesforce (non-blocking) — includes deal context
     _syncTaskToSalesforce(sfContactId, subject, 'dismiss');
     // Remove from local data (marketing + prospect contacts)
     _updateTaskInAllStores(sfContactId, subject, 'dismiss');

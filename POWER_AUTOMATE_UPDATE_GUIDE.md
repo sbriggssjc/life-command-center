@@ -148,8 +148,10 @@ Real open tasks come from `salesforce_activities` via `v_crm_client_rollup`.
 | Email Flag → Todo (Personal) | Email flagged | Event-driven | Working |
 | Complete → Unflag | Recurrence | Every 15 min | Working |
 | Personal Calendar Sync | Recurrence | Hourly | Working |
-| RCM Email Watcher | Email arrives in RCM folder | Event-driven | **Needs URL update** |
-| Sync SF Activities | Manual (one-time) | N/A | **Needs recurring schedule** |
+| RCM Email Watcher | Email arrives in RCM folder | Event-driven | **DONE** (Mar 23) |
+| Sync SF Activities | Recurrence | Every 4 hours | **DONE** (Mar 23) |
+| Log Activity to SF | HTTP trigger | On demand | Working |
+| **Complete SF Task** | HTTP trigger | On demand | **NEW — needs creation (see Section 4)** |
 
 ---
 
@@ -181,6 +183,74 @@ Real open tasks come from `salesforce_activities` via `v_crm_client_rollup`.
 | **Log & Reschedule** | Logs today's touchpoint + pushes task date out | Working |
 | **SF Contact link** | Contact names hyperlink to `northmarqcapital.lightning.force.com` | Working |
 
+## 4. NEW: Complete SF Task Flow — Close Open Activities from LCC
+
+### Problem
+
+When users click "Complete" on a task in LCC, it:
+1. Marks the activity `Completed` in Supabase (works) ✅
+2. Creates a NEW completed SF Task via `/sync/log-to-sf` → "Log Activity to SF" PA flow ✅
+3. **But the ORIGINAL open SF Task stays Open** ❌
+
+The original task isn't closed because the "Log Activity to SF" flow only **creates** tasks — it can't **update** existing ones.
+
+### New Power Automate Flow: "Complete SF Task"
+
+**Trigger:** HTTP request (When an HTTP request is received)
+
+**Expected JSON payload:**
+```json
+{
+  "sf_contact_id": "0038W00002PSA33",
+  "subject": "4 - DaVita MOB - Charlottesville, VA",
+  "action": "complete",
+  "ref_id": "LCC-abc12345"
+}
+```
+
+**Flow steps:**
+
+1. **Parse JSON** — Parse the trigger body
+
+2. **Get records (Salesforce)** — Query for the open task:
+   - Object type: `Task`
+   - Filter query: `WhoId = '@{triggerBody()?['sf_contact_id']}' AND Subject = '@{triggerBody()?['subject']}' AND Status != 'Completed'`
+   - Top count: 1
+
+3. **Condition** — Check if a task was found:
+   - If yes (task exists):
+     - **Update record (Salesforce)** — Update the found Task:
+       - Record ID: `@{first(outputs('Get_records')?['body/value'])?['Id']}`
+       - Status: `Completed`
+       - Description: append `[Completed via LCC: @{triggerBody()?['ref_id']}]`
+     - **Respond to HTTP request** — 200 OK: `{ "success": true, "task_id": "...", "action": "completed" }`
+   - If no (task not found):
+     - **Respond to HTTP request** — 200 OK: `{ "success": true, "task_id": null, "action": "not_found" }`
+
+**After creating the flow:**
+
+1. Copy the HTTP trigger URL
+2. Store it as Supabase secret: `PA_COMPLETE_TASK_URL`
+3. The edge function `/sync/log-to-sf` will be updated to also call this URL when `action: 'complete'` is present in the payload
+
+### Edge function changes needed
+
+The `/sync/log-to-sf` edge function needs a new code path:
+- If the payload contains `action: 'complete'` AND `subject`:
+  - Call `PA_COMPLETE_TASK_URL` with `{ sf_contact_id, subject, action, ref_id }`
+  - This closes the original open SF task
+  - THEN also create the completion log entry (existing behavior)
+
+### LCC app-side changes (already done)
+
+The `_syncTaskToSalesforce` function now sends:
+- `subject`: The task/deal name (e.g., "4 - DaVita MOB - Charlottesville, VA")
+- `deal_name`: The linked opportunity name if available
+- `activity_type`: `'Call'` for completions (not generic 'Follow-up')
+- `notes`: `[Completed] subject | Deal: deal_name`
+
+---
+
 ### What works today (detail)
 
 - **Log Call/Activity**: "Log" button opens a modal → POSTs to edge function `/sync/log-to-sf` → Power Automate creates a Salesforce Task with `WhoId`, `WhatId`, `ActivityDate`, `Status=Completed`. Includes a 75-day guard rail that warns if another team member recently logged activity on the same contact. Users can override with `force: true`.
@@ -202,14 +272,16 @@ Real open tasks come from `salesforce_activities` via `v_crm_client_rollup`.
 
 ### Implementation priority
 
-**Phase 1 — Blocking (PA changes)**
-1. RCM flow URL update (Section 1 above)
-2. SF Activities recurring sync (Section 2 above)
+**Phase 1 — DONE (Mar 23)**
+1. ~~RCM flow URL update~~ ✅
+2. ~~SF Activities recurring sync~~ ✅
+3. ~~Task routing fix (prospect-pattern subjects)~~ ✅
+4. ~~Deal context in SF completion logs~~ ✅
 
-**Phase 2 — Task lifecycle**
-1. Task status update endpoint + UI (mark complete, change status)
-2. Task creation modal + SF writeback
-3. Reschedule → push new date to SF
+**Phase 2 — In progress (PA changes needed)**
+1. **Complete SF Task flow** — New PA flow to close original open SF tasks (Section 4 above)
+2. Reschedule → push new date to SF (similar PA flow: update `ActivityDate` on existing task)
+3. Task creation modal + SF writeback
 
 **Phase 3 — Polish**
 1. Enable `sync_outbound_enabled` flag for full audit trail
