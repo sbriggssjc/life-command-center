@@ -1025,12 +1025,14 @@ async function loadMarketing() {
 
         const results = await Promise.all([
           fetchAllPages(leanFields, null),
-          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 }),
-          diaQuery('v_sf_tasks_contact_rollup', '*', { order: 'open_task_count.desc.nullslast', limit: 5000 })
+          diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
-        sfDealTasks = results[2] || [];
+        // v_sf_tasks_contact_rollup disabled — salesforce_tasks contains only stale
+        // Data Loader bulk records from May 2020 (10k+ rows, all same owner_id).
+        // Real open tasks come from v_crm_client_rollup (salesforce_activities).
+        sfDealTasks = [];
         console.log('[Marketing] Total contacts loaded: ' + clientRollupRaw.length);
         // Enrich contacts with open_tasks JSON via paginated fetch
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
