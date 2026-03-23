@@ -576,7 +576,7 @@ async function handleOutbound(req, res, user, workspaceId) {
 }
 
 // ============================================================================
-// COMPLETE SF TASK: Close original open task in Salesforce via Power Automate
+// UPDATE SF TASK: Complete or reschedule open tasks in Salesforce via Power Automate
 // ============================================================================
 
 async function handleCompleteSfTask(req, res, user, workspaceId) {
@@ -584,16 +584,25 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
     return res.status(501).json({ error: 'PA_COMPLETE_TASK_URL not configured' });
   }
 
-  const { sf_contact_id, subject } = req.body || {};
+  const { sf_contact_id, subject, action, new_date } = req.body || {};
   if (!sf_contact_id) return res.status(400).json({ error: 'sf_contact_id is required' });
   if (!subject) return res.status(400).json({ error: 'subject is required' });
+
+  const taskAction = action || 'complete';
+  if (!['complete', 'reschedule'].includes(taskAction)) {
+    return res.status(400).json({ error: 'action must be "complete" or "reschedule"' });
+  }
+  if (taskAction === 'reschedule' && !new_date) {
+    return res.status(400).json({ error: 'new_date is required for reschedule action' });
+  }
 
   const refId = `LCC-${Date.now().toString(36)}`;
   const payload = {
     sf_contact_id,
     subject,
-    action: 'complete',
-    ref_id: refId
+    action: taskAction,
+    ref_id: refId,
+    ...(new_date ? { new_date } : {})
   };
 
   // Retry with exponential backoff (up to 2 retries — this is non-critical)
@@ -618,10 +627,10 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
           workspace_id: workspaceId,
           actor_id: user.id,
           category: 'sync',
-          title: 'Complete SF Task',
+          title: taskAction === 'complete' ? 'Complete SF Task' : 'Reschedule SF Task',
           source_type: 'salesforce',
           visibility: 'shared',
-          metadata: { sf_contact_id, subject, ref_id: refId, pa_response: data },
+          metadata: { sf_contact_id, subject, action: taskAction, new_date, ref_id: refId, pa_response: data },
           occurred_at: new Date().toISOString()
         });
 
@@ -640,7 +649,7 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
   }
 
   return res.status(502).json({
-    error: 'Complete SF Task flow failed after retries',
+    error: 'SF Task update flow failed after retries',
     ref_id: refId,
     last_error: lastError
   });

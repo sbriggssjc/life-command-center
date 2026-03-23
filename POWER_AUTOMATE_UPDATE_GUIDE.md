@@ -269,7 +269,7 @@ When users click "Complete" on a task in LCC, it:
 | **SF sync is one-time** | Tasks go stale after initial load | **High** | Make recurring (see Section 2) |
 | **No task creation from LCC** | Can't create new SF tasks, only log activities | Medium | Add "New Task" modal that POSTs to `/sync/log-to-sf` with `status: 'Open'` |
 | **Task status lifecycle** | Can't update task status (Open → In Progress → Completed) without going to SF | Medium | Add `/sync/update-sf-task` endpoint with `status` parameter |
-| **Reschedule doesn't push to SF** | Rescheduled dates only update locally in Supabase | Medium | Add SF writeback in `submitLogReschedule` function |
+| **Reschedule doesn't push to SF** | ~~Rescheduled dates only update locally~~ Fixed: LCC now calls PA flow with `action: 'reschedule'` | ✅ Done | PA flow needs `reschedule` branch (see Section 4) |
 | **No opportunity stage sync** | Opportunity stage changes in SF don't reflect in LCC | Low | Add opportunity-specific sync via edge function |
 | **Outbound flag disabled** | `sync_outbound_enabled: false` — the formal outbound pipeline is off | Low | Direct edge function calls work fine today; enable flag when ready for full audit trail via `/api/sync?action=outbound` |
 | **No Kelly Largent filter** | CRM hub defaults to "My Tasks" (Scott) — Kelly's tasks require "All Tasks" toggle | Low | Add team member selector or auto-detect from login |
