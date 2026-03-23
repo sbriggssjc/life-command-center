@@ -159,6 +159,23 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: `Write access denied for table: ${table}` });
     }
 
+    // Redirect RCM marketing_leads POSTs to the dedicated rcm-ingest handler
+    // Power Automate posts here but /api/rcm-ingest does proper parsing + SF linking
+    if (source === 'dia' && table === 'marketing_leads' && req.method === 'POST'
+        && req.body && req.body.source === 'rcm' && req.body.raw_body) {
+      const syncUrl = new URL('/api/sync', `https://${req.headers.host || 'localhost'}`);
+      syncUrl.searchParams.set('_route', 'rcm-ingest');
+      try {
+        const { default: syncHandler } = await import('./sync.js');
+        // Rewrite the request query to route to rcm-ingest
+        req.query._route = 'rcm-ingest';
+        return syncHandler(req, res);
+      } catch (importErr) {
+        console.error('RCM redirect failed, falling back to raw insert:', importErr.message);
+        // Fall through to raw insert if sync module can't be loaded
+      }
+    }
+
     // Government domain tables must use write services instead of raw proxy writes
     if (source === 'gov' && GOV_WRITE_SERVICE_TABLES.has(table)) {
       const serviceHint = table === 'prospect_leads' || table === 'rpc/upsert_lead'
