@@ -920,6 +920,24 @@ async function loadMarketing() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
 
+  // Fire RCM backfill once per session — re-parses any raw leads and creates SF activities
+  if (!window._rcmBackfillFired && currentBizTab === 'marketing') {
+    window._rcmBackfillFired = true;
+    fetch('/api/rcm-backfill', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok && (d.reparsed > 0 || d.sf_activities_created > 0)) {
+          console.log('[RCM Backfill] reparsed=' + d.reparsed + ' sfCreated=' + d.sf_activities_created + ' matched=' + d.sf_matched);
+          // Silently reload marketing data to pick up newly parsed leads
+          mktLoaded = false;
+          loadMarketing();
+        } else {
+          console.log('[RCM Backfill] Nothing to backfill', d);
+        }
+      })
+      .catch(function(e) { console.warn('[RCM Backfill] Skipped:', e.message); });
+  }
+
   // If called just for domain prospects (not Marketing tab), only load opportunities
   if (currentBizTab !== 'marketing' && _mktOpportunitiesLoaded) {
     return; // opportunities already loaded, nothing else needed
