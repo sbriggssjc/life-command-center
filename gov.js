@@ -2101,6 +2101,10 @@ function renderGovOwnership() {
 }
 
 function renderGovPipeline() {
+  // Trigger marketing data load if not already loaded — needed for SF Prospects section
+  if (typeof mktLoaded !== 'undefined' && !mktLoaded && typeof loadMarketing === 'function') {
+    loadMarketing();
+  }
   // Deduplicate leads by lead_id (data may contain duplicate rows from JOINs)
   const seenIds = new Set();
   const dedupedLeads = govData.leads.filter(l => {
@@ -2160,13 +2164,13 @@ function renderGovPipeline() {
   html += '</div>';
 
   // SF Opportunity Prospects (domain-classified opportunities + prospect contacts)
+  // Always render the container — marketing data may load asynchronously after this tab renders
+  html += '<div style="margin-top:24px;border-top:2px solid var(--border);padding-top:16px">';
+  html += '<div id="govSfProspectsContainer"></div>';
+  html += '</div>';
+
   var hasGovProspects = (typeof window._mktOpportunities !== 'undefined' && window._mktOpportunities.government && window._mktOpportunities.government.length > 0)
     || (typeof window._mktProspectContacts !== 'undefined' && window._mktProspectContacts.government && window._mktProspectContacts.government.length > 0);
-  if (hasGovProspects) {
-    html += '<div style="margin-top:24px;border-top:2px solid var(--border);padding-top:16px">';
-    html += '<div id="govSfProspectsContainer"></div>';
-    html += '</div>';
-  }
 
   setTimeout(() => {
     if (sourceLabels.length > 0) {

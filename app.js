@@ -1379,6 +1379,16 @@ async function loadMarketing() {
   }
 
   renderMarketing();
+
+  // If gov pipeline tab is visible, populate the prospects section now that marketing data is ready
+  var govContainer = document.getElementById('govSfProspectsContainer');
+  if (govContainer && typeof renderDomainProspects === 'function') {
+    renderDomainProspects('government', 'govSfProspectsContainer');
+  }
+  // Same for dialysis prospects tab
+  if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
+    renderDomainProspects('dialysis');
+  }
 }
 
 function renderMarketing() {
