@@ -2737,6 +2737,28 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
   });
 }
 
+// Fire-and-forget: close the original open SF task via Power Automate
+function _closeOriginalSfTask(sfContactId, subject) {
+  fetch('/api/sync?action=complete_sf_task', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sf_contact_id: sfContactId, subject: subject })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      var action = data.pa_response && data.pa_response.action;
+      if (action === 'completed') {
+        console.log('[SF Complete] Original task closed for ' + sfContactId + ': ' + subject);
+      } else {
+        console.log('[SF Complete] Original task not found (already closed?) for ' + sfContactId);
+      }
+    } else {
+      console.error('[SF Complete] Error: ' + (data.error || 'Unknown'));
+    }
+  }).catch(function(e) {
+    console.error('[SF Complete] Network error:', e.message);
+  });
+}
+
 // ── Task management: complete, reschedule, dismiss ──
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
@@ -2757,6 +2779,8 @@ async function completeTask(sfContactId, subject) {
     showToast('Task completed!', 'success');
     // Sync completion to Salesforce (non-blocking) — includes deal context
     _syncTaskToSalesforce(sfContactId, subject, 'complete');
+    // Close the ORIGINAL open task in SF via Power Automate (non-blocking)
+    _closeOriginalSfTask(sfContactId, subject);
     // Remove from local data (marketing + prospect contacts) and re-render
     _updateTaskInAllStores(sfContactId, subject, 'complete');
     _rerenderCurrentView();

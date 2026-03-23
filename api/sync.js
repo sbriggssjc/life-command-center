@@ -20,6 +20,9 @@ import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycl
 // Edge function base URL (existing ai-copilot deployment)
 const EDGE_FN_URL = process.env.EDGE_FUNCTION_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 
+// Power Automate flow URL for completing original SF tasks
+const PA_COMPLETE_TASK_URL = process.env.PA_COMPLETE_TASK_URL;
+
 // DIA Supabase (for RCM ingest)
 const DIA_SUPABASE_URL = process.env.DIA_SUPABASE_URL;
 const DIA_SUPABASE_KEY = process.env.DIA_SUPABASE_KEY;
@@ -96,10 +99,11 @@ export default withErrorHandler(async function handler(req, res) {
       case 'ingest_calendar':     return await ingestCalendar(req, res, user, workspaceId);
       case 'ingest_sf_activities': return await ingestSfActivities(req, res, user, workspaceId);
       case 'outbound':            return await handleOutbound(req, res, user, workspaceId);
+      case 'complete_sf_task':     return await handleCompleteSfTask(req, res, user, workspaceId);
       case 'retry':               return await handleRetry(req, res, user, workspaceId);
       case 'verify_connector':    return await handleVerifyConnector(req, res, user, workspaceId);
       default:
-        return res.status(400).json({ error: 'Invalid POST action. Use: ingest_emails, ingest_calendar, ingest_sf_activities, outbound, retry, verify_connector' });
+        return res.status(400).json({ error: 'Invalid POST action. Use: ingest_emails, ingest_calendar, ingest_sf_activities, outbound, complete_sf_task, retry, verify_connector' });
     }
   }
 
@@ -567,6 +571,77 @@ async function handleOutbound(req, res, user, workspaceId) {
     sync_job_id: job.id,
     correlation_id: correlationId,
     attempts: retries + 1,
+    last_error: lastError
+  });
+}
+
+// ============================================================================
+// COMPLETE SF TASK: Close original open task in Salesforce via Power Automate
+// ============================================================================
+
+async function handleCompleteSfTask(req, res, user, workspaceId) {
+  if (!PA_COMPLETE_TASK_URL) {
+    return res.status(501).json({ error: 'PA_COMPLETE_TASK_URL not configured' });
+  }
+
+  const { sf_contact_id, subject } = req.body || {};
+  if (!sf_contact_id) return res.status(400).json({ error: 'sf_contact_id is required' });
+  if (!subject) return res.status(400).json({ error: 'subject is required' });
+
+  const refId = `LCC-${Date.now().toString(36)}`;
+  const payload = {
+    sf_contact_id,
+    subject,
+    action: 'complete',
+    ref_id: refId
+  };
+
+  // Retry with exponential backoff (up to 2 retries — this is non-critical)
+  let lastError = null;
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+      }
+
+      const paRes = await fetch(PA_COMPLETE_TASK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (paRes.ok) {
+        const data = await paRes.json();
+
+        // Log the activity for audit trail
+        await opsQuery('POST', 'activity_events', {
+          workspace_id: workspaceId,
+          actor_id: user.id,
+          category: 'sync',
+          title: 'Complete SF Task',
+          source_type: 'salesforce',
+          visibility: 'shared',
+          metadata: { sf_contact_id, subject, ref_id: refId, pa_response: data },
+          occurred_at: new Date().toISOString()
+        });
+
+        return res.status(200).json({
+          success: true,
+          ref_id: refId,
+          pa_response: data,
+          attempt: attempt + 1
+        });
+      }
+
+      lastError = `PA flow returned ${paRes.status}: ${await paRes.text().catch(() => '')}`;
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+
+  return res.status(502).json({
+    error: 'Complete SF Task flow failed after retries',
+    ref_id: refId,
     last_error: lastError
   });
 }
