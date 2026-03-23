@@ -891,6 +891,20 @@ function classifyContactDomain(contact) {
   // Check from opportunity domain map if available
   return contact._opp_domain || 'all_other';
 }
+// Detect prospect/deal tasks by subject pattern even when nm_type is null
+// Matches: "4 - DaVita MOB - City, ST", "ASC - Endoscopy Center - Pensacola, FL", etc.
+function looksLikeProspectTask(t) {
+  var subj = (t.subject || '').trim();
+  if (!subj) return false;
+  // Numbered pipeline stage: "4 - DaVita MOB - Charlottesville, VA"
+  if (/^\d+\s*-\s/.test(subj)) return true;
+  // "Tenant - City, ST" pattern: ends with " - City, XX" (2-letter state)
+  if (/\s-\s[^-]+,\s*[A-Z]{2}\s*$/.test(subj)) return true;
+  // Sold deals: "FMC Portfolio (9) - TN & AR - SOLD"
+  if (/\bSOLD\s*$/i.test(subj)) return true;
+  return false;
+}
+
 const MKT_PAGE = 20;
 
 // Unified Contact Hub state
@@ -1152,9 +1166,9 @@ async function loadMarketing() {
         if (!d.contact_name || !d.contact_name.trim() || d.contact_name.trim() === '(Unknown)') return;
 
         var allTasks = d.open_tasks || [];
-        // Detect opportunity tasks: explicit type OR tasks with a deal_name (what_name from SF)
-        var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity' || (t.deal_name && t.deal_name.trim()); });
-        var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity' && (!t.deal_name || !t.deal_name.trim()); });
+        // Detect opportunity/prospect tasks: explicit type, deal_name, OR subject pattern
+        var oppTasks = allTasks.filter(function(t) { return t.type === 'Opportunity' || (t.deal_name && t.deal_name.trim()) || looksLikeProspectTask(t); });
+        var nonOppTasks = allTasks.filter(function(t) { return t.type !== 'Opportunity' && (!t.deal_name || !t.deal_name.trim()) && !looksLikeProspectTask(t); });
 
         // Base contact fields shared by both routes
         var base = {
@@ -1270,12 +1284,12 @@ async function loadMarketing() {
             if (Array.isArray(ot) && ot.length > 0) openTaskEntries = ot;
           } catch(e) { /* ignore parse errors */ }
 
-          // Split tasks: those with a deal_name (what_name from SF) are opportunity-linked
+          // Split tasks: deal_name, type, OR subject pattern → prospect; else → marketing
           var oppTasks = openTaskEntries.filter(function(t) {
-            return t.type === 'Opportunity' || (t.deal_name && t.deal_name.trim());
+            return t.type === 'Opportunity' || (t.deal_name && t.deal_name.trim()) || looksLikeProspectTask(t);
           });
           var nonOppTasks = openTaskEntries.filter(function(t) {
-            return t.type !== 'Opportunity' && (!t.deal_name || !t.deal_name.trim());
+            return t.type !== 'Opportunity' && (!t.deal_name || !t.deal_name.trim()) && !looksLikeProspectTask(t);
           });
 
           var sfBase = {
