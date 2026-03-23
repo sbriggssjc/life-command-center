@@ -190,9 +190,7 @@ Real open tasks come from `salesforce_activities` via `v_crm_client_rollup`.
 When users click "Complete" on a task in LCC, it:
 1. Marks the activity `Completed` in Supabase (works) ✅
 2. Creates a NEW completed SF Task via `/sync/log-to-sf` → "Log Activity to SF" PA flow ✅
-3. **But the ORIGINAL open SF Task stays Open** ❌
-
-The original task isn't closed because the "Log Activity to SF" flow only **creates** tasks — it can't **update** existing ones.
+3. Closes the ORIGINAL open SF Task via `/api/sync?action=complete_sf_task` → "Complete SF Task" PA flow ✅
 
 ### New Power Automate Flow: "Complete SF Task"
 
@@ -231,19 +229,25 @@ The original task isn't closed because the "Log Activity to SF" flow only **crea
 
 1. Copy the HTTP trigger URL
 2. Store it as Supabase secret: `PA_COMPLETE_TASK_URL`
-3. The edge function `/sync/log-to-sf` will be updated to also call this URL when `action: 'complete'` is present in the payload
+3. ✅ Stored as Supabase secret AND Vercel env var `PA_COMPLETE_TASK_URL`
 
-### Edge function changes needed
+### Implementation (completed)
 
-The `/sync/log-to-sf` edge function needs a new code path:
-- If the payload contains `action: 'complete'` AND `subject`:
-  - Call `PA_COMPLETE_TASK_URL` with `{ sf_contact_id, subject, action, ref_id }`
-  - This closes the original open SF task
-  - THEN also create the completion log entry (existing behavior)
+**Vercel API route** (`api/sync.js`):
+- New action: `POST /api/sync?action=complete_sf_task`
+- Handler: `handleCompleteSfTask()` — proxies to PA flow with retry logic
+- Logs activity event for audit trail
+- Payload: `{ sf_contact_id, subject, action: 'complete', ref_id }`
 
-### LCC app-side changes (already done)
+**Frontend** (`app.js`):
+- New function: `_closeOriginalSfTask(sfContactId, subject)` — fire-and-forget call to Vercel API
+- Called from `completeTask()` alongside existing `_syncTaskToSalesforce()`
+- Two parallel non-blocking calls on complete:
+  1. `_syncTaskToSalesforce` → edge function → PA "Log Activity to SF" (creates completion log)
+  2. `_closeOriginalSfTask` → Vercel API → PA "Complete SF Task" (closes original open task)
 
-The `_syncTaskToSalesforce` function now sends:
+### What `_syncTaskToSalesforce` sends
+
 - `subject`: The task/deal name (e.g., "4 - DaVita MOB - Charlottesville, VA")
 - `deal_name`: The linked opportunity name if available
 - `activity_type`: `'Call'` for completions (not generic 'Follow-up')
