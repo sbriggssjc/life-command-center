@@ -1008,7 +1008,7 @@ async function loadMarketing() {
         const results = await Promise.all([
           fetchAllPages(leanFields, null),
           diaQuery('marketing_leads', '*', { filter: 'status=not.in.(archived,duplicate)', order: 'ingested_at.desc.nullslast', limit: 500 }),
-          diaQuery('v_sf_tasks_contact_rollup', '*', { order: 'open_task_count.desc.nullslast', limit: 500 })
+          diaQuery('v_sf_tasks_contact_rollup', '*', { order: 'open_task_count.desc.nullslast', limit: 5000 })
         ]);
         clientRollupRaw = results[0];
         leadsRaw = results[1];
