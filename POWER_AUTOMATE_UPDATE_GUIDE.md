@@ -179,33 +179,82 @@ Real open tasks come from `salesforce_activities` via `v_crm_client_rollup`.
 | **Log & Reschedule** | Logs today's touchpoint + pushes task date out | Working |
 | **SF Contact link** | Contact names hyperlink to `northmarqcapital.lightning.force.com` | Working |
 
+### What works today (detail)
+
+- **Log Call/Activity**: "Log" button opens a modal → POSTs to edge function `/sync/log-to-sf` → Power Automate creates a Salesforce Task with `WhoId`, `WhatId`, `ActivityDate`, `Status=Completed`. Includes a 75-day guard rail that warns if another team member recently logged activity on the same contact. Users can override with `force: true`.
+- **Complete task**: PATCHes `salesforce_activities` status to `Completed` in Supabase, then fires `/sync/log-to-sf` to record completion in SF (non-blocking).
+- **Reschedule task**: Updates `activity_date` in Supabase. **Note**: the reschedule does NOT currently push the new date back to SF — only updates locally.
+- **Log & Reschedule**: Logs today's touchpoint via `/sync/log-to-sf` AND pushes the task date out in Supabase.
+
 ### What's missing or needs improvement
 
-| Gap | Impact | Recommendation |
-|-----|--------|----------------|
-| **SF sync is one-time** | Tasks go stale after initial load | Make recurring (see Section 2) |
-| **No task creation from LCC** | Can't create new SF tasks, only log activities | Add "New Task" button that POSTs to `/sync/log-to-sf` with `status: 'Open'` |
-| **No opportunity sync** | Opportunity stage changes in SF don't reflect in LCC | Add opportunity-specific sync via edge function |
-| **Outbound flag disabled** | `sync_outbound_enabled: false` — the formal outbound pipeline is off | The direct edge function calls work fine; enable flag when ready for full audit trail |
-| **No Kelly Largent filter** | CRM hub defaults to "My Tasks" (Scott) — Kelly's tasks require "All Tasks" toggle | Add team member selector or auto-detect from login |
+| Gap | Impact | Priority | Recommendation |
+|-----|--------|----------|----------------|
+| **SF sync is one-time** | Tasks go stale after initial load | **High** | Make recurring (see Section 2) |
+| **No task creation from LCC** | Can't create new SF tasks, only log activities | Medium | Add "New Task" modal that POSTs to `/sync/log-to-sf` with `status: 'Open'` |
+| **Task status lifecycle** | Can't update task status (Open → In Progress → Completed) without going to SF | Medium | Add `/sync/update-sf-task` endpoint with `status` parameter |
+| **Reschedule doesn't push to SF** | Rescheduled dates only update locally in Supabase | Medium | Add SF writeback in `submitLogReschedule` function |
+| **No opportunity stage sync** | Opportunity stage changes in SF don't reflect in LCC | Low | Add opportunity-specific sync via edge function |
+| **Outbound flag disabled** | `sync_outbound_enabled: false` — the formal outbound pipeline is off | Low | Direct edge function calls work fine today; enable flag when ready for full audit trail via `/api/sync?action=outbound` |
+| **No Kelly Largent filter** | CRM hub defaults to "My Tasks" (Scott) — Kelly's tasks require "All Tasks" toggle | Low | Add team member selector or auto-detect from login |
+
+### Implementation priority
+
+**Phase 1 — Blocking (PA changes)**
+1. RCM flow URL update (Section 1 above)
+2. SF Activities recurring sync (Section 2 above)
+
+**Phase 2 — Task lifecycle**
+1. Task status update endpoint + UI (mark complete, change status)
+2. Task creation modal + SF writeback
+3. Reschedule → push new date to SF
+
+**Phase 3 — Polish**
+1. Enable `sync_outbound_enabled` flag for full audit trail
+2. Opportunity stage sync
+3. Bulk task operations
+4. Task completion metrics / completion rate in CRM rollup
 
 ### Marketing vs Prospecting — Separate Task Views
 
-Currently all CRM contacts land on the marketing tab, with opportunity-linked tasks routed to domain prospect sections via `deal_name` detection. This works but could be cleaner:
+Currently all CRM contacts land on the marketing tab, with opportunity-linked tasks routed to domain prospect sections via `deal_name` detection. This works but could be cleaner.
 
 **Current classification logic:**
 - Task has a `deal_name` (SF `what_name`) → routed to domain prospect tab (government/dialysis/all_other)
 - Task has no `deal_name` → stays on marketing tab as a CRM outreach task
 - Domain determined by: opportunity domain map → keyword classification (company name, task subjects) → fallback to `all_other`
 
-**Recommended improvement — add `nm_type` to the rollup view:**
+**What the `open_tasks` JSON already contains:**
 
-The `v_crm_client_rollup` view's `open_tasks` JSON already includes `type` (which is `nm_type` from `salesforce_activities`). Common values:
-- `Task` — generic CRM task (call, follow-up)
-- `Opportunity` — deal-linked activity
+The `v_crm_client_rollup` view's `open_tasks` array has this structure per task:
+```json
+{
+  "subject": "Call about DaVita deal",
+  "date": "2026-03-19",
+  "notes": "Follow-up notes...",
+  "type": "Opportunity"
+}
+```
 
-A future enhancement could use this to create dedicated sub-filters:
-- **Marketing tab**: Only `type = 'Task'` with no `deal_name` (pure outreach)
-- **Prospect tabs**: `type = 'Opportunity'` or any task with a `deal_name`
+The `type` field is `nm_type` from `salesforce_activities`. Common values: `Task`, `Opportunity`, `Call`, `Email`.
 
-This separation already works with the current `deal_name` detection we shipped today. No additional Power Automate changes needed — the classification happens in `app.js` at load time.
+**Current separation (shipped today):**
+- `type === 'Opportunity'` OR task has a `deal_name` → routed to domain prospect tab
+- Everything else → stays on marketing tab
+
+**Recommended future enhancement — task intent classification:**
+
+Add a `task_intent` classification to better separate:
+
+| Intent | Example | Where it shows |
+|--------|---------|----------------|
+| `marketing_outreach` | "Call John about Q2 market trends" | Marketing tab |
+| `prospecting` | "Call John RE: DaVita Omaha acquisition" | Domain prospect tab |
+| `internal` | "Update CRM notes" | Marketing tab |
+
+Classification logic:
+1. Task has `WhatId` (Opportunity linked) → `prospecting`
+2. Task has `WhoId` only + type is Call/Email/Follow-up → `marketing_outreach`
+3. Else → `internal`
+
+This would be a Supabase column addition + app.js filter update. No Power Automate changes needed — classification happens at load time.
