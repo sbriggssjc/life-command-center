@@ -1025,7 +1025,7 @@ async function loadMarketing() {
         async function fetchAllPages(selectFields, extraFilter) {
           var allRows = [];
           var batchOffset = 0;
-          for (var page = 0; page < 20; page++) { // safety cap: 20 pages = 20,000 rows max
+          for (var page = 0; page < 50; page++) { // safety cap: 50 pages = 25,000 rows max
             var url = buildRollupUrl(selectFields, extraFilter, batchOffset);
             var batch = await fetchRollupWithRetry(url.toString(), 2);
             if (!batch || batch.length === 0) break;
@@ -1071,18 +1071,35 @@ async function loadMarketing() {
         }
       }
 
-      // Load opportunities separately — this is a heavy query that can timeout during initial burst
+      // Load opportunities separately — paginated to capture all rows (DB has 11K+)
       let opportunitiesRaw = [];
       try {
-        opportunitiesRaw = await diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 });
+        let oppOffset = 0;
+        const OPP_PAGE = 2000;
+        for (let pg = 0; pg < 10; pg++) { // safety cap: 10 pages = 20,000 rows max
+          const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: OPP_PAGE, offset: oppOffset });
+          if (!batch || batch.length === 0) break;
+          opportunitiesRaw = opportunitiesRaw.concat(batch);
+          console.log('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
+          if (batch.length < OPP_PAGE) break;
+          oppOffset += OPP_PAGE;
+        }
       } catch (e) {
         console.warn('Opportunity domain query failed, will retry in 10s:', e.message);
       }
-      // If empty (timeout), schedule a deferred retry
+      // If empty (timeout), schedule a deferred retry with pagination
       if (!opportunitiesRaw || opportunitiesRaw.length === 0) {
         setTimeout(async () => {
           try {
-            const retry = await diaQuery('v_opportunity_domain_classified', '*', { limit: 2000 });
+            let retry = [], retryOffset = 0;
+            const RETRY_PAGE = 2000;
+            for (let pg = 0; pg < 10; pg++) {
+              const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: RETRY_PAGE, offset: retryOffset });
+              if (!batch || batch.length === 0) break;
+              retry = retry.concat(batch);
+              if (batch.length < RETRY_PAGE) break;
+              retryOffset += RETRY_PAGE;
+            }
             if (retry && retry.length > 0) {
               const retryOpps = retry.map(d => {
                 var te = { subject: d.deal_display_name || d.deal_name || 'Opportunity', date: d.activity_date, notes: d.nm_notes, type: 'Opportunity' };
@@ -1379,6 +1396,11 @@ async function loadMarketing() {
   }
 
   renderMarketing();
+
+  // Update home page stats now that CRM data is available (fixes "Open Activities: 0" on first load)
+  if (document.getElementById('statActivities')) renderHomeStats();
+  var ptEl = document.getElementById('priorityTasks');
+  if (ptEl) ptEl.innerHTML = renderPriorityTasks();
 
   // If gov pipeline tab is visible, populate the prospects section now that marketing data is ready
   var govContainer = document.getElementById('govSfProspectsContainer');
@@ -4054,10 +4076,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function renderHomeStats() {
   // Prefer canonical work_counts when available
-  if (canonicalCounts) {
+  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.inbox_new > 0)) {
     document.getElementById('statActivities').textContent = (canonicalCounts.my_actions || 0).toLocaleString();
     document.getElementById('statEmails').textContent = (canonicalCounts.inbox_new || 0).toLocaleString();
     document.getElementById('statDue').textContent = (canonicalCounts.due_this_week || 0).toLocaleString();
+  } else if (mktLoaded && mktData.length > 0) {
+    // CRM rollup fallback — use marketing pipeline data from Salesforce
+    const today = new Date().toISOString().split('T')[0];
+    const userName = LCC_USER.display_name || 'Scott Briggs';
+    const myTasks = mktData.filter(d => d.assigned_to === userName);
+    const allProspects = (window._mktOpportunities ? (window._mktOpportunities.government.length + window._mktOpportunities.dialysis.length + window._mktOpportunities.all_other.length) : 0)
+      + (window._mktProspectContacts ? (window._mktProspectContacts.government.length + window._mktProspectContacts.dialysis.length + window._mktProspectContacts.all_other.length) : 0);
+    document.getElementById('statActivities').textContent = (myTasks.length + allProspects).toLocaleString();
+    const now = Date.now(); const week = 7 * 86400000;
+    const due = mktData.filter(d => { if (!d.due_date) return false; var t = new Date(d.due_date).getTime(); return t >= now && t <= now + week; });
+    document.getElementById('statDue').textContent = due.length;
+    document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
   } else {
     // Legacy fallback — only update activity-dependent stats once loaded (prevents 0-flash)
     if (activitiesLoaded) {
@@ -4162,6 +4196,32 @@ function renderPriorityTasks() {
     const total = canonicalMyWork.pagination?.total || 0;
     if (total > 5) {
       html += `<div class="widget-more" onclick="navTo('pageMyWork')">View all ${total} items</div>`;
+    }
+    return html;
+  }
+
+  // CRM rollup fallback — show overdue/due-today tasks from marketing pipeline
+  if (mktLoaded && mktData.length > 0) {
+    const today = new Date().toISOString().split('T')[0];
+    const userName = LCC_USER.display_name || 'Scott Briggs';
+    // Show overdue first, then due today, then upcoming — across all sources
+    const allTasks = mktData.filter(d => d.assigned_to === userName);
+    const overdue = allTasks.filter(d => d.due_date && d.due_date < today).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+    const dueToday = allTasks.filter(d => d.due_date === today);
+    const upcoming = allTasks.filter(d => d.due_date && d.due_date > today).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+    const items = [...overdue, ...dueToday, ...upcoming].slice(0, 5);
+    if (items.length === 0) return '<div style="color:var(--text2);font-size:13px">No tasks assigned to you.</div>';
+    let html = '';
+    for (const d of items) {
+      const isOverdue = d.due_date && d.due_date < today;
+      const dueLabel = d.due_date ? (d.due_date === today ? 'Today' : d.due_date) : '';
+      html += `<div class="act-item${isOverdue ? ' overdue' : ''}" onclick="navTo('pageBiz');setTimeout(function(){switchBizTab('marketing')},100)">
+        <div class="act-top"><div class="act-subject">${esc(d.contact_name || d.deal_display_name || '—')}</div></div>
+        <div class="act-meta"><span class="act-company">${esc(d.company_name || '')}</span>${dueLabel ? `<span class="act-due${isOverdue ? ' text-overdue' : ''}">${dueLabel}</span>` : ''}</div>
+      </div>`;
+    }
+    if (allTasks.length > 5) {
+      html += `<div class="widget-more" onclick="navTo('pageBiz');setTimeout(function(){switchBizTab('marketing')},100)">View all ${allTasks.length} tasks</div>`;
     }
     return html;
   }
