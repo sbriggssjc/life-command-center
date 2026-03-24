@@ -346,13 +346,13 @@ async function _udSubmitDismiss() {
     // 3. If true owner entered, also save to ownership records
     if (propertyId && trueOwner) {
       try {
-        const owUrl = new URL('/api/dia-query', window.location.origin);
-        owUrl.searchParams.set('table', 'true_owners');
         const owPayload = { name: trueOwner, owner_type: ownerType || 'other' };
-        await fetch(owUrl.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-          body: JSON.stringify(owPayload)
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'true_owners',
+          data: owPayload,
+          source_surface: 'detail_clinic_dismiss',
+          propagation_scope: 'ownership_helper_record'
         });
       } catch (e) { console.warn('Owner record save warning:', e); }
     }
@@ -1670,13 +1670,10 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
 
 /** Write FULL private activity details to outbound_activities (Supabase only — never SF) */
 async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes) {
-  const url = new URL('/api/dia-query', window.location.origin);
-  url.searchParams.set('table', 'outbound_activities');
-
-  await fetch(url.toString(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  await applyInsertWithFallback({
+    proxyBase: '/api/dia-query',
+    table: 'outbound_activities',
+    data: {
       sf_contact_id: sfContactId || null,
       sf_company_id: sfCompanyId || null,
       activity_type: actType,
@@ -1685,7 +1682,9 @@ async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcom
       notes: notes || null,
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       ref_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null
-    })
+    },
+    source_surface: 'detail_outbound_activity',
+    propagation_scope: 'outbound_activity'
   });
 }
 
@@ -2006,18 +2005,18 @@ async function _udSaveOwnership() {
         });
         if (!patchResult.ok) console.error('Error patching recorded_owner:', (patchResult.errors || []).join(', '));
       } else {
-        const url = new URL(proxyBase, window.location.origin);
-        url.searchParams.set('table', 'recorded_owners');
-        const res = await fetch(url.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-          body: JSON.stringify(recordedOwnerPayload)
+        const res = await applyInsertWithFallback({
+          proxyBase,
+          table: 'recorded_owners',
+          data: recordedOwnerPayload,
+          source_surface: 'ownership_detail',
+          propagation_scope: 'ownership_helper_record'
         });
         if (res.ok) {
-          const [created] = await res.json();
+          const created = Array.isArray(res.rows) ? res.rows[0] : null;
           recordedOwnerId = created.recorded_owner_id;
         } else {
-          console.error('Error creating recorded_owner:', res.status);
+          console.error('Error creating recorded_owner:', res.errors || []);
         }
       }
     }
@@ -2043,18 +2042,18 @@ async function _udSaveOwnership() {
         });
         if (!patchResult.ok) console.error('Error patching true_owner:', (patchResult.errors || []).join(', '));
       } else {
-        const url = new URL(proxyBase, window.location.origin);
-        url.searchParams.set('table', 'true_owners');
-        const res = await fetch(url.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-          body: JSON.stringify(trueOwnerPayload)
+        const res = await applyInsertWithFallback({
+          proxyBase,
+          table: 'true_owners',
+          data: trueOwnerPayload,
+          source_surface: 'ownership_detail',
+          propagation_scope: 'ownership_helper_record'
         });
         if (res.ok) {
-          const [created] = await res.json();
+          const created = Array.isArray(res.rows) ? res.rows[0] : null;
           trueOwnerId = created.true_owner_id;
         } else {
-          console.error('Error creating true_owner:', res.status);
+          console.error('Error creating true_owner:', res.errors || []);
         }
       }
     }
@@ -2080,18 +2079,18 @@ async function _udSaveOwnership() {
         });
         if (!patchResult.ok) console.error('Error patching contact:', (patchResult.errors || []).join(', '));
       } else {
-        const url = new URL(proxyBase, window.location.origin);
-        url.searchParams.set('table', 'contacts');
-        const res = await fetch(url.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-          body: JSON.stringify(contactPayload)
+        const res = await applyInsertWithFallback({
+          proxyBase,
+          table: 'contacts',
+          data: contactPayload,
+          source_surface: 'ownership_detail',
+          propagation_scope: 'ownership_contact_record'
         });
         if (res.ok) {
-          const [created] = await res.json();
+          const created = Array.isArray(res.rows) ? res.rows[0] : null;
           contactId = created.contact_id;
         } else {
-          console.error('Error creating contact:', res.status);
+          console.error('Error creating contact:', res.errors || []);
         }
       }
     }
@@ -2184,8 +2183,6 @@ async function _intelSavePriorSale() {
   const seller = document.getElementById('intelSeller')?.value?.trim() || null;
 
   try {
-    const url = new URL(proxyBase, window.location.origin);
-    url.searchParams.set('table', 'sales_transactions');
     const payload = {
       property_id: propertyId,
       sale_date: saleDate || null,
@@ -2194,12 +2191,16 @@ async function _intelSavePriorSale() {
       buyer_name: buyer,
       seller_name: seller
     };
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const res = await applyInsertWithFallback({
+      proxyBase,
+      table: 'sales_transactions',
+      idColumn: 'property_id',
+      recordIdentifier: propertyId,
+      data: payload,
+      source_surface: db === 'gov' ? 'gov_intel_detail' : 'dialysis_intel_detail',
+      propagation_scope: 'prior_sale_record'
     });
-    if (!res.ok) { const err = await res.text(); console.error('Sale save error:', err); showToast('Error saving sale: ' + res.status, 'error'); return; }
+    if (!res.ok) { console.error('Sale save error:', res.errors || []); showToast('Error saving sale', 'error'); return; }
     showToast('Prior sale saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Prior sale recorded',
@@ -2235,8 +2236,6 @@ async function _intelSaveLoan() {
   const ltv = document.getElementById('intelLTV')?.value || null;
 
   try {
-    const url = new URL(proxyBase, window.location.origin);
-    url.searchParams.set('table', 'loans');
     const payload = {
       property_id: propertyId,
       lender_name: lender,
@@ -2249,12 +2248,16 @@ async function _intelSaveLoan() {
       recourse: recourse || null,
       loan_to_value: ltv ? parseFloat(ltv) : null
     };
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const res = await applyInsertWithFallback({
+      proxyBase,
+      table: 'loans',
+      idColumn: 'property_id',
+      recordIdentifier: propertyId,
+      data: payload,
+      source_surface: db === 'gov' ? 'gov_intel_detail' : 'dialysis_intel_detail',
+      propagation_scope: 'loan_record'
     });
-    if (!res.ok) { const err = await res.text(); console.error('Loan save error:', err); showToast('Error saving loan: ' + res.status, 'error'); return; }
+    if (!res.ok) { console.error('Loan save error:', res.errors || []); showToast('Error saving loan', 'error'); return; }
     showToast('Loan info saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Loan recorded',

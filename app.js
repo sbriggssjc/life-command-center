@@ -3854,7 +3854,11 @@ async function applyInsertWithFallback(opts) {
         const errText = await res.text();
         return { ok: false, applied_mode: 'fallback_failed', errors: [`Direct POST failed (${res.status}): ${errText}`] };
       }
-      return { ok: true, applied_mode: 'direct_fallback_insert' };
+      let rows = [];
+      try {
+        rows = await res.json();
+      } catch (_) { /* ignore */ }
+      return { ok: true, applied_mode: 'direct_fallback_insert', rows: Array.isArray(rows) ? rows : [] };
     } catch (err) {
       return { ok: false, applied_mode: 'fallback_failed', errors: [err.message] };
     }

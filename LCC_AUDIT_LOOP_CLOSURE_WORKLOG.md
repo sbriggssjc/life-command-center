@@ -53,6 +53,14 @@
   - `detail.js`
   - `gov.js`
 - Covered clinic lead outcomes, research outcome updates, sales-comp research saves, ownership-resolution logs, dismiss-lead outcomes, and intel research note saves with mutation-service audit logging.
+- Extended audited insert coverage to auxiliary domain records in `detail.js` and `gov.js`, including:
+  - `true_owners`
+  - `recorded_owners`
+  - `contacts`
+  - `outbound_activities`
+  - `sales_transactions`
+  - `loans`
+- Updated insert helpers to return created rows so ownership/contact flows can keep linking newly created IDs without falling back to raw proxy responses.
 
 ## Verification Notes
 
@@ -62,10 +70,13 @@
 - `node --check dialysis.js` passed after routing research outcome writes through the audited path.
 - `node --check detail.js` passed after routing detail research outcome inserts through the audited path.
 - `node --check gov.js` passed after routing government intel research notes through the audited path.
+- `node --check detail.js` passed again after moving ownership/contact/sales/loan inserts onto the audited path.
+- `node --check gov.js` passed again after moving sale/loan inserts onto the audited path.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
 
 - Legacy domain flows are heterogeneous, so not every direct write can be eliminated in one pass.
-- Lower-volume direct domain writes still exist for auxiliary inserts such as owner/contact/loan helper records and RPC helper paths; the primary research loop writes are now on the audited path, but those auxiliary writes remain follow-up candidates.
+- The remaining non-audited `POST` in the scanned domain files is a canonical outbound sync call rather than a raw table mutation.
+- RPC helper paths and any writes outside the currently scanned gov/dialysis/detail/app surfaces still need review for full repo-wide closure.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

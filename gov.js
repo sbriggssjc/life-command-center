@@ -2032,19 +2032,21 @@ async function saveLead(rec) {
   const propertyId = rec.matched_property_id || rec.property_id;
   if ((saleDate || salePrice || buyer || seller) && propertyId) {
     try {
-      const url = new URL('/api/gov-query', window.location.origin);
-      url.searchParams.set('table', 'sales_transactions');
-      await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await applyInsertWithFallback({
+        proxyBase: '/api/gov-query',
+        table: 'sales_transactions',
+        idColumn: 'property_id',
+        recordIdentifier: propertyId,
+        data: {
           property_id: propertyId,
           sale_date: saleDate,
           sold_price: salePrice,
           cap_rate: capRate,
           buyer_name: buyer,
           seller_name: seller
-        })
+        },
+        source_surface: 'gov_lead_research',
+        propagation_scope: 'prior_sale_record'
       });
     } catch (err) {
       console.error('Error saving sale transaction from lead:', err);
@@ -2111,12 +2113,14 @@ async function saveLead(rec) {
       await patchRecord('loans', 'property_id', propertyId, loanData);
     } else {
       try {
-        const url = new URL('/api/gov-query', window.location.origin);
-        url.searchParams.set('table', 'loans');
-        await fetch(url.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(loanData)
+        await applyInsertWithFallback({
+          proxyBase: '/api/gov-query',
+          table: 'loans',
+          idColumn: 'property_id',
+          recordIdentifier: propertyId,
+          data: loanData,
+          source_surface: 'gov_lead_research',
+          propagation_scope: 'loan_record'
         });
       } catch (err) {
         console.error('Error saving loan from lead:', err);
@@ -2192,12 +2196,14 @@ async function saveIntel(rec) {
       seller_name: seller
     };
     try {
-      const url = new URL('/api/gov-query', window.location.origin);
-      url.searchParams.set('table', 'sales_transactions');
-      await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(salePayload)
+      await applyInsertWithFallback({
+        proxyBase: '/api/gov-query',
+        table: 'sales_transactions',
+        idColumn: 'property_id',
+        recordIdentifier: propertyId,
+        data: salePayload,
+        source_surface: 'gov_intel_research',
+        propagation_scope: 'prior_sale_record'
       });
     } catch (err) {
       console.error('Error saving sale transaction:', err);
@@ -2279,12 +2285,14 @@ async function saveIntel(rec) {
       await patchRecord('loans', 'property_id', propertyId, loanData);
     } else {
       try {
-        const url = new URL('/api/gov-query', window.location.origin);
-        url.searchParams.set('table', 'loans');
-        await fetch(url.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(loanData)
+        await applyInsertWithFallback({
+          proxyBase: '/api/gov-query',
+          table: 'loans',
+          idColumn: 'property_id',
+          recordIdentifier: propertyId,
+          data: loanData,
+          source_surface: 'gov_intel_research',
+          propagation_scope: 'loan_record'
         });
       } catch (err) {
         console.error('Error saving loan (intel):', err);
@@ -2410,21 +2418,19 @@ async function saveLoanFields(rec) {
   if (existingLoan) {
     await patchRecord('loans', 'property_id', propertyId, loanData);
   } else {
-    // POST new loan using proxy endpoint
-    const url = new URL('/api/gov-query', window.location.origin);
-    url.searchParams.set('table', 'loans');
-    
     try {
-      const response = await fetch(url.toString(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(loanData)
+      const response = await applyInsertWithFallback({
+        proxyBase: '/api/gov-query',
+        table: 'loans',
+        idColumn: 'property_id',
+        recordIdentifier: propertyId,
+        data: loanData,
+        source_surface: 'gov_research_resolution',
+        propagation_scope: 'loan_record'
       });
       
       if (!response.ok) {
-        console.error('Error creating loan record:', response.status, await response.text());
+        console.error('Error creating loan record:', response.errors || []);
       }
     } catch (err) {
       console.error('Error creating loan record:', err);

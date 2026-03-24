@@ -209,6 +209,7 @@ export default withErrorHandler(async function handler(req, res) {
     ok: true,
     applied_mode: mutationMode === 'insert' ? 'mutation_insert' : 'mutation_service',
     rows_affected: Array.isArray(updatedRows) ? updatedRows.length : 0,
+    rows: Array.isArray(updatedRows) ? updatedRows : [],
     audit_logged: isOpsConfigured(),
     reconciliation: reconciliation || {},
     propagation: propagation || {}
