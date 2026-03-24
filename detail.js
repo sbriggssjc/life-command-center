@@ -296,8 +296,6 @@ async function _udSubmitDismiss() {
 
   try {
     // 1. Save research_queue_outcomes
-    const outUrl = new URL('/api/dia-query', window.location.origin);
-    outUrl.searchParams.set('table', 'research_queue_outcomes');
     const outPayload = {
       queue_type: 'clinic_lead',
       clinic_id: clinicId,
@@ -306,13 +304,17 @@ async function _udSubmitDismiss() {
       selected_property_id: propertyId || null,
       assigned_at: new Date().toISOString()
     };
-    const outRes = await fetch(outUrl.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(outPayload)
+    const outResult = await applyInsertWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'research_queue_outcomes',
+      idColumn: 'clinic_id',
+      recordIdentifier: clinicId,
+      data: outPayload,
+      source_surface: 'detail_clinic_dismiss',
+      propagation_scope: 'research_queue_outcome'
     });
-    if (!outRes.ok) {
-      console.error('Dismiss outcome error:', await outRes.text());
+    if (!outResult.ok) {
+      console.error('Dismiss outcome error:', outResult.errors || []);
       showToast('Error saving dismiss outcome', 'error');
       if (btn) { btn.disabled = false; btn.textContent = 'Dismiss Lead'; }
       return;
@@ -2115,8 +2117,6 @@ async function _udSaveOwnership() {
     // 5. Save to research_queue_outcomes as a log entry
     const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id || null;
     if (clinicId) {
-      const url = new URL(proxyBase, window.location.origin);
-      url.searchParams.set('table', 'research_queue_outcomes');
       const payload = {
         queue_type: 'ownership_resolution',
         clinic_id: clinicId,
@@ -2134,12 +2134,16 @@ async function _udSaveOwnership() {
         selected_property_id: propertyId,
         assigned_at: new Date().toISOString()
       };
-      const res = await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const res = await applyInsertWithFallback({
+        proxyBase,
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        recordIdentifier: clinicId,
+        data: payload,
+        source_surface: db === 'gov' ? 'gov_ownership_detail' : 'dialysis_ownership_detail',
+        propagation_scope: 'research_queue_outcome'
       });
-      if (!res.ok) console.error('Error creating research_queue_outcome:', res.status);
+      if (!res.ok) console.error('Error creating research_queue_outcome:', res.errors || []);
     }
 
     showToast('Ownership resolution saved!', 'success');
@@ -2327,8 +2331,6 @@ async function _intelSaveNotes() {
   if (!notes) { showToast('Please enter some research notes', 'error'); return; }
 
   try {
-    const url = new URL(proxyBase, window.location.origin);
-    url.searchParams.set('table', 'research_queue_outcomes');
     const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id || null;
     const payload = {
       queue_type: 'intel_research',
@@ -2342,12 +2344,16 @@ async function _intelSaveNotes() {
       selected_property_id: propertyId,
       assigned_at: new Date().toISOString()
     };
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const res = await applyInsertWithFallback({
+      proxyBase,
+      table: 'research_queue_outcomes',
+      idColumn: clinicId ? 'clinic_id' : 'selected_property_id',
+      recordIdentifier: clinicId || propertyId,
+      data: payload,
+      source_surface: db === 'gov' ? 'gov_intel_detail' : 'dialysis_intel_detail',
+      propagation_scope: 'research_queue_outcome'
     });
-    if (!res.ok) { const err = await res.text(); console.error('Notes save error:', err); showToast('Error saving notes: ' + res.status, 'error'); return; }
+    if (!res.ok) { console.error('Notes save error:', res.errors || []); showToast('Error saving notes', 'error'); return; }
     showToast('Research notes saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Research notes updated',

@@ -38,13 +38,34 @@
 - Added targeted tests for the new loop-closure helpers:
   - `test/entity-link.test.js`
   - `test/research-loop.test.js`
+- Routed the remaining high-use CRM/marketing mutations in `app.js` through the mutation service:
+  - Salesforce task complete
+  - Salesforce task reschedule
+  - Salesforce task dismiss
+  - Marketing deal reassign
+  - Marketing deal reclassify
+  - Marketing lead status updates
+  - Log-and-reschedule modal task date update
+- Extended `api/apply-change.js` and the `app.js` mutation helper to support composite match filters so audited writes can safely target `salesforce_activities` rows by `sf_contact_id + subject`.
+- Extended the mutation service to support audited inserts (`mutation_mode: insert`) and added `applyInsertWithFallback()` in `app.js`.
+- Moved key manual `research_queue_outcomes` inserts/updates onto the audited path in:
+  - `dialysis.js`
+  - `detail.js`
+  - `gov.js`
+- Covered clinic lead outcomes, research outcome updates, sales-comp research saves, ownership-resolution logs, dismiss-lead outcomes, and intel research note saves with mutation-service audit logging.
 
 ## Verification Notes
 
 - `node --check` passed for all modified JS files.
+- `node --check app.js` passed after the second-pass CRM mutation refactor.
+- `node --check api/apply-change.js` passed after adding composite filter support.
+- `node --check dialysis.js` passed after routing research outcome writes through the audited path.
+- `node --check detail.js` passed after routing detail research outcome inserts through the audited path.
+- `node --check gov.js` passed after routing government intel research notes through the audited path.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
 
 - Legacy domain flows are heterogeneous, so not every direct write can be eliminated in one pass.
+- Lower-volume direct domain writes still exist for auxiliary inserts such as owner/contact/loan helper records and RPC helper paths; the primary research loop writes are now on the audited path, but those auxiliary writes remain follow-up candidates.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

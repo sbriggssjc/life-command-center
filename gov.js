@@ -2299,19 +2299,24 @@ async function saveIntel(rec) {
 
   if (notes || source) {
     try {
-      const url = new URL('/api/gov-query', window.location.origin);
-      url.searchParams.set('table', 'research_queue_outcomes');
-      await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const result = await applyInsertWithFallback({
+        proxyBase: '/api/gov-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'selected_property_id',
+        recordIdentifier: propertyId,
+        data: {
           queue_type: 'intel_research',
           status: 'completed',
           notes: [source ? `[${source}]` : '', notes].filter(Boolean).join(' '),
           selected_property_id: propertyId,
           assigned_at: researchDate || new Date().toISOString()
-        })
+        },
+        source_surface: 'gov_intel_research',
+        propagation_scope: 'research_queue_outcome'
       });
+      if (!result.ok) {
+        console.error('Error saving intel research notes:', result.errors || []);
+      }
     } catch (err) {
       console.error('Error saving intel research notes:', err);
     }

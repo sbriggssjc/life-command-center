@@ -38,25 +38,30 @@ export default withErrorHandler(async function handler(req, res) {
     source_surface,
     target_table,
     target_source,       // 'gov' or 'dia' — which Supabase instance
+    mutation_mode,       // 'patch' (default) or 'insert'
     record_identifier,   // the filter value (e.g., property_id value)
     id_column,           // the filter column (e.g., 'property_id')
     changed_fields,
     notes,
     linked_pending_id,
     propagation_scope,
+    match_filters,
     reconciliation,
     propagation
   } = req.body || {};
 
   // --- Validate required fields ---
   const errors = [];
+  const extraFilters = Array.isArray(match_filters) ? match_filters : [];
+  const mutationMode = mutation_mode === 'insert' ? 'insert' : 'patch';
   if (!target_table) errors.push('target_table is required');
   if (!target_source || !SOURCE_CONFIG[target_source]) errors.push('target_source must be gov or dia');
-  if (!record_identifier) errors.push('record_identifier is required');
-  if (!id_column) errors.push('id_column is required');
+  if (mutationMode === 'patch' && !record_identifier) errors.push('record_identifier is required');
+  if (mutationMode === 'patch' && !id_column) errors.push('id_column is required');
   if (!changed_fields || typeof changed_fields !== 'object' || Object.keys(changed_fields).length === 0) {
     errors.push('changed_fields must be a non-empty object');
   }
+  if (!Array.isArray(extraFilters)) errors.push('match_filters must be an array when provided');
   if (errors.length > 0) {
     return res.status(400).json({ ok: false, errors });
   }
@@ -68,9 +73,23 @@ export default withErrorHandler(async function handler(req, res) {
   }
 
   // --- Validate column name ---
-  const col = safeColumn(id_column);
-  if (!col) {
+  const col = mutationMode === 'patch' ? safeColumn(id_column) : (id_column ? safeColumn(id_column) : null);
+  if (mutationMode === 'patch' && !col) {
     return res.status(400).json({ ok: false, errors: ['Invalid id_column name'] });
+  }
+  if (mutationMode === 'insert' && id_column && !col) {
+    return res.status(400).json({ ok: false, errors: ['Invalid id_column name'] });
+  }
+  const safeExtraFilters = [];
+  for (const filter of extraFilters) {
+    const safeCol = safeColumn(filter?.column || '');
+    if (!safeCol) {
+      return res.status(400).json({ ok: false, errors: ['Invalid match_filters column name'] });
+    }
+    if (filter?.value === undefined || filter?.value === null || filter?.value === '') {
+      return res.status(400).json({ ok: false, errors: ['match_filters entries require a non-empty value'] });
+    }
+    safeExtraFilters.push({ column: safeCol, value: String(filter.value) });
   }
 
   const dbUrl = process.env[cfg.urlEnv];
@@ -85,8 +104,10 @@ export default withErrorHandler(async function handler(req, res) {
       workspace_id: workspaceId,
       target_source,
       target_table,
-      record_identifier: String(record_identifier),
+      record_identifier: record_identifier != null ? String(record_identifier) : null,
       id_column: col,
+      mutation_mode: mutationMode,
+      match_filters: safeExtraFilters,
       source_surface: source_surface || 'unknown',
       actor: actor || user.display_name || user.email || 'unknown',
       status,
@@ -100,18 +121,23 @@ export default withErrorHandler(async function handler(req, res) {
     return pending.ok ? (Array.isArray(pending.data) ? pending.data[0] : pending.data) : null;
   }
 
-  // --- Apply the PATCH to the target table ---
-  const patchUrl = `${dbUrl}/rest/v1/${target_table}?${encodeURIComponent(col)}=eq.${encodeURIComponent(record_identifier)}`;
+  const requestUrl = mutationMode === 'insert'
+    ? `${dbUrl}/rest/v1/${target_table}`
+    : `${dbUrl}/rest/v1/${target_table}?${[{ column: col, value: String(record_identifier) }, ...safeExtraFilters]
+        .map(({ column, value }) => `${encodeURIComponent(column)}=eq.${encodeURIComponent(value)}`)
+        .join('&')}`;
 
-  let patchResponse;
+  let mutationResponse;
   try {
-    patchResponse = await fetch(patchUrl, {
-      method: 'PATCH',
+    mutationResponse = await fetch(requestUrl, {
+      method: mutationMode === 'insert' ? 'POST' : 'PATCH',
       headers: {
         'apikey': dbKey,
         'Authorization': `Bearer ${dbKey}`,
         'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
+        'Prefer': mutationMode === 'insert'
+          ? 'return=representation,resolution=ignore-duplicates'
+          : 'return=representation'
       },
       body: JSON.stringify(changed_fields)
     });
@@ -120,23 +146,23 @@ export default withErrorHandler(async function handler(req, res) {
     return res.status(502).json({ ok: false, errors: ['bridge_unavailable', `Fetch failed: ${err.message}`], pending_review });
   }
 
-  if (!patchResponse.ok) {
-    const errBody = await patchResponse.text();
+  if (!mutationResponse.ok) {
+    const errBody = await mutationResponse.text();
     const pending_review = await createPendingReview('needs_review', {
-      stage: 'patch',
-      status: patchResponse.status,
+      stage: mutationMode,
+      status: mutationResponse.status,
       detail: errBody.substring(0, 1000)
     });
-    return res.status(patchResponse.status).json({
+    return res.status(mutationResponse.status).json({
       ok: false,
-      errors: [`Supabase PATCH failed (${patchResponse.status}): ${errBody.substring(0, 500)}`],
+      errors: [`Supabase ${mutationMode.toUpperCase()} failed (${mutationResponse.status}): ${errBody.substring(0, 500)}`],
       pending_review
     });
   }
 
   let updatedRows = [];
   try {
-    const body = await patchResponse.text();
+    const body = await mutationResponse.text();
     updatedRows = body ? JSON.parse(body) : [];
   } catch { /* representation parse failure is non-fatal */ }
 
@@ -149,10 +175,12 @@ export default withErrorHandler(async function handler(req, res) {
       source_surface: source_surface || 'unknown',
       target_table,
       target_source,
-      record_identifier: String(record_identifier),
+      record_identifier: record_identifier != null ? String(record_identifier) : null,
       id_column: col,
+      mutation_mode: mutationMode,
+      match_filters: safeExtraFilters,
       changed_fields,
-      applied_mode: 'mutation_service',
+      applied_mode: mutationMode === 'insert' ? 'mutation_insert' : 'mutation_service',
       notes: notes || null,
       pending_update_id: linked_pending_id || null,
       propagation_scope: propagation_scope || null,
@@ -179,7 +207,7 @@ export default withErrorHandler(async function handler(req, res) {
 
   return res.status(200).json({
     ok: true,
-    applied_mode: 'mutation_service',
+    applied_mode: mutationMode === 'insert' ? 'mutation_insert' : 'mutation_service',
     rows_affected: Array.isArray(updatedRows) ? updatedRows.length : 0,
     audit_logged: isOpsConfigured(),
     reconciliation: reconciliation || {},

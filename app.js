@@ -2652,12 +2652,19 @@ async function mktReassignDeal(activityId, newOwner, sfContactId) {
   if (!newOwner) return;
   showToast('Reassigning to ' + newOwner + '...', 'success');
   try {
-    // Update in Supabase — this will need a SF sync to push back
-    const res = await diaQuery('salesforce_activities', '*', {
-      method: 'PATCH',
-      filter: `activity_id=eq.${activityId}`,
-      body: { assigned_to: newOwner }
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'salesforce_activities',
+      idColumn: 'activity_id',
+      idValue: activityId,
+      data: { assigned_to: newOwner },
+      source_surface: 'marketing_reassign_deal',
+      notes: sfContactId || null,
+      propagation_scope: 'salesforce_activity_assignment'
     });
+    if (!result.ok) {
+      throw new Error((result.errors || ['Unable to reassign deal']).join('; '));
+    }
     // Update local data across all stores
     mktData.forEach(d => { if (d.item_id === activityId) d.assigned_to = newOwner; });
     ['government', 'dialysis', 'all_other'].forEach(dom => {
@@ -2846,18 +2853,19 @@ function _updateSfTaskDate(sfContactId, subject, newDate) {
 async function completeTask(sfContactId, subject) {
   showToast('Marking task complete...', 'success');
   try {
-    // PATCH salesforce_activities: mark matching open activity as Completed
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'salesforce_activities');
-    url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
-    url.searchParams.set('filter2', 'subject=eq.' + subject);
-    const patchRes = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'Completed' })
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'salesforce_activities',
+      idColumn: 'sf_contact_id',
+      idValue: sfContactId,
+      matchFilters: [{ column: 'subject', value: subject }],
+      data: { status: 'Completed' },
+      source_surface: 'marketing_task_complete',
+      notes: subject,
+      propagation_scope: 'salesforce_activity_status'
     });
-    if (!patchRes.ok) {
-      console.error('[Complete] PATCH failed:', patchRes.status, await patchRes.text().catch(function() { return ''; }));
+    if (!result.ok) {
+      throw new Error((result.errors || ['Unable to complete task']).join('; '));
     }
     showToast('Task completed!', 'success');
     // Sync completion to Salesforce (non-blocking) — includes deal context
@@ -2876,15 +2884,20 @@ async function rescheduleTask(sfContactId, subject, newDate) {
   if (!newDate) return;
   showToast('Rescheduling to ' + newDate + '...', 'success');
   try {
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'salesforce_activities');
-    url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
-    url.searchParams.set('filter2', 'subject=eq.' + subject);
-    await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activity_date: newDate })
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'salesforce_activities',
+      idColumn: 'sf_contact_id',
+      idValue: sfContactId,
+      matchFilters: [{ column: 'subject', value: subject }],
+      data: { activity_date: newDate },
+      source_surface: 'marketing_task_reschedule',
+      notes: subject,
+      propagation_scope: 'salesforce_activity_date'
     });
+    if (!result.ok) {
+      throw new Error((result.errors || ['Unable to reschedule task']).join('; '));
+    }
     showToast('Rescheduled to ' + newDate, 'success');
     // Push new date to SF via Power Automate (non-blocking)
     _updateSfTaskDate(sfContactId, subject, newDate);
@@ -2900,17 +2913,19 @@ async function dismissTask(sfContactId, subject) {
   if (!confirm('Dismiss "' + subject + '"? This will mark it as Abandoned.')) return;
   showToast('Dismissing task...', 'success');
   try {
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'salesforce_activities');
-    url.searchParams.set('filter', 'sf_contact_id=eq.' + sfContactId);
-    url.searchParams.set('filter2', 'subject=eq.' + subject);
-    const patchRes = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'Abandoned' })
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'salesforce_activities',
+      idColumn: 'sf_contact_id',
+      idValue: sfContactId,
+      matchFilters: [{ column: 'subject', value: subject }],
+      data: { status: 'Abandoned' },
+      source_surface: 'marketing_task_dismiss',
+      notes: subject,
+      propagation_scope: 'salesforce_activity_status'
     });
-    if (!patchRes.ok) {
-      console.error('[Dismiss] PATCH failed:', patchRes.status, await patchRes.text().catch(function() { return ''; }));
+    if (!result.ok) {
+      throw new Error((result.errors || ['Unable to dismiss task']).join('; '));
     }
     showToast('Task dismissed', 'success');
     // Sync dismissal to Salesforce (non-blocking) — includes deal context
@@ -2928,11 +2943,18 @@ async function mktReclassifyDeal(activityId, newDomain) {
   if (!activityId || !newDomain) return;
   showToast('Reclassifying deal to ' + newDomain + '...', 'success');
   try {
-    await diaQuery('salesforce_activities', '*', {
-      method: 'PATCH',
-      filter: `activity_id=eq.${activityId}`,
-      body: { prospect_domain: newDomain }
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'salesforce_activities',
+      idColumn: 'activity_id',
+      idValue: activityId,
+      data: { prospect_domain: newDomain },
+      source_surface: 'marketing_reclassify_deal',
+      propagation_scope: 'salesforce_activity_domain'
     });
+    if (!result.ok) {
+      throw new Error((result.errors || ['Unable to reclassify deal']).join('; '));
+    }
     // Move item between domain buckets locally
     let movedItem = null;
     ['government', 'dialysis', 'all_other'].forEach(dom => {
@@ -3004,18 +3026,18 @@ async function mktMatchLead(leadId) {
 /** Update lead status (contacted, qualified, etc.) */
 async function mktUpdateStatus(leadId, newStatus) {
   try {
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'marketing_leads');
-    url.searchParams.set('filter', `lead_id=eq.${leadId}`);
-    const res = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus })
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'marketing_leads',
+      idColumn: 'lead_id',
+      idValue: leadId,
+      data: { status: newStatus },
+      source_surface: 'marketing_update_status',
+      propagation_scope: 'marketing_lead_status'
     });
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error('mktUpdateStatus error:', res.status, errText);
-      showToast('Error updating status — server returned ' + res.status, 'error');
+    if (!result.ok) {
+      console.error('mktUpdateStatus error:', result.errors || []);
+      showToast('Error updating status — ' + ((result.errors || ['unknown error'])[0]), 'error');
       return;
     }
     // Update local cache
@@ -3564,15 +3586,20 @@ async function submitLogReschedule() {
     }
 
     // 2. Reschedule the task date in Supabase (task stays open with new date)
-    var rescheduleUrl = new URL('/api/dia-query', window.location.origin);
-    rescheduleUrl.searchParams.set('table', 'salesforce_activities');
-    rescheduleUrl.searchParams.set('filter', 'sf_contact_id=eq.' + _lrData.sfContactId);
-    rescheduleUrl.searchParams.set('filter2', 'subject=eq.' + _lrData.taskSubject);
-    await fetch(rescheduleUrl.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activity_date: nextDate })
+    var rescheduleResult = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'salesforce_activities',
+      idColumn: 'sf_contact_id',
+      idValue: _lrData.sfContactId,
+      matchFilters: [{ column: 'subject', value: _lrData.taskSubject }],
+      data: { activity_date: nextDate },
+      source_surface: 'log_reschedule_modal',
+      notes: _lrData.taskSubject,
+      propagation_scope: 'salesforce_activity_date'
     });
+    if (!rescheduleResult.ok) {
+      throw new Error((rescheduleResult.errors || ['Unable to reschedule task']).join('; '));
+    }
 
     // 3. Push the new date to the original SF task via Power Automate (non-blocking)
     _updateSfTaskDate(_lrData.sfContactId, _lrData.taskSubject, nextDate);
@@ -3739,6 +3766,7 @@ async function applyManualChange(payload) {
  * @param {string|null} [opts.notes]
  * @param {string|null} [opts.linked_pending_id]
  * @param {string|null} [opts.propagation_scope]
+ * @param {Array<{column: string, value: string}>|null} [opts.matchFilters]
  * @returns {Promise<{ok: boolean, applied_mode: string, errors?: string[]}>}
  */
 async function applyChangeWithFallback(opts) {
@@ -3756,7 +3784,8 @@ async function applyChangeWithFallback(opts) {
     changed_fields: opts.data,
     notes: opts.notes || null,
     linked_pending_id: opts.linked_pending_id || null,
-    propagation_scope: opts.propagation_scope || null
+    propagation_scope: opts.propagation_scope || null,
+    match_filters: Array.isArray(opts.matchFilters) ? opts.matchFilters : []
   });
 
   // If bridge is unavailable, fall back to direct proxy PATCH
@@ -3769,6 +3798,9 @@ async function applyChangeWithFallback(opts) {
       const url = new URL(opts.proxyBase, window.location.origin);
       url.searchParams.set('table', opts.table);
       url.searchParams.set('filter', `${opts.idColumn}=eq.${opts.idValue}`);
+      (Array.isArray(opts.matchFilters) ? opts.matchFilters : []).forEach(function(filter, idx) {
+        url.searchParams.set(`filter${idx + 2}`, `${filter.column}=eq.${filter.value}`);
+      });
       const res = await fetch(url.toString(), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -3779,6 +3811,50 @@ async function applyChangeWithFallback(opts) {
         return { ok: false, applied_mode: 'fallback_failed', errors: [`Direct PATCH failed (${res.status}): ${errText}`] };
       }
       return { ok: true, applied_mode: 'direct_fallback' };
+    } catch (err) {
+      return { ok: false, applied_mode: 'fallback_failed', errors: [err.message] };
+    }
+  }
+
+  return result;
+}
+
+async function applyInsertWithFallback(opts) {
+  const targetSource = opts.proxyBase.includes('gov') ? 'gov' : 'dia';
+  const actor = (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'lcc_analyst';
+
+  const result = await applyManualChange({
+    actor,
+    source_surface: opts.source_surface || 'workspace',
+    target_table: opts.table,
+    target_source: targetSource,
+    mutation_mode: 'insert',
+    record_identifier: opts.recordIdentifier != null ? String(opts.recordIdentifier) : null,
+    id_column: opts.idColumn || null,
+    changed_fields: opts.data,
+    notes: opts.notes || null,
+    linked_pending_id: opts.linked_pending_id || null,
+    propagation_scope: opts.propagation_scope || null
+  });
+
+  if (!result.ok && result.errors && result.errors.includes('bridge_unavailable')) {
+    if (!checkFlag('mutation_fallback_enabled')) {
+      return result;
+    }
+    console.warn('[applyInsert] Bridge unavailable, falling back to direct POST');
+    try {
+      const url = new URL(opts.proxyBase, window.location.origin);
+      url.searchParams.set('table', opts.table);
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts.data)
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return { ok: false, applied_mode: 'fallback_failed', errors: [`Direct POST failed (${res.status}): ${errText}`] };
+      }
+      return { ok: true, applied_mode: 'direct_fallback_insert' };
     } catch (err) {
       return { ok: false, applied_mode: 'fallback_failed', errors: [err.message] };
     }

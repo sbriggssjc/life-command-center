@@ -2028,9 +2028,6 @@ async function markClinicLead(rec, status) {
  */
 async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
   try {
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'research_queue_outcomes');
-
     const payload = {
       queue_type: 'clinic_lead',
       clinic_id: clinicId,
@@ -2040,15 +2037,18 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
       assigned_at: new Date().toISOString()
     };
 
-    const response = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const result = await applyInsertWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'research_queue_outcomes',
+      idColumn: 'clinic_id',
+      recordIdentifier: clinicId,
+      data: payload,
+      source_surface: 'dialysis_clinic_leads',
+      propagation_scope: 'research_queue_outcome'
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Clinic lead save error:', response.status, errText);
+    if (!result.ok) {
+      console.error('Clinic lead save error:', result.errors || []);
       showToast('Error saving clinic lead', 'error');
       return false;
     }
@@ -2088,20 +2088,19 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
       assigned_at: new Date().toISOString()
     };
 
-    const url = new URL('/api/dia-query', window.location.origin);
-    url.searchParams.set('table', 'research_queue_outcomes');
-    url.searchParams.set('filter', `clinic_id=eq.${clinicId}`);
-    url.searchParams.set('filter2', `queue_type=eq.${queueType}`);
-
-    const response = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'research_queue_outcomes',
+      idColumn: 'clinic_id',
+      idValue: clinicId,
+      matchFilters: [{ column: 'queue_type', value: queueType }],
+      data: payload,
+      source_surface: 'dialysis_research_outcome',
+      propagation_scope: 'research_queue_outcome'
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error('Failed to save outcome: ' + errText);
+    if (!result.ok) {
+      throw new Error('Failed to save outcome: ' + (result.errors || []).join('; '));
     }
 
     showToast('Outcome saved', 'success');
@@ -4301,9 +4300,6 @@ async function saveSaleResearch() {
   }
 
   // Create or update research_queue_outcomes record
-  const url = new URL('/api/dia-query', window.location.origin);
-  url.searchParams.set('table', 'research_queue_outcomes');
-
   try {
     const data = {
       queue_type: 'sales_comp',
@@ -4313,15 +4309,18 @@ async function saveSaleResearch() {
       selected_property_id: record.property_id || null
     };
 
-    const response = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+    const result = await applyInsertWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'research_queue_outcomes',
+      idColumn: 'clinic_id',
+      recordIdentifier: record.clinic_id,
+      data,
+      source_surface: 'dialysis_sales_detail',
+      propagation_scope: 'research_queue_outcome'
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`Research save error: ${response.status}`, errText);
+    if (!result.ok) {
+      console.error('Research save error:', result.errors || []);
       showToast('Error saving research', 'error');
       return;
     }
@@ -4422,8 +4421,6 @@ async function saveDiaOwnershipResolution() {
   const clinicId = record.clinic_id || record.medicare_id || null;
   if (clinicId) {
     try {
-      const url = new URL('/api/dia-query', window.location.origin);
-      url.searchParams.set('table', 'research_queue_outcomes');
       const payload = {
         queue_type: 'ownership_resolution',
         clinic_id: clinicId,
@@ -4437,14 +4434,17 @@ async function saveDiaOwnershipResolution() {
         selected_property_id: propertyId,
         assigned_at: new Date().toISOString()
       };
-      const res = await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const result = await applyInsertWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        recordIdentifier: clinicId,
+        data: payload,
+        source_surface: 'dialysis_ownership_detail',
+        propagation_scope: 'research_queue_outcome'
       });
-      if (!res.ok) {
-        const err = await res.text();
-        console.error('Ownership resolution save error:', err);
+      if (!result.ok) {
+        console.error('Ownership resolution save error:', result.errors || []);
       }
     } catch (e) {
       console.error('Ownership resolution POST error:', e);
