@@ -139,11 +139,18 @@
 - `node --test test/contacts.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test test/raw-write-guardrail.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test test/apply-change.test.js` passed again after adding the pending-review failure-path case.
+- `node --test test/apply-change.test.js` passed in the current validation sweep.
 - `node --test test/contacts.test.js` passed again after adding the audited-write failure-path case and fixing handler error propagation.
+- `node --test test/contacts.test.js` passed in the current validation sweep.
 - `node --test test/entity-link.test.js` passed outside the sandbox after adding external-identity failure coverage.
+- `node --test test/entity-link.test.js` passed in the current validation sweep.
 - `node --test test/queue.test.js` passed outside the sandbox after adding inbox triage and promote-to-action verification.
+- `node --test test/queue.test.js` passed in the current validation sweep.
 - `node --test test/research-loop.test.js` passed outside the sandbox after adding cross-surface research-loop failure coverage.
+- `node --test test/research-loop.test.js` passed in the current validation sweep.
 - `node --test test/sync.test.js` passed outside the sandbox after adding Sync Health and complete-SF-task failure-path verification.
+- `node --test test/sync.test.js` passed in the current validation sweep.
+- `node --test test/raw-write-guardrail.test.js` passed in the current validation sweep.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
@@ -164,6 +171,7 @@
 - Government and Dialysis now expose grouped workflow navigation above the existing tab strips, which reduces top-of-screen tab density without rewriting the underlying renderers.
 - The remaining heavy ops pages now use paginated entity/research fetches, and post-mutation refreshes are routed through a shared active-page refresh helper instead of scattered manual rerenders.
 - Sync Health and Metrics now surface the new backend operational signals directly in the UI, including outbound success rate, unresolved sync error count, and Salesforce queue-drift indicators.
+- The focused verification matrix is now green end-to-end for the core helper, audited mutation, contacts, sync, queue/inbox, and raw-write guardrail suites.
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

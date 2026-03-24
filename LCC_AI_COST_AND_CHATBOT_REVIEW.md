@@ -104,6 +104,9 @@
 - Added route-mismatch detection to the AI dashboard so you can see when configured feature routing does not match recent observed provider/model traffic.
 - Added a rollout-readiness indicator to the AI dashboard so it is obvious whether feature routing is actually active or still effectively manual/default-only.
 - Added a suggested-next-step panel to the AI dashboard so rollout actions are driven by current readiness, mismatch status, and telemetry coverage.
+- Added `AI_CHAT_BALANCED_PRESET.env.example` as a concrete staged-routing preset artifact for rollout.
+- Added `AI_CHAT_MANUAL_EDGE_PRESET.env.example` as a clean rollback/default preset.
+- Added `AI_CHAT_LOW_COST_PRESET.env.example` as a more aggressive low-cost routing preset for post-balanced rollout testing.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

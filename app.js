@@ -5496,6 +5496,10 @@ function renderLiveIngestWorkbench(domainKey) {
         </div>
         ${proposal.missing_information?.length ? `<div class="live-ingest-callout warn">${proposal.missing_information.map(esc).join('<br>')}</div>` : ''}
         ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
+        ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
+          <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
+          <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
+        </div>` : ''}
         <div class="live-ingest-op-list">
           ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
         </div>
@@ -5566,9 +5570,9 @@ function renderLiveIngestOperation(domainKey, op, idx) {
   const target = op.kind === 'bridge'
     ? `Bridge: ${table}`
     : `${esc(op.target_source || domainKey)}.${table}${op.record_identifier != null ? `#${esc(String(op.record_identifier))}` : ''}`;
-  const fields = op.kind === 'bridge'
-    ? esc(JSON.stringify(op.payload || {}))
-    : esc(JSON.stringify(op.fields || {}, null, 2));
+  const bodyObj = op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {});
+  const fields = esc(JSON.stringify(bodyObj, null, 2));
+  const fieldEntries = Object.entries(bodyObj || {});
   return `<label class="live-ingest-op">
     <input type="checkbox" data-live-ingest-op="${domainKey}:${idx}" ${op._selected === false ? '' : 'checked'}>
     <div class="live-ingest-op-body">
@@ -5577,9 +5581,24 @@ function renderLiveIngestOperation(domainKey, op, idx) {
         <span class="live-ingest-op-target">${target}</span>
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
-      <pre>${fields}</pre>
+      ${fieldEntries.length ? `<div class="live-ingest-field-grid">
+        ${fieldEntries.map(([key, value]) => `<div class="live-ingest-field-row"><span>${esc(key)}</span><strong>${esc(renderLiveIngestFieldValue(value))}</strong></div>`).join('')}
+      </div>` : '<div class="live-ingest-empty" style="margin-top:8px">No fields on this operation.</div>'}
+      <div class="live-ingest-editor-head">
+        <span>Edit JSON</span>
+        <span>${fieldEntries.length} field${fieldEntries.length === 1 ? '' : 's'}</span>
+      </div>
+      <textarea class="live-ingest-json-editor" data-live-ingest-json="${domainKey}:${idx}" spellcheck="false">${fields}</textarea>
+      ${op._parseError ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(op._parseError)}</div>` : ''}
     </div>
   </label>`;
+}
+
+function renderLiveIngestFieldValue(value) {
+  if (value == null) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
 }
 
 function renderLiveIngestContextSummary(context) {
@@ -5694,6 +5713,14 @@ function bindLiveIngestWorkbench(domainKey) {
     state.lookupResults = [];
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-select-all="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = true; });
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
+    rerenderLiveIngestDomain(domainKey);
+  });
   document.querySelector(`[data-live-ingest-extract="${domainKey}"]`)?.addEventListener('click', () => runLiveIngestExtraction(domainKey));
   document.querySelector(`[data-live-ingest-clear-proposal="${domainKey}"]`)?.addEventListener('click', () => {
     state.proposal = null;
@@ -5707,6 +5734,26 @@ function bindLiveIngestWorkbench(domainKey) {
       const idx = parseInt(idxText, 10);
       if (!Array.isArray(state.proposal?.operations) || Number.isNaN(idx) || !state.proposal.operations[idx]) return;
       state.proposal.operations[idx]._selected = checkbox.checked;
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-json^="${domainKey}:"]`).forEach((editor) => {
+    editor.onchange = () => {
+      const [, idxText] = editor.dataset.liveIngestJson.split(':');
+      const idx = parseInt(idxText, 10);
+      if (!Array.isArray(state.proposal?.operations) || Number.isNaN(idx) || !state.proposal.operations[idx]) return;
+      const op = state.proposal.operations[idx];
+      try {
+        const parsed = JSON.parse(editor.value);
+        if (op.kind === 'bridge') {
+          op.payload = parsed;
+        } else {
+          op.fields = parsed;
+        }
+        op._parseError = '';
+      } catch (err) {
+        op._parseError = err.message || 'Invalid JSON';
+      }
+      rerenderLiveIngestDomain(domainKey);
     };
   });
   document.querySelectorAll(`[data-live-ingest-target^="${domainKey}:"]`).forEach((button) => {
@@ -5893,6 +5940,9 @@ async function normalizeLiveIngestFile(file) {
   if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
     return await convertPdfToImageAttachments(file);
   }
+  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lowerName.endsWith('.docx')) {
+    return await convertDocxToTextAttachment(file);
+  }
   if (file.type.startsWith('image/')) {
     const dataUrl = await readFileAsDataUrl(file);
     return [{
@@ -5908,7 +5958,7 @@ async function normalizeLiveIngestFile(file) {
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images, PDFs, and text-based exports are supported directly.');
+    throw new Error('Only images, PDFs, DOCX files, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
   return [{
@@ -5984,6 +6034,49 @@ function readFileAsArrayBuffer(file) {
     reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
     reader.readAsArrayBuffer(file);
   });
+}
+
+async function convertDocxToTextAttachment(file) {
+  if (typeof window.JSZip === 'undefined') {
+    throw new Error('DOCX extractor not available');
+  }
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const zip = await window.JSZip.loadAsync(buffer);
+  const docXmlFile = zip.file('word/document.xml');
+  if (!docXmlFile) {
+    throw new Error('DOCX is missing word/document.xml');
+  }
+
+  const xml = await docXmlFile.async('string');
+  const text = extractTextFromDocxXml(xml);
+  if (!text.trim()) {
+    throw new Error('DOCX did not contain readable text');
+  }
+
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'document.docx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    text: text.slice(0, 30000)
+  }];
+}
+
+function extractTextFromDocxXml(xmlText) {
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(String(xmlText || ''), 'application/xml');
+  const paragraphs = Array.from(xml.getElementsByTagName('w:p'));
+  const lines = paragraphs.map((p) => {
+    const texts = Array.from(p.getElementsByTagName('w:t')).map((node) => node.textContent || '');
+    return texts.join('');
+  });
+  const combined = lines.join('\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return combined;
 }
 
 async function runLiveIngestExtraction(domainKey) {
@@ -6232,6 +6325,11 @@ async function applyLiveIngestProposal(domainKey) {
   const ops = (state.proposal?.operations || []).filter((op) => op._selected !== false);
   if (!ops.length) {
     showToast('Select at least one proposed operation', 'warning');
+    return;
+  }
+  const invalidOp = ops.find((op) => op._parseError);
+  if (invalidOp) {
+    showToast('Fix invalid JSON in the selected operations before applying', 'error');
     return;
   }
 

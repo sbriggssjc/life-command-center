@@ -625,6 +625,13 @@ body.compact .greeting { font-size: 18px; }
 .live-ingest-op-kind { padding: 2px 8px; border-radius: 999px; background: rgba(108, 140, 255, 0.18); color: var(--accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; }
 .live-ingest-op-target { color: var(--text); font-size: 12px; font-weight: 600; }
 .live-ingest-op-reason { color: var(--text2); font-size: 12px; line-height: 1.45; }
+.live-ingest-field-grid { display: grid; gap: 6px; margin-top: 8px; margin-bottom: 10px; }
+.live-ingest-field-row { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 10px; padding: 7px 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(255,255,255,0.02); }
+.live-ingest-field-row span { color: var(--text3); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; }
+.live-ingest-field-row strong { color: var(--text); font-size: 12px; font-weight: 500; word-break: break-word; }
+.live-ingest-editor-head { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; margin-bottom: 6px; color: var(--text3); font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; }
+.live-ingest-json-editor { width: 100%; min-height: 132px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: rgba(0, 0, 0, 0.28); color: #d8e4ff; font-size: 11px; line-height: 1.5; white-space: pre; resize: vertical; font-family: 'JetBrains Mono', monospace; }
+.live-ingest-json-editor:focus { outline: none; border-color: var(--accent); background: rgba(2, 6, 14, 0.55); }
 .live-ingest-op pre { margin: 8px 0 0; padding: 10px; border-radius: 10px; background: rgba(0, 0, 0, 0.28); color: #d8e4ff; font-size: 11px; white-space: pre-wrap; word-break: break-word; font-family: 'JetBrains Mono', monospace; }
 
 /* Responsive */
@@ -637,6 +644,7 @@ body.compact .greeting { font-size: 18px; }
   .live-ingest-context { max-width: none; }
   .live-ingest-grid { grid-template-columns: 1fr; }
   .live-ingest-lookup-row { grid-template-columns: 1fr; }
+  .live-ingest-field-row { grid-template-columns: 1fr; }
   .charts-row { flex-direction: column; }
   .detail-panel { max-width: 100%; }
 }
