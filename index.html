@@ -207,6 +207,13 @@
       </div>
     </div>
 
+    <!-- DATA QUALITY -->
+    <div class="page" id="pageDataQuality">
+      <div class="page-inner">
+        <div id="dataQualityContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
     <!-- BUSINESS (legacy — domain dashboards) -->
     <div class="page" id="pageBiz">
       <div class="page-inner" id="bizPageInner">
@@ -252,17 +259,17 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       Today
     </button>
-    <button class="bnav" data-page="pageBiz">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
-      Business
+    <button class="bnav" data-page="pageMyWork">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+      My Work
     </button>
-    <button class="bnav" data-page="pageCal">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-      Calendar
+    <button class="bnav" data-page="pageTeamQueue">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      Queue
     </button>
-    <button class="bnav" data-page="pageMessages">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-      Messages
+    <button class="bnav" data-page="pageInbox">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
+      Inbox
     </button>
     <button class="bnav" id="moreNavBtn" onclick="toggleMoreDrawer()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
@@ -275,17 +282,17 @@
   <div class="more-drawer" id="moreDrawer">
     <div class="more-drawer-handle"></div>
     <div class="more-drawer-grid">
-      <button class="more-drawer-item" data-page="pageMyWork" onclick="navToFromMore('pageMyWork')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
-        My Work
+      <button class="more-drawer-item" data-page="pageBiz" onclick="navToFromMore('pageBiz')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
+        Business
       </button>
-      <button class="more-drawer-item" data-page="pageTeamQueue" onclick="navToFromMore('pageTeamQueue')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-        Queue
+      <button class="more-drawer-item" data-page="pageCal" onclick="navToFromMore('pageCal')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Calendar
       </button>
-      <button class="more-drawer-item" data-page="pageInbox" onclick="navToFromMore('pageInbox')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
-        Inbox
+      <button class="more-drawer-item" data-page="pageMessages" onclick="navToFromMore('pageMessages')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        Messages
       </button>
       <button class="more-drawer-item" data-page="pageEntities" onclick="navToFromMore('pageEntities')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
@@ -302,6 +309,10 @@
       <button class="more-drawer-item" data-page="pageSyncHealth" onclick="navToFromMore('pageSyncHealth')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
         Sync
+      </button>
+      <button class="more-drawer-item" data-page="pageDataQuality" onclick="navToFromMore('pageDataQuality')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+        Data Quality
       </button>
       <button class="more-drawer-item" data-page="pageContacts" onclick="navToFromMore('pageContacts')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -404,6 +415,60 @@
     <div class="modal-foot">
       <button class="btn-cancel" onclick="closeLogReschedule()">Cancel</button>
       <button class="btn-submit" id="lrSubmit" onclick="submitLogReschedule()">Log &amp; Reschedule</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ops assignment modal -->
+<div class="modal-overlay" id="assignModal">
+  <div class="modal">
+    <div class="modal-head"><h3>Assign Work</h3><button class="modal-close" onclick="closeAssignModal()">&times;</button></div>
+    <div class="modal-body">
+      <div id="assignContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <label>Assignee</label>
+      <select id="assignUserSelect"></select>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeAssignModal()">Cancel</button>
+      <button class="btn-submit" id="assignSubmit" onclick="submitAssignModal()">Assign</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ops escalation modal -->
+<div class="modal-overlay" id="escalateModal">
+  <div class="modal">
+    <div class="modal-head"><h3>Escalate Work</h3><button class="modal-close" onclick="closeEscalateModal()">&times;</button></div>
+    <div class="modal-body">
+      <div id="escalateContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <label>Escalate To</label>
+      <select id="escalateUserSelect"></select>
+      <label>Reason</label>
+      <textarea id="escalateReason" rows="3" placeholder="Why does this need escalation?" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeEscalateModal()">Cancel</button>
+      <button class="btn-submit" id="escalateSubmit" onclick="submitEscalateModal()">Escalate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Research follow-up modal -->
+<div class="modal-overlay" id="followupModal">
+  <div class="modal">
+    <div class="modal-head"><h3>Create Follow-Up</h3><button class="modal-close" onclick="closeFollowupModal()">&times;</button></div>
+    <div class="modal-body">
+      <div id="followupContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <label>Title</label>
+      <input type="text" id="followupTitleInput" placeholder="Follow-up action title">
+      <label>Assignee</label>
+      <select id="followupUserSelect"></select>
+      <label>Due Date</label>
+      <input type="date" id="followupDueInput">
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeFollowupModal()">Cancel</button>
+      <button class="btn-submit" id="followupSubmit" onclick="submitFollowupModal()">Create</button>
     </div>
   </div>
 </div>

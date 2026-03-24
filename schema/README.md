@@ -15,6 +15,7 @@ This directory contains the canonical data model for the Life Command Center reb
 - `011_connector_verification.sql` — Connector verification, isolation check support, v_connector_checklist (RG2)
 - `012_data_quality.sql` — Data quality views, duplicate candidates, entity completeness scoring, source precedence (RG3)
 - `013_perf_dashboard.sql` — Performance dashboard views, target compliance, slow request log, MV freshness (RG6)
+- `018_loop_closure.sql` — Pending manual review queue and data-correction audit tables for loop closure
 
 These migrations are designed for a shared Supabase project that serves as the canonical operational backbone alongside the existing Gov and Dia domain databases.
 

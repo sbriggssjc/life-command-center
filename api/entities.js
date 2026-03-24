@@ -151,6 +151,24 @@ export default withErrorHandler(async function handler(req, res) {
       });
     }
 
+    if (action === 'quality_details') {
+      const [duplicates, unlinked, stale, completeness, orphaned] = await Promise.all([
+        opsQuery('GET', `v_duplicate_candidates?workspace_id=eq.${workspaceId}&limit=25`),
+        opsQuery('GET', `v_unlinked_entities?workspace_id=eq.${workspaceId}&limit=25`),
+        opsQuery('GET', `v_stale_identities?workspace_id=eq.${workspaceId}&limit=25`),
+        opsQuery('GET', `v_entity_completeness?workspace_id=eq.${workspaceId}&order=completeness_score.asc&limit=25`),
+        opsQuery('GET', `v_orphaned_actions?workspace_id=eq.${workspaceId}&limit=25`)
+      ]);
+
+      return res.status(200).json({
+        duplicate_candidates: duplicates.data || [],
+        unlinked_entities: unlinked.data || [],
+        stale_identities: stale.data || [],
+        low_completeness: (completeness.data || []).filter(row => (row.completeness_score || 0) < 60),
+        orphaned_actions: orphaned.data || []
+      });
+    }
+
     // Search by name
     if (action === 'search' && q) {
       const searchTerm = q.replace(/[%_]/g, '').trim();

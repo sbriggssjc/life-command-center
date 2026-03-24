@@ -21,13 +21,14 @@ const DEFAULT_FLAGS = {
   sync_outlook_enabled: true,
   sync_salesforce_enabled: true,
   sync_outbound_enabled: false,
-  team_queue_enabled: false,
+  team_queue_enabled: true,
   escalations_enabled: false,
   bulk_operations_enabled: false,
   domain_templates_enabled: false,
   domain_sync_enabled: false,
-  ops_pages_enabled: false,
-  more_drawer_enabled: false,
+  mutation_fallback_enabled: false,
+  ops_pages_enabled: true,
+  more_drawer_enabled: true,
   freshness_indicators: true,
 };
 

@@ -1963,6 +1963,7 @@ async function saveOwnership(rec) {
     domain: 'government',
     external_id: String(propertyId || rec.ownership_id),
     source_system: 'gov_supabase',
+    source_type: 'asset',
     owner_name: recordedOwner,
     true_owner_name: trueOwner,
     notes: researchNotes,
@@ -1979,7 +1980,11 @@ async function saveOwnership(rec) {
       source_system: 'gov_supabase',
       source_type: 'asset',
       fields: {
-        name: trueOwner || recordedOwner || null
+        name: rec.address || rec.property_name || `Government Property ${propertyId}`,
+        address: rec.address || null,
+        city: rec.city || null,
+        state: rec.state || null,
+        asset_type: 'government_leased'
       }
     });
   }
@@ -2125,12 +2130,23 @@ async function saveLead(rec) {
     research_type: 'ownership',
     external_id: String(rec.property_id || rec.lead_id),
     source_system: 'gov_supabase',
+    source_type: 'lead',
     outcome: quickStatus === 'not_applicable' ? 'not_applicable' : 'completed',
     notes: leadData.research_notes,
     gov_change_event_id: writeResult?.change_event_id || null,
     gov_correlation_id: writeResult?.correlation_id || null,
     source_record_id: rec.lead_id,
-    source_table: 'prospect_leads'
+    source_table: 'prospect_leads',
+    title: rec.address || rec.lease_number || `Lead ${rec.lead_id}`,
+    entity_fields: {
+      name: rec.address || leadData.true_owner || leadData.recorded_owner || `Lead ${rec.lead_id}`,
+      email: leadData.contact_email || null,
+      phone: leadData.contact_phone || null,
+      address: rec.address || null,
+      city: rec.city || null,
+      state: rec.state || null,
+      asset_type: 'government_leased'
+    }
   });
 
   // Ensure canonical entity link exists for this gov lead
@@ -2140,9 +2156,13 @@ async function saveLead(rec) {
       source_system: 'gov_supabase',
       source_type: 'lead',
       fields: {
-        name: leadData.true_owner || leadData.recorded_owner || null,
+        name: rec.address || leadData.true_owner || leadData.recorded_owner || `Lead ${rec.lead_id}`,
         email: leadData.contact_email || null,
-        phone: leadData.contact_phone || null
+        phone: leadData.contact_phone || null,
+        address: rec.address || null,
+        city: rec.city || null,
+        state: rec.state || null,
+        asset_type: 'government_leased'
       }
     });
   }
@@ -2303,10 +2323,19 @@ async function saveIntel(rec) {
     research_type: 'intel',
     external_id: String(propertyId),
     source_system: 'gov_supabase',
+    source_type: 'asset',
     outcome: 'completed',
     notes: notes,
     source_record_id: propertyId,
-    source_table: 'properties'
+    source_table: 'properties',
+    title: rec.address || rec.property_name || `Property ${propertyId}`,
+    entity_fields: {
+      name: rec.address || rec.property_name || `Property ${propertyId}`,
+      address: rec.address || null,
+      city: rec.city || null,
+      state: rec.state || null,
+      asset_type: 'government_leased'
+    }
   });
 
   if (recordedOwner || trueOwner) {
@@ -2315,7 +2344,11 @@ async function saveIntel(rec) {
       source_system: 'gov_supabase',
       source_type: 'asset',
       fields: {
-        name: trueOwner || recordedOwner || null
+        name: rec.address || rec.property_name || `Property ${propertyId}`,
+        address: rec.address || null,
+        city: rec.city || null,
+        state: rec.state || null,
+        asset_type: 'government_leased'
       }
     });
   }

@@ -101,14 +101,21 @@ export default withErrorHandler(async function handler(req, res) {
     }
 
     case 'research': {
-      let path = `v_research_queue?workspace_id=eq.${workspaceId}`;
+      let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),users!research_tasks_assigned_to_fkey(display_name),users!research_tasks_created_by_fkey(display_name)`;
       if (domain) path += `&domain=eq.${domain}`;
       if (req.query.assigned_to) path += `&assigned_to=eq.${req.query.assigned_to}`;
       if (req.query.research_type) path += `&research_type=eq.${req.query.research_type}`;
+      if (req.query.status === 'active') path += `&status=in.(queued,in_progress)`;
+      else if (req.query.status) path += `&status=eq.${req.query.status}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'priority.asc,created_at.asc' });
 
       const result = await opsQuery('GET', path);
-      return res.status(200).json({ items: result.data || [], count: result.count, view: 'research' });
+      const items = (result.data || []).map(r => ({
+        ...r,
+        entity_name: r.entities?.name || null,
+        assignee_name: r.users?.display_name || r['users!research_tasks_assigned_to_fkey']?.display_name || null
+      }));
+      return res.status(200).json({ items, count: result.count, view: 'research' });
     }
 
     case 'entity_timeline': {
@@ -282,7 +289,7 @@ async function v2GetResearch(req, user, workspaceId) {
   const { status, domain, research_type } = req.query;
   const order = v2SortParam(req.query, 'priority.asc,created_at.asc');
 
-  let path = `v_research_queue?workspace_id=eq.${workspaceId}`;
+  let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),users!research_tasks_assigned_to_fkey(display_name),users!research_tasks_created_by_fkey(display_name)`;
   if (status) {
     if (status === 'active') path += `&status=in.(queued,in_progress)`;
     else path += `&status=eq.${status}`;
@@ -292,7 +299,13 @@ async function v2GetResearch(req, user, workspaceId) {
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path);
-  return { view: 'research', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+  const items = (result.data || []).map(r => ({
+    ...r,
+    entity_name: r.entities?.name || null,
+    assignee_name: r['users!research_tasks_assigned_to_fkey']?.display_name || null,
+    creator_name: r['users!research_tasks_created_by_fkey']?.display_name || null
+  }));
+  return { view: 'research', items, pagination: v2PaginationMeta(page, perPage, result.count || 0) };
 }
 
 // ---- V2 WORK COUNTS ----

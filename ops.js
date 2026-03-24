@@ -45,6 +45,10 @@ let opsInboxFilter = 'new';       // new | triaged | all
 let opsEntityFilter = 'all';      // all | person | company | property | clinic
 let opsResearchFilter = 'active'; // active | completed | all
 let opsInboxSelected = new Set();
+let opsWorkspaceMembers = [];
+let opsAssignModalState = null;
+let opsEscalateModalState = null;
+let opsFollowupModalState = null;
 
 // Advanced team queue filters
 let opsTeamDomainFilter = '';       // '' = all domains
@@ -56,6 +60,7 @@ const V2_MAP = {
   '/api/queue?view=my_work': '/api/queue-v2?view=my_work',
   '/api/queue?view=team_queue': '/api/queue-v2?view=team_queue',
   '/api/queue?view=inbox': '/api/queue-v2?view=inbox',
+  '/api/queue?view=research': '/api/queue-v2?view=research',
   '/api/queue?view=research_queue': '/api/queue-v2?view=research',
   '/api/queue?view=work_counts': '/api/queue-v2?view=work_counts'
 };
@@ -111,6 +116,17 @@ async function opsApi(path, opts = {}) {
 
 async function opsPost(path, body) {
   return opsApi(path, { method: 'POST', body: JSON.stringify(body) });
+}
+
+async function opsPatch(path, body) {
+  return opsApi(path, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+async function loadWorkspaceMembers() {
+  if (opsWorkspaceMembers.length) return opsWorkspaceMembers;
+  const res = await opsApi('/api/members');
+  if (res.ok) opsWorkspaceMembers = res.data?.members || [];
+  return opsWorkspaceMembers;
 }
 
 // --- Freshness helpers ---
@@ -524,7 +540,7 @@ function inboxItemHTML(item, idx) {
     html += `<button class="q-action" onclick="triageSingle('${item.id}')">Triage</button>`;
   }
   html += `<button class="q-action primary" onclick="promoteSingle('${item.id}')">Promote</button>`;
-  html += `<button class="q-action" onclick="quickReassign('${item.id}','inbox')">Assign</button>`;
+  html += `<button class="q-action" onclick="quickReassign('${item.id}','inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
   html += `<button class="q-action danger" onclick="dismissSingle('${item.id}')">Dismiss</button>`;
   html += '</div>';
 
@@ -579,8 +595,9 @@ async function bulkPromoteInbox() {
 }
 
 async function triageSingle(id) {
-  await opsPost('/api/inbox?action=triage', { id, status: 'triaged' });
-  showToast('Triaged', 'success');
+  const res = await opsPatch(`/api/inbox?id=${id}`, { status: 'triaged' });
+  if (res.ok) showToast('Triaged', 'success');
+  else showToast(res.error || 'Triage failed', 'error');
   renderInboxTriage();
 }
 
@@ -592,8 +609,9 @@ async function promoteSingle(id) {
 }
 
 async function dismissSingle(id) {
-  await opsPost('/api/inbox?action=triage', { id, status: 'dismissed' });
-  showToast('Dismissed', 'success');
+  const res = await opsPatch(`/api/inbox?id=${id}`, { status: 'dismissed' });
+  if (res.ok) showToast('Dismissed', 'success');
+  else showToast(res.error || 'Dismiss failed', 'error');
   renderInboxTriage();
 }
 
@@ -658,6 +676,52 @@ async function renderEntitiesPage() {
   perf.end();
 }
 
+async function renderDataQualityPage() {
+  const el = document.getElementById('dataQualityContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:data_quality');
+
+  const [summaryRes, detailRes] = await Promise.all([
+    opsApi('/api/entities?action=quality'),
+    opsApi('/api/entities?action=quality_details')
+  ]);
+
+  if (!summaryRes.ok) {
+    el.innerHTML = `<div class="ops-empty">Could not load data quality.<br><small>${summaryRes.error}</small></div>`;
+    return;
+  }
+
+  const summary = summaryRes.data || {};
+  const detail = detailRes.ok ? (detailRes.data || {}) : {};
+
+  let html = '<div class="ops-header"><h2>Data Quality</h2></div>';
+  html += '<div class="metrics-grid">';
+  html += metricCardHTML('Unlinked', summary.unlinked || 0, 'entities needing links', (summary.unlinked || 0) > 0 ? 'yellow' : 'green');
+  html += metricCardHTML('Stale Links', summary.stale_identities || 0, '7+ days old', (summary.stale_identities || 0) > 0 ? 'yellow' : 'green');
+  html += metricCardHTML('Orphaned Actions', summary.orphaned_actions || 0, 'entity missing', (summary.orphaned_actions || 0) > 0 ? 'red' : 'green');
+  html += metricCardHTML('Aliases', summary.total_aliases || 0, 'dedup coverage');
+  html += '</div>';
+
+  const sections = [
+    { title: 'Duplicate Candidates', items: detail.duplicate_candidates || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.canonical_name || 'Unnamed')}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.duplicate_count || item.count || 0} matches</span></div></div><div class="q-item-meta">${(item.entity_names || []).map(esc).join(' · ')}</div></div>` },
+    { title: 'Unlinked Entities', items: detail.unlinked_entities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-item-meta">${esc([item.city, item.state].filter(Boolean).join(', '))}</div><div class="q-actions"><button class="q-action" onclick="navTo('pageEntities')">Review</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Link external identity for ${item.name || 'entity'}`)})">Create Follow-up</button></div></div>` },
+    { title: 'Stale Identities', items: detail.stale_identities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.entity_name || item.external_id)}</span><div class="q-item-badges">${item.source_system ? typeBadge(item.source_system) : ''}</div></div><div class="q-item-meta">${freshnessHTML(item.last_synced_at)}</div></div>` },
+    { title: 'Low Completeness', items: detail.low_completeness || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.completeness_score || 0}% complete</span></div></div><div class="q-item-meta">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div>` },
+    { title: 'Orphaned Actions', items: detail.orphaned_actions || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.title)}</span><div class="q-item-badges">${statusBadge(item.status)}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-actions"><button class="q-action primary" onclick="navTo('pageTeamQueue')">Review Queue</button></div></div>` }
+  ];
+
+  sections.forEach(section => {
+    html += `<div class="widget"><div class="widget-title">${section.title}</div>`;
+    if (!section.items.length) html += '<div class="ops-empty">No current issues</div>';
+    else section.items.slice(0, 10).forEach(item => { html += section.render(item); });
+    html += '</div>';
+  });
+
+  el.innerHTML = html;
+  perf.end();
+}
+
 function viewEntity(entityId) {
   // Navigate to entity detail (leverages existing detail panel)
   if (typeof openEntityDetail === 'function') {
@@ -676,7 +740,10 @@ async function renderResearchPage() {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:research');
 
-  const res = await opsApi('/api/queue?view=research_queue&limit=100');
+  const statusParam = opsResearchFilter === 'active' ? 'active'
+    : opsResearchFilter === 'completed' ? 'completed'
+    : '';
+  const res = await opsApi(`/api/queue?view=research&limit=100${statusParam ? `&status=${statusParam}` : ''}`);
   if (!res.ok) {
     el.innerHTML = `<div class="ops-empty">Could not load research tasks.<br><small>${res.error}</small></div>`;
     return;
@@ -738,16 +805,114 @@ async function completeResearch(id) {
 }
 
 async function createFollowup(id) {
-  const title = prompt('Follow-up action title:');
-  if (!title) return;
-  const res = await opsPost('/api/workflows?action=research_followup', {
-    research_task_id: id,
-    followup_title: title,
-    followup_type: 'follow_up'
+  const members = await loadWorkspaceMembers();
+  const select = document.getElementById('followupUserSelect');
+  if (!select) return;
+  select.innerHTML = members
+    .filter(m => m.is_active !== false)
+    .map(m => `<option value="${esc(m.user_id)}">${esc(m.display_name || m.email || m.user_id)}</option>`)
+    .join('');
+  document.getElementById('followupTitleInput').value = '';
+  document.getElementById('followupDueInput').value = '';
+  document.getElementById('followupContext').textContent = 'Create a follow-up action and complete this research task.';
+  opsFollowupModalState = { researchTaskId: id };
+  document.getElementById('followupModal').classList.add('open');
+}
+
+function closeAssignModal() {
+  opsAssignModalState = null;
+  document.getElementById('assignModal')?.classList.remove('open');
+}
+
+async function submitAssignModal() {
+  if (!opsAssignModalState) return;
+  const assigned_to = document.getElementById('assignUserSelect')?.value;
+  if (!assigned_to) return;
+  showToast('Assigning...', 'info');
+  const res = await opsPost('/api/workflows?action=reassign', {
+    item_type: opsAssignModalState.itemType || 'action',
+    item_id: opsAssignModalState.itemId,
+    assigned_to
   });
-  if (res.ok) showToast('Research completed + follow-up created', 'success');
-  else showToast(res.error || 'Failed', 'error');
-  renderResearchPage();
+  if (res.ok) {
+    closeAssignModal();
+    showToast('Assigned successfully', 'success');
+    const activePage = document.querySelector('.page.active');
+    if (activePage) handlePageLoad(activePage.id);
+  } else {
+    showToast(res.error || 'Assign failed', 'error');
+  }
+}
+
+function closeEscalateModal() {
+  opsEscalateModalState = null;
+  document.getElementById('escalateModal')?.classList.remove('open');
+}
+
+async function submitEscalateModal() {
+  if (!opsEscalateModalState) return;
+  const escalate_to = document.getElementById('escalateUserSelect')?.value;
+  const reason = document.getElementById('escalateReason')?.value?.trim();
+  if (!escalate_to || !reason) {
+    showToast('Select a manager and provide a reason', 'error');
+    return;
+  }
+  showToast('Escalating...', 'info');
+  const res = await opsPost('/api/workflows?action=escalate', {
+    action_item_id: opsEscalateModalState.itemId,
+    escalate_to,
+    reason
+  });
+  if (res.ok) {
+    closeEscalateModal();
+    showToast('Escalated successfully', 'success');
+    const activePage = document.querySelector('.page.active');
+    if (activePage) handlePageLoad(activePage.id);
+  } else {
+    showToast(res.error || 'Escalation failed', 'error');
+  }
+}
+
+function closeFollowupModal() {
+  opsFollowupModalState = null;
+  document.getElementById('followupModal')?.classList.remove('open');
+}
+
+async function submitFollowupModal() {
+  if (!opsFollowupModalState) return;
+  const followup_title = document.getElementById('followupTitleInput')?.value?.trim();
+  const assigned_to = document.getElementById('followupUserSelect')?.value;
+  const due_date = document.getElementById('followupDueInput')?.value || null;
+  if (!followup_title) {
+    showToast('Follow-up title is required', 'error');
+    return;
+  }
+  const res = await opsPost('/api/workflows?action=research_followup', {
+    research_task_id: opsFollowupModalState.researchTaskId,
+    followup_title,
+    followup_type: 'follow_up',
+    assigned_to,
+    due_date
+  });
+  if (res.ok) {
+    closeFollowupModal();
+    showToast('Research completed + follow-up created', 'success');
+    renderResearchPage();
+  } else {
+    showToast(res.error || 'Failed', 'error');
+  }
+}
+
+async function createQualityFollowup(title) {
+  const res = await opsPost('/api/actions', {
+    title,
+    action_type: 'follow_up',
+    priority: 'normal',
+    visibility: 'shared',
+    metadata: { source: 'data_quality' }
+  });
+  if (res.ok) showToast('Follow-up created', 'success');
+  else showToast(res.error || 'Could not create follow-up', 'error');
 }
 
 // ============================================================================
@@ -922,7 +1087,7 @@ async function renderSyncHealthPage() {
 }
 
 async function triggerSync(connectorType) {
-  const actionMap = { email: 'ingest_emails', calendar: 'ingest_calendar', salesforce: 'ingest_sf_activities' };
+  const actionMap = { email: 'ingest_emails', outlook: 'ingest_emails', calendar: 'ingest_calendar', salesforce: 'ingest_sf_activities' };
   const action = actionMap[connectorType] || 'ingest_' + connectorType;
   const res = await opsPost(`/api/sync?action=${action}`, {});
   if (res.ok) showToast(`Sync triggered for ${connectorType}`, 'success');
@@ -941,9 +1106,9 @@ async function retrySync(errorId) {
 
 async function quickTransition(itemId, newStatus, itemType) {
   const statusLabels = { in_progress: 'Started', completed: 'Completed', waiting: 'Set to waiting', open: 'Reopened' };
-  const table = itemType === 'inbox' ? 'inbox' : 'actions';
+  const path = itemType === 'inbox' ? `/api/inbox?id=${itemId}` : `/api/actions?id=${itemId}`;
   showToast(`Updating...`, 'info');
-  const res = await opsPost(`/api/${table}?action=transition`, { id: itemId, status: newStatus });
+  const res = await opsPatch(path, { status: newStatus });
   if (res.ok) {
     showToast(statusLabels[newStatus] || `Status → ${newStatus}`, 'success');
     const activePage = document.querySelector('.page.active');
@@ -953,37 +1118,39 @@ async function quickTransition(itemId, newStatus, itemType) {
   }
 }
 
-async function quickReassign(itemId, itemType) {
-  const assignee = prompt('Enter user ID to assign to:');
-  if (!assignee) return;
-  showToast('Assigning...', 'info');
-  const res = await opsPost('/api/workflows?action=reassign', {
-    item_type: itemType || 'action',
-    item_id: itemId,
-    assigned_to: assignee
-  });
-  if (res.ok) {
-    showToast('Reassigned successfully', 'success');
-    const activePage = document.querySelector('.page.active');
-    if (activePage) handlePageLoad(activePage.id);
-  } else {
-    showToast(res.error || 'Reassign failed', 'error');
+async function quickReassign(itemId, itemType, itemTitle = 'this item') {
+  const members = await loadWorkspaceMembers();
+  if (!members.length) {
+    showToast('No workspace members available', 'error');
+    return;
   }
+  const select = document.getElementById('assignUserSelect');
+  if (!select) return;
+  select.innerHTML = members
+    .filter(m => m.is_active !== false)
+    .map(m => `<option value="${esc(m.user_id)}">${esc(m.display_name || m.email || m.user_id)} (${esc(m.role || 'member')})</option>`)
+    .join('');
+  document.getElementById('assignContext').textContent = `Assign: ${itemTitle}`;
+  opsAssignModalState = { itemId, itemType: itemType || 'action' };
+  document.getElementById('assignModal').classList.add('open');
 }
 
-async function quickEscalate(itemId) {
-  const reason = prompt('Escalation reason:');
-  if (!reason) return;
-  const target = prompt('Escalate to (user ID):');
-  if (!target) return;
-  showToast('Escalating...', 'info');
-  const res = await opsPost('/api/workflows?action=escalate', {
-    action_item_id: itemId,
-    escalate_to: target,
-    reason
-  });
-  if (res.ok) showToast('Escalated successfully — assignee notified', 'success');
-  else showToast(res.error || 'Escalation failed', 'error');
+async function quickEscalate(itemId, itemTitle = 'this item') {
+  const members = await loadWorkspaceMembers();
+  if (!members.length) {
+    showToast('No workspace members available', 'error');
+    return;
+  }
+  const select = document.getElementById('escalateUserSelect');
+  if (!select) return;
+  select.innerHTML = members
+    .filter(m => ['owner', 'manager'].includes(m.role))
+    .map(m => `<option value="${esc(m.user_id)}">${esc(m.display_name || m.email || m.user_id)} (${esc(m.role)})</option>`)
+    .join('');
+  document.getElementById('escalateContext').textContent = `Escalate: ${itemTitle}`;
+  document.getElementById('escalateReason').value = '';
+  opsEscalateModalState = { itemId };
+  document.getElementById('escalateModal').classList.add('open');
 }
 
 // ============================================================================
@@ -1030,13 +1197,13 @@ function queueItemHTML(item, context, opts = {}) {
   if (item.status === 'waiting') html += `<button class="q-action" onclick="quickTransition('${item.id}','in_progress','action')">Resume</button>`;
   // Reassign available on all contexts for items that support it
   if (!item.assigned_to || opts.showAssign || context === 'team_queue') {
-    html += `<button class="q-action" onclick="quickReassign('${item.id}','action')">Assign</button>`;
+    html += `<button class="q-action" onclick="quickReassign('${item.id}','action',${jsStringArg(item.title || 'Untitled')})">Assign</button>`;
   } else if (context !== 'my_work') {
-    html += `<button class="q-action" onclick="quickReassign('${item.id}','action')">Reassign</button>`;
+    html += `<button class="q-action" onclick="quickReassign('${item.id}','action',${jsStringArg(item.title || 'Untitled')})">Reassign</button>`;
   }
   // Escalate on all non-completed items (gated by flag)
   if (item.status !== 'completed' && item.status !== 'cancelled' && checkFlag('escalations_enabled')) {
-    html += `<button class="q-action" onclick="quickEscalate('${item.id}')">Escalate</button>`;
+    html += `<button class="q-action" onclick="quickEscalate('${item.id}',${jsStringArg(item.title || 'Untitled')})">Escalate</button>`;
   }
   html += '</div>';
 
@@ -1073,6 +1240,10 @@ function paginationHTML(paginationKey, refreshFn) {
 function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function jsStringArg(s) {
+  return `'${String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
 // ============================================================================

@@ -1980,8 +1980,19 @@ async function saveClinicLeadResearch(rec) {
     research_type: 'clinic_lead',
     external_id: String(rec.medicare_id || rec.property_id),
     source_system: 'dia_supabase',
+    source_type: rec.property_id ? 'asset' : 'clinic',
     outcome: 'completed',
-    notes: data.notes
+    notes: data.notes,
+    source_record_id: String(rec.medicare_id || rec.property_id),
+    source_table: rec.property_id ? 'properties' : 'clinic_leads',
+    title: rec.facility_name || rec.address || `Clinic ${rec.medicare_id || rec.property_id}`,
+    entity_fields: {
+      name: rec.facility_name || rec.address || `Clinic ${rec.medicare_id || rec.property_id}`,
+      address: rec.address || null,
+      city: rec.city || null,
+      state: rec.state || null,
+      asset_type: 'dialysis_clinic'
+    }
   });
 
   showToast('Clinic lead saved!', 'success');
@@ -4318,10 +4329,23 @@ async function saveSaleResearch() {
     showToast('Research resolution saved', 'success');
     canonicalBridge('complete_research', {
       domain: 'dialysis',
+      research_type: 'entity_enrichment',
       source_system: 'dia_supabase',
       external_id: String(record.clinic_id),
-      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
-      metadata: { queue_type: 'sales_comp', clinic_id: record.clinic_id, status: status, property_id: record.property_id, notes: notes }
+      source_type: 'clinic',
+      outcome: status || 'completed',
+      notes: notes,
+      source_record_id: String(record.clinic_id),
+      source_table: 'research_queue_outcomes',
+      title: record.facility_name || record.address || `Clinic ${record.clinic_id}`,
+      entity_fields: {
+        name: record.facility_name || record.address || `Clinic ${record.clinic_id}`,
+        address: record.address || null,
+        city: record.city || null,
+        state: record.state || null,
+        asset_type: 'dialysis_clinic'
+      },
+      metadata: { queue_type: 'sales_comp', clinic_id: record.clinic_id, status: status, property_id: record.property_id }
     });
   } catch (err) {
     console.error('saveSaleResearch error:', err);

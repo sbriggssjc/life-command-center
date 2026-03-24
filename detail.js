@@ -1627,14 +1627,14 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
     };
 
     // 1. Log to Salesforce (generic)
-    const res = await fetch(`${API}/sync/log-to-sf`, {
+    const res = await fetch('/api/sync?action=outbound', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ command: 'log_to_sf', payload })
     });
     const data = await res.json();
 
-    if (data.success) {
+    if (data.status === 'completed' || data.success) {
       showToast('Activity logged (SF generic + private notes saved)', 'success');
       document.getElementById('udLogNotes').value = '';
       // 2. Log FULL details to outbound_activities in Supabase (private)
@@ -1952,6 +1952,7 @@ async function _udSaveOwnership() {
         domain: 'government',
         external_id: String(propertyId),
         source_system: 'gov_supabase',
+        source_type: 'asset',
         user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
         owner_name: recordedOwner,
         true_owner_name: trueOwner,
@@ -1970,7 +1971,11 @@ async function _udSaveOwnership() {
         source_system: 'gov_supabase',
         source_type: 'asset',
         fields: {
-          name: trueOwner || recordedOwner || null
+          name: _udCache.property?.address || _udCache.property?.page_title || `Property ${propertyId}`,
+          address: _udCache.property?.address || null,
+          city: _udCache.property?.city || null,
+          state: _udCache.property?.state || null,
+          asset_type: 'government_leased'
         }
       });
 
@@ -2142,6 +2147,7 @@ async function _udSaveOwnership() {
       domain: 'dialysis',
       external_id: String(propertyId),
       source_system: 'dia_supabase',
+      source_type: 'asset',
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       owner_name: recordedOwner,
       true_owner_name: trueOwner,

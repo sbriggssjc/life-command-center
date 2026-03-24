@@ -30,13 +30,14 @@ const LCC_FLAGS = {
   sync_outlook_enabled: true,
   sync_salesforce_enabled: true,
   sync_outbound_enabled: false,
-  team_queue_enabled: false,
+  team_queue_enabled: true,
   escalations_enabled: false,
   bulk_operations_enabled: false,
   domain_templates_enabled: false,
   domain_sync_enabled: false,
-  ops_pages_enabled: false,
-  more_drawer_enabled: false,
+  mutation_fallback_enabled: false,
+  ops_pages_enabled: true,
+  more_drawer_enabled: true,
   freshness_indicators: true,
   _loaded: false
 };
@@ -394,6 +395,7 @@ function handlePageLoad(pageId) {
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
     case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
     case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;
+    case 'pageDataQuality': if (typeof renderDataQualityPage === 'function') renderDataQualityPage(); break;
     case 'pageCal': renderCalendarFull(); break;
     case 'pageBiz':
       if (currentBizTab === 'government') {
@@ -2776,12 +2778,15 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
   };
 
   // Non-blocking: fire the sync, log errors but don't block UI
-  fetch(API + '/sync/log-to-sf', {
+  fetch('/api/sync?action=outbound', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({
+      command: 'log_to_sf',
+      payload
+    })
   }).then(function(r) { return r.json(); }).then(function(data) {
-    if (data.success) {
+    if (data.status === 'completed' || data.success) {
       console.log('[SF Sync] ' + actionLabel + ' logged for ' + sfContactId + ': ' + subject);
     } else if (data.warning) {
       console.warn('[SF Sync] Warning: ' + (data.message || 'Recent activity detected'));
@@ -3473,12 +3478,12 @@ async function submitLogCall() {
     return;
   }
   try {
-    const res = await fetch(`${API}/sync/log-to-sf`, {
+    const res = await fetch('/api/sync?action=outbound', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ command: 'log_to_sf', payload }),
     });
     const data = await res.json();
-    if (data.success) {
+    if (data.status === 'completed' || data.success) {
       showToast('Activity logged to Salesforce!', 'success');
       closeLogCall();
     } else if (data.warning) {
@@ -3540,10 +3545,10 @@ async function submitLogReschedule() {
       force: true
     };
 
-    var logRes = await fetch(API + '/sync/log-to-sf', {
+    var logRes = await fetch('/api/sync?action=outbound', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(logPayload)
+      body: JSON.stringify({ command: 'log_to_sf', payload: logPayload })
     });
     var logData = await logRes.json();
 
@@ -3552,7 +3557,7 @@ async function submitLogReschedule() {
       btn.disabled = false; btn.textContent = 'Log & Reschedule';
       return;
     }
-    if (!logData.success && logData.error) {
+    if (!(logData.status === 'completed' || logData.success) && logData.error) {
       showToast('SF log error: ' + logData.error, 'error');
       btn.disabled = false; btn.textContent = 'Log & Reschedule';
       return;
@@ -3596,10 +3601,24 @@ async function submitLogReschedule() {
 function triggerCanonicalSync() {
   if (!LCC_USER._loaded) return;
   const headers = { 'Content-Type': 'application/json' };
-  // Fire-and-forget — these populate the canonical model for Phase 4+ queue views
-  fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(() => {});
-  fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(() => {});
-  fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(() => {});
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+
+  const staleThresholdMs = 15 * 60 * 1000;
+  fetch('/api/sync?action=health', { headers })
+    .then(r => r.ok ? r.json() : null)
+    .then(health => {
+      const connectors = health?.connectors || [];
+      const isStale = connectors.length === 0 || connectors.some(conn => {
+        if (conn.status === 'error' || conn.status === 'degraded' || !conn.last_sync_at) return true;
+        return (Date.now() - new Date(conn.last_sync_at).getTime()) > staleThresholdMs;
+      });
+      if (!isStale) return;
+
+      fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(() => {});
+      fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(() => {});
+      fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(() => {});
+    })
+    .catch(() => {});
 }
 
 // ============================================================
@@ -3742,6 +3761,9 @@ async function applyChangeWithFallback(opts) {
 
   // If bridge is unavailable, fall back to direct proxy PATCH
   if (!result.ok && result.errors && result.errors.includes('bridge_unavailable')) {
+    if (!checkFlag('mutation_fallback_enabled')) {
+      return result;
+    }
     console.warn('[applyChange] Bridge unavailable, falling back to direct PATCH');
     try {
       const url = new URL(opts.proxyBase, window.location.origin);

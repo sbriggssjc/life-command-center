@@ -43,7 +43,9 @@ export default withErrorHandler(async function handler(req, res) {
     changed_fields,
     notes,
     linked_pending_id,
-    propagation_scope
+    propagation_scope,
+    reconciliation,
+    propagation
   } = req.body || {};
 
   // --- Validate required fields ---
@@ -77,6 +79,27 @@ export default withErrorHandler(async function handler(req, res) {
     return res.status(503).json({ ok: false, errors: ['bridge_unavailable', 'Domain database not configured'] });
   }
 
+  async function createPendingReview(status, errorDetails) {
+    if (!isOpsConfigured()) return null;
+    const pending = await opsQuery('POST', 'pending_updates', {
+      workspace_id: workspaceId,
+      target_source,
+      target_table,
+      record_identifier: String(record_identifier),
+      id_column: col,
+      source_surface: source_surface || 'unknown',
+      actor: actor || user.display_name || user.email || 'unknown',
+      status,
+      changed_fields,
+      notes: notes || null,
+      error_details: errorDetails || {},
+      reconciliation: reconciliation || {},
+      propagation: propagation || {},
+      propagation_scope: propagation_scope || null
+    });
+    return pending.ok ? (Array.isArray(pending.data) ? pending.data[0] : pending.data) : null;
+  }
+
   // --- Apply the PATCH to the target table ---
   const patchUrl = `${dbUrl}/rest/v1/${target_table}?${encodeURIComponent(col)}=eq.${encodeURIComponent(record_identifier)}`;
 
@@ -93,14 +116,21 @@ export default withErrorHandler(async function handler(req, res) {
       body: JSON.stringify(changed_fields)
     });
   } catch (err) {
-    return res.status(502).json({ ok: false, errors: ['bridge_unavailable', `Fetch failed: ${err.message}`] });
+    const pending_review = await createPendingReview('needs_review', { stage: 'fetch', message: err.message });
+    return res.status(502).json({ ok: false, errors: ['bridge_unavailable', `Fetch failed: ${err.message}`], pending_review });
   }
 
   if (!patchResponse.ok) {
     const errBody = await patchResponse.text();
+    const pending_review = await createPendingReview('needs_review', {
+      stage: 'patch',
+      status: patchResponse.status,
+      detail: errBody.substring(0, 1000)
+    });
     return res.status(patchResponse.status).json({
       ok: false,
-      errors: [`Supabase PATCH failed (${patchResponse.status}): ${errBody.substring(0, 500)}`]
+      errors: [`Supabase PATCH failed (${patchResponse.status}): ${errBody.substring(0, 500)}`],
+      pending_review
     });
   }
 
@@ -124,8 +154,10 @@ export default withErrorHandler(async function handler(req, res) {
       changed_fields,
       applied_mode: 'mutation_service',
       notes: notes || null,
-      linked_pending_id: linked_pending_id || null,
+      pending_update_id: linked_pending_id || null,
       propagation_scope: propagation_scope || null,
+      reconciliation_result: reconciliation || {},
+      propagation_result: propagation || {},
       applied_at: new Date().toISOString()
     };
 
@@ -148,6 +180,9 @@ export default withErrorHandler(async function handler(req, res) {
   return res.status(200).json({
     ok: true,
     applied_mode: 'mutation_service',
-    rows_affected: Array.isArray(updatedRows) ? updatedRows.length : 0
+    rows_affected: Array.isArray(updatedRows) ? updatedRows.length : 0,
+    audit_logged: isOpsConfigured(),
+    reconciliation: reconciliation || {},
+    propagation: propagation || {}
   });
 });

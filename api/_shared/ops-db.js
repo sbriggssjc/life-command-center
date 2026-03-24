@@ -3,11 +3,16 @@
 // Life Command Center — Phase 2
 // ============================================================================
 
-const OPS_URL = process.env.OPS_SUPABASE_URL;
-const OPS_KEY = process.env.OPS_SUPABASE_KEY;
+function opsUrl() {
+  return process.env.OPS_SUPABASE_URL;
+}
+
+function opsKey() {
+  return process.env.OPS_SUPABASE_KEY;
+}
 
 export function isOpsConfigured() {
-  return !!(OPS_URL && OPS_KEY);
+  return !!(opsUrl() && opsKey());
 }
 
 /**
@@ -19,6 +24,8 @@ export function isOpsConfigured() {
  * @returns {{ ok: boolean, status: number, data: any, count?: number }}
  */
 export async function opsQuery(method, path, body, extraHeaders = {}) {
+  const OPS_URL = opsUrl();
+  const OPS_KEY = opsKey();
   if (!OPS_URL || !OPS_KEY) {
     return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
   }

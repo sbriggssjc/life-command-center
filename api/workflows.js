@@ -19,9 +19,10 @@
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import {
-  canTransitionInbox, canTransitionAction, canTransitionResearch,
+  canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
 } from './_shared/lifecycle.js';
+import { closeResearchLoop } from './_shared/research-loop.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -254,59 +255,41 @@ async function researchFollowup(req, res, user, workspaceId) {
   const research = await fetchOne('research_tasks', research_task_id, workspaceId);
   if (!research) return res.status(404).json({ error: 'Research task not found' });
 
-  if (!canTransitionResearch(research.status, 'completed')) {
-    return res.status(400).json({ error: `Cannot complete research from status "${research.status}"` });
+  const closure = await closeResearchLoop({
+    workspaceId,
+    user,
+    researchTaskId: research_task_id,
+    sourceRecordId: research.source_record_id || null,
+    sourceTable: research.source_table || null,
+    researchType: research.research_type,
+    domain: research.domain,
+    entityId: entity_id || research.entity_id,
+    title: research.title,
+    instructions: research.instructions,
+    outcome: outcome || { status: 'completed' },
+    followupTitle: followup_title,
+    followupType: isValidEnum(followup_type, ACTION_TYPES) ? followup_type : 'follow_up',
+    followupPriority: isValidEnum(followup_priority, PRIORITIES) ? followup_priority : 'normal',
+    followupAssignee: assigned_to || user.id,
+    followupDue: due_date || null,
+    activityMetadata: { workflow: 'research_followup' },
+    researchMetadata: { workflow: 'research_followup' }
+  });
+  if (!closure.ok) {
+    return res.status(closure.status || 500).json({ error: closure.error, detail: closure.detail });
   }
 
-  // Complete the research task
-  await opsQuery('PATCH', `research_tasks?id=eq.${research_task_id}`, {
-    status: 'completed',
-    outcome: outcome || {},
-    completed_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  });
-
-  // Create follow-up action if requested
-  let createdAction = null;
-  if (followup_title) {
-    const action = await opsQuery('POST', 'action_items', {
-      workspace_id: workspaceId,
-      created_by: user.id,
-      owner_id: user.id,
-      assigned_to: assigned_to || user.id,
-      title: followup_title,
-      description: `Follow-up from research: ${research.title}`,
-      action_type: isValidEnum(followup_type, ACTION_TYPES) ? followup_type : 'follow_up',
-      status: 'open',
-      priority: isValidEnum(followup_priority, PRIORITIES) ? followup_priority : 'normal',
-      due_date: due_date || null,
-      visibility: 'shared',
-      entity_id: entity_id || research.entity_id,
-      domain: research.domain,
-      source_type: 'research',
-      metadata: { research_task_id, research_type: research.research_type }
-    });
-
-    if (action.ok) {
-      createdAction = unwrap(action);
-      await opsQuery('POST', 'watchers', {
-        workspace_id: workspaceId, user_id: user.id,
-        action_item_id: createdAction.id, reason: 'creator'
-      }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
-    }
+  if (closure.followupAction) {
+    await opsQuery('POST', 'watchers', {
+      workspace_id: workspaceId, user_id: user.id,
+      action_item_id: closure.followupAction.id, reason: 'creator'
+    }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
   }
-
-  await logWorkflowActivity(user, workspaceId, {
-    category: 'research',
-    title: `Completed research "${research.title}"${createdAction ? ' and created follow-up' : ''}`,
-    entity_id: entity_id || research.entity_id,
-    action_item_id: createdAction?.id,
-    domain: research.domain
-  });
 
   return res.status(200).json({
-    research_status: 'completed',
-    action: createdAction,
+    research_status: closure.researchTask?.status || 'completed',
+    action: closure.followupAction,
+    research_task: closure.researchTask,
     workflow: 'research_followup'
   });
 }
