@@ -90,6 +90,10 @@
 - Added `Save Reviewed Ownership` so assistant-prefilled ownership fields can flow straight into the existing ownership save path.
 - Added an AI usage section to the existing Performance Dashboard, backed by recent `ai_call` telemetry from `perf_metrics`.
 - The dashboard now summarizes recent AI calls by feature, provider, latency, token totals when available, attachment counts, statuses, and recent call activity.
+- Normalized AI telemetry at the `/api/chat` boundary so embedded assistants log their real feature names instead of collapsing into `global_copilot`.
+- Added model, cache-hit, cache-read-token, and normalized token fields to AI telemetry so the dashboard can show more reliable cost and caching signals.
+- Updated the global copilot in `app.js` to use the shared assistant helper, so global chat traffic is tagged consistently as `global_copilot` in the same telemetry path as embedded assistants.
+- Added telemetry quality indicators to the AI dashboard so missing model, usage, or cache data is visible instead of silently skewing cost analysis.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

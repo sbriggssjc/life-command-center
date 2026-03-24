@@ -152,12 +152,13 @@ export default withErrorHandler(async function handler(req, res) {
     }
 
     if (action === 'quality_details') {
-      const [duplicates, unlinked, stale, completeness, orphaned] = await Promise.all([
+      const [duplicates, unlinked, stale, completeness, orphaned, precedence] = await Promise.all([
         opsQuery('GET', `v_duplicate_candidates?workspace_id=eq.${workspaceId}&limit=25`),
         opsQuery('GET', `v_unlinked_entities?workspace_id=eq.${workspaceId}&limit=25`),
         opsQuery('GET', `v_stale_identities?workspace_id=eq.${workspaceId}&limit=25`),
         opsQuery('GET', `v_entity_completeness?workspace_id=eq.${workspaceId}&order=completeness_score.asc&limit=25`),
-        opsQuery('GET', `v_orphaned_actions?workspace_id=eq.${workspaceId}&limit=25`)
+        opsQuery('GET', `v_orphaned_actions?workspace_id=eq.${workspaceId}&limit=25`),
+        opsQuery('GET', `source_precedence?workspace_id=eq.${workspaceId}&order=precedence.desc&limit=25`)
       ]);
 
       return res.status(200).json({
@@ -165,7 +166,8 @@ export default withErrorHandler(async function handler(req, res) {
         unlinked_entities: unlinked.data || [],
         stale_identities: stale.data || [],
         low_completeness: (completeness.data || []).filter(row => (row.completeness_score || 0) < 60),
-        orphaned_actions: orphaned.data || []
+        orphaned_actions: orphaned.data || [],
+        source_precedence: precedence.data || []
       });
     }
 
@@ -234,6 +236,26 @@ export default withErrorHandler(async function handler(req, res) {
         return res.status(result.status).json({ error: 'Failed to add alias', detail: result.data });
       }
       return res.status(201).json({ alias: Array.isArray(result.data) ? result.data[0] : result.data });
+    }
+
+    if (req.query.action === 'set_precedence') {
+      const { field_name, source_system, precedence } = req.body || {};
+      const parsed = Number(precedence);
+      if (!field_name || !source_system || Number.isNaN(parsed)) {
+        return res.status(400).json({ error: 'field_name, source_system, and numeric precedence are required' });
+      }
+
+      const result = await opsQuery('POST', 'source_precedence', {
+        workspace_id: workspaceId,
+        field_name: String(field_name).trim(),
+        source_system: String(source_system).trim(),
+        precedence: parsed
+      }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+
+      if (!result.ok) {
+        return res.status(result.status).json({ error: 'Failed to set source precedence', detail: result.data });
+      }
+      return res.status(201).json({ precedence: Array.isArray(result.data) ? result.data[0] : result.data });
     }
 
     // Merge two entities — moves all relationships, identities, aliases, actions, inbox items to target

@@ -29,6 +29,41 @@ export async function logAiMetric(workspaceId, userId, endpoint, durationMs, met
   }
 }
 
+export function normalizeAiUsage(payload = {}) {
+  const usage = payload?.usage || payload?.metrics?.usage || {};
+  const inputTokens = Number(usage.input_tokens || usage.prompt_tokens || usage.input || 0);
+  const outputTokens = Number(usage.output_tokens || usage.completion_tokens || usage.output || 0);
+  const totalTokens = Number(usage.total_tokens || (inputTokens + outputTokens) || 0);
+  return {
+    raw: usage && Object.keys(usage).length ? usage : null,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+  };
+}
+
+export function normalizeAiTelemetry(payload = {}) {
+  const usage = normalizeAiUsage(payload);
+  const telemetry = payload?.telemetry || payload?.metrics || {};
+  const cacheRead = Number(
+    telemetry?.cache_read_tokens ||
+    telemetry?.cached_input_tokens ||
+    payload?.cache_read_tokens ||
+    usage.raw?.cached_tokens ||
+    0
+  );
+  return {
+    usage,
+    model: payload?.model || payload?.response_model || payload?.metrics?.model || telemetry?.model || null,
+    cache_hit: Boolean(
+      payload?.cache_hit ||
+      telemetry?.cache_hit ||
+      cacheRead > 0
+    ),
+    cache_read_tokens: cacheRead,
+  };
+}
+
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   if (cfg.provider === 'disabled' || cfg.provider === 'none') {

@@ -1,6 +1,6 @@
 import { authenticate, handleCors } from './_shared/auth.js';
 import { requireOps, withErrorHandler } from './_shared/ops-db.js';
-import { invokeChatProvider, logAiMetric } from './_shared/ai.js';
+import { invokeChatProvider, logAiMetric, normalizeAiTelemetry } from './_shared/ai.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -36,18 +36,24 @@ export default withErrorHandler(async function handler(req, res) {
   const startedAt = Date.now();
   const result = await invokeChatProvider({ message, context, history, attachments: safeAttachments, user, workspaceId });
   const durationMs = Date.now() - startedAt;
-
-  const usage = result.data?.usage || result.data?.metrics?.usage || null;
+  const normalized = normalizeAiTelemetry(result.data || {});
+  const feature = context?.assistant_feature || context?.feature || 'global_copilot';
   await logAiMetric(workspaceId, user.id, 'chat', durationMs, {
-    feature: 'global_copilot',
+    feature,
     provider: result.provider,
     status: result.status,
+    model: normalized.model,
+    cache_hit: normalized.cache_hit,
+    cache_read_tokens: normalized.cache_read_tokens,
     had_context: !!context && Object.keys(context || {}).length > 0,
     history_count: Array.isArray(history) ? history.length : 0,
     attachment_count: safeAttachments.length,
     attachment_types: safeAttachments.map((item) => item.type || 'image'),
     message_chars: message.length,
-    usage,
+    usage: normalized.usage.raw,
+    input_tokens: normalized.usage.input_tokens,
+    output_tokens: normalized.usage.output_tokens,
+    total_tokens: normalized.usage.total_tokens,
   });
 
   if (!result.ok) {
@@ -62,7 +68,12 @@ export default withErrorHandler(async function handler(req, res) {
     ...result.data,
     provider: result.provider,
     telemetry: {
+      ...(result.data?.telemetry || {}),
       duration_ms: durationMs,
+      cache_hit: normalized.cache_hit,
+      cache_read_tokens: normalized.cache_read_tokens,
     },
+    model: result.data?.model || normalized.model || null,
+    usage: result.data?.usage || normalized.usage.raw,
   });
 });

@@ -421,6 +421,9 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
     let totalOutputTokens = 0;
     let totalTokens = 0;
     let totalAttachments = 0;
+    let callsWithModel = 0;
+    let callsWithUsage = 0;
+    let callsWithCacheData = 0;
 
     for (const row of rows) {
       totalCalls += 1;
@@ -429,19 +432,27 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       const meta = row.metadata || {};
       const feature = meta.feature || meta.assistant_feature || 'unknown';
       const provider = meta.provider || 'unknown';
+      const model = meta.model || 'unknown';
       const status = String(meta.status || 'unknown');
       const attachmentCount = Number(meta.attachment_count || 0);
-      const usage = meta.usage || {};
-      const inputTokens = Number(usage.input_tokens || usage.prompt_tokens || 0);
-      const outputTokens = Number(usage.output_tokens || usage.completion_tokens || 0);
-      const totalRowTokens = Number(usage.total_tokens || (inputTokens + outputTokens) || 0);
+      const inputTokens = Number(meta.input_tokens || meta.usage?.input_tokens || meta.usage?.prompt_tokens || 0);
+      const outputTokens = Number(meta.output_tokens || meta.usage?.output_tokens || meta.usage?.completion_tokens || 0);
+      const totalRowTokens = Number(meta.total_tokens || meta.usage?.total_tokens || (inputTokens + outputTokens) || 0);
+      const cacheHit = Boolean(meta.cache_hit);
+      const cacheReadTokens = Number(meta.cache_read_tokens || 0);
+      const hasModel = Boolean(meta.model);
+      const hasUsage = Boolean(meta.usage || meta.total_tokens || meta.input_tokens || meta.output_tokens);
+      const hasCacheData = Boolean(meta.cache_hit || meta.cache_read_tokens);
 
       totalInputTokens += inputTokens;
       totalOutputTokens += outputTokens;
       totalTokens += totalRowTokens;
       totalAttachments += attachmentCount;
+      callsWithModel += hasModel ? 1 : 0;
+      callsWithUsage += hasUsage ? 1 : 0;
+      callsWithCacheData += hasCacheData ? 1 : 0;
 
-      if (!featureMap.has(feature)) featureMap.set(feature, { feature, calls: 0, total_duration_ms: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, attachments: 0, last_called_at: null });
+      if (!featureMap.has(feature)) featureMap.set(feature, { feature, calls: 0, total_duration_ms: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, attachments: 0, cache_hits: 0, cache_read_tokens: 0, last_called_at: null });
       const featureRow = featureMap.get(feature);
       featureRow.calls += 1;
       featureRow.total_duration_ms += Number(row.duration_ms || 0);
@@ -449,13 +460,17 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       featureRow.output_tokens += outputTokens;
       featureRow.total_tokens += totalRowTokens;
       featureRow.attachments += attachmentCount;
+      featureRow.cache_hits += cacheHit ? 1 : 0;
+      featureRow.cache_read_tokens += cacheReadTokens;
       featureRow.last_called_at = featureRow.last_called_at || row.created_at || null;
 
-      if (!providerMap.has(provider)) providerMap.set(provider, { provider, calls: 0, total_duration_ms: 0, total_tokens: 0 });
-      const providerRow = providerMap.get(provider);
+      const providerKey = `${provider}::${model}`;
+      if (!providerMap.has(providerKey)) providerMap.set(providerKey, { provider, model, calls: 0, total_duration_ms: 0, total_tokens: 0, cache_hits: 0 });
+      const providerRow = providerMap.get(providerKey);
       providerRow.calls += 1;
       providerRow.total_duration_ms += Number(row.duration_ms || 0);
       providerRow.total_tokens += totalRowTokens;
+      providerRow.cache_hits += cacheHit ? 1 : 0;
 
       statusMap.set(status, (statusMap.get(status) || 0) + 1);
     }
@@ -484,7 +499,9 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       created_at: row.created_at,
       feature: row.metadata?.feature || row.metadata?.assistant_feature || 'unknown',
       provider: row.metadata?.provider || 'unknown',
+      model: row.metadata?.model || 'unknown',
       status: row.metadata?.status || 'unknown',
+      cache_hit: Boolean(row.metadata?.cache_hit),
       attachment_count: Number(row.metadata?.attachment_count || 0),
       usage: row.metadata?.usage || null,
     }));
@@ -499,6 +516,13 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
         total_output_tokens: totalOutputTokens,
         total_tokens: totalTokens,
         total_attachments: totalAttachments,
+        cache_hits: rows.filter((row) => row.metadata?.cache_hit).length,
+        calls_with_model: callsWithModel,
+        calls_with_usage: callsWithUsage,
+        calls_with_cache_data: callsWithCacheData,
+        model_coverage_pct: totalCalls ? Math.round((callsWithModel / totalCalls) * 100) : 0,
+        usage_coverage_pct: totalCalls ? Math.round((callsWithUsage / totalCalls) * 100) : 0,
+        cache_coverage_pct: totalCalls ? Math.round((callsWithCacheData / totalCalls) * 100) : 0,
       },
       features,
       providers,

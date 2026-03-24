@@ -5036,22 +5036,12 @@ async function sendCopilotMessage() {
   copilotHistory.push({ role: 'user', content: msg });
 
   try {
-    const res = await fetch(CHAT_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-LCC-Workspace': LCC_USER.workspace_id || '',
-      },
-      body: JSON.stringify({
-        message: msg,
-        context: context,
-        history: copilotHistory.slice(-6),
-      }),
+    const reply = await invokeLccAssistant({
+      message: msg,
+      context,
+      history: copilotHistory.slice(-6),
+      feature: 'global_copilot',
     });
-
-    if (!res.ok) throw new Error('API returned ' + res.status);
-    const data = await res.json();
-    const reply = data.response || data.message || data.reply || 'I couldn\'t generate a response. Try rephrasing your question.';
 
     // Remove typing indicator
     const typingEl = document.getElementById(typingId);

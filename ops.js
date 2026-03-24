@@ -1546,7 +1546,25 @@ async function renderPerfDashboard(container) {
 
   if (aiData.summary) {
     const aiSummary = aiData.summary || {};
+    const missingModel = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_model || 0));
+    const missingUsage = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_usage || 0));
+    const missingCache = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_cache_data || 0));
     html += '<div class="widget"><div class="widget-title">AI Usage (Recent 200 Calls)</div>';
+    html += `<div class="q-item" style="margin-bottom:12px">
+      <div class="q-item-header">
+        <span class="q-item-title">Telemetry Quality</span>
+        <div class="q-item-badges">
+          <span class="q-badge type">Model ${fmtN(aiSummary.model_coverage_pct || 0)}%</span>
+          <span class="q-badge type">Usage ${fmtN(aiSummary.usage_coverage_pct || 0)}%</span>
+          <span class="q-badge type">Cache ${fmtN(aiSummary.cache_coverage_pct || 0)}%</span>
+        </div>
+      </div>
+      <div class="q-item-meta">
+        <span>Missing model: ${fmtN(missingModel)}</span>
+        <span>Missing usage: ${fmtN(missingUsage)}</span>
+        <span>Missing cache data: ${fmtN(missingCache)}</span>
+      </div>
+    </div>`;
     html += '<div class="metrics-grid">';
     html += `<div class="metric-card"><div class="metric-label">Calls</div><div class="metric-val">${fmtN(aiSummary.total_calls || 0)}</div></div>`;
     html += `<div class="metric-card"><div class="metric-label">Avg Latency</div><div class="metric-val">${fmtN(aiSummary.avg_duration_ms || 0)}ms</div></div>`;
@@ -1554,6 +1572,7 @@ async function renderPerfDashboard(container) {
     html += `<div class="metric-card"><div class="metric-label">Output Tokens</div><div class="metric-val">${fmtN(aiSummary.total_output_tokens || 0)}</div></div>`;
     html += `<div class="metric-card"><div class="metric-label">Total Tokens</div><div class="metric-val">${fmtN(aiSummary.total_tokens || 0)}</div></div>`;
     html += `<div class="metric-card"><div class="metric-label">Attachments</div><div class="metric-val">${fmtN(aiSummary.total_attachments || 0)}</div></div>`;
+    html += `<div class="metric-card"><div class="metric-label">Cache Hits</div><div class="metric-val">${fmtN(aiSummary.cache_hits || 0)}</div></div>`;
     html += '</div>';
 
     if (aiData.features?.length) {
@@ -1564,6 +1583,7 @@ async function renderPerfDashboard(container) {
         + '<th style="padding:6px;text-align:right">Avg</th>'
         + '<th style="padding:6px;text-align:right">Tokens</th>'
         + '<th style="padding:6px;text-align:right">Attachments</th>'
+        + '<th style="padding:6px;text-align:right">Cache Hits</th>'
         + '<th style="padding:6px;text-align:right">Last Call</th>'
         + '</tr></thead><tbody>';
       aiData.features.slice(0, 12).forEach((row) => {
@@ -1573,6 +1593,7 @@ async function renderPerfDashboard(container) {
           <td style="padding:6px;text-align:right">${fmtN(row.avg_duration_ms || 0)}ms</td>
           <td style="padding:6px;text-align:right">${fmtN(row.total_tokens || 0)}</td>
           <td style="padding:6px;text-align:right">${fmtN(row.attachments || 0)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.cache_hits || 0)}</td>
           <td style="padding:6px;text-align:right">${row.last_called_at ? freshnessHTML(row.last_called_at) : '--'}</td>
         </tr>`;
       });
@@ -1585,16 +1606,20 @@ async function renderPerfDashboard(container) {
       html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
       html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
         + '<th style="padding:6px">Provider</th>'
+        + '<th style="padding:6px">Model</th>'
         + '<th style="padding:6px;text-align:right">Calls</th>'
         + '<th style="padding:6px;text-align:right">Avg</th>'
         + '<th style="padding:6px;text-align:right">Tokens</th>'
+        + '<th style="padding:6px;text-align:right">Cache Hits</th>'
         + '</tr></thead><tbody>';
       aiData.providers.forEach((row) => {
         html += `<tr style="border-bottom:1px solid var(--border)">
           <td style="padding:6px">${esc(row.provider)}</td>
+          <td style="padding:6px">${esc(row.model || 'unknown')}</td>
           <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
           <td style="padding:6px;text-align:right">${fmtN(row.avg_duration_ms || 0)}ms</td>
           <td style="padding:6px;text-align:right">${fmtN(row.total_tokens || 0)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.cache_hits || 0)}</td>
         </tr>`;
       });
       html += '</tbody></table>';
@@ -1619,8 +1644,10 @@ async function renderPerfDashboard(container) {
             <span class="q-item-title">${esc(row.feature || 'unknown')}</span>
             <div class="q-item-badges">
               <span class="q-badge type">${esc(row.provider || 'unknown')}</span>
+              <span class="q-badge type">${esc(row.model || 'unknown')}</span>
               <span class="q-badge">${fmtN(row.duration_ms || 0)}ms</span>
               <span class="q-badge">${fmtN(totalTokens || 0)} tok</span>
+              ${row.cache_hit ? '<span class="q-badge pri-low">cache</span>' : ''}
             </div>
           </div>
           <div class="q-item-meta">
