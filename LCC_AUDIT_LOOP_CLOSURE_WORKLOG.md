@@ -42,6 +42,9 @@
   - composite-filter PATCH behavior
   - audited insert mode returning inserted rows
 - Added focused contact-hub auditing coverage in `test/contacts.test.js` for a classified contact mutation writing both Gov records and ops audit records.
+- Added repo policy and guardrails for write surfaces:
+  - `WRITE_SURFACE_POLICY.md`
+  - `test/raw-write-guardrail.test.js`
 - Routed the remaining high-use CRM/marketing mutations in `app.js` through the mutation service:
   - Salesforce task complete
   - Salesforce task reschedule
@@ -75,6 +78,11 @@
   - remaining write paths in `api/sync.js` are canonical connector/outbound jobs
   - `api/data-proxy.js` remains the generic proxy layer, not a business-flow save surface
   - remaining `POST`s in `api/contacts.js` are external Teams/WebEx/SMS API calls, not raw internal business-table writes
+- Documented approved exemptions and disallowed mutation patterns in `WRITE_SURFACE_POLICY.md`.
+- Added a repo guardrail test that flags:
+  - raw `govQuery('POST'|'PATCH')`
+  - raw `diaQuery(... method: 'POST'|'PATCH')`
+  - direct `/api/gov-query` or `/api/dia-query` mutation blocks outside approved exemptions
 
 ## Verification Notes
 
@@ -90,7 +98,9 @@
 - `node --test test/apply-change.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --check api/contacts.js` passed after the audited contact write refactor.
 - `node --check test/contacts.test.js` passed.
+- `node --check test/raw-write-guardrail.test.js` passed.
 - `node --test test/contacts.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
+- `node --test test/raw-write-guardrail.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
@@ -100,4 +110,5 @@
 - A separate write-heavy surface remains in `api/contacts.js`; those calls appear to be contact engagement/messaging and token-management paths rather than the gov/dialysis/detail human-loop saves already remediated.
 - `api/contacts.js` now has audited coverage for its main internal Gov writes, but broader repo-wide review is still needed for any other APIs that mutate domain/business tables outside the mutation-service or audited-helper model.
 - The primary remaining repo-wide review item is explicit policy/cleanup around exempt write surfaces: connector sync, external messaging APIs, token refresh, and the generic data proxy.
+- Repo-wide write policy is now explicit; the remaining work is broader end-to-end verification rather than major write-path refactoring.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.
