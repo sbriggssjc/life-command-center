@@ -73,3 +73,275 @@
 - What logic currently lives inside the external `ai-copilot/chat` edge function, and what is its current monthly token spend by route/use case?
 - Which manual-research steps are highest frequency and highest pain today: ownership tracing, contact hunting, comp gathering, note drafting, or CRM logging?
 - Which current subscriptions and desktop workflows are acceptable for human-in-the-loop use versus full automation?
+
+## Detailed Implementation Plan
+
+### Phase 0 - Baseline And Controls
+
+- Goal: make AI usage measurable before changing architecture.
+- Add an AI inventory document that lists every AI touchpoint by:
+  - route
+  - model
+  - prompt purpose
+  - synchronous vs async
+  - user-facing vs back-office
+  - current estimated volume
+- Capture current spend and volume by workflow:
+  - global copilot chat
+  - research enrichment jobs
+  - outbound drafting
+  - call/document summarization
+- Add request logging fields to every AI invocation path:
+  - `feature`
+  - `model`
+  - `provider`
+  - `input_tokens`
+  - `output_tokens`
+  - `latency_ms`
+  - `cache_hit`
+  - `workspace_id`
+  - `user_id`
+- Define guardrails:
+  - max context size
+  - max output size
+  - timeout per feature
+  - model allowlist by feature
+  - fallback behavior when AI is unavailable
+
+### Phase 1 - Centralize AI Orchestration
+
+- Goal: stop scattering model logic across frontend, Python jobs, and external edge functions.
+- Create a repo-local AI service layer, likely under:
+  - `api/_shared/ai.js` for server-side orchestration
+  - `api/chat.js` or `api/copilot.js` for first-party chat routing
+- Responsibilities of the AI service:
+  - provider abstraction
+  - model routing
+  - prompt templates
+  - structured output parsing
+  - cost/usage logging
+  - retry/fallback behavior
+  - prompt caching strategy
+- Migrate hard-coded edge URLs toward config-based routing:
+  - replace direct `ai-copilot` constants in `app.js` and `detail.js`
+  - route frontend chat through repo-local API first
+- Keep the external `ai-copilot` edge function only where it is still required, but document its contract and reduce hidden coupling.
+
+### Phase 2 - Tiered Model Routing
+
+- Goal: use the cheapest acceptable model for each task.
+- Define service tiers:
+  - Tier A: deterministic/no-model logic
+  - Tier B: local/open-source or ultra-cheap model
+  - Tier C: mid-tier API model for standard extraction/summarization
+  - Tier D: premium reasoning model for ambiguous, high-value decisions
+- Initial routing proposal:
+  - deterministic/rules:
+    - simple queue explanations
+    - canned message templates
+    - local dashboard summaries
+  - cheap/local:
+    - OCR cleanup
+    - screenshot text extraction
+    - email/call summary first pass
+    - classification, tagging, dedupe hints
+  - mid-tier API:
+    - structured entity extraction
+    - county lookup validation
+    - contact discovery synthesis
+    - note-to-CRM formatting
+  - premium model:
+    - ownership resolution with conflicting evidence
+    - nuanced user Q&A over multiple data sources
+    - final deliverable drafting
+    - high-stakes outbound response drafting
+- Add per-feature config so models can be changed without code edits.
+
+### Phase 3 - OpenAI Cost Optimization
+
+- Goal: reduce OpenAI spend without losing useful capability.
+- Migrate new and priority chat flows from Chat Completions to Responses API.
+- Standardize prompt structure with stable prefixes for better cache reuse.
+- Move all non-urgent enrichment to async queues:
+  - entity resolution
+  - county lookup
+  - contact discovery
+  - batch summaries
+  - document extraction
+- Use Batch/Flex-style processing for overnight or background jobs.
+- Add hard limits per request:
+  - truncate history aggressively
+  - cap output tokens
+  - require JSON schemas for extraction tasks
+- Replace “send everything” prompts with record-specific context packs.
+
+### Phase 4 - Human-In-The-Loop Subscription Workflows
+
+- Goal: shift expensive research and drafting work from API calls to existing paid chat subscriptions where a human is already involved.
+- Add “Open in ChatGPT” and “Open in Claude” payload builders from:
+  - research queue
+  - property detail
+  - contact detail
+  - messaging composer
+- Each payload builder should package:
+  - core property/contact metadata
+  - recent notes
+  - desired deliverable format
+  - compliance reminder
+  - answer template
+- Suggested subscription-first workflows:
+  - ownership trace memo
+  - contact search strategy
+  - first draft of OM/email/call prep
+  - call summary normalization
+  - market narrative generation
+- Capture the result back into LCC via a paste/import action so the chat output becomes structured internal data instead of dead text.
+
+### Phase 5 - Embedded Copilot UX
+
+- Goal: place AI where the manual work happens instead of relying on one global chatbot.
+- Add embedded assistants to the following surfaces:
+  - Research Queue (`ops.js`)
+  - Ownership / Research panel (`detail.js`)
+  - Contact messaging and message templates (`api/contacts.js` + UI)
+  - Activity/call logging flows
+- Research Queue assistant should:
+  - summarize the task
+  - propose next 3 actions
+  - draft completion note
+  - draft follow-up task
+  - identify missing fields
+- Ownership assistant should:
+  - summarize existing ownership chain
+  - convert pasted notes into structured owner fields
+  - produce confidence and unresolved questions
+- Messaging assistant should:
+  - generate channel-specific drafts
+  - shorten/expand tone
+  - generate follow-up variants
+  - summarize message thread before reply
+- Logging assistant should:
+  - convert rough notes into CRM-safe activity logs
+  - separate private notes from Salesforce-safe notes
+  - propose next action and due date
+
+### Phase 6 - Document, Screenshot, And Research Intake
+
+- Goal: speed up manual research collection without unsafe scraping.
+- Build a user-initiated intake tool for:
+  - screenshots
+  - PDFs
+  - copied page text
+  - emails
+  - call notes
+- Processing stages:
+  - local OCR / extraction
+  - field detection
+  - confidence scoring
+  - human review/edit
+  - save to canonical tables or research outcome log
+- Target use cases:
+  - brochure/OM intake
+  - lease abstract extraction
+  - offering memo summary
+  - screenshot-to-note conversion
+  - call transcript to action items
+- Compliance position:
+  - no unattended scraping of CoStar/LoopNet
+  - no autonomous crawling behind login walls
+  - only user-mediated capture and review unless licensing explicitly allows more
+
+### Phase 7 - Open-Source / Low-Cost Model Adoption
+
+- Goal: reserve paid frontier models for tasks that clearly justify them.
+- Evaluate a local or low-cost stack for:
+  - OCR post-processing
+  - NER/entity extraction
+  - record classification
+  - duplicate detection hints
+  - basic summarization
+- Architecture pattern:
+  - local worker process for cheap transforms
+  - API model only on escalation
+- Good first candidates:
+  - ingestion preprocessing
+  - propagation QA
+  - note cleanup
+  - transcript condensation
+  - standard deliverable boilerplate generation
+- Add human override and confidence thresholds before writes to production records.
+
+### Phase 8 - Data Propagation And Closed-Loop Automation
+
+- Goal: use AI to assist propagation, not silently mutate core records.
+- Add AI-assisted “proposed change” generation instead of direct writes for:
+  - owner/contact merges
+  - normalized field fills
+  - missing metadata inference
+  - research outcome summarization
+- Persist all AI-generated proposals through existing audited/manual-review paths.
+- Prefer `pending_updates` / `data_corrections` style reviewable records when confidence is below threshold.
+- Add feedback capture:
+  - accepted
+  - edited
+  - rejected
+- Use that feedback to tune prompts, routing, and confidence thresholds.
+
+### Phase 9 - Deliverables And User Query Assistance
+
+- Goal: improve turnaround on standard outputs and Q&A.
+- Add structured generators for:
+  - property summary
+  - ownership memo
+  - contact brief
+  - call prep sheet
+  - post-call summary
+  - follow-up email draft
+  - market update note
+- For chatbot Q&A:
+  - classify the question first
+  - answer from local structured data when possible
+  - only call an LLM when synthesis is actually needed
+  - return sources/record links inside the answer
+- Add answer modes:
+  - quick answer
+  - analyst brief
+  - action checklist
+
+### Phase 10 - Verification, Rollout, And Governance
+
+- Goal: ship incrementally without blowing up reliability or cost.
+- Rollout order:
+  1. instrumentation and inventory
+  2. central AI service
+  3. model routing and cheaper defaults
+  4. embedded assistants on research/detail surfaces
+  5. screenshot/document intake
+  6. subscription workflow bridges
+- Add tests for:
+  - prompt builders
+  - structured output parsing
+  - fallback behavior
+  - model routing rules
+  - redaction of CRM-safe vs private notes
+- Add governance checks:
+  - block disallowed source ingestion paths
+  - block raw automated scraping workflows for restricted sites
+  - require explicit user review on low-confidence writes
+
+## Proposed First Sprint
+
+- Build Phase 0 telemetry and feature inventory.
+- Add repo-local `api/chat.js` or equivalent orchestration entrypoint.
+- Migrate `pipeline/ai_research.py` to a configurable router with cheaper defaults.
+- Add one embedded assistant to the research queue and one to the property detail panel.
+- Add “Open in ChatGPT/Claude” structured export for ownership research and outbound drafting.
+- Define compliance rules for screenshot/document intake before implementing capture features.
+
+## Success Metrics
+
+- 30-50% reduction in paid API spend for batch/back-office AI tasks.
+- Faster time-to-complete for research queue items.
+- Higher percentage of research tasks completed with structured notes and follow-up actions.
+- Reduced analyst time spent on repetitive drafting and CRM logging.
+- Lower rate of low-value premium-model calls for tasks that local logic or subscription chats can handle.

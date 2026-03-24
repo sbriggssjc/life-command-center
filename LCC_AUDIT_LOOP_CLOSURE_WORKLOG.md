@@ -38,6 +38,9 @@
 - Added targeted tests for the new loop-closure helpers:
   - `test/entity-link.test.js`
   - `test/research-loop.test.js`
+- Added targeted mutation-service tests in `test/apply-change.test.js` covering:
+  - composite-filter PATCH behavior
+  - audited insert mode returning inserted rows
 - Routed the remaining high-use CRM/marketing mutations in `app.js` through the mutation service:
   - Salesforce task complete
   - Salesforce task reschedule
@@ -72,11 +75,14 @@
 - `node --check gov.js` passed after routing government intel research notes through the audited path.
 - `node --check detail.js` passed again after moving ownership/contact/sales/loan inserts onto the audited path.
 - `node --check gov.js` passed again after moving sale/loan inserts onto the audited path.
+- `node --check test/apply-change.test.js` passed.
+- `node --test test/apply-change.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
 
 - Legacy domain flows are heterogeneous, so not every direct write can be eliminated in one pass.
 - The remaining non-audited `POST` in the scanned domain files is a canonical outbound sync call rather than a raw table mutation.
+- A separate write-heavy surface remains in `api/contacts.js`; those calls appear to be contact engagement/messaging and token-management paths rather than the gov/dialysis/detail human-loop saves already remediated.
 - RPC helper paths and any writes outside the currently scanned gov/dialysis/detail/app surfaces still need review for full repo-wide closure.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.
