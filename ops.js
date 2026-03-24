@@ -713,6 +713,7 @@ async function renderDataQualityPage() {
 
   const summary = summaryRes.data || {};
   const detail = detailRes.ok ? (detailRes.data || {}) : {};
+  const precedenceRows = detail.source_precedence || [];
 
   let html = '<div class="ops-header"><h2>Data Quality</h2></div>';
   html += '<div class="metrics-grid">';
@@ -723,12 +724,23 @@ async function renderDataQualityPage() {
   html += '</div>';
 
   const sections = [
-    { title: 'Duplicate Candidates', items: detail.duplicate_candidates || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.canonical_name || 'Unnamed')}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.duplicate_count || item.count || 0} matches</span></div></div><div class="q-item-meta">${(item.entity_names || []).map(esc).join(' · ')}</div></div>` },
-    { title: 'Unlinked Entities', items: detail.unlinked_entities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-item-meta">${esc([item.city, item.state].filter(Boolean).join(', '))}</div><div class="q-actions"><button class="q-action" onclick="navTo('pageEntities')">Review</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Link external identity for ${item.name || 'entity'}`)})">Create Follow-up</button></div></div>` },
-    { title: 'Stale Identities', items: detail.stale_identities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.entity_name || item.external_id)}</span><div class="q-item-badges">${item.source_system ? typeBadge(item.source_system) : ''}</div></div><div class="q-item-meta">${freshnessHTML(item.last_synced_at)}</div></div>` },
-    { title: 'Low Completeness', items: detail.low_completeness || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.completeness_score || 0}% complete</span></div></div><div class="q-item-meta">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div>` },
+    { title: 'Duplicate Candidates', items: detail.duplicate_candidates || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.canonical_name || 'Unnamed')}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.duplicate_count || item.count || 0} matches</span></div></div><div class="q-item-meta">${(item.entity_names || []).map(esc).join(' · ')}</div><div class="q-actions"><button class="q-action" onclick="qualityAddAlias(${jsStringArg(item.entity_ids?.[0])}, ${jsStringArg(item.canonical_name || item.entity_names?.[0] || '')})">Add Alias</button><button class="q-action" onclick="qualityMergeDuplicate(${jsStringArg(JSON.stringify(item.entity_ids || []))}, ${jsStringArg(JSON.stringify(item.entity_names || []))})">Merge First Pair</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Review duplicate entity group: ${item.canonical_name || 'unnamed'}`)})">Create Follow-up</button></div></div>` },
+    { title: 'Unlinked Entities', items: detail.unlinked_entities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-item-meta">${esc([item.city, item.state].filter(Boolean).join(', '))}</div><div class="q-actions"><button class="q-action" onclick="navTo('pageEntities')">Review</button><button class="q-action" onclick="qualityLinkIdentity(${jsStringArg(item.id)}, ${jsStringArg(item.name || 'entity')})">Link Identity</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Link external identity for ${item.name || 'entity'}`)})">Create Follow-up</button></div></div>` },
+    { title: 'Stale Identities', items: detail.stale_identities || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.entity_name || item.external_id)}</span><div class="q-item-badges">${item.source_system ? typeBadge(item.source_system) : ''}</div></div><div class="q-item-meta">${freshnessHTML(item.last_synced_at)}</div><div class="q-actions"><button class="q-action" onclick="qualitySetPrecedence('*', ${jsStringArg(item.source_system || '')}, 60)">Prefer Source</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Refresh stale identity for ${item.entity_name || item.external_id || 'entity'}`)})">Create Follow-up</button></div></div>` },
+    { title: 'Low Completeness', items: detail.low_completeness || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.name)}</span><div class="q-item-badges"><span class="q-badge pri-high">${item.completeness_score || 0}% complete</span></div></div><div class="q-item-meta">${item.entity_type ? typeBadge(item.entity_type) : ''}${item.domain ? domainBadge(item.domain) : ''}</div><div class="q-actions"><button class="q-action" onclick="qualityAddAlias(${jsStringArg(item.id)}, ${jsStringArg(item.name || '')})">Add Alias</button><button class="q-action primary" onclick="createQualityFollowup(${jsStringArg(`Enrich low-completeness entity: ${item.name || 'entity'}`)})">Create Follow-up</button></div></div>` },
     { title: 'Orphaned Actions', items: detail.orphaned_actions || [], render: item => `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(item.title)}</span><div class="q-item-badges">${statusBadge(item.status)}${item.domain ? domainBadge(item.domain) : ''}</div></div><div class="q-actions"><button class="q-action primary" onclick="navTo('pageTeamQueue')">Review Queue</button></div></div>` }
   ];
+
+  html += '<div class="widget"><div class="widget-title">Source Precedence</div>';
+  html += `<div class="q-item"><div class="q-item-meta">Use this to prefer a source for a field during manual reconciliation.</div><div class="q-actions"><button class="q-action primary" onclick="qualitySetPrecedence()">Set Precedence</button></div></div>`;
+  if (!precedenceRows.length) {
+    html += '<div class="ops-empty">No overrides configured</div>';
+  } else {
+    precedenceRows.slice(0, 10).forEach(row => {
+      html += `<div class="q-item"><div class="q-item-header"><span class="q-item-title">${esc(row.field_name || '*')}</span><div class="q-item-badges"><span class="q-badge pri-high">${Number(row.precedence || 0)}</span></div></div><div class="q-item-meta">${esc(row.source_system || 'unknown')}</div><div class="q-actions"><button class="q-action" onclick="qualitySetPrecedence(${jsStringArg(row.field_name || '*')}, ${jsStringArg(row.source_system || '')}, ${Number(row.precedence || 50)})">Edit</button></div></div>`;
+    });
+  }
+  html += '</div>';
 
   sections.forEach(section => {
     html += `<div class="widget"><div class="widget-title">${section.title}</div>`;
@@ -842,6 +854,101 @@ async function createFollowup(id) {
   document.getElementById('followupContext').textContent = 'Create a follow-up action and complete this research task.';
   opsFollowupModalState = { researchTaskId: id };
   document.getElementById('followupModal').classList.add('open');
+}
+
+async function qualityMergeDuplicate(entityIdsJson, entityNamesJson) {
+  let entityIds = [];
+  let entityNames = [];
+  try { entityIds = JSON.parse(entityIdsJson || '[]'); } catch (_) {}
+  try { entityNames = JSON.parse(entityNamesJson || '[]'); } catch (_) {}
+  if (!entityIds || entityIds.length < 2) {
+    showToast('Need at least two entities to merge', 'error');
+    return;
+  }
+  const targetId = entityIds[0];
+  const sourceId = entityIds[1];
+  const label = `${entityNames[1] || sourceId} -> ${entityNames[0] || targetId}`;
+  if (!confirm(`Merge duplicate pair ${label}?`)) return;
+  const res = await opsPost('/api/entities?action=merge', { target_id: targetId, source_id: sourceId });
+  if (!res.ok) {
+    showToast('Merge failed: ' + (res.error || 'unknown error'), 'error');
+    return;
+  }
+  showToast('Entities merged', 'success');
+  renderDataQualityPage();
+}
+
+async function qualityAddAlias(entityId, suggestedAlias) {
+  if (!entityId) {
+    showToast('No entity selected', 'error');
+    return;
+  }
+  const alias = prompt('Alias name', suggestedAlias || '');
+  if (!alias) return;
+  const res = await opsPost('/api/entities?action=add_alias', {
+    entity_id: entityId,
+    alias_name: alias,
+    source: 'data_quality'
+  });
+  if (!res.ok) {
+    showToast('Alias save failed: ' + (res.error || 'unknown error'), 'error');
+    return;
+  }
+  showToast('Alias saved', 'success');
+  renderDataQualityPage();
+}
+
+async function qualityLinkIdentity(entityId, entityName) {
+  if (!entityId) {
+    showToast('No entity selected', 'error');
+    return;
+  }
+  const sourceSystem = prompt(`Source system for ${entityName || 'entity'}`, 'gov_supabase');
+  if (!sourceSystem) return;
+  const sourceType = prompt('Source type', 'asset');
+  if (!sourceType) return;
+  const externalId = prompt('External ID');
+  if (!externalId) return;
+  const externalUrl = prompt('External URL (optional)', '') || null;
+  const res = await opsPost('/api/entities?action=link', {
+    entity_id: entityId,
+    source_system: sourceSystem,
+    source_type: sourceType,
+    external_id: externalId,
+    external_url: externalUrl,
+    metadata: { source: 'data_quality' }
+  });
+  if (!res.ok) {
+    showToast('Identity link failed: ' + (res.error || 'unknown error'), 'error');
+    return;
+  }
+  showToast('Identity linked', 'success');
+  renderDataQualityPage();
+}
+
+async function qualitySetPrecedence(defaultField, defaultSource, defaultPrecedence) {
+  const fieldName = prompt('Field name ("*" for default)', defaultField || '*');
+  if (!fieldName) return;
+  const sourceSystem = prompt('Source system', defaultSource || 'manual');
+  if (!sourceSystem) return;
+  const precedence = prompt('Precedence (0-100)', String(defaultPrecedence != null ? defaultPrecedence : 80));
+  if (precedence === null) return;
+  const parsed = Number(precedence);
+  if (Number.isNaN(parsed)) {
+    showToast('Precedence must be numeric', 'error');
+    return;
+  }
+  const res = await opsPost('/api/entities?action=set_precedence', {
+    field_name: fieldName,
+    source_system: sourceSystem,
+    precedence: parsed
+  });
+  if (!res.ok) {
+    showToast('Precedence save failed: ' + (res.error || 'unknown error'), 'error');
+    return;
+  }
+  showToast('Source precedence saved', 'success');
+  renderDataQualityPage();
 }
 
 function buildResearchTaskBrief(item) {
