@@ -1368,6 +1368,7 @@ function _udAssistantSection(mode, title, subtitle) {
     body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="q-action" onclick="_udCopyAssistantReply('${mode}')">Copy</button>
+        ${mode === 'ownership' ? `<button class="q-action" onclick="_udApplyAssistantFields('${mode}')">Apply Extracted Facts to Fields</button>` : ''}
         <button class="q-action primary" onclick="_udApplyAssistantReply('${mode}')">${mode === 'ownership' ? 'Apply to Ownership Notes' : 'Apply to Research Notes'}</button>
       </div>`;
   }
@@ -1413,6 +1414,19 @@ function _udBuildAssistantPrompt(mode) {
       '3. Evidence and gaps',
       '4. Recommended next 3 actions',
       '5. Draft ownership note to save',
+      '6. Structured ownership facts JSON',
+      'For section 6, return only valid JSON inside a ```json fenced block with this shape:',
+      '{',
+      '  "ownership": {',
+      '    "recorded_owner": "string or null",',
+      '    "true_owner": "string or null",',
+      '    "owner_type": "individual|llc|reit|developer|fund|operator|other|null",',
+      '    "contact_name": "string or null",',
+      '    "contact_phone": "string or null",',
+      '    "contact_email": "string or null",',
+      '    "state_of_incorporation": "string or null"',
+      '  }',
+      '}',
     ].join('\n');
   }
 
@@ -1487,6 +1501,7 @@ function _intelRenderIntakeAnalysis() {
     body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(intake.analysis) : esc(intake.analysis)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="q-action" onclick="_intelCopyIntakeAnalysis()">Copy</button>
+        <button class="q-action" onclick="_intelApplyIntakeFields()">Apply Extracted Facts to Fields</button>
         <button class="q-action primary" onclick="_intelApplyIntakeAnalysis()">Apply to Research Notes</button>
       </div>`;
   }
@@ -1614,6 +1629,35 @@ function _intelBuildIntakePrompt() {
     '3. Potentially unreliable or unclear items',
     '4. Recommended next 3 actions',
     '5. Draft research note to save',
+    '6. Structured facts JSON',
+    'For section 6, return only valid JSON inside a ```json fenced block with this shape:',
+    '{',
+    '  "prior_sale": {',
+    '    "sale_date": "YYYY-MM-DD or null",',
+    '    "sale_price": number or null,',
+    '    "cap_rate_sale": number or null,',
+    '    "buyer": "string or null",',
+    '    "seller": "string or null"',
+    '  },',
+    '  "loan": {',
+    '    "lender": "string or null",',
+    '    "loan_amount": number or null,',
+    '    "interest_rate": number or null,',
+    '    "loan_type": "Fixed|Variable|Bridge|CMBS|Agency|Other|null",',
+    '    "origination_date": "YYYY-MM-DD or null",',
+    '    "maturity_date": "YYYY-MM-DD or null",',
+    '    "amortization_years": integer or null,',
+    '    "recourse": "Recourse|Non-Recourse|Partial|null",',
+    '    "ltv": number or null',
+    '  },',
+    '  "cash_flow": {',
+    '    "annual_rent": number or null,',
+    '    "rent_per_sf": number or null,',
+    '    "expense_type": "string or null",',
+    '    "estimated_value": number or null,',
+    '    "current_cap_rate": number or null',
+    '  }',
+    '}',
   ].join('\n');
 }
 
@@ -1686,6 +1730,74 @@ function _intelApplyIntakeAnalysis() {
   showToast('Research notes updated from intake analysis', 'success');
 }
 
+function _intelExtractStructuredFacts(text) {
+  if (!text) return null;
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  const raw = fenced?.[1]?.trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function _intelSetFieldValue(id, value) {
+  if (value === null || value === undefined || value === '') return false;
+  const el = document.getElementById(id);
+  if (!el) return false;
+  el.value = String(value);
+  return true;
+}
+
+function _intelApplyIntakeFields() {
+  const analysis = _udIntakeState.analysis || '';
+  if (!analysis) {
+    showToast('No intake analysis to apply', 'error');
+    return;
+  }
+
+  const facts = _intelExtractStructuredFacts(analysis);
+  if (!facts) {
+    showToast('No structured facts found in intake analysis', 'error');
+    return;
+  }
+
+  let updated = 0;
+  const priorSale = facts.prior_sale || {};
+  const loan = facts.loan || {};
+  const cashFlow = facts.cash_flow || {};
+
+  updated += _intelSetFieldValue('intelSaleDate', priorSale.sale_date) ? 1 : 0;
+  updated += _intelSetFieldValue('intelSalePrice', priorSale.sale_price) ? 1 : 0;
+  updated += _intelSetFieldValue('intelCapRateSale', priorSale.cap_rate_sale) ? 1 : 0;
+  updated += _intelSetFieldValue('intelBuyer', priorSale.buyer) ? 1 : 0;
+  updated += _intelSetFieldValue('intelSeller', priorSale.seller) ? 1 : 0;
+
+  updated += _intelSetFieldValue('intelLender', loan.lender) ? 1 : 0;
+  updated += _intelSetFieldValue('intelLoanAmount', loan.loan_amount) ? 1 : 0;
+  updated += _intelSetFieldValue('intelInterestRate', loan.interest_rate) ? 1 : 0;
+  updated += _intelSetFieldValue('intelLoanType', loan.loan_type) ? 1 : 0;
+  updated += _intelSetFieldValue('intelOrigDate', loan.origination_date) ? 1 : 0;
+  updated += _intelSetFieldValue('intelMatDate', loan.maturity_date) ? 1 : 0;
+  updated += _intelSetFieldValue('intelAmortization', loan.amortization_years) ? 1 : 0;
+  updated += _intelSetFieldValue('intelRecourse', loan.recourse) ? 1 : 0;
+  updated += _intelSetFieldValue('intelLTV', loan.ltv) ? 1 : 0;
+
+  updated += _intelSetFieldValue('intelAnnualRent', cashFlow.annual_rent) ? 1 : 0;
+  updated += _intelSetFieldValue('intelRentPerSF', cashFlow.rent_per_sf) ? 1 : 0;
+  updated += _intelSetFieldValue('intelExpenseType', cashFlow.expense_type) ? 1 : 0;
+  updated += _intelSetFieldValue('intelEstValue', cashFlow.estimated_value) ? 1 : 0;
+  updated += _intelSetFieldValue('intelCurrentCapRate', cashFlow.current_cap_rate) ? 1 : 0;
+
+  if (!updated) {
+    showToast('Structured facts were present but no fields were populated', 'error');
+    return;
+  }
+
+  showToast(`Applied ${updated} extracted field${updated === 1 ? '' : 's'} for review`, 'success');
+}
+
 function _intelClearIntake() {
   _udIntakeState = {
     fileName: '',
@@ -1705,6 +1817,26 @@ function _udExtractAssistantSection(text, headingNumber) {
   const pattern = new RegExp(`(?:^|\\n)${headingNumber}\\.\\s+[^\\n]*\\n([\\s\\S]*?)(?=\\n\\d+\\.\\s+|$)`, 'i');
   const match = text.match(pattern);
   return (match?.[1] || '').trim();
+}
+
+function _udExtractStructuredFacts(text) {
+  if (!text) return null;
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  const raw = fenced?.[1]?.trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function _udSetFieldValue(id, value) {
+  if (value === null || value === undefined || value === '') return false;
+  const el = document.getElementById(id);
+  if (!el) return false;
+  el.value = String(value);
+  return true;
 }
 
 async function _udAskAssistant(mode) {
@@ -1776,6 +1908,42 @@ function _udApplyAssistantReply(mode) {
   }
   target.value = [target.value?.trim(), draft].filter(Boolean).join(target.value?.trim() ? '\n\n' : '');
   showToast('Research notes updated from assistant', 'success');
+}
+
+function _udApplyAssistantFields(mode) {
+  const reply = _udAssistantState[mode]?.reply || '';
+  if (!reply) {
+    showToast('No assistant reply to apply', 'error');
+    return;
+  }
+
+  const facts = _udExtractStructuredFacts(reply);
+  if (!facts) {
+    showToast('No structured facts found in assistant reply', 'error');
+    return;
+  }
+
+  if (mode !== 'ownership') {
+    showToast('Structured field apply is not configured for this workflow', 'error');
+    return;
+  }
+
+  const ownership = facts.ownership || {};
+  let updated = 0;
+  updated += _udSetFieldValue('udOwnRecorded', ownership.recorded_owner) ? 1 : 0;
+  updated += _udSetFieldValue('udOwnTrue', ownership.true_owner) ? 1 : 0;
+  updated += _udSetFieldValue('udOwnType', ownership.owner_type) ? 1 : 0;
+  updated += _udSetFieldValue('udOwnContact', ownership.contact_name) ? 1 : 0;
+  updated += _udSetFieldValue('udOwnPhone', ownership.contact_phone) ? 1 : 0;
+  updated += _udSetFieldValue('udOwnEmail', ownership.contact_email) ? 1 : 0;
+  updated += _udSetFieldValue('udOwnState', ownership.state_of_incorporation) ? 1 : 0;
+
+  if (!updated) {
+    showToast('Structured facts were present but no fields were populated', 'error');
+    return;
+  }
+
+  showToast(`Applied ${updated} ownership field${updated === 1 ? '' : 's'} for review`, 'success');
 }
 
 function _qlActionBtn(label, onclick, icon, color) {
@@ -2917,8 +3085,10 @@ window._intelUpdateIntakeText = _intelUpdateIntakeText;
 window._intelAnalyzeIntake = _intelAnalyzeIntake;
 window._intelHandleIntakePaste = _intelHandleIntakePaste;
 window._intelCopyIntakeAnalysis = _intelCopyIntakeAnalysis;
+window._intelApplyIntakeFields = _intelApplyIntakeFields;
 window._intelApplyIntakeAnalysis = _intelApplyIntakeAnalysis;
 window._intelClearIntake = _intelClearIntake;
 window._udAskAssistant = _udAskAssistant;
 window._udCopyAssistantReply = _udCopyAssistantReply;
+window._udApplyAssistantFields = _udApplyAssistantFields;
 window._udApplyAssistantReply = _udApplyAssistantReply;

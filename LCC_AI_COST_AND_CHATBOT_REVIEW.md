@@ -82,6 +82,10 @@
 - PDF and image uploads are explicitly flagged as pending OCR/manual text extraction instead of pretending to extract them.
 - Extended the intake workflow to support review-first screenshot analysis with uploaded or pasted images.
 - Added attachment plumbing from the UI through `/api/chat` so image research artifacts can be forwarded to the configured AI provider when supported.
+- Extended intake analysis to request structured JSON facts alongside the readable summary.
+- Added a review-first “apply extracted facts to fields” action that prefills Intel sale, loan, and cash-flow inputs without auto-saving.
+- Extended the ownership assistant to request structured ownership JSON alongside the readable analyst response.
+- Added a review-first ownership field prefill action for recorded owner, true owner, owner type, contact details, and incorporation state.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

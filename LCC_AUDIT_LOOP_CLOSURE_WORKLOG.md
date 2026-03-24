@@ -48,6 +48,10 @@
 - Added repo policy and guardrails for write surfaces:
   - `WRITE_SURFACE_POLICY.md`
   - `test/raw-write-guardrail.test.js`
+- Added rollout handoff summary:
+  - `LCC_LOOP_CLOSURE_ROLLOUT_SUMMARY.md`
+- Added current-state changeset manifest:
+  - `LCC_LOOP_CLOSURE_CHANGESET.md`
 - Routed the remaining high-use CRM/marketing mutations in `app.js` through the mutation service:
   - Salesforce task complete
   - Salesforce task reschedule
@@ -126,4 +130,6 @@
 - Repo-wide write policy is now explicit; the remaining work is broader end-to-end verification rather than major write-path refactoring.
 - Remaining verification work is now concentrated on broader cross-surface scenarios rather than single-handler mutation plumbing.
 - The core helper layer now has both happy-path and failure-path coverage for entity reconciliation, research closure, audited mutations, and audited contact writes.
+- A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
+- A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.
