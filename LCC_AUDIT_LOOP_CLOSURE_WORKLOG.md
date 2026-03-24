@@ -41,6 +41,7 @@
 - Added targeted mutation-service tests in `test/apply-change.test.js` covering:
   - composite-filter PATCH behavior
   - audited insert mode returning inserted rows
+- Added focused contact-hub auditing coverage in `test/contacts.test.js` for a classified contact mutation writing both Gov records and ops audit records.
 - Routed the remaining high-use CRM/marketing mutations in `app.js` through the mutation service:
   - Salesforce task complete
   - Salesforce task reschedule
@@ -64,6 +65,12 @@
   - `sales_transactions`
   - `loans`
 - Updated insert helpers to return created rows so ownership/contact flows can keep linking newly created IDs without falling back to raw proxy responses.
+- Added an internal audited Gov-write layer in `api/contacts.js` and routed key internal contact-hub mutations through it:
+  - `unified_contacts` create/update/classify/engagement updates
+  - `contact_change_log` inserts
+  - `contact_merge_queue` inserts/patches
+  - `system_tokens` WebEx token upserts
+- Kept Teams/WebEx/SMS external sends as canonical side effects, but now their internal contact/log writes pass through the audited layer.
 
 ## Verification Notes
 
@@ -77,6 +84,9 @@
 - `node --check gov.js` passed again after moving sale/loan inserts onto the audited path.
 - `node --check test/apply-change.test.js` passed.
 - `node --test test/apply-change.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
+- `node --check api/contacts.js` passed after the audited contact write refactor.
+- `node --check test/contacts.test.js` passed.
+- `node --test test/contacts.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
@@ -84,5 +94,6 @@
 - Legacy domain flows are heterogeneous, so not every direct write can be eliminated in one pass.
 - The remaining non-audited `POST` in the scanned domain files is a canonical outbound sync call rather than a raw table mutation.
 - A separate write-heavy surface remains in `api/contacts.js`; those calls appear to be contact engagement/messaging and token-management paths rather than the gov/dialysis/detail human-loop saves already remediated.
+- `api/contacts.js` now has audited coverage for its main internal Gov writes, but broader repo-wide review is still needed for any other APIs that mutate domain/business tables outside the mutation-service or audited-helper model.
 - RPC helper paths and any writes outside the currently scanned gov/dialysis/detail/app surfaces still need review for full repo-wide closure.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

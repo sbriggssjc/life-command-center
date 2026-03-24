@@ -768,6 +768,11 @@ body.compact .greeting { font-size: 18px; }
 .pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
 .pager button:disabled { opacity: 0.4; cursor: default; }
 
+.assistant-panel { background: var(--s2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--text); line-height: 1.5; }
+.assistant-status { display: flex; align-items: center; gap: 8px; color: var(--text2); }
+.assistant-error { color: var(--red); }
+.assistant-copy { white-space: normal; }
+
 /* ============================================================
    TODAY PAGE — Canonical model integration styles
    ============================================================ */

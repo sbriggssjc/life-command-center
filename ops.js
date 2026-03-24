@@ -49,6 +49,7 @@ let opsWorkspaceMembers = [];
 let opsAssignModalState = null;
 let opsEscalateModalState = null;
 let opsFollowupModalState = null;
+let opsResearchAssistantState = {};
 
 // Advanced team queue filters
 let opsTeamDomainFilter = '';       // '' = all domains
@@ -186,6 +187,20 @@ function typeBadge(type) {
 function domainBadge(domain) {
   if (!domain) return '';
   return `<span class="q-badge domain">${domain}</span>`;
+}
+
+function researchAssistantPanelHTML(itemId) {
+  const state = opsResearchAssistantState[itemId] || { open: false, loading: false, reply: '', error: '' };
+  if (!state.open) return '';
+  const body = state.loading
+    ? '<div class="assistant-status"><span class="spinner" style="width:14px;height:14px"></span> Analyzing task...</div>'
+    : state.error
+      ? `<div class="assistant-status assistant-error">${esc(state.error)}</div>`
+      : state.reply
+        ? `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>`
+        : '<div class="assistant-status">No response yet.</div>';
+
+  return `<div class="assistant-panel">${body}</div>`;
 }
 
 // --- Sync warning banner ---
@@ -786,9 +801,11 @@ async function renderResearchPage() {
         <div class="q-actions">
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="completeResearch('${item.id}')">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="createFollowup('${item.id}')">Follow-up</button>` : ''}
+          <button class="q-action" onclick="runResearchAssistant('${item.id}')">Assist</button>
           <button class="q-action" onclick="exportResearchTaskBrief('${item.id}','chatgpt')">ChatGPT</button>
           <button class="q-action" onclick="exportResearchTaskBrief('${item.id}','claude')">Claude</button>
         </div>
+        ${researchAssistantPanelHTML(item.id)}
       </div>`;
     });
   }
@@ -864,6 +881,60 @@ async function exportResearchTaskBrief(id, provider) {
 
   window.open(provider === 'claude' ? 'https://claude.ai/chats' : 'https://chatgpt.com/', '_blank', 'noopener');
   showToast(`Research brief copied. Paste it into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'success');
+}
+
+function buildResearchAssistantPrompt(item) {
+  if (!item) return '';
+  return [
+    'You are assisting with a commercial real estate research task inside Life Command Center.',
+    'Provide a concise workflow answer focused on execution.',
+    '',
+    'Task Context',
+    `- Title: ${item.title || 'Untitled'}`,
+    `- Research type: ${item.research_type || 'Unknown'}`,
+    `- Domain: ${item.domain || 'Unknown'}`,
+    `- Status: ${item.status || 'Unknown'}`,
+    `- Assignee: ${item.assignee_name || 'Unassigned'}`,
+    '',
+    'Instructions',
+    item.instructions || 'No additional instructions.',
+    '',
+    'Return in this format:',
+    '1. What this task is really asking for',
+    '2. Best next 3 steps',
+    '3. Missing data or blockers',
+    '4. Draft completion note',
+    '5. Draft follow-up action if needed',
+  ].join('\n');
+}
+
+async function runResearchAssistant(id) {
+  const item = (opsResearchData || []).find(r => r.id === id);
+  if (!item) {
+    showToast('Research task not found', 'error');
+    return;
+  }
+
+  opsResearchAssistantState[id] = { open: true, loading: true, reply: '', error: '' };
+  renderResearchPage();
+
+  try {
+    const reply = await invokeLccAssistant({
+      message: buildResearchAssistantPrompt(item),
+      context: {
+        feature: 'ops_research_assistant',
+        task_id: item.id,
+        research_type: item.research_type || null,
+        domain: item.domain || null,
+      },
+      feature: 'ops_research_assistant',
+    });
+    opsResearchAssistantState[id] = { open: true, loading: false, reply, error: '' };
+  } catch (e) {
+    opsResearchAssistantState[id] = { open: true, loading: false, reply: '', error: e.message };
+  }
+
+  renderResearchPage();
 }
 
 function closeAssignModal() {

@@ -66,6 +66,10 @@
 - Added first-pass ChatGPT / Claude export actions to:
   - property detail research quick links
   - ops research queue items
+- Added embedded in-app assistant actions backed by `/api/chat` for:
+  - ops research queue tasks
+  - property detail ownership workflow
+  - property detail intel workflow
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

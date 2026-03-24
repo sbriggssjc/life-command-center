@@ -5090,6 +5090,30 @@ function formatCopilotText(text) {
     .replace(/`(.+?)`/g, '<code style="background:var(--s2);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
 }
 
+async function invokeLccAssistant({ message, context = {}, history = [], feature = 'embedded_assistant' }) {
+  const res = await fetch(CHAT_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-LCC-Workspace': LCC_USER.workspace_id || '',
+    },
+    body: JSON.stringify({
+      message,
+      context: {
+        ...context,
+        assistant_feature: feature,
+      },
+      history: Array.isArray(history) ? history : [],
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `AI request failed (${res.status})`);
+  }
+  return data.response || data.message || data.reply || '';
+}
+
 function buildCopilotContext() {
   const ctx = {};
   ctx.total_activities = activities.length;

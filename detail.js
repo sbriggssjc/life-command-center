@@ -6,6 +6,10 @@
 
 // Cache for the current detail data (avoids re-fetch on tab switch)
 let _udCache = null;
+let _udAssistantState = {
+  ownership: { loading: false, reply: '', error: '' },
+  intel: { loading: false, reply: '', error: '' },
+};
 
 /**
  * Open the unified detail panel for any property/clinic.
@@ -774,6 +778,8 @@ function _udTabOwnership() {
     html += '</div></div>';
   }
 
+  html += _udAssistantSection('ownership', 'Ownership Assistant', 'Summarize the ownership picture, identify the likely owner or decision-maker, and suggest the next research steps.');
+
   // ── CURRENT OWNERSHIP ──────────────────────────────────────────────
   if (!own) {
     html += '<div class="detail-section">';
@@ -1093,6 +1099,8 @@ function _udTabIntel() {
 
   let html = '';
 
+  html += _udAssistantSection('intel', 'Research Assistant', 'Turn the current notes and property context into a clean analyst summary and recommended next actions.');
+
   // ── PRIOR SALE SECTION ──────────────────────────────────────────────────────
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-prior-sale\').style.display = this.parentElement.querySelector(\'.intel-prior-sale\').style.display === \'none\' ? \'block\' : \'none\'">Prior Sale</div>';
@@ -1336,6 +1344,129 @@ function _qlBtn(label, url, icon, color) {
     <span class="ql-icon">${icon}</span>
     <span class="ql-label">${esc(label)}</span>
   </a>`;
+}
+
+function _udAssistantSection(mode, title, subtitle) {
+  const state = _udAssistantState[mode] || { loading: false, reply: '', error: '' };
+  let body = '<div class="assistant-status">No analysis generated yet.</div>';
+  if (state.loading) {
+    body = '<div class="assistant-status"><span class="spinner" style="width:14px;height:14px"></span> Working...</div>';
+  } else if (state.error) {
+    body = `<div class="assistant-status assistant-error">${esc(state.error)}</div>`;
+  } else if (state.reply) {
+    body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>`;
+  }
+
+  return `<div class="detail-section">
+    <div class="detail-section-title">${esc(title)}</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:10px">${esc(subtitle)}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="q-action primary" onclick="_udAskAssistant('${mode}')">Assist</button>
+      <button class="q-action" onclick="${mode === 'ownership' ? 'openResearchInChatGPT()' : 'openResearchInClaude()'}">${mode === 'ownership' ? 'Export to ChatGPT' : 'Export to Claude'}</button>
+    </div>
+    <div id="udAssistantPanel_${mode}" class="assistant-panel">${body}</div>
+  </div>`;
+}
+
+function _udBuildAssistantPrompt(mode) {
+  if (!_udCache || !_udCache.property) return '';
+  const p = _udCache.property || {};
+  const own = _udCache.ownership || {};
+  const fallback = _udCache.fallback || {};
+  const ownNotes = document.getElementById('udOwnNotes')?.value?.trim() || '';
+  const intelNotes = document.getElementById('intelResearchNotes')?.value?.trim() || '';
+
+  if (mode === 'ownership') {
+    return [
+      'You are assisting with an ownership resolution workflow in commercial real estate.',
+      'Focus on who likely owns the asset, who to contact, and what remains unresolved.',
+      '',
+      `Property: ${p.page_title || p.facility_name || p.address || 'Unknown property'}`,
+      `Address: ${p.address || 'N/A'}, ${p.city || 'N/A'}, ${p.state || 'N/A'}`,
+      `County: ${p.county || 'Unknown'}`,
+      `Recorded owner: ${own.recorded_owner || fallback.recorded_owner || 'Unknown'}`,
+      `True owner: ${own.true_owner || fallback.true_owner || 'Unknown'}`,
+      `Owner type: ${own.owner_type || fallback.owner_type || 'Unknown'}`,
+      `Contact name: ${own.contact_1_name || own.contact_name || 'Unknown'}`,
+      `Contact email: ${own.contact_email || 'Unknown'}`,
+      `Contact phone: ${own.contact_phone || 'Unknown'}`,
+      `Research notes: ${ownNotes || 'None entered'}`,
+      '',
+      'Return in this format:',
+      '1. Ownership summary',
+      '2. Likely best contact',
+      '3. Evidence and gaps',
+      '4. Recommended next 3 actions',
+      '5. Draft ownership note to save',
+    ].join('\n');
+  }
+
+  return [
+    'You are assisting with a property research workflow in commercial real estate.',
+    'Use the current property context and notes to produce a concise analyst update.',
+    '',
+    `Property: ${p.page_title || p.facility_name || p.address || 'Unknown property'}`,
+    `Address: ${p.address || 'N/A'}, ${p.city || 'N/A'}, ${p.state || 'N/A'}`,
+    `Domain: ${_udCache.db || 'unknown'}`,
+    `Lease number: ${p.lease_number || fallback.lease_number || 'Unknown'}`,
+    `Estimated value: ${p.estimated_value || 'Unknown'}`,
+    `Current notes: ${intelNotes || 'None entered'}`,
+    '',
+    'Return in this format:',
+    '1. Executive summary',
+    '2. Key facts captured',
+    '3. Missing facts still needed',
+    '4. Recommended next 3 actions',
+    '5. Draft research note to save',
+  ].join('\n');
+}
+
+function _udRenderAssistantState(mode) {
+  const panel = document.getElementById(`udAssistantPanel_${mode}`);
+  if (!panel) return;
+  const state = _udAssistantState[mode] || { loading: false, reply: '', error: '' };
+  if (state.loading) {
+    panel.innerHTML = '<div class="assistant-status"><span class="spinner" style="width:14px;height:14px"></span> Working...</div>';
+    return;
+  }
+  if (state.error) {
+    panel.innerHTML = `<div class="assistant-status assistant-error">${esc(state.error)}</div>`;
+    return;
+  }
+  if (state.reply) {
+    panel.innerHTML = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>`;
+    return;
+  }
+  panel.innerHTML = '<div class="assistant-status">No analysis generated yet.</div>';
+}
+
+async function _udAskAssistant(mode) {
+  const prompt = _udBuildAssistantPrompt(mode);
+  if (!prompt) {
+    showToast('No record loaded', 'error');
+    return;
+  }
+
+  _udAssistantState[mode] = { loading: true, reply: '', error: '' };
+  _udRenderAssistantState(mode);
+
+  try {
+    const reply = await invokeLccAssistant({
+      message: prompt,
+      context: {
+        feature: mode === 'ownership' ? 'detail_ownership_assistant' : 'detail_intel_assistant',
+        property_id: _udCache.ids?.property_id || null,
+        lease_number: _udCache.ids?.lease_number || null,
+        domain: _udCache.db || null,
+      },
+      feature: mode === 'ownership' ? 'detail_ownership_assistant' : 'detail_intel_assistant',
+    });
+    _udAssistantState[mode] = { loading: false, reply, error: '' };
+  } catch (e) {
+    _udAssistantState[mode] = { loading: false, reply: '', error: e.message };
+  }
+
+  _udRenderAssistantState(mode);
 }
 
 function _qlActionBtn(label, onclick, icon, color) {
@@ -2472,3 +2603,4 @@ window._intelSavePriorSale = _intelSavePriorSale;
 window._intelSaveLoan = _intelSaveLoan;
 window._intelSaveCashFlow = _intelSaveCashFlow;
 window._intelSaveNotes = _intelSaveNotes;
+window._udAskAssistant = _udAskAssistant;
