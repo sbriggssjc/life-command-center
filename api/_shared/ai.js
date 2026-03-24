@@ -35,11 +35,31 @@ export async function logAiMetric(workspaceId, userId, endpoint, durationMs, met
 
 export function normalizeAiUsage(payload = {}) {
   const usage = payload?.usage || payload?.metrics?.usage || {};
-  const inputTokens = Number(usage.input_tokens || usage.prompt_tokens || usage.input || 0);
-  const outputTokens = Number(usage.output_tokens || usage.completion_tokens || usage.output || 0);
+  const inputTokens = Number(
+    usage.input_tokens ||
+    usage.prompt_tokens ||
+    usage.input ||
+    payload?.prompt_eval_count ||
+    0
+  );
+  const outputTokens = Number(
+    usage.output_tokens ||
+    usage.completion_tokens ||
+    usage.output ||
+    payload?.eval_count ||
+    0
+  );
   const totalTokens = Number(usage.total_tokens || (inputTokens + outputTokens) || 0);
   return {
-    raw: usage && Object.keys(usage).length ? usage : null,
+    raw: (usage && Object.keys(usage).length ? usage : null) || (
+      payload?.prompt_eval_count != null || payload?.eval_count != null
+        ? {
+            prompt_tokens: payload?.prompt_eval_count || 0,
+            completion_tokens: payload?.eval_count || 0,
+            total_tokens: totalTokens,
+          }
+        : null
+    ),
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     total_tokens: totalTokens,
@@ -166,6 +186,74 @@ async function invokeOpenAIResponses({ message, context, history, attachments, c
   };
 }
 
+function stripDataUrlPrefix(dataUrl = '') {
+  const match = String(dataUrl).match(/^data:.*?;base64,(.*)$/);
+  return match?.[1] || dataUrl;
+}
+
+async function invokeOllamaChat({ message, context, history, attachments, cfg }) {
+  const baseUrl = cfg.openaiBaseUrl || 'http://localhost:11434/api';
+  const messages = [];
+  const contextText = buildContextText(context);
+
+  if (Array.isArray(history)) {
+    history.slice(-8).forEach((item) => {
+      if (!item?.content || !item?.role) return;
+      messages.push({
+        role: item.role === 'assistant' ? 'assistant' : 'user',
+        content: String(item.content),
+      });
+    });
+  }
+
+  const userMessage = {
+    role: 'user',
+    content: [contextText, message].filter(Boolean).join('\n\n'),
+  };
+  if (Array.isArray(attachments) && attachments.length) {
+    userMessage.images = attachments
+      .filter((item) => item?.data_url)
+      .map((item) => stripDataUrlPrefix(item.data_url));
+  }
+  messages.push(userMessage);
+
+  const res = await fetch(`${baseUrl}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: cfg.chatModel,
+      messages,
+      stream: false,
+    }),
+  });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = { error: 'Invalid Ollama response' };
+  }
+
+  return {
+    ok: res.ok,
+    status: res.status,
+    provider: 'ollama',
+    baseUrl,
+    data: {
+      ...data,
+      model: data?.model || cfg.chatModel,
+      response: data?.message?.content || data?.response || '',
+      usage: {
+        prompt_tokens: Number(data?.prompt_eval_count || 0),
+        completion_tokens: Number(data?.eval_count || 0),
+        total_tokens: Number((data?.prompt_eval_count || 0) + (data?.eval_count || 0)),
+      },
+    },
+  };
+}
+
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   if (cfg.provider === 'disabled' || cfg.provider === 'none') {
@@ -174,6 +262,10 @@ export async function invokeChatProvider({ message, context, history, attachment
 
   if (cfg.provider === 'openai') {
     return invokeOpenAIResponses({ message, context, history, attachments, cfg });
+  }
+
+  if (cfg.provider === 'ollama') {
+    return invokeOllamaChat({ message, context, history, attachments, cfg });
   }
 
   if (cfg.provider !== 'edge') {

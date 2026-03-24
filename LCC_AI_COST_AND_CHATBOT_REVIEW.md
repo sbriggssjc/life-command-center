@@ -96,6 +96,7 @@
 - Added telemetry quality indicators to the AI dashboard so missing model, usage, or cache data is visible instead of silently skewing cost analysis.
 - Added a repo-local direct OpenAI chat path behind `AI_CHAT_PROVIDER=openai`, so `/api/chat` can bypass the external edge function when you want a first-party telemetry contract.
 - Added `AI_CHAT_MODEL` to `.env.example` so chat routing can move independently from the batch research model.
+- Added a repo-local Ollama chat path behind `AI_CHAT_PROVIDER=ollama`, using Ollama's `/api/chat` endpoint with local image support and normalized token telemetry from prompt/eval counts.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

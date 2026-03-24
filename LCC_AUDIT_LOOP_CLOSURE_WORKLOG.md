@@ -122,6 +122,10 @@
 - `node --check api/contacts.js` passed after the audited contact write refactor.
 - `node --check api/entities.js` passed after Data Quality operator actions were added.
 - `node --check api/sync.js` passed after outbound task completion was aligned with sync job/error tracking.
+- `node --check api/_shared/ops-db.js` passed after adding the shared perf-metric logger.
+- `node --check api/apply-change.js` passed after wiring mutation latency logging.
+- `node --check api/sync.js` passed again after wiring propagation latency logging and Sync Health drift/success-rate signals.
+- `node --check test/sync.test.js` passed after adding response-level Sync Health and outbound-failure coverage.
 - `node --check test/contacts.test.js` passed.
 - `node --check test/raw-write-guardrail.test.js` passed.
 - `node --check ops.js` passed after Data Quality operator actions were added.
@@ -131,6 +135,7 @@
 - `node --test test/contacts.test.js` passed again after adding the audited-write failure-path case and fixing handler error propagation.
 - `node --test test/entity-link.test.js` passed outside the sandbox after adding external-identity failure coverage.
 - `node --test test/research-loop.test.js` passed outside the sandbox after adding cross-surface research-loop failure coverage.
+- `node --test test/sync.test.js` passed outside the sandbox after adding Sync Health and complete-SF-task failure-path verification.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
@@ -145,6 +150,8 @@
 - The core helper layer now has both happy-path and failure-path coverage for entity reconciliation, research closure, audited mutations, and audited contact writes.
 - Data Quality is no longer just passive reporting; it now supports direct reconciliation actions and source-precedence management from the operator surface.
 - Outbound Salesforce task completion/reschedule is now better integrated with Sync Health and unresolved sync exceptions.
+- Mutation latency is now logged through the shared ops perf-metric path, and outbound propagation now records latency plus 24h success-rate and basic Salesforce queue-drift signals in Sync Health.
+- The verification layer now includes response-level Sync API coverage in addition to helper-level unit tests, so health summaries and outbound failure surfacing are no longer untested.
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

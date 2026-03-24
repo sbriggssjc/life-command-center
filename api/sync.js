@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { logPerfMetric, opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 
 // Edge function base URL (existing ai-copilot deployment)
@@ -474,6 +474,7 @@ function mapSfPriority(sfPriority) {
 // ============================================================================
 
 async function handleOutbound(req, res, user, workspaceId) {
+  const startedAt = Date.now();
   // Gate behind feature flag — outbound writes are disabled by default
   const wsResult = await opsQuery('GET', `workspaces?id=eq.${workspaceId}&select=config`);
   const flags = wsResult.data?.[0]?.config?.feature_flags || {};
@@ -546,6 +547,14 @@ async function handleOutbound(req, res, user, workspaceId) {
           occurred_at: new Date().toISOString()
         });
 
+        logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:outbound', Date.now() - startedAt, {
+          status: 'completed',
+          command,
+          connector_type: connectorType,
+          attempts: attempt + 1,
+          sync_job_id: job.id
+        });
+
         return res.status(200).json({
           sync_job_id: job.id,
           correlation_id: correlationId,
@@ -565,6 +574,14 @@ async function handleOutbound(req, res, user, workspaceId) {
   await completeSyncJob(job.id, 'failed', 0, 1, lastError);
   await logSyncError(job.id, workspaceId, connector.id, null, lastError, payload, true);
   await updateConnectorStatus(connector.id, 'degraded', null, lastError);
+  logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:outbound', Date.now() - startedAt, {
+    status: 'failed',
+    command,
+    connector_type: connectorType,
+    attempts: retries + 1,
+    sync_job_id: job.id,
+    last_error: lastError
+  });
 
   return res.status(502).json({
     error: 'Outbound command failed after retries',
@@ -580,6 +597,7 @@ async function handleOutbound(req, res, user, workspaceId) {
 // ============================================================================
 
 async function handleCompleteSfTask(req, res, user, workspaceId) {
+  const startedAt = Date.now();
   if (!PA_COMPLETE_TASK_URL) {
     return res.status(501).json({ error: 'PA_COMPLETE_TASK_URL not configured' });
   }
@@ -646,6 +664,14 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
           occurred_at: new Date().toISOString()
         });
 
+        logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:complete_sf_task', Date.now() - startedAt, {
+          status: 'completed',
+          action: taskAction,
+          attempts: attempt + 1,
+          sync_job_id: job?.id || null,
+          connector_id: connector?.id || null
+        });
+
         return res.status(200).json({
           success: true,
           sync_job_id: job?.id || null,
@@ -669,6 +695,13 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
     await logSyncError(job?.id || null, workspaceId, connector.id, sf_contact_id, lastError, payload, true);
     await updateConnectorStatus(connector.id, 'degraded', null, lastError);
   }
+  logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:complete_sf_task', Date.now() - startedAt, {
+    status: 'failed',
+    action: taskAction,
+    sync_job_id: job?.id || null,
+    connector_id: connector?.id || null,
+    last_error: lastError
+  });
 
   return res.status(502).json({
     error: 'SF Task update flow failed after retries',
@@ -739,14 +772,30 @@ async function handleHealth(req, res, user, workspaceId) {
     `sync_errors?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=id,connector_account_id,error_code,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`
   );
 
+  const openSfTasks = await opsQuery('GET',
+    `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.sf_task&status=in.(new,triaged)&select=id&limit=1`,
+    { count: 'exact' }
+  );
+
   const connectorList = connectors.data || [];
+  const recentJobList = recentJobs.data || [];
+  const outboundJobs = recentJobList.filter(job => job.direction === 'outbound');
+  const outboundTracked = outboundJobs.filter(job => ['completed', 'failed', 'partial'].includes(job.status));
+  const outboundCompleted = outboundTracked.filter(job => job.status === 'completed').length;
+  const latestSfInbound = recentJobList.find(job =>
+    job.entity_type === 'sf_activity' && ['completed', 'partial'].includes(job.status)
+  );
+  const sfOpenTaskCount = openSfTasks.count || 0;
+  const sfLastProcessed = Number(latestSfInbound?.records_processed || 0);
+  const estimatedGap = Math.max(sfOpenTaskCount - sfLastProcessed, 0);
   const summary = {
     total_connectors: connectorList.length,
     healthy: connectorList.filter(c => c.status === 'healthy').length,
     degraded: connectorList.filter(c => c.status === 'degraded').length,
     error: connectorList.filter(c => c.status === 'error').length,
     disconnected: connectorList.filter(c => c.status === 'disconnected').length,
-    pending: connectorList.filter(c => c.status === 'pending_setup').length
+    pending: connectorList.filter(c => c.status === 'pending_setup').length,
+    outbound_success_rate_24h: outboundTracked.length ? Number((outboundCompleted / outboundTracked.length).toFixed(3)) : null
   };
 
   // Per-user breakdown
@@ -780,8 +829,17 @@ async function handleHealth(req, res, user, workspaceId) {
     connectors: connectorList,
     by_user: byUser,
     verification_status: verificationStatus,
-    recent_jobs: recentJobs.data || [],
+    recent_jobs: recentJobList,
     unresolved_errors: unresolvedErrors.data || [],
+    queue_drift: {
+      source: 'salesforce',
+      salesforce_open_task_count: sfOpenTaskCount,
+      last_sf_records_processed: sfLastProcessed,
+      estimated_gap: estimatedGap,
+      drift_flag: estimatedGap > 25,
+      last_inbound_job_id: latestSfInbound?.id || null,
+      last_inbound_completed_at: latestSfInbound?.completed_at || null
+    },
     checked_at: new Date().toISOString()
   });
 }
