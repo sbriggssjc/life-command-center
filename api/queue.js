@@ -548,6 +548,14 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       rollout: {
         status: rolloutStatus,
         override_count: overrideCount,
+        suggestion:
+          rolloutStatus === 'manual_only'
+            ? 'Set AI_CHAT_POLICY=balanced or add feature overrides to begin a staged rollout.'
+            : mismatches.length > 0
+              ? 'Review routing mismatches below before expanding the rollout. Observed traffic does not fully match the configured route.'
+              : callsWithUsage < totalCalls
+                ? 'Routing is active. Next priority is improving upstream model/usage telemetry coverage so cost tracking is more reliable.'
+                : 'Routing is active and telemetry coverage looks healthy. Expand or tighten feature routing based on observed cost and quality.',
       },
       summary: {
         total_calls: totalCalls,

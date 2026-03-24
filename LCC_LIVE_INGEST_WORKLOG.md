@@ -21,6 +21,7 @@
 
 ## Current MVP Capabilities
 - Drag/drop image files.
+- Upload PDFs and automatically convert the first pages into images for AI extraction.
 - Paste clipboard screenshots.
 - Capture a live screen snapshot.
 - Attach text-based exports (`.txt`, `.md`, `.csv`, `.json`, `.html`, `.htm`, `.eml`).
@@ -32,12 +33,13 @@
 - Automatically log successful live-ingest sessions into `research_queue_outcomes` for provenance.
 
 ## Constraints / Known Gaps
-- Direct PDF/docx parsing is not implemented in this pass; screenshots are the supported path for those sources.
+- PDF uploads are rendered as images, not parsed into structured text; `docx` still lacks first-class handling.
 - Operation quality depends on current record context and the source material. The prompt blocks fabricated IDs, so some proposed writes may stop at `missing_information`.
 - Dialysis research selection is still limited by the existing screen behavior; the new lookup flow mitigates that, but queue-to-selection behavior is still worth tightening later.
 
 ## Files Changed
 - `app.js`
+- `index.html`
 - `api/live-ingest.js`
 - `api/_shared/live-ingest-normalize.js`
 - `gov.js`
@@ -51,6 +53,7 @@
 - Added browser-side attachment normalization for screenshots and text exports.
 - Added extraction prompt + JSON proposal parsing.
 - Added authenticated server-side normalization for HTML and `.eml` text sources.
+- Added client-side PDF rendering into page images for multimodal intake.
 - Added apply flow for selected operations through existing audited mutation helpers.
 - Added target-record lookup and manual binding inside the intake surface.
 - Added automatic provenance logging after successful live-ingest apply operations.
@@ -60,6 +63,7 @@
 ## Verification Plan
 - Syntax check updated JS files.
 - Run unit tests for source normalization helper.
+- Confirm PDF renderer integration does not break page script loading.
 - Confirm both dashboards render the intake card.
 - Confirm file picker / paste / capture actions do not throw.
 - Confirm extraction path builds a proposal and apply flow routes through mutation helpers.
@@ -72,7 +76,8 @@
 - `node --check api/live-ingest.js` passed.
 - `node --check api/_shared/live-ingest-normalize.js` passed.
 - `node --test test/live-ingest-normalize.test.js` passed.
+- PDF intake follow-up changes in `app.js` also passed `node --check app.js`.
 
 ## Next Follow-Up Candidates
 - Add richer per-operation field diff UI.
-- Add deeper server-side parsing for PDFs and richer MIME email bodies/attachments.
+- Add deeper server-side parsing for `docx`, PDFs with OCR/text extraction, and richer MIME email attachments.

@@ -103,6 +103,7 @@
 - Added routing-policy visibility to the AI dashboard so the active default route and feature overrides are visible next to live telemetry.
 - Added route-mismatch detection to the AI dashboard so you can see when configured feature routing does not match recent observed provider/model traffic.
 - Added a rollout-readiness indicator to the AI dashboard so it is obvious whether feature routing is actually active or still effectively manual/default-only.
+- Added a suggested-next-step panel to the AI dashboard so rollout actions are driven by current readiness, mismatch status, and telemetry coverage.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`
@@ -119,6 +120,73 @@
   - Tier 3: premium model only for ambiguous/high-value tasks
 - Add embedded copilot actions inside research, ownership, message drafting, and activity logging surfaces instead of only one global chat panel.
 - Add async batch enrichment for entity resolution, county lookup, contact discovery, call summaries, and document extraction.
+
+## Rollout Playbook
+
+### Recommended First Rollout
+
+- Goal: move cheap/review-first assistant flows onto lower-cost/local providers while keeping higher-ambiguity workflows on stronger models.
+- Recommended starting policy:
+  - `detail_intake_assistant` -> `ollama`
+  - `detail_intel_assistant` -> `ollama`
+  - `ops_research_assistant` -> `ollama`
+  - `detail_ownership_assistant` -> `openai`
+  - `global_copilot` -> `edge`
+
+### Example Env Configuration
+
+```env
+AI_CHAT_POLICY=balanced
+AI_CHAT_PROVIDER=edge
+AI_CHAT_MODEL=gpt-5-mini
+AI_CHAT_FEATURE_PROVIDERS={"detail_ownership_assistant":"openai","global_copilot":"edge"}
+AI_CHAT_FEATURE_MODELS={"detail_intake_assistant":"llama3.2-vision","detail_intel_assistant":"llama3.1","ops_research_assistant":"llama3.1","detail_ownership_assistant":"gpt-5-mini"}
+```
+
+### Rollout Verification
+
+1. Open the Performance Dashboard and go to the AI section.
+2. Confirm `Rollout Readiness` shows routing is active.
+3. Confirm `Routing Policy` matches the configured default provider/model and feature overrides.
+4. Confirm no unexpected entries appear under `Routing Mismatches Detected`.
+5. Run each workflow at least once:
+   - global copilot
+   - ops research assistant
+   - detail ownership assistant
+   - detail intel assistant
+   - detail intake assistant with text
+   - detail intake assistant with image
+6. Confirm the feature/provider/model rows match the intended routes.
+7. Confirm telemetry quality is acceptable:
+   - model coverage should be high
+   - usage coverage should be high for repo-local OpenAI and Ollama paths
+   - cache coverage may still be partial depending on provider path
+
+### Rollback
+
+- To disable staged routing and return to the previous behavior:
+
+```env
+AI_CHAT_POLICY=manual
+AI_CHAT_FEATURE_PROVIDERS=
+AI_CHAT_FEATURE_MODELS=
+AI_CHAT_PROVIDER=edge
+```
+
+### Decision Rules After Initial Rollout
+
+- Keep a feature on `ollama` if:
+  - analyst output quality is acceptable
+  - structured extraction remains reliable
+  - latency is acceptable
+- Move a feature from `ollama` to `openai` if:
+  - ownership/entity reasoning is too weak
+  - screenshot interpretation is unreliable
+  - structured extraction drifts too often
+- Move a feature off `edge` if:
+  - telemetry quality remains too poor for cost control
+  - the repo-local path provides equivalent answer quality
+  - you want direct model/provider control
 
 ## Open Questions
 

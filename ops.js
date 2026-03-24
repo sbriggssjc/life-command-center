@@ -44,6 +44,8 @@ let opsMyWorkFilter = 'all';      // all | open | in_progress | waiting | overdu
 let opsInboxFilter = 'new';       // new | triaged | all
 let opsEntityFilter = 'all';      // all | person | company | property | clinic
 let opsResearchFilter = 'active'; // active | completed | all
+let opsEntitiesPage = 1;
+let opsResearchPage = 1;
 let opsInboxSelected = new Set();
 let opsWorkspaceMembers = [];
 let opsAssignModalState = null;
@@ -69,6 +71,13 @@ let useV2 = false; // Controlled by queue_v2_enabled flag; auto-degrades to v1 i
 
 // --- Pagination state for infinite scroll / page navigation ---
 let opsPagination = {};
+
+function refreshActiveOpsPage() {
+  const activePage = document.querySelector('.page.active');
+  if (activePage && typeof handlePageLoad === 'function') {
+    handlePageLoad(activePage.id);
+  }
+}
 
 // --- API helper ---
 async function opsApi(path, opts = {}) {
@@ -637,19 +646,21 @@ async function dismissSingle(id) {
 // ============================================================================
 // ENTITIES — canonical model browser
 // ============================================================================
-async function renderEntitiesPage() {
+async function renderEntitiesPage(page = opsEntitiesPage) {
   const el = document.getElementById('entitiesContent');
   if (!el) return;
+  opsEntitiesPage = Math.max(parseInt(page) || 1, 1);
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:entities');
 
-  const res = await opsApi('/api/entities?action=list&limit=100');
+  const res = await opsApi(`/api/entities?page=${opsEntitiesPage}&per_page=25`);
   if (!res.ok) {
     el.innerHTML = `<div class="ops-empty">Could not load entities.<br><small>${res.error}</small></div>`;
     return;
   }
 
   opsEntitiesData = res.data?.entities || res.data || [];
+  opsPagination['/api/entities'] = res.data?.pagination || null;
   const counts = {};
   opsEntitiesData.forEach(e => { counts[e.entity_type] = (counts[e.entity_type] || 0) + 1; });
 
@@ -659,9 +670,9 @@ async function renderEntitiesPage() {
   </div>`;
 
   html += '<div class="ops-filters">';
-  html += filterPill('all', `All (${opsEntitiesData.length})`, opsEntityFilter, 'opsEntityFilter', 'renderEntitiesPage');
+  html += `<button class="ops-filter ${opsEntityFilter === 'all' ? 'active' : ''}" onclick="opsEntityFilter='all';opsEntitiesPage=1;renderEntitiesPage()">All (${opsEntitiesData.length})</button>`;
   Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, ct]) => {
-    html += filterPill(type, `${type} (${ct})`, opsEntityFilter, 'opsEntityFilter', 'renderEntitiesPage');
+    html += `<button class="ops-filter ${opsEntityFilter === type ? 'active' : ''}" onclick="opsEntityFilter='${esc(type)}';opsEntitiesPage=1;renderEntitiesPage()">${esc(type)} (${ct})</button>`;
   });
   html += '</div>';
 
@@ -690,6 +701,8 @@ async function renderEntitiesPage() {
       </div>`;
     });
   }
+
+  html += paginationHTML('/api/entities', 'renderEntitiesPage');
 
   el.innerHTML = html;
   perf.end();
@@ -765,16 +778,17 @@ function viewEntity(entityId) {
 // ============================================================================
 // RESEARCH — research task queue
 // ============================================================================
-async function renderResearchPage() {
+async function renderResearchPage(page = opsResearchPage) {
   const el = document.getElementById('researchContent');
   if (!el) return;
+  opsResearchPage = Math.max(parseInt(page) || 1, 1);
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:research');
 
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
-  const res = await opsApi(`/api/queue?view=research&limit=100${statusParam ? `&status=${statusParam}` : ''}`);
+  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}`);
   if (!res.ok) {
     el.innerHTML = `<div class="ops-empty">Could not load research tasks.<br><small>${res.error}</small></div>`;
     return;
@@ -788,9 +802,9 @@ async function renderResearchPage() {
   </div>`;
 
   html += '<div class="ops-filters">';
-  html += filterPill('active', 'Active', opsResearchFilter, 'opsResearchFilter', 'renderResearchPage');
-  html += filterPill('completed', 'Completed', opsResearchFilter, 'opsResearchFilter', 'renderResearchPage');
-  html += filterPill('all', 'All', opsResearchFilter, 'opsResearchFilter', 'renderResearchPage');
+  html += `<button class="ops-filter ${opsResearchFilter === 'active' ? 'active' : ''}" onclick="opsResearchFilter='active';opsResearchPage=1;renderResearchPage()">Active</button>`;
+  html += `<button class="ops-filter ${opsResearchFilter === 'completed' ? 'active' : ''}" onclick="opsResearchFilter='completed';opsResearchPage=1;renderResearchPage()">Completed</button>`;
+  html += `<button class="ops-filter ${opsResearchFilter === 'all' ? 'active' : ''}" onclick="opsResearchFilter='all';opsResearchPage=1;renderResearchPage()">All</button>`;
   html += '</div>';
 
   const filtered = opsResearchFilter === 'all' ? opsResearchData
@@ -826,6 +840,8 @@ async function renderResearchPage() {
     });
   }
 
+  html += paginationHTML('/api/queue?view=research', 'renderResearchPage');
+
   el.innerHTML = html;
   perf.end();
 }
@@ -836,7 +852,7 @@ async function completeResearch(id) {
   });
   if (res.ok) showToast('Research completed', 'success');
   else showToast(res.error || 'Failed', 'error');
-  renderResearchPage();
+  refreshActiveOpsPage();
 }
 
 async function createFollowup(id) {
@@ -875,7 +891,7 @@ async function qualityMergeDuplicate(entityIdsJson, entityNamesJson) {
     return;
   }
   showToast('Entities merged', 'success');
-  renderDataQualityPage();
+  refreshActiveOpsPage();
 }
 
 async function qualityAddAlias(entityId, suggestedAlias) {
@@ -895,7 +911,7 @@ async function qualityAddAlias(entityId, suggestedAlias) {
     return;
   }
   showToast('Alias saved', 'success');
-  renderDataQualityPage();
+  refreshActiveOpsPage();
 }
 
 async function qualityLinkIdentity(entityId, entityName) {
@@ -923,7 +939,7 @@ async function qualityLinkIdentity(entityId, entityName) {
     return;
   }
   showToast('Identity linked', 'success');
-  renderDataQualityPage();
+  refreshActiveOpsPage();
 }
 
 async function qualitySetPrecedence(defaultField, defaultSource, defaultPrecedence) {
@@ -948,7 +964,7 @@ async function qualitySetPrecedence(defaultField, defaultSource, defaultPreceden
     return;
   }
   showToast('Source precedence saved', 'success');
-  renderDataQualityPage();
+  refreshActiveOpsPage();
 }
 
 function buildResearchTaskBrief(item) {
@@ -1180,7 +1196,7 @@ async function submitFollowupModal() {
   if (res.ok) {
     closeFollowupModal();
     showToast('Research completed + follow-up created', 'success');
-    renderResearchPage();
+    refreshActiveOpsPage();
   } else {
     showToast(res.error || 'Failed', 'error');
   }
@@ -1207,9 +1223,10 @@ async function renderMetricsPage() {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:metrics');
 
-  const [countsRes, oversightRes] = await Promise.all([
+  const [countsRes, oversightRes, syncHealthRes] = await Promise.all([
     opsApi('/api/queue?view=work_counts'),
-    opsApi('/api/workflows?action=oversight')
+    opsApi('/api/workflows?action=oversight'),
+    opsApi('/api/sync?action=health')
   ]);
 
   let html = '';
@@ -1229,6 +1246,26 @@ async function renderMetricsPage() {
     html += metricCardHTML('Research', c.research_active || 0, 'active tasks');
     html += metricCardHTML('Sync Errors', c.sync_errors || 0, 'connectors', c.sync_errors > 0 ? 'red' : 'green');
     html += '</div>';
+    if (c.refreshed_at) {
+      html += `<div class="widget" style="margin-top:12px"><div class="q-item-meta">Counts refreshed ${freshnessHTML(c.refreshed_at)}</div></div>`;
+    }
+  }
+
+  if (syncHealthRes.ok && syncHealthRes.data) {
+    const summary = syncHealthRes.data.summary || {};
+    const drift = syncHealthRes.data.queue_drift || {};
+    html += '<div class="widget"><div class="widget-title">Operational Signals</div>';
+    html += '<div class="metrics-grid">';
+    html += metricCardHTML(
+      'Outbound Success',
+      summary.outbound_success_rate_24h != null ? Math.round(summary.outbound_success_rate_24h * 100) + '%' : '--',
+      'last 24h',
+      summary.outbound_success_rate_24h != null && summary.outbound_success_rate_24h < 0.9 ? 'red' : 'green'
+    );
+    html += metricCardHTML('Degraded Connectors', summary.degraded || 0, 'need attention', (summary.degraded || 0) > 0 ? 'yellow' : 'green');
+    html += metricCardHTML('Queue Drift Gap', drift.estimated_gap || 0, 'Salesforce open-task delta', drift.drift_flag ? 'red' : 'green');
+    html += metricCardHTML('Drift Status', drift.drift_flag ? 'Review' : 'Stable', drift.source || 'sync health', drift.drift_flag ? 'red' : 'green');
+    html += '</div></div>';
   }
 
   // Team overview (manager only)
@@ -1332,28 +1369,54 @@ async function renderSyncHealthPage() {
     });
   }
 
+  const health = healthRes.ok ? (healthRes.data || {}) : {};
+  const summary = health.summary || {};
+  const unresolvedErrors = health.unresolved_errors || [];
+  const queueDrift = health.queue_drift || null;
+
   // Sync health summary
   if (healthRes.ok && healthRes.data) {
-    const h = healthRes.data;
     html += '<div class="widget" style="margin-top:16px"><div class="widget-title">Sync Summary</div>';
     html += '<div class="metrics-grid">';
-    html += metricCardHTML('Total Jobs', h.total_jobs || h.jobs_24h || 0, 'last 24h');
-    html += metricCardHTML('Success Rate', h.success_rate ? Math.round(h.success_rate * 100) + '%' : '--', 'last 24h', h.success_rate < 0.9 ? 'red' : 'green');
-    html += metricCardHTML('Errors', h.error_count || 0, 'last 24h', h.error_count > 0 ? 'red' : 'green');
-    html += metricCardHTML('Avg Duration', h.avg_duration ? h.avg_duration + 's' : '--', 'per job');
+    html += metricCardHTML('Healthy', summary.healthy || 0, 'connectors');
+    html += metricCardHTML('Degraded', summary.degraded || 0, 'connectors', (summary.degraded || 0) > 0 ? 'yellow' : 'green');
+    html += metricCardHTML('Errors', unresolvedErrors.length, 'unresolved sync issues', unresolvedErrors.length > 0 ? 'red' : 'green');
+    html += metricCardHTML(
+      'Outbound Success',
+      summary.outbound_success_rate_24h != null ? Math.round(summary.outbound_success_rate_24h * 100) + '%' : '--',
+      'completed outbound jobs, 24h',
+      summary.outbound_success_rate_24h != null && summary.outbound_success_rate_24h < 0.9 ? 'red' : 'green'
+    );
     html += '</div></div>';
   }
 
-  // Recent sync errors
-  if (healthRes.ok && healthRes.data?.recent_errors?.length) {
+  if (queueDrift) {
+    html += '<div class="widget" style="margin-top:16px"><div class="widget-title">Queue Drift</div>';
+    html += '<div class="metrics-grid">';
+    html += metricCardHTML('Open SF Tasks', queueDrift.salesforce_open_task_count || 0, 'inbox items');
+    html += metricCardHTML('Last SF Pull', queueDrift.last_sf_records_processed || 0, 'records processed');
+    html += metricCardHTML('Estimated Gap', queueDrift.estimated_gap || 0, 'open tasks vs last pull', queueDrift.drift_flag ? 'red' : 'green');
+    html += metricCardHTML('Drift Flag', queueDrift.drift_flag ? 'Review' : 'Stable', queueDrift.last_inbound_completed_at ? `last inbound ${freshnessHTML(queueDrift.last_inbound_completed_at)}` : 'no inbound timestamp', queueDrift.drift_flag ? 'red' : 'green');
+    html += '</div>';
+    html += `<div class="q-item" style="margin-top:12px">
+      <div class="q-item-meta">
+        <span>Source: ${esc(queueDrift.source || 'unknown')}</span>
+        ${queueDrift.last_inbound_job_id ? `<span>Job: ${esc(queueDrift.last_inbound_job_id)}</span>` : ''}
+      </div>
+    </div>`;
+    html += '</div>';
+  }
+
+  // Unresolved sync errors
+  if (unresolvedErrors.length) {
     html += '<div class="widget" style="border-color:var(--red)"><div class="widget-title">Recent Errors</div>';
-    healthRes.data.recent_errors.forEach(err => {
+    unresolvedErrors.forEach(err => {
       html += `<div class="q-item overdue">
         <div class="q-item-header">
-          <span class="q-item-title">${esc(err.connector_type || 'Unknown')} — ${esc(err.error_category || 'Error')}</span>
-          ${freshnessHTML(err.occurred_at)}
+          <span class="q-item-title">${esc(err.error_code || 'Sync Error')}</span>
+          ${freshnessHTML(err.created_at)}
         </div>
-        <div class="q-item-meta"><span style="color:var(--red)">${esc(err.message || '')}</span></div>
+        <div class="q-item-meta"><span style="color:var(--red)">${esc(err.error_message || '')}</span></div>
         <div class="q-actions">
           <button class="q-action" onclick="retrySync('${err.id}')">Retry</button>
         </div>
@@ -1674,6 +1737,16 @@ async function renderPerfDashboard(container) {
         <span>${rollout.status === 'active' ? 'Feature routing config is present and should be observable below.' : 'Set AI_CHAT_POLICY or feature overrides to start a staged routing rollout.'}</span>
       </div>
     </div>`;
+    if (rollout.suggestion) {
+      html += `<div class="q-item" style="margin-bottom:12px;border-color:var(--accent)">
+        <div class="q-item-header">
+          <span class="q-item-title">Suggested Next Step</span>
+        </div>
+        <div class="q-item-meta">
+          <span>${esc(rollout.suggestion)}</span>
+        </div>
+      </div>`;
+    }
     html += `<div class="q-item" style="margin-bottom:12px">
       <div class="q-item-header">
         <span class="q-item-title">Routing Policy</span>

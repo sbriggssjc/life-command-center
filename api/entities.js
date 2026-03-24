@@ -18,6 +18,18 @@ import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from './_shared/lifecycle.js';
 
+function pageMeta(page, perPage, totalCount) {
+  const totalPages = Math.ceil((totalCount || 0) / perPage);
+  return {
+    page,
+    per_page: perPage,
+    total: totalCount || 0,
+    total_pages: totalPages,
+    has_next: page < totalPages,
+    has_prev: page > 1
+  };
+}
+
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
@@ -192,6 +204,10 @@ export default withErrorHandler(async function handler(req, res) {
     }
 
     // List with filters
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const perPage = Math.min(Math.max(parseInt(req.query.per_page) || parseInt(req.query.limit) || 50, 1), 100);
+    const offset = (page - 1) * perPage;
+
     let path = `entities?workspace_id=eq.${workspaceId}&select=id,entity_type,name,domain,city,state,email,org_type,asset_type,created_at`;
     if (entity_type && isValidEnum(entity_type, ENTITY_TYPES)) {
       path += `&entity_type=eq.${entity_type}`;
@@ -199,10 +215,14 @@ export default withErrorHandler(async function handler(req, res) {
     if (domain && isValidEnum(domain, DOMAINS)) {
       path += `&domain=eq.${domain}`;
     }
-    path += paginationParams(req.query);
+    path += `&limit=${perPage}&offset=${offset}&order=${req.query.order || 'created_at.desc'}`;
 
     const result = await opsQuery('GET', path);
-    return res.status(200).json({ entities: result.data || [], count: result.count });
+    return res.status(200).json({
+      entities: result.data || [],
+      count: result.count,
+      pagination: pageMeta(page, perPage, result.count)
+    });
   }
 
   // POST — create entity or link external identity

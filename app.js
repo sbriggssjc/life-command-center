@@ -5812,8 +5812,8 @@ async function ingestLiveIngestFiles(domainKey, fileList) {
   const state = getLiveIngestState(domainKey);
   for (const file of files.slice(0, 6)) {
     try {
-      const item = await normalizeLiveIngestFile(file);
-      if (item) state.attachments.push(item);
+      const items = await normalizeLiveIngestFile(file);
+      if (Array.isArray(items)) state.attachments.push(...items);
     } catch (err) {
       showToast(`Skipped ${file.name}: ${err.message}`, 'error');
     }
@@ -5889,32 +5889,35 @@ async function captureLiveIngestScreen(domainKey) {
 }
 
 async function normalizeLiveIngestFile(file) {
+  const lowerName = String(file.name || '').toLowerCase();
+  if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
+    return await convertPdfToImageAttachments(file);
+  }
   if (file.type.startsWith('image/')) {
     const dataUrl = await readFileAsDataUrl(file);
-    return {
+    return [{
       id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       kind: 'image',
       name: file.name || 'image',
       mime_type: file.type,
       data_url: dataUrl
-    };
+    }];
   }
 
-  const lowerName = String(file.name || '').toLowerCase();
   const isTextLike = file.type.startsWith('text/')
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images and text-based exports are supported directly. For PDFs or web pages, use screenshots.');
+    throw new Error('Only images, PDFs, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
-  return {
+  return [{
     id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind: 'text',
     name: file.name || 'text',
     mime_type: file.type || 'text/plain',
     text: String(text || '').slice(0, 30000)
-  };
+  }];
 }
 
 function readFileAsDataUrl(file) {
@@ -5932,6 +5935,54 @@ function readFileAsText(file) {
     reader.onload = () => resolve(String(reader.result || ''));
     reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
     reader.readAsText(file);
+  });
+}
+
+async function convertPdfToImageAttachments(file) {
+  if (typeof window.pdfjsLib === 'undefined') {
+    throw new Error('PDF renderer not available');
+  }
+
+  if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.worker.min.js';
+  }
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const pdf = await window.pdfjsLib.getDocument({ data: buffer }).promise;
+  const pageCount = Math.min(pdf.numPages || 0, 3);
+  const items = [];
+
+  for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1.35 });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const dataUrl = canvas.toDataURL('image/png');
+    items.push({
+      id: `li-${Date.now()}-${pageNum}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'image',
+      name: `${file.name || 'document.pdf'} - page ${pageNum}`,
+      mime_type: 'image/png',
+      data_url: dataUrl
+    });
+  }
+
+  if (!items.length) {
+    throw new Error('PDF did not contain renderable pages');
+  }
+
+  return items;
+}
+
+function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
   });
 }
 
