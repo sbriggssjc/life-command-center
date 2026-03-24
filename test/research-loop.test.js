@@ -92,4 +92,103 @@ describe('research-loop helper', () => {
     assert.equal(result.researchTask.id, 'research-1');
     assert.equal(result.followupAction.id, 'action-1');
   });
+
+  it('aborts research closure when entity reconciliation fails', async () => {
+    let patchedResearchTask = false;
+
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/external_identities?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.includes('/entities?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.endsWith('/entities') && opts.method === 'POST') {
+        return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
+      }
+      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+        return jsonResponse({ error: 'identity failure' }, false, 500);
+      }
+      if (u.includes('/research_tasks?id=eq.')) {
+        patchedResearchTask = true;
+        return jsonResponse([{ id: 'research-1' }]);
+      }
+      throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+    };
+
+    const result = await closeResearchLoop({
+      workspaceId: 'ws-1',
+      user: { id: 'user-1' },
+      sourceSystem: 'gov_supabase',
+      sourceType: 'asset',
+      sourceRecordId: 'prop-123',
+      externalId: 'prop-123',
+      researchType: 'ownership',
+      domain: 'government',
+      entitySeedFields: {
+        name: '123 Main St',
+        address: '123 Main St',
+        city: 'Tulsa',
+        state: 'OK',
+        asset_type: 'government_leased'
+      },
+      notes: 'Resolved owner'
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'Failed to create external identity link');
+    assert.equal(patchedResearchTask, false);
+  });
+
+  it('returns an error when research task update fails after task resolution', async () => {
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/external_identities?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.includes('/entities?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.endsWith('/entities') && opts.method === 'POST') {
+        return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
+      }
+      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+        return jsonResponse([{ id: 'ext-1', entity_id: 'entity-1' }]);
+      }
+      if (u.includes('/research_tasks?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.endsWith('/research_tasks') && opts.method === 'POST') {
+        return jsonResponse([{ id: 'research-1', status: 'in_progress' }]);
+      }
+      if (u.includes('/research_tasks?id=eq.research-1') && opts.method === 'PATCH') {
+        return jsonResponse({ error: 'patch failed' }, false, 500);
+      }
+      throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+    };
+
+    const result = await closeResearchLoop({
+      workspaceId: 'ws-1',
+      user: { id: 'user-1' },
+      sourceSystem: 'gov_supabase',
+      sourceType: 'asset',
+      sourceRecordId: 'prop-123',
+      externalId: 'prop-123',
+      researchType: 'ownership',
+      domain: 'government',
+      entitySeedFields: {
+        name: '123 Main St',
+        address: '123 Main St',
+        city: 'Tulsa',
+        state: 'OK',
+        asset_type: 'government_leased'
+      },
+      notes: 'Resolved owner'
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'Failed to update research task');
+    assert.deepEqual(result.detail, { error: 'patch failed' });
+  });
 });

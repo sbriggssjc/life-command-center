@@ -16,13 +16,25 @@ export default withErrorHandler(async function handler(req, res) {
   const workspaceId = req.headers['x-lcc-workspace'] || user.memberships[0]?.workspace_id;
   if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
 
-  const { message, context, history } = req.body || {};
+  const { message, context, history, attachments } = req.body || {};
   if (!message || typeof message !== 'string') {
     return res.status(400).json({ error: 'message is required' });
   }
+  const safeAttachments = Array.isArray(attachments)
+    ? attachments
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, 3)
+      .map((item) => ({
+        type: typeof item.type === 'string' ? item.type : 'image',
+        mime_type: typeof item.mime_type === 'string' ? item.mime_type : '',
+        name: typeof item.name === 'string' ? item.name : '',
+        data_url: typeof item.data_url === 'string' ? item.data_url : '',
+      }))
+      .filter((item) => item.data_url)
+    : [];
 
   const startedAt = Date.now();
-  const result = await invokeChatProvider({ message, context, history, user, workspaceId });
+  const result = await invokeChatProvider({ message, context, history, attachments: safeAttachments, user, workspaceId });
   const durationMs = Date.now() - startedAt;
 
   const usage = result.data?.usage || result.data?.metrics?.usage || null;
@@ -32,6 +44,8 @@ export default withErrorHandler(async function handler(req, res) {
     status: result.status,
     had_context: !!context && Object.keys(context || {}).length > 0,
     history_count: Array.isArray(history) ? history.length : 0,
+    attachment_count: safeAttachments.length,
+    attachment_types: safeAttachments.map((item) => item.type || 'image'),
     message_chars: message.length,
     usage,
   });

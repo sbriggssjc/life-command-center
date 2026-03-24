@@ -78,4 +78,43 @@ describe('entity-link helper', () => {
     assert.ok(calls.some(call => call.url.includes('/entities') && call.method === 'POST'));
     assert.ok(calls.some(call => call.url.includes('/external_identities') && call.method === 'POST'));
   });
+
+  it('returns an error when external identity creation fails after entity creation', async () => {
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/external_identities?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.includes('/entities?') && opts.method === 'GET') {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/0' });
+      }
+      if (u.endsWith('/entities') && opts.method === 'POST') {
+        return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
+      }
+      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+        return jsonResponse({ error: 'duplicate conflict' }, false, 409);
+      }
+      throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
+    };
+
+    const result = await ensureEntityLink({
+      workspaceId: 'ws-1',
+      userId: 'user-1',
+      sourceSystem: 'gov_supabase',
+      sourceType: 'asset',
+      externalId: 'prop-123',
+      domain: 'government',
+      seedFields: {
+        name: '123 Main St',
+        address: '123 Main St',
+        city: 'Tulsa',
+        state: 'OK',
+        asset_type: 'government_leased'
+      }
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'Failed to create external identity link');
+    assert.equal(result.entity.id, 'entity-1');
+  });
 });

@@ -775,6 +775,8 @@ body.compact .greeting { font-size: 18px; }
 .intake-box { background: var(--s2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .intake-meta { font-size: 12px; color: var(--text2); margin-bottom: 8px; }
 .intake-notice { font-size: 12px; color: var(--yellow); margin-bottom: 8px; line-height: 1.4; }
+.intake-preview { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+.intake-preview img { display: block; width: 100%; max-height: 280px; object-fit: contain; background: #fff; }
 
 /* ============================================================
    TODAY PAGE — Canonical model integration styles

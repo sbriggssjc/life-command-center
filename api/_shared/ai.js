@@ -29,7 +29,7 @@ export async function logAiMetric(workspaceId, userId, endpoint, durationMs, met
   }
 }
 
-export async function invokeChatProvider({ message, context, history, user, workspaceId }) {
+export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   if (cfg.provider === 'disabled' || cfg.provider === 'none') {
     return { ok: false, status: 503, data: { error: 'AI chat provider is disabled' }, provider: cfg.provider };
@@ -51,6 +51,7 @@ export async function invokeChatProvider({ message, context, history, user, work
       message,
       context: context || {},
       history: Array.isArray(history) ? history : [],
+      attachments: Array.isArray(attachments) ? attachments : [],
     }),
   });
 

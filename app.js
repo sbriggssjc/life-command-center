@@ -5090,7 +5090,7 @@ function formatCopilotText(text) {
     .replace(/`(.+?)`/g, '<code style="background:var(--s2);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
 }
 
-async function invokeLccAssistant({ message, context = {}, history = [], feature = 'embedded_assistant' }) {
+async function invokeLccAssistant({ message, context = {}, history = [], attachments = [], feature = 'embedded_assistant' }) {
   const res = await fetch(CHAT_API, {
     method: 'POST',
     headers: {
@@ -5104,6 +5104,7 @@ async function invokeLccAssistant({ message, context = {}, history = [], feature
         assistant_feature: feature,
       },
       history: Array.isArray(history) ? history : [],
+      attachments: Array.isArray(attachments) ? attachments : [],
     }),
   });
 

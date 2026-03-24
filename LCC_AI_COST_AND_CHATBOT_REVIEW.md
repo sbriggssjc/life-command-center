@@ -80,6 +80,8 @@
 - The intake workflow can read text-based files locally in-browser and accept pasted/extracted research text.
 - Intake analysis now routes through the repo-local AI endpoint and can be applied directly into research notes.
 - PDF and image uploads are explicitly flagged as pending OCR/manual text extraction instead of pretending to extract them.
+- Extended the intake workflow to support review-first screenshot analysis with uploaded or pasted images.
+- Added attachment plumbing from the UI through `/api/chat` so image research artifacts can be forwarded to the configured AI provider when supported.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

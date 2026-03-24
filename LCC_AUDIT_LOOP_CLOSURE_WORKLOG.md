@@ -38,6 +38,7 @@
 - Added targeted tests for the new loop-closure helpers:
   - `test/entity-link.test.js`
   - `test/research-loop.test.js`
+  - extended with failure-path coverage for entity-link and research-loop abort behavior
 - Added targeted mutation-service tests in `test/apply-change.test.js` covering:
   - composite-filter PATCH behavior
   - audited insert mode returning inserted rows
@@ -77,6 +78,9 @@
   - `system_tokens` WebEx token upserts
 - Kept Teams/WebEx/SMS external sends as canonical side effects, but now their internal contact/log writes pass through the audited layer.
 - Fixed contact-hub manual mutation handling so classify/update/merge/dismiss stop and return an error when an audited Gov write fails, instead of continuing after a failed write.
+- Added broader loop-edge verification:
+  - `ensureEntityLink()` now has a test for external identity creation failure after entity creation
+  - `closeResearchLoop()` now has tests for entity reconciliation failure and research-task patch failure
 - Completed a broader repo sweep after the contacts pass:
   - remaining write paths in `api/sync.js` are canonical connector/outbound jobs
   - `api/data-proxy.js` remains the generic proxy layer, not a business-flow save surface
@@ -98,6 +102,8 @@
 - `node --check detail.js` passed again after moving ownership/contact/sales/loan inserts onto the audited path.
 - `node --check gov.js` passed again after moving sale/loan inserts onto the audited path.
 - `node --check test/apply-change.test.js` passed.
+- `node --check test/entity-link.test.js` passed after adding entity-link failure coverage.
+- `node --check test/research-loop.test.js` passed after adding research-loop abort/failure coverage.
 - `node --test test/apply-change.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --check api/contacts.js` passed after the audited contact write refactor.
 - `node --check test/contacts.test.js` passed.
@@ -106,6 +112,8 @@
 - `node --test test/raw-write-guardrail.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test test/apply-change.test.js` passed again after adding the pending-review failure-path case.
 - `node --test test/contacts.test.js` passed again after adding the audited-write failure-path case and fixing handler error propagation.
+- `node --test test/entity-link.test.js` passed outside the sandbox after adding external-identity failure coverage.
+- `node --test test/research-loop.test.js` passed outside the sandbox after adding cross-surface research-loop failure coverage.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
@@ -117,4 +125,5 @@
 - The primary remaining repo-wide review item is explicit policy/cleanup around exempt write surfaces: connector sync, external messaging APIs, token refresh, and the generic data proxy.
 - Repo-wide write policy is now explicit; the remaining work is broader end-to-end verification rather than major write-path refactoring.
 - Remaining verification work is now concentrated on broader cross-surface scenarios rather than single-handler mutation plumbing.
+- The core helper layer now has both happy-path and failure-path coverage for entity reconciliation, research closure, audited mutations, and audited contact writes.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

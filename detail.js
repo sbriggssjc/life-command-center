@@ -15,6 +15,7 @@ let _udIntakeState = {
   fileType: '',
   notice: '',
   text: '',
+  imageDataUrl: '',
   loading: false,
   analysis: '',
   error: '',
@@ -1464,7 +1465,8 @@ function _udResearchIntakeSection() {
       <div class="intake-meta">${esc(meta || 'No file loaded. Text-based files can be read locally in-browser.')}</div>
       ${intake.notice ? `<div class="intake-notice">${esc(intake.notice)}</div>` : ''}
       <input type="file" accept=".txt,.md,.csv,.json,.log,.html,.htm,.xml,.yaml,.yml,.rtf,.pdf,image/*" onchange="_intelHandleIntakeFile(this)" style="width:100%;margin-bottom:10px">
-      <textarea id="intelIntakeText" rows="8" placeholder="Paste copied text, OCR output, broker notes, call notes, listing text, or extracted document text..." oninput="_intelUpdateIntakeText(this.value)" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box">${esc(intake.text || '')}</textarea>
+      ${intake.imageDataUrl ? `<div class="intake-preview"><img src="${esc(intake.imageDataUrl)}" alt="Research intake screenshot preview"></div>` : ''}
+      <textarea id="intelIntakeText" rows="8" placeholder="Paste copied text, OCR output, broker notes, call notes, listing text, or extracted document text. You can also paste a screenshot directly into this box." oninput="_intelUpdateIntakeText(this.value)" onpaste="_intelHandleIntakePaste(event)" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box">${esc(intake.text || '')}</textarea>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="q-action primary" onclick="_intelAnalyzeIntake()">Analyze Intake</button>
         <button class="q-action" onclick="_intelClearIntake()">Clear</button>
@@ -1495,6 +1497,15 @@ function _intelUpdateIntakeText(value) {
   _udIntakeState.text = value || '';
 }
 
+function _intelReadFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result || '');
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function _intelHandleIntakeFile(input) {
   const file = input?.files?.[0];
   if (!file) return;
@@ -1510,14 +1521,29 @@ async function _intelHandleIntakeFile(input) {
   const isPdf = lowerName.endsWith('.pdf') || file.type === 'application/pdf';
   const isImage = (file.type || '').startsWith('image/');
 
-  if (isPdf || isImage) {
+  if (isPdf) {
     _udIntakeState.notice = 'This file type is not extracted in-browser yet. Paste OCR or copied text into the box below, then analyze.';
+    _udIntakeState.imageDataUrl = '';
+    refreshDetailPanel();
+    return;
+  }
+
+  if (isImage) {
+    try {
+      _udIntakeState.imageDataUrl = await _intelReadFileAsDataUrl(file);
+      _udIntakeState.notice = 'Screenshot loaded for review-first analysis. Add any copied text below if you want the assistant to combine both.';
+      _udIntakeState.error = '';
+    } catch (e) {
+      _udIntakeState.imageDataUrl = '';
+      _udIntakeState.error = `Could not read ${file.name}: ${e.message}`;
+    }
     refreshDetailPanel();
     return;
   }
 
   if (!isTextFile) {
     _udIntakeState.notice = 'This file type is not supported for local extraction yet. Paste copied text into the box below to continue.';
+    _udIntakeState.imageDataUrl = '';
     refreshDetailPanel();
     return;
   }
@@ -1525,9 +1551,34 @@ async function _intelHandleIntakeFile(input) {
   try {
     _udIntakeState.text = await file.text();
     _udIntakeState.notice = `Loaded ${file.name} for local review.`;
+    _udIntakeState.imageDataUrl = '';
   } catch (e) {
     _udIntakeState.notice = '';
     _udIntakeState.error = `Could not read ${file.name}: ${e.message}`;
+  }
+
+  refreshDetailPanel();
+}
+
+async function _intelHandleIntakePaste(event) {
+  const items = Array.from(event?.clipboardData?.items || []);
+  const imageItem = items.find((item) => item.type && item.type.startsWith('image/'));
+  if (!imageItem) return;
+
+  const file = imageItem.getAsFile();
+  if (!file) return;
+  event.preventDefault();
+
+  _udIntakeState.fileName = file.name || 'clipboard-image.png';
+  _udIntakeState.fileType = file.type || 'image/png';
+  _udIntakeState.error = '';
+
+  try {
+    _udIntakeState.imageDataUrl = await _intelReadFileAsDataUrl(file);
+    _udIntakeState.notice = 'Pasted screenshot loaded for review-first analysis. Add copied text below if you want the assistant to combine both.';
+  } catch (e) {
+    _udIntakeState.imageDataUrl = '';
+    _udIntakeState.error = `Could not read pasted screenshot: ${e.message}`;
   }
 
   refreshDetailPanel();
@@ -1538,7 +1589,8 @@ function _intelBuildIntakePrompt() {
   const p = _udCache.property || {};
   const fallback = _udCache.fallback || {};
   const intakeText = (_udIntakeState.text || '').trim();
-  if (!intakeText) return '';
+  const hasImage = !!_udIntakeState.imageDataUrl;
+  if (!intakeText && !hasImage) return '';
 
   return [
     'You are assisting with a research intake workflow in commercial real estate.',
@@ -1550,9 +1602,11 @@ function _intelBuildIntakePrompt() {
     `Domain: ${_udCache.db || 'unknown'}`,
     `Lease number: ${p.lease_number || fallback.lease_number || 'Unknown'}`,
     `Loaded file: ${_udIntakeState.fileName || 'None'}`,
+    `Screenshot attached: ${hasImage ? 'Yes' : 'No'}`,
     '',
-    'Intake material:',
-    intakeText,
+    hasImage ? 'A screenshot is attached. Use it as a review artifact, but note any ambiguity caused by image quality or missing context.' : '',
+    intakeText ? 'Intake material:' : '',
+    intakeText || '',
     '',
     'Return in this format:',
     '1. Executive summary',
@@ -1585,6 +1639,12 @@ async function _intelAnalyzeIntake() {
         domain: _udCache.db || null,
         file_name: _udIntakeState.fileName || null,
       },
+      attachments: _udIntakeState.imageDataUrl ? [{
+        type: 'image',
+        mime_type: _udIntakeState.fileType || 'image/png',
+        name: _udIntakeState.fileName || 'research-intake.png',
+        data_url: _udIntakeState.imageDataUrl,
+      }] : [],
       feature: 'detail_intake_assistant',
     });
     _udIntakeState.analysis = reply;
@@ -1632,6 +1692,7 @@ function _intelClearIntake() {
     fileType: '',
     notice: '',
     text: '',
+    imageDataUrl: '',
     loading: false,
     analysis: '',
     error: '',
@@ -2854,6 +2915,7 @@ window._intelSaveNotes = _intelSaveNotes;
 window._intelHandleIntakeFile = _intelHandleIntakeFile;
 window._intelUpdateIntakeText = _intelUpdateIntakeText;
 window._intelAnalyzeIntake = _intelAnalyzeIntake;
+window._intelHandleIntakePaste = _intelHandleIntakePaste;
 window._intelCopyIntakeAnalysis = _intelCopyIntakeAnalysis;
 window._intelApplyIntakeAnalysis = _intelApplyIntakeAnalysis;
 window._intelClearIntake = _intelClearIntake;
