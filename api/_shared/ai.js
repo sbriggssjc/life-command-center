@@ -2,18 +2,52 @@ import { opsQuery } from './ops-db.js';
 
 const DEFAULT_EDGE_FN_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_CHAT_POLICY = 'manual';
+const CHAT_POLICY_PRESETS = {
+  balanced: {
+    providers: {
+      detail_intake_assistant: 'ollama',
+      detail_intel_assistant: 'ollama',
+      ops_research_assistant: 'ollama',
+      detail_ownership_assistant: 'openai',
+      global_copilot: 'edge',
+    },
+    models: {
+      detail_intake_assistant: 'llama3.2-vision',
+      detail_intel_assistant: 'llama3.1',
+      ops_research_assistant: 'llama3.1',
+      detail_ownership_assistant: 'gpt-5-mini',
+    },
+  },
+};
 
 function normalizeBaseUrl(url) {
   return (url || '').replace(/\/+$/, '');
 }
 
+function parseJsonEnv(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 export function getAiConfig() {
+  const policyName = (process.env.AI_CHAT_POLICY || DEFAULT_CHAT_POLICY).toLowerCase();
+  const preset = CHAT_POLICY_PRESETS[policyName] || { providers: {}, models: {} };
+  const envFeatureProviders = parseJsonEnv(process.env.AI_CHAT_FEATURE_PROVIDERS, {});
+  const envFeatureModels = parseJsonEnv(process.env.AI_CHAT_FEATURE_MODELS, {});
   return {
     provider: (process.env.AI_CHAT_PROVIDER || 'edge').toLowerCase(),
     edgeBaseUrl: normalizeBaseUrl(process.env.AI_CHAT_URL || process.env.EDGE_FUNCTION_URL || DEFAULT_EDGE_FN_URL),
     openaiBaseUrl: normalizeBaseUrl(process.env.AI_API_BASE_URL || DEFAULT_OPENAI_BASE_URL),
     openaiApiKey: process.env.OPENAI_API_KEY || '',
     chatModel: process.env.AI_CHAT_MODEL || process.env.AI_MODEL || 'gpt-5-mini',
+    chatPolicy: policyName,
+    featureProviders: { ...preset.providers, ...envFeatureProviders },
+    featureModels: { ...preset.models, ...envFeatureModels },
   };
 }
 
@@ -88,6 +122,17 @@ export function normalizeAiTelemetry(payload = {}) {
   };
 }
 
+export function resolveAiRoute(cfg, context = {}) {
+  const feature = context?.assistant_feature || context?.feature || 'global_copilot';
+  const configuredProvider = cfg.featureProviders?.[feature];
+  const configuredModel = cfg.featureModels?.[feature];
+  return {
+    feature,
+    provider: (configuredProvider || cfg.provider || 'edge').toLowerCase(),
+    model: configuredModel || cfg.chatModel || 'gpt-5-mini',
+  };
+}
+
 function buildContextText(context = {}) {
   if (!context || typeof context !== 'object' || !Object.keys(context).length) return '';
   return `Context JSON:\n${JSON.stringify(context, null, 2)}`;
@@ -136,7 +181,7 @@ function extractResponseText(data = {}) {
   return parts.join('\n').trim();
 }
 
-async function invokeOpenAIResponses({ message, context, history, attachments, cfg }) {
+async function invokeOpenAIResponses({ message, context, history, attachments, cfg, route }) {
   if (!cfg.openaiApiKey) {
     return { ok: false, status: 503, data: { error: 'OPENAI_API_KEY is not configured' }, provider: 'openai' };
   }
@@ -159,7 +204,7 @@ async function invokeOpenAIResponses({ message, context, history, attachments, c
       Authorization: `Bearer ${cfg.openaiApiKey}`,
     },
     body: JSON.stringify({
-      model: cfg.chatModel,
+      model: route.model,
       input,
       store: false,
     }),
@@ -180,7 +225,7 @@ async function invokeOpenAIResponses({ message, context, history, attachments, c
     baseUrl: cfg.openaiBaseUrl,
     data: {
       ...data,
-      model: data?.model || cfg.chatModel,
+      model: data?.model || route.model,
       response: responseText || data?.response || data?.message || data?.reply || '',
     },
   };
@@ -191,7 +236,7 @@ function stripDataUrlPrefix(dataUrl = '') {
   return match?.[1] || dataUrl;
 }
 
-async function invokeOllamaChat({ message, context, history, attachments, cfg }) {
+async function invokeOllamaChat({ message, context, history, attachments, cfg, route }) {
   const baseUrl = cfg.openaiBaseUrl || 'http://localhost:11434/api';
   const messages = [];
   const contextText = buildContextText(context);
@@ -223,7 +268,7 @@ async function invokeOllamaChat({ message, context, history, attachments, cfg })
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: cfg.chatModel,
+      model: route.model,
       messages,
       stream: false,
     }),
@@ -243,7 +288,7 @@ async function invokeOllamaChat({ message, context, history, attachments, cfg })
     baseUrl,
     data: {
       ...data,
-      model: data?.model || cfg.chatModel,
+      model: data?.model || route.model,
       response: data?.message?.content || data?.response || '',
       usage: {
         prompt_tokens: Number(data?.prompt_eval_count || 0),
@@ -256,20 +301,21 @@ async function invokeOllamaChat({ message, context, history, attachments, cfg })
 
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
-  if (cfg.provider === 'disabled' || cfg.provider === 'none') {
-    return { ok: false, status: 503, data: { error: 'AI chat provider is disabled' }, provider: cfg.provider };
+  const route = resolveAiRoute(cfg, context);
+  if (route.provider === 'disabled' || route.provider === 'none') {
+    return { ok: false, status: 503, data: { error: 'AI chat provider is disabled' }, provider: route.provider };
   }
 
-  if (cfg.provider === 'openai') {
-    return invokeOpenAIResponses({ message, context, history, attachments, cfg });
+  if (route.provider === 'openai') {
+    return invokeOpenAIResponses({ message, context, history, attachments, cfg, route });
   }
 
-  if (cfg.provider === 'ollama') {
-    return invokeOllamaChat({ message, context, history, attachments, cfg });
+  if (route.provider === 'ollama') {
+    return invokeOllamaChat({ message, context, history, attachments, cfg, route });
   }
 
-  if (cfg.provider !== 'edge') {
-    return { ok: false, status: 400, data: { error: `Unsupported AI chat provider: ${cfg.provider}` }, provider: cfg.provider };
+  if (route.provider !== 'edge') {
+    return { ok: false, status: 400, data: { error: `Unsupported AI chat provider: ${route.provider}` }, provider: route.provider };
   }
 
   const res = await fetch(`${cfg.edgeBaseUrl}/chat`, {
@@ -295,5 +341,5 @@ export async function invokeChatProvider({ message, context, history, attachment
     data = { error: 'Invalid AI provider response' };
   }
 
-  return { ok: res.ok, status: res.status, data, provider: cfg.provider, baseUrl: cfg.edgeBaseUrl };
+  return { ok: res.ok, status: res.status, data, provider: route.provider, baseUrl: cfg.edgeBaseUrl, route };
 }

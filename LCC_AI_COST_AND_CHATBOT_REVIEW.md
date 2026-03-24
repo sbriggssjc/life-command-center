@@ -97,6 +97,9 @@
 - Added a repo-local direct OpenAI chat path behind `AI_CHAT_PROVIDER=openai`, so `/api/chat` can bypass the external edge function when you want a first-party telemetry contract.
 - Added `AI_CHAT_MODEL` to `.env.example` so chat routing can move independently from the batch research model.
 - Added a repo-local Ollama chat path behind `AI_CHAT_PROVIDER=ollama`, using Ollama's `/api/chat` endpoint with local image support and normalized token telemetry from prompt/eval counts.
+- Added per-feature provider/model routing for `/api/chat`, so individual assistant flows can be assigned to `edge`, `openai`, or `ollama` without changing the frontend call sites.
+- Added `AI_CHAT_FEATURE_PROVIDERS` and `AI_CHAT_FEATURE_MODELS` env hooks for feature-level routing control.
+- Added an opt-in `AI_CHAT_POLICY=balanced` preset that applies the recommended first-cut routing mix without requiring manual JSON maps for every feature.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

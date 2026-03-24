@@ -3147,6 +3147,7 @@ function renderGovResearch() {
   }
 
   let html = '<div class="research-workbench">';
+  html += renderLiveIngestWorkbench('government');
 
   // Mode toggle — always visible so user can switch modes
   html += `<div class="research-mode-toggle">
@@ -3186,12 +3187,14 @@ function renderGovResearch() {
       <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
     </div>`;
     html += '</div>';
+    setTimeout(() => bindLiveIngestWorkbench('government'), 0);
     return html;
   }
 
   // Render the research card (progress + card)
   html += renderResearchInner();
   html += '</div>';
+  setTimeout(() => bindLiveIngestWorkbench('government'), 0);
   return html;
 }
 

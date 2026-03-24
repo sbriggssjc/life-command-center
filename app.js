@@ -5338,6 +5338,792 @@ function dismissInstall() {
   if (banner) banner.remove();
 }
 
+// ============================================================
+// LIVE INGEST WORKBENCH
+// Shared multimodal intake for Government + Dialysis research
+// ============================================================
+
+const LIVE_INGEST_ALLOWED_TABLES = {
+  government: ['properties', 'prospect_leads', 'ownership_history', 'sales_transactions', 'loans', 'research_queue_outcomes'],
+  dialysis: ['properties', 'ownership_history', 'sales_transactions', 'research_queue_outcomes']
+};
+
+const liveIngestState = {
+  government: createLiveIngestDomainState(),
+  dialysis: createLiveIngestDomainState()
+};
+
+function createLiveIngestDomainState() {
+  return {
+    sourceLabel: '',
+    notes: '',
+    attachments: [],
+    lookupQuery: '',
+    lookupLoading: false,
+    lookupResults: [],
+    boundTarget: null,
+    proposal: null,
+    extracting: false,
+    applying: false,
+    error: '',
+    lastAppliedAt: '',
+    rawResponse: ''
+  };
+}
+
+function getLiveIngestState(domainKey) {
+  if (!liveIngestState[domainKey]) liveIngestState[domainKey] = createLiveIngestDomainState();
+  return liveIngestState[domainKey];
+}
+
+function renderLiveIngestWorkbench(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const prefix = `live-ingest-${domainKey}`;
+  const attachmentHtml = state.attachments.length
+    ? state.attachments.map((item) => {
+        const meta = item.kind === 'image' ? 'Image' : 'Text';
+        return `<div class="live-ingest-chip" title="${esc(item.name || meta)}">
+          <span>${esc(item.name || meta)}</span>
+          <button type="button" data-live-ingest-remove="${esc(item.id)}" data-domain="${domainKey}">&times;</button>
+        </div>`;
+      }).join('')
+    : '<div class="live-ingest-empty">No attachments yet. Drop screenshots, paste clipboard images, or attach text/HTML/email files.</div>';
+
+  const proposal = state.proposal;
+  const ops = Array.isArray(proposal?.operations) ? proposal.operations : [];
+  const effectiveContext = getLiveIngestEffectiveContext(domainKey);
+  const proposalHtml = proposal
+    ? `<div class="live-ingest-results">
+        <div class="live-ingest-results-head">
+          <div>
+            <div class="live-ingest-results-title">Proposed Writeback</div>
+            <div class="live-ingest-results-sub">${esc(proposal.summary || 'No summary returned')}</div>
+          </div>
+          <div class="live-ingest-results-meta">${ops.length} op${ops.length === 1 ? '' : 's'}</div>
+        </div>
+        ${proposal.missing_information?.length ? `<div class="live-ingest-callout warn">${proposal.missing_information.map(esc).join('<br>')}</div>` : ''}
+        ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
+        <div class="live-ingest-op-list">
+          ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
+        </div>
+        <div class="live-ingest-actions">
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${state.applying ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
+          ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
+        </div>
+      </div>`
+    : '';
+
+  return `<section class="live-ingest-card">
+    <div class="live-ingest-head">
+      <div>
+        <div class="live-ingest-kicker">Live Intake</div>
+        <h3>Drag files, paste screenshots, and route extracted facts into ${domainKey === 'government' ? 'Government' : 'Dialysis'}</h3>
+        <p>Use this for emails, web pages, screenshots, and saved text exports. The model proposes audited updates before anything is written.</p>
+      </div>
+      <div class="live-ingest-context">${renderLiveIngestContextSummary(effectiveContext)}</div>
+    </div>
+    <div class="live-ingest-grid">
+      <div class="live-ingest-pane">
+        <div class="live-ingest-dropzone" id="${prefix}-dropzone" tabindex="0">
+          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml" style="display:none">
+          <div class="live-ingest-drop-title">Drop screenshots or source files here</div>
+          <div class="live-ingest-drop-sub">Click to browse, paste from clipboard, or capture a screen snapshot.</div>
+          <div class="live-ingest-button-row">
+            <button class="btn-secondary" type="button" data-live-ingest-pick="${domainKey}">Add Files</button>
+            <button class="btn-secondary" type="button" data-live-ingest-paste="${domainKey}">Paste Clipboard</button>
+            <button class="btn-secondary" type="button" data-live-ingest-capture="${domainKey}">Capture Screen</button>
+            <button class="btn-secondary" type="button" data-live-ingest-clear-files="${domainKey}">Clear</button>
+          </div>
+        </div>
+        <div class="live-ingest-chip-row">${attachmentHtml}</div>
+      </div>
+      <div class="live-ingest-pane">
+        <div class="form-group">
+          <label for="${prefix}-lookup">Target record lookup</label>
+          <div class="live-ingest-lookup-row">
+            <input id="${prefix}-lookup" type="text" placeholder="${domainKey === 'government' ? 'Search address, owner, lease, tenant...' : 'Search facility, operator, clinic ID, address...'}" value="${esc(state.lookupQuery)}">
+            <button class="btn-secondary" type="button" data-live-ingest-search="${domainKey}" ${state.lookupLoading ? 'disabled' : ''}>${state.lookupLoading ? 'Searching...' : 'Find'}</button>
+            ${state.boundTarget ? `<button class="btn-secondary" type="button" data-live-ingest-clear-target="${domainKey}">Clear</button>` : ''}
+          </div>
+          ${renderLiveIngestLookupResults(domainKey, state)}
+        </div>
+        <div class="form-group">
+          <label for="${prefix}-source">Source label</label>
+          <input id="${prefix}-source" type="text" placeholder="Example: broker email, LoopNet page, county recorder site" value="${esc(state.sourceLabel)}">
+        </div>
+        <div class="form-group">
+          <label for="${prefix}-notes">Instructions / context</label>
+          <textarea id="${prefix}-notes" placeholder="Describe what should be extracted or where the data should land.">${esc(state.notes)}</textarea>
+        </div>
+        ${state.error ? `<div class="live-ingest-callout warn">${esc(state.error)}</div>` : ''}
+        <div class="live-ingest-actions">
+          <button class="btn-primary" type="button" data-live-ingest-extract="${domainKey}" ${state.extracting ? 'disabled' : ''}>${state.extracting ? 'Extracting...' : 'Extract + Map Changes'}</button>
+          <div class="live-ingest-stamp">Allowed tables: ${LIVE_INGEST_ALLOWED_TABLES[domainKey].map(esc).join(', ')}</div>
+        </div>
+      </div>
+    </div>
+    ${proposalHtml}
+  </section>`;
+}
+
+function renderLiveIngestOperation(domainKey, op, idx) {
+  const opType = esc(op.kind || 'update');
+  const table = esc(op.table || op.action || 'operation');
+  const target = op.kind === 'bridge'
+    ? `Bridge: ${table}`
+    : `${esc(op.target_source || domainKey)}.${table}${op.record_identifier != null ? `#${esc(String(op.record_identifier))}` : ''}`;
+  const fields = op.kind === 'bridge'
+    ? esc(JSON.stringify(op.payload || {}))
+    : esc(JSON.stringify(op.fields || {}, null, 2));
+  return `<label class="live-ingest-op">
+    <input type="checkbox" data-live-ingest-op="${domainKey}:${idx}" ${op._selected === false ? '' : 'checked'}>
+    <div class="live-ingest-op-body">
+      <div class="live-ingest-op-head">
+        <span class="live-ingest-op-kind">${opType}</span>
+        <span class="live-ingest-op-target">${target}</span>
+      </div>
+      ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
+      <pre>${fields}</pre>
+    </div>
+  </label>`;
+}
+
+function renderLiveIngestContextSummary(context) {
+  if (!context || !context.current_record) {
+    return '<div><strong>No record bound</strong><span>Will only apply operations that include valid IDs.</span></div>';
+  }
+  const rec = context.current_record;
+  const label = rec.address || rec.facility_name || rec.property_name || rec.lease_number || rec.clinic_id || rec.lead_id || rec.property_id || rec.ownership_id || 'Current record';
+  const idBits = [];
+  ['lead_id', 'property_id', 'ownership_id', 'clinic_id', 'medicare_id'].forEach((key) => {
+    if (rec[key] != null && rec[key] !== '') idBits.push(`${key}: ${rec[key]}`);
+  });
+  const prefix = context.manual_target ? 'Bound target' : 'Current context';
+  const sourceTable = context.source_table ? ` | ${context.source_table}` : '';
+  return `<div><strong>${esc(prefix + ': ' + label)}</strong><span>${esc(idBits.join(' | ') || context.mode || 'Research context')}${esc(sourceTable)}</span></div>`;
+}
+
+function renderLiveIngestLookupResults(domainKey, state) {
+  if (state.boundTarget) {
+    return `<div class="live-ingest-bound-target">
+      <strong>Using target</strong>
+      <span>${esc(state.boundTarget.label || 'Bound record')}</span>
+      <span>${esc(state.boundTarget.subtitle || state.boundTarget.source_table || '')}</span>
+    </div>`;
+  }
+  if (state.lookupLoading) {
+    return '<div class="live-ingest-empty" style="margin-top:8px">Searching records...</div>';
+  }
+  if (!state.lookupResults.length) {
+    return '';
+  }
+  return `<div class="live-ingest-lookup-results">
+    ${state.lookupResults.map((item, idx) => `<button class="live-ingest-lookup-result" type="button" data-live-ingest-target="${domainKey}:${idx}">
+      <strong>${esc(item.label || 'Record')}</strong>
+      <span>${esc(item.subtitle || item.source_table || '')}</span>
+    </button>`).join('')}
+  </div>`;
+}
+
+function bindLiveIngestWorkbench(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const prefix = `live-ingest-${domainKey}`;
+  const fileInput = document.getElementById(`${prefix}-file`);
+  const dropzone = document.getElementById(`${prefix}-dropzone`);
+  const lookupEl = document.getElementById(`${prefix}-lookup`);
+  const sourceEl = document.getElementById(`${prefix}-source`);
+  const notesEl = document.getElementById(`${prefix}-notes`);
+
+  if (lookupEl) {
+    lookupEl.oninput = () => { state.lookupQuery = lookupEl.value; };
+    lookupEl.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        searchLiveIngestRecords(domainKey);
+      }
+    };
+  }
+  if (sourceEl) {
+    sourceEl.oninput = () => { state.sourceLabel = sourceEl.value; };
+  }
+  if (notesEl) {
+    notesEl.oninput = () => { state.notes = notesEl.value; };
+  }
+
+  if (fileInput) {
+    fileInput.onchange = async () => {
+      await ingestLiveIngestFiles(domainKey, fileInput.files);
+      fileInput.value = '';
+    };
+  }
+
+  if (dropzone) {
+    dropzone.onclick = (e) => {
+      if (e.target.closest('button')) return;
+      fileInput?.click();
+    };
+    dropzone.ondragover = (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragging');
+    };
+    dropzone.ondragleave = () => dropzone.classList.remove('dragging');
+    dropzone.ondrop = async (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragging');
+      await ingestLiveIngestFiles(domainKey, e.dataTransfer?.files || []);
+    };
+    dropzone.onpaste = async (e) => {
+      const items = Array.from(e.clipboardData?.items || []);
+      if (!items.length) return;
+      e.preventDefault();
+      await ingestLiveIngestClipboardItems(domainKey, items);
+    };
+  }
+
+  document.querySelectorAll(`[data-live-ingest-remove][data-domain="${domainKey}"]`).forEach((btn) => {
+    btn.onclick = () => {
+      state.attachments = state.attachments.filter((item) => item.id !== btn.dataset.liveIngestRemove);
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+
+  document.querySelector(`[data-live-ingest-pick="${domainKey}"]`)?.addEventListener('click', () => fileInput?.click());
+  document.querySelector(`[data-live-ingest-paste="${domainKey}"]`)?.addEventListener('click', () => pasteLiveIngestClipboard(domainKey));
+  document.querySelector(`[data-live-ingest-capture="${domainKey}"]`)?.addEventListener('click', () => captureLiveIngestScreen(domainKey));
+  document.querySelector(`[data-live-ingest-clear-files="${domainKey}"]`)?.addEventListener('click', () => {
+    state.attachments = [];
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-search="${domainKey}"]`)?.addEventListener('click', () => searchLiveIngestRecords(domainKey));
+  document.querySelector(`[data-live-ingest-clear-target="${domainKey}"]`)?.addEventListener('click', () => {
+    state.boundTarget = null;
+    state.lookupResults = [];
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-extract="${domainKey}"]`)?.addEventListener('click', () => runLiveIngestExtraction(domainKey));
+  document.querySelector(`[data-live-ingest-clear-proposal="${domainKey}"]`)?.addEventListener('click', () => {
+    state.proposal = null;
+    state.error = '';
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-apply="${domainKey}"]`)?.addEventListener('click', () => applyLiveIngestProposal(domainKey));
+  document.querySelectorAll(`[data-live-ingest-op^="${domainKey}:"]`).forEach((checkbox) => {
+    checkbox.onchange = () => {
+      const [, idxText] = checkbox.dataset.liveIngestOp.split(':');
+      const idx = parseInt(idxText, 10);
+      if (!Array.isArray(state.proposal?.operations) || Number.isNaN(idx) || !state.proposal.operations[idx]) return;
+      state.proposal.operations[idx]._selected = checkbox.checked;
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-target^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestTarget.split(':');
+      const idx = parseInt(idxText, 10);
+      if (Number.isNaN(idx) || !state.lookupResults[idx]) return;
+      state.boundTarget = state.lookupResults[idx];
+      state.lookupResults = [];
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+}
+
+function rerenderLiveIngestDomain(domainKey) {
+  if (domainKey === 'government') {
+    renderGovTab();
+  } else {
+    renderDiaTab();
+  }
+}
+
+function getLiveIngestCurrentContext(domainKey) {
+  if (domainKey === 'government') {
+    const rec = Array.isArray(researchQueue) ? researchQueue[researchIdx] : null;
+    return {
+      domain: 'government',
+      mode: typeof researchMode === 'string' ? researchMode : 'research',
+      allowed_tables: LIVE_INGEST_ALLOWED_TABLES.government,
+      current_record: rec ? {
+        lead_id: rec.lead_id || null,
+        property_id: rec.property_id || rec.matched_property_id || null,
+        ownership_id: rec.ownership_id || null,
+        lease_number: rec.lease_number || null,
+        address: rec.address || null,
+        city: rec.city || null,
+        state: rec.state || null,
+        facility_name: rec.facility_name || null,
+        property_name: rec.property_name || null
+      } : null
+    };
+  }
+
+  const rec = getCurrentDiaResearchRecord();
+  return {
+    domain: 'dialysis',
+    mode: typeof diaResearchMode === 'string' ? diaResearchMode : 'research',
+    allowed_tables: LIVE_INGEST_ALLOWED_TABLES.dialysis,
+    current_record: rec ? {
+      clinic_id: rec.clinic_id || rec.medicare_id || null,
+      medicare_id: rec.medicare_id || rec.ccn || null,
+      property_id: rec.property_id || null,
+      ownership_id: rec.ownership_id || null,
+      facility_name: rec.facility_name || null,
+      address: rec.address || null,
+      city: rec.city || null,
+      state: rec.state || null,
+      operator_name: rec.operator_name || rec.chain_organization || null
+    } : null
+  };
+}
+
+function getLiveIngestEffectiveContext(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  if (state.boundTarget?.current_record) {
+    return {
+      domain: domainKey,
+      mode: 'manual_target',
+      allowed_tables: LIVE_INGEST_ALLOWED_TABLES[domainKey],
+      source_table: state.boundTarget.source_table || null,
+      manual_target: true,
+      current_record: state.boundTarget.current_record
+    };
+  }
+  return getLiveIngestCurrentContext(domainKey);
+}
+
+function getCurrentDiaResearchRecord() {
+  if (typeof diaResearchMode === 'undefined') return null;
+  if (diaResearchMode === 'property') {
+    const filtered = (diaData?.propertyReviewQueue || []).filter((row) => !diaPropertyFilter?.review_type || row.review_type === diaPropertyFilter.review_type);
+    return filtered[diaPropertyFilter?.selectedIdx];
+  }
+  if (diaResearchMode === 'lease') {
+    const filtered = (diaData?.leaseBackfillRows || []).filter((row) => !diaLeaseFilter?.priority || row.lease_backfill_priority === diaLeaseFilter.priority);
+    return filtered[diaLeaseFilter?.selectedIdx];
+  }
+  if (diaResearchMode === 'clinic_leads') {
+    let filtered = Array.isArray(diaClinicLeadQueue) ? diaClinicLeadQueue.slice() : [];
+    const resolvedIds = new Set(((diaData?.researchOutcomes) || []).filter((o) => o.queue_type === 'clinic_lead').map((o) => o.clinic_id));
+    if (diaClinicLeadFilter?.hideResolved) filtered = filtered.filter((row) => !resolvedIds.has(row.medicare_id));
+    if (diaClinicLeadFilter?.category) filtered = filtered.filter((row) => row.research_category === diaClinicLeadFilter.category);
+    if (diaClinicLeadFilter?.tier) filtered = filtered.filter((row) => row.priority_tier === diaClinicLeadFilter.tier);
+    if (diaClinicLeadFilter?.state) filtered = filtered.filter((row) => row.state === diaClinicLeadFilter.state);
+    return filtered[diaClinicLeadFilter?.selectedIdx];
+  }
+  return null;
+}
+
+async function ingestLiveIngestFiles(domainKey, fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const state = getLiveIngestState(domainKey);
+  for (const file of files.slice(0, 6)) {
+    try {
+      const item = await normalizeLiveIngestFile(file);
+      if (item) state.attachments.push(item);
+    } catch (err) {
+      showToast(`Skipped ${file.name}: ${err.message}`, 'error');
+    }
+  }
+  rerenderLiveIngestDomain(domainKey);
+}
+
+async function ingestLiveIngestClipboardItems(domainKey, items) {
+  const files = [];
+  items.forEach((item) => {
+    const file = item.getAsFile?.();
+    if (file) files.push(file);
+  });
+  if (!files.length) {
+    showToast('Clipboard does not contain an image file', 'warning');
+    return;
+  }
+  await ingestLiveIngestFiles(domainKey, files);
+}
+
+async function pasteLiveIngestClipboard(domainKey) {
+  if (!navigator.clipboard?.read) {
+    showToast('Click the drop area and paste with Ctrl+V', 'warning');
+    return;
+  }
+  try {
+    const items = await navigator.clipboard.read();
+    const files = [];
+    for (const item of items) {
+      for (const type of item.types) {
+        if (!type.startsWith('image/')) continue;
+        const blob = await item.getType(type);
+        files.push(new File([blob], `clipboard-${Date.now()}.png`, { type }));
+      }
+    }
+    if (!files.length) {
+      showToast('Clipboard does not contain an image', 'warning');
+      return;
+    }
+    await ingestLiveIngestFiles(domainKey, files);
+  } catch (err) {
+    showToast(`Clipboard read failed: ${err.message}`, 'error');
+  }
+}
+
+async function captureLiveIngestScreen(domainKey) {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    showToast('Screen capture is not supported in this browser', 'warning');
+    return;
+  }
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const track = stream.getVideoTracks()[0];
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    await video.play();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('Unable to capture image');
+    await ingestLiveIngestFiles(domainKey, [new File([blob], `screen-${Date.now()}.png`, { type: 'image/png' })]);
+  } catch (err) {
+    showToast(`Screen capture failed: ${err.message}`, 'error');
+  } finally {
+    (stream?.getTracks?.() || []).forEach((track) => track.stop());
+  }
+}
+
+async function normalizeLiveIngestFile(file) {
+  if (file.type.startsWith('image/')) {
+    const dataUrl = await readFileAsDataUrl(file);
+    return {
+      id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'image',
+      name: file.name || 'image',
+      mime_type: file.type,
+      data_url: dataUrl
+    };
+  }
+
+  const lowerName = String(file.name || '').toLowerCase();
+  const isTextLike = file.type.startsWith('text/')
+    || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
+    || ['application/json', 'message/rfc822'].includes(file.type);
+  if (!isTextLike) {
+    throw new Error('Only images and text-based exports are supported directly. For PDFs or web pages, use screenshots.');
+  }
+  const text = await readFileAsText(file);
+  return {
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'text',
+    mime_type: file.type || 'text/plain',
+    text: String(text || '').slice(0, 30000)
+  };
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
+}
+
+async function runLiveIngestExtraction(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const imageAttachments = state.attachments.filter((item) => item.kind === 'image').slice(0, 3).map((item) => ({
+    type: 'image',
+    mime_type: item.mime_type || 'image/png',
+    name: item.name || 'image',
+    data_url: item.data_url
+  }));
+  const textDocs = state.attachments.filter((item) => item.kind === 'text').map((item) => ({
+    name: item.name,
+    mime_type: item.mime_type,
+    text: item.text
+  }));
+
+  if (!imageAttachments.length && !textDocs.length) {
+    state.error = 'Add at least one screenshot or text-based source file before extracting.';
+    rerenderLiveIngestDomain(domainKey);
+    return;
+  }
+
+  state.extracting = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+
+  try {
+    const context = getLiveIngestEffectiveContext(domainKey);
+    const response = await invokeLccAssistant({
+      feature: `${domainKey}_live_ingest`,
+      context: {
+        ...context,
+        source_label: state.sourceLabel || null,
+        user_notes: state.notes || null,
+        text_documents: textDocs
+      },
+      attachments: imageAttachments,
+      message: buildLiveIngestPrompt(domainKey, state, context)
+    });
+
+    state.rawResponse = response;
+    const proposal = parseLiveIngestProposal(response, domainKey);
+    proposal.operations = (proposal.operations || []).map((op) => ({ ...op, _selected: op._selected !== false }));
+    state.proposal = proposal;
+  } catch (err) {
+    state.error = err.message || 'Extraction failed';
+  } finally {
+    state.extracting = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+async function searchLiveIngestRecords(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const term = String(state.lookupQuery || '').trim();
+  if (!term) {
+    state.lookupResults = [];
+    rerenderLiveIngestDomain(domainKey);
+    return;
+  }
+
+  state.lookupLoading = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+
+  const like = `*${term}*`;
+  try {
+    let results = [];
+    if (domainKey === 'government') {
+      const [leads, properties, ownership] = await Promise.all([
+        govQuery('prospect_leads', 'lead_id,lease_number,address,city,state,tenant_agency,lessor_name,matched_property_id,property_id', { filter: `or=(address.ilike.${like},tenant_agency.ilike.${like},lessor_name.ilike.${like},lease_number.ilike.${like})`, limit: 8 }),
+        govQuery('properties', 'property_id,address,city,state,property_name,agency', { filter: `or=(address.ilike.${like},city.ilike.${like},state.ilike.${like},agency.ilike.${like},property_name.ilike.${like})`, limit: 8 }),
+        govQuery('ownership_history', 'ownership_id,property_id,address,city,state,new_owner,prior_owner,recorded_owner_name', { filter: `or=(address.ilike.${like},new_owner.ilike.${like},prior_owner.ilike.${like},recorded_owner_name.ilike.${like})`, limit: 8 })
+      ]);
+      results = [
+        ...(leads.data || []).map((row) => ({
+          source_table: 'prospect_leads',
+          label: row.address || row.lease_number || `Lead ${row.lead_id}`,
+          subtitle: [row.city, row.state, row.tenant_agency, row.lead_id ? `lead ${row.lead_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            lead_id: row.lead_id || null,
+            property_id: row.matched_property_id || row.property_id || null,
+            lease_number: row.lease_number || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        })),
+        ...(properties.data || []).map((row) => ({
+          source_table: 'properties',
+          label: row.address || row.property_name || `Property ${row.property_id}`,
+          subtitle: [row.city, row.state, row.agency, row.property_id ? `property ${row.property_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            property_id: row.property_id || null,
+            property_name: row.property_name || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        })),
+        ...(ownership.data || []).map((row) => ({
+          source_table: 'ownership_history',
+          label: row.address || `Ownership ${row.ownership_id}`,
+          subtitle: [row.city, row.state, row.new_owner || row.prior_owner || row.recorded_owner_name, row.ownership_id ? `ownership ${row.ownership_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            ownership_id: row.ownership_id || null,
+            property_id: row.property_id || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        }))
+      ];
+    } else {
+      const [clinics, properties, queue] = await Promise.all([
+        diaQuery('v_cms_data', 'clinic_id,facility_name,address,city,state,operator_name,ccn', { filter: `or=(facility_name.ilike.${like},operator_name.ilike.${like},address.ilike.${like},city.ilike.${like},state.ilike.${like},ccn.ilike.${like},clinic_id.ilike.${like})`, limit: 8 }),
+        diaQuery('properties', 'property_id,address,city,state,property_name,tenant_operator', { filter: `or=(address.ilike.${like},city.ilike.${like},state.ilike.${like},property_name.ilike.${like},tenant_operator.ilike.${like})`, limit: 8 }),
+        diaQuery('v_clinic_property_link_review_queue', 'clinic_id,facility_name,operator_name,state,property_id,review_type', { filter: `or=(facility_name.ilike.${like},operator_name.ilike.${like},state.ilike.${like},clinic_id.ilike.${like})`, limit: 8 }).catch(() => [])
+      ]);
+      results = [
+        ...(clinics || []).map((row) => ({
+          source_table: 'v_cms_data',
+          label: row.facility_name || `Clinic ${row.clinic_id}`,
+          subtitle: [row.city, row.state, row.operator_name, row.clinic_id ? `clinic ${row.clinic_id}` : row.ccn ? `ccn ${row.ccn}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            clinic_id: row.clinic_id || null,
+            medicare_id: row.ccn || null,
+            facility_name: row.facility_name || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null,
+            operator_name: row.operator_name || null
+          }
+        })),
+        ...(properties || []).map((row) => ({
+          source_table: 'properties',
+          label: row.address || row.property_name || `Property ${row.property_id}`,
+          subtitle: [row.city, row.state, row.tenant_operator, row.property_id ? `property ${row.property_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            property_id: row.property_id || null,
+            property_name: row.property_name || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        })),
+        ...(queue || []).map((row) => ({
+          source_table: 'v_clinic_property_link_review_queue',
+          label: row.facility_name || `Clinic ${row.clinic_id}`,
+          subtitle: [row.state, row.operator_name, row.review_type, row.clinic_id ? `clinic ${row.clinic_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            clinic_id: row.clinic_id || null,
+            property_id: row.property_id || null,
+            facility_name: row.facility_name || null,
+            state: row.state || null,
+            operator_name: row.operator_name || null
+          }
+        }))
+      ];
+    }
+
+    state.lookupResults = results.slice(0, 12);
+  } catch (err) {
+    state.error = `Record lookup failed: ${err.message}`;
+    state.lookupResults = [];
+  } finally {
+    state.lookupLoading = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+function buildLiveIngestPrompt(domainKey, state, context) {
+  const allowedTables = LIVE_INGEST_ALLOWED_TABLES[domainKey];
+  return [
+    `You are mapping multimodal source material into audited ${domainKey} database updates for Life Command Center.`,
+    'Return JSON only. Do not wrap it in markdown.',
+    'Never invent record IDs, table names, or values not supported by the source material or provided context.',
+    'If a change cannot be safely targeted, put it in missing_information instead of making an operation.',
+    `Allowed target tables: ${allowedTables.join(', ')}.`,
+    'Allowed operation kinds:',
+    '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters? }',
+    '- insert: { kind, target_source, table, id_column?, record_identifier?, fields, reason, propagation_scope? }',
+    '- bridge: { kind, action, payload, reason }',
+    'Allowed bridge actions: update_entity, complete_research, save_ownership, log_activity.',
+    'JSON schema:',
+    '{ "summary": string, "confidence": "high"|"medium"|"low", "notes_for_user": string[], "missing_information": string[], "operations": [] }',
+    `Source label: ${state.sourceLabel || 'not provided'}.`,
+    `User instructions: ${state.notes || 'Extract facts and map them to the right writes.'}.`,
+    `Current context: ${JSON.stringify(context.current_record || null)}`
+  ].join('\n');
+}
+
+function parseLiveIngestProposal(raw, domainKey) {
+  const text = String(raw || '').trim();
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('The AI response did not include valid JSON.');
+  }
+  const parsed = JSON.parse(cleaned.slice(start, end + 1));
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('The AI response JSON was empty.');
+  }
+  parsed.summary = typeof parsed.summary === 'string' ? parsed.summary : '';
+  parsed.notes_for_user = Array.isArray(parsed.notes_for_user) ? parsed.notes_for_user : [];
+  parsed.missing_information = Array.isArray(parsed.missing_information) ? parsed.missing_information : [];
+  parsed.operations = Array.isArray(parsed.operations) ? parsed.operations.filter((op) => {
+    if (!op || typeof op !== 'object' || !op.kind) return false;
+    if (op.kind === 'bridge') return !!op.action;
+    return op.target_source === domainKey && LIVE_INGEST_ALLOWED_TABLES[domainKey].includes(op.table);
+  }) : [];
+  return parsed;
+}
+
+async function applyLiveIngestProposal(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const ops = (state.proposal?.operations || []).filter((op) => op._selected !== false);
+  if (!ops.length) {
+    showToast('Select at least one proposed operation', 'warning');
+    return;
+  }
+
+  state.applying = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+
+  const proxyBase = domainKey === 'government' ? '/api/gov-query' : '/api/dia-query';
+  const sourceSurface = domainKey === 'government' ? 'gov_live_ingest' : 'dia_live_ingest';
+
+  try {
+    for (const op of ops) {
+      if (op.kind === 'update') {
+        const result = await applyChangeWithFallback({
+          proxyBase,
+          table: op.table,
+          idColumn: op.id_column,
+          idValue: op.record_identifier,
+          data: op.fields || {},
+          source_surface: sourceSurface,
+          notes: op.reason || state.notes || null,
+          propagation_scope: op.propagation_scope || 'live_ingest',
+          matchFilters: Array.isArray(op.match_filters) ? op.match_filters : []
+        });
+        if (!result.ok) throw new Error((result.errors || []).join(', ') || `Failed to update ${op.table}`);
+      } else if (op.kind === 'insert') {
+        const result = await applyInsertWithFallback({
+          proxyBase,
+          table: op.table,
+          idColumn: op.id_column || null,
+          recordIdentifier: op.record_identifier || null,
+          data: op.fields || {},
+          source_surface: sourceSurface,
+          notes: op.reason || state.notes || null,
+          propagation_scope: op.propagation_scope || 'live_ingest'
+        });
+        if (!result.ok) throw new Error((result.errors || []).join(', ') || `Failed to insert ${op.table}`);
+      } else if (op.kind === 'bridge') {
+        await canonicalBridge(op.action, op.payload || {});
+      }
+    }
+
+    state.lastAppliedAt = new Date().toLocaleString();
+    showToast(`Applied ${ops.length} ingest operation${ops.length === 1 ? '' : 's'}`, 'success');
+    if (domainKey === 'government') {
+      await loadGovData();
+    } else {
+      await loadDiaData();
+    }
+  } catch (err) {
+    state.error = err.message || 'Failed to apply proposed changes';
+    showToast(state.error, 'error');
+  } finally {
+    state.applying = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
+window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
+
 // Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {
   if (!localStorage.getItem('lcc-install-dismissed')) {

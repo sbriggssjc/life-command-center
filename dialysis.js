@@ -1107,6 +1107,7 @@ function renderDiaNpi() {
  */
 function renderDiaResearch() {
   let html = '<div class="research-workbench">';
+  html += renderLiveIngestWorkbench('dialysis');
   
   // Mode tabs
   html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap;">';
@@ -1127,6 +1128,7 @@ function renderDiaResearch() {
   
   // Attach mode handlers
   setTimeout(() => {
+    bindLiveIngestWorkbench('dialysis');
     document.querySelectorAll('[data-mode]').forEach(btn => {
       btn.addEventListener('click', e => {
         diaResearchMode = e.target.dataset.mode;

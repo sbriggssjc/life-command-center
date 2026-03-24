@@ -1,6 +1,6 @@
 import { authenticate, handleCors } from './_shared/auth.js';
 import { requireOps, withErrorHandler } from './_shared/ops-db.js';
-import { invokeChatProvider, logAiMetric, normalizeAiTelemetry } from './_shared/ai.js';
+import { invokeChatProvider, logAiMetric, normalizeAiTelemetry, resolveAiRoute, getAiConfig } from './_shared/ai.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -32,17 +32,19 @@ export default withErrorHandler(async function handler(req, res) {
       }))
       .filter((item) => item.data_url)
     : [];
+  const route = resolveAiRoute(getAiConfig(), context || {});
 
   const startedAt = Date.now();
   const result = await invokeChatProvider({ message, context, history, attachments: safeAttachments, user, workspaceId });
   const durationMs = Date.now() - startedAt;
   const normalized = normalizeAiTelemetry(result.data || {});
-  const feature = context?.assistant_feature || context?.feature || 'global_copilot';
+  const feature = route.feature;
   await logAiMetric(workspaceId, user.id, 'chat', durationMs, {
     feature,
     provider: result.provider,
     status: result.status,
-    model: normalized.model,
+    model: normalized.model || route.model,
+    chat_policy: getAiConfig().chatPolicy,
     cache_hit: normalized.cache_hit,
     cache_read_tokens: normalized.cache_read_tokens,
     had_context: !!context && Object.keys(context || {}).length > 0,
@@ -73,7 +75,7 @@ export default withErrorHandler(async function handler(req, res) {
       cache_hit: normalized.cache_hit,
       cache_read_tokens: normalized.cache_read_tokens,
     },
-    model: result.data?.model || normalized.model || null,
+    model: result.data?.model || normalized.model || route.model || null,
     usage: result.data?.usage || normalized.usage.raw,
   });
 });

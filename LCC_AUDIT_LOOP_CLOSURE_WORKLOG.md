@@ -125,6 +125,7 @@
 - `node --check api/_shared/ops-db.js` passed after adding the shared perf-metric logger.
 - `node --check api/apply-change.js` passed after wiring mutation latency logging.
 - `node --check api/sync.js` passed again after wiring propagation latency logging and Sync Health drift/success-rate signals.
+- `node --check test/queue.test.js` passed after adding inbox transition and promotion contract coverage.
 - `node --check test/sync.test.js` passed after adding response-level Sync Health and outbound-failure coverage.
 - `node --check test/contacts.test.js` passed.
 - `node --check test/raw-write-guardrail.test.js` passed.
@@ -134,6 +135,7 @@
 - `node --test test/apply-change.test.js` passed again after adding the pending-review failure-path case.
 - `node --test test/contacts.test.js` passed again after adding the audited-write failure-path case and fixing handler error propagation.
 - `node --test test/entity-link.test.js` passed outside the sandbox after adding external-identity failure coverage.
+- `node --test test/queue.test.js` passed outside the sandbox after adding inbox triage and promote-to-action verification.
 - `node --test test/research-loop.test.js` passed outside the sandbox after adding cross-surface research-loop failure coverage.
 - `node --test test/sync.test.js` passed outside the sandbox after adding Sync Health and complete-SF-task failure-path verification.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
@@ -152,6 +154,7 @@
 - Outbound Salesforce task completion/reschedule is now better integrated with Sync Health and unresolved sync exceptions.
 - Mutation latency is now logged through the shared ops perf-metric path, and outbound propagation now records latency plus 24h success-rate and basic Salesforce queue-drift signals in Sync Health.
 - The verification layer now includes response-level Sync API coverage in addition to helper-level unit tests, so health summaries and outbound failure surfacing are no longer untested.
+- The queue/inbox transition contract now has direct handler-level coverage for triage and promote flows, reducing the risk that UI wiring drifts away from supported inbox state transitions.
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

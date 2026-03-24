@@ -433,6 +433,7 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       const feature = meta.feature || meta.assistant_feature || 'unknown';
       const provider = meta.provider || 'unknown';
       const model = meta.model || 'unknown';
+      const chatPolicy = meta.chat_policy || 'manual';
       const status = String(meta.status || 'unknown');
       const attachmentCount = Number(meta.attachment_count || 0);
       const inputTokens = Number(meta.input_tokens || meta.usage?.input_tokens || meta.usage?.prompt_tokens || 0);
@@ -472,6 +473,7 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       providerRow.total_tokens += totalRowTokens;
       providerRow.cache_hits += cacheHit ? 1 : 0;
 
+      statusMap.set(`policy:${chatPolicy}`, (statusMap.get(`policy:${chatPolicy}`) || 0) + 1);
       statusMap.set(status, (statusMap.get(status) || 0) + 1);
     }
 
