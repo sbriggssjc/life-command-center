@@ -86,6 +86,8 @@
 - Added a review-first “apply extracted facts to fields” action that prefills Intel sale, loan, and cash-flow inputs without auto-saving.
 - Extended the ownership assistant to request structured ownership JSON alongside the readable analyst response.
 - Added a review-first ownership field prefill action for recorded owner, true owner, owner type, contact details, and incorporation state.
+- Added `Save Reviewed Intel` to batch-save populated Intel sections after analyst review, using the existing save handlers with one refresh at the end.
+- Added `Save Reviewed Ownership` so assistant-prefilled ownership fields can flow straight into the existing ownership save path.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

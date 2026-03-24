@@ -1369,6 +1369,7 @@ function _udAssistantSection(mode, title, subtitle) {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="q-action" onclick="_udCopyAssistantReply('${mode}')">Copy</button>
         ${mode === 'ownership' ? `<button class="q-action" onclick="_udApplyAssistantFields('${mode}')">Apply Extracted Facts to Fields</button>` : ''}
+        ${mode === 'ownership' ? `<button class="q-action primary" onclick="_udSaveReviewedOwnership()">Save Reviewed Ownership</button>` : ''}
         <button class="q-action primary" onclick="_udApplyAssistantReply('${mode}')">${mode === 'ownership' ? 'Apply to Ownership Notes' : 'Apply to Research Notes'}</button>
       </div>`;
   }
@@ -1502,6 +1503,7 @@ function _intelRenderIntakeAnalysis() {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="q-action" onclick="_intelCopyIntakeAnalysis()">Copy</button>
         <button class="q-action" onclick="_intelApplyIntakeFields()">Apply Extracted Facts to Fields</button>
+        <button class="q-action primary" onclick="_intelSaveReviewed()">Save Reviewed Intel</button>
         <button class="q-action primary" onclick="_intelApplyIntakeAnalysis()">Apply to Research Notes</button>
       </div>`;
   }
@@ -2608,7 +2610,9 @@ function refreshDetailPanel() {
  * Upserts to: recorded_owners, true_owners, contacts, research_queue_outcomes
  * Patches properties to link the owner IDs
  */
-async function _udSaveOwnership() {
+async function _udSaveOwnership(options = {}) {
+  const refresh = options.refresh !== false;
+  const silent = options.silent === true;
   if (!_udCache) { showToast('No record loaded', 'error'); return; }
   const db = _udCache.db;
   const propertyId = _udCache.ids?.property_id;
@@ -2638,7 +2642,7 @@ async function _udSaveOwnership() {
         owner_type: ownerType
       });
 
-      showToast('Ownership resolution saved!', 'success');
+      if (!silent) showToast('Ownership resolution saved!', 'success');
 
       // Bridge to canonical model with gov change metadata
       canonicalBridge('save_ownership', {
@@ -2672,7 +2676,7 @@ async function _udSaveOwnership() {
         }
       });
 
-      refreshDetailPanel();
+      if (refresh) refreshDetailPanel();
       return;
     }
 
@@ -2837,7 +2841,7 @@ async function _udSaveOwnership() {
       if (!res.ok) console.error('Error creating research_queue_outcome:', res.errors || []);
     }
 
-    showToast('Ownership resolution saved!', 'success');
+    if (!silent) showToast('Ownership resolution saved!', 'success');
     canonicalBridge('save_ownership', {
       domain: 'dialysis',
       external_id: String(propertyId),
@@ -2850,7 +2854,7 @@ async function _udSaveOwnership() {
       contact_name: contactName,
       notes: notes
     });
-    refreshDetailPanel();
+    if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Ownership save error:', e);
     showToast('Error saving ownership: ' + e.message, 'error');
@@ -2861,7 +2865,9 @@ async function _udSaveOwnership() {
 // INTEL TAB SAVE FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function _intelSavePriorSale() {
+async function _intelSavePriorSale(options = {}) {
+  const refresh = options.refresh !== false;
+  const silent = options.silent === true;
   if (!_udCache) { showToast('No record loaded', 'error'); return; }
   const propertyId = _udCache.ids?.property_id;
   if (!propertyId) { showToast('No property ID', 'error'); return; }
@@ -2893,7 +2899,7 @@ async function _intelSavePriorSale() {
       propagation_scope: 'prior_sale_record'
     });
     if (!res.ok) { console.error('Sale save error:', res.errors || []); showToast('Error saving sale', 'error'); return; }
-    showToast('Prior sale saved!', 'success');
+    if (!silent) showToast('Prior sale saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Prior sale recorded',
       domain: db === 'gov' ? 'government' : 'dialysis',
@@ -2903,14 +2909,16 @@ async function _intelSavePriorSale() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { sale_date: saleDate, sale_price: salePrice, buyer: buyer, seller: seller }
     });
-    refreshDetailPanel();
+    if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Prior sale save error:', e);
     showToast('Error: ' + e.message, 'error');
   }
 }
 
-async function _intelSaveLoan() {
+async function _intelSaveLoan(options = {}) {
+  const refresh = options.refresh !== false;
+  const silent = options.silent === true;
   if (!_udCache) { showToast('No record loaded', 'error'); return; }
   const propertyId = _udCache.ids?.property_id;
   if (!propertyId) { showToast('No property ID', 'error'); return; }
@@ -2950,7 +2958,7 @@ async function _intelSaveLoan() {
       propagation_scope: 'loan_record'
     });
     if (!res.ok) { console.error('Loan save error:', res.errors || []); showToast('Error saving loan', 'error'); return; }
-    showToast('Loan info saved!', 'success');
+    if (!silent) showToast('Loan info saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Loan recorded',
       domain: db === 'gov' ? 'government' : 'dialysis',
@@ -2960,14 +2968,16 @@ async function _intelSaveLoan() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { lender: lender, loan_amount: loanAmount, loan_type: loanType, maturity_date: matDate }
     });
-    refreshDetailPanel();
+    if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Loan save error:', e);
     showToast('Error: ' + e.message, 'error');
   }
 }
 
-async function _intelSaveCashFlow() {
+async function _intelSaveCashFlow(options = {}) {
+  const refresh = options.refresh !== false;
+  const silent = options.silent === true;
   if (!_udCache) { showToast('No record loaded', 'error'); return; }
   const propertyId = _udCache.ids?.property_id;
   if (!propertyId) { showToast('No property ID', 'error'); return; }
@@ -2995,7 +3005,7 @@ async function _intelSaveCashFlow() {
       notes: 'Cash flow / valuation update'
     });
     if (!result.ok) { console.error('Cash flow update error:', (result.errors || []).join(', ')); showToast('Error saving cash flow', 'error'); return; }
-    showToast('Cash flow / valuation saved!', 'success');
+    if (!silent) showToast('Cash flow / valuation saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Cash flow estimate saved',
       domain: db === 'gov' ? 'government' : 'dialysis',
@@ -3005,14 +3015,16 @@ async function _intelSaveCashFlow() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { annual_rent: annualRent, estimated_value: estValue, cap_rate: currentCapRate }
     });
-    refreshDetailPanel();
+    if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Cash flow save error:', e);
     showToast('Error: ' + e.message, 'error');
   }
 }
 
-async function _intelSaveNotes() {
+async function _intelSaveNotes(options = {}) {
+  const refresh = options.refresh !== false;
+  const silent = options.silent === true;
   if (!_udCache) { showToast('No record loaded', 'error'); return; }
   const propertyId = _udCache.ids?.property_id;
   if (!propertyId) { showToast('No property ID', 'error'); return; }
@@ -3049,7 +3061,7 @@ async function _intelSaveNotes() {
       propagation_scope: 'research_queue_outcome'
     });
     if (!res.ok) { console.error('Notes save error:', res.errors || []); showToast('Error saving notes', 'error'); return; }
-    showToast('Research notes saved!', 'success');
+    if (!silent) showToast('Research notes saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Research notes updated',
       domain: db === 'gov' ? 'government' : 'dialysis',
@@ -3059,11 +3071,57 @@ async function _intelSaveNotes() {
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
       metadata: { notes: notes, source: source, date_found: dateFound }
     });
-    refreshDetailPanel();
+    if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Notes save error:', e);
     showToast('Error: ' + e.message, 'error');
   }
+}
+
+function _intelHasReviewedSectionValues() {
+  return {
+    priorSale: ['intelSaleDate', 'intelSalePrice', 'intelCapRateSale', 'intelBuyer', 'intelSeller'].some((id) => document.getElementById(id)?.value?.trim()),
+    loan: ['intelLender', 'intelLoanAmount', 'intelInterestRate', 'intelLoanType', 'intelOrigDate', 'intelMatDate', 'intelAmortization', 'intelRecourse', 'intelLTV'].some((id) => document.getElementById(id)?.value?.trim()),
+    cashFlow: ['intelAnnualRent', 'intelRentPerSF', 'intelExpenseType', 'intelEstValue', 'intelCurrentCapRate'].some((id) => document.getElementById(id)?.value?.trim()),
+    notes: ['intelResearchNotes'].some((id) => document.getElementById(id)?.value?.trim()),
+  };
+}
+
+async function _intelSaveReviewed() {
+  const sections = _intelHasReviewedSectionValues();
+  const planned = [
+    sections.priorSale ? 'prior sale' : null,
+    sections.loan ? 'loan' : null,
+    sections.cashFlow ? 'cash flow' : null,
+    sections.notes ? 'notes' : null,
+  ].filter(Boolean);
+
+  if (!planned.length) {
+    showToast('No reviewed Intel fields to save', 'error');
+    return;
+  }
+
+  try {
+    if (sections.priorSale) await _intelSavePriorSale({ refresh: false, silent: true });
+    if (sections.loan) await _intelSaveLoan({ refresh: false, silent: true });
+    if (sections.cashFlow) await _intelSaveCashFlow({ refresh: false, silent: true });
+    if (sections.notes) await _intelSaveNotes({ refresh: false, silent: true });
+    showToast(`Saved reviewed Intel: ${planned.join(', ')}`, 'success');
+    refreshDetailPanel();
+  } catch (e) {
+    console.error('Reviewed Intel save error:', e);
+    showToast('Error saving reviewed Intel: ' + e.message, 'error');
+  }
+}
+
+async function _udSaveReviewedOwnership() {
+  const hasOwnershipValues = ['udOwnRecorded', 'udOwnTrue', 'udOwnType', 'udOwnContact', 'udOwnPhone', 'udOwnEmail', 'udOwnState', 'udOwnNotes']
+    .some((id) => document.getElementById(id)?.value?.trim());
+  if (!hasOwnershipValues) {
+    showToast('No reviewed ownership fields to save', 'error');
+    return;
+  }
+  await _udSaveOwnership({ refresh: true, silent: false });
 }
 
 // Expose to global scope
@@ -3080,6 +3138,7 @@ window._intelSavePriorSale = _intelSavePriorSale;
 window._intelSaveLoan = _intelSaveLoan;
 window._intelSaveCashFlow = _intelSaveCashFlow;
 window._intelSaveNotes = _intelSaveNotes;
+window._intelSaveReviewed = _intelSaveReviewed;
 window._intelHandleIntakeFile = _intelHandleIntakeFile;
 window._intelUpdateIntakeText = _intelUpdateIntakeText;
 window._intelAnalyzeIntake = _intelAnalyzeIntake;
@@ -3092,3 +3151,4 @@ window._udAskAssistant = _udAskAssistant;
 window._udCopyAssistantReply = _udCopyAssistantReply;
 window._udApplyAssistantFields = _udApplyAssistantFields;
 window._udApplyAssistantReply = _udApplyAssistantReply;
+window._udSaveReviewedOwnership = _udSaveReviewedOwnership;
