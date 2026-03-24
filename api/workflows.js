@@ -247,7 +247,7 @@ async function sfTaskToAction(req, res, user, workspaceId) {
 // ============================================================================
 
 async function researchFollowup(req, res, user, workspaceId) {
-  const { research_task_id, outcome, followup_title, followup_type, followup_priority,
+  const { research_task_id, outcome, followup_title, followup_description, followup_type, followup_priority,
           assigned_to, due_date, entity_id } = req.body || {};
 
   if (!research_task_id) return res.status(400).json({ error: 'research_task_id is required' });
@@ -268,6 +268,7 @@ async function researchFollowup(req, res, user, workspaceId) {
     instructions: research.instructions,
     outcome: outcome || { status: 'completed' },
     followupTitle: followup_title,
+    followupDescription: followup_description,
     followupType: isValidEnum(followup_type, ACTION_TYPES) ? followup_type : 'follow_up',
     followupPriority: isValidEnum(followup_priority, PRIORITIES) ? followup_priority : 'normal',
     followupAssignee: assigned_to || user.id,

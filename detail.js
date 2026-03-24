@@ -1354,7 +1354,11 @@ function _udAssistantSection(mode, title, subtitle) {
   } else if (state.error) {
     body = `<div class="assistant-status assistant-error">${esc(state.error)}</div>`;
   } else if (state.reply) {
-    body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>`;
+    body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="q-action" onclick="_udCopyAssistantReply('${mode}')">Copy</button>
+        <button class="q-action primary" onclick="_udApplyAssistantReply('${mode}')">${mode === 'ownership' ? 'Apply to Ownership Notes' : 'Apply to Research Notes'}</button>
+      </div>`;
   }
 
   return `<div class="detail-section">
@@ -1440,6 +1444,13 @@ function _udRenderAssistantState(mode) {
   panel.innerHTML = '<div class="assistant-status">No analysis generated yet.</div>';
 }
 
+function _udExtractAssistantSection(text, headingNumber) {
+  if (!text) return '';
+  const pattern = new RegExp(`(?:^|\\n)${headingNumber}\\.\\s+[^\\n]*\\n([\\s\\S]*?)(?=\\n\\d+\\.\\s+|$)`, 'i');
+  const match = text.match(pattern);
+  return (match?.[1] || '').trim();
+}
+
 async function _udAskAssistant(mode) {
   const prompt = _udBuildAssistantPrompt(mode);
   if (!prompt) {
@@ -1467,6 +1478,48 @@ async function _udAskAssistant(mode) {
   }
 
   _udRenderAssistantState(mode);
+}
+
+async function _udCopyAssistantReply(mode) {
+  const reply = _udAssistantState[mode]?.reply || '';
+  if (!reply) {
+    showToast('No assistant reply to copy', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(reply);
+    showToast('Assistant reply copied', 'success');
+  } catch {
+    showToast('Copy failed', 'error');
+  }
+}
+
+function _udApplyAssistantReply(mode) {
+  const reply = _udAssistantState[mode]?.reply || '';
+  if (!reply) {
+    showToast('No assistant reply to apply', 'error');
+    return;
+  }
+
+  const draft = _udExtractAssistantSection(reply, 5) || _udExtractAssistantSection(reply, 1) || reply;
+  if (mode === 'ownership') {
+    const target = document.getElementById('udOwnNotes');
+    if (!target) {
+      showToast('Ownership notes field not available', 'error');
+      return;
+    }
+    target.value = [target.value?.trim(), draft].filter(Boolean).join(target.value?.trim() ? '\n\n' : '');
+    showToast('Ownership notes updated from assistant', 'success');
+    return;
+  }
+
+  const target = document.getElementById('intelResearchNotes');
+  if (!target) {
+    showToast('Research notes field not available', 'error');
+    return;
+  }
+  target.value = [target.value?.trim(), draft].filter(Boolean).join(target.value?.trim() ? '\n\n' : '');
+  showToast('Research notes updated from assistant', 'success');
 }
 
 function _qlActionBtn(label, onclick, icon, color) {
@@ -2604,3 +2657,5 @@ window._intelSaveLoan = _intelSaveLoan;
 window._intelSaveCashFlow = _intelSaveCashFlow;
 window._intelSaveNotes = _intelSaveNotes;
 window._udAskAssistant = _udAskAssistant;
+window._udCopyAssistantReply = _udCopyAssistantReply;
+window._udApplyAssistantReply = _udApplyAssistantReply;

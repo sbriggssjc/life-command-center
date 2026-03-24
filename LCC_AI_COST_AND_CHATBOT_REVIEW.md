@@ -70,6 +70,12 @@
   - ops research queue tasks
   - property detail ownership workflow
   - property detail intel workflow
+- Added assistant-to-workflow actions:
+  - copy assistant output
+  - apply assistant output into ownership notes
+  - apply assistant output into research notes
+  - load assistant follow-up drafts into the research follow-up modal
+- Extended the research follow-up flow to accept a follow-up description/notes field.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

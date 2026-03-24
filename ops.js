@@ -197,7 +197,11 @@ function researchAssistantPanelHTML(itemId) {
     : state.error
       ? `<div class="assistant-status assistant-error">${esc(state.error)}</div>`
       : state.reply
-        ? `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>`
+        ? `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+             <button class="q-action" onclick="copyResearchAssistantReply('${itemId}')">Copy</button>
+             <button class="q-action primary" onclick="useResearchAssistantFollowup('${itemId}')">Use as Follow-up Draft</button>
+           </div>`
         : '<div class="assistant-status">No response yet.</div>';
 
   return `<div class="assistant-panel">${body}</div>`;
@@ -833,6 +837,8 @@ async function createFollowup(id) {
     .join('');
   document.getElementById('followupTitleInput').value = '';
   document.getElementById('followupDueInput').value = '';
+  const notesInput = document.getElementById('followupNotesInput');
+  if (notesInput) notesInput.value = '';
   document.getElementById('followupContext').textContent = 'Create a follow-up action and complete this research task.';
   opsFollowupModalState = { researchTaskId: id };
   document.getElementById('followupModal').classList.add('open');
@@ -908,6 +914,13 @@ function buildResearchAssistantPrompt(item) {
   ].join('\n');
 }
 
+function extractAssistantSection(text, headingNumber) {
+  if (!text) return '';
+  const pattern = new RegExp(`(?:^|\\n)${headingNumber}\\.\\s+[^\\n]*\\n([\\s\\S]*?)(?=\\n\\d+\\.\\s+|$)`, 'i');
+  const match = text.match(pattern);
+  return (match?.[1] || '').trim();
+}
+
 async function runResearchAssistant(id) {
   const item = (opsResearchData || []).find(r => r.id === id);
   if (!item) {
@@ -935,6 +948,49 @@ async function runResearchAssistant(id) {
   }
 
   renderResearchPage();
+}
+
+async function copyResearchAssistantReply(id) {
+  const reply = opsResearchAssistantState[id]?.reply || '';
+  if (!reply) {
+    showToast('No assistant reply to copy', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(reply);
+    showToast('Assistant reply copied', 'success');
+  } catch {
+    showToast('Copy failed', 'error');
+  }
+}
+
+async function useResearchAssistantFollowup(id) {
+  const item = (opsResearchData || []).find(r => r.id === id);
+  const reply = opsResearchAssistantState[id]?.reply || '';
+  if (!item || !reply) {
+    showToast('No assistant draft available', 'error');
+    return;
+  }
+
+  await createFollowup(id);
+
+  const titleInput = document.getElementById('followupTitleInput');
+  const notesInput = document.getElementById('followupNotesInput');
+  const followupDraft = extractAssistantSection(reply, 5);
+  const completionDraft = extractAssistantSection(reply, 4);
+
+  if (titleInput) {
+    const firstLine = (followupDraft || '').split('\n')[0].replace(/^[-*]\s*/, '').trim();
+    titleInput.value = firstLine || `Follow up: ${item.title || 'research task'}`;
+  }
+  if (notesInput) {
+    notesInput.value = [
+      completionDraft ? `Completion note:\n${completionDraft}` : '',
+      followupDraft ? `Follow-up draft:\n${followupDraft}` : ''
+    ].filter(Boolean).join('\n\n');
+  }
+  document.getElementById('followupContext').textContent = 'Assistant draft loaded. Review and create the follow-up action.';
+  showToast('Follow-up draft loaded', 'success');
 }
 
 function closeAssignModal() {
@@ -999,6 +1055,7 @@ function closeFollowupModal() {
 async function submitFollowupModal() {
   if (!opsFollowupModalState) return;
   const followup_title = document.getElementById('followupTitleInput')?.value?.trim();
+  const followup_description = document.getElementById('followupNotesInput')?.value?.trim() || null;
   const assigned_to = document.getElementById('followupUserSelect')?.value;
   const due_date = document.getElementById('followupDueInput')?.value || null;
   if (!followup_title) {
@@ -1008,6 +1065,7 @@ async function submitFollowupModal() {
   const res = await opsPost('/api/workflows?action=research_followup', {
     research_task_id: opsFollowupModalState.researchTaskId,
     followup_title,
+    followup_description,
     followup_type: 'follow_up',
     assigned_to,
     due_date

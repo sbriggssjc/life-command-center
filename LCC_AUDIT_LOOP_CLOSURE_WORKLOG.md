@@ -71,6 +71,10 @@
   - `contact_merge_queue` inserts/patches
   - `system_tokens` WebEx token upserts
 - Kept Teams/WebEx/SMS external sends as canonical side effects, but now their internal contact/log writes pass through the audited layer.
+- Completed a broader repo sweep after the contacts pass:
+  - remaining write paths in `api/sync.js` are canonical connector/outbound jobs
+  - `api/data-proxy.js` remains the generic proxy layer, not a business-flow save surface
+  - remaining `POST`s in `api/contacts.js` are external Teams/WebEx/SMS API calls, not raw internal business-table writes
 
 ## Verification Notes
 
@@ -95,5 +99,5 @@
 - The remaining non-audited `POST` in the scanned domain files is a canonical outbound sync call rather than a raw table mutation.
 - A separate write-heavy surface remains in `api/contacts.js`; those calls appear to be contact engagement/messaging and token-management paths rather than the gov/dialysis/detail human-loop saves already remediated.
 - `api/contacts.js` now has audited coverage for its main internal Gov writes, but broader repo-wide review is still needed for any other APIs that mutate domain/business tables outside the mutation-service or audited-helper model.
-- RPC helper paths and any writes outside the currently scanned gov/dialysis/detail/app surfaces still need review for full repo-wide closure.
+- The primary remaining repo-wide review item is explicit policy/cleanup around exempt write surfaces: connector sync, external messaging APIs, token refresh, and the generic data proxy.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.
