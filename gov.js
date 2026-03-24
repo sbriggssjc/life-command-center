@@ -4813,9 +4813,13 @@ async function execGovSearch() {
 // Helper to programmatically navigate to gov sub-tabs
 function goToGovTab(tabName) {
   currentGovTab = tabName;
-  document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-  const btn = document.querySelector('[data-gov-tab="' + tabName + '"]');
-  if (btn) btn.classList.add('active');
+  if (typeof window.syncDomainTabGroup === 'function') {
+    window.syncDomainTabGroup('government', tabName);
+  } else {
+    document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector('[data-gov-tab="' + tabName + '"]');
+    if (btn) btn.classList.add('active');
+  }
   if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
     renderGovTab();
   }

@@ -349,6 +349,23 @@ body.compact .greeting { font-size: 18px; }
 .cat-metric-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
 
 /* Government Tab Styles */
+.domain-tab-groups { display: flex; gap: 8px; padding: 8px 16px 0; background: var(--s1); overflow-x: auto; flex-shrink: 0; }
+.domain-tab-group {
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--s2);
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.domain-tab-group.active {
+  background: var(--accent2);
+  border-color: var(--accent2);
+  color: #fff;
+}
 .gov-inner-tabs { display: flex; gap: 0; background: var(--s1); border-bottom: 1px solid var(--border); padding: 0 16px; overflow-x: auto; flex-shrink: 0; margin-bottom: 12px; }
 .gov-inner-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text2); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; background: none; border: none; }
 .gov-inner-tab.active { color: var(--accent); border-bottom-color: var(--accent); }

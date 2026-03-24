@@ -25,9 +25,11 @@
 - Capture a live screen snapshot.
 - Attach text-based exports (`.txt`, `.md`, `.csv`, `.json`, `.html`, `.htm`, `.eml`).
 - Search for and bind a Government or Dialysis target record directly inside the intake card.
+- Normalize HTML and raw email sources on the server before they are sent to AI.
 - Send current research context plus attachments to AI for structured mapping.
 - Preview proposed `update`, `insert`, and `bridge` operations.
 - Apply selected operations into Government or Dialysis write paths.
+- Automatically log successful live-ingest sessions into `research_queue_outcomes` for provenance.
 
 ## Constraints / Known Gaps
 - Direct PDF/docx parsing is not implemented in this pass; screenshots are the supported path for those sources.
@@ -36,22 +38,28 @@
 
 ## Files Changed
 - `app.js`
+- `api/live-ingest.js`
+- `api/_shared/live-ingest-normalize.js`
 - `gov.js`
 - `dialysis.js`
 - `styles.css`
 - `LCC_LIVE_INGEST_WORKLOG.md`
+- `test/live-ingest-normalize.test.js`
 
 ## What Changed
 - Added a shared `Live Intake` workbench renderer/binder in `app.js`.
 - Added browser-side attachment normalization for screenshots and text exports.
 - Added extraction prompt + JSON proposal parsing.
+- Added authenticated server-side normalization for HTML and `.eml` text sources.
 - Added apply flow for selected operations through existing audited mutation helpers.
 - Added target-record lookup and manual binding inside the intake surface.
+- Added automatic provenance logging after successful live-ingest apply operations.
 - Injected the workbench into both Government and Dialysis research tabs.
 - Added styling for the new intake surface and proposal preview.
 
 ## Verification Plan
 - Syntax check updated JS files.
+- Run unit tests for source normalization helper.
 - Confirm both dashboards render the intake card.
 - Confirm file picker / paste / capture actions do not throw.
 - Confirm extraction path builds a proposal and apply flow routes through mutation helpers.
@@ -61,9 +69,10 @@
 - `node --check gov.js` passed.
 - `node --check dialysis.js` passed.
 - Follow-up record-lookup changes in `app.js` also passed `node --check app.js`.
+- `node --check api/live-ingest.js` passed.
+- `node --check api/_shared/live-ingest-normalize.js` passed.
+- `node --test test/live-ingest-normalize.test.js` passed.
 
 ## Next Follow-Up Candidates
-- Add first-class PDF/email parsing on the server.
-- Add record lookup/search inside the intake card when no current record is selected.
 - Add richer per-operation field diff UI.
-- Auto-link successful ingest sessions into `research_queue_outcomes` with source provenance.
+- Add deeper server-side parsing for PDFs and richer MIME email bodies/attachments.

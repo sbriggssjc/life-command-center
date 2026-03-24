@@ -1653,10 +1653,84 @@ async function renderPerfDashboard(container) {
 
   if (aiData.summary) {
     const aiSummary = aiData.summary || {};
+    const routeConfig = aiData.route_config || {};
+    const rollout = aiData.rollout || {};
     const missingModel = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_model || 0));
     const missingUsage = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_usage || 0));
     const missingCache = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_cache_data || 0));
     html += '<div class="widget"><div class="widget-title">AI Usage (Recent 200 Calls)</div>';
+    const rolloutBadge = rollout.status === 'active' ? 'pri-low' : 'pri-high';
+    const rolloutText = rollout.status === 'active'
+      ? `Routing active · ${fmtN(rollout.override_count || 0)} override entries`
+      : 'Routing still manual/default-only';
+    html += `<div class="q-item" style="margin-bottom:12px">
+      <div class="q-item-header">
+        <span class="q-item-title">Rollout Readiness</span>
+        <div class="q-item-badges">
+          <span class="q-badge ${rolloutBadge}">${esc(rolloutText)}</span>
+        </div>
+      </div>
+      <div class="q-item-meta">
+        <span>${rollout.status === 'active' ? 'Feature routing config is present and should be observable below.' : 'Set AI_CHAT_POLICY or feature overrides to start a staged routing rollout.'}</span>
+      </div>
+    </div>`;
+    html += `<div class="q-item" style="margin-bottom:12px">
+      <div class="q-item-header">
+        <span class="q-item-title">Routing Policy</span>
+        <div class="q-item-badges">
+          <span class="q-badge type">${esc(routeConfig.policy || 'manual')}</span>
+          <span class="q-badge type">${esc(routeConfig.default_provider || 'edge')}</span>
+          <span class="q-badge type">${esc(routeConfig.default_model || 'gpt-5-mini')}</span>
+        </div>
+      </div>
+      <div class="q-item-meta">
+        <span>Default route for features without overrides</span>
+      </div>
+    </div>`;
+    const featureProviderEntries = Object.entries(routeConfig.feature_providers || {});
+    const featureModelEntries = Object.entries(routeConfig.feature_models || {});
+    if (featureProviderEntries.length || featureModelEntries.length) {
+      const featureKeys = [...new Set([...featureProviderEntries.map(([key]) => key), ...featureModelEntries.map(([key]) => key)])];
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
+      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+        + '<th style="padding:6px">Feature</th>'
+        + '<th style="padding:6px">Provider</th>'
+        + '<th style="padding:6px">Model</th>'
+        + '</tr></thead><tbody>';
+      featureKeys.sort().forEach((feature) => {
+        html += `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px">${esc(feature)}</td>
+          <td style="padding:6px">${esc(routeConfig.feature_providers?.[feature] || routeConfig.default_provider || 'edge')}</td>
+          <td style="padding:6px">${esc(routeConfig.feature_models?.[feature] || routeConfig.default_model || 'gpt-5-mini')}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
+    if (aiData.mismatches?.length) {
+      html += '<div class="q-item" style="margin-bottom:12px;border-color:var(--orange)">';
+      html += '<div class="q-item-header"><span class="q-item-title">Routing Mismatches Detected</span>';
+      html += `<div class="q-item-badges"><span class="q-badge pri-high">${fmtN(aiData.mismatches.length)}</span></div></div>`;
+      html += '<div class="q-item-meta"><span>Configured routes differ from recent observed telemetry for these features.</span></div>';
+      html += '</div>';
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
+      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+        + '<th style="padding:6px">Feature</th>'
+        + '<th style="padding:6px">Expected</th>'
+        + '<th style="padding:6px">Observed</th>'
+        + '<th style="padding:6px;text-align:right">Calls</th>'
+        + '</tr></thead><tbody>';
+      aiData.mismatches.forEach((row) => {
+        const observed = `${(row.seen_providers || []).join(', ') || 'unknown'} / ${(row.seen_models || []).join(', ') || 'unknown'}`;
+        const expected = `${row.expected_provider || 'edge'} / ${row.expected_model || 'gpt-5-mini'}`;
+        html += `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px">${esc(row.feature)}</td>
+          <td style="padding:6px">${esc(expected)}</td>
+          <td style="padding:6px">${esc(observed)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
     html += `<div class="q-item" style="margin-bottom:12px">
       <div class="q-item-header">
         <span class="q-item-title">Telemetry Quality</span>

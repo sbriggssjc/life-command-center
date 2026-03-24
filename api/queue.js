@@ -19,6 +19,7 @@
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { getAiConfig } from './_shared/ai.js';
 import {
   canTransitionInbox, inboxTransitionEffects, buildTransitionActivity,
   INBOX_TRANSITIONS, PRIORITIES, VISIBILITY_SCOPES, INBOX_SOURCE_TYPES, isValidEnum
@@ -406,6 +407,7 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
   }
 
   if (section === 'ai') {
+    const aiCfg = getAiConfig();
     const aiMetrics = await opsQuery(
       'GET',
       `perf_metrics?workspace_id=eq.${workspaceId}&metric_type=eq.ai_call&select=endpoint,duration_ms,metadata,created_at&order=created_at.desc&limit=200`
@@ -508,9 +510,45 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       usage: row.metadata?.usage || null,
     }));
 
+    const routeConfig = {
+      policy: aiCfg.chatPolicy || 'manual',
+      default_provider: aiCfg.provider || 'edge',
+      default_model: aiCfg.chatModel || 'gpt-5-mini',
+      feature_providers: aiCfg.featureProviders || {},
+      feature_models: aiCfg.featureModels || {},
+    };
+    const overrideCount = Object.keys(routeConfig.feature_providers || {}).length + Object.keys(routeConfig.feature_models || {}).length;
+    const rolloutStatus = routeConfig.policy !== 'manual' || overrideCount > 0 ? 'active' : 'manual_only';
+
+    const mismatches = features
+      .map((row) => {
+        const expectedProvider = routeConfig.feature_providers[row.feature] || routeConfig.default_provider;
+        const expectedModel = routeConfig.feature_models[row.feature] || routeConfig.default_model;
+        const matchingRecent = rows.filter((metric) => (metric.metadata?.feature || metric.metadata?.assistant_feature || 'unknown') === row.feature);
+        const seenProviders = [...new Set(matchingRecent.map((metric) => metric.metadata?.provider || 'unknown'))];
+        const seenModels = [...new Set(matchingRecent.map((metric) => metric.metadata?.model || 'unknown'))];
+        const providerMismatch = seenProviders.length > 0 && !seenProviders.every((provider) => provider === expectedProvider);
+        const modelMismatch = seenModels.some((model) => model !== 'unknown' && model !== expectedModel);
+        if (!providerMismatch && !modelMismatch) return null;
+        return {
+          feature: row.feature,
+          expected_provider: expectedProvider,
+          expected_model: expectedModel,
+          seen_providers: seenProviders,
+          seen_models: seenModels,
+          calls: row.calls,
+        };
+      })
+      .filter(Boolean);
+
     return {
       view: '_perf',
       section: 'ai',
+      route_config: routeConfig,
+      rollout: {
+        status: rolloutStatus,
+        override_count: overrideCount,
+      },
       summary: {
         total_calls: totalCalls,
         avg_duration_ms: totalCalls ? Math.round(totalDurationMs / totalCalls) : 0,
@@ -529,6 +567,7 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
       features,
       providers,
       statuses,
+      mismatches,
       recent,
     };
   }

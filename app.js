@@ -173,6 +173,8 @@ let govConnected = false;
 let diaConnected = false;
 let currentGovTab = 'overview';
 let currentDiaTab = 'overview';
+let currentGovGroup = 'overview';
+let currentDiaGroup = 'overview';
 let diaData = {
   freshness: {},
   inventorySummary: {},
@@ -200,6 +202,20 @@ let govData = {
   frppRecords: [],
   countyAuth: [],
   loans: []
+};
+
+const GOV_TAB_GROUPS = {
+  overview: ['overview', 'search'],
+  pipeline: ['pipeline', 'sales', 'prospects'],
+  research: ['research', 'ownership'],
+  reference: ['leases', 'loans', 'players']
+};
+
+const DIA_TAB_GROUPS = {
+  overview: ['overview', 'search', 'changes', 'npi'],
+  pipeline: ['prospects', 'activity', 'sales'],
+  research: ['research'],
+  reference: ['leases', 'loans', 'players']
 };
 
 // SOS URLs for all 50 states
@@ -290,6 +306,39 @@ function cleanLabel(s) { return labelMap[s] || norm(s); }
 
 function q(selector) { return document.querySelector(selector); }
 
+function groupForTab(tabName, groups, fallback = 'overview') {
+  for (const [group, tabs] of Object.entries(groups)) {
+    if (tabs.includes(tabName)) return group;
+  }
+  return fallback;
+}
+
+function syncDomainTabGroup(domain, explicitTab) {
+  const isGov = domain === 'government';
+  const currentTab = explicitTab || (isGov ? currentGovTab : currentDiaTab);
+  const groups = isGov ? GOV_TAB_GROUPS : DIA_TAB_GROUPS;
+  const groupId = isGov ? 'govTabGroups' : 'diaTabGroups';
+  const tabsId = isGov ? 'govInnerTabs' : 'diaInnerTabs';
+  const attr = isGov ? 'govTab' : 'diaTab';
+  const activeGroup = groupForTab(currentTab, groups, 'overview');
+
+  if (isGov) currentGovGroup = activeGroup;
+  else currentDiaGroup = activeGroup;
+
+  document.querySelectorAll(`#${groupId} .domain-tab-group`).forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.group === activeGroup);
+  });
+
+  const allowedTabs = new Set(groups[activeGroup] || []);
+  document.querySelectorAll(`#${tabsId} .gov-inner-tab`).forEach((btn) => {
+    const tabName = btn.dataset[attr];
+    btn.style.display = allowedTabs.has(tabName) ? '' : 'none';
+    btn.classList.toggle('active', tabName === currentTab);
+  });
+}
+
+window.syncDomainTabGroup = syncDomainTabGroup;
+
 function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d); if (isNaN(date)) return d;
@@ -369,6 +418,8 @@ function navToFromMore(pageId) {
   if (page) page.classList.add('active');
   // Hide biz sub-tabs unless on biz page
   document.getElementById('bizSubTabs').style.display = pageId === 'pageBiz' ? 'flex' : 'none';
+  document.getElementById('govTabGroups').style.display = 'none';
+  document.getElementById('diaTabGroups').style.display = 'none';
   document.getElementById('govInnerTabs').style.display = 'none';
   document.getElementById('diaInnerTabs').style.display = 'none';
   // Trigger page-specific loading
@@ -400,11 +451,15 @@ function handlePageLoad(pageId) {
     case 'pageCal': renderCalendarFull(); break;
     case 'pageBiz':
       if (currentBizTab === 'government') {
+        document.getElementById('govTabGroups').style.display = 'flex';
         document.getElementById('govInnerTabs').style.display = 'flex';
+        syncDomainTabGroup('government', currentGovTab);
         if (govConnected && !govDataLoaded) loadGovData();
         else renderBizContent();
       } else if (currentBizTab === 'dialysis') {
+        document.getElementById('diaTabGroups').style.display = 'flex';
         document.getElementById('diaInnerTabs').style.display = 'flex';
+        syncDomainTabGroup('dialysis', currentDiaTab);
         if (diaConnected && !diaDataLoaded) loadDiaData();
         else renderBizContent();
       } else {
@@ -523,6 +578,8 @@ document.querySelectorAll('.bnav[data-page]').forEach(btn => {
     if (page) page.classList.add('active');
     // Hide all secondary tab bars unless on Biz page
     document.getElementById('bizSubTabs').style.display = btn.dataset.page === 'pageBiz' ? 'flex' : 'none';
+    document.getElementById('govTabGroups').style.display = 'none';
+    document.getElementById('diaTabGroups').style.display = 'none';
     document.getElementById('govInnerTabs').style.display = 'none';
     document.getElementById('diaInnerTabs').style.display = 'none';
     handlePageLoad(btn.dataset.page);
@@ -538,10 +595,14 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   bizPage = 0;
   bizSearch = '';
   
+  document.getElementById('govTabGroups').style.display = currentBizTab === 'government' ? 'flex' : 'none';
+  document.getElementById('diaTabGroups').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
   document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
   document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
 
   if (currentBizTab === 'marketing') {
+    document.getElementById('govTabGroups').style.display = 'none';
+    document.getElementById('diaTabGroups').style.display = 'none';
     document.getElementById('govInnerTabs').style.display = 'none';
     document.getElementById('diaInnerTabs').style.display = 'none';
     loadMarketing();
@@ -553,8 +614,8 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
     if (!govConnected) showGovConnectionForm();
     else {
       currentGovTab = 'overview';
-      document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-      q('[data-gov-tab="overview"]').classList.add('active');
+      currentGovGroup = 'overview';
+      syncDomainTabGroup('government', currentGovTab);
       if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
         renderGovTab();
       } else {
@@ -564,13 +625,13 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   } else if (currentBizTab === 'dialysis') {
     if (!diaConnected) {
       currentDiaTab = 'activity';
-      document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-      q('[data-dia-tab="activity"]').classList.add('active');
+      currentDiaGroup = groupForTab('activity', DIA_TAB_GROUPS, 'pipeline');
+      syncDomainTabGroup('dialysis', currentDiaTab);
       renderBizContent();
     } else {
       currentDiaTab = 'overview';
-      document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-      q('[data-dia-tab="overview"]').classList.add('active');
+      currentDiaGroup = 'overview';
+      syncDomainTabGroup('dialysis', currentDiaTab);
       if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
         renderDiaTab();
       } else {
@@ -596,9 +657,8 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
 document.getElementById('govInnerTabs').addEventListener('click', (e) => {
   const tab = e.target.closest('.gov-inner-tab');
   if (!tab) return;
-  document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
   currentGovTab = tab.dataset.govTab;
+  syncDomainTabGroup('government', currentGovTab);
   if (currentGovTab === 'prospects') {
     // Prospects tab uses marketing data, not gov data
     if (_mktOpportunitiesLoaded) {
@@ -614,9 +674,8 @@ document.getElementById('govInnerTabs').addEventListener('click', (e) => {
 document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   const tab = e.target.closest('.gov-inner-tab');
   if (!tab) return;
-  document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
   currentDiaTab = tab.dataset.diaTab;
+  syncDomainTabGroup('dialysis', currentDiaTab);
   if (currentDiaTab === 'activity') {
     renderBizContent();
   } else if (currentDiaTab === 'prospects') {
@@ -631,6 +690,40 @@ document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   } else {
     // Data not loaded yet — trigger load, tab will render after
     if (typeof loadDiaData === 'function') loadDiaData();
+  }
+});
+
+document.getElementById('govTabGroups').addEventListener('click', (e) => {
+  const btn = e.target.closest('.domain-tab-group');
+  if (!btn) return;
+  currentGovGroup = btn.dataset.group;
+  const nextTab = GOV_TAB_GROUPS[currentGovGroup]?.[0] || 'overview';
+  currentGovTab = nextTab;
+  syncDomainTabGroup('government', currentGovTab);
+  if (currentGovTab === 'prospects') {
+    if (_mktOpportunitiesLoaded) renderDomainProspects('government');
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('government'));
+  } else {
+    renderGovTab();
+  }
+});
+
+document.getElementById('diaTabGroups').addEventListener('click', (e) => {
+  const btn = e.target.closest('.domain-tab-group');
+  if (!btn) return;
+  currentDiaGroup = btn.dataset.group;
+  const nextTab = DIA_TAB_GROUPS[currentDiaGroup]?.[0] || 'overview';
+  currentDiaTab = nextTab;
+  syncDomainTabGroup('dialysis', currentDiaTab);
+  if (currentDiaTab === 'activity') {
+    renderBizContent();
+  } else if (currentDiaTab === 'prospects') {
+    if (_mktOpportunitiesLoaded) renderDomainProspects('dialysis');
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('dialysis'));
+  } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
+    renderDiaTab();
+  } else if (typeof loadDiaData === 'function') {
+    loadDiaData();
   }
 });
 
@@ -5868,13 +5961,14 @@ async function runLiveIngestExtraction(domainKey) {
 
   try {
     const context = getLiveIngestEffectiveContext(domainKey);
+    const normalizedDocs = await normalizeLiveIngestTextDocuments(textDocs);
     const response = await invokeLccAssistant({
       feature: `${domainKey}_live_ingest`,
       context: {
         ...context,
         source_label: state.sourceLabel || null,
         user_notes: state.notes || null,
-        text_documents: textDocs
+        text_documents: normalizedDocs
       },
       attachments: imageAttachments,
       message: buildLiveIngestPrompt(domainKey, state, context)
@@ -5889,6 +5983,30 @@ async function runLiveIngestExtraction(domainKey) {
   } finally {
     state.extracting = false;
     rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+async function normalizeLiveIngestTextDocuments(textDocs) {
+  if (!Array.isArray(textDocs) || !textDocs.length) return [];
+  try {
+    const res = await fetch('/api/live-ingest?action=normalize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-LCC-Workspace': LCC_USER.workspace_id || ''
+      },
+      body: JSON.stringify({ action: 'normalize', documents: textDocs })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Normalize failed (${res.status})`);
+    return Array.isArray(data.documents) ? data.documents : [];
+  } catch (err) {
+    console.warn('Live ingest normalization fallback:', err);
+    return textDocs.map((doc) => ({
+      ...doc,
+      source_kind: 'text',
+      normalized_text: doc.text || ''
+    }));
   }
 }
 
@@ -6072,6 +6190,7 @@ async function applyLiveIngestProposal(domainKey) {
 
   const proxyBase = domainKey === 'government' ? '/api/gov-query' : '/api/dia-query';
   const sourceSurface = domainKey === 'government' ? 'gov_live_ingest' : 'dia_live_ingest';
+  const effectiveContext = getLiveIngestEffectiveContext(domainKey);
 
   try {
     for (const op of ops) {
@@ -6105,6 +6224,15 @@ async function applyLiveIngestProposal(domainKey) {
       }
     }
 
+    await logLiveIngestProvenance({
+      domainKey,
+      proxyBase,
+      sourceSurface,
+      state,
+      effectiveContext,
+      appliedCount: ops.length
+    });
+
     state.lastAppliedAt = new Date().toLocaleString();
     showToast(`Applied ${ops.length} ingest operation${ops.length === 1 ? '' : 's'}`, 'success');
     if (domainKey === 'government') {
@@ -6119,6 +6247,60 @@ async function applyLiveIngestProposal(domainKey) {
     state.applying = false;
     rerenderLiveIngestDomain(domainKey);
   }
+}
+
+async function logLiveIngestProvenance({ domainKey, proxyBase, sourceSurface, state, effectiveContext, appliedCount }) {
+  const record = effectiveContext?.current_record || {};
+  const notes = buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount);
+  const payload = {
+    queue_type: 'live_ingest',
+    status: 'applied',
+    notes,
+    assigned_at: new Date().toISOString()
+  };
+
+  if (record.property_id != null && record.property_id !== '') {
+    payload.selected_property_id = record.property_id;
+  }
+  if (domainKey === 'dialysis' && (record.clinic_id != null && record.clinic_id !== '')) {
+    payload.clinic_id = record.clinic_id;
+  }
+
+  // Provenance should never block the underlying writeback flow.
+  try {
+    await applyInsertWithFallback({
+      proxyBase,
+      table: 'research_queue_outcomes',
+      idColumn: domainKey === 'dialysis' ? 'clinic_id' : 'selected_property_id',
+      recordIdentifier: domainKey === 'dialysis'
+        ? (payload.clinic_id != null ? payload.clinic_id : null)
+        : (payload.selected_property_id != null ? payload.selected_property_id : null),
+      data: payload,
+      source_surface: sourceSurface,
+      notes: 'Automatic live ingest provenance log',
+      propagation_scope: 'research_queue_outcome'
+    });
+  } catch (err) {
+    console.error('Live ingest provenance log failed:', err);
+  }
+}
+
+function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount) {
+  const record = effectiveContext?.current_record || {};
+  const attachmentNames = (state.attachments || []).map((item) => item.name || item.kind || 'attachment').slice(0, 8);
+  const bits = [
+    '[live_ingest]',
+    state.sourceLabel ? `source=${state.sourceLabel}` : null,
+    `applied_ops=${appliedCount}`,
+    state.proposal?.summary ? `summary=${state.proposal.summary}` : null,
+    attachmentNames.length ? `attachments=${attachmentNames.join(', ')}` : null,
+    record.lead_id ? `lead_id=${record.lead_id}` : null,
+    record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
+    record.property_id ? `property_id=${record.property_id}` : null,
+    record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
+    state.notes ? `notes=${state.notes}` : null
+  ].filter(Boolean);
+  return bits.join(' | ').slice(0, 4000);
 }
 
 window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;

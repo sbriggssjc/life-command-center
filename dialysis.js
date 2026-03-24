@@ -266,9 +266,13 @@ function renderDiaTab() {
 // Helper: navigate to a dia sub-tab
 function goToDiaTab(tabName) {
   currentDiaTab = tabName;
-  document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-  const btn = document.querySelector('[data-dia-tab="' + tabName + '"]');
-  if (btn) btn.classList.add('active');
+  if (typeof window.syncDomainTabGroup === 'function') {
+    window.syncDomainTabGroup('dialysis', tabName);
+  } else {
+    document.querySelectorAll('#diaInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector('[data-dia-tab="' + tabName + '"]');
+    if (btn) btn.classList.add('active');
+  }
   if (tabName === 'activity') { renderBizContent(); }
   else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) { renderDiaTab(); }
 }

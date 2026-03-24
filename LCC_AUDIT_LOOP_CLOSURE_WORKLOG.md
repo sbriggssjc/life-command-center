@@ -125,6 +125,9 @@
 - `node --check api/_shared/ops-db.js` passed after adding the shared perf-metric logger.
 - `node --check api/apply-change.js` passed after wiring mutation latency logging.
 - `node --check api/sync.js` passed again after wiring propagation latency logging and Sync Health drift/success-rate signals.
+- `node --check app.js` passed after adding grouped Government/Dialysis business navigation.
+- `node --check gov.js` passed after aligning programmatic gov tab navigation with grouped tabs.
+- `node --check dialysis.js` passed after aligning programmatic dialysis tab navigation with grouped tabs.
 - `node --check test/queue.test.js` passed after adding inbox transition and promotion contract coverage.
 - `node --check test/sync.test.js` passed after adding response-level Sync Health and outbound-failure coverage.
 - `node --check test/contacts.test.js` passed.
@@ -155,6 +158,7 @@
 - Mutation latency is now logged through the shared ops perf-metric path, and outbound propagation now records latency plus 24h success-rate and basic Salesforce queue-drift signals in Sync Health.
 - The verification layer now includes response-level Sync API coverage in addition to helper-level unit tests, so health summaries and outbound failure surfacing are no longer untested.
 - The queue/inbox transition contract now has direct handler-level coverage for triage and promote flows, reducing the risk that UI wiring drifts away from supported inbox state transitions.
+- Government and Dialysis now expose grouped workflow navigation above the existing tab strips, which reduces top-of-screen tab density without rewriting the underlying renderers.
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

@@ -100,6 +100,9 @@
 - Added per-feature provider/model routing for `/api/chat`, so individual assistant flows can be assigned to `edge`, `openai`, or `ollama` without changing the frontend call sites.
 - Added `AI_CHAT_FEATURE_PROVIDERS` and `AI_CHAT_FEATURE_MODELS` env hooks for feature-level routing control.
 - Added an opt-in `AI_CHAT_POLICY=balanced` preset that applies the recommended first-cut routing mix without requiring manual JSON maps for every feature.
+- Added routing-policy visibility to the AI dashboard so the active default route and feature overrides are visible next to live telemetry.
+- Added route-mismatch detection to the AI dashboard so you can see when configured feature routing does not match recent observed provider/model traffic.
+- Added a rollout-readiness indicator to the AI dashboard so it is obvious whether feature routing is actually active or still effectively manual/default-only.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`
