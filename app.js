@@ -725,9 +725,8 @@ function updateBizBadges() {
 
 function renderBizContent() {
   console.log('renderBizContent:', { currentBizTab, currentDiaTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded });
-  // If marketing tab, load deal tasks
+  // If marketing tab, just return — loadMarketing() is already called by setBizTab
   if (currentBizTab === 'marketing') {
-    loadMarketing();
     return;
   }
   // If prospects tab, render cross-project view
@@ -950,9 +949,13 @@ let prospectSearch = { government: '', dialysis: '', all_other: '' };
 let prospectSearchTimeout;
 const PROSPECT_PAGE = 20;
 
+let _mktLoading = false;
 async function loadMarketing() {
+  if (_mktLoading) return; // Prevent double-load
+  if (mktLoaded) { renderMarketing(); return; } // Already loaded, just re-render
   const el = document.getElementById('bizPageInner');
   if (!el) return;
+  _mktLoading = true;
 
   // Fire RCM backfill once per session — re-parses any raw leads and creates SF activities
   if (!window._rcmBackfillFired && currentBizTab === 'marketing') {
@@ -988,7 +991,7 @@ async function loadMarketing() {
       // Load CRM client rollup — paginated fetch (Supabase caps at 1000 rows per request)
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
-      const BATCH_SIZE = 500;
+      const BATCH_SIZE = 1000;
 
       function buildRollupUrl(selectFields, extraFilter, batchOffset) {
         var url = new URL('/api/dia-query', window.location.origin);
@@ -1411,9 +1414,11 @@ async function loadMarketing() {
     } catch (e) {
       console.error('Marketing load error:', e);
       el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading marketing pipeline.</div>';
+      _mktLoading = false;
       return;
     }
   }
+  _mktLoading = false;
 
   renderMarketing();
 
@@ -4289,13 +4294,29 @@ function renderPriorityTasks() {
 }
 
 function renderCategoryMetrics() {
-  // Prefer canonical counts when available
-  if (canonicalCounts) {
+  // Prefer canonical counts when available AND has meaningful data
+  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0 || canonicalCounts.completed_week > 0 || canonicalCounts.overdue > 0)) {
     let html = '<div class="cat-metrics">';
     html += `<div class="cat-metric clickable" onclick="navTo('pageMyWork')"><div class="cat-metric-val" style="color:var(--accent)">${canonicalCounts.my_actions || 0}</div><div class="cat-metric-lbl">My Actions</div></div>`;
     html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${canonicalCounts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
     html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--green)">${canonicalCounts.completed_week || 0}</div><div class="cat-metric-lbl">Done This Week</div></div>`;
     html += `<div class="cat-metric${(canonicalCounts.overdue || 0) > 0 ? ' overdue' : ''}"><div class="cat-metric-val" style="color:${(canonicalCounts.overdue || 0) > 0 ? 'var(--red)' : 'var(--yellow)'}">${canonicalCounts.overdue || 0}</div><div class="cat-metric-lbl">Overdue</div></div>`;
+    html += '</div>';
+    return html;
+  }
+
+  // CRM rollup fallback (same data source as renderHomeStats)
+  if (mktLoaded && mktData.length > 0) {
+    const userName = LCC_USER.display_name || 'Scott Briggs';
+    const myTasks = mktData.filter(d => d.assigned_to === userName && d.open_task_count > 0);
+    const allOpen = mktData.filter(d => d.open_task_count > 0);
+    const now = Date.now();
+    const overdue = mktData.filter(d => d.due_date && new Date(d.due_date).getTime() < now);
+    let html = '<div class="cat-metrics">';
+    html += `<div class="cat-metric clickable" onclick="navTo('pageBiz')"><div class="cat-metric-val" style="color:var(--accent)">${myTasks.length}</div><div class="cat-metric-lbl">My Actions</div></div>`;
+    html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--cyan)">${allOpen.length}</div><div class="cat-metric-lbl">Team Open</div></div>`;
+    html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--green)">0</div><div class="cat-metric-lbl">Done This Week</div></div>`;
+    html += `<div class="cat-metric${overdue.length > 0 ? ' overdue' : ''}"><div class="cat-metric-val" style="color:${overdue.length > 0 ? 'var(--red)' : 'var(--yellow)'}">${overdue.length}</div><div class="cat-metric-lbl">Overdue</div></div>`;
     html += '</div>';
     return html;
   }
@@ -4366,9 +4387,13 @@ function renderTeamPulse() {
   const el = document.getElementById('teamPulseContent');
   if (!widget || !el) return;
 
-  // Only show for managers/owners with canonical data
+  // Only show for managers/owners with meaningful canonical data
   const isManager = LCC_USER.role === 'owner' || LCC_USER.role === 'manager';
-  if (!isManager || !canonicalCounts) {
+  const hasData = canonicalCounts && (
+    (canonicalCounts.open_actions || 0) > 0 || (canonicalCounts.open_escalations || 0) > 0 ||
+    (canonicalCounts.sync_errors || 0) > 0 || (canonicalCounts.in_progress || 0) > 0
+  );
+  if (!isManager || !hasData) {
     widget.style.display = 'none';
     return;
   }
