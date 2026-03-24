@@ -1433,9 +1433,10 @@ async function renderPerfDashboard(container) {
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
 
-  const [summaryRes, slowRes] = await Promise.all([
+  const [summaryRes, slowRes, aiRes] = await Promise.all([
     opsApi('/api/queue-v2?view=_perf&section=summary'),
-    opsApi('/api/queue-v2?view=_perf&section=slow')
+    opsApi('/api/queue-v2?view=_perf&section=slow'),
+    opsApi('/api/queue-v2?view=_perf&section=ai')
   ]);
 
   if (!summaryRes.ok) {
@@ -1445,6 +1446,7 @@ async function renderPerfDashboard(container) {
 
   const data = summaryRes.data;
   const slowData = slowRes.ok ? slowRes.data : {};
+  const aiData = aiRes.ok ? aiRes.data : {};
   let html = '';
 
   html += '<div class="ops-header"><h2>Performance Dashboard</h2></div>';
@@ -1540,6 +1542,99 @@ async function renderPerfDashboard(container) {
     html += '</div>';
   } else {
     html += '<div class="widget"><div class="widget-title">Slow Requests (24h)</div><div class="ops-empty">No slow requests detected</div></div>';
+  }
+
+  if (aiData.summary) {
+    const aiSummary = aiData.summary || {};
+    html += '<div class="widget"><div class="widget-title">AI Usage (Recent 200 Calls)</div>';
+    html += '<div class="metrics-grid">';
+    html += `<div class="metric-card"><div class="metric-label">Calls</div><div class="metric-val">${fmtN(aiSummary.total_calls || 0)}</div></div>`;
+    html += `<div class="metric-card"><div class="metric-label">Avg Latency</div><div class="metric-val">${fmtN(aiSummary.avg_duration_ms || 0)}ms</div></div>`;
+    html += `<div class="metric-card"><div class="metric-label">Input Tokens</div><div class="metric-val">${fmtN(aiSummary.total_input_tokens || 0)}</div></div>`;
+    html += `<div class="metric-card"><div class="metric-label">Output Tokens</div><div class="metric-val">${fmtN(aiSummary.total_output_tokens || 0)}</div></div>`;
+    html += `<div class="metric-card"><div class="metric-label">Total Tokens</div><div class="metric-val">${fmtN(aiSummary.total_tokens || 0)}</div></div>`;
+    html += `<div class="metric-card"><div class="metric-label">Attachments</div><div class="metric-val">${fmtN(aiSummary.total_attachments || 0)}</div></div>`;
+    html += '</div>';
+
+    if (aiData.features?.length) {
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:12px">';
+      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+        + '<th style="padding:6px">Feature</th>'
+        + '<th style="padding:6px;text-align:right">Calls</th>'
+        + '<th style="padding:6px;text-align:right">Avg</th>'
+        + '<th style="padding:6px;text-align:right">Tokens</th>'
+        + '<th style="padding:6px;text-align:right">Attachments</th>'
+        + '<th style="padding:6px;text-align:right">Last Call</th>'
+        + '</tr></thead><tbody>';
+      aiData.features.slice(0, 12).forEach((row) => {
+        html += `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px">${esc(row.feature)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.avg_duration_ms || 0)}ms</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.total_tokens || 0)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.attachments || 0)}</td>
+          <td style="padding:6px;text-align:right">${row.last_called_at ? freshnessHTML(row.last_called_at) : '--'}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+
+    html += '<div class="widget"><div class="widget-title">AI Providers And Recent Calls</div>';
+    if (aiData.providers?.length) {
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+        + '<th style="padding:6px">Provider</th>'
+        + '<th style="padding:6px;text-align:right">Calls</th>'
+        + '<th style="padding:6px;text-align:right">Avg</th>'
+        + '<th style="padding:6px;text-align:right">Tokens</th>'
+        + '</tr></thead><tbody>';
+      aiData.providers.forEach((row) => {
+        html += `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px">${esc(row.provider)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.avg_duration_ms || 0)}ms</td>
+          <td style="padding:6px;text-align:right">${fmtN(row.total_tokens || 0)}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<div class="ops-empty">No provider data available</div>';
+    }
+
+    if (aiData.statuses?.length) {
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">';
+      aiData.statuses.forEach((row) => {
+        html += `<span class="q-badge type">${esc(row.status)}: ${fmtN(row.calls || 0)}</span>`;
+      });
+      html += '</div>';
+    }
+
+    if (aiData.recent?.length) {
+      aiData.recent.slice(0, 10).forEach((row) => {
+        const usage = row.usage || {};
+        const totalTokens = usage.total_tokens || ((usage.input_tokens || usage.prompt_tokens || 0) + (usage.output_tokens || usage.completion_tokens || 0));
+        html += `<div class="q-item">
+          <div class="q-item-header">
+            <span class="q-item-title">${esc(row.feature || 'unknown')}</span>
+            <div class="q-item-badges">
+              <span class="q-badge type">${esc(row.provider || 'unknown')}</span>
+              <span class="q-badge">${fmtN(row.duration_ms || 0)}ms</span>
+              <span class="q-badge">${fmtN(totalTokens || 0)} tok</span>
+            </div>
+          </div>
+          <div class="q-item-meta">
+            <span>${esc(row.endpoint || 'chat')}</span>
+            <span>${esc(String(row.status || 'unknown'))}</span>
+            ${row.attachment_count ? `<span>${fmtN(row.attachment_count)} attachment${row.attachment_count === 1 ? '' : 's'}</span>` : ''}
+            <span>${row.created_at ? freshnessHTML(row.created_at) : '--'}</span>
+          </div>
+        </div>`;
+      });
+    } else {
+      html += '<div class="ops-empty">No recent AI calls found</div>';
+    }
+    html += '</div>';
   }
 
   // Client-side perf log

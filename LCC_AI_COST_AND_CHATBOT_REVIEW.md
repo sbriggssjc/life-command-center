@@ -88,6 +88,8 @@
 - Added a review-first ownership field prefill action for recorded owner, true owner, owner type, contact details, and incorporation state.
 - Added `Save Reviewed Intel` to batch-save populated Intel sections after analyst review, using the existing save handlers with one refresh at the end.
 - Added `Save Reviewed Ownership` so assistant-prefilled ownership fields can flow straight into the existing ownership save path.
+- Added an AI usage section to the existing Performance Dashboard, backed by recent `ai_call` telemetry from `perf_metrics`.
+- The dashboard now summarizes recent AI calls by feature, provider, latency, token totals when available, attachment counts, statuses, and recent call activity.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

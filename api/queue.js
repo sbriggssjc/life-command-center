@@ -405,7 +405,109 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
     return { view: '_perf', section: 'workspace', workspace_perf: ws.data?.[0] || null };
   }
 
-  return { view: '_perf', error: 'section must be: summary, slow, workspace' };
+  if (section === 'ai') {
+    const aiMetrics = await opsQuery(
+      'GET',
+      `perf_metrics?workspace_id=eq.${workspaceId}&metric_type=eq.ai_call&select=endpoint,duration_ms,metadata,created_at&order=created_at.desc&limit=200`
+    );
+    const rows = aiMetrics.data || [];
+
+    const featureMap = new Map();
+    const providerMap = new Map();
+    const statusMap = new Map();
+    let totalCalls = 0;
+    let totalDurationMs = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalTokens = 0;
+    let totalAttachments = 0;
+
+    for (const row of rows) {
+      totalCalls += 1;
+      totalDurationMs += Number(row.duration_ms || 0);
+
+      const meta = row.metadata || {};
+      const feature = meta.feature || meta.assistant_feature || 'unknown';
+      const provider = meta.provider || 'unknown';
+      const status = String(meta.status || 'unknown');
+      const attachmentCount = Number(meta.attachment_count || 0);
+      const usage = meta.usage || {};
+      const inputTokens = Number(usage.input_tokens || usage.prompt_tokens || 0);
+      const outputTokens = Number(usage.output_tokens || usage.completion_tokens || 0);
+      const totalRowTokens = Number(usage.total_tokens || (inputTokens + outputTokens) || 0);
+
+      totalInputTokens += inputTokens;
+      totalOutputTokens += outputTokens;
+      totalTokens += totalRowTokens;
+      totalAttachments += attachmentCount;
+
+      if (!featureMap.has(feature)) featureMap.set(feature, { feature, calls: 0, total_duration_ms: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, attachments: 0, last_called_at: null });
+      const featureRow = featureMap.get(feature);
+      featureRow.calls += 1;
+      featureRow.total_duration_ms += Number(row.duration_ms || 0);
+      featureRow.input_tokens += inputTokens;
+      featureRow.output_tokens += outputTokens;
+      featureRow.total_tokens += totalRowTokens;
+      featureRow.attachments += attachmentCount;
+      featureRow.last_called_at = featureRow.last_called_at || row.created_at || null;
+
+      if (!providerMap.has(provider)) providerMap.set(provider, { provider, calls: 0, total_duration_ms: 0, total_tokens: 0 });
+      const providerRow = providerMap.get(provider);
+      providerRow.calls += 1;
+      providerRow.total_duration_ms += Number(row.duration_ms || 0);
+      providerRow.total_tokens += totalRowTokens;
+
+      statusMap.set(status, (statusMap.get(status) || 0) + 1);
+    }
+
+    const features = [...featureMap.values()]
+      .map((row) => ({
+        ...row,
+        avg_duration_ms: row.calls ? Math.round(row.total_duration_ms / row.calls) : 0,
+      }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const providers = [...providerMap.values()]
+      .map((row) => ({
+        ...row,
+        avg_duration_ms: row.calls ? Math.round(row.total_duration_ms / row.calls) : 0,
+      }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const statuses = [...statusMap.entries()]
+      .map(([status, calls]) => ({ status, calls }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const recent = rows.slice(0, 20).map((row) => ({
+      endpoint: row.endpoint,
+      duration_ms: row.duration_ms,
+      created_at: row.created_at,
+      feature: row.metadata?.feature || row.metadata?.assistant_feature || 'unknown',
+      provider: row.metadata?.provider || 'unknown',
+      status: row.metadata?.status || 'unknown',
+      attachment_count: Number(row.metadata?.attachment_count || 0),
+      usage: row.metadata?.usage || null,
+    }));
+
+    return {
+      view: '_perf',
+      section: 'ai',
+      summary: {
+        total_calls: totalCalls,
+        avg_duration_ms: totalCalls ? Math.round(totalDurationMs / totalCalls) : 0,
+        total_input_tokens: totalInputTokens,
+        total_output_tokens: totalOutputTokens,
+        total_tokens: totalTokens,
+        total_attachments: totalAttachments,
+      },
+      features,
+      providers,
+      statuses,
+      recent,
+    };
+  }
+
+  return { view: '_perf', error: 'section must be: summary, slow, workspace, ai' };
 }
 
 // ---- PERF METRIC LOGGING (fire-and-forget) ----
