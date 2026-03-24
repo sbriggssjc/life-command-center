@@ -1422,11 +1422,12 @@ async function loadMarketing() {
   var ptEl = document.getElementById('priorityTasks');
   if (ptEl) ptEl.innerHTML = renderPriorityTasks();
 
-  // If gov or dialysis prospects tab is active, populate now that marketing data is ready
-  if (typeof currentGovTab !== 'undefined' && currentGovTab === 'prospects') {
+  // If gov or dialysis prospects tab is currently visible, populate now that marketing data is ready
+  // Guard with currentBizTab check to avoid overwriting marketing/other tab content
+  if (currentBizTab === 'government' && typeof currentGovTab !== 'undefined' && currentGovTab === 'prospects') {
     renderDomainProspects('government');
   }
-  if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
+  if (currentBizTab === 'dialysis' && typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
     renderDomainProspects('dialysis');
   }
 }
