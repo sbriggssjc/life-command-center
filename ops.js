@@ -786,6 +786,8 @@ async function renderResearchPage() {
         <div class="q-actions">
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="completeResearch('${item.id}')">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="createFollowup('${item.id}')">Follow-up</button>` : ''}
+          <button class="q-action" onclick="exportResearchTaskBrief('${item.id}','chatgpt')">ChatGPT</button>
+          <button class="q-action" onclick="exportResearchTaskBrief('${item.id}','claude')">Claude</button>
         </div>
       </div>`;
     });
@@ -817,6 +819,51 @@ async function createFollowup(id) {
   document.getElementById('followupContext').textContent = 'Create a follow-up action and complete this research task.';
   opsFollowupModalState = { researchTaskId: id };
   document.getElementById('followupModal').classList.add('open');
+}
+
+function buildResearchTaskBrief(item) {
+  if (!item) return '';
+  return [
+    'You are helping complete a commercial real estate research task in Life Command Center.',
+    'Use the task details below and produce a compact analyst-ready brief.',
+    '',
+    'Task',
+    `- Title: ${item.title || 'Untitled'}`,
+    `- Research type: ${item.research_type || 'Unknown'}`,
+    `- Domain: ${item.domain || 'Unknown'}`,
+    `- Status: ${item.status || 'Unknown'}`,
+    `- Assignee: ${item.assignee_name || 'Unassigned'}`,
+    '',
+    'Instructions',
+    item.instructions || 'No additional instructions provided.',
+    '',
+    'Return in this format:',
+    '1. What this task is asking for',
+    '2. Best next steps',
+    '3. Risks / missing data',
+    '4. Draft completion note',
+    '5. Draft follow-up action if needed',
+  ].join('\n');
+}
+
+async function exportResearchTaskBrief(id, provider) {
+  const item = (opsResearchData || []).find(r => r.id === id);
+  if (!item) {
+    showToast('Research task not found', 'error');
+    return;
+  }
+
+  const brief = buildResearchTaskBrief(item);
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(brief);
+    }
+  } catch (e) {
+    console.warn('Research brief clipboard warning:', e);
+  }
+
+  window.open(provider === 'claude' ? 'https://claude.ai/chats' : 'https://chatgpt.com/', '_blank', 'noopener');
+  showToast(`Research brief copied. Paste it into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'success');
 }
 
 function closeAssignModal() {

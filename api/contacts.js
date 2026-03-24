@@ -18,7 +18,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, isOpsConfigured, withErrorHandler } from './_shared/ops-db.js';
 
 const GOV_URL = process.env.GOV_SUPABASE_URL;
 const GOV_KEY = process.env.GOV_SUPABASE_KEY;
@@ -137,14 +137,31 @@ async function upsertWebexToken(accessToken, refreshToken, expiresAt, refreshExp
     const updates = { access_token: accessToken, expires_at: expiresAt };
     if (refreshToken) updates.refresh_token = refreshToken;
     if (refreshExpiresAt) updates.refresh_expires_at = refreshExpiresAt;
-    await govQuery('PATCH', 'system_tokens?token_key=eq.webex', updates);
+    await auditedPatchGov({
+      table: 'system_tokens',
+      filter: 'token_key=eq.webex',
+      recordIdentifier: 'webex',
+      idColumn: 'token_key',
+      changedFields: updates,
+      sourceSurface: 'contacts_token_refresh',
+      notes: 'Refresh WebEx token material',
+      propagationScope: 'system_token'
+    });
   } else {
-    await govQuery('POST', 'system_tokens', {
+    await auditedInsertGov({
+      table: 'system_tokens',
+      recordIdentifier: 'webex',
+      idColumn: 'token_key',
+      changedFields: {
       token_key: 'webex',
       access_token: accessToken,
       refresh_token: refreshToken,
       expires_at: expiresAt,
       refresh_expires_at: refreshExpiresAt
+      },
+      sourceSurface: 'contacts_token_refresh',
+      notes: 'Create WebEx token material',
+      propagationScope: 'system_token'
     });
   }
 }
@@ -179,6 +196,107 @@ async function govQuery(method, path, body, extraHeaders = {}) {
     if (match) count = parseInt(match[1], 10);
   }
   return { ok: res.ok, status: res.status, data, count };
+}
+
+async function auditedGovWrite({
+  workspaceId,
+  user,
+  method,
+  path,
+  targetTable,
+  recordIdentifier = null,
+  idColumn = null,
+  changedFields = {},
+  sourceSurface = 'contacts_api',
+  notes = null,
+  propagationScope = null
+}) {
+  const resolvedWorkspaceId = workspaceId || user?.memberships?.[0]?.workspace_id || null;
+  const result = await govQuery(method, path, changedFields);
+
+  if (!isOpsConfigured() || !resolvedWorkspaceId) {
+    return result;
+  }
+
+  const actor = user?.display_name || user?.email || user?.id || 'system';
+  const correctionBase = {
+    workspace_id: resolvedWorkspaceId,
+    actor,
+    source_surface: sourceSurface,
+    target_table: targetTable,
+    target_source: 'gov',
+    record_identifier: recordIdentifier != null ? String(recordIdentifier) : null,
+    id_column: idColumn,
+    changed_fields: changedFields || {},
+    notes,
+    propagation_scope: propagationScope || null,
+    applied_at: new Date().toISOString()
+  };
+
+  if (!result.ok) {
+    await opsQuery('POST', 'pending_updates', {
+      workspace_id: resolvedWorkspaceId,
+      target_source: 'gov',
+      target_table: targetTable,
+      record_identifier: recordIdentifier != null ? String(recordIdentifier) : null,
+      id_column: idColumn,
+      mutation_mode: method === 'POST' ? 'insert' : 'patch',
+      source_surface: sourceSurface,
+      actor,
+      status: 'needs_review',
+      changed_fields: changedFields || {},
+      notes,
+      error_details: {
+        stage: method.toLowerCase(),
+        status: result.status,
+        detail: result.data
+      },
+      propagation_scope: propagationScope || null
+    }).catch(() => {});
+
+    return result;
+  }
+
+  await opsQuery('POST', 'data_corrections', {
+    ...correctionBase,
+    applied_mode: method === 'POST' ? 'contacts_insert' : 'contacts_patch',
+    reconciliation_result: {},
+    propagation_result: {}
+  }).catch(() => {});
+
+  return result;
+}
+
+function auditedPatchGov({ workspaceId, user, table, filter, recordIdentifier, idColumn, changedFields, sourceSurface, notes, propagationScope }) {
+  return auditedGovWrite({
+    workspaceId,
+    user,
+    method: 'PATCH',
+    path: `${table}?${filter}`,
+    targetTable: table,
+    recordIdentifier,
+    idColumn,
+    changedFields,
+    sourceSurface,
+    notes,
+    propagationScope
+  });
+}
+
+function auditedInsertGov({ workspaceId, user, table, recordIdentifier, idColumn, changedFields, sourceSurface, notes, propagationScope }) {
+  return auditedGovWrite({
+    workspaceId,
+    user,
+    method: 'POST',
+    path: table,
+    targetTable: table,
+    recordIdentifier,
+    idColumn,
+    changedFields,
+    sourceSurface,
+    notes,
+    propagationScope
+  });
 }
 
 export default withErrorHandler(async function handler(req, res) {
@@ -567,16 +685,33 @@ async function ingestContact(req, res, user) {
     updates.field_sources = mergedFieldSources;
 
     if (Object.keys(updates).length > 0) {
-      await govQuery('PATCH', `unified_contacts?unified_id=eq.${existingId}`, updates);
+      await auditedPatchGov({
+        user,
+        table: 'unified_contacts',
+        filter: `unified_id=eq.${existingId}`,
+        recordIdentifier: existingId,
+        idColumn: 'unified_id',
+        changedFields: updates,
+        sourceSurface: 'contacts_ingest_merge',
+        propagationScope: 'unified_contact'
+      });
 
       // Log the merge
       if (Object.keys(fieldsChanged).length > 0) {
-        await govQuery('POST', 'contact_change_log', {
+        await auditedInsertGov({
+          user,
+          table: 'contact_change_log',
+          recordIdentifier: existingId,
+          idColumn: 'unified_id',
+          changedFields: {
           unified_id: existingId,
           change_type: 'update',
           source,
           fields_changed: fieldsChanged,
           changed_by: user.display_name || user.id
+          },
+          sourceSurface: 'contacts_ingest_merge',
+          propagationScope: 'contact_change_log'
         });
       }
     }
@@ -637,7 +772,13 @@ async function ingestContact(req, res, user) {
       );
     }
 
-    const result = await govQuery('POST', 'unified_contacts', newContact);
+    const result = await auditedInsertGov({
+      user,
+      table: 'unified_contacts',
+      changedFields: newContact,
+      sourceSurface: 'contacts_ingest_create',
+      propagationScope: 'unified_contact'
+    });
     if (!result.ok) {
       return res.status(result.status).json({ error: 'Failed to create contact', detail: result.data });
     }
@@ -645,12 +786,20 @@ async function ingestContact(req, res, user) {
     const created = Array.isArray(result.data) ? result.data[0] : result.data;
 
     // Log creation
-    await govQuery('POST', 'contact_change_log', {
+    await auditedInsertGov({
+      user,
+      table: 'contact_change_log',
+      recordIdentifier: created.unified_id,
+      idColumn: 'unified_id',
+      changedFields: {
       unified_id: created.unified_id,
       change_type: 'create',
       source,
       fields_changed: incomingFields,
       changed_by: user.display_name || user.id
+      },
+      sourceSurface: 'contacts_ingest_create',
+      propagationScope: 'contact_change_log'
     });
 
     return res.status(201).json({
@@ -681,15 +830,32 @@ async function classifyContact(req, res, user, id) {
     return res.status(200).json({ message: 'Already classified as ' + contact_class });
   }
 
-  await govQuery('PATCH', `unified_contacts?unified_id=eq.${id}`, { contact_class });
+  await auditedPatchGov({
+    user,
+    table: 'unified_contacts',
+    filter: `unified_id=eq.${id}`,
+    recordIdentifier: id,
+    idColumn: 'unified_id',
+    changedFields: { contact_class },
+    sourceSurface: 'contacts_classify',
+    propagationScope: 'unified_contact'
+  });
 
   // Log classification change
-  await govQuery('POST', 'contact_change_log', {
+  await auditedInsertGov({
+    user,
+    table: 'contact_change_log',
+    recordIdentifier: id,
+    idColumn: 'unified_id',
+    changedFields: {
     unified_id: id,
     change_type: 'classify',
     source: 'manual',
     fields_changed: { contact_class: { old: oldClass, new: contact_class } },
     changed_by: user.display_name || user.id
+    },
+    sourceSurface: 'contacts_classify',
+    propagationScope: 'contact_change_log'
   });
 
   return res.status(200).json({
@@ -741,15 +907,32 @@ async function updateContact(req, res, user, id) {
   }
   updates.field_sources = fieldSources;
 
-  await govQuery('PATCH', `unified_contacts?unified_id=eq.${id}`, updates);
+  await auditedPatchGov({
+    user,
+    table: 'unified_contacts',
+    filter: `unified_id=eq.${id}`,
+    recordIdentifier: id,
+    idColumn: 'unified_id',
+    changedFields: updates,
+    sourceSurface: 'contacts_update',
+    propagationScope: 'unified_contact'
+  });
 
   if (Object.keys(fieldsChanged).length > 0) {
-    await govQuery('POST', 'contact_change_log', {
+    await auditedInsertGov({
+      user,
+      table: 'contact_change_log',
+      recordIdentifier: id,
+      idColumn: 'unified_id',
+      changedFields: {
       unified_id: id,
       change_type: 'update',
       source: 'manual',
       fields_changed: fieldsChanged,
       changed_by: user.display_name || user.id
+      },
+      sourceSurface: 'contacts_update',
+      propagationScope: 'contact_change_log'
     });
   }
 
@@ -815,17 +998,34 @@ async function mergeContacts(req, res, user) {
 
   // Apply updates to kept contact
   if (Object.keys(updates).length > 0) {
-    await govQuery('PATCH', `unified_contacts?unified_id=eq.${keep_id}`, updates);
+    await auditedPatchGov({
+      user,
+      table: 'unified_contacts',
+      filter: `unified_id=eq.${keep_id}`,
+      recordIdentifier: keep_id,
+      idColumn: 'unified_id',
+      changedFields: updates,
+      sourceSurface: 'contacts_merge',
+      propagationScope: 'unified_contact'
+    });
   }
 
   // Log the merge
-  await govQuery('POST', 'contact_change_log', {
+  await auditedInsertGov({
+    user,
+    table: 'contact_change_log',
+    recordIdentifier: keep_id,
+    idColumn: 'unified_id',
+    changedFields: {
     unified_id: keep_id,
     change_type: 'merge',
     source: 'manual',
     fields_changed: updates,
     merged_from: merge_id,
     changed_by: user.display_name || user.id
+    },
+    sourceSurface: 'contacts_merge',
+    propagationScope: 'contact_change_log'
   });
 
   // Delete the merged contact
@@ -833,10 +1033,19 @@ async function mergeContacts(req, res, user) {
 
   // Update merge queue if queue_id provided
   if (queue_id) {
-    await govQuery('PATCH', `contact_merge_queue?queue_id=eq.${queue_id}`, {
+    await auditedPatchGov({
+      user,
+      table: 'contact_merge_queue',
+      filter: `queue_id=eq.${queue_id}`,
+      recordIdentifier: queue_id,
+      idColumn: 'queue_id',
+      changedFields: {
       status: 'merged',
       reviewed_by: user.display_name || user.id,
       reviewed_at: now
+      },
+      sourceSurface: 'contacts_merge',
+      propagationScope: 'contact_merge_queue'
     });
   }
 
@@ -856,10 +1065,19 @@ async function dismissMerge(req, res, user) {
   const { queue_id } = req.body || {};
   if (!queue_id) return res.status(400).json({ error: 'queue_id is required' });
 
-  await govQuery('PATCH', `contact_merge_queue?queue_id=eq.${queue_id}`, {
+  await auditedPatchGov({
+    user,
+    table: 'contact_merge_queue',
+    filter: `queue_id=eq.${queue_id}`,
+    recordIdentifier: queue_id,
+    idColumn: 'queue_id',
+    changedFields: {
     status: 'dismissed',
     reviewed_by: user.display_name || user.id,
     reviewed_at: new Date().toISOString()
+    },
+    sourceSurface: 'contacts_dismiss_merge',
+    propagationScope: 'contact_merge_queue'
   });
 
   return res.status(200).json({ queue_id, status: 'dismissed' });
@@ -1040,14 +1258,28 @@ async function ingestWebexCalls(req, res, user) {
             newTotalCalls, existing.total_emails_sent || 0
           );
 
-          await govQuery('PATCH', `unified_contacts?unified_id=eq.${existingId}`, {
+          await auditedPatchGov({
+            user,
+            table: 'unified_contacts',
+            filter: `unified_id=eq.${existingId}`,
+            recordIdentifier: existingId,
+            idColumn: 'unified_id',
+            changedFields: {
             last_call_date: newLastCall,
             total_calls: newTotalCalls,
             engagement_score: newScore
+            },
+            sourceSurface: 'contacts_webex_ingest',
+            propagationScope: 'unified_contact_engagement'
           });
 
           // Log engagement update
-          await govQuery('POST', 'contact_change_log', {
+          await auditedInsertGov({
+            user,
+            table: 'contact_change_log',
+            recordIdentifier: existingId,
+            idColumn: 'unified_id',
+            changedFields: {
             unified_id: existingId,
             change_type: 'engagement',
             source: 'webex',
@@ -1058,6 +1290,9 @@ async function ingestWebexCalls(req, res, user) {
               new_score: newScore
             },
             changed_by: 'system'
+            },
+            sourceSurface: 'contacts_webex_ingest',
+            propagationScope: 'contact_change_log'
           });
 
           matched++;
@@ -1087,15 +1322,29 @@ async function ingestWebexCalls(req, res, user) {
           match_method: 'webex_call'
         };
 
-        const result = await govQuery('POST', 'unified_contacts', newContact);
+        const result = await auditedInsertGov({
+          user,
+          table: 'unified_contacts',
+          changedFields: newContact,
+          sourceSurface: 'contacts_webex_ingest',
+          propagationScope: 'unified_contact'
+        });
         if (result.ok) {
           const createdContact = Array.isArray(result.data) ? result.data[0] : result.data;
-          await govQuery('POST', 'contact_change_log', {
+          await auditedInsertGov({
+            user,
+            table: 'contact_change_log',
+            recordIdentifier: createdContact.unified_id,
+            idColumn: 'unified_id',
+            changedFields: {
             unified_id: createdContact.unified_id,
             change_type: 'create',
             source: 'webex',
             fields_changed: { phone, name: titleCaseName, call_date: callTimestamp, direction },
             changed_by: 'system'
+            },
+            sourceSurface: 'contacts_webex_ingest',
+            propagationScope: 'contact_change_log'
           });
           created++;
         }
@@ -1175,9 +1424,18 @@ async function ingestCalendarContacts(req, res, user, workspaceId) {
             contact.total_calls || 0, contact.total_emails_sent || 0
           );
 
-          await govQuery('PATCH', `unified_contacts?unified_id=eq.${contact.unified_id}`, {
+          await auditedPatchGov({
+            user,
+            table: 'unified_contacts',
+            filter: `unified_id=eq.${contact.unified_id}`,
+            recordIdentifier: contact.unified_id,
+            idColumn: 'unified_id',
+            changedFields: {
             last_meeting_date: newLastMeeting,
             engagement_score: newScore
+            },
+            sourceSurface: 'contacts_calendar_ingest',
+            propagationScope: 'unified_contact_engagement'
           });
           matched++;
         } else {
@@ -1205,15 +1463,29 @@ async function ingestCalendarContacts(req, res, user, workspaceId) {
             match_method: 'calendar_attendee'
           };
 
-          const result = await govQuery('POST', 'unified_contacts', newContact);
+          const result = await auditedInsertGov({
+            user,
+            table: 'unified_contacts',
+            changedFields: newContact,
+            sourceSurface: 'contacts_calendar_ingest',
+            propagationScope: 'unified_contact'
+          });
           if (result.ok) {
             const createdContact = Array.isArray(result.data) ? result.data[0] : result.data;
-            await govQuery('POST', 'contact_change_log', {
+            await auditedInsertGov({
+              user,
+              table: 'contact_change_log',
+              recordIdentifier: createdContact.unified_id,
+              idColumn: 'unified_id',
+              changedFields: {
               unified_id: createdContact.unified_id,
               change_type: 'create',
               source: 'calendar',
               fields_changed: { email, name, meeting_date: meetingDate },
               changed_by: 'system'
+              },
+              sourceSurface: 'contacts_calendar_ingest',
+              propagationScope: 'contact_change_log'
             });
             created++;
           } else {
@@ -1328,12 +1600,20 @@ async function detectDuplicates(req, res, user) {
       }
 
       if (score >= min_score && reason) {
-        await govQuery('POST', 'contact_merge_queue', {
+        await auditedInsertGov({
+          user,
+          table: 'contact_merge_queue',
+          recordIdentifier: a.unified_id,
+          idColumn: 'contact_a',
+          changedFields: {
           contact_a: a.unified_id,
           contact_b: b.unified_id,
           match_score: score,
           match_reason: reason,
           status: 'pending'
+          },
+          sourceSurface: 'contacts_detect_duplicates',
+          propagationScope: 'contact_merge_queue'
         });
         queuedPairs.add(`${a.unified_id}|${b.unified_id}`);
         duplicatesFound++;
@@ -1651,12 +1931,21 @@ async function sendTeamsMessage(req, res, user, id) {
     await updateEngagementOnMessage(id, 'teams', user);
 
     // Log in change log
-    await govQuery('POST', 'contact_change_log', {
+    await auditedInsertGov({
+      workspaceId: user.memberships?.[0]?.workspace_id,
+      user,
+      table: 'contact_change_log',
+      recordIdentifier: id,
+      idColumn: 'unified_id',
+      changedFields: {
       unified_id: id,
       change_type: 'engagement',
       source: 'teams',
       fields_changed: { message_sent: { channel: 'teams', template_id: template_id || null, timestamp: new Date().toISOString() } },
       changed_by: user.display_name || user.id
+      },
+      sourceSurface: 'contacts_send_teams',
+      propagationScope: 'contact_change_log'
     });
 
     return res.status(200).json({ sent: true, message_id: sentMsg.id, chat_id: chatId, channel: 'teams' });
@@ -1817,12 +2106,21 @@ async function sendWebexMessage(req, res, user, id) {
 
     await updateEngagementOnMessage(id, 'webex', user);
 
-    await govQuery('POST', 'contact_change_log', {
+    await auditedInsertGov({
+      workspaceId: user.memberships?.[0]?.workspace_id,
+      user,
+      table: 'contact_change_log',
+      recordIdentifier: id,
+      idColumn: 'unified_id',
+      changedFields: {
       unified_id: id,
       change_type: 'engagement',
       source: 'webex',
       fields_changed: { message_sent: { channel: 'webex', template_id: template_id || null, timestamp: new Date().toISOString() } },
       changed_by: user.display_name || user.id
+      },
+      sourceSurface: 'contacts_send_webex',
+      propagationScope: 'contact_change_log'
     });
 
     return res.status(200).json({ sent: true, message_id: sentMsg.id, room_id: sentMsg.roomId, channel: 'webex' });
@@ -1931,12 +2229,21 @@ async function sendSmsMessage(req, res, user, id) {
 
     await updateEngagementOnMessage(id, 'webex', user);
 
-    await govQuery('POST', 'contact_change_log', {
+    await auditedInsertGov({
+      workspaceId: user.memberships?.[0]?.workspace_id,
+      user,
+      table: 'contact_change_log',
+      recordIdentifier: id,
+      idColumn: 'unified_id',
+      changedFields: {
       unified_id: id,
       change_type: 'engagement',
       source: 'webex',
       fields_changed: { sms_sent: { destination, template_id: template_id || null, timestamp: new Date().toISOString() } },
       changed_by: user.display_name || user.id
+      },
+      sourceSurface: 'contacts_send_sms',
+      propagationScope: 'contact_change_log'
     });
 
     return res.status(200).json({ sent: true, destination, channel: 'sms', detail: sentData });
@@ -1968,9 +2275,19 @@ async function updateEngagementOnMessage(unifiedId, _source, _user) {
     contact.total_calls || 0, newTotalEmails
   );
 
-  await govQuery('PATCH', `unified_contacts?unified_id=eq.${unifiedId}`, {
+  await auditedPatchGov({
+    workspaceId: _user?.memberships?.[0]?.workspace_id,
+    user: _user,
+    table: 'unified_contacts',
+    filter: `unified_id=eq.${unifiedId}`,
+    recordIdentifier: unifiedId,
+    idColumn: 'unified_id',
+    changedFields: {
     last_email_date: newLastEmail,
     total_emails_sent: newTotalEmails,
     engagement_score: newScore
+    },
+    sourceSurface: 'contacts_message_engagement',
+    propagationScope: 'unified_contact_engagement'
   });
 }

@@ -58,6 +58,21 @@
 - Route simple drafting, summarization, and first-pass reasoning to subscription chats or lower-cost local/open models.
 - Keep any CoStar/LoopNet assistance user-mediated and permissions-aware; avoid automated scraping/export pipelines unless contractually authorized.
 
+## Implementation Progress
+
+- Added repo-local AI orchestration helpers in `api/_shared/ai.js`.
+- Added `api/chat.js` as a first-party chat endpoint that authenticates requests, proxies chat to the configured provider, and logs `ai_call` telemetry into `perf_metrics`.
+- Updated `app.js` copilot chat to call `/api/chat` instead of the direct external edge chat endpoint.
+- Added first-pass ChatGPT / Claude export actions to:
+  - property detail research quick links
+  - ops research queue items
+- Refactored `pipeline/ai_research.py` to support configurable providers:
+  - `openai`
+  - `ollama`
+  - `disabled`
+- Changed the default batch research model from `gpt-4o` to `gpt-5-mini`.
+- Extended `.env.example` with AI routing/configuration variables.
+
 ## Likely Next Implementation Tracks
 
 - Add a repo-local chat orchestration layer so model routing, caching, logging, and fallback do not live only in the external edge function.

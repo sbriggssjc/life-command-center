@@ -1338,6 +1338,14 @@ function _qlBtn(label, url, icon, color) {
   </a>`;
 }
 
+function _qlActionBtn(label, onclick, icon, color) {
+  if (!onclick) return '';
+  return `<button type="button" class="ql-btn" style="--ql-color:${color};cursor:pointer" title="${esc(label)}" onclick="${esc(onclick)}">
+    <span class="ql-icon">${icon}</span>
+    <span class="ql-label">${esc(label)}</span>
+  </button>`;
+}
+
 /** Research Quick Links — property-level research shortcuts */
 function _udResearchLinks() {
   if (!_udCache || !_udCache.property) return '';
@@ -1454,8 +1462,84 @@ function _udResearchLinks() {
     );
   }
 
+  html += _qlActionBtn('ChatGPT Brief', 'openResearchInChatGPT()', '🤖', '#10a37f');
+  html += _qlActionBtn('Claude Brief', 'openResearchInClaude()', '✦', '#d97706');
+
   html += '</div></div>';
   return html;
+}
+
+function buildResearchAssistantPrompt(provider = 'chatgpt') {
+  if (!_udCache || !_udCache.property) return '';
+
+  const p = _udCache.property || {};
+  const own = _udCache.ownership || {};
+  const fallback = _udCache.fallback || {};
+  const ownershipNotes = document.getElementById('udOwnNotes')?.value?.trim() || '';
+  const intelNotes = document.getElementById('intelResearchNotes')?.value?.trim() || '';
+  const lines = [
+    `You are helping with commercial real estate research inside Life Command Center.`,
+    `Create a concise analyst-ready output for this property.`,
+    '',
+    'Property',
+    `- Address: ${p.address || 'N/A'}`,
+    `- City/State: ${p.city || 'N/A'}, ${p.state || 'N/A'}`,
+    `- County: ${p.county || 'Unknown'}`,
+    `- Domain: ${_udCache.db || 'unknown'}`,
+    `- Property ID: ${p.property_id || fallback.property_id || 'N/A'}`,
+    `- Lease Number: ${p.lease_number || fallback.lease_number || 'N/A'}`,
+    '',
+    'Ownership Context',
+    `- Recorded owner: ${own.recorded_owner || fallback.recorded_owner || 'Unknown'}`,
+    `- True owner: ${own.true_owner || fallback.true_owner || 'Unknown'}`,
+    `- Owner type: ${own.recorded_owner_type || own.owner_type || fallback.owner_type || 'Unknown'}`,
+    `- State of incorporation: ${fallback.state_of_incorporation || own.true_owner_state || own.recorded_owner_state || 'Unknown'}`,
+    '',
+    'Existing Notes',
+    `- Ownership notes: ${ownershipNotes || 'None entered'}`,
+    `- Research notes: ${intelNotes || 'None entered'}`,
+    '',
+    'Return in this format:',
+    '1. Executive summary',
+    '2. Most likely owner / decision-maker',
+    '3. Evidence and unresolved questions',
+    '4. Recommended next 3 research steps',
+    '5. Draft CRM-safe follow-up note',
+  ];
+
+  if (provider === 'claude') {
+    lines.push('Keep the output direct and analyst-friendly. Avoid filler.');
+  }
+
+  return lines.join('\n');
+}
+
+async function exportResearchToAssistant(provider) {
+  const prompt = buildResearchAssistantPrompt(provider);
+  if (!prompt) {
+    showToast('No property loaded', 'error');
+    return;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(prompt);
+    }
+  } catch (e) {
+    console.warn('Clipboard export warning:', e);
+  }
+
+  const target = provider === 'claude' ? 'https://claude.ai/chats' : 'https://chatgpt.com/';
+  window.open(target, '_blank', 'noopener');
+  showToast(`Research brief copied. Paste it into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'success');
+}
+
+function openResearchInChatGPT() {
+  exportResearchToAssistant('chatgpt');
+}
+
+function openResearchInClaude() {
+  exportResearchToAssistant('claude');
 }
 
 /** System links — Salesforce records + email for the Ownership tab */

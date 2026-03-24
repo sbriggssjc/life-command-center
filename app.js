@@ -2,6 +2,7 @@
 // CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
+const CHAT_API = '/api/chat';
 
 // ============================================================
 // USER CONTEXT — Phase 1: Multi-user support
@@ -5035,9 +5036,12 @@ async function sendCopilotMessage() {
   copilotHistory.push({ role: 'user', content: msg });
 
   try {
-    const res = await fetch(`${API}/chat`, {
+    const res = await fetch(CHAT_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-LCC-Workspace': LCC_USER.workspace_id || '',
+      },
       body: JSON.stringify({
         message: msg,
         context: context,

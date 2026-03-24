@@ -8,11 +8,16 @@ and CONTACT_DISCOVERY_PROMPT for improved disambiguation and validation.
 import os
 import logging
 import json
+import urllib.request
+import urllib.error
 
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-AI_MODEL = os.environ.get("AI_MODEL", "gpt-4o")
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "openai").lower()
+AI_MODEL = os.environ.get("AI_MODEL", "gpt-5-mini")
+AI_API_BASE_URL = os.environ.get("AI_API_BASE_URL", "").rstrip("/")
+AI_TIMEOUT_S = int(os.environ.get("AI_TIMEOUT_S", "60"))
 
 
 # ---------------------------------------------------------------------------
@@ -164,24 +169,66 @@ def build_contact_discovery_prompt(lead: dict) -> str:
 # AI calling
 # ---------------------------------------------------------------------------
 
-def call_ai(prompt: str) -> dict | None:
-    """Call OpenAI-compatible API and parse JSON response."""
+def _call_openai(prompt: str) -> dict | None:
     if not OPENAI_API_KEY:
-        logger.warning("OPENAI_API_KEY not set — skipping AI call")
+        logger.warning("OPENAI_API_KEY not set — skipping OpenAI call")
+        return None
+
+    import openai
+
+    client_kwargs = {"api_key": OPENAI_API_KEY}
+    if AI_API_BASE_URL:
+        client_kwargs["base_url"] = AI_API_BASE_URL
+    client = openai.OpenAI(**client_kwargs)
+    resp = client.chat.completions.create(
+        model=AI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    usage = getattr(resp, "usage", None)
+    if usage:
+        logger.info("AI usage provider=openai model=%s prompt_tokens=%s completion_tokens=%s", AI_MODEL, getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None))
+    content = resp.choices[0].message.content
+    return json.loads(content)
+
+
+def _call_ollama(prompt: str) -> dict | None:
+    base_url = AI_API_BASE_URL or "http://localhost:11434"
+    payload = json.dumps({
+        "model": AI_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {
+            "temperature": 0.2,
+        },
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=AI_TIMEOUT_S) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    logger.info("AI usage provider=ollama model=%s eval_count=%s", AI_MODEL, body.get("eval_count"))
+    return json.loads(body.get("response", "{}"))
+
+
+def call_ai(prompt: str) -> dict | None:
+    """Call the configured AI provider and parse JSON response."""
+    if AI_PROVIDER in {"none", "disabled"}:
+        logger.warning("AI provider disabled — skipping AI call")
         return None
 
     try:
-        import openai
-
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model=AI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
-        content = resp.choices[0].message.content
-        return json.loads(content)
+        if AI_PROVIDER == "ollama":
+            return _call_ollama(prompt)
+        return _call_openai(prompt)
+    except (urllib.error.URLError, urllib.error.HTTPError) as e:
+        logger.error("AI network call failed: %s", e)
+        return None
     except Exception as e:
         logger.error("AI call failed: %s", e)
         return None
