@@ -76,6 +76,10 @@
   - apply assistant output into research notes
   - load assistant follow-up drafts into the research follow-up modal
 - Extended the research follow-up flow to accept a follow-up description/notes field.
+- Added a first-pass research intake workflow inside the property detail Intel tab.
+- The intake workflow can read text-based files locally in-browser and accept pasted/extracted research text.
+- Intake analysis now routes through the repo-local AI endpoint and can be applied directly into research notes.
+- PDF and image uploads are explicitly flagged as pending OCR/manual text extraction instead of pretending to extract them.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

@@ -299,6 +299,17 @@ function auditedInsertGov({ workspaceId, user, table, recordIdentifier, idColumn
   });
 }
 
+function ensureGovWriteOk(result, res, fallbackMessage) {
+  if (result?.ok) return true;
+  if (res && !res.headersSent) {
+    res.status(result?.status || 500).json({
+      error: fallbackMessage || 'Gov write failed',
+      detail: result?.data || null
+    });
+  }
+  return false;
+}
+
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
 
@@ -830,7 +841,7 @@ async function classifyContact(req, res, user, id) {
     return res.status(200).json({ message: 'Already classified as ' + contact_class });
   }
 
-  await auditedPatchGov({
+  const classifyResult = await auditedPatchGov({
     user,
     table: 'unified_contacts',
     filter: `unified_id=eq.${id}`,
@@ -840,9 +851,10 @@ async function classifyContact(req, res, user, id) {
     sourceSurface: 'contacts_classify',
     propagationScope: 'unified_contact'
   });
+  if (!ensureGovWriteOk(classifyResult, res, 'Failed to classify contact')) return;
 
   // Log classification change
-  await auditedInsertGov({
+  const classLogResult = await auditedInsertGov({
     user,
     table: 'contact_change_log',
     recordIdentifier: id,
@@ -857,6 +869,7 @@ async function classifyContact(req, res, user, id) {
     sourceSurface: 'contacts_classify',
     propagationScope: 'contact_change_log'
   });
+  if (!ensureGovWriteOk(classLogResult, res, 'Failed to log classification change')) return;
 
   return res.status(200).json({
     unified_id: id,
@@ -907,7 +920,7 @@ async function updateContact(req, res, user, id) {
   }
   updates.field_sources = fieldSources;
 
-  await auditedPatchGov({
+  const updateResult = await auditedPatchGov({
     user,
     table: 'unified_contacts',
     filter: `unified_id=eq.${id}`,
@@ -917,9 +930,10 @@ async function updateContact(req, res, user, id) {
     sourceSurface: 'contacts_update',
     propagationScope: 'unified_contact'
   });
+  if (!ensureGovWriteOk(updateResult, res, 'Failed to update contact')) return;
 
   if (Object.keys(fieldsChanged).length > 0) {
-    await auditedInsertGov({
+    const updateLogResult = await auditedInsertGov({
       user,
       table: 'contact_change_log',
       recordIdentifier: id,
@@ -934,6 +948,7 @@ async function updateContact(req, res, user, id) {
       sourceSurface: 'contacts_update',
       propagationScope: 'contact_change_log'
     });
+    if (!ensureGovWriteOk(updateLogResult, res, 'Failed to log contact update')) return;
   }
 
   return res.status(200).json({ unified_id: id, fields_updated: Object.keys(fieldsChanged) });
@@ -998,7 +1013,7 @@ async function mergeContacts(req, res, user) {
 
   // Apply updates to kept contact
   if (Object.keys(updates).length > 0) {
-    await auditedPatchGov({
+    const mergePatchResult = await auditedPatchGov({
       user,
       table: 'unified_contacts',
       filter: `unified_id=eq.${keep_id}`,
@@ -1008,10 +1023,11 @@ async function mergeContacts(req, res, user) {
       sourceSurface: 'contacts_merge',
       propagationScope: 'unified_contact'
     });
+    if (!ensureGovWriteOk(mergePatchResult, res, 'Failed to update kept contact during merge')) return;
   }
 
   // Log the merge
-  await auditedInsertGov({
+  const mergeLogResult = await auditedInsertGov({
     user,
     table: 'contact_change_log',
     recordIdentifier: keep_id,
@@ -1027,13 +1043,14 @@ async function mergeContacts(req, res, user) {
     sourceSurface: 'contacts_merge',
     propagationScope: 'contact_change_log'
   });
+  if (!ensureGovWriteOk(mergeLogResult, res, 'Failed to log contact merge')) return;
 
   // Delete the merged contact
   await govQuery('DELETE', `unified_contacts?unified_id=eq.${merge_id}`);
 
   // Update merge queue if queue_id provided
   if (queue_id) {
-    await auditedPatchGov({
+    const mergeQueueResult = await auditedPatchGov({
       user,
       table: 'contact_merge_queue',
       filter: `queue_id=eq.${queue_id}`,
@@ -1047,6 +1064,7 @@ async function mergeContacts(req, res, user) {
       sourceSurface: 'contacts_merge',
       propagationScope: 'contact_merge_queue'
     });
+    if (!ensureGovWriteOk(mergeQueueResult, res, 'Failed to update merge queue')) return;
   }
 
   return res.status(200).json({
@@ -1065,7 +1083,7 @@ async function dismissMerge(req, res, user) {
   const { queue_id } = req.body || {};
   if (!queue_id) return res.status(400).json({ error: 'queue_id is required' });
 
-  await auditedPatchGov({
+  const dismissResult = await auditedPatchGov({
     user,
     table: 'contact_merge_queue',
     filter: `queue_id=eq.${queue_id}`,
@@ -1079,6 +1097,7 @@ async function dismissMerge(req, res, user) {
     sourceSurface: 'contacts_dismiss_merge',
     propagationScope: 'contact_merge_queue'
   });
+  if (!ensureGovWriteOk(dismissResult, res, 'Failed to dismiss merge suggestion')) return;
 
   return res.status(200).json({ queue_id, status: 'dismissed' });
 }

@@ -145,4 +145,44 @@ describe('apply-change handler', () => {
     assert.match(calls[0].url, /\/research_queue_outcomes$/);
     assert.match(calls[0].opts.headers.Prefer, /resolution=ignore-duplicates/);
   });
+
+  it('creates a pending review record when a patch mutation fails', async () => {
+    process.env.OPS_SUPABASE_URL = 'https://ops.example.com';
+    process.env.OPS_SUPABASE_KEY = 'ops-key';
+
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      calls.push({ url: String(url), opts });
+      if (String(url).includes('dia.example.com/rest/v1/salesforce_activities')) {
+        return jsonResponse({ message: 'boom' }, false, 500);
+      }
+      if (String(url).includes('ops.example.com/rest/v1/pending_updates') && opts.method === 'POST') {
+        return jsonResponse([{ id: 'pending-1', status: 'needs_review' }]);
+      }
+      throw new Error(`Unexpected fetch: ${opts.method} ${url}`);
+    };
+
+    const handler = await loadHandler();
+    const req = {
+      method: 'POST',
+      headers: {},
+      body: {
+        actor: 'Tester',
+        source_surface: 'unit_test_failure',
+        target_table: 'salesforce_activities',
+        target_source: 'dia',
+        record_identifier: 'contact-1',
+        id_column: 'sf_contact_id',
+        changed_fields: { status: 'Completed' }
+      }
+    };
+    const res = mockRes();
+
+    await handler(req, res);
+
+    assert.equal(res._status, 500);
+    assert.equal(res._json.ok, false);
+    assert.equal(res._json.pending_review.id, 'pending-1');
+    assert.ok(calls.some((call) => call.url.includes('/rest/v1/pending_updates') && call.opts.method === 'POST'));
+  });
 });

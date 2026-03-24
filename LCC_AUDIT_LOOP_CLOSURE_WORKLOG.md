@@ -41,7 +41,9 @@
 - Added targeted mutation-service tests in `test/apply-change.test.js` covering:
   - composite-filter PATCH behavior
   - audited insert mode returning inserted rows
+  - pending-review creation on mutation failure
 - Added focused contact-hub auditing coverage in `test/contacts.test.js` for a classified contact mutation writing both Gov records and ops audit records.
+  - extended with a failure-path case proving pending-review creation on audited contact mutation failure
 - Added repo policy and guardrails for write surfaces:
   - `WRITE_SURFACE_POLICY.md`
   - `test/raw-write-guardrail.test.js`
@@ -74,6 +76,7 @@
   - `contact_merge_queue` inserts/patches
   - `system_tokens` WebEx token upserts
 - Kept Teams/WebEx/SMS external sends as canonical side effects, but now their internal contact/log writes pass through the audited layer.
+- Fixed contact-hub manual mutation handling so classify/update/merge/dismiss stop and return an error when an audited Gov write fails, instead of continuing after a failed write.
 - Completed a broader repo sweep after the contacts pass:
   - remaining write paths in `api/sync.js` are canonical connector/outbound jobs
   - `api/data-proxy.js` remains the generic proxy layer, not a business-flow save surface
@@ -101,6 +104,8 @@
 - `node --check test/raw-write-guardrail.test.js` passed.
 - `node --test test/contacts.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test test/raw-write-guardrail.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
+- `node --test test/apply-change.test.js` passed again after adding the pending-review failure-path case.
+- `node --test test/contacts.test.js` passed again after adding the audited-write failure-path case and fixing handler error propagation.
 - `node --test ...` is blocked in the current sandbox with `spawn EPERM`, so the new tests were added but could not be executed here.
 
 ## Open Risks
@@ -111,4 +116,5 @@
 - `api/contacts.js` now has audited coverage for its main internal Gov writes, but broader repo-wide review is still needed for any other APIs that mutate domain/business tables outside the mutation-service or audited-helper model.
 - The primary remaining repo-wide review item is explicit policy/cleanup around exempt write surfaces: connector sync, external messaging APIs, token refresh, and the generic data proxy.
 - Repo-wide write policy is now explicit; the remaining work is broader end-to-end verification rather than major write-path refactoring.
+- Remaining verification work is now concentrated on broader cross-surface scenarios rather than single-handler mutation plumbing.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

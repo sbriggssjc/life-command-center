@@ -10,6 +10,15 @@ let _udAssistantState = {
   ownership: { loading: false, reply: '', error: '' },
   intel: { loading: false, reply: '', error: '' },
 };
+let _udIntakeState = {
+  fileName: '',
+  fileType: '',
+  notice: '',
+  text: '',
+  loading: false,
+  analysis: '',
+  error: '',
+};
 
 /**
  * Open the unified detail panel for any property/clinic.
@@ -1100,6 +1109,7 @@ function _udTabIntel() {
   let html = '';
 
   html += _udAssistantSection('intel', 'Research Assistant', 'Turn the current notes and property context into a clean analyst summary and recommended next actions.');
+  html += _udResearchIntakeSection();
 
   // ── PRIOR SALE SECTION ──────────────────────────────────────────────────────
   html += '<div class="detail-section">';
@@ -1442,6 +1452,191 @@ function _udRenderAssistantState(mode) {
     return;
   }
   panel.innerHTML = '<div class="assistant-status">No analysis generated yet.</div>';
+}
+
+function _udResearchIntakeSection() {
+  const intake = _udIntakeState || {};
+  const meta = [intake.fileName, intake.fileType].filter(Boolean).join(' • ');
+  return `<div class="detail-section">
+    <div class="detail-section-title">Research Intake</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Paste copied research text or load a text-based file, then generate a clean analyst readout before saving notes.</div>
+    <div class="intake-box">
+      <div class="intake-meta">${esc(meta || 'No file loaded. Text-based files can be read locally in-browser.')}</div>
+      ${intake.notice ? `<div class="intake-notice">${esc(intake.notice)}</div>` : ''}
+      <input type="file" accept=".txt,.md,.csv,.json,.log,.html,.htm,.xml,.yaml,.yml,.rtf,.pdf,image/*" onchange="_intelHandleIntakeFile(this)" style="width:100%;margin-bottom:10px">
+      <textarea id="intelIntakeText" rows="8" placeholder="Paste copied text, OCR output, broker notes, call notes, listing text, or extracted document text..." oninput="_intelUpdateIntakeText(this.value)" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box">${esc(intake.text || '')}</textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="q-action primary" onclick="_intelAnalyzeIntake()">Analyze Intake</button>
+        <button class="q-action" onclick="_intelClearIntake()">Clear</button>
+      </div>
+    </div>
+    ${_intelRenderIntakeAnalysis()}
+  </div>`;
+}
+
+function _intelRenderIntakeAnalysis() {
+  const intake = _udIntakeState || {};
+  let body = '<div class="assistant-status">No intake analysis generated yet.</div>';
+  if (intake.loading) {
+    body = '<div class="assistant-status"><span class="spinner" style="width:14px;height:14px"></span> Working...</div>';
+  } else if (intake.error) {
+    body = `<div class="assistant-status assistant-error">${esc(intake.error)}</div>`;
+  } else if (intake.analysis) {
+    body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(intake.analysis) : esc(intake.analysis)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="q-action" onclick="_intelCopyIntakeAnalysis()">Copy</button>
+        <button class="q-action primary" onclick="_intelApplyIntakeAnalysis()">Apply to Research Notes</button>
+      </div>`;
+  }
+  return `<div id="intelIntakeAnalysisPanel" class="assistant-panel" style="margin-top:12px">${body}</div>`;
+}
+
+function _intelUpdateIntakeText(value) {
+  _udIntakeState.text = value || '';
+}
+
+async function _intelHandleIntakeFile(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  _udIntakeState.fileName = file.name || '';
+  _udIntakeState.fileType = file.type || '';
+  _udIntakeState.notice = '';
+  _udIntakeState.error = '';
+
+  const lowerName = (file.name || '').toLowerCase();
+  const textExtensions = ['.txt', '.md', '.csv', '.json', '.log', '.html', '.htm', '.xml', '.yaml', '.yml', '.rtf'];
+  const isTextFile = textExtensions.some((ext) => lowerName.endsWith(ext)) || (file.type && file.type.startsWith('text/'));
+  const isPdf = lowerName.endsWith('.pdf') || file.type === 'application/pdf';
+  const isImage = (file.type || '').startsWith('image/');
+
+  if (isPdf || isImage) {
+    _udIntakeState.notice = 'This file type is not extracted in-browser yet. Paste OCR or copied text into the box below, then analyze.';
+    refreshDetailPanel();
+    return;
+  }
+
+  if (!isTextFile) {
+    _udIntakeState.notice = 'This file type is not supported for local extraction yet. Paste copied text into the box below to continue.';
+    refreshDetailPanel();
+    return;
+  }
+
+  try {
+    _udIntakeState.text = await file.text();
+    _udIntakeState.notice = `Loaded ${file.name} for local review.`;
+  } catch (e) {
+    _udIntakeState.notice = '';
+    _udIntakeState.error = `Could not read ${file.name}: ${e.message}`;
+  }
+
+  refreshDetailPanel();
+}
+
+function _intelBuildIntakePrompt() {
+  if (!_udCache?.property) return '';
+  const p = _udCache.property || {};
+  const fallback = _udCache.fallback || {};
+  const intakeText = (_udIntakeState.text || '').trim();
+  if (!intakeText) return '';
+
+  return [
+    'You are assisting with a research intake workflow in commercial real estate.',
+    'Review the provided intake material and turn it into a concise analyst-ready output.',
+    'Do not invent facts. Call out uncertainty clearly.',
+    '',
+    `Property: ${p.page_title || p.facility_name || p.address || 'Unknown property'}`,
+    `Address: ${p.address || 'N/A'}, ${p.city || 'N/A'}, ${p.state || 'N/A'}`,
+    `Domain: ${_udCache.db || 'unknown'}`,
+    `Lease number: ${p.lease_number || fallback.lease_number || 'Unknown'}`,
+    `Loaded file: ${_udIntakeState.fileName || 'None'}`,
+    '',
+    'Intake material:',
+    intakeText,
+    '',
+    'Return in this format:',
+    '1. Executive summary',
+    '2. Key extracted facts',
+    '3. Potentially unreliable or unclear items',
+    '4. Recommended next 3 actions',
+    '5. Draft research note to save',
+  ].join('\n');
+}
+
+async function _intelAnalyzeIntake() {
+  const prompt = _intelBuildIntakePrompt();
+  if (!prompt) {
+    showToast('Add intake text before analyzing', 'error');
+    return;
+  }
+
+  _udIntakeState.loading = true;
+  _udIntakeState.analysis = '';
+  _udIntakeState.error = '';
+  refreshDetailPanel();
+
+  try {
+    const reply = await invokeLccAssistant({
+      message: prompt,
+      context: {
+        feature: 'detail_intake_assistant',
+        property_id: _udCache.ids?.property_id || null,
+        lease_number: _udCache.ids?.lease_number || null,
+        domain: _udCache.db || null,
+        file_name: _udIntakeState.fileName || null,
+      },
+      feature: 'detail_intake_assistant',
+    });
+    _udIntakeState.analysis = reply;
+  } catch (e) {
+    _udIntakeState.error = e.message;
+  }
+
+  _udIntakeState.loading = false;
+  refreshDetailPanel();
+}
+
+async function _intelCopyIntakeAnalysis() {
+  const analysis = _udIntakeState.analysis || '';
+  if (!analysis) {
+    showToast('No intake analysis to copy', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(analysis);
+    showToast('Intake analysis copied', 'success');
+  } catch {
+    showToast('Copy failed', 'error');
+  }
+}
+
+function _intelApplyIntakeAnalysis() {
+  const analysis = _udIntakeState.analysis || '';
+  if (!analysis) {
+    showToast('No intake analysis to apply', 'error');
+    return;
+  }
+  const target = document.getElementById('intelResearchNotes');
+  if (!target) {
+    showToast('Research notes field not available', 'error');
+    return;
+  }
+  const draft = _udExtractAssistantSection(analysis, 5) || _udExtractAssistantSection(analysis, 1) || analysis;
+  target.value = [target.value?.trim(), draft].filter(Boolean).join(target.value?.trim() ? '\n\n' : '');
+  showToast('Research notes updated from intake analysis', 'success');
+}
+
+function _intelClearIntake() {
+  _udIntakeState = {
+    fileName: '',
+    fileType: '',
+    notice: '',
+    text: '',
+    loading: false,
+    analysis: '',
+    error: '',
+  };
+  refreshDetailPanel();
 }
 
 function _udExtractAssistantSection(text, headingNumber) {
@@ -2656,6 +2851,12 @@ window._intelSavePriorSale = _intelSavePriorSale;
 window._intelSaveLoan = _intelSaveLoan;
 window._intelSaveCashFlow = _intelSaveCashFlow;
 window._intelSaveNotes = _intelSaveNotes;
+window._intelHandleIntakeFile = _intelHandleIntakeFile;
+window._intelUpdateIntakeText = _intelUpdateIntakeText;
+window._intelAnalyzeIntake = _intelAnalyzeIntake;
+window._intelCopyIntakeAnalysis = _intelCopyIntakeAnalysis;
+window._intelApplyIntakeAnalysis = _intelApplyIntakeAnalysis;
+window._intelClearIntake = _intelClearIntake;
 window._udAskAssistant = _udAskAssistant;
 window._udCopyAssistantReply = _udCopyAssistantReply;
 window._udApplyAssistantReply = _udApplyAssistantReply;

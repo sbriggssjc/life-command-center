@@ -772,6 +772,9 @@ body.compact .greeting { font-size: 18px; }
 .assistant-status { display: flex; align-items: center; gap: 8px; color: var(--text2); }
 .assistant-error { color: var(--red); }
 .assistant-copy { white-space: normal; }
+.intake-box { background: var(--s2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.intake-meta { font-size: 12px; color: var(--text2); margin-bottom: 8px; }
+.intake-notice { font-size: 12px; color: var(--yellow); margin-bottom: 8px; line-height: 1.4; }
 
 /* ============================================================
    TODAY PAGE — Canonical model integration styles

@@ -119,4 +119,49 @@ describe('contacts handler auditing', () => {
     assert.ok(calls.some((call) => call.url.endsWith('/rest/v1/contact_change_log') && call.method === 'POST'));
     assert.ok(calls.filter((call) => call.url.endsWith('/rest/v1/data_corrections') && call.method === 'POST').length >= 2);
   });
+
+  it('creates a pending review record when an audited contact mutation fails', async () => {
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      const method = opts.method || 'GET';
+      const target = String(url);
+      calls.push({ url: target, method, body: opts.body });
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-1',
+          email: 'dev@example.com',
+          display_name: 'Dev User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'operator', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      if (target.includes('/rest/v1/unified_contacts?unified_id=eq.contact-1&select=contact_class')) {
+        return jsonResponse([{ unified_id: 'contact-1', contact_class: 'personal' }]);
+      }
+      if (target.includes('/rest/v1/unified_contacts?unified_id=eq.contact-1') && method === 'PATCH') {
+        return jsonResponse({ error: 'write failed' }, false, 500);
+      }
+      if (target.endsWith('/rest/v1/pending_updates') && method === 'POST') {
+        return jsonResponse([{ id: 'pending-1' }]);
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${target}`);
+    };
+
+    const handler = await loadHandler();
+    const req = {
+      method: 'POST',
+      query: { action: 'classify', id: 'contact-1' },
+      headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' },
+      body: { contact_class: 'business' }
+    };
+    const res = mockRes();
+
+    await handler(req, res);
+
+    assert.equal(res._status, 500);
+    assert.equal(res._json.error, 'Failed to classify contact');
+    assert.ok(calls.some((call) => call.url.endsWith('/rest/v1/pending_updates') && call.method === 'POST'));
+    assert.ok(!calls.some((call) => call.url.endsWith('/rest/v1/contact_change_log') && call.method === 'POST'));
+  });
 });
