@@ -42,6 +42,11 @@ export default withErrorHandler(async function handler(req, res) {
     return handleInbox(req, res, user, workspaceId);
   }
 
+  // Allow POST for _perf beacon (performance telemetry from navigator.sendBeacon)
+  if (req.method === 'POST' && req.query?.view === '_perf') {
+    return res.status(204).end();
+  }
+
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Only GET is supported on the queue endpoint' });
   }
