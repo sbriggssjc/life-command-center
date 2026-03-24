@@ -6,7 +6,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, isOpsConfigured, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, isOpsConfigured, logPerfMetric, withErrorHandler } from './_shared/ops-db.js';
 import {
   GOV_WRITE_TABLES, DIA_WRITE_TABLES, isAllowedTable, safeColumn
 } from './_shared/allowlist.js';
@@ -17,6 +17,7 @@ const SOURCE_CONFIG = {
 };
 
 export default withErrorHandler(async function handler(req, res) {
+  const startedAt = Date.now();
   if (handleCors(req, res)) return;
 
   if (req.method !== 'POST') {
@@ -143,6 +144,12 @@ export default withErrorHandler(async function handler(req, res) {
     });
   } catch (err) {
     const pending_review = await createPendingReview('needs_review', { stage: 'fetch', message: err.message });
+    logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
+      status: 'fetch_failed',
+      target_table,
+      target_source,
+      mutation_mode: mutationMode
+    }).catch(() => {});
     return res.status(502).json({ ok: false, errors: ['bridge_unavailable', `Fetch failed: ${err.message}`], pending_review });
   }
 
@@ -153,6 +160,13 @@ export default withErrorHandler(async function handler(req, res) {
       status: mutationResponse.status,
       detail: errBody.substring(0, 1000)
     });
+    logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
+      status: 'mutation_failed',
+      status_code: mutationResponse.status,
+      target_table,
+      target_source,
+      mutation_mode: mutationMode
+    }).catch(() => {});
     return res.status(mutationResponse.status).json({
       ok: false,
       errors: [`Supabase ${mutationMode.toUpperCase()} failed (${mutationResponse.status}): ${errBody.substring(0, 500)}`],
@@ -204,6 +218,17 @@ export default withErrorHandler(async function handler(req, res) {
       });
     }
   }
+
+  logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
+    status: 'ok',
+    target_table,
+    target_source,
+    mutation_mode: mutationMode,
+    rows_affected: Array.isArray(updatedRows) ? updatedRows.length : 0,
+    propagation_scope: propagation_scope || null,
+    reconciliation_present: !!reconciliation,
+    propagation_present: !!propagation
+  }).catch(() => {});
 
   return res.status(200).json({
     ok: true,

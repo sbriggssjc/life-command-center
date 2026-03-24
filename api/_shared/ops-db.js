@@ -60,6 +60,22 @@ export async function opsQuery(method, path, body, extraHeaders = {}) {
   return { ok: res.ok, status: res.status, data, count };
 }
 
+export async function logPerfMetric(workspaceId, userId, metricType, endpoint, durationMs, metadata) {
+  if (!isOpsConfigured()) return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
+  try {
+    return await opsQuery('POST', 'perf_metrics', {
+      workspace_id: workspaceId || null,
+      user_id: userId || null,
+      metric_type: metricType,
+      endpoint,
+      duration_ms: Math.max(0, Math.round(durationMs || 0)),
+      metadata: metadata || {}
+    });
+  } catch {
+    return { ok: false, status: 500, data: { error: 'Failed to log perf metric' } };
+  }
+}
+
 /**
  * Build pagination query params.
  * @param {object} query - Express-style query object with limit, offset, order

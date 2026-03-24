@@ -605,6 +605,12 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
     ...(new_date ? { new_date } : {})
   };
 
+  const connector = await resolveConnector(user.id, workspaceId, 'salesforce');
+  const correlationId = `sf-task-${taskAction}-${Date.now()}`;
+  const job = connector
+    ? await createSyncJob(workspaceId, connector.id, 'outbound', 'complete_sf_task', correlationId, connector)
+    : null;
+
   // Retry with exponential backoff (up to 2 retries — this is non-critical)
   let lastError = null;
   for (let attempt = 0; attempt <= 2; attempt++) {
@@ -621,6 +627,12 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
 
       if (paRes.ok) {
         const data = await paRes.json();
+        if (job) {
+          await completeSyncJob(job.id, 'completed', 1, 0);
+        }
+        if (connector) {
+          await updateConnectorStatus(connector.id, 'healthy', new Date().toISOString(), null);
+        }
 
         // Log the activity for audit trail
         await opsQuery('POST', 'activity_events', {
@@ -636,6 +648,8 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
 
         return res.status(200).json({
           success: true,
+          sync_job_id: job?.id || null,
+          correlation_id: correlationId,
           ref_id: refId,
           pa_response: data,
           attempt: attempt + 1
@@ -648,8 +662,18 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
     }
   }
 
+  if (job) {
+    await completeSyncJob(job.id, 'failed', 0, 1, lastError);
+  }
+  if (connector) {
+    await logSyncError(job?.id || null, workspaceId, connector.id, sf_contact_id, lastError, payload, true);
+    await updateConnectorStatus(connector.id, 'degraded', null, lastError);
+  }
+
   return res.status(502).json({
     error: 'SF Task update flow failed after retries',
+    sync_job_id: job?.id || null,
+    correlation_id: correlationId,
     ref_id: refId,
     last_error: lastError
   });

@@ -85,6 +85,16 @@
 - Added broader loop-edge verification:
   - `ensureEntityLink()` now has a test for external identity creation failure after entity creation
   - `closeResearchLoop()` now has tests for entity reconciliation failure and research-task patch failure
+- Upgraded the Data Quality surface from read-only reporting to an operator workbench:
+  - duplicate candidates can trigger merge or alias actions
+  - unlinked entities can trigger manual identity linking
+  - stale identities can drive precedence overrides or follow-up creation
+  - source precedence rows are now visible/editable from the UI
+  - `api/entities.js` now exposes `set_precedence` and returns `source_precedence` in quality details
+- Closed a major outbound propagation visibility gap:
+  - `api/sync.js` `complete_sf_task` now creates outbound sync jobs when a Salesforce connector is available
+  - success/failure now returns `sync_job_id` and `correlation_id`
+  - failed Salesforce task completion/reschedule now logs `sync_errors` and degrades connector status for Sync Health visibility
 - Completed a broader repo sweep after the contacts pass:
   - remaining write paths in `api/sync.js` are canonical connector/outbound jobs
   - `api/data-proxy.js` remains the generic proxy layer, not a business-flow save surface
@@ -110,8 +120,11 @@
 - `node --check test/research-loop.test.js` passed after adding research-loop abort/failure coverage.
 - `node --test test/apply-change.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --check api/contacts.js` passed after the audited contact write refactor.
+- `node --check api/entities.js` passed after Data Quality operator actions were added.
+- `node --check api/sync.js` passed after outbound task completion was aligned with sync job/error tracking.
 - `node --check test/contacts.test.js` passed.
 - `node --check test/raw-write-guardrail.test.js` passed.
+- `node --check ops.js` passed after Data Quality operator actions were added.
 - `node --test test/contacts.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test test/raw-write-guardrail.test.js` passed outside the sandbox after the local runner hit `spawn EPERM`.
 - `node --test test/apply-change.test.js` passed again after adding the pending-review failure-path case.
@@ -130,6 +143,8 @@
 - Repo-wide write policy is now explicit; the remaining work is broader end-to-end verification rather than major write-path refactoring.
 - Remaining verification work is now concentrated on broader cross-surface scenarios rather than single-handler mutation plumbing.
 - The core helper layer now has both happy-path and failure-path coverage for entity reconciliation, research closure, audited mutations, and audited contact writes.
+- Data Quality is no longer just passive reporting; it now supports direct reconciliation actions and source-precedence management from the operator surface.
+- Outbound Salesforce task completion/reschedule is now better integrated with Sync Health and unresolved sync exceptions.
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

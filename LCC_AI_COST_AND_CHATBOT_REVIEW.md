@@ -94,6 +94,8 @@
 - Added model, cache-hit, cache-read-token, and normalized token fields to AI telemetry so the dashboard can show more reliable cost and caching signals.
 - Updated the global copilot in `app.js` to use the shared assistant helper, so global chat traffic is tagged consistently as `global_copilot` in the same telemetry path as embedded assistants.
 - Added telemetry quality indicators to the AI dashboard so missing model, usage, or cache data is visible instead of silently skewing cost analysis.
+- Added a repo-local direct OpenAI chat path behind `AI_CHAT_PROVIDER=openai`, so `/api/chat` can bypass the external edge function when you want a first-party telemetry contract.
+- Added `AI_CHAT_MODEL` to `.env.example` so chat routing can move independently from the batch research model.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`
