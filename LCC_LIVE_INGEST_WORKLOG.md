@@ -30,6 +30,8 @@
 - Normalize HTML and raw email sources on the server before they are sent to AI.
 - Send current research context plus attachments to AI for structured mapping.
 - Preview proposed `update`, `insert`, and `bridge` operations with editable per-operation JSON before apply.
+- Preview proposed updates against fetched current record values for before/after review when a target record can be resolved.
+- Refresh before/after snapshots globally or per operation without rerunning extraction.
 - Apply selected operations into Government or Dialysis write paths.
 - Automatically log successful live-ingest sessions into `research_queue_outcomes` for provenance.
 
@@ -60,6 +62,8 @@
 - Added target-record lookup and manual binding inside the intake surface.
 - Added automatic provenance logging after successful live-ingest apply operations.
 - Added richer proposal review UI with field summaries, select-all/select-none, and editable JSON per operation.
+- Added pre-apply snapshot loading for update operations so review can show current vs proposed field values.
+- Added snapshot refresh controls and fallback matching without auxiliary filters when strict snapshot lookups miss.
 - Injected the workbench into both Government and Dialysis research tabs.
 - Added styling for the new intake surface and proposal preview.
 
@@ -82,7 +86,9 @@
 - PDF intake follow-up changes in `app.js` also passed `node --check app.js`.
 - DOCX intake follow-up changes in `app.js` also passed `node --check app.js`.
 - Proposal review/editor follow-up changes in `app.js` also passed `node --check app.js`.
+- Before/after snapshot diff follow-up changes in `app.js` also passed `node --check app.js`.
+- Snapshot refresh/matching follow-up changes in `app.js` also passed `node --check app.js`.
 
 ## Next Follow-Up Candidates
 - Add deeper handling for `docx` comments/tracked changes, PDFs with OCR/text extraction, and richer MIME email attachments.
-- Add optional pre-apply record snapshots so proposal review can show true before/after diffs instead of extracted field payloads only.
+- Add stronger cross-table/entity linking so extracted facts can suggest canonical follow-up actions beyond direct table writes.

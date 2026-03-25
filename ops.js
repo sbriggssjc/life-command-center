@@ -1747,6 +1747,22 @@ async function renderPerfDashboard(container) {
         </div>
       </div>`;
     }
+    if (aiData.presets?.length) {
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
+      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
+        + '<th style="padding:6px">Preset</th>'
+        + '<th style="padding:6px">Artifact</th>'
+        + '<th style="padding:6px">Use Case</th>'
+        + '</tr></thead><tbody>';
+      aiData.presets.forEach((preset) => {
+        html += `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px">${esc(preset.name || '')}</td>
+          <td style="padding:6px">${esc(preset.file || '')}</td>
+          <td style="padding:6px">${esc(preset.recommended_for || preset.description || '')}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
     html += `<div class="q-item" style="margin-bottom:12px">
       <div class="q-item-header">
         <span class="q-item-title">Routing Policy</span>

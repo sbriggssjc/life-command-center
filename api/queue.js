@@ -550,13 +550,33 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
         override_count: overrideCount,
         suggestion:
           rolloutStatus === 'manual_only'
-            ? 'Set AI_CHAT_POLICY=balanced or add feature overrides to begin a staged rollout.'
+          ? 'Set AI_CHAT_POLICY=balanced or add feature overrides to begin a staged rollout.'
             : mismatches.length > 0
               ? 'Review routing mismatches below before expanding the rollout. Observed traffic does not fully match the configured route.'
               : callsWithUsage < totalCalls
                 ? 'Routing is active. Next priority is improving upstream model/usage telemetry coverage so cost tracking is more reliable.'
                 : 'Routing is active and telemetry coverage looks healthy. Expand or tighten feature routing based on observed cost and quality.',
       },
+      presets: [
+        {
+          name: 'Manual Edge',
+          file: 'AI_CHAT_MANUAL_EDGE_PRESET.env.example',
+          description: 'Rollback/default preset that keeps routing effectively off and preserves edge-first behavior.',
+          recommended_for: 'Fallback or baseline comparison',
+        },
+        {
+          name: 'Balanced',
+          file: 'AI_CHAT_BALANCED_PRESET.env.example',
+          description: 'Recommended first rollout: intake/intel/research on local-cost paths, ownership on stronger API reasoning, copilot still on edge.',
+          recommended_for: 'Initial staged rollout',
+        },
+        {
+          name: 'Low Cost',
+          file: 'AI_CHAT_LOW_COST_PRESET.env.example',
+          description: 'More aggressive cost-reduction preset that shifts most chat traffic to local Ollama while preserving stronger ownership reasoning.',
+          recommended_for: 'Post-balanced optimization',
+        },
+      ],
       summary: {
         total_calls: totalCalls,
         avg_duration_ms: totalCalls ? Math.round(totalDurationMs / totalCalls) : 0,

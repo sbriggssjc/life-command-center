@@ -107,6 +107,7 @@
 - Added `AI_CHAT_BALANCED_PRESET.env.example` as a concrete staged-routing preset artifact for rollout.
 - Added `AI_CHAT_MANUAL_EDGE_PRESET.env.example` as a clean rollback/default preset.
 - Added `AI_CHAT_LOW_COST_PRESET.env.example` as a more aggressive low-cost routing preset for post-balanced rollout testing.
+- Added preset catalog visibility to the AI dashboard so the available rollout artifacts are visible next to the active routing state.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

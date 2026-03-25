@@ -5456,6 +5456,7 @@ function createLiveIngestDomainState() {
     lookupResults: [],
     boundTarget: null,
     proposal: null,
+    loadingSnapshots: false,
     extracting: false,
     applying: false,
     error: '',
@@ -5496,9 +5497,11 @@ function renderLiveIngestWorkbench(domainKey) {
         </div>
         ${proposal.missing_information?.length ? `<div class="live-ingest-callout warn">${proposal.missing_information.map(esc).join('<br>')}</div>` : ''}
         ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
+        ${state.loadingSnapshots ? '<div class="live-ingest-callout">Loading current record snapshots for before/after review...</div>' : ''}
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
           <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
+          <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         <div class="live-ingest-op-list">
           ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
@@ -5573,17 +5576,21 @@ function renderLiveIngestOperation(domainKey, op, idx) {
   const bodyObj = op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {});
   const fields = esc(JSON.stringify(bodyObj, null, 2));
   const fieldEntries = Object.entries(bodyObj || {});
+  const diffHtml = op.kind === 'update'
+    ? renderLiveIngestDiffTable(op, fieldEntries)
+    : (fieldEntries.length ? `<div class="live-ingest-field-grid">
+        ${fieldEntries.map(([key, value]) => `<div class="live-ingest-field-row"><span>${esc(key)}</span><strong>${esc(renderLiveIngestFieldValue(value))}</strong></div>`).join('')}
+      </div>` : '<div class="live-ingest-empty" style="margin-top:8px">No fields on this operation.</div>');
   return `<label class="live-ingest-op">
     <input type="checkbox" data-live-ingest-op="${domainKey}:${idx}" ${op._selected === false ? '' : 'checked'}>
     <div class="live-ingest-op-body">
       <div class="live-ingest-op-head">
         <span class="live-ingest-op-kind">${opType}</span>
         <span class="live-ingest-op-target">${target}</span>
+        ${op.kind === 'update' ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-refresh-op="${domainKey}:${idx}">Refresh</button>` : ''}
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
-      ${fieldEntries.length ? `<div class="live-ingest-field-grid">
-        ${fieldEntries.map(([key, value]) => `<div class="live-ingest-field-row"><span>${esc(key)}</span><strong>${esc(renderLiveIngestFieldValue(value))}</strong></div>`).join('')}
-      </div>` : '<div class="live-ingest-empty" style="margin-top:8px">No fields on this operation.</div>'}
+      ${diffHtml}
       <div class="live-ingest-editor-head">
         <span>Edit JSON</span>
         <span>${fieldEntries.length} field${fieldEntries.length === 1 ? '' : 's'}</span>
@@ -5599,6 +5606,31 @@ function renderLiveIngestFieldValue(value) {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return JSON.stringify(value);
+}
+
+function renderLiveIngestDiffTable(op, fieldEntries) {
+  if (!fieldEntries.length) {
+    return '<div class="live-ingest-empty" style="margin-top:8px">No fields on this operation.</div>';
+  }
+  if (op._snapshotError) {
+    return `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(op._snapshotError)}</div>`;
+  }
+  const currentFields = op._currentFields && typeof op._currentFields === 'object' ? op._currentFields : null;
+  const rows = fieldEntries.map(([key, value]) => {
+    const currentValue = currentFields ? currentFields[key] : undefined;
+    const changed = JSON.stringify(currentValue) !== JSON.stringify(value);
+    return `<div class="live-ingest-diff-row ${changed ? 'changed' : ''}">
+      <span class="live-ingest-diff-key">${esc(key)}</span>
+      <span class="live-ingest-diff-old">${esc(renderLiveIngestFieldValue(currentValue))}</span>
+      <span class="live-ingest-diff-arrow">→</span>
+      <span class="live-ingest-diff-new">${esc(renderLiveIngestFieldValue(value))}</span>
+    </div>`;
+  }).join('');
+  return `<div class="live-ingest-editor-head">
+      <span>Before / After</span>
+      <span>${currentFields ? 'Current snapshot loaded' : 'Snapshot unavailable'}</span>
+    </div>
+    <div class="live-ingest-diff-table">${rows}</div>`;
 }
 
 function renderLiveIngestContextSummary(context) {
@@ -5721,6 +5753,17 @@ function bindLiveIngestWorkbench(domainKey) {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-refresh-snapshots="${domainKey}"]`)?.addEventListener('click', async () => {
+    if (!state.proposal?.operations?.length) return;
+    state.loadingSnapshots = true;
+    rerenderLiveIngestDomain(domainKey);
+    try {
+      await hydrateLiveIngestSnapshots(domainKey, state.proposal.operations || []);
+    } finally {
+      state.loadingSnapshots = false;
+      rerenderLiveIngestDomain(domainKey);
+    }
+  });
   document.querySelector(`[data-live-ingest-extract="${domainKey}"]`)?.addEventListener('click', () => runLiveIngestExtraction(domainKey));
   document.querySelector(`[data-live-ingest-clear-proposal="${domainKey}"]`)?.addEventListener('click', () => {
     state.proposal = null;
@@ -5764,6 +5807,28 @@ function bindLiveIngestWorkbench(domainKey) {
       state.boundTarget = state.lookupResults[idx];
       state.lookupResults = [];
       rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-refresh-op^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const [, idxText] = button.dataset.liveIngestRefreshOp.split(':');
+      const idx = parseInt(idxText, 10);
+      if (Number.isNaN(idx) || !state.proposal?.operations?.[idx]) return;
+      const op = state.proposal.operations[idx];
+      op._snapshotError = '';
+      state.loadingSnapshots = true;
+      rerenderLiveIngestDomain(domainKey);
+      try {
+        const fields = await fetchLiveIngestCurrentFields(domainKey, op);
+        op._currentFields = fields;
+      } catch (err) {
+        op._snapshotError = err.message || 'Unable to refresh current values';
+      } finally {
+        state.loadingSnapshots = false;
+        rerenderLiveIngestDomain(domainKey);
+      }
     };
   });
 }
@@ -6100,6 +6165,7 @@ async function runLiveIngestExtraction(domainKey) {
   }
 
   state.extracting = true;
+  state.loadingSnapshots = false;
   state.error = '';
   rerenderLiveIngestDomain(domainKey);
 
@@ -6122,12 +6188,61 @@ async function runLiveIngestExtraction(domainKey) {
     const proposal = parseLiveIngestProposal(response, domainKey);
     proposal.operations = (proposal.operations || []).map((op) => ({ ...op, _selected: op._selected !== false }));
     state.proposal = proposal;
+    state.loadingSnapshots = true;
+    rerenderLiveIngestDomain(domainKey);
+    await hydrateLiveIngestSnapshots(domainKey, proposal.operations || []);
   } catch (err) {
     state.error = err.message || 'Extraction failed';
   } finally {
     state.extracting = false;
+    state.loadingSnapshots = false;
     rerenderLiveIngestDomain(domainKey);
   }
+}
+
+async function hydrateLiveIngestSnapshots(domainKey, operations) {
+  const updates = (Array.isArray(operations) ? operations : []).filter((op) =>
+    op.kind === 'update' && op.table && op.id_column && op.record_identifier != null
+  );
+  await Promise.all(updates.map(async (op) => {
+    try {
+      op._currentFields = await fetchLiveIngestCurrentFields(domainKey, op);
+      op._snapshotError = '';
+    } catch (err) {
+      op._snapshotError = err.message || 'Unable to load current values';
+    }
+  }));
+}
+
+async function fetchLiveIngestCurrentFields(domainKey, op) {
+  const proxyBase = domainKey === 'government' ? '/api/gov-query' : '/api/dia-query';
+  const fields = Object.keys(op.fields || {}).filter(Boolean);
+  if (!fields.length) return {};
+  const primaryRows = await fetchLiveIngestSnapshotRows(proxyBase, op, fields, true);
+  if (primaryRows.length) return primaryRows[0] || {};
+  const fallbackRows = await fetchLiveIngestSnapshotRows(proxyBase, op, fields, false);
+  if (fallbackRows.length) return fallbackRows[0] || {};
+  throw new Error('Snapshot lookup returned no matching rows');
+}
+
+async function fetchLiveIngestSnapshotRows(proxyBase, op, fields, includeMatchFilters) {
+  const url = new URL(proxyBase, window.location.origin);
+  url.searchParams.set('table', op.table);
+  url.searchParams.set('select', fields.join(','));
+  url.searchParams.set('filter', `${op.id_column}=eq.${op.record_identifier}`);
+  if (includeMatchFilters) {
+    (Array.isArray(op.match_filters) ? op.match_filters : []).forEach((filter, idx) => {
+      if (!filter?.column) return;
+      url.searchParams.set(`filter${idx + 2}`, `${filter.column}=eq.${filter.value}`);
+    });
+  }
+  url.searchParams.set('limit', '1');
+  const res = await fetch(url.toString());
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Snapshot lookup failed (${res.status})`);
+  }
+  return Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
 }
 
 async function normalizeLiveIngestTextDocuments(textDocs) {
