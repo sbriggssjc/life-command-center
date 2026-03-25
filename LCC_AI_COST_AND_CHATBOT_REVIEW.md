@@ -114,6 +114,7 @@
 - Updated the rollout scripts to load `.env.local`, so `npm run ai:routing` reflects the applied local preset instead of only inherited shell environment variables.
 - Added `AI_CHAT_ROLLOUT_CHECKLIST.md` as a concrete post-switch validation checklist for the balanced rollout.
 - Added `AI_CHAT_ROLLOUT_RESULTS_TEMPLATE.md` so rollout outcomes can be captured consistently after the first live validation pass.
+- Added `scripts/ai-rollout-status.mjs` plus `npm run ai:status` as a single-command starting point for each rollout validation session.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

@@ -1,3 +1,5 @@
+import { inflateRawSync } from 'node:zlib';
+
 function decodeHtmlEntities(text = '') {
   return String(text)
     .replace(/&nbsp;/gi, ' ')
@@ -141,6 +143,7 @@ function isTextLikeMime(mime = '') {
   return value.startsWith('text/')
     || [
       'application/json',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/xml',
       'application/xhtml+xml',
       'message/rfc822'
@@ -166,6 +169,123 @@ function summarizeAttachmentPart(part) {
   return `${filename} (${part.contentType.mime || 'application/octet-stream'})`;
 }
 
+function findZipCentralDirectoryOffset(buffer) {
+  for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 65557); offset--) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+function extractZipEntries(buffer, wantedNames = []) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 22) return new Map();
+  const wanted = new Set((Array.isArray(wantedNames) ? wantedNames : []).map((name) => String(name || '')));
+  const entries = new Map();
+  const eocdOffset = findZipCentralDirectoryOffset(buffer);
+  if (eocdOffset === -1) return entries;
+  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
+  const directoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+  let offset = directoryOffset;
+  for (let index = 0; index < entryCount && offset + 46 <= buffer.length; index++) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) break;
+    const compression = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.slice(offset + 46, offset + 46 + fileNameLength).toString('utf8');
+    offset += 46 + fileNameLength + extraLength + commentLength;
+    if (wanted.size && !wanted.has(fileName)) continue;
+    if (localHeaderOffset + 30 > buffer.length || buffer.readUInt32LE(localHeaderOffset) !== 0x04034b50) continue;
+    const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+    const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataOffset + compressedSize;
+    if (dataOffset > buffer.length || dataEnd > buffer.length) continue;
+    const data = buffer.slice(dataOffset, dataEnd);
+    try {
+      const content = compression === 8 ? inflateRawSync(data) : compression === 0 ? data : null;
+      if (content) entries.set(fileName, content);
+    } catch {
+      // Skip unreadable entries and continue with the rest.
+    }
+  }
+  return entries;
+}
+
+function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
+  const commentIds = Array.from(paragraphXml.matchAll(/<w:commentReference\b[^>]*?(?:w:id|id)="([^"]+)"[^>]*\/>/g))
+    .map((match) => String(match[1] || '').trim())
+    .filter(Boolean);
+  const text = decodeHtmlEntities(
+    paragraphXml
+      .replace(/<w:delText\b[^>]*>([\s\S]*?)<\/w:delText>/g, (_, value) => ` [Deleted: ${value}] `)
+      .replace(/<w:(?:tab)\b[^>]*\/>/g, '\t')
+      .replace(/<w:(?:br|cr)\b[^>]*\/>/g, '\n')
+      .replace(/<\/w:(?:p|tr|tc)>/g, '\n')
+      .replace(/<[^>]+>/g, '')
+  );
+  const comments = Array.from(new Set(commentIds))
+    .map((id) => commentsMap[id])
+    .filter(Boolean)
+    .map((value) => `[Comment: ${value}]`);
+  return collapseWhitespace([text, ...comments].filter(Boolean).join(' '));
+}
+
+function buildDocxCommentsMapFromXml(xmlText = '') {
+  const map = {};
+  for (const match of String(xmlText || '').matchAll(/<w:comment\b[\s\S]*?(?:w:id|id)="([^"]+)"[\s\S]*?>([\s\S]*?)<\/w:comment>/g)) {
+    const id = String(match[1] || '').trim();
+    const body = String(match[2] || '');
+    if (!id) continue;
+    const paragraphs = Array.from(body.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
+      .map((paragraph) => extractDocxParagraphTextFromXml(paragraph[0], {}))
+      .filter(Boolean);
+    map[id] = paragraphs.join(' ').trim();
+  }
+  return map;
+}
+
+function extractDocxNotesFromXml(xmlText = '', label = 'Notes') {
+  const notes = Array.from(String(xmlText || '').matchAll(/<w:(?:footnote|endnote)\b[\s\S]*?(?:w:id|id)="([^"]+)"[\s\S]*?>([\s\S]*?)<\/w:(?:footnote|endnote)>/g))
+    .filter((match) => !['-1', '0'].includes(String(match[1] || '').trim()))
+    .map((match) => {
+      const paragraphs = Array.from(String(match[2] || '').matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
+        .map((paragraph) => extractDocxParagraphTextFromXml(paragraph[0], {}))
+        .filter(Boolean);
+      return paragraphs.join(' ').trim();
+    })
+    .filter(Boolean);
+  return notes.length ? `${label}:\n${notes.join('\n')}` : '';
+}
+
+function extractDocxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'word/document.xml',
+    'word/comments.xml',
+    'word/footnotes.xml',
+    'word/endnotes.xml'
+  ]);
+  const documentXml = entries.get('word/document.xml')?.toString('utf8') || '';
+  if (!documentXml) return '';
+  const commentsMap = buildDocxCommentsMapFromXml(entries.get('word/comments.xml')?.toString('utf8') || '');
+  const paragraphs = Array.from(documentXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
+    .map((paragraph) => extractDocxParagraphTextFromXml(paragraph[0], commentsMap))
+    .filter(Boolean);
+  const footnotes = extractDocxNotesFromXml(entries.get('word/footnotes.xml')?.toString('utf8') || '', 'Footnotes');
+  const endnotes = extractDocxNotesFromXml(entries.get('word/endnotes.xml')?.toString('utf8') || '', 'Endnotes');
+  return [paragraphs.join('\n'), footnotes, endnotes].filter(Boolean).join('\n\n').trim();
+}
+
+function isDocxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    || filename.endsWith('.docx');
+}
+
 function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
@@ -189,6 +309,9 @@ function extractAttachmentPreview(part) {
   if (!part) return '';
   const mime = String(part.contentType?.mime || '').toLowerCase();
   if (isTextLikeMime(mime)) {
+    if (isDocxPart(part)) {
+      return extractDocxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
     return normalizeMimeTextPart(part).slice(0, 4000);
   }
   if (mime === 'application/pdf') {

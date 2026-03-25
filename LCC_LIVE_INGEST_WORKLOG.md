@@ -44,7 +44,7 @@
 
 ## Constraints / Known Gaps
 - PDF uploads are rendered as images and now include selectable PDF text when available, but they still lack OCR for image-only PDFs; `docx` extraction now includes comments/deletions/notes but still does not resolve embedded files or full tracked-change semantics.
-- Email normalization now extracts readable text-like attachments and simple embedded PDF text when that text is already present in the PDF payload, but it still does not OCR image-only PDFs or unpack Office/image binaries embedded inside `.eml` files.
+- Email normalization now extracts readable text-like attachments plus simple embedded PDF and `docx` text when those payloads contain extractable text, but it still does not OCR image-only PDFs/images or unpack more complex Office/image binaries embedded inside `.eml` files.
 - Operation quality depends on current record context and the source material. The prompt blocks fabricated IDs, so some proposed writes may stop at `missing_information`.
 - Dialysis research selection is still limited by the existing screen behavior; the new lookup flow mitigates that, but queue-to-selection behavior is still worth tightening later.
 
@@ -67,6 +67,7 @@
 - Extended server-side email normalization to summarize multipart attachments and combine more readable MIME text parts.
 - Extended server-side email normalization again to recurse through nested MIME parts and include readable excerpts from text-like attachments such as CSV, JSON, HTML, and nested email content.
 - Extended server-side email normalization again to decode attached PDF payloads and surface readable embedded PDF text when available, without claiming OCR for image-only pages.
+- Extended server-side email normalization again to decode attached `docx` payloads with a minimal ZIP/XML reader and surface body text, comments, and notes when present.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -114,5 +115,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add fuller tracked-change handling for `docx`, OCR for image-only PDFs, and binary attachment extraction for Office docs/images inside `.eml` files.
+- Add fuller tracked-change handling for `docx`, OCR for image-only PDFs, and binary attachment extraction for images or more complex Office payloads inside `.eml` files.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

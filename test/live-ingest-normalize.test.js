@@ -5,6 +5,63 @@ import {
   normalizeLiveIngestDocuments
 } from '../api/_shared/live-ingest-normalize.js';
 
+function buildStoredZip(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  entries.forEach(({ name, content }) => {
+    const fileNameBuffer = Buffer.from(name, 'utf8');
+    const dataBuffer = Buffer.isBuffer(content) ? content : Buffer.from(String(content || ''), 'utf8');
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(dataBuffer.length, 18);
+    localHeader.writeUInt32LE(dataBuffer.length, 22);
+    localHeader.writeUInt16LE(fileNameBuffer.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+
+    localParts.push(localHeader, fileNameBuffer, dataBuffer);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(dataBuffer.length, 20);
+    centralHeader.writeUInt32LE(dataBuffer.length, 24);
+    centralHeader.writeUInt16LE(fileNameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, fileNameBuffer);
+
+    offset += localHeader.length + fileNameBuffer.length + dataBuffer.length;
+  });
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
 describe('normalizeLiveIngestDocument', () => {
   it('strips html into readable text', () => {
     const doc = normalizeLiveIngestDocument({
@@ -187,6 +244,64 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /Attachment content excerpts:/);
     assert.match(doc.normalized_text, /Lease Rate 12500 Monthly/);
     assert.match(doc.normalized_text, /Effective Date 2026-05-01/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts readable text from attached docx payloads when present', () => {
+    const docxLike = buildStoredZip([
+      {
+        name: 'word/document.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+          '<w:body>',
+          '<w:p><w:r><w:t>Dialysis lease amendment</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p>',
+          '<w:p><w:r><w:t>Rate reset on 2026-06-01</w:t></w:r></w:p>',
+          '</w:body>',
+          '</w:document>'
+        ].join(''),
+      },
+      {
+        name: 'word/comments.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+          '<w:comment w:id="0"><w:p><w:r><w:t>Signed copy received</w:t></w:r></w:p></w:comment>',
+          '</w:comments>'
+        ].join(''),
+      }
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: DOCX Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="docx123"',
+      '',
+      '--docx123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached amendment.',
+      '--docx123',
+      'Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; name="amendment.docx"',
+      'Content-Disposition: attachment; filename="amendment.docx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      docxLike,
+      '--docx123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'docx-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /amendment\.docx \(application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document\)/);
+    assert.match(doc.normalized_text, /Attachment content excerpts:/);
+    assert.match(doc.normalized_text, /Dialysis lease amendment/);
+    assert.match(doc.normalized_text, /Rate reset on 2026-06-01/);
+    assert.match(doc.normalized_text, /\[Comment: Signed copy received\]/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 });
