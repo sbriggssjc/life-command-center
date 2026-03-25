@@ -5693,6 +5693,7 @@ function renderLiveIngestEntityResults(domainKey, state) {
         state.selectedEntity.city,
         state.selectedEntity.state
       ].filter(Boolean).join(' | '))}</span>
+      <span>${esc(state.selectedEntity._autoSelected ? `Auto-selected (${state.selectedEntity._confidenceLabel || 'high confidence'})` : 'Manually selected')}</span>
     </div>`;
   }
   if (state.entityLoading) {
@@ -6499,7 +6500,14 @@ async function searchLiveIngestEntities(domainKey, rawTerm) {
   try {
     const results = await Promise.all(queries.map((query) => fetchLiveIngestEntityCandidates(domainKey, query, context)));
     const merged = mergeLiveIngestEntityCandidates(results.flat(), context, domainKey);
-    state.entityResults = merged.slice(0, 8);
+    const suggestions = merged.slice(0, 8);
+    const autoSelected = pickLiveIngestAutoEntity(suggestions);
+    if (autoSelected) {
+      state.selectedEntity = autoSelected;
+      state.entityResults = [];
+    } else {
+      state.entityResults = suggestions;
+    }
   } catch (err) {
     state.error = `Entity search failed: ${err.message}`;
     state.entityResults = [];
@@ -6559,6 +6567,24 @@ function mergeLiveIngestEntityCandidates(candidates, context, domainKey) {
     }
   }
   return Array.from(byId.values()).sort((a, b) => (b._score || 0) - (a._score || 0) || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+function pickLiveIngestAutoEntity(candidates) {
+  const ranked = Array.isArray(candidates) ? candidates : [];
+  if (!ranked.length) return null;
+  const top = ranked[0];
+  const second = ranked[1];
+  const topScore = Number(top?._score || 0);
+  const secondScore = Number(second?._score || 0);
+  const scoreGap = topScore - secondScore;
+  if (topScore >= 85 && (ranked.length === 1 || scoreGap >= 20)) {
+    return {
+      ...top,
+      _autoSelected: true,
+      _confidenceLabel: scoreGap >= 35 ? 'very high confidence' : 'high confidence'
+    };
+  }
+  return null;
 }
 
 function scoreLiveIngestEntity(entity, context, domainKey) {
