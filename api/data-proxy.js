@@ -176,6 +176,18 @@ export default async function handler(req, res) {
       }
     }
 
+    // Redirect LoopNet marketing_leads POSTs to the dedicated loopnet-ingest handler
+    if (source === 'dia' && table === 'marketing_leads' && req.method === 'POST'
+        && req.body && req.body.source === 'loopnet' && req.body.raw_body) {
+      try {
+        const { default: syncHandler } = await import('./sync.js');
+        req.query._route = 'loopnet-ingest';
+        return syncHandler(req, res);
+      } catch (importErr) {
+        console.error('LoopNet redirect failed, falling back to raw insert:', importErr.message);
+      }
+    }
+
     // Government domain tables must use write services instead of raw proxy writes
     if (source === 'gov' && GOV_WRITE_SERVICE_TABLES.has(table)) {
       const serviceHint = table === 'prospect_leads' || table === 'rpc/upsert_lead'

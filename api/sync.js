@@ -11,6 +11,12 @@
 //
 // RCM Ingest (routed via vercel.json: /api/rcm-ingest → /api/sync?_route=rcm-ingest):
 // POST /api/rcm-ingest — parse RCM email notifications into marketing_leads
+//
+// LoopNet Ingest (routed via vercel.json: /api/loopnet-ingest → /api/sync?_route=loopnet-ingest):
+// POST /api/loopnet-ingest — parse LoopNet inquiry emails into marketing_leads
+//
+// Lead Health (routed via vercel.json: /api/lead-health → /api/sync?_route=lead-health):
+// GET /api/lead-health — health check for lead ingestion pipeline
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
@@ -26,6 +32,22 @@ const PA_COMPLETE_TASK_URL = process.env.PA_COMPLETE_TASK_URL;
 // DIA Supabase (for RCM ingest)
 const DIA_SUPABASE_URL = process.env.DIA_SUPABASE_URL;
 const DIA_SUPABASE_KEY = process.env.DIA_SUPABASE_KEY;
+
+// Webhook secret for Power Automate ingestion endpoints (RCM, LoopNet, etc.)
+// Bypasses user auth — PA flows send this in X-PA-Webhook-Secret header
+const PA_WEBHOOK_SECRET = process.env.PA_WEBHOOK_SECRET;
+function authenticateWebhook(req) {
+  // If no webhook secret is configured, allow all requests (transitional)
+  if (!PA_WEBHOOK_SECRET) return true;
+  const provided = req.headers['x-pa-webhook-secret'] || '';
+  if (!provided || provided.length !== PA_WEBHOOK_SECRET.length) return false;
+  // Constant-time comparison
+  let mismatch = 0;
+  for (let i = 0; i < PA_WEBHOOK_SECRET.length; i++) {
+    mismatch |= provided.charCodeAt(i) ^ PA_WEBHOOK_SECRET.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
 
 /**
  * Build per-user headers for edge function calls.
@@ -67,6 +89,16 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to RCM backfill if routed via _route=rcm-backfill
   if (req.query._route === 'rcm-backfill') {
     return handleRcmBackfill(req, res);
+  }
+
+  // Dispatch to LoopNet ingest
+  if (req.query._route === 'loopnet-ingest') {
+    return handleLoopNetIngest(req, res);
+  }
+
+  // Dispatch to lead ingest test/health check
+  if (req.query._route === 'lead-health') {
+    return handleLeadHealth(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -1213,12 +1245,15 @@ async function handleRcmIngest(req, res) {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
 
-  const user = await authenticate(req, res);
-  if (!user) return;
-
-  const ws = primaryWorkspace(user);
-  if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-    return res.status(403).json({ error: 'Operator role required' });
+  // Webhook endpoints accept PA_WEBHOOK_SECRET instead of user auth
+  if (!authenticateWebhook(req)) {
+    // Fall back to standard user auth (allows browser-based testing)
+    const user = await authenticate(req, res);
+    if (!user) return;
+    const ws = primaryWorkspace(user);
+    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+      return res.status(403).json({ error: 'Operator role required' });
+    }
   }
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
@@ -1441,12 +1476,14 @@ async function handleRcmBackfill(req, res) {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
 
-  const user = await authenticate(req, res);
-  if (!user) return;
-
-  const ws = primaryWorkspace(user);
-  if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-    return res.status(403).json({ error: 'Operator role required' });
+  // Webhook endpoints accept PA_WEBHOOK_SECRET instead of user auth
+  if (!authenticateWebhook(req)) {
+    const user = await authenticate(req, res);
+    if (!user) return;
+    const ws = primaryWorkspace(user);
+    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+      return res.status(403).json({ error: 'Operator role required' });
+    }
   }
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
@@ -1624,4 +1661,334 @@ async function handleRcmBackfill(req, res) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+}
+
+// ============================================================================
+// LoopNet Email Parser
+// ============================================================================
+function parseLoopNetEmail(rawBody, subject) {
+  const lines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+
+  function extractAfterLabel(labels) {
+    for (const label of labels) {
+      for (const line of lines) {
+        if (line.toLowerCase().startsWith(label.toLowerCase())) {
+          return line.substring(label.length).trim().replace(/^[:\s]+/, '');
+        }
+      }
+    }
+    return null;
+  }
+
+  const name = extractAfterLabel([
+    'Name:', 'Full Name:', 'Contact Name:', 'From:', 'Sender:',
+    'Inquirer:', 'Prospect Name:', 'Buyer Name:'
+  ]);
+  const company = extractAfterLabel([
+    'Company:', 'Firm:', 'Organization:', 'Brokerage:', 'Company Name:',
+    'Buyer Company:', 'Investor Group:'
+  ]);
+  const inquiryType = extractAfterLabel([
+    'Inquiry Type:', 'Request Type:', 'Type:', 'Action:', 'Interest:',
+    'Lead Type:', 'Inquiry About:'
+  ]);
+  const propertyRef = extractAfterLabel([
+    'Property:', 'Listing:', 'Property Name:', 'Property Address:',
+    'Listing Name:', 'Asset:', 'Subject Property:'
+  ]);
+  const message = extractAfterLabel([
+    'Message:', 'Comments:', 'Notes:', 'Additional Info:', 'Inquiry Message:'
+  ]);
+
+  const emailMatch = rawBody.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  const email = emailMatch ? emailMatch[0] : null;
+
+  const phoneMatch = rawBody.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(\s*(x|ext\.?|extension)\s*\d+)?/i);
+  const phone = phoneMatch ? phoneMatch[0] : null;
+
+  const listingIdMatch = rawBody.match(/(?:Listing\s*(?:ID|#|Number)[:\s]*)([\d]+)/i);
+  const listingId = listingIdMatch ? listingIdMatch[1] : null;
+
+  let firstName = null, lastName = null;
+  if (name) {
+    const parts = name.split(/\s+/);
+    firstName = parts[0] || null;
+    lastName = parts.slice(1).join(' ') || null;
+  }
+
+  let dealName = subject || propertyRef || null;
+  if (dealName) {
+    dealName = dealName
+      .replace(/^(New\s+)?LoopNet\s+(Inquiry|Lead|Request)\s*[-:–]\s*/i, '')
+      .replace(/^(RE|FW|Fwd):\s*/i, '')
+      .trim();
+  }
+
+  return {
+    lead_name: name,
+    lead_first_name: firstName,
+    lead_last_name: lastName,
+    lead_email: email,
+    lead_phone: phone,
+    lead_company: company,
+    deal_name: dealName,
+    listing_id: listingId,
+    activity_type: inquiryType || 'loopnet_inquiry',
+    activity_detail: message || inquiryType || null
+  };
+}
+
+// ============================================================================
+// LOOPNET INGEST — Parses LoopNet inquiry emails into marketing_leads
+// POST /api/loopnet-ingest
+// ============================================================================
+async function handleLoopNetIngest(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  // Webhook auth (same as RCM)
+  if (!authenticateWebhook(req)) {
+    const user = await authenticate(req, res);
+    if (!user) return;
+    const ws = primaryWorkspace(user);
+    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+      return res.status(403).json({ error: 'Operator role required' });
+    }
+  }
+
+  if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
+    return res.status(500).json({ error: 'DIA Supabase not configured' });
+  }
+
+  const { source_ref, deal_name, raw_body, status } = req.body || {};
+  if (!raw_body) {
+    return res.status(400).json({ error: 'raw_body is required' });
+  }
+
+  const parsed = parseLoopNetEmail(raw_body, deal_name);
+
+  const insertPayload = {
+    source: 'loopnet',
+    source_ref: source_ref || null,
+    lead_name: parsed.lead_name,
+    lead_first_name: parsed.lead_first_name,
+    lead_last_name: parsed.lead_last_name,
+    lead_email: parsed.lead_email,
+    lead_phone: parsed.lead_phone,
+    lead_company: parsed.lead_company,
+    deal_name: parsed.deal_name,
+    listing_id: parsed.listing_id,
+    activity_type: parsed.activity_type,
+    activity_detail: parsed.activity_detail,
+    notes: raw_body,
+    status: status || 'new',
+    ingested_at: new Date().toISOString()
+  };
+
+  try {
+    const insertUrl = `${DIA_SUPABASE_URL}/rest/v1/marketing_leads`;
+    const insertRes = await fetch(insertUrl, {
+      method: 'POST',
+      headers: {
+        'apikey': DIA_SUPABASE_KEY,
+        'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation,resolution=ignore-duplicates'
+      },
+      body: JSON.stringify(insertPayload)
+    });
+
+    if (!insertRes.ok) {
+      const errText = await insertRes.text();
+      return res.status(insertRes.status).json({
+        error: 'Failed to insert marketing lead',
+        detail: errText
+      });
+    }
+
+    const inserted = await insertRes.json();
+    const lead = Array.isArray(inserted) ? inserted[0] : inserted;
+
+    if (!lead || !lead.lead_id) {
+      return res.status(200).json({
+        ok: true,
+        duplicate: true,
+        message: 'Lead already exists (duplicate source_ref)',
+        source_ref
+      });
+    }
+
+    // Auto-match to Salesforce by email (same logic as RCM)
+    let sfMatch = null;
+    if (parsed.lead_email) {
+      try {
+        const sfUrl = new URL(`${DIA_SUPABASE_URL}/rest/v1/salesforce_activities`);
+        sfUrl.searchParams.set('select', 'sf_contact_id,sf_company_id,first_name,last_name,company_name,assigned_to');
+        sfUrl.searchParams.set('email', `eq.${parsed.lead_email}`);
+        sfUrl.searchParams.set('limit', '1');
+
+        const sfRes = await fetch(sfUrl.toString(), {
+          headers: {
+            'apikey': DIA_SUPABASE_KEY,
+            'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (sfRes.ok) {
+          const sfData = await sfRes.json();
+          if (Array.isArray(sfData) && sfData.length > 0 && sfData[0].sf_contact_id) {
+            sfMatch = sfData[0];
+            await fetch(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads?lead_id=eq.${lead.lead_id}`, {
+              method: 'PATCH',
+              headers: {
+                'apikey': DIA_SUPABASE_KEY,
+                'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal'
+              },
+              body: JSON.stringify({
+                sf_contact_id: sfMatch.sf_contact_id,
+                sf_match_status: 'matched'
+              })
+            });
+          }
+        }
+      } catch (sfErr) {
+        console.error('SF match attempt failed:', sfErr.message);
+      }
+    }
+
+    // Create salesforce_activities task so lead appears in CRM hub
+    let sfActivityId = null;
+    try {
+      const contactId = sfMatch ? sfMatch.sf_contact_id : `loopnet-lead-${lead.lead_id}`;
+      const taskSubject = parsed.deal_name
+        ? `LoopNet: ${parsed.deal_name}`
+        : `LoopNet Inquiry – ${parsed.lead_name || parsed.lead_email || 'New Lead'}`;
+      const noteSnippet = parsed.activity_detail
+        || (raw_body || '').substring(0, 300) + ((raw_body || '').length > 300 ? '…' : '');
+
+      const sfActivityPayload = {
+        subject: taskSubject,
+        first_name: sfMatch?.first_name || parsed.lead_first_name || null,
+        last_name: sfMatch?.last_name || parsed.lead_last_name || null,
+        company_name: sfMatch?.company_name || parsed.lead_company || null,
+        email: parsed.lead_email,
+        phone: parsed.lead_phone,
+        sf_contact_id: contactId,
+        sf_company_id: sfMatch?.sf_company_id || null,
+        nm_type: 'Task',
+        task_subtype: 'Task',
+        status: 'Open',
+        activity_date: new Date().toISOString().split('T')[0],
+        nm_notes: noteSnippet,
+        assigned_to: sfMatch?.assigned_to || 'Unassigned',
+        source_ref: `loopnet:${source_ref || lead.lead_id}`
+      };
+
+      const sfActRes = await fetch(`${DIA_SUPABASE_URL}/rest/v1/salesforce_activities`, {
+        method: 'POST',
+        headers: {
+          'apikey': DIA_SUPABASE_KEY,
+          'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation,resolution=ignore-duplicates'
+        },
+        body: JSON.stringify(sfActivityPayload)
+      });
+
+      if (sfActRes.ok) {
+        const sfActData = await sfActRes.json();
+        const sfAct = Array.isArray(sfActData) ? sfActData[0] : sfActData;
+        sfActivityId = sfAct?.activity_id || null;
+
+        if (sfActivityId) {
+          await fetch(`${DIA_SUPABASE_URL}/rest/v1/marketing_leads?lead_id=eq.${lead.lead_id}`, {
+            method: 'PATCH',
+            headers: {
+              'apikey': DIA_SUPABASE_KEY,
+              'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify({ sf_activity_id: sfActivityId })
+          });
+        }
+      } else {
+        console.error('SF activity creation failed:', await sfActRes.text().catch(() => ''));
+      }
+    } catch (sfActErr) {
+      console.error('SF activity creation error:', sfActErr.message);
+    }
+
+    // Refresh CRM rollup
+    try {
+      await fetch(`${DIA_SUPABASE_URL}/rest/v1/rpc/refresh_crm_rollup`, {
+        method: 'POST',
+        headers: {
+          'apikey': DIA_SUPABASE_KEY,
+          'Authorization': `Bearer ${DIA_SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: '{}'
+      });
+    } catch (refreshErr) {
+      console.warn('CRM rollup refresh skipped:', refreshErr.message);
+    }
+
+    return res.status(201).json({
+      ok: true,
+      lead_id: lead.lead_id,
+      sf_activity_id: sfActivityId,
+      parsed: {
+        lead_name: parsed.lead_name,
+        lead_email: parsed.lead_email,
+        lead_phone: parsed.lead_phone,
+        lead_company: parsed.lead_company,
+        deal_name: parsed.deal_name,
+        listing_id: parsed.listing_id,
+        activity_type: parsed.activity_type
+      },
+      sf_match: sfMatch ? {
+        sf_contact_id: sfMatch.sf_contact_id,
+        name: `${sfMatch.first_name || ''} ${sfMatch.last_name || ''}`.trim()
+      } : null
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// ============================================================================
+// LEAD HEALTH — Test/health check for lead ingestion pipeline
+// GET /api/lead-health
+// ============================================================================
+async function handleLeadHealth(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'GET only' });
+  }
+
+  const checks = {
+    dia_configured: !!(DIA_SUPABASE_URL && DIA_SUPABASE_KEY),
+    webhook_secret_configured: !!PA_WEBHOOK_SECRET,
+    timestamp: new Date().toISOString()
+  };
+
+  if (checks.dia_configured) {
+    try {
+      const countRes = await fetch(
+        `${DIA_SUPABASE_URL}/rest/v1/marketing_leads?select=lead_id&limit=1`,
+        { headers: { 'apikey': DIA_SUPABASE_KEY, 'Authorization': `Bearer ${DIA_SUPABASE_KEY}` } }
+      );
+      checks.marketing_leads_accessible = countRes.ok;
+      if (!countRes.ok) checks.marketing_leads_error = await countRes.text();
+    } catch (e) {
+      checks.marketing_leads_accessible = false;
+      checks.marketing_leads_error = e.message;
+    }
+  }
+
+  return res.status(200).json(checks);
 }
