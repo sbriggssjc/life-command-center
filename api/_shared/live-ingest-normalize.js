@@ -41,19 +41,24 @@ function decodeQuotedPrintable(text = '') {
     .replace(/=([A-Fa-f0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-function decodeTransferEncoding(body = '', encoding = '') {
+function decodeTransferEncodingToBuffer(body = '', encoding = '') {
+  const raw = String(body || '');
   const mode = String(encoding || '').toLowerCase().trim();
   if (mode === 'base64') {
     try {
-      return Buffer.from(String(body).replace(/\s+/g, ''), 'base64').toString('utf8');
+      return Buffer.from(raw.replace(/\s+/g, ''), 'base64');
     } catch {
-      return String(body);
+      return Buffer.from(raw, 'utf8');
     }
   }
   if (mode === 'quoted-printable') {
-    return decodeQuotedPrintable(body);
+    return Buffer.from(decodeQuotedPrintable(raw), 'utf8');
   }
-  return String(body);
+  return Buffer.from(raw, 'utf8');
+}
+
+function decodeTransferEncoding(body = '', encoding = '') {
+  return decodeTransferEncodingToBuffer(body, encoding).toString('utf8');
 }
 
 function parseHeaders(headerText = '') {
@@ -106,11 +111,13 @@ function parseMimePart(part = '') {
   const headers = parseHeaders(headerText);
   const contentType = parseContentTypeParts(headers['content-type'] || 'text/plain');
   const disposition = parseContentTypeParts(headers['content-disposition'] || '');
+  const bodyBuffer = decodeTransferEncodingToBuffer(bodyText, headers['content-transfer-encoding'] || '');
   return {
     headers,
     contentType,
     disposition,
-    body: decodeTransferEncoding(bodyText, headers['content-transfer-encoding'] || '')
+    body: bodyBuffer.toString('utf8'),
+    body_buffer: bodyBuffer
   };
 }
 
@@ -159,9 +166,35 @@ function summarizeAttachmentPart(part) {
   return `${filename} (${part.contentType.mime || 'application/octet-stream'})`;
 }
 
+function extractPdfTextPreviewFromBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const latin = buffer.toString('latin1');
+  const parenStrings = Array.from(latin.matchAll(/\(([^()\\]{6,})\)/g))
+    .map((match) => match[1])
+    .map((text) => text.replace(/\\([nrtbf()\\])/g, ' '))
+    .map((text) => collapseWhitespace(text))
+    .filter((text) => /[A-Za-z]{3,}/.test(text));
+  if (parenStrings.length) {
+    return collapseWhitespace(parenStrings.join(' ')).slice(0, 4000);
+  }
+  const asciiRuns = latin.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_-]{20,}/g) || [];
+  const filtered = asciiRuns
+    .map((text) => collapseWhitespace(text))
+    .filter((text) => /[A-Za-z]{4,}/.test(text))
+    .filter((text) => !/^endobj|stream|endstream|xref|trailer/i.test(text));
+  return collapseWhitespace(filtered.join(' ')).slice(0, 4000);
+}
+
 function extractAttachmentPreview(part) {
-  if (!part || !isTextLikeMime(part.contentType?.mime || '')) return '';
-  return normalizeMimeTextPart(part).slice(0, 4000);
+  if (!part) return '';
+  const mime = String(part.contentType?.mime || '').toLowerCase();
+  if (isTextLikeMime(mime)) {
+    return normalizeMimeTextPart(part).slice(0, 4000);
+  }
+  if (mime === 'application/pdf') {
+    return extractPdfTextPreviewFromBuffer(part.body_buffer);
+  }
+  return '';
 }
 
 function collectMimeInsights(part, depth = 0) {
@@ -224,7 +257,8 @@ function normalizeEmailText(text = '') {
     headers,
     contentType: parseContentTypeParts(contentType),
     disposition: parseContentTypeParts(headers['content-disposition'] || ''),
-    body: decodeTransferEncoding(bodyText, transferEncoding)
+    body: decodeTransferEncoding(bodyText, transferEncoding),
+    body_buffer: decodeTransferEncodingToBuffer(bodyText, transferEncoding)
   };
 
   if (rootPart.contentType.mime.startsWith('multipart/')) {

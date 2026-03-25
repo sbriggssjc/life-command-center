@@ -113,6 +113,7 @@
 - Added `scripts/apply-ai-chat-preset.mjs` plus dry-run apply npm scripts so a preset can be merged into `.env.local` explicitly and safely.
 - Updated the rollout scripts to load `.env.local`, so `npm run ai:routing` reflects the applied local preset instead of only inherited shell environment variables.
 - Added `AI_CHAT_ROLLOUT_CHECKLIST.md` as a concrete post-switch validation checklist for the balanced rollout.
+- Added `AI_CHAT_ROLLOUT_RESULTS_TEMPLATE.md` so rollout outcomes can be captured consistently after the first live validation pass.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

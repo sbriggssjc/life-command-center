@@ -155,6 +155,40 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /"status":"approved"/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
+
+  it('extracts readable text from attached pdf payloads when present', () => {
+    const pdfLike = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Page >>\nstream\nBT\n(Lease Rate 12500 Monthly) Tj\n(Effective Date 2026-05-01) Tj\nET\nendstream\nendobj\n', 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdf123"',
+      '',
+      '--pdf123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached lease PDF.',
+      '--pdf123',
+      'Content-Type: application/pdf; name="lease.pdf"',
+      'Content-Disposition: attachment; filename="lease.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdf123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /lease\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Attachment content excerpts:/);
+    assert.match(doc.normalized_text, /Lease Rate 12500 Monthly/);
+    assert.match(doc.normalized_text, /Effective Date 2026-05-01/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {
