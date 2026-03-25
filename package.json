@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vercel dev",
     "lint": "eslint api/ --ext .js",
+    "ai:routing": "node scripts/print-ai-chat-routing.mjs",
     "test": "node --test test/",
     "test:watch": "node --test --watch test/"
   },
