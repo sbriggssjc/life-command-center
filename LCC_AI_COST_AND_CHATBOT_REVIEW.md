@@ -109,6 +109,7 @@
 - Added `AI_CHAT_LOW_COST_PRESET.env.example` as a more aggressive low-cost routing preset for post-balanced rollout testing.
 - Added preset catalog visibility to the AI dashboard so the available rollout artifacts are visible next to the active routing state.
 - Added `scripts/print-ai-chat-routing.mjs` plus `npm run ai:routing` to print the effective chat routing from the current env before or after rollout changes.
+- Added `scripts/preview-ai-chat-preset.mjs` plus preview npm scripts so each preset can be inspected before applying it to the real environment.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

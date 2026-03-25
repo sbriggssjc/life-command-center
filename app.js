@@ -5455,6 +5455,9 @@ function createLiveIngestDomainState() {
     lookupLoading: false,
     lookupResults: [],
     boundTarget: null,
+    entityLoading: false,
+    entityResults: [],
+    selectedEntity: null,
     proposal: null,
     loadingSnapshots: false,
     extracting: false,
@@ -5551,6 +5554,15 @@ function renderLiveIngestWorkbench(domainKey) {
         <div class="form-group">
           <label for="${prefix}-source">Source label</label>
           <input id="${prefix}-source" type="text" placeholder="Example: broker email, LoopNet page, county recorder site" value="${esc(state.sourceLabel)}">
+        </div>
+        <div class="form-group">
+          <label>Canonical entity context</label>
+          <div class="live-ingest-lookup-row">
+            <input id="${prefix}-entity" type="text" placeholder="Search canonical entities..." value="${esc(state.selectedEntity?.name || '')}" ${state.selectedEntity ? 'disabled' : ''}>
+            <button class="btn-secondary" type="button" data-live-ingest-search-entity="${domainKey}" ${state.entityLoading ? 'disabled' : ''}>${state.entityLoading ? 'Searching...' : 'Find'}</button>
+            ${state.selectedEntity ? `<button class="btn-secondary" type="button" data-live-ingest-clear-entity="${domainKey}">Clear</button>` : ''}
+          </div>
+          ${renderLiveIngestEntityResults(domainKey, state)}
         </div>
         <div class="form-group">
           <label for="${prefix}-notes">Instructions / context</label>
@@ -5670,12 +5682,40 @@ function renderLiveIngestLookupResults(domainKey, state) {
   </div>`;
 }
 
+function renderLiveIngestEntityResults(domainKey, state) {
+  if (state.selectedEntity) {
+    return `<div class="live-ingest-bound-target entity">
+      <strong>Using canonical entity</strong>
+      <span>${esc(state.selectedEntity.name || 'Entity')}</span>
+      <span>${esc([
+        state.selectedEntity.entity_type,
+        state.selectedEntity.domain,
+        state.selectedEntity.city,
+        state.selectedEntity.state
+      ].filter(Boolean).join(' | '))}</span>
+    </div>`;
+  }
+  if (state.entityLoading) {
+    return '<div class="live-ingest-empty" style="margin-top:8px">Searching canonical entities...</div>';
+  }
+  if (!state.entityResults.length) {
+    return '<div class="live-ingest-empty" style="margin-top:8px">Optional: bind a canonical entity to improve `update_entity` and follow-up bridge suggestions.</div>';
+  }
+  return `<div class="live-ingest-lookup-results">
+    ${state.entityResults.map((item, idx) => `<button class="live-ingest-lookup-result" type="button" data-live-ingest-entity="${domainKey}:${idx}">
+      <strong>${esc(item.name || 'Entity')}</strong>
+      <span>${esc([item.entity_type, item.domain, item.city, item.state].filter(Boolean).join(' | '))}</span>
+    </button>`).join('')}
+  </div>`;
+}
+
 function bindLiveIngestWorkbench(domainKey) {
   const state = getLiveIngestState(domainKey);
   const prefix = `live-ingest-${domainKey}`;
   const fileInput = document.getElementById(`${prefix}-file`);
   const dropzone = document.getElementById(`${prefix}-dropzone`);
   const lookupEl = document.getElementById(`${prefix}-lookup`);
+  const entityEl = document.getElementById(`${prefix}-entity`);
   const sourceEl = document.getElementById(`${prefix}-source`);
   const notesEl = document.getElementById(`${prefix}-notes`);
 
@@ -5690,6 +5730,14 @@ function bindLiveIngestWorkbench(domainKey) {
   }
   if (sourceEl) {
     sourceEl.oninput = () => { state.sourceLabel = sourceEl.value; };
+  }
+  if (entityEl && !state.selectedEntity) {
+    entityEl.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        searchLiveIngestEntities(domainKey, entityEl.value);
+      }
+    };
   }
   if (notesEl) {
     notesEl.oninput = () => { state.notes = notesEl.value; };
@@ -5743,6 +5791,15 @@ function bindLiveIngestWorkbench(domainKey) {
   document.querySelector(`[data-live-ingest-clear-target="${domainKey}"]`)?.addEventListener('click', () => {
     state.boundTarget = null;
     state.lookupResults = [];
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-search-entity="${domainKey}"]`)?.addEventListener('click', () => {
+    const term = state.selectedEntity ? '' : (entityEl?.value || deriveLiveIngestEntityQuery(domainKey));
+    searchLiveIngestEntities(domainKey, term);
+  });
+  document.querySelector(`[data-live-ingest-clear-entity="${domainKey}"]`)?.addEventListener('click', () => {
+    state.selectedEntity = null;
+    state.entityResults = [];
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-all="${domainKey}"]`)?.addEventListener('click', () => {
@@ -5806,6 +5863,19 @@ function bindLiveIngestWorkbench(domainKey) {
       if (Number.isNaN(idx) || !state.lookupResults[idx]) return;
       state.boundTarget = state.lookupResults[idx];
       state.lookupResults = [];
+      state.selectedEntity = null;
+      state.entityResults = [];
+      rerenderLiveIngestDomain(domainKey);
+      searchLiveIngestEntities(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-entity^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestEntity.split(':');
+      const idx = parseInt(idxText, 10);
+      if (Number.isNaN(idx) || !state.entityResults[idx]) return;
+      state.selectedEntity = state.entityResults[idx];
+      state.entityResults = [];
       rerenderLiveIngestDomain(domainKey);
     };
   });
@@ -5884,16 +5954,34 @@ function getLiveIngestCurrentContext(domainKey) {
 function getLiveIngestEffectiveContext(domainKey) {
   const state = getLiveIngestState(domainKey);
   if (state.boundTarget?.current_record) {
-    return {
+    return enrichLiveIngestContextWithEntity({
       domain: domainKey,
       mode: 'manual_target',
       allowed_tables: LIVE_INGEST_ALLOWED_TABLES[domainKey],
       source_table: state.boundTarget.source_table || null,
       manual_target: true,
       current_record: state.boundTarget.current_record
-    };
+    }, state.selectedEntity);
   }
-  return getLiveIngestCurrentContext(domainKey);
+  return enrichLiveIngestContextWithEntity(getLiveIngestCurrentContext(domainKey), state.selectedEntity);
+}
+
+function enrichLiveIngestContextWithEntity(context, entity) {
+  if (!entity) return context;
+  return {
+    ...context,
+    selected_entity: {
+      id: entity.id || null,
+      entity_type: entity.entity_type || null,
+      name: entity.name || null,
+      domain: entity.domain || null,
+      city: entity.city || null,
+      state: entity.state || null,
+      email: entity.email || null,
+      phone: entity.phone || null,
+      address: entity.address || null
+    }
+  };
 }
 
 function getCurrentDiaResearchRecord() {
@@ -6386,6 +6474,114 @@ async function searchLiveIngestRecords(domainKey) {
     state.lookupLoading = false;
     rerenderLiveIngestDomain(domainKey);
   }
+}
+
+function deriveLiveIngestEntityQuery(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const context = getLiveIngestEffectiveContext(domainKey);
+  if (state.boundTarget?.label) return state.boundTarget.label;
+  const rec = context?.current_record || {};
+  return rec.facility_name || rec.property_name || rec.address || rec.lease_number || rec.operator_name || rec.city || '';
+}
+
+async function searchLiveIngestEntities(domainKey, rawTerm) {
+  const state = getLiveIngestState(domainKey);
+  const context = getLiveIngestEffectiveContext(domainKey);
+  const queries = buildLiveIngestEntityQueries(domainKey, rawTerm, context);
+  if (!queries.length) {
+    state.entityResults = [];
+    rerenderLiveIngestDomain(domainKey);
+    return;
+  }
+
+  state.entityLoading = true;
+  rerenderLiveIngestDomain(domainKey);
+  try {
+    const results = await Promise.all(queries.map((query) => fetchLiveIngestEntityCandidates(domainKey, query, context)));
+    const merged = mergeLiveIngestEntityCandidates(results.flat(), context, domainKey);
+    state.entityResults = merged.slice(0, 8);
+  } catch (err) {
+    state.error = `Entity search failed: ${err.message}`;
+    state.entityResults = [];
+  } finally {
+    state.entityLoading = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+function buildLiveIngestEntityQueries(domainKey, rawTerm, context) {
+  const rec = context?.current_record || {};
+  const candidates = [
+    rawTerm,
+    rec.facility_name,
+    rec.property_name,
+    rec.operator_name,
+    rec.address,
+    rec.lease_number,
+    deriveLiveIngestEntityQuery(domainKey)
+  ]
+    .map((value) => String(value || '').trim())
+    .filter((value) => value.length >= 2);
+
+  return Array.from(new Set(candidates)).slice(0, 4);
+}
+
+async function fetchLiveIngestEntityCandidates(domainKey, query, context) {
+  const url = new URL('/api/entities', window.location.origin);
+  url.searchParams.set('action', 'search');
+  url.searchParams.set('q', query);
+  if (domainKey === 'government') {
+    url.searchParams.set('domain', 'government');
+  } else if (domainKey === 'dialysis') {
+    url.searchParams.set('domain', 'dialysis');
+  }
+  if (context?.current_record?.property_id) {
+    url.searchParams.set('entity_type', 'asset');
+  }
+  const res = await fetch(url.toString(), {
+    headers: { 'X-LCC-Workspace': LCC_USER.workspace_id || '' }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Entity search failed (${res.status})`);
+  return Array.isArray(data.entities)
+    ? data.entities.map((entity) => ({ ...entity, _query: query }))
+    : [];
+}
+
+function mergeLiveIngestEntityCandidates(candidates, context, domainKey) {
+  const byId = new Map();
+  for (const entity of candidates) {
+    const key = entity.id || `${entity.name}|${entity.entity_type}|${entity.domain}`;
+    const scored = { ...entity, _score: scoreLiveIngestEntity(entity, context, domainKey) };
+    const existing = byId.get(key);
+    if (!existing || scored._score > existing._score) {
+      byId.set(key, scored);
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => (b._score || 0) - (a._score || 0) || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+function scoreLiveIngestEntity(entity, context, domainKey) {
+  const rec = context?.current_record || {};
+  const name = String(entity.name || '').toLowerCase();
+  const query = String(entity._query || '').toLowerCase();
+  let score = 0;
+  if (entity.domain === domainKey) score += 20;
+  if (query && name === query) score += 40;
+  if (query && name.includes(query)) score += 18;
+  if (rec.city && entity.city && String(rec.city).toLowerCase() === String(entity.city).toLowerCase()) score += 10;
+  if (rec.state && entity.state && String(rec.state).toLowerCase() === String(entity.state).toLowerCase()) score += 8;
+  if (rec.property_id && entity.entity_type === 'asset') score += 12;
+  if (rec.clinic_id && (entity.entity_type === 'asset' || entity.entity_type === 'org')) score += 8;
+
+  const identities = Array.isArray(entity.external_identities) ? entity.external_identities : [];
+  const expectedIds = [rec.property_id, rec.lead_id, rec.ownership_id, rec.clinic_id, rec.medicare_id].filter((value) => value != null).map(String);
+  identities.forEach((identity) => {
+    if (expectedIds.includes(String(identity.external_id))) score += 60;
+    if (domainKey === 'government' && identity.source_system === 'gov_supabase') score += 8;
+    if (domainKey === 'dialysis' && identity.source_system === 'dialysis') score += 8;
+  });
+  return score;
 }
 
 function buildLiveIngestPrompt(domainKey, state, context) {

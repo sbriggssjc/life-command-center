@@ -603,8 +603,11 @@ body.compact .greeting { font-size: 18px; }
 .live-ingest-lookup-result strong { display: block; margin-bottom: 4px; font-size: 12px; }
 .live-ingest-lookup-result span { color: var(--text2); font-size: 11px; line-height: 1.4; }
 .live-ingest-bound-target { margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 10px; background: rgba(22, 101, 52, 0.16); }
+.live-ingest-bound-target.entity { border-color: rgba(96, 165, 250, 0.35); background: rgba(30, 64, 175, 0.16); }
 .live-ingest-bound-target strong { display: block; margin-bottom: 3px; color: #d9ffe8; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; }
+.live-ingest-bound-target.entity strong { color: #dce8ff; }
 .live-ingest-bound-target span { display: block; color: #dff7e8; font-size: 12px; line-height: 1.45; }
+.live-ingest-bound-target.entity span { color: #e3ecff; }
 .live-ingest-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: rgba(14, 18, 28, 0.9); color: var(--text); font-size: 12px; }
 .live-ingest-chip span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .live-ingest-chip button { padding: 0; border: none; background: transparent; color: var(--text3); font-size: 16px; line-height: 1; cursor: pointer; }
