@@ -6606,7 +6606,34 @@ function scoreLiveIngestEntity(entity, context, domainKey) {
     if (expectedIds.includes(String(identity.external_id))) score += 60;
     if (domainKey === 'government' && identity.source_system === 'gov_supabase') score += 8;
     if (domainKey === 'dialysis' && identity.source_system === 'dialysis') score += 8;
+    if (identity.source_system === 'salesforce') score += 4;
   });
+
+  const assetType = String(entity.asset_type || '').toLowerCase();
+  const orgType = String(entity.org_type || '').toLowerCase();
+  const operatorName = String(rec.operator_name || '').toLowerCase();
+  const address = String(rec.address || '').toLowerCase();
+  const facilityName = String(rec.facility_name || '').toLowerCase();
+  const propertyName = String(rec.property_name || '').toLowerCase();
+
+  if (domainKey === 'government') {
+    if (rec.property_id && entity.entity_type === 'asset') score += 16;
+    if (rec.lead_id && entity.entity_type === 'asset') score += 10;
+    if (address && name.includes(address)) score += 20;
+    if (propertyName && name.includes(propertyName)) score += 14;
+    if (orgType.includes('owner') || orgType.includes('landlord')) score += 6;
+    if (assetType.includes('government')) score += 10;
+  }
+
+  if (domainKey === 'dialysis') {
+    if (facilityName && name.includes(facilityName)) score += 18;
+    if (operatorName && name.includes(operatorName)) score += 14;
+    if (rec.clinic_id && entity.entity_type === 'org' && operatorName) score += 8;
+    if (rec.property_id && entity.entity_type === 'asset') score += 14;
+    if (assetType.includes('medical') || assetType.includes('dialysis')) score += 10;
+    if (orgType.includes('operator') || orgType.includes('healthcare')) score += 8;
+  }
+
   return score;
 }
 

@@ -35,6 +35,7 @@
 - Search and bind a canonical entity so extraction can produce stronger `update_entity` and bridge follow-up proposals.
 - Generate canonical entity suggestions automatically from current record metadata and rank them by domain/location/identity fit.
 - Auto-select canonical entities when the best suggestion is clearly dominant and expose confidence in the intake UI.
+- Weight canonical entity suggestions with more domain-specific signals such as asset/org type, operator/agency fit, and preferred source systems.
 - Apply selected operations into Government or Dialysis write paths.
 - Automatically log successful live-ingest sessions into `research_queue_outcomes` for provenance.
 
@@ -70,6 +71,7 @@
 - Added canonical entity search/binding in the intake surface and pass-through of selected entity context into extraction.
 - Added automatic canonical entity suggestion ranking from record metadata and matched external identities.
 - Added high-confidence entity auto-selection when one candidate clearly outranks the rest.
+- Added more domain-specific entity weighting using asset/org metadata and preferred source systems.
 - Injected the workbench into both Government and Dialysis research tabs.
 - Added styling for the new intake surface and proposal preview.
 
@@ -97,7 +99,8 @@
 - Canonical entity binding follow-up changes in `app.js` also passed `node --check app.js`.
 - Automatic entity suggestion/ranking follow-up changes in `app.js` also passed `node --check app.js`.
 - High-confidence entity auto-select follow-up changes in `app.js` also passed `node --check app.js`.
+- Domain-specific entity weighting follow-up changes in `app.js` also passed `node --check app.js`.
 
 ## Next Follow-Up Candidates
 - Add deeper handling for `docx` comments/tracked changes, PDFs with OCR/text extraction, and richer MIME email attachments.
-- Add more domain-specific weighting for entity suggestions using asset/agency/operator metadata and external identity source precedence.
+- Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
