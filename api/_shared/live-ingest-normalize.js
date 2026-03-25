@@ -218,6 +218,7 @@ function normalizeEmailText(text = '') {
   let extracted = '';
   let attachmentSummary = '';
   let attachmentPreviews = '';
+  let attachmentPreviewCount = 0;
 
   const rootPart = {
     headers,
@@ -237,6 +238,7 @@ function normalizeEmailText(text = '') {
         .filter((item) => item.preview)
         .map((item) => `${item.summary}\n${item.preview}`);
       if (previews.length) {
+        attachmentPreviewCount = previews.length;
         attachmentPreviews = `Attachment content excerpts:\n\n${previews.join('\n\n')}`;
       }
     }
@@ -264,7 +266,7 @@ function normalizeEmailText(text = '') {
     metadata: {
       ...metadata,
       attachment_summary: attachmentSummary || null,
-      attachment_preview_count: attachmentPreviews ? (attachmentPreviews.match(/\n\n/g)?.length || 0) + 1 : 0
+      attachment_preview_count: attachmentPreviewCount
     }
   };
 }
