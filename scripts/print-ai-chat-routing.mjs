@@ -1,3 +1,5 @@
+import { loadEnvForScripts } from './_env-file.mjs';
+
 function parseJsonEnv(value, fallback = {}) {
   if (!value) return fallback;
   try {
@@ -25,12 +27,13 @@ const CHAT_POLICY_PRESETS = {
   },
 };
 
-const policy = String(process.env.AI_CHAT_POLICY || 'manual').toLowerCase();
+const env = loadEnvForScripts();
+const policy = String(env.AI_CHAT_POLICY || 'manual').toLowerCase();
 const preset = CHAT_POLICY_PRESETS[policy] || { providers: {}, models: {} };
-const defaultProvider = String(process.env.AI_CHAT_PROVIDER || 'edge').toLowerCase();
-const defaultModel = process.env.AI_CHAT_MODEL || process.env.AI_MODEL || 'gpt-5-mini';
-const featureProviders = { ...preset.providers, ...parseJsonEnv(process.env.AI_CHAT_FEATURE_PROVIDERS, {}) };
-const featureModels = { ...preset.models, ...parseJsonEnv(process.env.AI_CHAT_FEATURE_MODELS, {}) };
+const defaultProvider = String(env.AI_CHAT_PROVIDER || 'edge').toLowerCase();
+const defaultModel = env.AI_CHAT_MODEL || env.AI_MODEL || 'gpt-5-mini';
+const featureProviders = { ...preset.providers, ...parseJsonEnv(env.AI_CHAT_FEATURE_PROVIDERS, {}) };
+const featureModels = { ...preset.models, ...parseJsonEnv(env.AI_CHAT_FEATURE_MODELS, {}) };
 
 const knownFeatures = [
   'global_copilot',

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseEnvText } from './_env-file.mjs';
 
 function parseJsonEnv(value, fallback = {}) {
   if (!value) return fallback;
@@ -8,21 +9,6 @@ function parseJsonEnv(value, fallback = {}) {
   } catch {
     return fallback;
   }
-}
-
-function parseEnvFile(filePath) {
-  const env = {};
-  const raw = fs.readFileSync(filePath, 'utf8');
-  raw.split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) return;
-    const key = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1).trim();
-    env[key] = value;
-  });
-  return env;
 }
 
 const CHAT_POLICY_PRESETS = {
@@ -55,7 +41,7 @@ if (!fs.existsSync(presetPath)) {
   process.exit(1);
 }
 
-const env = parseEnvFile(presetPath);
+const env = parseEnvText(fs.readFileSync(presetPath, 'utf8'));
 const policy = String(env.AI_CHAT_POLICY || 'manual').toLowerCase();
 const preset = CHAT_POLICY_PRESETS[policy] || { providers: {}, models: {} };
 const defaultProvider = String(env.AI_CHAT_PROVIDER || 'edge').toLowerCase();

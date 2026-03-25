@@ -6155,9 +6155,23 @@ async function convertPdfToImageAttachments(file) {
   const pdf = await window.pdfjsLib.getDocument({ data: buffer }).promise;
   const pageCount = Math.min(pdf.numPages || 0, 3);
   const items = [];
+  const textPages = [];
 
   for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
     const page = await pdf.getPage(pageNum);
+    try {
+      const textContent = await page.getTextContent();
+      const pageText = (textContent.items || [])
+        .map((item) => item?.str || '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (pageText) {
+        textPages.push(`Page ${pageNum}\n${pageText}`);
+      }
+    } catch (_) {
+      // Ignore text extraction failures and keep visual rendering path.
+    }
     const viewport = page.getViewport({ scale: 1.35 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -6171,6 +6185,16 @@ async function convertPdfToImageAttachments(file) {
       name: `${file.name || 'document.pdf'} - page ${pageNum}`,
       mime_type: 'image/png',
       data_url: dataUrl
+    });
+  }
+
+  if (textPages.length) {
+    items.push({
+      id: `li-${Date.now()}-pdftext-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'text',
+      name: `${file.name || 'document.pdf'} - extracted text`,
+      mime_type: 'text/plain',
+      text: textPages.join('\n\n').slice(0, 30000)
     });
   }
 

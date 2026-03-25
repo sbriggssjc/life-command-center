@@ -172,6 +172,7 @@
 - The remaining heavy ops pages now use paginated entity/research fetches, and post-mutation refreshes are routed through a shared active-page refresh helper instead of scattered manual rerenders.
 - Sync Health and Metrics now surface the new backend operational signals directly in the UI, including outbound success rate, unresolved sync error count, and Salesforce queue-drift indicators.
 - The focused verification matrix is now green end-to-end for the core helper, audited mutation, contacts, sync, queue/inbox, and raw-write guardrail suites.
+- A reusable deployment signoff checklist now exists in `LCC_DEPLOYMENT_SIGNOFF_TEMPLATE.md` so rollout validation can be run consistently by an operator.
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.

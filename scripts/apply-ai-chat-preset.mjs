@@ -1,24 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-
-function parseEnvText(raw) {
-  const env = {};
-  raw.split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) return;
-    const key = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1);
-    env[key] = value;
-  });
-  return env;
-}
-
-function parseEnvFile(filePath) {
-  if (!fs.existsSync(filePath)) return {};
-  return parseEnvText(fs.readFileSync(filePath, 'utf8'));
-}
+import { parseEnvText, readEnvFile } from './_env-file.mjs';
 
 function buildEnvText(env, existingRaw = '') {
   const lines = existingRaw ? existingRaw.split(/\r?\n/) : [];
@@ -79,7 +61,7 @@ if (!fs.existsSync(presetPath)) {
 const presetRaw = fs.readFileSync(presetPath, 'utf8');
 const presetEnv = parseEnvText(presetRaw);
 const targetRaw = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf8') : '';
-const targetEnv = parseEnvText(targetRaw);
+const targetEnv = readEnvFile(targetPath);
 
 const merged = { ...targetEnv, ...presetEnv };
 const changedKeys = Object.keys(presetEnv).filter((key) => targetEnv[key] !== presetEnv[key]);

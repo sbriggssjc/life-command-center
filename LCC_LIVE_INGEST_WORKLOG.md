@@ -22,6 +22,7 @@
 ## Current MVP Capabilities
 - Drag/drop image files.
 - Upload PDFs and automatically convert the first pages into images for AI extraction.
+- Extract selectable text from PDFs when available, alongside rendered page images.
 - Upload `docx` files and extract document text client-side before AI extraction.
 - Preserve more `docx` context by extracting comments, deleted text markers, footnotes, and endnotes.
 - Paste clipboard screenshots.
@@ -29,6 +30,7 @@
 - Attach text-based exports (`.txt`, `.md`, `.csv`, `.json`, `.html`, `.htm`, `.eml`).
 - Search for and bind a Government or Dialysis target record directly inside the intake card.
 - Normalize HTML and raw email sources on the server before they are sent to AI.
+- Normalize richer multipart email structure on the server, including attachment summaries for `.eml` sources.
 - Send current research context plus attachments to AI for structured mapping.
 - Preview proposed `update`, `insert`, and `bridge` operations with editable per-operation JSON before apply.
 - Preview proposed updates against fetched current record values for before/after review when a target record can be resolved.
@@ -41,7 +43,8 @@
 - Automatically log successful live-ingest sessions into `research_queue_outcomes` for provenance.
 
 ## Constraints / Known Gaps
-- PDF uploads are rendered as images, not parsed into structured text; `docx` extraction now includes comments/deletions/notes but still does not resolve embedded files or full tracked-change semantics.
+- PDF uploads are rendered as images and now include selectable PDF text when available, but they still lack OCR for image-only PDFs; `docx` extraction now includes comments/deletions/notes but still does not resolve embedded files or full tracked-change semantics.
+- Email normalization now extracts readable text-like attachments from MIME payloads, but it still does not unpack binary attachment contents such as PDFs, Office documents, or images embedded inside `.eml` files.
 - Operation quality depends on current record context and the source material. The prompt blocks fabricated IDs, so some proposed writes may stop at `missing_information`.
 - Dialysis research selection is still limited by the existing screen behavior; the new lookup flow mitigates that, but queue-to-selection behavior is still worth tightening later.
 
@@ -61,7 +64,10 @@
 - Added browser-side attachment normalization for screenshots and text exports.
 - Added extraction prompt + JSON proposal parsing.
 - Added authenticated server-side normalization for HTML and `.eml` text sources.
+- Extended server-side email normalization to summarize multipart attachments and combine more readable MIME text parts.
+- Extended server-side email normalization again to recurse through nested MIME parts and include readable excerpts from text-like attachments such as CSV, JSON, HTML, and nested email content.
 - Added client-side PDF rendering into page images for multimodal intake.
+- Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
 - Extended `docx` extraction to include comments, deleted text markers, footnotes, and endnotes.
 - Added apply flow for selected operations through existing audited mutation helpers.
@@ -103,7 +109,9 @@
 - High-confidence entity auto-select follow-up changes in `app.js` also passed `node --check app.js`.
 - Domain-specific entity weighting follow-up changes in `app.js` also passed `node --check app.js`.
 - Richer DOCX extraction follow-up changes in `app.js` also passed `node --check app.js`.
+- Richer email normalization follow-up changes passed `node --check api/_shared/live-ingest-normalize.js`.
+- Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add fuller tracked-change handling for `docx`, PDFs with OCR/text extraction, and richer MIME email attachments.
+- Add fuller tracked-change handling for `docx`, OCR for image-only PDFs, and binary attachment extraction for PDFs/Office docs/images inside `.eml` files.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

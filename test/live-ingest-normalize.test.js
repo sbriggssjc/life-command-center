@@ -48,6 +48,113 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /From: sender@example.com/);
     assert.match(doc.normalized_text, /Plain body line/);
   });
+
+  it('summarizes attachments from multipart email', () => {
+    const raw = [
+      'Subject: Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="mix123"',
+      '',
+      '--mix123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached lease abstract.',
+      '--mix123',
+      'Content-Type: application/pdf; name="lease.pdf"',
+      'Content-Disposition: attachment; filename="lease.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      'JVBERi0xLjQK',
+      '--mix123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.equal(doc.source_kind, 'email');
+    assert.match(doc.normalized_text, /See attached lease abstract/);
+    assert.match(doc.normalized_text, /Attachments:/);
+    assert.match(doc.normalized_text, /lease\.pdf \(application\/pdf\)/);
+    assert.equal(doc.metadata.attachment_summary.includes('lease.pdf'), true);
+  });
+
+  it('extracts readable text from text-like email attachments', () => {
+    const raw = [
+      'Subject: Attachment Body Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="mix456"',
+      '',
+      '--mix456',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'Attached notes and rent roll.',
+      '--mix456',
+      'Content-Type: text/csv; name="rent-roll.csv"',
+      'Content-Disposition: attachment; filename="rent-roll.csv"',
+      '',
+      'tenant,monthly_rent',
+      'Alpha LLC,12000',
+      '--mix456',
+      'Content-Type: text/html; name="notes.html"',
+      'Content-Disposition: attachment; filename="notes.html"',
+      '',
+      '<html><body><p>Lease starts 2026-04-01</p></body></html>',
+      '--mix456--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'attachment-body.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.equal(doc.source_kind, 'email');
+    assert.match(doc.normalized_text, /Attachment content excerpts:/);
+    assert.match(doc.normalized_text, /rent-roll\.csv \(text\/csv\)/);
+    assert.match(doc.normalized_text, /tenant,monthly_rent/);
+    assert.match(doc.normalized_text, /Lease starts 2026-04-01/);
+    assert.equal(doc.metadata.attachment_preview_count, 2);
+  });
+
+  it('handles nested multipart email attachments', () => {
+    const raw = [
+      'Subject: Nested Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="outer123"',
+      '',
+      '--outer123',
+      'Content-Type: multipart/alternative; boundary="inner456"',
+      '',
+      '--inner456',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'Outer message body.',
+      '--inner456--',
+      '--outer123',
+      'Content-Type: application/json; name="payload.json"',
+      'Content-Disposition: attachment; filename="payload.json"',
+      '',
+      '{\"status\":\"approved\",\"amount\":42}',
+      '--outer123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'nested.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /Outer message body/);
+    assert.match(doc.normalized_text, /payload\.json \(application\/json\)/);
+    assert.match(doc.normalized_text, /"status":"approved"/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {
