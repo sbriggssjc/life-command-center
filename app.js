@@ -403,9 +403,18 @@ function navTo(pageId) {
 }
 
 function navToFromMore(pageId) {
-  // Close more drawer
-  document.getElementById('moreDrawerOverlay').classList.remove('open');
-  document.getElementById('moreDrawer').classList.remove('open');
+  // Close more drawer instantly (skip CSS transition to avoid visual overlap)
+  const overlay = document.getElementById('moreDrawerOverlay');
+  const drawer = document.getElementById('moreDrawer');
+  drawer.style.transition = 'none';
+  overlay.style.transition = 'none';
+  overlay.classList.remove('open');
+  drawer.classList.remove('open');
+  // Force reflow so the instant hide takes effect
+  void drawer.offsetHeight;
+  // Restore transitions for next open
+  drawer.style.transition = '';
+  overlay.style.transition = '';
   // Deactivate all nav buttons
   document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
