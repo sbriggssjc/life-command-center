@@ -93,6 +93,7 @@
 - Before/after snapshot diff follow-up changes in `app.js` also passed `node --check app.js`.
 - Snapshot refresh/matching follow-up changes in `app.js` also passed `node --check app.js`.
 - Canonical entity binding follow-up changes in `app.js` also passed `node --check app.js`.
+- Automatic entity suggestion/ranking follow-up changes in `app.js` also passed `node --check app.js`.
 
 ## Next Follow-Up Candidates
 - Add deeper handling for `docx` comments/tracked changes, PDFs with OCR/text extraction, and richer MIME email attachments.
