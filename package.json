@@ -11,6 +11,9 @@
     "ai:preview-balanced": "node scripts/preview-ai-chat-preset.mjs AI_CHAT_BALANCED_PRESET.env.example",
     "ai:preview-low-cost": "node scripts/preview-ai-chat-preset.mjs AI_CHAT_LOW_COST_PRESET.env.example",
     "ai:preview-manual": "node scripts/preview-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example",
+    "ai:apply-balanced": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_BALANCED_PRESET.env.example --target .env.local",
+    "ai:apply-low-cost": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_LOW_COST_PRESET.env.example --target .env.local",
+    "ai:apply-manual": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example --target .env.local",
     "test": "node --test test/",
     "test:watch": "node --test --watch test/"
   },

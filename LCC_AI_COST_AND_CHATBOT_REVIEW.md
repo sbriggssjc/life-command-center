@@ -110,6 +110,7 @@
 - Added preset catalog visibility to the AI dashboard so the available rollout artifacts are visible next to the active routing state.
 - Added `scripts/print-ai-chat-routing.mjs` plus `npm run ai:routing` to print the effective chat routing from the current env before or after rollout changes.
 - Added `scripts/preview-ai-chat-preset.mjs` plus preview npm scripts so each preset can be inspected before applying it to the real environment.
+- Added `scripts/apply-ai-chat-preset.mjs` plus dry-run apply npm scripts so a preset can be merged into `.env.local` explicitly and safely.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`

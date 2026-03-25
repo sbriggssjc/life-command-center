@@ -23,6 +23,7 @@
 - Drag/drop image files.
 - Upload PDFs and automatically convert the first pages into images for AI extraction.
 - Upload `docx` files and extract document text client-side before AI extraction.
+- Preserve more `docx` context by extracting comments, deleted text markers, footnotes, and endnotes.
 - Paste clipboard screenshots.
 - Capture a live screen snapshot.
 - Attach text-based exports (`.txt`, `.md`, `.csv`, `.json`, `.html`, `.htm`, `.eml`).
@@ -40,7 +41,7 @@
 - Automatically log successful live-ingest sessions into `research_queue_outcomes` for provenance.
 
 ## Constraints / Known Gaps
-- PDF uploads are rendered as images, not parsed into structured text; `docx` extraction currently reads main document text only and does not resolve comments, tracked changes, or embedded files.
+- PDF uploads are rendered as images, not parsed into structured text; `docx` extraction now includes comments/deletions/notes but still does not resolve embedded files or full tracked-change semantics.
 - Operation quality depends on current record context and the source material. The prompt blocks fabricated IDs, so some proposed writes may stop at `missing_information`.
 - Dialysis research selection is still limited by the existing screen behavior; the new lookup flow mitigates that, but queue-to-selection behavior is still worth tightening later.
 
@@ -62,6 +63,7 @@
 - Added authenticated server-side normalization for HTML and `.eml` text sources.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side `docx` text extraction via document XML parsing.
+- Extended `docx` extraction to include comments, deleted text markers, footnotes, and endnotes.
 - Added apply flow for selected operations through existing audited mutation helpers.
 - Added target-record lookup and manual binding inside the intake surface.
 - Added automatic provenance logging after successful live-ingest apply operations.
@@ -100,7 +102,8 @@
 - Automatic entity suggestion/ranking follow-up changes in `app.js` also passed `node --check app.js`.
 - High-confidence entity auto-select follow-up changes in `app.js` also passed `node --check app.js`.
 - Domain-specific entity weighting follow-up changes in `app.js` also passed `node --check app.js`.
+- Richer DOCX extraction follow-up changes in `app.js` also passed `node --check app.js`.
 
 ## Next Follow-Up Candidates
-- Add deeper handling for `docx` comments/tracked changes, PDFs with OCR/text extraction, and richer MIME email attachments.
+- Add fuller tracked-change handling for `docx`, PDFs with OCR/text extraction, and richer MIME email attachments.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

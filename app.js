@@ -6202,8 +6202,18 @@ async function convertDocxToTextAttachment(file) {
     throw new Error('DOCX is missing word/document.xml');
   }
 
-  const xml = await docXmlFile.async('string');
-  const text = extractTextFromDocxXml(xml);
+  const [xml, commentsXml, footnotesXml, endnotesXml] = await Promise.all([
+    docXmlFile.async('string'),
+    zip.file('word/comments.xml')?.async('string') || Promise.resolve(''),
+    zip.file('word/footnotes.xml')?.async('string') || Promise.resolve(''),
+    zip.file('word/endnotes.xml')?.async('string') || Promise.resolve('')
+  ]);
+  const text = extractTextFromDocxPackage({
+    documentXml: xml,
+    commentsXml,
+    footnotesXml,
+    endnotesXml
+  });
   if (!text.trim()) {
     throw new Error('DOCX did not contain readable text');
   }
@@ -6217,13 +6227,20 @@ async function convertDocxToTextAttachment(file) {
   }];
 }
 
-function extractTextFromDocxXml(xmlText) {
+function extractTextFromDocxPackage(pkg) {
+  const commentsMap = buildDocxCommentsMap(pkg.commentsXml || '');
+  const bodyText = extractTextFromDocxXml(pkg.documentXml || '', commentsMap);
+  const footnotes = extractDocxNoteSection(pkg.footnotesXml || '', 'Footnotes');
+  const endnotes = extractDocxNoteSection(pkg.endnotesXml || '', 'Endnotes');
+  return [bodyText, footnotes, endnotes].filter(Boolean).join('\n\n').trim();
+}
+
+function extractTextFromDocxXml(xmlText, commentsMap = {}) {
   const parser = new DOMParser();
   const xml = parser.parseFromString(String(xmlText || ''), 'application/xml');
   const paragraphs = Array.from(xml.getElementsByTagName('w:p'));
   const lines = paragraphs.map((p) => {
-    const texts = Array.from(p.getElementsByTagName('w:t')).map((node) => node.textContent || '');
-    return texts.join('');
+    return extractDocxParagraphText(p, commentsMap);
   });
   const combined = lines.join('\n')
     .replace(/\r\n/g, '\n')
@@ -6231,6 +6248,90 @@ function extractTextFromDocxXml(xmlText) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return combined;
+}
+
+function extractDocxParagraphText(paragraph, commentsMap = {}) {
+  const parts = [];
+  const commentIds = [];
+
+  function walk(node) {
+    if (!node || node.nodeType !== 1) return;
+    const name = docxNodeName(node);
+    if (name === 't' || name === 'instrText') {
+      parts.push(node.textContent || '');
+      return;
+    }
+    if (name === 'delText') {
+      const text = String(node.textContent || '').trim();
+      if (text) parts.push(`[Deleted: ${text}]`);
+      return;
+    }
+    if (name === 'tab') {
+      parts.push('\t');
+      return;
+    }
+    if (name === 'br' || name === 'cr') {
+      parts.push('\n');
+      return;
+    }
+    if (name === 'commentReference') {
+      const commentId = node.getAttribute('w:id') || node.getAttribute('id');
+      if (commentId != null) commentIds.push(String(commentId));
+      return;
+    }
+    Array.from(node.childNodes || []).forEach(walk);
+  }
+
+  Array.from(paragraph.childNodes || []).forEach(walk);
+  const text = parts.join('').replace(/\n{2,}/g, '\n').trim();
+  const uniqueComments = Array.from(new Set(commentIds))
+    .map((id) => commentsMap[id])
+    .filter(Boolean);
+  if (!uniqueComments.length) return text;
+  const commentText = uniqueComments.map((comment) => `[Comment: ${comment}]`).join(' ');
+  return [text, commentText].filter(Boolean).join(' ').trim();
+}
+
+function buildDocxCommentsMap(xmlText) {
+  if (!xmlText) return {};
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(String(xmlText || ''), 'application/xml');
+  const comments = Array.from(xml.getElementsByTagName('w:comment'));
+  const map = {};
+  comments.forEach((comment) => {
+    const id = comment.getAttribute('w:id') || comment.getAttribute('id');
+    if (id == null) return;
+    const paragraphs = Array.from(comment.getElementsByTagName('w:p'))
+      .map((p) => extractDocxParagraphText(p, {}))
+      .filter(Boolean);
+    map[String(id)] = paragraphs.join(' ').trim();
+  });
+  return map;
+}
+
+function extractDocxNoteSection(xmlText, label) {
+  if (!xmlText) return '';
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(String(xmlText || ''), 'application/xml');
+  const noteTag = label === 'Footnotes' ? 'w:footnote' : 'w:endnote';
+  const notes = Array.from(xml.getElementsByTagName(noteTag))
+    .filter((note) => {
+      const id = note.getAttribute('w:id') || note.getAttribute('id');
+      return id !== '-1' && id !== '0';
+    })
+    .map((note) => {
+      const lines = Array.from(note.getElementsByTagName('w:p'))
+        .map((p) => extractDocxParagraphText(p, {}))
+        .filter(Boolean);
+      return lines.join(' ').trim();
+    })
+    .filter(Boolean);
+  if (!notes.length) return '';
+  return `${label}:\n${notes.join('\n')}`;
+}
+
+function docxNodeName(node) {
+  return String(node.localName || node.nodeName || '').replace(/^.*:/, '');
 }
 
 async function runLiveIngestExtraction(domainKey) {
