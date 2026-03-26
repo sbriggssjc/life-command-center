@@ -213,3 +213,21 @@ Current behavior:
 
 Remaining gap:
 - Full authenticated browser smoke testing against a real `GOV_API_URL` target and screenshot is still required.
+
+## 2026-03-26 Government Evidence Conflict Review
+
+Implemented in this pass:
+- Added conflict detection to the live gov evidence workbench in `gov.js`.
+- The panel now compares screenshot evidence against current research values for owner, lender, RBA, and year built.
+- Added in-panel `Keep Current` / `Use Evidence` actions for each detected conflict.
+- `Apply Safe Evidence` is disabled until all detected conflicts are resolved.
+- Choosing `Keep Current` rewrites the working evidence payload so later artifact save / safe apply respects the operator decision.
+- Re-ran `node --check gov.js` successfully after the conflict-review changes.
+
+Current behavior:
+- The live LCC government research tab no longer silently safe-applies key fields when the screenshot extraction disagrees with current research values.
+- Conflict decisions append `[SAFE EVIDENCE CONFLICT]` note lines for auditability.
+
+Remaining gap:
+- This is currently screenshot-vs-current-value conflict review only.
+- Multi-source conflict resolution should be added later when document evidence is ported into the same live panel.

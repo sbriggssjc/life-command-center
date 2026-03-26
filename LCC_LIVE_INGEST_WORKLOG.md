@@ -82,6 +82,10 @@
 - Extended the extraction prompt and proposal parser to support model-returned `source_refs` per operation against an indexed extraction-source catalog, with heuristic lineage retained as fallback when the model does not cite sources.
 - Added citation-aware apply gating so operations produced in a low-confidence OCR run without model-cited `source_refs` are flagged individually and require a second acknowledgment before apply.
 - Added safer batch controls so the review UI can auto-select only cited operations, letting the lower-risk subset move forward without bundling uncited OCR-dependent operations into the same apply action.
+- Tightened the default selection behavior so uncited operations from low-confidence OCR runs now start deselected automatically, making the default apply path conservative without hiding the riskier operations.
+- Added targeted OCR retry controls on low-confidence transcript entries so a single source image can be re-read and the proposal remapped without restarting the whole intake batch.
+- Added retry-result comparison for OCR retries so each retried source can show before/after transcript text and confidence changes directly in the extraction review panel.
+- Weighted proposal ordering toward model-cited and stronger-source operations so the safer subset appears first in the review list instead of being mixed evenly with heuristic or uncited OCR-dependent operations.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -129,5 +133,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as retry prompts or per-operation retry requests, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
+- Add stronger OCR quality handling such as OCR-source diff cues inside operation cards or retry-history tracking, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

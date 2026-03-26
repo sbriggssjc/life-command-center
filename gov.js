@@ -12,8 +12,6 @@ let countyCache = {};
 let acTimeout = null;
 let govEvidenceState = {
   contextKey: '',
-  screenshotName: '',
-  screenshotDataUrl: '',
   review: null,
   artifactId: null,
   loading: false,
@@ -2530,6 +2528,18 @@ function getGovEvidenceContextKey(rec) {
   return [researchMode || 'research', rec.lead_id || '', rec.property_id || rec.matched_property_id || '', rec.ownership_id || '', rec.lease_number || ''].join(':');
 }
 
+function getGovEvidenceSourceAttachment() {
+  if (typeof getLiveIngestState !== 'function') return null;
+  const state = getLiveIngestState('government');
+  const attachments = Array.isArray(state?.attachments) ? state.attachments : [];
+  const images = attachments.filter((item) => item && item.kind === 'image' && item.data_url);
+  return images.length ? images[images.length - 1] : null;
+}
+
+function getGovEvidenceSourceLabel() {
+  const attachment = getGovEvidenceSourceAttachment();
+  return attachment?.name || 'No screenshot uploaded in Live Intake yet';
+}
 function getGovEvidenceBinding(rec) {
   return {
     lead_id: rec?.lead_id || null,
@@ -2774,12 +2784,13 @@ function renderGovEvidenceWorkbench() {
           <button class="btn-secondary" type="button" data-gov-evidence-clear ${govEvidenceState.loading ? 'disabled' : ''}>Clear</button>
         </div>
         ${govEvidenceState.review ? `<div class="live-ingest-callout" style="margin-top:12px">${esc(buildGovEvidenceSummary(govEvidenceState.review))}</div>` : ''}
+        ${renderGovEvidenceConflictPanel()}
         ${govEvidenceState.queueError ? `<div class="live-ingest-callout warn" style="margin-top:12px">${esc(govEvidenceState.queueError)}</div>` : ''}
       </div>
       <div class="live-ingest-pane">
         <div class="live-ingest-actions" style="margin-bottom:8px;flex-wrap:wrap">
           <button class="btn-secondary" type="button" data-gov-evidence-save ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Save Artifact</button>
-          <button class="btn-primary" type="button" data-gov-evidence-safe ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Apply Safe Evidence</button>
+          <button class="btn-primary" type="button" data-gov-evidence-safe ${govEvidenceState.loading || !govEvidenceState.review || unresolvedGovEvidenceConflicts().length ? 'disabled' : ''}>${unresolvedGovEvidenceConflicts().length ? 'Resolve Conflicts First' : 'Apply Safe Evidence'}</button>
           <button class="btn-secondary" type="button" data-gov-evidence-promote-rows ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Promote Rows</button>
           <button class="btn-secondary" type="button" data-gov-evidence-refresh-queue ${govEvidenceState.queueLoading || !rec ? 'disabled' : ''}>${govEvidenceState.queueLoading ? 'Refreshing...' : 'Refresh Queue'}</button>
           <button class="btn-secondary" type="button" data-gov-evidence-health ${govEvidenceState.healthLoading ? 'disabled' : ''}>${govEvidenceState.healthLoading ? 'Checking...' : 'Check Evidence Health'}</button>
@@ -3078,6 +3089,21 @@ function bindGovEvidenceWorkbench() {
   document.querySelector('[data-gov-evidence-promote-rows]')?.addEventListener('click', () => promoteGovEvidenceRows());
   document.querySelector('[data-gov-evidence-refresh-queue]')?.addEventListener('click', () => loadGovEvidenceObservations(true));
   document.querySelector('[data-gov-evidence-health]')?.addEventListener('click', () => checkGovEvidenceHealth());
+  document.querySelectorAll('[data-gov-evidence-conflict]').forEach((button) => {
+    button.onclick = () => {
+      const raw = button.dataset.govEvidenceConflict || '';
+      const splitAt = raw.lastIndexOf(':');
+      if (splitAt <= 0) return;
+      const conflictId = raw.slice(0, splitAt);
+      const resolution = raw.slice(splitAt + 1);
+      applyGovEvidenceConflictResolution(conflictId, resolution);
+      if (resolution === 'keep_current') {
+        applyGovEvidenceReviewToForm(govEvidenceState.review);
+      }
+      appendGovEvidenceNote(`[SAFE EVIDENCE CONFLICT] ${conflictId} -> ${resolution}`);
+      rerenderGovEvidenceOnly();
+    };
+  });
   document.querySelectorAll('[data-gov-evidence-note]').forEach((button) => {
     button.onclick = () => {
       const idx = Number(button.dataset.govEvidenceNote);
@@ -5440,6 +5466,9 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
+
+
 
 
 
