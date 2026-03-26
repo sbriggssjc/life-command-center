@@ -22,7 +22,7 @@ export default withErrorHandler(async function handler(req, res) {
 
   // Dispatch to chat if routed via vercel.json _route=chat
   if (req.query._route === 'chat') {
-    return handleChat(req, res);
+    return handleChatRoute(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -419,4 +419,61 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
 
   // Update sync timestamp on external identity
   await opsQuery('PATCH',
-    `external_identities?entity_id=eq.${entityId}&source_system=eq.${sour
+    `external_identities?entity_id=eq.${entityId}&source_system=eq.${source_system}`,
+    { last_synced_at: new Date().toISOString() }
+  );
+
+  if (!result.ok) {
+    return res.status(result.status || 500).json({ error: 'Failed to update entity' });
+  }
+
+  return res.status(200).json({
+    updated: true,
+    entity_id: entityId,
+    fields_updated: fieldCount
+  });
+}
+
+// ============================================================================
+// CHAT: Route /api/chat → invokeChatProvider (AI copilot)
+// ============================================================================
+
+async function handleChatRoute(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  // Authenticate — allows transitional no-auth fallback
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || '';
+
+  const { message, context, history, attachments } = req.body || {};
+  if (!message) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  const result = await invokeChatProvider({
+    message,
+    context: context || {},
+    history: Array.isArray(history) ? history : [],
+    attachments: Array.isArray(attachments) ? attachments : [],
+    user,
+    workspaceId
+  });
+
+  if (!result.ok) {
+    return res.status(result.status || 502).json({
+      error: result.data?.error || 'AI provider request failed',
+      provider: result.provider,
+      details: result.data?.details
+    });
+  }
+
+  return res.status(200).json({
+    response: result.data?.response || result.data?.content?.[0]?.text || '',
+    usage: result.data?.usage || null,
+    provider: result.provider
+  });
+}
