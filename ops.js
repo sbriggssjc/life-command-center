@@ -385,13 +385,42 @@ function renderMyWorkList(el, connectors) {
   html += '</div>';
 
   if (!items.length && opsMyWorkData.length === 0) {
-    html += emptyStateHTML(
-      '<path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/>',
-      'No work items yet',
-      connectors.length ? 'Sync your connectors or promote inbox items to populate your queue.' : 'Set up connectors to start receiving work items.',
-      connectors.length ? 'Go to Inbox' : 'Set up connectors',
-      connectors.length ? "navTo('pageInbox')" : "navTo('pageSyncHealth')"
-    );
+    // Show CRM tasks fallback if marketing data is loaded
+    if (typeof mktData !== 'undefined' && mktData && mktData.length > 0) {
+      const userName = (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) ? LCC_USER.display_name : 'Scott Briggs';
+      const today = new Date().toISOString().split('T')[0];
+      const myTasks = mktData.filter(d => d.assigned_to === userName);
+      const overdueTasks = myTasks.filter(d => d.due_date && d.due_date < today);
+      const dueSoon = myTasks.filter(d => d.due_date && d.due_date >= today).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+      const crmItems = [...overdueTasks, ...dueSoon].slice(0, 25);
+      if (crmItems.length > 0) {
+        html += `<div style="padding:8px 12px;background:var(--s2);border-radius:8px;margin-bottom:12px;font-size:12px;color:var(--text2)">Showing ${myTasks.length} CRM tasks assigned to you</div>`;
+        crmItems.forEach(d => {
+          const isOD = d.due_date && d.due_date < today;
+          const dueLabel = d.due_date ? (d.due_date === today ? 'Today' : d.due_date) : '';
+          html += `<div class="q-item${isOD ? ' overdue' : ''}" onclick="navTo('pageBiz');setTimeout(function(){switchBizTab('marketing')},100)">
+            <div class="q-title">${typeof esc === 'function' ? esc(d.contact_name || d.deal_display_name || d.company_name || '—') : (d.contact_name || d.deal_display_name || d.company_name || '—')}</div>
+            <div class="q-meta">${typeof esc === 'function' ? esc(d.company_name || '') : (d.company_name || '')}${dueLabel ? ` · <span style="color:${isOD ? 'var(--red)' : 'var(--text2)'}">${dueLabel}</span>` : ''}</div>
+          </div>`;
+        });
+      } else {
+        html += emptyStateHTML(
+          '<path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/>',
+          'No tasks assigned to you',
+          'Check the Marketing tab for all CRM activity.',
+          'Go to Marketing',
+          "navTo('pageBiz');setTimeout(function(){switchBizTab('marketing')},100)"
+        );
+      }
+    } else {
+      html += emptyStateHTML(
+        '<path d="M9 14l2 2 4-4"/><circle cx="12" cy="12" r="10"/>',
+        'No work items yet',
+        connectors.length ? 'Sync your connectors or promote inbox items to populate your queue.' : 'Set up connectors to start receiving work items.',
+        connectors.length ? 'Go to Inbox' : 'Set up connectors',
+        connectors.length ? "navTo('pageInbox')" : "navTo('pageSyncHealth')"
+      );
+    }
   } else if (!items.length) {
     html += '<div class="ops-empty">No items match this filter</div>';
   } else {
@@ -603,31 +632,27 @@ async function renderInboxTriage() {
   }
 
   if (!opsInboxData.length) {
-    html += emptyStateHTML(
-      '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>',
-      opsInboxFilter === 'new' ? 'Inbox is clear' : 'No items match this filter',
-      opsInboxFilter === 'new' ? 'All caught up! New items from connectors will appear here.' : 'Try changing your filter to see more items.',
-      null, null
-    );
-  } else if (opsInboxData[0]._edge_source) {
-    // Render edge function emails in a simplified email card format
-    opsInboxData.forEach(function(item) {
-      html += `<div class="q-item">
-        <div class="q-item-header">
-          <span class="q-item-title">${esc(item.title)}</span>
-          <div class="q-item-badges">
-            ${statusBadge(item.status)}
-            ${typeBadge('flagged_email')}
-          </div>
-        </div>
-        <div class="q-item-meta">
-          <span>${esc(item.sender)}</span>
-          <span>${freshnessHTML(item.received_at)}</span>
-        </div>
-        ${item.body ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.body.substring(0, 150))}</div>` : ''}
-        ${item.external_url ? `<div class="q-actions"><a href="${esc(item.external_url)}" target="_blank" rel="noopener" class="q-action" onclick="event.stopPropagation()">Open in Outlook</a></div>` : ''}
-      </div>`;
-    });
+    // Show flagged emails fallback if available
+    if (typeof emails !== 'undefined' && emails && emails.length > 0 && opsInboxFilter !== 'triaged') {
+      html += `<div style="padding:8px 12px;background:var(--s2);border-radius:8px;margin-bottom:12px;font-size:12px;color:var(--text2)">Showing ${emails.length} flagged emails from sync</div>`;
+      const inboxEmails = emails.slice(0, 25);
+      inboxEmails.forEach(e => {
+        const sender = typeof esc === 'function' ? esc(e.sender_name || e.sender_email || '—') : (e.sender_name || e.sender_email || '—');
+        const subj = typeof esc === 'function' ? esc(e.subject || '(No subject)') : (e.subject || '(No subject)');
+        const dateStr = e.received_at ? new Date(e.received_at).toLocaleDateString() : '';
+        html += `<div class="q-item" style="cursor:default">
+          <div class="q-title">${subj}</div>
+          <div class="q-meta">${sender}${dateStr ? ` · ${dateStr}` : ''}</div>
+        </div>`;
+      });
+    } else {
+      html += emptyStateHTML(
+        '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>',
+        opsInboxFilter === 'new' ? 'Inbox is clear' : 'No items match this filter',
+        opsInboxFilter === 'new' ? 'All caught up! New items from connectors will appear here.' : 'Try changing your filter to see more items.',
+        null, null
+      );
+    }
   } else {
     opsInboxData.forEach((item, idx) => { html += inboxItemHTML(item, idx); });
   }
