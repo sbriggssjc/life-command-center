@@ -655,6 +655,7 @@ body.compact .greeting { font-size: 18px; }
 .live-ingest-op-kind { padding: 2px 8px; border-radius: 999px; background: rgba(108, 140, 255, 0.18); color: var(--accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; }
 .live-ingest-op-flag { padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,0.08); color: var(--text2); font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
 .live-ingest-op-flag.warn { background: rgba(248, 113, 113, 0.18); color: #ffd4d4; }
+.live-ingest-op-flag.ok { background: rgba(16, 185, 129, 0.16); color: #c8ffe8; }
 .live-ingest-op-target { color: var(--text); font-size: 12px; font-weight: 600; }
 .live-ingest-inline-btn { margin-left: auto; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.03); color: var(--text2); font-size: 11px; font-weight: 600; cursor: pointer; }
 .live-ingest-inline-btn:hover { border-color: var(--accent); color: var(--text); }

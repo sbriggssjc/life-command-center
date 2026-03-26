@@ -5563,7 +5563,7 @@ function renderLiveIngestWorkbench(domainKey) {
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         <div class="live-ingest-op-list">
-          ${ops.length ? renderLiveIngestOperationGroups(domainKey, ops) : '<div class="live-ingest-empty">No operations were proposed.</div>'}
+          ${ops.length ? renderLiveIngestOperationGroups(domainKey, ops, state) : '<div class="live-ingest-empty">No operations were proposed.</div>'}
         </div>
         <div class="live-ingest-actions">
           ${hasLowConfidenceOcr ? `<label class="live-ingest-ack">
@@ -5805,7 +5805,7 @@ function renderLiveIngestOperation(domainKey, op, idx) {
   </label>`;
 }
 
-function renderLiveIngestOperationGroups(domainKey, operations) {
+function renderLiveIngestOperationGroups(domainKey, operations, state) {
   const groups = buildLiveIngestOperationGroups(operations);
   return groups.map((group, groupIdx) => {
     const statuses = [];
@@ -5813,6 +5813,7 @@ function renderLiveIngestOperationGroups(domainKey, operations) {
     if (group.citationCount) statuses.push(`<span class="live-ingest-op-flag warn">No cited source ${group.citationCount}</span>`);
     if (group.worsenedCount) statuses.push(`<span class="live-ingest-op-flag warn">Retry worsened ${group.worsenedCount}</span>`);
     if (!group.lowConfidenceCount && !group.citationCount && !group.worsenedCount) statuses.push('<span class="live-ingest-op-flag">No source risk</span>');
+    statuses.push(renderLiveIngestGroupAckIndicator(group, state));
     const countBits = [
       `${group.indices.length} op${group.indices.length === 1 ? '' : 's'}`,
       group.selectedCount ? `${group.selectedCount} selected` : null,
@@ -5839,6 +5840,24 @@ function renderLiveIngestOperationGroups(domainKey, operations) {
   }).join('');
 }
 
+function renderLiveIngestGroupAckIndicator(group, state) {
+  const labels = [];
+  const pending = [];
+  if (group.pendingLowConfidenceAck && !state?.lowConfidenceOcrAcknowledged) pending.push('OCR ack pending');
+  else if (group.selectedLowConfidenceCount) labels.push('OCR acknowledged');
+  if (group.pendingCitationAck && !state?.citationRiskAcknowledged) pending.push('Citation ack pending');
+  else if (group.selectedCitationCount) labels.push('Citation acknowledged');
+  if (group.pendingWorsenedAck && !state?.worsenedRetryAcknowledged) pending.push('Retry ack pending');
+  else if (group.selectedWorsenedCount) labels.push('Retry acknowledged');
+  if (pending.length) {
+    return `<span class="live-ingest-op-flag warn">${esc(pending.join(' | '))}</span>`;
+  }
+  if (labels.length) {
+    return `<span class="live-ingest-op-flag ok">${esc(labels.join(' | '))}</span>`;
+  }
+  return '<span class="live-ingest-op-flag">No active group gate</span>';
+}
+
 function buildLiveIngestOperationGroups(operations) {
   const groups = [];
   const byKey = new Map();
@@ -5848,13 +5867,34 @@ function buildLiveIngestOperationGroups(operations) {
     const detail = op?._sourceLineage?.detail || (sourceName ? `Source: ${sourceName}` : 'Operations without clear source lineage');
     const key = `${label}__${detail}`;
     if (!byKey.has(key)) {
-      const group = { key, label, detail, indices: [], selectedCount: 0, worsenedCount: 0, lowConfidenceCount: 0, citationCount: 0, canAcknowledgeShortcut: false };
+      const group = {
+        key,
+        label,
+        detail,
+        indices: [],
+        selectedCount: 0,
+        worsenedCount: 0,
+        lowConfidenceCount: 0,
+        citationCount: 0,
+        selectedLowConfidenceCount: 0,
+        selectedCitationCount: 0,
+        selectedWorsenedCount: 0,
+        pendingLowConfidenceAck: false,
+        pendingCitationAck: false,
+        pendingWorsenedAck: false,
+        canAcknowledgeShortcut: false
+      };
       byKey.set(key, group);
       groups.push(group);
     }
     const group = byKey.get(key);
     group.indices.push(idx);
-    if (op?._selected !== false) group.selectedCount += 1;
+    if (op?._selected !== false) {
+      group.selectedCount += 1;
+      if (op?._lowConfidenceOcr) group.selectedLowConfidenceCount += 1;
+      if (op?._citationRisk) group.selectedCitationCount += 1;
+      if (op?._worsenedRetryRisk) group.selectedWorsenedCount += 1;
+    }
     if (op?._lowConfidenceOcr) group.lowConfidenceCount += 1;
     if (op?._citationRisk) group.citationCount += 1;
     if (op?._worsenedRetryRisk) group.worsenedCount += 1;
@@ -5871,6 +5911,9 @@ function buildLiveIngestOperationGroups(operations) {
     const lowConfidenceOnlyInGroup = selectedInGroup.some(({ op }) => op?._lowConfidenceOcr) && !outsideGroup.some(({ op }) => op?._lowConfidenceOcr);
     const citationOnlyInGroup = selectedInGroup.some(({ op }) => op?._citationRisk) && !outsideGroup.some(({ op }) => op?._citationRisk);
     const worsenedOnlyInGroup = selectedInGroup.some(({ op }) => op?._worsenedRetryRisk) && !outsideGroup.some(({ op }) => op?._worsenedRetryRisk);
+    group.pendingLowConfidenceAck = lowConfidenceOnlyInGroup;
+    group.pendingCitationAck = citationOnlyInGroup;
+    group.pendingWorsenedAck = worsenedOnlyInGroup;
     group.canAcknowledgeShortcut = lowConfidenceOnlyInGroup || citationOnlyInGroup || worsenedOnlyInGroup;
   });
   return groups;
