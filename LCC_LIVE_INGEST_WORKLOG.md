@@ -134,7 +134,9 @@
 - Richer DOCX extraction follow-up changes in `app.js` also passed `node --check app.js`.
 - Richer email normalization follow-up changes passed `node --check api/_shared/live-ingest-normalize.js`.
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
+- Reconciled a repo drift issue where the worklog/CSS reflected the advanced live-ingest review flow but the checked-in `app.js` had reverted to an older workbench block; restored the advanced live-ingest block into the current `app.js` and re-ran `node --check app.js`.
+- Added persistent OCR retry history in the review UI so retried sources keep an auditable before/after trail across multiple attempts, and re-ran `node --check app.js`.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as retry-history tracking, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
+- Add stronger OCR quality handling such as confidence deltas or retry-result promotion rules, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

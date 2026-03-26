@@ -634,6 +634,8 @@ body.compact .greeting { font-size: 18px; }
 .live-ingest-source-item.low-confidence summary strong { color: #ffd4d4; }
 .live-ingest-source-actions { padding: 0 12px 10px; }
 .live-ingest-retry-compare { padding: 0 12px 12px; }
+.live-ingest-retry-history { display: grid; gap: 10px; }
+.live-ingest-retry-entry { padding: 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; background: rgba(255,255,255,0.02); }
 .live-ingest-retry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .live-ingest-retry-label { margin-bottom: 6px; color: var(--text3); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; }
 .live-ingest-retry-compare pre { margin: 0; padding: 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; background: rgba(0, 0, 0, 0.24); color: #d8e4ff; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; font-family: 'JetBrains Mono', monospace; max-height: 180px; overflow: auto; }

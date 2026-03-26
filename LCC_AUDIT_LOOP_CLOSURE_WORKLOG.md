@@ -231,3 +231,20 @@ Current behavior:
 Remaining gap:
 - This is currently screenshot-vs-current-value conflict review only.
 - Multi-source conflict resolution should be added later when document evidence is ported into the same live panel.
+
+## 2026-03-26 Single Upload Government Evidence Intake
+
+Implemented in this pass:
+- Removed the practical need for a second upload box in the live gov evidence flow.
+- The gov evidence panel now reuses the latest image from the shared `Live Intake` attachment queue in `gov.js`.
+- The panel now labels that source explicitly and extracts from the latest shared intake image with `source: 'auto'`.
+- GovernmentProject now accepts `auto` screenshot source handling for the screenshot extraction endpoints.
+- Re-ran `node --check gov.js` successfully after the single-upload refactor.
+
+Current behavior:
+- Operators upload once in the shared Live Intake area.
+- The gov evidence panel then uses that same uploaded image for extraction, artifact save, conflict review, safe apply, and row promotion.
+- There is no longer a separate CoStar-specific upload path exposed in the live LCC gov research UI.
+
+Remaining gap:
+- `auto` currently normalizes to the CoStar screenshot path rather than classifying among multiple screenshot platforms.

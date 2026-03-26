@@ -2554,15 +2554,16 @@ function syncGovEvidenceContext() {
   if (govEvidenceState.contextKey === nextKey) return rec;
   govEvidenceState = {
     contextKey: nextKey,
-    screenshotName: '',
-    screenshotDataUrl: '',
     review: null,
     artifactId: null,
     loading: false,
     queue: [],
     queueLoading: false,
     queueLoaded: false,
-    queueError: ''
+    queueError: '',
+    healthLoading: false,
+    health: null,
+    conflicts: []
   };
   return rec;
 }
@@ -2777,7 +2778,7 @@ function renderGovEvidenceWorkbench() {
         <div class="form-group">
           <label>Evidence Source</label>
           <div class="live-ingest-stamp" style="margin-top:8px">Using latest image from Live Intake: ${esc(getGovEvidenceSourceLabel())}</div>
-          <div class="live-ingest-stamp" style="margin-top:6px">Upload once in the shared Live Intake panel above. The government evidence workflow will auto-use the latest screenshot image from that queue.</div>
+          <div class="live-ingest-stamp" style="margin-top:6px">Upload once in the shared Live Intake panel above. The government evidence workflow will auto-use the latest screenshot image from that queue and route it through automatic source handling.</div>
         </div>
         <div class="live-ingest-actions">
           <button class="btn-primary" type="button" data-gov-evidence-extract ${govEvidenceState.loading || !rec || !getGovEvidenceSourceAttachment() ? 'disabled' : ''}>${govEvidenceState.loading ? 'Extracting...' : 'Extract Latest Screenshot'}</button>
@@ -2796,7 +2797,7 @@ function renderGovEvidenceWorkbench() {
           <button class="btn-secondary" type="button" data-gov-evidence-health ${govEvidenceState.healthLoading ? 'disabled' : ''}>${govEvidenceState.healthLoading ? 'Checking...' : 'Check Evidence Health'}</button>
         </div>
         <div class="live-ingest-stamp">Artifact: ${esc(govEvidenceState.artifactId || 'not saved yet')}</div>
-        <div class="live-ingest-stamp" style="margin-top:6px">Source detection: auto-routed from shared intake image</div>
+        <div class="live-ingest-stamp" style="margin-top:6px">Source handling: auto from shared intake image</div>
         ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
           <div class="live-ingest-results-title">Pending Observation Queue</div>
@@ -2886,7 +2887,7 @@ async function ensureGovEvidenceArtifactSaved() {
       artifact_type: 'costar_screenshot',
       source_platform: 'costar',
       payload: govEvidenceState.review,
-      file_name: govEvidenceState.screenshotName || 'lcc-screenshot.png',
+      file_name: getGovEvidenceSourceAttachment()?.name || 'lcc-screenshot.png',
       lead_id: binding.lead_id,
       property_id: binding.property_id,
       ownership_id: binding.ownership_id,
@@ -2930,7 +2931,8 @@ function rerenderGovEvidenceOnly() {
 
 async function extractGovEvidenceScreenshot() {
   const rec = syncGovEvidenceContext();
-  if (!rec || !govEvidenceState.screenshotDataUrl) return;
+  const attachment = getGovEvidenceSourceAttachment();
+  if (!rec || !attachment?.data_url) return;
   govEvidenceState.loading = true;
   rerenderGovEvidenceOnly();
   try {
@@ -2938,16 +2940,16 @@ async function extractGovEvidenceScreenshot() {
     const result = await govEvidenceApi('extract-screenshot-json', {
       method: 'POST',
       body: {
-        image_data_url: govEvidenceState.screenshotDataUrl,
-        file_name: govEvidenceState.screenshotName || 'lcc-screenshot.png',
-        source: 'costar',
+        image_data_url: attachment.data_url,
+        file_name: attachment.name || 'lcc-screenshot.png',
+        source: 'auto',
         extra_context: context
       }
     });
     govEvidenceState.review = result?.data || null;
     govEvidenceState.artifactId = null;
     applyGovEvidenceReviewToForm(govEvidenceState.review);
-    appendGovEvidenceNote(`Extracted screenshot evidence from ${govEvidenceState.screenshotName || 'screenshot'}.`);
+    appendGovEvidenceNote(`Extracted screenshot evidence from ${attachment.name || 'shared intake screenshot'}.`);
     showToast('Screenshot evidence extracted', 'success');
   } catch (err) {
     showToast(`Evidence extraction failed: ${err.message}`, 'error');
@@ -3052,24 +3054,11 @@ async function promoteGovEvidenceObservation(idx) {
 
 function bindGovEvidenceWorkbench() {
   syncGovEvidenceContext();
-  const fileInput = document.getElementById('gov-evidence-file');
-  if (fileInput) {
-    fileInput.onchange = async () => {
-      const file = fileInput.files && fileInput.files[0];
-      if (!file) return;
-      govEvidenceState.screenshotName = file.name || 'screenshot.png';
-      govEvidenceState.screenshotDataUrl = await readFileAsDataUrl(file);
-      govEvidenceState.review = null;
-      govEvidenceState.artifactId = null;
-      rerenderGovEvidenceOnly();
-    };
-  }
   document.querySelector('[data-gov-evidence-extract]')?.addEventListener('click', () => extractGovEvidenceScreenshot());
   document.querySelector('[data-gov-evidence-clear]')?.addEventListener('click', () => {
-    govEvidenceState.screenshotName = '';
-    govEvidenceState.screenshotDataUrl = '';
     govEvidenceState.review = null;
     govEvidenceState.artifactId = null;
+    govEvidenceState.conflicts = [];
     rerenderGovEvidenceOnly();
   });
   document.querySelector('[data-gov-evidence-save]')?.addEventListener('click', async () => {
@@ -5467,6 +5456,10 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
+
+
+
 
 
 

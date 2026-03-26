@@ -5493,6 +5493,11 @@ function createLiveIngestDomainState() {
     entityResults: [],
     selectedEntity: null,
     proposal: null,
+    extractionDocs: [],
+    preparedTextDocs: [],
+    preparedImageAttachments: [],
+    lowConfidenceOcrAcknowledged: false,
+    citationRiskAcknowledged: false,
     loadingSnapshots: false,
     extracting: false,
     applying: false,
@@ -5523,6 +5528,9 @@ function renderLiveIngestWorkbench(domainKey) {
   const proposal = state.proposal;
   const ops = Array.isArray(proposal?.operations) ? proposal.operations : [];
   const effectiveContext = getLiveIngestEffectiveContext(domainKey);
+  const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
+  const hasLowConfidenceOcr = liveIngestHasLowConfidenceOcr(state.extractionDocs || []);
+  const hasCitationRisk = liveIngestHasCitationRisk(proposal?.operations || [], true);
   const proposalHtml = proposal
     ? `<div class="live-ingest-results">
         <div class="live-ingest-results-head">
@@ -5534,9 +5542,11 @@ function renderLiveIngestWorkbench(domainKey) {
         </div>
         ${proposal.missing_information?.length ? `<div class="live-ingest-callout warn">${proposal.missing_information.map(esc).join('<br>')}</div>` : ''}
         ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
+        ${extractionDocsHtml}
         ${state.loadingSnapshots ? '<div class="live-ingest-callout">Loading current record snapshots for before/after review...</div>' : ''}
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
+          <button class="btn-secondary" type="button" data-live-ingest-select-cited="${domainKey}">Select Cited Only</button>
           <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
@@ -5544,7 +5554,15 @@ function renderLiveIngestWorkbench(domainKey) {
           ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
         </div>
         <div class="live-ingest-actions">
-          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${state.applying ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          ${hasLowConfidenceOcr ? `<label class="live-ingest-ack">
+            <input type="checkbox" data-live-ingest-ack="${domainKey}" ${state.lowConfidenceOcrAcknowledged ? 'checked' : ''}>
+            <span>I reviewed the low-confidence OCR transcript before applying.</span>
+          </label>` : ''}
+          ${hasCitationRisk ? `<label class="live-ingest-ack">
+            <input type="checkbox" data-live-ingest-citation-ack="${domainKey}" ${state.citationRiskAcknowledged ? 'checked' : ''}>
+            <span>I reviewed operations that rely on low-confidence OCR without model-cited sources.</span>
+          </label>` : ''}
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
           ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
         </div>
@@ -5563,7 +5581,7 @@ function renderLiveIngestWorkbench(domainKey) {
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
         <div class="live-ingest-dropzone" id="${prefix}-dropzone" tabindex="0">
-          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml" style="display:none">
+          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.xlsx,.pptx" style="display:none">
           <div class="live-ingest-drop-title">Drop screenshots or source files here</div>
           <div class="live-ingest-drop-sub">Click to browse, paste from clipboard, or capture a screen snapshot.</div>
           <div class="live-ingest-button-row">
@@ -5613,6 +5631,118 @@ function renderLiveIngestWorkbench(domainKey) {
   </section>`;
 }
 
+function renderLiveIngestExtractionDocs(docs) {
+  const items = (Array.isArray(docs) ? docs : []).filter((doc) => doc && doc.normalized_text);
+  if (!items.length) return '';
+  const lowConfidenceItems = items.filter((doc) => String(doc.metadata?.ocr_confidence || '').toLowerCase() === 'low');
+  return `<div class="live-ingest-source-block">
+    <div class="live-ingest-editor-head" style="margin-top:0">
+      <span>Extraction Inputs</span>
+      <span>${items.length} source${items.length === 1 ? '' : 's'}</span>
+    </div>
+    ${lowConfidenceItems.length ? `<div class="live-ingest-callout warn">
+      Low-confidence OCR detected in ${lowConfidenceItems.length} source${lowConfidenceItems.length === 1 ? '' : 's'}.
+      Review these transcript${lowConfidenceItems.length === 1 ? '' : 's'} before applying writebacks:<br>${lowConfidenceItems.map((doc) => esc(doc.metadata?.source_image_name || doc.name || 'OCR source')).join('<br>')}
+    </div>` : ''}
+    <div class="live-ingest-source-list">
+      ${items.map((doc, idx) => {
+        const sourceKind = String(doc.source_kind || 'text');
+        const label = sourceKind === 'ocr' ? 'OCR transcript' : sourceKind;
+        const meta = [];
+        if (doc.metadata?.generated_from_images) meta.push(`${doc.metadata.generated_from_images} image${doc.metadata.generated_from_images === 1 ? '' : 's'}`);
+        if (doc.metadata?.attachment_preview_count) meta.push(`${doc.metadata.attachment_preview_count} attachment preview${doc.metadata.attachment_preview_count === 1 ? '' : 's'}`);
+        if (doc.metadata?.source_image_name) meta.push(`source: ${doc.metadata.source_image_name}`);
+        if (doc.metadata?.ocr_confidence) meta.push(`confidence: ${doc.metadata.ocr_confidence}`);
+        const lowConfidence = String(doc.metadata?.ocr_confidence || '').toLowerCase() === 'low';
+        const retryComparison = renderLiveIngestOcrRetryComparison(doc);
+        return `<details class="live-ingest-source-item ${lowConfidence ? 'low-confidence' : ''}" ${(sourceKind === 'ocr' || lowConfidence) ? 'open' : ''}>
+          <summary>
+            <strong>${esc(doc.name || 'Source document')}</strong>
+            <span>${esc([label, ...meta].filter(Boolean).join(' | '))}</span>
+          </summary>
+          ${lowConfidence ? `<div class="live-ingest-source-actions"><button class="live-ingest-inline-btn" type="button" data-live-ingest-retry-ocr="${idx}">Retry OCR</button></div>` : ''}
+          ${retryComparison}
+          <pre>${esc(String(doc.normalized_text || '').slice(0, 4000))}</pre>
+        </details>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderLiveIngestOcrRetryComparison(doc) {
+  const history = Array.isArray(doc?.metadata?.ocr_retry_history)
+    ? doc.metadata.ocr_retry_history.filter((entry) => entry && typeof entry === 'object')
+    : [];
+  if (!history.length) {
+    const previousText = String(doc?.metadata?.ocr_retry_previous_text || '').trim();
+    const previousConfidence = String(doc?.metadata?.ocr_retry_previous_confidence || '').trim();
+    const currentConfidence = String(doc?.metadata?.ocr_confidence || '').trim();
+    if (!previousText && !previousConfidence) return '';
+    history.push({
+      previous_text: previousText,
+      previous_confidence: previousConfidence,
+      next_text: String(doc.normalized_text || '').trim(),
+      next_confidence: currentConfidence,
+      retried_at: null
+    });
+  }
+  const entries = history.slice().reverse();
+  return `<div class="live-ingest-retry-compare">
+    <div class="live-ingest-editor-head" style="margin-top:0">
+      <span>Retry History</span>
+      <span>${entries.length} attempt${entries.length === 1 ? '' : 's'}</span>
+    </div>
+    <div class="live-ingest-retry-history">
+      ${entries.map((entry, idx) => {
+        const labelBits = [
+          entry.retried_at ? formatLiveIngestRetryTimestamp(entry.retried_at) : null,
+          entry.previous_confidence ? `was ${entry.previous_confidence}` : null,
+          entry.next_confidence ? `now ${entry.next_confidence}` : null
+        ].filter(Boolean);
+        return `<div class="live-ingest-retry-entry">
+          <div class="live-ingest-editor-head" style="margin-top:0">
+            <span>Retry ${entries.length - idx}</span>
+            <span>${esc(labelBits.join(' | ') || 'updated transcript')}</span>
+          </div>
+          <div class="live-ingest-retry-grid">
+            <div>
+              <div class="live-ingest-retry-label">Before Retry</div>
+              <pre>${esc(String(entry.previous_text || '').slice(0, 2000) || 'No prior transcript saved.')}</pre>
+            </div>
+            <div>
+              <div class="live-ingest-retry-label">After Retry</div>
+              <pre>${esc(String(entry.next_text || '').slice(0, 2000) || 'No refreshed transcript saved.')}</pre>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function formatLiveIngestRetryTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function liveIngestHasLowConfidenceOcr(docs) {
+  return (Array.isArray(docs) ? docs : []).some((doc) => String(doc?.metadata?.ocr_confidence || '').toLowerCase() === 'low');
+}
+
+function liveIngestHasCitationRisk(operations, selectedOnly = false) {
+  return (Array.isArray(operations) ? operations : []).some((op) => {
+    if (!op?._citationRisk) return false;
+    if (!selectedOnly) return true;
+    return op._selected !== false;
+  });
+}
+
 function renderLiveIngestOperation(domainKey, op, idx) {
   const opType = esc(op.kind || 'update');
   const table = esc(op.table || op.action || 'operation');
@@ -5633,9 +5763,19 @@ function renderLiveIngestOperation(domainKey, op, idx) {
       <div class="live-ingest-op-head">
         <span class="live-ingest-op-kind">${opType}</span>
         <span class="live-ingest-op-target">${target}</span>
+        ${op._lowConfidenceOcr ? `<span class="live-ingest-op-flag warn">Low-confidence OCR</span>` : ''}
+        ${op._citationRisk ? `<span class="live-ingest-op-flag warn">No cited source</span>` : ''}
+        ${op._sourceLineage?.label ? `<span class="live-ingest-op-flag">${esc(op._sourceLineage.label)}</span>` : ''}
         ${op.kind === 'update' ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-refresh-op="${domainKey}:${idx}">Refresh</button>` : ''}
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
+      ${op._lowConfidenceOcr ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation was proposed while low-confidence OCR text was part of the extraction input. Review the related transcript before applying.</div>` : ''}
+      ${op._citationRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation does not include a model-cited source reference even though low-confidence OCR was present in the extraction run.</div>` : ''}
+      ${op._sourceLineage?.detail ? `<div class="live-ingest-op-reason">${esc(op._sourceLineage.detail)}</div>` : ''}
+      ${op._sourceLineage?.evidence ? `<div class="live-ingest-source-evidence">
+        <div class="live-ingest-retry-label">Source Evidence</div>
+        <blockquote>${esc(op._sourceLineage.evidence)}</blockquote>
+      </div>` : ''}
       ${diffHtml}
       <div class="live-ingest-editor-head">
         <span>Edit JSON</span>
@@ -5820,6 +5960,8 @@ function bindLiveIngestWorkbench(domainKey) {
   document.querySelector(`[data-live-ingest-capture="${domainKey}"]`)?.addEventListener('click', () => captureLiveIngestScreen(domainKey));
   document.querySelector(`[data-live-ingest-clear-files="${domainKey}"]`)?.addEventListener('click', () => {
     state.attachments = [];
+    state.preparedTextDocs = [];
+    state.preparedImageAttachments = [];
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-search="${domainKey}"]`)?.addEventListener('click', () => searchLiveIngestRecords(domainKey));
@@ -5841,6 +5983,11 @@ function bindLiveIngestWorkbench(domainKey) {
     (state.proposal?.operations || []).forEach((op) => { op._selected = true; });
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-select-cited="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = !op._citationRisk; });
+    state.citationRiskAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
     rerenderLiveIngestDomain(domainKey);
@@ -5859,16 +6006,40 @@ function bindLiveIngestWorkbench(domainKey) {
   document.querySelector(`[data-live-ingest-extract="${domainKey}"]`)?.addEventListener('click', () => runLiveIngestExtraction(domainKey));
   document.querySelector(`[data-live-ingest-clear-proposal="${domainKey}"]`)?.addEventListener('click', () => {
     state.proposal = null;
+    state.extractionDocs = [];
+    state.preparedTextDocs = [];
+    state.preparedImageAttachments = [];
+    state.lowConfidenceOcrAcknowledged = false;
+    state.citationRiskAcknowledged = false;
     state.error = '';
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
+    state.lowConfidenceOcrAcknowledged = !!e.target.checked;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-citation-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
+    state.citationRiskAcknowledged = !!e.target.checked;
+    rerenderLiveIngestDomain(domainKey);
+  });
   document.querySelector(`[data-live-ingest-apply="${domainKey}"]`)?.addEventListener('click', () => applyLiveIngestProposal(domainKey));
+  document.querySelectorAll('[data-live-ingest-retry-ocr]').forEach((button) => {
+    button.onclick = async (e) => {
+      e.preventDefault();
+      const idx = parseInt(button.dataset.liveIngestRetryOcr, 10);
+      if (Number.isNaN(idx)) return;
+      await retryLiveIngestOcrSource(domainKey, idx);
+    };
+  });
   document.querySelectorAll(`[data-live-ingest-op^="${domainKey}:"]`).forEach((checkbox) => {
     checkbox.onchange = () => {
       const [, idxText] = checkbox.dataset.liveIngestOp.split(':');
       const idx = parseInt(idxText, 10);
       if (!Array.isArray(state.proposal?.operations) || Number.isNaN(idx) || !state.proposal.operations[idx]) return;
       state.proposal.operations[idx]._selected = checkbox.checked;
+      if (!liveIngestHasCitationRisk(state.proposal.operations || [], true)) {
+        state.citationRiskAcknowledged = false;
+      }
     };
   });
   document.querySelectorAll(`[data-live-ingest-json^="${domainKey}:"]`).forEach((editor) => {
@@ -6131,6 +6302,12 @@ async function normalizeLiveIngestFile(file) {
   if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lowerName.endsWith('.docx')) {
     return await convertDocxToTextAttachment(file);
   }
+  if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || lowerName.endsWith('.xlsx')) {
+    return await convertXlsxToTextAttachment(file);
+  }
+  if (file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || lowerName.endsWith('.pptx')) {
+    return await convertPptxToTextAttachment(file);
+  }
   if (file.type.startsWith('image/')) {
     const dataUrl = await readFileAsDataUrl(file);
     return [{
@@ -6146,7 +6323,7 @@ async function normalizeLiveIngestFile(file) {
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images, PDFs, DOCX files, and text-based exports are supported directly.');
+    throw new Error('Only images, PDFs, DOCX/XLSX/PPTX files, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
   return [{
@@ -6285,6 +6462,75 @@ async function convertDocxToTextAttachment(file) {
   }];
 }
 
+async function convertXlsxToTextAttachment(file) {
+  if (typeof window.JSZip === 'undefined') {
+    throw new Error('XLSX extractor not available');
+  }
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const zip = await window.JSZip.loadAsync(buffer);
+  const workbookXml = await zip.file('xl/workbook.xml')?.async('string');
+  if (!workbookXml) {
+    throw new Error('XLSX is missing xl/workbook.xml');
+  }
+
+  const [relsXml, sharedStringsXml] = await Promise.all([
+    zip.file('xl/_rels/workbook.xml.rels')?.async('string') || Promise.resolve(''),
+    zip.file('xl/sharedStrings.xml')?.async('string') || Promise.resolve('')
+  ]);
+  const sheetEntries = await extractTextFromXlsxPackage({
+    workbookXml,
+    relsXml,
+    sharedStringsXml,
+    getSheetXml: (path) => zip.file(path)?.async('string') || Promise.resolve('')
+  });
+  const text = sheetEntries.join('\n\n').trim();
+  if (!text) {
+    throw new Error('XLSX did not contain readable cells');
+  }
+
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'workbook.xlsx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    text: text.slice(0, 30000)
+  }];
+}
+
+async function convertPptxToTextAttachment(file) {
+  if (typeof window.JSZip === 'undefined') {
+    throw new Error('PPTX extractor not available');
+  }
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const zip = await window.JSZip.loadAsync(buffer);
+  const presentationXml = await zip.file('ppt/presentation.xml')?.async('string');
+  if (!presentationXml) {
+    throw new Error('PPTX is missing ppt/presentation.xml');
+  }
+
+  const relsXml = await zip.file('ppt/_rels/presentation.xml.rels')?.async('string') || '';
+  const slideEntries = await extractTextFromPptxPackage({
+    presentationXml,
+    relsXml,
+    getSlideXml: (path) => zip.file(path)?.async('string') || Promise.resolve(''),
+    getNotesXml: (path) => zip.file(path)?.async('string') || Promise.resolve('')
+  });
+  const text = slideEntries.join('\n\n').trim();
+  if (!text) {
+    throw new Error('PPTX did not contain readable slide text');
+  }
+
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'deck.pptx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    text: text.slice(0, 30000)
+  }];
+}
+
 function extractTextFromDocxPackage(pkg) {
   const commentsMap = buildDocxCommentsMap(pkg.commentsXml || '');
   const bodyText = extractTextFromDocxXml(pkg.documentXml || '', commentsMap);
@@ -6309,39 +6555,57 @@ function extractTextFromDocxXml(xmlText, commentsMap = {}) {
 }
 
 function extractDocxParagraphText(paragraph, commentsMap = {}) {
-  const parts = [];
   const commentIds = [];
 
-  function walk(node) {
+  function revisionMeta(node) {
+    const author = String(node?.getAttribute?.('w:author') || node?.getAttribute?.('author') || '').trim();
+    const date = String(node?.getAttribute?.('w:date') || node?.getAttribute?.('date') || '').trim();
+    const bits = [];
+    if (author) bits.push(`by ${author}`);
+    if (date) bits.push(`on ${date}`);
+    return bits.length ? ` ${bits.join(' ')}` : '';
+  }
+
+  function walk(node, revisionContext = '') {
     if (!node || node.nodeType !== 1) return;
     const name = docxNodeName(node);
     if (name === 't' || name === 'instrText') {
-      parts.push(node.textContent || '');
-      return;
+      return node.textContent || '';
     }
     if (name === 'delText') {
       const text = String(node.textContent || '').trim();
-      if (text) parts.push(`[Deleted: ${text}]`);
-      return;
+      if (!text) return '';
+      return revisionContext === 'del' ? text : `[Deleted: ${text}]`;
     }
     if (name === 'tab') {
-      parts.push('\t');
-      return;
+      return '\t';
     }
     if (name === 'br' || name === 'cr') {
-      parts.push('\n');
-      return;
+      return '\n';
     }
     if (name === 'commentReference') {
       const commentId = node.getAttribute('w:id') || node.getAttribute('id');
       if (commentId != null) commentIds.push(String(commentId));
-      return;
+      return '';
     }
-    Array.from(node.childNodes || []).forEach(walk);
+    if (name === 'ins' || name === 'del') {
+      const content = Array.from(node.childNodes || [])
+        .map((child) => walk(child, name))
+        .join('')
+        .replace(/\n{2,}/g, '\n')
+        .trim();
+      if (!content) return '';
+      const label = name === 'ins' ? 'Inserted' : 'Deleted';
+      return `[${label}${revisionMeta(node)}: ${content}]`;
+    }
+    return Array.from(node.childNodes || []).map((child) => walk(child, revisionContext)).join('');
   }
 
-  Array.from(paragraph.childNodes || []).forEach(walk);
-  const text = parts.join('').replace(/\n{2,}/g, '\n').trim();
+  const text = Array.from(paragraph.childNodes || [])
+    .map((child) => walk(child))
+    .join('')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
   const uniqueComments = Array.from(new Set(commentIds))
     .map((id) => commentsMap[id])
     .filter(Boolean);
@@ -6392,6 +6656,99 @@ function docxNodeName(node) {
   return String(node.localName || node.nodeName || '').replace(/^.*:/, '');
 }
 
+async function extractTextFromXlsxPackage(pkg) {
+  const parser = new DOMParser();
+  const workbookXml = parser.parseFromString(String(pkg.workbookXml || ''), 'application/xml');
+  const relsXml = parser.parseFromString(String(pkg.relsXml || ''), 'application/xml');
+  const sharedStrings = extractXlsxSharedStrings(parser.parseFromString(String(pkg.sharedStringsXml || ''), 'application/xml'));
+  const relMap = new Map(Array.from(relsXml.getElementsByTagName('Relationship')).map((rel) => [
+    rel.getAttribute('Id'),
+    `xl/${String(rel.getAttribute('Target') || '').replace(/^\/+/, '')}`
+  ]));
+  const sheets = Array.from(workbookXml.getElementsByTagName('sheet')).map((sheet, index) => ({
+    name: sheet.getAttribute('name') || `Sheet ${index + 1}`,
+    path: relMap.get(sheet.getAttribute('r:id')) || `xl/worksheets/sheet${index + 1}.xml`
+  }));
+  const outputs = [];
+  for (const sheet of sheets.slice(0, 6)) {
+    const xmlText = await pkg.getSheetXml(sheet.path);
+    if (!xmlText) continue;
+    const rows = extractXlsxSheetRows(parser.parseFromString(String(xmlText || ''), 'application/xml'), sharedStrings);
+    if (!rows.length) continue;
+    outputs.push(`${sheet.name}\n${rows.join('\n')}`);
+  }
+  return outputs;
+}
+
+function extractXlsxSharedStrings(xml) {
+  return Array.from(xml?.getElementsByTagName?.('si') || []).map((item) => {
+    return Array.from(item.getElementsByTagName('t'))
+      .map((node) => node.textContent || '')
+      .join('')
+      .trim();
+  });
+}
+
+function extractXlsxSheetRows(xml, sharedStrings = []) {
+  const rows = Array.from(xml?.getElementsByTagName?.('row') || []);
+  return rows.map((row) => {
+    const cells = Array.from(row.getElementsByTagName('c')).map((cell) => {
+      const type = cell.getAttribute('t') || '';
+      if (type === 'inlineStr') {
+        return Array.from(cell.getElementsByTagName('t')).map((node) => node.textContent || '').join('').trim();
+      }
+      const value = cell.getElementsByTagName('v')[0]?.textContent || '';
+      if (type === 's') {
+        const idx = parseInt(value, 10);
+        return Number.isNaN(idx) ? '' : (sharedStrings[idx] || '');
+      }
+      return String(value || '').trim();
+    }).filter((value) => value !== '');
+    return cells.join('\t').trim();
+  }).filter(Boolean);
+}
+
+async function extractTextFromPptxPackage(pkg) {
+  const parser = new DOMParser();
+  const relsXml = parser.parseFromString(String(pkg.relsXml || ''), 'application/xml');
+  const relMap = new Map(Array.from(relsXml.getElementsByTagName('Relationship')).map((rel) => [
+    rel.getAttribute('Id'),
+    `ppt/${String(rel.getAttribute('Target') || '').replace(/^\/+/, '')}`
+  ]));
+  const presentationXml = parser.parseFromString(String(pkg.presentationXml || ''), 'application/xml');
+  const slides = Array.from(presentationXml.getElementsByTagName('p:sldId')).map((slide, index) => ({
+    name: `Slide ${index + 1}`,
+    path: relMap.get(slide.getAttribute('r:id')) || `ppt/slides/slide${index + 1}.xml`,
+    notesPath: `ppt/notesSlides/notesSlide${index + 1}.xml`
+  }));
+  const outputs = [];
+  for (const slide of slides.slice(0, 10)) {
+    const [slideXml, notesXml] = await Promise.all([
+      pkg.getSlideXml(slide.path),
+      pkg.getNotesXml(slide.notesPath)
+    ]);
+    const slideText = extractPptxTextFromXml(parser.parseFromString(String(slideXml || ''), 'application/xml'));
+    const notesText = extractPptxTextFromXml(parser.parseFromString(String(notesXml || ''), 'application/xml'));
+    const combined = [
+      slideText ? `${slide.name}\n${slideText}` : '',
+      notesText ? `Notes\n${notesText}` : ''
+    ].filter(Boolean).join('\n');
+    if (combined) outputs.push(combined.trim());
+  }
+  return outputs;
+}
+
+function extractPptxTextFromXml(xml) {
+  const paragraphs = Array.from(xml?.getElementsByTagName?.('a:p') || []);
+  return paragraphs.map((paragraph) => {
+    return Array.from(paragraph.getElementsByTagName('a:t'))
+      .map((node) => node.textContent || '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }).filter(Boolean).join('\n').trim();
+}
+
 async function runLiveIngestExtraction(domainKey) {
   const state = getLiveIngestState(domainKey);
   const imageAttachments = state.attachments.filter((item) => item.kind === 'image').slice(0, 3).map((item) => ({
@@ -6415,26 +6772,62 @@ async function runLiveIngestExtraction(domainKey) {
   state.extracting = true;
   state.loadingSnapshots = false;
   state.error = '';
+  state.extractionDocs = [];
+  state.lowConfidenceOcrAcknowledged = false;
+  state.citationRiskAcknowledged = false;
   rerenderLiveIngestDomain(domainKey);
 
   try {
     const context = getLiveIngestEffectiveContext(domainKey);
     const normalizedDocs = await normalizeLiveIngestTextDocuments(textDocs);
+    const normalizedImageAttachments = normalizedDocs
+      .flatMap((doc) => Array.isArray(doc.extracted_attachments) ? doc.extracted_attachments : [])
+      .filter((item) => item && item.kind === 'image' && item.data_url)
+      .slice(0, Math.max(0, 3 - imageAttachments.length))
+      .map((item) => ({
+        type: 'image',
+        mime_type: item.mime_type || 'image/png',
+        name: item.name || 'email image',
+        data_url: item.data_url
+      }));
+    const ocrDocs = await extractLiveIngestOcrDocuments({
+      domainKey,
+      sourceLabel: state.sourceLabel,
+      imageAttachments: [...imageAttachments, ...normalizedImageAttachments]
+    });
+    state.preparedTextDocs = normalizedDocs;
+    state.preparedImageAttachments = [...imageAttachments, ...normalizedImageAttachments];
+    state.extractionDocs = [...normalizedDocs, ...ocrDocs];
+    const lowConfidenceOcrSources = state.extractionDocs
+      .filter((doc) => String(doc?.metadata?.ocr_confidence || '').toLowerCase() === 'low')
+      .map((doc) => String(doc?.metadata?.source_image_name || doc?.name || 'OCR source'));
     const response = await invokeLccAssistant({
       feature: `${domainKey}_live_ingest`,
       context: {
         ...context,
         source_label: state.sourceLabel || null,
         user_notes: state.notes || null,
-        text_documents: normalizedDocs
+        text_documents: [...normalizedDocs, ...ocrDocs]
       },
-      attachments: imageAttachments,
+      attachments: [...imageAttachments, ...normalizedImageAttachments],
       message: buildLiveIngestPrompt(domainKey, state, context)
     });
 
     state.rawResponse = response;
-    const proposal = parseLiveIngestProposal(response, domainKey);
-    proposal.operations = (proposal.operations || []).map((op) => ({ ...op, _selected: op._selected !== false }));
+    const proposal = parseLiveIngestProposal(response, domainKey, {
+      lowConfidenceOcrSources,
+      extractionDocs: state.extractionDocs
+    });
+    proposal.operations = sortLiveIngestOperationsByConfidence((proposal.operations || []).map((op) => ({
+      ...op,
+      _selected: op._citationRisk ? false : op._selected !== false
+    })));
+    if ((proposal.operations || []).some((op) => op._citationRisk)) {
+      proposal.notes_for_user = [
+        'Uncited operations from a low-confidence OCR run were deselected by default. Use `Select Cited Only` to keep the safer subset selected, or review and re-enable individual risky operations manually.',
+        ...(proposal.notes_for_user || [])
+      ];
+    }
     state.proposal = proposal;
     state.loadingSnapshots = true;
     rerenderLiveIngestDomain(domainKey);
@@ -6446,6 +6839,176 @@ async function runLiveIngestExtraction(domainKey) {
     state.loadingSnapshots = false;
     rerenderLiveIngestDomain(domainKey);
   }
+}
+
+async function retryLiveIngestOcrSource(domainKey, docIndex) {
+  const state = getLiveIngestState(domainKey);
+  const doc = state.extractionDocs?.[docIndex];
+  if (!doc || String(doc.source_kind || '') !== 'ocr') return;
+  const sourceName = String(doc.metadata?.source_image_name || '').trim();
+  const previousText = String(doc.normalized_text || '');
+  const previousConfidence = String(doc.metadata?.ocr_confidence || '').trim();
+  const image = (state.preparedImageAttachments || []).find((item) => String(item?.name || '').trim() === sourceName);
+  if (!image?.data_url) {
+    showToast('Could not find the original image for this OCR source', 'warning');
+    return;
+  }
+
+  state.extracting = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+  try {
+    const refreshedDocs = await extractLiveIngestOcrDocuments({
+      domainKey,
+      sourceLabel: state.sourceLabel,
+      imageAttachments: [image]
+    });
+    if (!refreshedDocs.length) {
+      showToast('OCR retry did not return usable text', 'warning');
+      return;
+    }
+    const nextDoc = {
+      ...refreshedDocs[0],
+      metadata: {
+        ...(refreshedDocs[0].metadata || {}),
+        source_image_name: sourceName || refreshedDocs[0].metadata?.source_image_name || null,
+        ocr_retry_previous_text: previousText,
+        ocr_retry_previous_confidence: previousConfidence || null,
+        ocr_retry_history: [
+          ...((Array.isArray(doc?.metadata?.ocr_retry_history) ? doc.metadata.ocr_retry_history : []).filter((entry) => entry && typeof entry === 'object')),
+          {
+            previous_text: previousText,
+            previous_confidence: previousConfidence || null,
+            next_text: String(refreshedDocs[0].normalized_text || ''),
+            next_confidence: String(refreshedDocs[0].metadata?.ocr_confidence || '').trim() || null,
+            retried_at: new Date().toISOString()
+          }
+        ]
+      }
+    };
+    state.extractionDocs = (state.extractionDocs || []).map((item, idx) => idx === docIndex ? nextDoc : item);
+    await rerunLiveIngestProposalFromPreparedInputs(domainKey);
+    showToast('OCR retried and proposal refreshed', 'success');
+  } catch (err) {
+    state.error = err.message || 'OCR retry failed';
+  } finally {
+    state.extracting = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+async function rerunLiveIngestProposalFromPreparedInputs(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const context = getLiveIngestEffectiveContext(domainKey);
+  const preparedTextDocs = Array.isArray(state.preparedTextDocs) ? state.preparedTextDocs : [];
+  const preparedImageAttachments = Array.isArray(state.preparedImageAttachments) ? state.preparedImageAttachments : [];
+  const lowConfidenceOcrSources = (state.extractionDocs || [])
+    .filter((doc) => String(doc?.metadata?.ocr_confidence || '').toLowerCase() === 'low')
+    .map((doc) => String(doc?.metadata?.source_image_name || doc?.name || 'OCR source'));
+  const response = await invokeLccAssistant({
+    feature: `${domainKey}_live_ingest`,
+    context: {
+      ...context,
+      source_label: state.sourceLabel || null,
+      user_notes: state.notes || null,
+      text_documents: state.extractionDocs || []
+    },
+    attachments: preparedImageAttachments,
+    message: buildLiveIngestPrompt(domainKey, state, context)
+  });
+  state.rawResponse = response;
+  const proposal = parseLiveIngestProposal(response, domainKey, {
+    lowConfidenceOcrSources,
+    extractionDocs: state.extractionDocs
+  });
+  proposal.operations = sortLiveIngestOperationsByConfidence((proposal.operations || []).map((op) => ({
+    ...op,
+    _selected: op._citationRisk ? false : op._selected !== false
+  })));
+  if ((proposal.operations || []).some((op) => op._citationRisk)) {
+    proposal.notes_for_user = [
+      'Uncited operations from a low-confidence OCR run were deselected by default. Use `Select Cited Only` to keep the safer subset selected, or review and re-enable individual risky operations manually.',
+      ...(proposal.notes_for_user || [])
+    ];
+  }
+  state.lowConfidenceOcrAcknowledged = false;
+  state.citationRiskAcknowledged = false;
+  state.proposal = proposal;
+  state.loadingSnapshots = true;
+  rerenderLiveIngestDomain(domainKey);
+  try {
+    await hydrateLiveIngestSnapshots(domainKey, proposal.operations || []);
+  } finally {
+    state.loadingSnapshots = false;
+  }
+}
+
+async function extractLiveIngestOcrDocuments({ domainKey, sourceLabel, imageAttachments = [] }) {
+  const images = (Array.isArray(imageAttachments) ? imageAttachments : [])
+    .filter((item) => item && item.data_url)
+    .slice(0, 3);
+  if (!images.length) return [];
+
+  try {
+    const response = await invokeLccAssistant({
+      feature: 'detail_intake_assistant',
+      context: {
+        domain: domainKey,
+        source_label: sourceLabel || null,
+        task: 'ocr_transcription'
+      },
+      attachments: images,
+      message: [
+        'Read the attached images and transcribe visible text for downstream data ingestion.',
+        'Return JSON only with schema: {"pages":[{"name":string,"text":string,"confidence":"high"|"medium"|"low"}],"notes":[string]}.',
+        'Keep layout hints for tables/lists when visible, but do not infer missing text.',
+        'If an image is mostly non-text, return an empty text string for that page.',
+        'Use low confidence when text is partial, obstructed, or visually ambiguous.'
+      ].join('\n')
+    });
+    const payload = parseLiveIngestJsonPayload(response);
+    const pages = Array.isArray(payload?.pages) ? payload.pages : [];
+    const docs = pages
+      .map((page, index) => {
+        const sourceImageName = String(images[index]?.name || `Image ${index + 1}`).trim();
+        const name = String(page?.name || sourceImageName).trim();
+        const text = String(page?.text || '').trim();
+        const confidence = String(page?.confidence || '').toLowerCase();
+        if (!text) return null;
+        return {
+          name: `${sourceLabel || `${domainKey} intake`} - OCR - ${name}`,
+          mime_type: 'text/plain',
+          source_kind: 'ocr',
+          normalized_text: `${name}\n${text}`.slice(0, 30000),
+          metadata: {
+            source_image_name: sourceImageName,
+            ocr_page_name: name,
+            ocr_confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : null,
+            ocr_page_index: index + 1,
+            generated_from_images: 1
+          }
+        };
+      })
+      .filter(Boolean);
+    return docs;
+  } catch (err) {
+    console.warn('Live ingest OCR fallback failed:', err);
+    return [];
+  }
+}
+
+function parseLiveIngestJsonPayload(raw) {
+  const text = String(raw || '').trim();
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('The AI response did not include valid JSON.');
+  }
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
 async function hydrateLiveIngestSnapshots(domainKey, operations) {
@@ -6798,6 +7361,7 @@ function scoreLiveIngestEntity(entity, context, domainKey) {
 
 function buildLiveIngestPrompt(domainKey, state, context) {
   const allowedTables = LIVE_INGEST_ALLOWED_TABLES[domainKey];
+  const sourceCatalog = buildLiveIngestSourceCatalog(state.extractionDocs || []);
   return [
     `You are mapping multimodal source material into audited ${domainKey} database updates for Life Command Center.`,
     'Return JSON only. Do not wrap it in markdown.',
@@ -6805,19 +7369,32 @@ function buildLiveIngestPrompt(domainKey, state, context) {
     'If a change cannot be safely targeted, put it in missing_information instead of making an operation.',
     `Allowed target tables: ${allowedTables.join(', ')}.`,
     'Allowed operation kinds:',
-    '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters? }',
-    '- insert: { kind, target_source, table, id_column?, record_identifier?, fields, reason, propagation_scope? }',
-    '- bridge: { kind, action, payload, reason }',
+    '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters?, source_refs? }',
+    '- insert: { kind, target_source, table, id_column?, record_identifier?, fields, reason, propagation_scope?, source_refs? }',
+    '- bridge: { kind, action, payload, reason, source_refs? }',
     'Allowed bridge actions: update_entity, complete_research, save_ownership, log_activity.',
     'JSON schema:',
     '{ "summary": string, "confidence": "high"|"medium"|"low", "notes_for_user": string[], "missing_information": string[], "operations": [] }',
     `Source label: ${state.sourceLabel || 'not provided'}.`,
     `User instructions: ${state.notes || 'Extract facts and map them to the right writes.'}.`,
-    `Current context: ${JSON.stringify(context.current_record || null)}`
+    `Current context: ${JSON.stringify(context.current_record || null)}`,
+    'If possible, include source_refs on each operation using the provided source indexes.',
+    'source_refs format: [{ source_index: number, quote?: string }]. Keep quotes short and only when directly supported.',
+    `Extraction source catalog: ${JSON.stringify(sourceCatalog)}`
   ].join('\n');
 }
 
-function parseLiveIngestProposal(raw, domainKey) {
+function buildLiveIngestSourceCatalog(docs) {
+  return (Array.isArray(docs) ? docs : []).map((doc, index) => ({
+    source_index: index,
+    name: doc?.name || `Source ${index + 1}`,
+    source_kind: doc?.source_kind || 'text',
+    source_image_name: doc?.metadata?.source_image_name || null,
+    ocr_confidence: doc?.metadata?.ocr_confidence || null
+  }));
+}
+
+function parseLiveIngestProposal(raw, domainKey, options = {}) {
   const text = String(raw || '').trim();
   const cleaned = text
     .replace(/^```json\s*/i, '')
@@ -6835,12 +7412,174 @@ function parseLiveIngestProposal(raw, domainKey) {
   parsed.summary = typeof parsed.summary === 'string' ? parsed.summary : '';
   parsed.notes_for_user = Array.isArray(parsed.notes_for_user) ? parsed.notes_for_user : [];
   parsed.missing_information = Array.isArray(parsed.missing_information) ? parsed.missing_information : [];
+  const lowConfidenceOcrSources = Array.isArray(options.lowConfidenceOcrSources) ? options.lowConfidenceOcrSources : [];
+  const hasLowConfidenceOcr = lowConfidenceOcrSources.length > 0;
+  const extractionDocs = Array.isArray(options.extractionDocs) ? options.extractionDocs : [];
+  if (hasLowConfidenceOcr) {
+    parsed.notes_for_user.unshift(`Low-confidence OCR was part of this extraction: ${lowConfidenceOcrSources.join(', ')}`);
+  }
   parsed.operations = Array.isArray(parsed.operations) ? parsed.operations.filter((op) => {
     if (!op || typeof op !== 'object' || !op.kind) return false;
     if (op.kind === 'bridge') return !!op.action;
     return op.target_source === domainKey && LIVE_INGEST_ALLOWED_TABLES[domainKey].includes(op.table);
-  }) : [];
+  }).map((op) => ({
+    ...op,
+    _lowConfidenceOcr: hasLowConfidenceOcr,
+    _sourceLineage: deriveLiveIngestOperationSourceLineage(op, extractionDocs),
+    source_refs: normalizeLiveIngestSourceRefs(op.source_refs, extractionDocs)
+  })) : [];
+  parsed.operations = parsed.operations.map((op) => ({
+    ...op,
+    _sourceLineage: deriveLiveIngestDisplayLineage(op, extractionDocs),
+    _citationRisk: hasLowConfidenceOcr && (!Array.isArray(op.source_refs) || !op.source_refs.length)
+  }));
   return parsed;
+}
+
+function normalizeLiveIngestSourceRefs(sourceRefs, extractionDocs) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  return (Array.isArray(sourceRefs) ? sourceRefs : [])
+    .map((ref) => {
+      const idx = Number(ref?.source_index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= docs.length) return null;
+      return {
+        source_index: idx,
+        quote: String(ref?.quote || '').trim().slice(0, 220)
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function sortLiveIngestOperationsByConfidence(operations) {
+  return (Array.isArray(operations) ? operations.slice() : []).sort((a, b) => {
+    const scoreDiff = scoreLiveIngestOperationConfidence(b) - scoreLiveIngestOperationConfidence(a);
+    if (scoreDiff) return scoreDiff;
+    return String(a?.table || a?.action || '').localeCompare(String(b?.table || b?.action || ''));
+  });
+}
+
+function scoreLiveIngestOperationConfidence(op) {
+  let score = 0;
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) score += 40;
+  if (op?._sourceLineage?.label === 'Model cited source') score += 20;
+  if (op?._sourceLineage?.label === 'Source matched OCR' || op?._sourceLineage?.label === 'Source matched') score += 10;
+  if (op?._citationRisk) score -= 50;
+  if (op?._lowConfidenceOcr) score -= 10;
+  return score;
+}
+
+function deriveLiveIngestDisplayLineage(op, extractionDocs) {
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
+    const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+    const refs = op.source_refs
+      .map((ref) => {
+        const doc = docs[ref.source_index];
+        if (!doc) return null;
+        const sourceName = String(doc.metadata?.source_image_name || doc.name || `Source ${ref.source_index + 1}`).trim();
+        const confidence = String(doc.metadata?.ocr_confidence || '').toLowerCase();
+        return {
+          sourceName,
+          confidence,
+          quote: ref.quote || ''
+        };
+      })
+      .filter(Boolean);
+    if (refs.length) {
+      const first = refs[0];
+      return {
+        label: 'Model cited source',
+        detail: `Model-cited source: ${first.sourceName}${first.confidence ? ` | OCR confidence: ${first.confidence}` : ''}${first.quote ? ` | Quote: ${first.quote}` : ''}`,
+        source_name: first.sourceName,
+        source_kind: 'model_citation',
+        ocr_confidence: first.confidence || null,
+        evidence: first.quote || ''
+      };
+    }
+  }
+  return deriveLiveIngestOperationSourceLineage(op, extractionDocs);
+}
+
+function deriveLiveIngestOperationSourceLineage(op, extractionDocs) {
+  const docs = (Array.isArray(extractionDocs) ? extractionDocs : []).filter((doc) => doc && doc.normalized_text);
+  if (!docs.length) return null;
+  const opText = buildLiveIngestOperationSearchText(op);
+  if (!opText) return null;
+  const opTokens = tokenizeLiveIngestText(opText);
+  if (!opTokens.length) return null;
+  let bestDoc = null;
+  let bestScore = 0;
+  docs.forEach((doc) => {
+    const docTokens = tokenizeLiveIngestText(String(doc.normalized_text || '').slice(0, 4000));
+    if (!docTokens.length) return;
+    const docSet = new Set(docTokens);
+    let overlap = 0;
+    opTokens.forEach((token) => {
+      if (docSet.has(token)) overlap += token.length > 8 ? 2 : 1;
+    });
+    if (overlap > bestScore) {
+      bestScore = overlap;
+      bestDoc = doc;
+    }
+  });
+  if (!bestDoc || bestScore < 2) return null;
+  const sourceKind = String(bestDoc.source_kind || 'text');
+  const sourceName = String(bestDoc.metadata?.source_image_name || bestDoc.name || 'source').trim();
+  const confidence = String(bestDoc.metadata?.ocr_confidence || '').toLowerCase();
+  const label = sourceKind === 'ocr' ? 'Source matched OCR' : 'Source matched';
+  const evidence = extractLiveIngestEvidenceSnippet(String(bestDoc.normalized_text || ''), opTokens);
+  const detailBits = [sourceName];
+  if (confidence) detailBits.push(`OCR confidence: ${confidence}`);
+  return {
+    label,
+    detail: `Most likely source: ${detailBits.join(' | ')}`,
+    source_name: sourceName,
+    source_kind: sourceKind,
+    ocr_confidence: confidence || null,
+    score: bestScore,
+    evidence
+  };
+}
+
+function buildLiveIngestOperationSearchText(op) {
+  const parts = [
+    op?.table,
+    op?.action,
+    op?.reason,
+    JSON.stringify(op?.fields || {}),
+    JSON.stringify(op?.payload || {})
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function tokenizeLiveIngestText(text) {
+  const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'your', 'their', 'will', 'have', 'has', 'had', 'are', 'was', 'were', 'but', 'not', 'can', 'could', 'should', 'would', 'about', 'after', 'before', 'table', 'update', 'insert', 'bridge', 'action', 'reason', 'field', 'value', 'null', 'true', 'false']);
+  return Array.from(new Set(
+    String(text || '')
+      .toLowerCase()
+      .match(/[a-z0-9]{3,}/g) || []
+  )).filter((token) => !STOPWORDS.has(token));
+}
+
+function extractLiveIngestEvidenceSnippet(text, tokens) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!source) return '';
+  const searchTokens = (Array.isArray(tokens) ? tokens : []).filter(Boolean).slice(0, 12);
+  if (!searchTokens.length) return source.slice(0, 180);
+  let bestIndex = -1;
+  let bestToken = '';
+  searchTokens.forEach((token) => {
+    const idx = source.toLowerCase().indexOf(String(token).toLowerCase());
+    if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
+      bestIndex = idx;
+      bestToken = token;
+    }
+  });
+  if (bestIndex === -1) return source.slice(0, 180);
+  const start = Math.max(0, bestIndex - 60);
+  const end = Math.min(source.length, bestIndex + Math.max(120, bestToken.length + 80));
+  const snippet = source.slice(start, end).trim();
+  return `${start > 0 ? '...' : ''}${snippet}${end < source.length ? '...' : ''}`.slice(0, 220);
 }
 
 async function applyLiveIngestProposal(domainKey) {
@@ -6853,6 +7592,14 @@ async function applyLiveIngestProposal(domainKey) {
   const invalidOp = ops.find((op) => op._parseError);
   if (invalidOp) {
     showToast('Fix invalid JSON in the selected operations before applying', 'error');
+    return;
+  }
+  if (liveIngestHasLowConfidenceOcr(state.extractionDocs || []) && !state.lowConfidenceOcrAcknowledged) {
+    showToast('Review and acknowledge the low-confidence OCR transcript before applying', 'warning');
+    return;
+  }
+  if (liveIngestHasCitationRisk(ops || [], false) && !state.citationRiskAcknowledged) {
+    showToast('Acknowledge operations without model-cited sources before applying', 'warning');
     return;
   }
 
@@ -7003,3 +7750,4 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !is
     }, 3000);
   }
 }
+
