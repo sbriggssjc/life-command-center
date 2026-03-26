@@ -343,6 +343,81 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.extracted_attachments[0].mime_type, 'image/png');
     assert.match(doc.extracted_attachments[0].data_url, /^data:image\/png;base64,/);
   });
+
+  it('extracts readable text from attached xlsx payloads when present', () => {
+    const xlsxLike = buildStoredZip([
+      {
+        name: 'xl/workbook.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+          '<sheets><sheet name="Rent Roll" sheetId="1" r:id="rId1"/></sheets>',
+          '</workbook>'
+        ].join('')
+      },
+      {
+        name: 'xl/_rels/workbook.xml.rels',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+          '</Relationships>'
+        ].join('')
+      },
+      {
+        name: 'xl/sharedStrings.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<sst>',
+          '<si><t>tenant</t></si>',
+          '<si><t>rent</t></si>',
+          '<si><t>Alpha Clinic</t></si>',
+          '</sst>'
+        ].join('')
+      },
+      {
+        name: 'xl/worksheets/sheet1.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<worksheet><sheetData>',
+          '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>',
+          '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>14500</v></c></row>',
+          '</sheetData></worksheet>'
+        ].join('')
+      }
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: XLSX Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="xlsx123"',
+      '',
+      '--xlsx123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached rent roll.',
+      '--xlsx123',
+      'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; name="rent-roll.xlsx"',
+      'Content-Disposition: attachment; filename="rent-roll.xlsx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      xlsxLike,
+      '--xlsx123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'xlsx-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /rent-roll\.xlsx \(application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet\)/);
+    assert.match(doc.normalized_text, /Rent Roll/);
+    assert.match(doc.normalized_text, /tenant\s+rent/);
+    assert.match(doc.normalized_text, /Alpha Clinic\s+14500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {

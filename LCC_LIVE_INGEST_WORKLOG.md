@@ -70,6 +70,7 @@
 - Extended server-side email normalization again to decode attached `docx` payloads with a minimal ZIP/XML reader and surface body text, comments, and notes when present.
 - Tightened tracked-change handling for `docx` extraction so inserted/deleted revisions now preserve author/date context in both direct `docx` intake and `.eml`-embedded `docx` normalization.
 - Extended `.eml` normalization and client extraction wiring so attached email images can flow back as extracted image attachments into the existing multimodal AI path, instead of only appearing in attachment summaries.
+- Added `.xlsx` intake support for direct uploads and `.eml` attachments, with workbook/sheet/shared-string parsing that converts spreadsheet rows into readable tabular text for extraction.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -117,5 +118,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add OCR for image-only PDFs and image-based `.eml` attachments when text is not otherwise available, plus deeper extraction for more complex Office payloads.
+- Add OCR for image-only PDFs and image-based `.eml` attachments when text is not otherwise available, plus deeper extraction for more complex Office payloads such as legacy Excel or PowerPoint files.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

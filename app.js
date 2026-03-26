@@ -5538,7 +5538,7 @@ function renderLiveIngestWorkbench(domainKey) {
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
         <div class="live-ingest-dropzone" id="${prefix}-dropzone" tabindex="0">
-          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml" style="display:none">
+          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.xlsx" style="display:none">
           <div class="live-ingest-drop-title">Drop screenshots or source files here</div>
           <div class="live-ingest-drop-sub">Click to browse, paste from clipboard, or capture a screen snapshot.</div>
           <div class="live-ingest-button-row">
@@ -6106,6 +6106,9 @@ async function normalizeLiveIngestFile(file) {
   if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lowerName.endsWith('.docx')) {
     return await convertDocxToTextAttachment(file);
   }
+  if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || lowerName.endsWith('.xlsx')) {
+    return await convertXlsxToTextAttachment(file);
+  }
   if (file.type.startsWith('image/')) {
     const dataUrl = await readFileAsDataUrl(file);
     return [{
@@ -6121,7 +6124,7 @@ async function normalizeLiveIngestFile(file) {
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images, PDFs, DOCX files, and text-based exports are supported directly.');
+    throw new Error('Only images, PDFs, DOCX/XLSX files, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
   return [{
@@ -6260,6 +6263,42 @@ async function convertDocxToTextAttachment(file) {
   }];
 }
 
+async function convertXlsxToTextAttachment(file) {
+  if (typeof window.JSZip === 'undefined') {
+    throw new Error('XLSX extractor not available');
+  }
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const zip = await window.JSZip.loadAsync(buffer);
+  const workbookXml = await zip.file('xl/workbook.xml')?.async('string');
+  if (!workbookXml) {
+    throw new Error('XLSX is missing xl/workbook.xml');
+  }
+
+  const [relsXml, sharedStringsXml] = await Promise.all([
+    zip.file('xl/_rels/workbook.xml.rels')?.async('string') || Promise.resolve(''),
+    zip.file('xl/sharedStrings.xml')?.async('string') || Promise.resolve('')
+  ]);
+  const sheetEntries = await extractTextFromXlsxPackage({
+    workbookXml,
+    relsXml,
+    sharedStringsXml,
+    getSheetXml: (path) => zip.file(path)?.async('string') || Promise.resolve('')
+  });
+  const text = sheetEntries.join('\n\n').trim();
+  if (!text) {
+    throw new Error('XLSX did not contain readable cells');
+  }
+
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'workbook.xlsx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    text: text.slice(0, 30000)
+  }];
+}
+
 function extractTextFromDocxPackage(pkg) {
   const commentsMap = buildDocxCommentsMap(pkg.commentsXml || '');
   const bodyText = extractTextFromDocxXml(pkg.documentXml || '', commentsMap);
@@ -6383,6 +6422,58 @@ function extractDocxNoteSection(xmlText, label) {
 
 function docxNodeName(node) {
   return String(node.localName || node.nodeName || '').replace(/^.*:/, '');
+}
+
+async function extractTextFromXlsxPackage(pkg) {
+  const parser = new DOMParser();
+  const workbookXml = parser.parseFromString(String(pkg.workbookXml || ''), 'application/xml');
+  const relsXml = parser.parseFromString(String(pkg.relsXml || ''), 'application/xml');
+  const sharedStrings = extractXlsxSharedStrings(parser.parseFromString(String(pkg.sharedStringsXml || ''), 'application/xml'));
+  const relMap = new Map(Array.from(relsXml.getElementsByTagName('Relationship')).map((rel) => [
+    rel.getAttribute('Id'),
+    `xl/${String(rel.getAttribute('Target') || '').replace(/^\/+/, '')}`
+  ]));
+  const sheets = Array.from(workbookXml.getElementsByTagName('sheet')).map((sheet, index) => ({
+    name: sheet.getAttribute('name') || `Sheet ${index + 1}`,
+    path: relMap.get(sheet.getAttribute('r:id')) || `xl/worksheets/sheet${index + 1}.xml`
+  }));
+  const outputs = [];
+  for (const sheet of sheets.slice(0, 6)) {
+    const xmlText = await pkg.getSheetXml(sheet.path);
+    if (!xmlText) continue;
+    const rows = extractXlsxSheetRows(parser.parseFromString(String(xmlText || ''), 'application/xml'), sharedStrings);
+    if (!rows.length) continue;
+    outputs.push(`${sheet.name}\n${rows.join('\n')}`);
+  }
+  return outputs;
+}
+
+function extractXlsxSharedStrings(xml) {
+  return Array.from(xml?.getElementsByTagName?.('si') || []).map((item) => {
+    return Array.from(item.getElementsByTagName('t'))
+      .map((node) => node.textContent || '')
+      .join('')
+      .trim();
+  });
+}
+
+function extractXlsxSheetRows(xml, sharedStrings = []) {
+  const rows = Array.from(xml?.getElementsByTagName?.('row') || []);
+  return rows.map((row) => {
+    const cells = Array.from(row.getElementsByTagName('c')).map((cell) => {
+      const type = cell.getAttribute('t') || '';
+      if (type === 'inlineStr') {
+        return Array.from(cell.getElementsByTagName('t')).map((node) => node.textContent || '').join('').trim();
+      }
+      const value = cell.getElementsByTagName('v')[0]?.textContent || '';
+      if (type === 's') {
+        const idx = parseInt(value, 10);
+        return Number.isNaN(idx) ? '' : (sharedStrings[idx] || '');
+      }
+      return String(value || '').trim();
+    }).filter((value) => value !== '');
+    return cells.join('\t').trim();
+  }).filter(Boolean);
 }
 
 async function runLiveIngestExtraction(domainKey) {

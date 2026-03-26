@@ -143,6 +143,7 @@ function isTextLikeMime(mime = '') {
   return value.startsWith('text/')
     || [
       'application/json',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/xml',
       'application/xhtml+xml',
@@ -310,6 +311,78 @@ function isDocxPart(part) {
     || filename.endsWith('.docx');
 }
 
+function extractXlsxSharedStringsFromXml(xmlText = '') {
+  return Array.from(String(xmlText || '').matchAll(/<si\b[\s\S]*?>([\s\S]*?)<\/si>/g))
+    .map((match) => decodeHtmlEntities((match[1] || '').replace(/<[^>]+>/g, '')))
+    .map((value) => collapseWhitespace(value))
+    .filter(Boolean);
+}
+
+function extractXlsxRelationshipMap(xmlText = '') {
+  const map = new Map();
+  for (const match of String(xmlText || '').matchAll(/<Relationship\b[\s\S]*?\bId="([^"]+)"[\s\S]*?\bTarget="([^"]+)"[\s\S]*?\/>/g)) {
+    const id = String(match[1] || '').trim();
+    const target = String(match[2] || '').trim().replace(/^\/+/, '');
+    if (!id || !target) continue;
+    map.set(id, target.startsWith('xl/') ? target : `xl/${target.replace(/^(\.\.\/)+/, '')}`);
+  }
+  return map;
+}
+
+function extractXlsxSheetRowsFromXml(xmlText = '', sharedStrings = []) {
+  return Array.from(String(xmlText || '').matchAll(/<row\b[\s\S]*?>([\s\S]*?)<\/row>/g))
+    .map((rowMatch) => {
+      const rowXml = String(rowMatch[1] || '');
+      const cells = Array.from(rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)).map((cellMatch) => {
+        const attrs = String(cellMatch[1] || '');
+        const cellXml = String(cellMatch[2] || '');
+        const type = attrs.match(/\bt="([^"]+)"/)?.[1] || '';
+        if (type === 'inlineStr') {
+          return collapseWhitespace(decodeHtmlEntities(cellXml.replace(/<[^>]+>/g, '')));
+        }
+        const rawValue = cellXml.match(/<v\b[^>]*>([\s\S]*?)<\/v>/)?.[1] || '';
+        if (type === 's') {
+          const idx = parseInt(rawValue, 10);
+          return Number.isNaN(idx) ? '' : (sharedStrings[idx] || '');
+        }
+        return collapseWhitespace(decodeHtmlEntities(rawValue));
+      }).filter(Boolean);
+      return cells.join('\t').trim();
+    })
+    .filter(Boolean);
+}
+
+function extractXlsxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    'xl/sharedStrings.xml'
+  ]);
+  if (!entries.get('xl/workbook.xml')) return '';
+  const workbookXml = entries.get('xl/workbook.xml')?.toString('utf8') || '';
+  const relMap = extractXlsxRelationshipMap(entries.get('xl/_rels/workbook.xml.rels')?.toString('utf8') || '');
+  const sharedStrings = extractXlsxSharedStringsFromXml(entries.get('xl/sharedStrings.xml')?.toString('utf8') || '');
+  const sheets = Array.from(workbookXml.matchAll(/<sheet\b[\s\S]*?\bname="([^"]+)"[\s\S]*?\br:id="([^"]+)"[\s\S]*?\/>/g))
+    .map((match, index) => ({
+      name: String(match[1] || '').trim() || `Sheet ${index + 1}`,
+      path: relMap.get(String(match[2] || '').trim()) || `xl/worksheets/sheet${index + 1}.xml`
+    }));
+  const wantedSheetPaths = sheets.map((sheet) => sheet.path).slice(0, 6);
+  const sheetEntries = extractZipEntries(buffer, wantedSheetPaths);
+  const outputs = sheets.slice(0, 6).map((sheet) => {
+    const rows = extractXlsxSheetRowsFromXml(sheetEntries.get(sheet.path)?.toString('utf8') || '', sharedStrings);
+    return rows.length ? `${sheet.name}\n${rows.join('\n')}` : '';
+  }).filter(Boolean);
+  return outputs.join('\n\n').trim();
+}
+
+function isXlsxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    || filename.endsWith('.xlsx');
+}
+
 function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
@@ -335,6 +408,9 @@ function extractAttachmentPreview(part) {
   if (isTextLikeMime(mime)) {
     if (isDocxPart(part)) {
       return extractDocxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isXlsxPart(part)) {
+      return extractXlsxTextFromBuffer(part.body_buffer).slice(0, 4000);
     }
     return normalizeMimeTextPart(part).slice(0, 4000);
   }

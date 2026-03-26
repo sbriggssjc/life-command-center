@@ -8,7 +8,7 @@
     { "source": "/api/diag", "destination": "/api/diagnostics?_route=diag" },
     { "source": "/api/treasury", "destination": "/api/diagnostics?_route=treasury" },
     { "source": "/api/gov-query", "destination": "/api/data-proxy?_source=gov" },
-    { "source": "/api/gov-write", "destination": "/api/data-proxy?_route=gov-write" },
+    { "source": "/api/gov-write", "destination": "/api/data-proxy?_route=gov-write" },`r`n    { "source": "/api/gov-evidence", "destination": "/api/data-proxy?_route=gov-evidence" },
     { "source": "/api/dia-query", "destination": "/api/data-proxy?_source=dia" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
@@ -49,3 +49,4 @@
     }
   ]
 }
+
