@@ -308,6 +308,41 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /\[Comment: Signed copy received\]/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
+
+  it('returns attached email images as extracted image attachments', () => {
+    const imagePayload = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]).toString('base64');
+    const raw = [
+      'Subject: Image Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="img123"',
+      '',
+      '--img123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached site photo.',
+      '--img123',
+      'Content-Type: image/png; name="site-photo.png"',
+      'Content-Disposition: attachment; filename="site-photo.png"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      imagePayload,
+      '--img123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'image-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /site-photo\.png \(image\/png\)/);
+    assert.equal(Array.isArray(doc.extracted_attachments), true);
+    assert.equal(doc.extracted_attachments.length, 1);
+    assert.equal(doc.extracted_attachments[0].kind, 'image');
+    assert.equal(doc.extracted_attachments[0].mime_type, 'image/png');
+    assert.match(doc.extracted_attachments[0].data_url, /^data:image\/png;base64,/);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {

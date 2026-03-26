@@ -150,6 +150,10 @@ function isTextLikeMime(mime = '') {
     ].includes(value);
 }
 
+function isImageMime(mime = '') {
+  return ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'].includes(String(mime || '').toLowerCase());
+}
+
 function normalizeMimeTextPart(part) {
   if (!part) return '';
   if (part.contentType.mime === 'text/html') return stripHtml(part.body);
@@ -342,13 +346,13 @@ function extractAttachmentPreview(part) {
 
 function collectMimeInsights(part, depth = 0) {
   if (!part || depth > 6) {
-    return { textParts: [], attachments: [] };
+    return { textParts: [], attachments: [], imageAttachments: [] };
   }
 
   const mime = String(part.contentType?.mime || '').toLowerCase();
   if (mime.startsWith('multipart/')) {
     const boundary = part.contentType?.params?.boundary;
-    if (!boundary) return { textParts: [], attachments: [] };
+    if (!boundary) return { textParts: [], attachments: [], imageAttachments: [] };
     return splitMultipartBody(part.body, boundary)
       .map(parseMimePart)
       .filter(Boolean)
@@ -356,25 +360,36 @@ function collectMimeInsights(part, depth = 0) {
         const childInsights = collectMimeInsights(child, depth + 1);
         acc.textParts.push(...childInsights.textParts);
         acc.attachments.push(...childInsights.attachments);
+        acc.imageAttachments.push(...childInsights.imageAttachments);
         return acc;
-      }, { textParts: [], attachments: [] });
+      }, { textParts: [], attachments: [], imageAttachments: [] });
   }
 
   if (isAttachmentPart(part)) {
     const preview = extractAttachmentPreview(part);
+    const imageAttachment = isImageMime(mime) && part.body_buffer?.length
+      ? {
+          kind: 'image',
+          name: getAttachmentFilename(part),
+          mime_type: mime,
+          data_url: `data:${mime};base64,${part.body_buffer.toString('base64')}`
+        }
+      : null;
     return {
       textParts: [],
       attachments: [{
         summary: summarizeAttachmentPart(part),
         preview
-      }]
+      }],
+      imageAttachments: imageAttachment ? [imageAttachment] : []
     };
   }
 
   const text = normalizeMimeTextPart(part);
   return {
     textParts: text ? [text] : [],
-    attachments: []
+    attachments: [],
+    imageAttachments: []
   };
 }
 
@@ -395,6 +410,7 @@ function normalizeEmailText(text = '') {
   let attachmentSummary = '';
   let attachmentPreviews = '';
   let attachmentPreviewCount = 0;
+  let extractedAttachments = [];
 
   const rootPart = {
     headers,
@@ -408,6 +424,9 @@ function normalizeEmailText(text = '') {
     const insights = collectMimeInsights(rootPart);
     if (insights.textParts.length) {
       extracted = insights.textParts.join('\n\n');
+    }
+    if (insights.imageAttachments.length) {
+      extractedAttachments = insights.imageAttachments.slice(0, 3);
     }
     if (insights.attachments.length) {
       attachmentSummary = `Attachments:\n${insights.attachments.map((item) => `- ${item.summary}`).join('\n')}`;
@@ -444,7 +463,8 @@ function normalizeEmailText(text = '') {
       ...metadata,
       attachment_summary: attachmentSummary || null,
       attachment_preview_count: attachmentPreviewCount
-    }
+    },
+    extracted_attachments: extractedAttachments
   };
 }
 
@@ -471,7 +491,8 @@ export function normalizeLiveIngestDocument(doc = {}) {
       mime_type: mimeType || 'message/rfc822',
       source_kind: 'email',
       normalized_text: email.normalized_text,
-      metadata: email.metadata || {}
+      metadata: email.metadata || {},
+      extracted_attachments: Array.isArray(email.extracted_attachments) ? email.extracted_attachments : []
     };
   }
 
@@ -480,7 +501,8 @@ export function normalizeLiveIngestDocument(doc = {}) {
     mime_type: mimeType || 'text/plain',
     source_kind: 'text',
     normalized_text: collapseWhitespace(text),
-    metadata: {}
+    metadata: {},
+    extracted_attachments: []
   };
 }
 
@@ -491,7 +513,10 @@ export function normalizeLiveIngestDocuments(docs = []) {
     .map((doc) => normalizeLiveIngestDocument(doc))
     .map((doc) => ({
       ...doc,
-      normalized_text: String(doc.normalized_text || '').slice(0, 30000)
+      normalized_text: String(doc.normalized_text || '').slice(0, 30000),
+      extracted_attachments: (Array.isArray(doc.extracted_attachments) ? doc.extracted_attachments : [])
+        .filter((item) => item && item.kind === 'image' && item.data_url)
+        .slice(0, 3)
     }))
     .filter((doc) => doc.normalized_text);
 }

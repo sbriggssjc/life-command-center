@@ -6413,6 +6413,16 @@ async function runLiveIngestExtraction(domainKey) {
   try {
     const context = getLiveIngestEffectiveContext(domainKey);
     const normalizedDocs = await normalizeLiveIngestTextDocuments(textDocs);
+    const normalizedImageAttachments = normalizedDocs
+      .flatMap((doc) => Array.isArray(doc.extracted_attachments) ? doc.extracted_attachments : [])
+      .filter((item) => item && item.kind === 'image' && item.data_url)
+      .slice(0, Math.max(0, 3 - imageAttachments.length))
+      .map((item) => ({
+        type: 'image',
+        mime_type: item.mime_type || 'image/png',
+        name: item.name || 'email image',
+        data_url: item.data_url
+      }));
     const response = await invokeLccAssistant({
       feature: `${domainKey}_live_ingest`,
       context: {
@@ -6421,7 +6431,7 @@ async function runLiveIngestExtraction(domainKey) {
         user_notes: state.notes || null,
         text_documents: normalizedDocs
       },
-      attachments: imageAttachments,
+      attachments: [...imageAttachments, ...normalizedImageAttachments],
       message: buildLiveIngestPrompt(domainKey, state, context)
     });
 
