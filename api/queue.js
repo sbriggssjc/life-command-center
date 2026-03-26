@@ -186,6 +186,10 @@ async function handleV2(req, res, user, workspaceId) {
   const duration = Date.now() - start;
   res.setHeader('Server-Timing', `db;dur=${duration}`);
   res.setHeader('X-Response-Time', `${duration}ms`);
+  // Allow short caching for work_counts since it's called on every page load/tab switch
+  if (view === 'work_counts') {
+    res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=30');
+  }
 
   logPerfMetric(workspaceId, user.id, 'api_latency', `/api/queue-v2?view=${view}`, duration, {
     item_count: result.items?.length || 0,
@@ -312,15 +316,20 @@ async function v2GetResearch(req, user, workspaceId) {
 // ---- V2 WORK COUNTS ----
 
 async function v2GetWorkCounts(req, user, workspaceId) {
-  let result = await opsQuery('GET', `mv_work_counts?workspace_id=eq.${workspaceId}&limit=1`);
+  // Run both queries in parallel to cut latency in half
+  const [result1, userResult1] = await Promise.all([
+    opsQuery('GET', `mv_work_counts?workspace_id=eq.${workspaceId}&limit=1`),
+    opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&limit=1`)
+  ]);
+
+  // Fallback: if materialized views are empty, try regular views
+  let result = result1;
   if (!result.ok || !result.data?.length) {
     result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}&limit=1`);
   }
   const counts = result.data?.[0] || {};
 
-  let userResult = await opsQuery('GET',
-    `mv_user_work_counts?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&limit=1`
-  );
+  let userResult = userResult1;
   if (!userResult.ok || !userResult.data?.length) {
     const myActions = await opsQuery('GET',
       `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
