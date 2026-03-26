@@ -248,3 +248,19 @@ Current behavior:
 
 Remaining gap:
 - `auto` currently normalizes to the CoStar screenshot path rather than classifying among multiple screenshot platforms.
+
+## 2026-03-26 Automatic Screenshot Source Detection
+
+Implemented in this pass:
+- GovernmentProject now performs backend screenshot source detection for `source=auto`.
+- The screenshot extraction path now distinguishes detected CoStar screenshots from generic market screenshots.
+- The live gov evidence panel in `gov.js` now displays the detected source returned by the backend after extraction.
+- Re-ran `node --check gov.js` successfully after wiring the detected-source state back into the single-upload flow.
+
+Current behavior:
+- Operators still upload once in the shared Live Intake area.
+- The live gov evidence panel now shows what source the backend recognized instead of silently assuming CoStar.
+- CoStar screenshots continue down the richer CoStar extraction prompt; other screenshots fall back to the generic market screenshot extractor.
+
+Remaining gap:
+- LoopNet and other platforms still use the generic fallback extractor rather than a platform-specific schema.

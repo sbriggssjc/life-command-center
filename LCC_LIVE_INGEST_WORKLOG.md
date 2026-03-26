@@ -136,7 +136,10 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 - Reconciled a repo drift issue where the worklog/CSS reflected the advanced live-ingest review flow but the checked-in `app.js` had reverted to an older workbench block; restored the advanced live-ingest block into the current `app.js` and re-ran `node --check app.js`.
 - Added persistent OCR retry history in the review UI so retried sources keep an auditable before/after trail across multiple attempts, and re-ran `node --check app.js`.
+- Added OCR retry confidence-delta handling so each retry history entry shows whether confidence improved, worsened, or stayed flat, and the retry toast now reports that outcome directly.
+- Added OCR retry-result promotion rules so improved OCR sources are marked as promoted and operation-level low-confidence badges now follow the actual cited or matched source instead of inheriting run-level OCR risk across the board.
+- Added source-level apply gating for worsened OCR retries so retried sources that lose confidence are flagged in the source list, propagate `Retry Worsened` risk to affected operations, and require a separate acknowledgment before selected risky operations can be applied.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as confidence deltas or retry-result promotion rules, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
+- Add stronger OCR quality handling such as selective auto-deselection for worsened-retry operations, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

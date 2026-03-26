@@ -20,7 +20,9 @@ let govEvidenceState = {
   queueLoaded: false,
   queueError: '',
   healthLoading: false,
-  health: null
+  health: null,
+  conflicts: [],
+  detectedSource: null
 };
 
 // State code to full name mapping
@@ -2563,7 +2565,8 @@ function syncGovEvidenceContext() {
     queueError: '',
     healthLoading: false,
     health: null,
-    conflicts: []
+    conflicts: [],
+    detectedSource: null
   };
   return rec;
 }
@@ -2798,6 +2801,7 @@ function renderGovEvidenceWorkbench() {
         </div>
         <div class="live-ingest-stamp">Artifact: ${esc(govEvidenceState.artifactId || 'not saved yet')}</div>
         <div class="live-ingest-stamp" style="margin-top:6px">Source handling: auto from shared intake image</div>
+        ${govEvidenceState.detectedSource ? `<div class="live-ingest-stamp" style="margin-top:6px">Detected source: ${esc(govEvidenceState.detectedSource.platform || 'unknown')} (${esc(String(govEvidenceState.detectedSource.confidence ?? ''))})</div>` : ''}
         ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
           <div class="live-ingest-results-title">Pending Observation Queue</div>
@@ -2948,6 +2952,8 @@ async function extractGovEvidenceScreenshot() {
     });
     govEvidenceState.review = result?.data || null;
     govEvidenceState.artifactId = null;
+    govEvidenceState.detectedSource = result?.detected_source || { platform: result?.source || 'unknown', confidence: '' };
+    govEvidenceState.conflicts = buildGovEvidenceConflictList(govEvidenceState.review, rec);
     applyGovEvidenceReviewToForm(govEvidenceState.review);
     appendGovEvidenceNote(`Extracted screenshot evidence from ${attachment.name || 'shared intake screenshot'}.`);
     showToast('Screenshot evidence extracted', 'success');
@@ -3059,6 +3065,7 @@ function bindGovEvidenceWorkbench() {
     govEvidenceState.review = null;
     govEvidenceState.artifactId = null;
     govEvidenceState.conflicts = [];
+    govEvidenceState.detectedSource = null;
     rerenderGovEvidenceOnly();
   });
   document.querySelector('[data-gov-evidence-save]')?.addEventListener('click', async () => {
