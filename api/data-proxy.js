@@ -47,6 +47,7 @@ const GOV_EVIDENCE_ENDPOINT_MAP = {
   'apply-loan': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-loan', methods: ['POST'] },
   'apply-ownership': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-ownership', methods: ['POST'] },
   'apply-listing': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-listing', methods: ['POST'] },
+  'apply-broker-contact': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-broker-contact', methods: ['POST'] },
   'apply-activity-note': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-activity-note', methods: ['POST'] },
   'promote-observations': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/promote-observations', methods: ['POST'] },
   'research-observations': { path: '/api/research-observations', methods: ['GET'] },
@@ -433,6 +434,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
 
 
 

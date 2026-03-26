@@ -3068,6 +3068,26 @@ function bindGovEvidenceWorkbench() {
     govEvidenceState.detectedSource = null;
     rerenderGovEvidenceOnly();
   });
+  document.querySelector('[data-gov-evidence-broker]')?.addEventListener('click', async () => {
+    try {
+      govEvidenceState.loading = true;
+      rerenderGovEvidenceOnly();
+      const artifactId = await ensureGovEvidenceArtifactSaved();
+      const result = await govEvidenceApi('apply-broker-contact', {
+        method: 'POST',
+        query: { artifact_id: artifactId, actor: getGovEvidenceActor() },
+        body: { actor: getGovEvidenceActor() }
+      });
+      const brokerName = result?.contact?.name || result?.lead_result?.contact_name || 'broker';
+      appendGovEvidenceNote(`Applied broker contact from evidence: ${brokerName}`);
+      showToast('Broker contact applied', 'success');
+    } catch (err) {
+      showToast(`Broker apply failed: ${err.message}`, 'error');
+    } finally {
+      govEvidenceState.loading = false;
+      rerenderGovEvidenceOnly();
+    }
+  });
   document.querySelector('[data-gov-evidence-save]')?.addEventListener('click', async () => {
     try {
       govEvidenceState.loading = true;
@@ -5463,6 +5483,7 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
 
 
 

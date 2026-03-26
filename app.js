@@ -5597,7 +5597,7 @@ function renderLiveIngestWorkbench(domainKey) {
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
         <div class="live-ingest-dropzone" id="${prefix}-dropzone" tabindex="0">
-          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.xlsx,.pptx" style="display:none">
+          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.doc,.docx,.xls,.xlsx,.pptx" style="display:none">
           <div class="live-ingest-drop-title">Drop screenshots or source files here</div>
           <div class="live-ingest-drop-sub">Click to browse, paste from clipboard, or capture a screen snapshot.</div>
           <div class="live-ingest-button-row">
@@ -6474,8 +6474,14 @@ async function normalizeLiveIngestFile(file) {
   if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lowerName.endsWith('.docx')) {
     return await convertDocxToTextAttachment(file);
   }
+  if (file.type === 'application/msword' || lowerName.endsWith('.doc')) {
+    return await convertLegacyDocToTextAttachment(file);
+  }
   if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || lowerName.endsWith('.xlsx')) {
     return await convertXlsxToTextAttachment(file);
+  }
+  if (file.type === 'application/vnd.ms-excel' || lowerName.endsWith('.xls')) {
+    return await convertLegacyXlsToTextAttachment(file);
   }
   if (file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || lowerName.endsWith('.pptx')) {
     return await convertPptxToTextAttachment(file);
@@ -6495,7 +6501,7 @@ async function normalizeLiveIngestFile(file) {
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images, PDFs, DOCX/XLSX/PPTX files, and text-based exports are supported directly.');
+    throw new Error('Only images, PDFs, DOC/DOCX/XLS/XLSX/PPTX files, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
   return [{
@@ -6634,6 +6640,21 @@ async function convertDocxToTextAttachment(file) {
   }];
 }
 
+async function convertLegacyDocToTextAttachment(file) {
+  const buffer = await readFileAsArrayBuffer(file);
+  const text = extractLegacyOfficeTextFromArrayBuffer(buffer, 'doc');
+  if (!text.trim()) {
+    throw new Error('DOC did not contain readable text');
+  }
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'document.doc',
+    mime_type: 'application/msword',
+    text: text.slice(0, 30000)
+  }];
+}
+
 async function convertXlsxToTextAttachment(file) {
   if (typeof window.JSZip === 'undefined') {
     throw new Error('XLSX extractor not available');
@@ -6670,6 +6691,21 @@ async function convertXlsxToTextAttachment(file) {
   }];
 }
 
+async function convertLegacyXlsToTextAttachment(file) {
+  const buffer = await readFileAsArrayBuffer(file);
+  const text = extractLegacyOfficeTextFromArrayBuffer(buffer, 'xls');
+  if (!text.trim()) {
+    throw new Error('XLS did not contain readable text');
+  }
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'workbook.xls',
+    mime_type: 'application/vnd.ms-excel',
+    text: text.slice(0, 30000)
+  }];
+}
+
 async function convertPptxToTextAttachment(file) {
   if (typeof window.JSZip === 'undefined') {
     throw new Error('PPTX extractor not available');
@@ -6701,6 +6737,53 @@ async function convertPptxToTextAttachment(file) {
     mime_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     text: text.slice(0, 30000)
   }];
+}
+
+function extractLegacyOfficeTextFromArrayBuffer(arrayBuffer, label = 'office') {
+  const bytes = new Uint8Array(arrayBuffer || new ArrayBuffer(0));
+  if (!bytes.length) return '';
+  const ascii = extractLegacyOfficeAsciiRuns(bytes);
+  const utf16 = extractLegacyOfficeUtf16Runs(bytes);
+  const merged = Array.from(new Set([...ascii, ...utf16]))
+    .map((value) => value.replace(/\s+/g, ' ').trim())
+    .filter((value) => value.length >= 4);
+  if (!merged.length) return '';
+  const header = label === 'xls' ? 'Legacy Excel text preview' : 'Legacy Word text preview';
+  return `${header}\n${merged.slice(0, 120).join('\n')}`.trim();
+}
+
+function extractLegacyOfficeAsciiRuns(bytes) {
+  const text = Array.from(bytes, (value) => {
+    if (value === 9 || value === 10 || value === 13) return '\n';
+    return value >= 32 && value <= 126 ? String.fromCharCode(value) : ' ';
+  }).join('');
+  return Array.from(new Set(
+    text
+      .split(/\n+/)
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
+  ));
+}
+
+function extractLegacyOfficeUtf16Runs(bytes) {
+  const lines = [];
+  let current = '';
+  for (let index = 0; index + 1 < bytes.length; index += 2) {
+    const code = bytes[index] | (bytes[index + 1] << 8);
+    if (code === 9 || code === 10 || code === 13) {
+      if (current.trim()) lines.push(current.trim());
+      current = '';
+      continue;
+    }
+    if (code >= 32 && code <= 126) {
+      current += String.fromCharCode(code);
+      continue;
+    }
+    if (current.trim()) lines.push(current.trim());
+    current = '';
+  }
+  if (current.trim()) lines.push(current.trim());
+  return Array.from(new Set(lines.filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)));
 }
 
 function extractTextFromDocxPackage(pkg) {

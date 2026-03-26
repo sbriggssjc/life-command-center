@@ -142,7 +142,9 @@ function isTextLikeMime(mime = '') {
   const value = String(mime || '').toLowerCase();
   return value.startsWith('text/')
     || [
+      'application/msword',
       'application/json',
+      'application/vnd.ms-excel',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -312,6 +314,48 @@ function isDocxPart(part) {
     || filename.endsWith('.docx');
 }
 
+function extractLegacyOfficeStringsFromBuffer(buffer, label = 'office') {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const ascii = Array.from(new Set(
+    buffer
+      .toString('latin1')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, ' ')
+      .split(/\r?\n+/)
+      .map((line) => collapseWhitespace(line))
+      .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
+  ));
+  const utf16Lines = [];
+  let current = '';
+  for (let index = 0; index + 1 < buffer.length; index += 2) {
+    const code = buffer.readUInt16LE(index);
+    if (code === 9 || code === 10 || code === 13) {
+      if (current.trim()) utf16Lines.push(collapseWhitespace(current));
+      current = '';
+      continue;
+    }
+    if (code >= 32 && code <= 126) {
+      current += String.fromCharCode(code);
+      continue;
+    }
+    if (current.trim()) utf16Lines.push(collapseWhitespace(current));
+    current = '';
+  }
+  if (current.trim()) utf16Lines.push(collapseWhitespace(current));
+  const merged = Array.from(new Set([...ascii, ...utf16Lines]))
+    .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
+    .slice(0, 120);
+  if (!merged.length) return '';
+  const header = label === 'xls' ? 'Legacy Excel text preview' : 'Legacy Word text preview';
+  return `${header}\n${merged.join('\n')}`.trim();
+}
+
+function isLegacyDocPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/msword'
+    || filename.endsWith('.doc');
+}
+
 function extractXlsxSharedStringsFromXml(xmlText = '') {
   return Array.from(String(xmlText || '').matchAll(/<si\b[\s\S]*?>([\s\S]*?)<\/si>/g))
     .map((match) => decodeHtmlEntities((match[1] || '').replace(/<[^>]+>/g, '')))
@@ -382,6 +426,13 @@ function isXlsxPart(part) {
   const filename = getAttachmentFilename(part).toLowerCase();
   return mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     || filename.endsWith('.xlsx');
+}
+
+function isLegacyXlsPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.ms-excel'
+    || filename.endsWith('.xls');
 }
 
 function extractPptxRelationshipMap(xmlText = '', basePrefix = 'ppt/') {
@@ -462,8 +513,14 @@ function extractAttachmentPreview(part) {
   if (!part) return '';
   const mime = String(part.contentType?.mime || '').toLowerCase();
   if (isTextLikeMime(mime)) {
+    if (isLegacyDocPart(part)) {
+      return extractLegacyOfficeStringsFromBuffer(part.body_buffer, 'doc').slice(0, 4000);
+    }
     if (isDocxPart(part)) {
       return extractDocxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isLegacyXlsPart(part)) {
+      return extractLegacyOfficeStringsFromBuffer(part.body_buffer, 'xls').slice(0, 4000);
     }
     if (isXlsxPart(part)) {
       return extractXlsxTextFromBuffer(part.body_buffer).slice(0, 4000);

@@ -494,6 +494,84 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /Discuss with landlord next week/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
+
+  it('extracts readable text from attached legacy doc payloads when present', () => {
+    const docLike = Buffer.concat([
+      Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]),
+      Buffer.from('Legacy lease memo\nTenant Alpha Clinic\nRenewal rate 18250\n', 'latin1'),
+      Buffer.from('Signed copy received', 'utf16le')
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: DOC Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="doc123"',
+      '',
+      '--doc123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached legacy memo.',
+      '--doc123',
+      'Content-Type: application/msword; name="legacy-memo.doc"',
+      'Content-Disposition: attachment; filename="legacy-memo.doc"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      docLike,
+      '--doc123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'doc-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /legacy-memo\.doc \(application\/msword\)/);
+    assert.match(doc.normalized_text, /Legacy Word text preview/);
+    assert.match(doc.normalized_text, /Tenant Alpha Clinic/);
+    assert.match(doc.normalized_text, /Renewal rate 18250/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts readable text from attached legacy xls payloads when present', () => {
+    const xlsLike = Buffer.concat([
+      Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]),
+      Buffer.from('Legacy rent roll\nTenant\tRent\nAlpha Clinic\t14500\n', 'latin1'),
+      Buffer.from('Beta Clinic\t16750', 'utf16le')
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: XLS Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="xls123"',
+      '',
+      '--xls123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached legacy workbook.',
+      '--xls123',
+      'Content-Type: application/vnd.ms-excel; name="legacy-rent-roll.xls"',
+      'Content-Disposition: attachment; filename="legacy-rent-roll.xls"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      xlsLike,
+      '--xls123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'xls-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /legacy-rent-roll\.xls \(application\/vnd\.ms-excel\)/);
+    assert.match(doc.normalized_text, /Legacy Excel text preview/);
+    assert.match(doc.normalized_text, /Alpha Clinic/);
+    assert.match(doc.normalized_text, /14500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {
