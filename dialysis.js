@@ -321,14 +321,15 @@ function renderDiaOverview() {
           all = all.concat(batch || []);
           if (!batch || batch.length < 1000) break;
           pg++;
+          if (pg > 20) break; // safety cap
         }
         diaSalesComps = all;
-      } catch(e) { diaSalesComps = []; }
+      } catch(e) { diaSalesComps = []; console.warn('Sales comps load failed:', e.message); }
       diaSalesLoading = false;
-      // Re-render sales section once loaded
-      const salesEl = document.getElementById('diaOverviewSales');
+      // Re-render sales sections once loaded (check for DOM elements)
+      var salesEl = document.getElementById('diaOverviewSales');
       if (salesEl) salesEl.innerHTML = renderSalesMetricsInner();
-      const nmEl = document.getElementById('diaOverviewNM');
+      var nmEl = document.getElementById('diaOverviewNM');
       if (nmEl) nmEl.innerHTML = renderNorthmarqInner();
     })();
   }
@@ -549,7 +550,10 @@ function renderDiaOverview() {
 
 function renderSalesMetricsInner() {
   if (!diaSalesComps) {
-    return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading sales data...</div></div></div>';
+    if (diaSalesLoading) {
+      return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading sales data...</div></div></div>';
+    }
+    return '<div class="dia-grid dia-grid-5"><div class="dia-info-card" style="grid-column:span 5;text-align:center;padding:24px;color:var(--text2);font-size:13px">No sales data available</div></div>';
   }
   const comps = diaSalesComps;
   const now = new Date();
@@ -589,7 +593,10 @@ function renderSalesMetricsInner() {
 
 function renderNorthmarqInner() {
   if (!diaSalesComps) {
-    return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading...</div></div></div>';
+    if (diaSalesLoading) {
+      return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading...</div></div></div>';
+    }
+    return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px;color:var(--text2);font-size:13px">No Northmarq data available</div></div>';
   }
   const comps = diaSalesComps;
   const now = new Date();
@@ -2992,9 +2999,16 @@ function renderDiaLeases() {
     el.innerHTML = '<div class="loading"><span class="spinner"></span> Loading lease data...</div>';
     (async () => {
       try {
+        // These views may return 403 if Supabase role lacks SELECT permission — catch individually
         const [watchlist, gaps] = await Promise.all([
-          diaQueryAll('v_clinic_lease_renewal_watchlist', '*'),
-          diaQueryAll('v_clinic_lease_data_gaps', 'gap_type,clinic_id,facility_name,operator_name,city,state,lease_expiration,total_patients')
+          diaQueryAll('v_clinic_lease_renewal_watchlist', '*').catch(function(e) {
+            console.warn('v_clinic_lease_renewal_watchlist: ' + (e.message || '403 — grant SELECT to API role'));
+            return [];
+          }),
+          diaQueryAll('v_clinic_lease_data_gaps', 'gap_type,clinic_id,facility_name,operator_name,city,state,lease_expiration,total_patients').catch(function(e) {
+            console.warn('v_clinic_lease_data_gaps: ' + (e.message || '403 — grant SELECT to API role'));
+            return [];
+          })
         ]);
         diaLeaseWatchlist = watchlist || [];
         diaLeaseGaps = gaps || [];
@@ -3655,10 +3669,19 @@ function renderDiaSearch() {
     } else {
       html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 16px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' found</div>';
 
+      // Store flat search results array for onclick references (avoids massive inline JSON in DOM)
+      window._diaSearchFlat = [];
+      function pushDiaRef(record) {
+        var idx = window._diaSearchFlat.length;
+        window._diaSearchFlat.push(record);
+        return idx;
+      }
+
       if (clinics.length > 0) {
         html += '<div class="search-results-section"><h4>Clinics (' + clinics.length + ')</h4>';
         clinics.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
+          var idx = pushDiaRef(r);
+          html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Clinic</span></div>';
           html += '<div class="search-card-meta">';
@@ -3675,7 +3698,8 @@ function renderDiaSearch() {
       if (npiSignals.length > 0) {
         html += '<div class="search-results-section"><h4>NPI Signals (' + npiSignals.length + ')</h4>';
         npiSignals.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
+          var idx = pushDiaRef(r);
+          html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.npi || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(248,113,113,0.15); color: #f87171;">NPI Signal</span></div>';
           html += '<div class="search-card-meta">';
@@ -3690,7 +3714,8 @@ function renderDiaSearch() {
       if (propQueue.length > 0) {
         html += '<div class="search-results-section"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
         propQueue.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
+          var idx = pushDiaRef(r);
+          html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Property</span></div>';
           html += '<div class="search-card-meta">';
@@ -3705,7 +3730,8 @@ function renderDiaSearch() {
       if (outcomes.length > 0) {
         html += '<div class="search-results-section"><h4>Research Outcomes (' + outcomes.length + ')</h4>';
         outcomes.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
+          var idx = pushDiaRef(r);
+          html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.queue_type || r.clinic_id || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Research</span></div>';
           html += '<div class="search-card-meta">';
