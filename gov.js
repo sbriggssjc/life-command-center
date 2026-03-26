@@ -10,6 +10,18 @@ let researchMode = "leads";
 let researchFilter = "pending";
 let countyCache = {};
 let acTimeout = null;
+let govEvidenceState = {
+  contextKey: '',
+  review: null,
+  artifactId: null,
+  loading: false,
+  queue: [],
+  queueLoading: false,
+  queueLoaded: false,
+  queueError: '',
+  healthLoading: false,
+  health: null
+};
 
 // State code to full name mapping
 const STATE_FULL = {
@@ -2500,6 +2512,621 @@ function setResearchFilter(filter) {
   });
 }
 
+function getGovEvidenceActor() {
+  if (typeof LCC_USER !== 'undefined') {
+    return LCC_USER.email || LCC_USER.display_name || LCC_USER.id || 'lcc_user';
+  }
+  return 'lcc_user';
+}
+
+function getGovEvidenceContextRecord() {
+  return Array.isArray(researchQueue) ? (researchQueue[researchIdx] || null) : null;
+}
+
+function getGovEvidenceContextKey(rec) {
+  if (!rec) return 'none';
+  return [researchMode || 'research', rec.lead_id || '', rec.property_id || rec.matched_property_id || '', rec.ownership_id || '', rec.lease_number || ''].join(':');
+}
+
+function getGovEvidenceSourceAttachment() {
+  if (typeof getLiveIngestState !== 'function') return null;
+  const state = getLiveIngestState('government');
+  const attachments = Array.isArray(state?.attachments) ? state.attachments : [];
+  const images = attachments.filter((item) => item && item.kind === 'image' && item.data_url);
+  return images.length ? images[images.length - 1] : null;
+}
+
+function getGovEvidenceSourceLabel() {
+  const attachment = getGovEvidenceSourceAttachment();
+  return attachment?.name || 'No screenshot uploaded in Live Intake yet';
+}
+function getGovEvidenceBinding(rec) {
+  return {
+    lead_id: rec?.lead_id || null,
+    property_id: rec?.property_id || rec?.matched_property_id || null,
+    ownership_id: rec?.ownership_id || null
+  };
+}
+
+function syncGovEvidenceContext() {
+  const rec = getGovEvidenceContextRecord();
+  const nextKey = getGovEvidenceContextKey(rec);
+  if (govEvidenceState.contextKey === nextKey) return rec;
+  govEvidenceState = {
+    contextKey: nextKey,
+    screenshotName: '',
+    screenshotDataUrl: '',
+    review: null,
+    artifactId: null,
+    loading: false,
+    queue: [],
+    queueLoading: false,
+    queueLoaded: false,
+    queueError: ''
+  };
+  return rec;
+}
+
+function getGovEvidenceNotesEl() {
+  return document.getElementById(researchMode === 'intel' ? 'res-intel-notes' : 'res-notes');
+}
+
+function appendGovEvidenceNote(note) {
+  const el = getGovEvidenceNotesEl();
+  if (!el || !note) return;
+  const stamp = new Date().toISOString().slice(0, 10);
+  const line = `[EVIDENCE ${stamp}] ${note}`;
+  el.value = el.value ? `${el.value}\n${line}` : line;
+}
+
+function setGovEvidenceField(selectors, value) {
+  if (value == null || value === '') return;
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (!el) continue;
+    el.value = value;
+    return;
+  }
+}
+
+function pickGovEvidenceValue(...values) {
+  for (const value of values) {
+    if (value != null && value !== '') return value;
+  }
+  return null;
+}
+
+function normalizeGovEvidenceCompareValue(value) {
+  return String(value == null ? '' : value).trim().toLowerCase();
+}
+
+function readGovEvidenceCurrentField(kind, rec) {
+  const selectors = {
+    owner: ['#res-true-owner', '#res-intel-true-owner', '#res-recorded-owner', '#res-intel-recorded-owner'],
+    lender: ['#res-lender', '#res-intel-lender'],
+    rba: ['#res-rba', '#res-intel-rba'],
+    year_built: ['#res-year-built', '#res-intel-year-built']
+  };
+  for (const selector of (selectors[kind] || [])) {
+    const el = document.querySelector(selector);
+    const value = el?.value;
+    if (value != null && String(value).trim() !== '') return value;
+  }
+  if (!rec) return '';
+  if (kind === 'owner') return rec.true_owner || rec.recorded_owner || rec.new_owner || rec.prior_owner || '';
+  if (kind === 'lender') return rec._loan?.index_name || '';
+  if (kind === 'rba') return rec.rba || rec.square_feet || '';
+  if (kind === 'year_built') return rec.year_built || '';
+  return '';
+}
+
+function buildGovEvidenceConflictList(review, rec) {
+  if (!review || typeof review !== 'object') return [];
+  const candidates = [
+    {
+      key: 'owner',
+      label: 'Owner',
+      currentValue: readGovEvidenceCurrentField('owner', rec),
+      evidenceValue: pickGovEvidenceValue(review.ownership?.true_owner, review.ownership?.current_owner, review.property?.owner_name)
+    },
+    {
+      key: 'lender',
+      label: 'Lender',
+      currentValue: readGovEvidenceCurrentField('lender', rec),
+      evidenceValue: pickGovEvidenceValue(review.loan?.lender, review.loan?.index_name)
+    },
+    {
+      key: 'rba',
+      label: 'RBA',
+      currentValue: readGovEvidenceCurrentField('rba', rec),
+      evidenceValue: pickGovEvidenceValue(review.property?.rba, review.property?.building_sf, review.building?.rba)
+    },
+    {
+      key: 'year_built',
+      label: 'Year Built',
+      currentValue: readGovEvidenceCurrentField('year_built', rec),
+      evidenceValue: pickGovEvidenceValue(review.property?.year_built, review.building?.year_built)
+    }
+  ];
+  return candidates.filter((item) => {
+    if (item.currentValue == null || item.currentValue === '') return false;
+    if (item.evidenceValue == null || item.evidenceValue === '') return false;
+    return normalizeGovEvidenceCompareValue(item.currentValue) !== normalizeGovEvidenceCompareValue(item.evidenceValue);
+  }).map((item, idx) => ({
+    id: `${item.key}:${idx}`,
+    resolution: '',
+    ...item
+  }));
+}
+
+function applyGovEvidenceConflictResolution(conflictId, resolution) {
+  const conflict = govEvidenceState.conflicts.find((item) => item.id === conflictId);
+  if (!conflict || !govEvidenceState.review) return;
+  conflict.resolution = resolution;
+  if (resolution !== 'keep_current') return;
+
+  if (conflict.key === 'owner') {
+    govEvidenceState.review.ownership = govEvidenceState.review.ownership || {};
+    govEvidenceState.review.property = govEvidenceState.review.property || {};
+    govEvidenceState.review.ownership.true_owner = conflict.currentValue;
+    govEvidenceState.review.ownership.current_owner = conflict.currentValue;
+    govEvidenceState.review.property.owner_name = conflict.currentValue;
+  }
+  if (conflict.key === 'lender') {
+    govEvidenceState.review.loan = govEvidenceState.review.loan || {};
+    govEvidenceState.review.loan.lender = conflict.currentValue;
+    govEvidenceState.review.loan.index_name = conflict.currentValue;
+  }
+  if (conflict.key === 'rba') {
+    govEvidenceState.review.property = govEvidenceState.review.property || {};
+    govEvidenceState.review.building = govEvidenceState.review.building || {};
+    govEvidenceState.review.property.rba = conflict.currentValue;
+    govEvidenceState.review.property.building_sf = conflict.currentValue;
+    govEvidenceState.review.building.rba = conflict.currentValue;
+  }
+  if (conflict.key === 'year_built') {
+    govEvidenceState.review.property = govEvidenceState.review.property || {};
+    govEvidenceState.review.building = govEvidenceState.review.building || {};
+    govEvidenceState.review.property.year_built = conflict.currentValue;
+    govEvidenceState.review.building.year_built = conflict.currentValue;
+  }
+}
+
+function unresolvedGovEvidenceConflicts() {
+  return (govEvidenceState.conflicts || []).filter((item) => !item.resolution);
+}
+
+function renderGovEvidenceConflictPanel() {
+  if (!govEvidenceState.conflicts?.length) return '';
+  const unresolved = unresolvedGovEvidenceConflicts();
+  return `<div class="live-ingest-callout warn" style="margin-top:12px">
+    <div style="font-weight:700;margin-bottom:8px">Conflict Review Required</div>
+    <div style="margin-bottom:10px">The screenshot evidence disagrees with current research values on ${unresolved.length} field${unresolved.length === 1 ? '' : 's'}. Choose whether to keep the current value or trust the screenshot before safe apply.</div>
+    <div style="display:grid;gap:8px">
+      ${govEvidenceState.conflicts.map((conflict) => `<div style="border:1px solid rgba(248,113,113,0.25);border-radius:8px;padding:10px;background:rgba(248,113,113,0.04)">
+        <div style="font-size:12px;font-weight:700;color:var(--text)">${esc(conflict.label)}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px">Current: ${esc(String(conflict.currentValue || ''))}</div>
+        <div style="font-size:12px;color:var(--text2)">Evidence: ${esc(String(conflict.evidenceValue || ''))}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn-secondary" type="button" data-gov-evidence-conflict="${esc(conflict.id)}:keep_current">Keep Current${conflict.resolution === 'keep_current' ? ' ✓' : ''}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-conflict="${esc(conflict.id)}:use_evidence">Use Evidence${conflict.resolution === 'use_evidence' ? ' ✓' : ''}</button>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+function applyGovEvidenceReviewToForm(review) {
+  if (!review || typeof review !== 'object') return;
+  const owner = pickGovEvidenceValue(
+    review.ownership?.true_owner,
+    review.ownership?.current_owner,
+    review.property?.owner_name,
+    review.owner?.name
+  );
+  const recordedOwner = pickGovEvidenceValue(
+    review.ownership?.recorded_owner,
+    review.property?.owner_name,
+    owner
+  );
+  const lender = pickGovEvidenceValue(review.loan?.lender, review.loan?.index_name);
+  const loanAmount = pickGovEvidenceValue(review.loan?.current_balance, review.loan?.loan_amount);
+  const rba = pickGovEvidenceValue(review.property?.rba, review.property?.building_sf, review.building?.rba);
+  const yearBuilt = pickGovEvidenceValue(review.property?.year_built, review.building?.year_built);
+  setGovEvidenceField(['#res-true-owner', '#res-intel-true-owner'], owner);
+  setGovEvidenceField(['#res-recorded-owner', '#res-intel-recorded-owner'], recordedOwner);
+  setGovEvidenceField(['#res-lender', '#res-intel-lender'], lender);
+  setGovEvidenceField(['#res-loan-amount', '#res-intel-loan-amount'], loanAmount);
+  setGovEvidenceField(['#res-rba', '#res-intel-rba'], rba);
+  setGovEvidenceField(['#res-year-built', '#res-intel-year-built'], yearBuilt);
+}
+
+function renderGovEvidenceWorkbench() {
+  const rec = syncGovEvidenceContext();
+  const binding = getGovEvidenceBinding(rec);
+  const queueHtml = govEvidenceState.queueLoading
+    ? '<div class="live-ingest-empty" style="margin-top:8px">Loading pending evidence rows...</div>'
+    : govEvidenceState.queue.length
+      ? `<div style="display:grid;gap:8px;margin-top:10px">${govEvidenceState.queue.map((row, idx) => `
+          <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:rgba(255,255,255,0.02)">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+              <div>
+                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em">${esc(row.observation_type || 'observation')}</div>
+                <div style="font-size:13px;color:var(--text);margin-top:4px">${esc(row.summary || row.observation_value || 'Pending evidence row')}</div>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                <button class="btn-secondary" type="button" data-gov-evidence-note="${idx}">Note</button>
+                <button class="btn-secondary" type="button" data-gov-evidence-review="${idx}">Review</button>
+                <button class="btn-secondary" type="button" data-gov-evidence-dismiss="${idx}">Dismiss</button>
+                <button class="btn-primary" type="button" data-gov-evidence-promote="${idx}">Promote</button>
+              </div>
+            </div>
+          </div>`).join('')}</div>`
+      : '<div class="live-ingest-empty" style="margin-top:8px">No pending observation rows for this record.</div>';
+
+  return `<section class="live-ingest-card" style="margin-top:16px">
+    <div class="live-ingest-head">
+      <div>
+        <div class="live-ingest-kicker">Gov Evidence</div>
+        <h3>Extract CoStar screenshots into reviewed government evidence</h3>
+        <p>This is the LCC runtime bridge for the GovernmentProject evidence workflow. It saves artifacts, applies low-risk actions, and queues tenant or lease rows for review.</p>
+      </div>
+      <div class="live-ingest-context">${rec ? `<div><strong>${esc(rec.address || rec.property_name || rec.lease_number || 'Current record')}</strong><span>${esc([binding.lead_id ? `lead ${binding.lead_id}` : '', binding.property_id ? `property ${binding.property_id}` : '', binding.ownership_id ? `ownership ${binding.ownership_id}` : ''].filter(Boolean).join(' | '))}</span></div>` : '<div><strong>No record bound</strong><span>Move to a government research row to use evidence actions.</span></div>'}</div>
+    </div>
+    <div class="live-ingest-grid">
+      <div class="live-ingest-pane">
+        <div class="form-group">
+          <label for="gov-evidence-file">Screenshot</label>
+          <input id="gov-evidence-file" type="file" accept="image/*" />
+          <div class="live-ingest-stamp" style="margin-top:8px">${esc(govEvidenceState.screenshotName || 'No screenshot selected')}</div>
+        </div>
+        <div class="live-ingest-actions">
+          <button class="btn-primary" type="button" data-gov-evidence-extract ${govEvidenceState.loading || !rec || !govEvidenceState.screenshotDataUrl ? 'disabled' : ''}>${govEvidenceState.loading ? 'Extracting...' : 'Extract Screenshot'}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-clear ${govEvidenceState.loading ? 'disabled' : ''}>Clear</button>
+        </div>
+        ${govEvidenceState.review ? `<div class="live-ingest-callout" style="margin-top:12px">${esc(buildGovEvidenceSummary(govEvidenceState.review))}</div>` : ''}
+        ${renderGovEvidenceConflictPanel()}
+        ${govEvidenceState.queueError ? `<div class="live-ingest-callout warn" style="margin-top:12px">${esc(govEvidenceState.queueError)}</div>` : ''}
+      </div>
+      <div class="live-ingest-pane">
+        <div class="live-ingest-actions" style="margin-bottom:8px;flex-wrap:wrap">
+          <button class="btn-secondary" type="button" data-gov-evidence-save ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Save Artifact</button>
+          <button class="btn-primary" type="button" data-gov-evidence-safe ${govEvidenceState.loading || !govEvidenceState.review || unresolvedGovEvidenceConflicts().length ? 'disabled' : ''}>${unresolvedGovEvidenceConflicts().length ? 'Resolve Conflicts First' : 'Apply Safe Evidence'}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-promote-rows ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Promote Rows</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-refresh-queue ${govEvidenceState.queueLoading || !rec ? 'disabled' : ''}>${govEvidenceState.queueLoading ? 'Refreshing...' : 'Refresh Queue'}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-health ${govEvidenceState.healthLoading ? 'disabled' : ''}>${govEvidenceState.healthLoading ? 'Checking...' : 'Check Evidence Health'}</button>
+        </div>
+        <div class="live-ingest-stamp">Artifact: ${esc(govEvidenceState.artifactId || 'not saved yet')}</div>
+        ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
+        <div style="margin-top:10px">
+          <div class="live-ingest-results-title">Pending Observation Queue</div>
+          ${queueHtml}
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
+function buildGovEvidenceHealthSummary(health) {
+  if (!health || typeof health !== 'object') return 'Evidence health unavailable.';
+  const bits = [];
+  bits.push(`status: ${health.status || 'unknown'}`);
+  if (health.configuration) {
+    bits.push(`openai: ${health.configuration.openai_api_key_configured ? 'ok' : 'missing'}`);
+    bits.push(`supabase: ${health.configuration.supabase_service_role_configured ? 'ok' : 'missing'}`);
+  }
+  if (health.database) {
+    bits.push(`db: ${health.database.connected ? 'ok' : 'down'}`);
+    bits.push(`artifacts: ${health.database.research_artifacts_table ? 'ok' : 'missing'}`);
+    bits.push(`observations: ${health.database.research_artifact_observations_table ? 'ok' : 'missing'}`);
+    if (health.database.error) bits.push(`error: ${health.database.error}`);
+  }
+  return bits.join(' | ');
+}
+
+async function checkGovEvidenceHealth() {
+  govEvidenceState.healthLoading = true;
+  rerenderGovEvidenceOnly();
+  try {
+    govEvidenceState.health = await govEvidenceApi('evidence-health');
+    showToast(govEvidenceState.health.status === 'ok' ? 'Evidence health check passed' : 'Evidence health check degraded', govEvidenceState.health.status === 'ok' ? 'success' : 'warning');
+  } catch (err) {
+    govEvidenceState.health = { status: 'error', database: { connected: false, error: err.message } };
+    showToast(`Evidence health check failed: ${err.message}`, 'error');
+  } finally {
+    govEvidenceState.healthLoading = false;
+    rerenderGovEvidenceOnly();
+  }
+}
+function buildGovEvidenceSummary(review) {
+  const bits = [];
+  const address = pickGovEvidenceValue(review.property?.address, review.property?.property_name);
+  const owner = pickGovEvidenceValue(review.ownership?.true_owner, review.ownership?.current_owner, review.property?.owner_name);
+  const lender = pickGovEvidenceValue(review.loan?.lender, review.loan?.index_name);
+  const avail = pickGovEvidenceValue(review.property?.available_sf, review.building?.available_sf);
+  if (address) bits.push(address);
+  if (owner) bits.push(`owner: ${owner}`);
+  if (lender) bits.push(`lender: ${lender}`);
+  if (avail) bits.push(`available: ${avail}`);
+  const tenantCount = Array.isArray(review.tenants) ? review.tenants.length : 0;
+  const leaseCount = Array.isArray(review.lease_activity) ? review.lease_activity.length : 0;
+  if (tenantCount) bits.push(`${tenantCount} tenant row${tenantCount === 1 ? '' : 's'}`);
+  if (leaseCount) bits.push(`${leaseCount} lease row${leaseCount === 1 ? '' : 's'}`);
+  return bits.join(' | ') || 'Evidence extracted. Review and save if it looks correct.';
+}
+
+async function govEvidenceApi(endpoint, options = {}) {
+  const query = new URLSearchParams({ endpoint });
+  if (options.query && typeof options.query === 'object') {
+    Object.entries(options.query).forEach(([key, value]) => {
+      if (value != null && value !== '') query.set(key, value);
+    });
+  }
+  const response = await fetch(`/api/gov-evidence?${query.toString()}`, {
+    method: options.method || 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload?.detail?.detail || payload?.detail?.error || payload?.error || 'Request failed';
+    throw new Error(detail);
+  }
+  return payload;
+}
+
+async function ensureGovEvidenceArtifactSaved() {
+  if (govEvidenceState.artifactId) return govEvidenceState.artifactId;
+  const rec = getGovEvidenceContextRecord();
+  if (!rec || !govEvidenceState.review) throw new Error('No evidence review payload to save');
+  const binding = getGovEvidenceBinding(rec);
+  const result = await govEvidenceApi('research-artifacts', {
+    method: 'POST',
+    body: {
+      artifact_type: 'costar_screenshot',
+      source_platform: 'costar',
+      payload: govEvidenceState.review,
+      file_name: govEvidenceState.screenshotName || 'lcc-screenshot.png',
+      lead_id: binding.lead_id,
+      property_id: binding.property_id,
+      ownership_id: binding.ownership_id,
+      actor: getGovEvidenceActor()
+    }
+  });
+  govEvidenceState.artifactId = result?.artifact?.artifact_id || result?.artifact?.id || null;
+  return govEvidenceState.artifactId;
+}
+
+async function loadGovEvidenceObservations(force = false) {
+  const rec = syncGovEvidenceContext();
+  if (!rec) return;
+  if (govEvidenceState.queueLoaded && !force) return;
+  govEvidenceState.queueLoading = true;
+  govEvidenceState.queueError = '';
+  rerenderGovEvidenceOnly();
+  try {
+    const binding = getGovEvidenceBinding(rec);
+    const result = await govEvidenceApi('research-observations', {
+      query: {
+        status: 'pending_review',
+        lead_id: binding.lead_id,
+        property_id: binding.property_id,
+        ownership_id: binding.ownership_id
+      }
+    });
+    govEvidenceState.queue = Array.isArray(result?.observations) ? result.observations : [];
+    govEvidenceState.queueLoaded = true;
+  } catch (err) {
+    govEvidenceState.queueError = err.message || 'Could not load evidence queue';
+  } finally {
+    govEvidenceState.queueLoading = false;
+    rerenderGovEvidenceOnly();
+  }
+}
+
+function rerenderGovEvidenceOnly() {
+  renderGovTab();
+}
+
+async function extractGovEvidenceScreenshot() {
+  const rec = syncGovEvidenceContext();
+  if (!rec || !govEvidenceState.screenshotDataUrl) return;
+  govEvidenceState.loading = true;
+  rerenderGovEvidenceOnly();
+  try {
+    const context = [rec.address, rec.city, rec.state, rec.lease_number].filter(Boolean).join(' | ');
+    const result = await govEvidenceApi('extract-screenshot-json', {
+      method: 'POST',
+      body: {
+        image_data_url: govEvidenceState.screenshotDataUrl,
+        file_name: govEvidenceState.screenshotName || 'lcc-screenshot.png',
+        source: 'costar',
+        extra_context: context
+      }
+    });
+    govEvidenceState.review = result?.data || null;
+    govEvidenceState.artifactId = null;
+    applyGovEvidenceReviewToForm(govEvidenceState.review);
+    appendGovEvidenceNote(`Extracted screenshot evidence from ${govEvidenceState.screenshotName || 'screenshot'}.`);
+    showToast('Screenshot evidence extracted', 'success');
+  } catch (err) {
+    showToast(`Evidence extraction failed: ${err.message}`, 'error');
+  } finally {
+    govEvidenceState.loading = false;
+    rerenderGovEvidenceOnly();
+  }
+}
+
+async function applyGovEvidenceSafeBundle() {
+  if (!govEvidenceState.review) return;
+  govEvidenceState.loading = true;
+  rerenderGovEvidenceOnly();
+  const applied = [];
+  const skipped = [];
+  const endpoints = [
+    ['apply-ownership', 'owner'],
+    ['apply-listing', 'listing'],
+    ['apply-activity-note', 'activity'],
+    ['apply-loan', 'loan']
+  ];
+  try {
+    const artifactId = await ensureGovEvidenceArtifactSaved();
+    for (const [endpoint, label] of endpoints) {
+      try {
+        await govEvidenceApi(endpoint, {
+          method: 'POST',
+          query: { artifact_id: artifactId, actor: getGovEvidenceActor() },
+          body: { actor: getGovEvidenceActor() }
+        });
+        applied.push(label);
+      } catch (err) {
+        skipped.push(`${label}: ${err.message}`);
+      }
+    }
+    applyGovEvidenceReviewToForm(govEvidenceState.review);
+    appendGovEvidenceNote(`Safe evidence applied. Applied: ${applied.join(', ') || 'none'}. ${skipped.length ? `Skipped: ${skipped.join(' | ')}` : ''}`.trim());
+    showToast(`Safe evidence applied: ${applied.join(', ') || 'none'}`, applied.length ? 'success' : 'warning');
+  } catch (err) {
+    showToast(`Safe evidence apply failed: ${err.message}`, 'error');
+  } finally {
+    govEvidenceState.loading = false;
+    rerenderGovEvidenceOnly();
+  }
+}
+
+async function promoteGovEvidenceRows() {
+  if (!govEvidenceState.review) return;
+  govEvidenceState.loading = true;
+  rerenderGovEvidenceOnly();
+  try {
+    const artifactId = await ensureGovEvidenceArtifactSaved();
+    const result = await govEvidenceApi('promote-observations', {
+      method: 'POST',
+      query: { artifact_id: artifactId, actor: getGovEvidenceActor() },
+      body: { actor: getGovEvidenceActor() }
+    });
+    const count = result?.promoted_count || 0;
+    appendGovEvidenceNote(`Promoted ${count} screenshot observation row${count === 1 ? '' : 's'} into the review queue.`);
+    showToast(`Promoted ${count} evidence row${count === 1 ? '' : 's'}`, 'success');
+    govEvidenceState.queueLoaded = false;
+    await loadGovEvidenceObservations(true);
+  } catch (err) {
+    govEvidenceState.loading = false;
+    rerenderGovEvidenceOnly();
+    showToast(`Promote rows failed: ${err.message}`, 'error');
+  }
+}
+
+async function reviewGovEvidenceObservation(idx, action) {
+  const row = govEvidenceState.queue[idx];
+  if (!row) return;
+  try {
+    await govEvidenceApi('review-observation', {
+      method: 'POST',
+      query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
+      body: { action, actor: getGovEvidenceActor(), resolution_note: `LCC ${action}` }
+    });
+    showToast(`Observation ${action}`, 'success');
+    await loadGovEvidenceObservations(true);
+  } catch (err) {
+    showToast(`Observation update failed: ${err.message}`, 'error');
+  }
+}
+
+async function promoteGovEvidenceObservation(idx) {
+  const row = govEvidenceState.queue[idx];
+  if (!row) return;
+  try {
+    await govEvidenceApi('promote-observation', {
+      method: 'POST',
+      query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
+      body: { actor: getGovEvidenceActor(), resolution_note: 'Promoted from LCC evidence queue' }
+    });
+    appendGovEvidenceNote(`Promoted evidence row: ${row.summary || row.observation_value || row.observation_type || 'observation'}`);
+    showToast('Observation promoted', 'success');
+    await loadGovEvidenceObservations(true);
+  } catch (err) {
+    showToast(`Observation promotion failed: ${err.message}`, 'error');
+  }
+}
+
+function bindGovEvidenceWorkbench() {
+  syncGovEvidenceContext();
+  const fileInput = document.getElementById('gov-evidence-file');
+  if (fileInput) {
+    fileInput.onchange = async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      govEvidenceState.screenshotName = file.name || 'screenshot.png';
+      govEvidenceState.screenshotDataUrl = await readFileAsDataUrl(file);
+      govEvidenceState.review = null;
+      govEvidenceState.artifactId = null;
+      rerenderGovEvidenceOnly();
+    };
+  }
+  document.querySelector('[data-gov-evidence-extract]')?.addEventListener('click', () => extractGovEvidenceScreenshot());
+  document.querySelector('[data-gov-evidence-clear]')?.addEventListener('click', () => {
+    govEvidenceState.screenshotName = '';
+    govEvidenceState.screenshotDataUrl = '';
+    govEvidenceState.review = null;
+    govEvidenceState.artifactId = null;
+    rerenderGovEvidenceOnly();
+  });
+  document.querySelector('[data-gov-evidence-save]')?.addEventListener('click', async () => {
+    try {
+      govEvidenceState.loading = true;
+      rerenderGovEvidenceOnly();
+      await ensureGovEvidenceArtifactSaved();
+      appendGovEvidenceNote(`Saved evidence artifact ${govEvidenceState.artifactId}.`);
+      showToast('Evidence artifact saved', 'success');
+    } catch (err) {
+      showToast(`Artifact save failed: ${err.message}`, 'error');
+    } finally {
+      govEvidenceState.loading = false;
+      rerenderGovEvidenceOnly();
+    }
+  });
+  document.querySelector('[data-gov-evidence-safe]')?.addEventListener('click', () => applyGovEvidenceSafeBundle());
+  document.querySelector('[data-gov-evidence-promote-rows]')?.addEventListener('click', () => promoteGovEvidenceRows());
+  document.querySelector('[data-gov-evidence-refresh-queue]')?.addEventListener('click', () => loadGovEvidenceObservations(true));
+  document.querySelector('[data-gov-evidence-health]')?.addEventListener('click', () => checkGovEvidenceHealth());
+  document.querySelectorAll('[data-gov-evidence-conflict]').forEach((button) => {
+    button.onclick = () => {
+      const raw = button.dataset.govEvidenceConflict || '';
+      const splitAt = raw.lastIndexOf(':');
+      if (splitAt <= 0) return;
+      const conflictId = raw.slice(0, splitAt);
+      const resolution = raw.slice(splitAt + 1);
+      applyGovEvidenceConflictResolution(conflictId, resolution);
+      if (resolution === 'keep_current') {
+        applyGovEvidenceReviewToForm(govEvidenceState.review);
+      }
+      appendGovEvidenceNote(`[SAFE EVIDENCE CONFLICT] ${conflictId} -> ${resolution}`);
+      rerenderGovEvidenceOnly();
+    };
+  });
+  document.querySelectorAll('[data-gov-evidence-note]').forEach((button) => {
+    button.onclick = () => {
+      const idx = Number(button.dataset.govEvidenceNote);
+      const row = govEvidenceState.queue[idx];
+      if (!row) return;
+      appendGovEvidenceNote(`Evidence row: ${row.summary || row.observation_value || row.observation_type || 'observation'}`);
+      showToast('Evidence row appended to notes', 'success');
+    };
+  });
+  document.querySelectorAll('[data-gov-evidence-review]').forEach((button) => {
+    button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceReview), 'reviewed');
+  });
+  document.querySelectorAll('[data-gov-evidence-dismiss]').forEach((button) => {
+    button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
+  });
+  document.querySelectorAll('[data-gov-evidence-promote]').forEach((button) => {
+    button.onclick = () => promoteGovEvidenceObservation(Number(button.dataset.govEvidencePromote));
+  });
+  if (!govEvidenceState.queueLoaded && !govEvidenceState.queueLoading && getGovEvidenceContextRecord()) {
+    loadGovEvidenceObservations(false);
+  }
+}
+
 // ============================================================================
 // TAB RENDERERS
 // ============================================================================
@@ -3148,6 +3775,7 @@ function renderGovResearch() {
 
   let html = '<div class="research-workbench">';
   html += renderLiveIngestWorkbench('government');
+  html += renderGovEvidenceWorkbench();
 
   // Mode toggle — always visible so user can switch modes
   html += `<div class="research-mode-toggle">
@@ -3188,6 +3816,7 @@ function renderGovResearch() {
     </div>`;
     html += '</div>';
     setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+    setTimeout(() => bindGovEvidenceWorkbench(), 0);
     return html;
   }
 
@@ -3195,6 +3824,7 @@ function renderGovResearch() {
   html += renderResearchInner();
   html += '</div>';
   setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+  setTimeout(() => bindGovEvidenceWorkbench(), 0);
   return html;
 }
 
@@ -4836,3 +5466,11 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
+
+
+
+
+
+
+

@@ -256,6 +256,8 @@ describe('normalizeLiveIngestDocument', () => {
           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
           '<w:body>',
           '<w:p><w:r><w:t>Dialysis lease amendment</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p>',
+          '<w:p><w:ins w:author="Alex" w:date="2026-03-20T10:00:00Z"><w:r><w:t>Inserted clause text</w:t></w:r></w:ins></w:p>',
+          '<w:p><w:del w:author="Alex" w:date="2026-03-21T11:30:00Z"><w:r><w:delText>Removed legacy rate</w:delText></w:r></w:del></w:p>',
           '<w:p><w:r><w:t>Rate reset on 2026-06-01</w:t></w:r></w:p>',
           '</w:body>',
           '</w:document>'
@@ -300,8 +302,196 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /amendment\.docx \(application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document\)/);
     assert.match(doc.normalized_text, /Attachment content excerpts:/);
     assert.match(doc.normalized_text, /Dialysis lease amendment/);
+    assert.match(doc.normalized_text, /\[Inserted by Alex on 2026-03-20T10:00:00Z: Inserted clause text\]/);
+    assert.match(doc.normalized_text, /\[Deleted by Alex on 2026-03-21T11:30:00Z: Removed legacy rate\]/);
     assert.match(doc.normalized_text, /Rate reset on 2026-06-01/);
     assert.match(doc.normalized_text, /\[Comment: Signed copy received\]/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('returns attached email images as extracted image attachments', () => {
+    const imagePayload = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]).toString('base64');
+    const raw = [
+      'Subject: Image Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="img123"',
+      '',
+      '--img123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached site photo.',
+      '--img123',
+      'Content-Type: image/png; name="site-photo.png"',
+      'Content-Disposition: attachment; filename="site-photo.png"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      imagePayload,
+      '--img123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'image-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /site-photo\.png \(image\/png\)/);
+    assert.equal(Array.isArray(doc.extracted_attachments), true);
+    assert.equal(doc.extracted_attachments.length, 1);
+    assert.equal(doc.extracted_attachments[0].kind, 'image');
+    assert.equal(doc.extracted_attachments[0].mime_type, 'image/png');
+    assert.match(doc.extracted_attachments[0].data_url, /^data:image\/png;base64,/);
+  });
+
+  it('extracts readable text from attached xlsx payloads when present', () => {
+    const xlsxLike = buildStoredZip([
+      {
+        name: 'xl/workbook.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+          '<sheets><sheet name="Rent Roll" sheetId="1" r:id="rId1"/></sheets>',
+          '</workbook>'
+        ].join('')
+      },
+      {
+        name: 'xl/_rels/workbook.xml.rels',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+          '</Relationships>'
+        ].join('')
+      },
+      {
+        name: 'xl/sharedStrings.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<sst>',
+          '<si><t>tenant</t></si>',
+          '<si><t>rent</t></si>',
+          '<si><t>Alpha Clinic</t></si>',
+          '</sst>'
+        ].join('')
+      },
+      {
+        name: 'xl/worksheets/sheet1.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<worksheet><sheetData>',
+          '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>',
+          '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>14500</v></c></row>',
+          '</sheetData></worksheet>'
+        ].join('')
+      }
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: XLSX Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="xlsx123"',
+      '',
+      '--xlsx123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached rent roll.',
+      '--xlsx123',
+      'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; name="rent-roll.xlsx"',
+      'Content-Disposition: attachment; filename="rent-roll.xlsx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      xlsxLike,
+      '--xlsx123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'xlsx-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /rent-roll\.xlsx \(application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet\)/);
+    assert.match(doc.normalized_text, /Rent Roll/);
+    assert.match(doc.normalized_text, /tenant\s+rent/);
+    assert.match(doc.normalized_text, /Alpha Clinic\s+14500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts readable text from attached pptx payloads when present', () => {
+    const pptxLike = buildStoredZip([
+      {
+        name: 'ppt/presentation.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+          '<p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>',
+          '</p:presentation>'
+        ].join('')
+      },
+      {
+        name: 'ppt/_rels/presentation.xml.rels',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>',
+          '</Relationships>'
+        ].join('')
+      },
+      {
+        name: 'ppt/slides/slide1.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">',
+          '<p:cSld><p:spTree><p:sp><p:txBody>',
+          '<a:p><a:r><a:t>Operator update</a:t></a:r></a:p>',
+          '<a:p><a:r><a:t>Renewal target rent 16500</a:t></a:r></a:p>',
+          '</p:txBody></p:sp></p:spTree></p:cSld>',
+          '</p:sld>'
+        ].join('')
+      },
+      {
+        name: 'ppt/notesSlides/notesSlide1.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">',
+          '<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Discuss with landlord next week</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>',
+          '</p:notes>'
+        ].join('')
+      }
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: PPTX Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pptx123"',
+      '',
+      '--pptx123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached deck.',
+      '--pptx123',
+      'Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation; name="market-deck.pptx"',
+      'Content-Disposition: attachment; filename="market-deck.pptx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pptxLike,
+      '--pptx123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pptx-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /market-deck\.pptx \(application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation\)/);
+    assert.match(doc.normalized_text, /Slide 1/);
+    assert.match(doc.normalized_text, /Operator update/);
+    assert.match(doc.normalized_text, /Renewal target rent 16500/);
+    assert.match(doc.normalized_text, /Discuss with landlord next week/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 });

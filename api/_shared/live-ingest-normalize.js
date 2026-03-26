@@ -143,11 +143,17 @@ function isTextLikeMime(mime = '') {
   return value.startsWith('text/')
     || [
       'application/json',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/xml',
       'application/xhtml+xml',
       'message/rfc822'
     ].includes(value);
+}
+
+function isImageMime(mime = '') {
+  return ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'].includes(String(mime || '').toLowerCase());
 }
 
 function normalizeMimeTextPart(part) {
@@ -215,13 +221,29 @@ function extractZipEntries(buffer, wantedNames = []) {
   return entries;
 }
 
-function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
-  const commentIds = Array.from(paragraphXml.matchAll(/<w:commentReference\b[^>]*?(?:w:id|id)="([^"]+)"[^>]*\/>/g))
+function extractDocxRevisionMetaFromAttrs(attrsText = '') {
+  const author = String(attrsText.match(/(?:w:author|author)="([^"]+)"/)?.[1] || '').trim();
+  const date = String(attrsText.match(/(?:w:date|date)="([^"]+)"/)?.[1] || '').trim();
+  const bits = [];
+  if (author) bits.push(`by ${author}`);
+  if (date) bits.push(`on ${date}`);
+  return bits.length ? ` ${bits.join(' ')}` : '';
+}
+
+function extractDocxFragmentText(fragmentXml = '', commentsMap = {}, revisionContext = '', depth = 0) {
+  if (!fragmentXml || depth > 6) return '';
+  const commentIds = Array.from(String(fragmentXml || '').matchAll(/<w:commentReference\b[^>]*?(?:w:id|id)="([^"]+)"[^>]*\/>/g))
     .map((match) => String(match[1] || '').trim())
     .filter(Boolean);
+  const revised = String(fragmentXml || '').replace(/<w:(ins|del)\b([^>]*)>([\s\S]*?)<\/w:\1>/g, (_, type, attrs, inner) => {
+    const innerText = extractDocxFragmentText(inner, commentsMap, type, depth + 1);
+    if (!innerText) return ' ';
+    const label = type === 'ins' ? 'Inserted' : 'Deleted';
+    return ` [${label}${extractDocxRevisionMetaFromAttrs(attrs)}: ${innerText}] `;
+  });
   const text = decodeHtmlEntities(
-    paragraphXml
-      .replace(/<w:delText\b[^>]*>([\s\S]*?)<\/w:delText>/g, (_, value) => ` [Deleted: ${value}] `)
+    revised
+      .replace(/<w:delText\b[^>]*>([\s\S]*?)<\/w:delText>/g, (_, value) => revisionContext === 'del' ? ` ${value} ` : ` [Deleted: ${value}] `)
       .replace(/<w:(?:tab)\b[^>]*\/>/g, '\t')
       .replace(/<w:(?:br|cr)\b[^>]*\/>/g, '\n')
       .replace(/<\/w:(?:p|tr|tc)>/g, '\n')
@@ -232,6 +254,10 @@ function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
     .filter(Boolean)
     .map((value) => `[Comment: ${value}]`);
   return collapseWhitespace([text, ...comments].filter(Boolean).join(' '));
+}
+
+function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
+  return extractDocxFragmentText(paragraphXml, commentsMap);
 }
 
 function buildDocxCommentsMapFromXml(xmlText = '') {
@@ -286,6 +312,133 @@ function isDocxPart(part) {
     || filename.endsWith('.docx');
 }
 
+function extractXlsxSharedStringsFromXml(xmlText = '') {
+  return Array.from(String(xmlText || '').matchAll(/<si\b[\s\S]*?>([\s\S]*?)<\/si>/g))
+    .map((match) => decodeHtmlEntities((match[1] || '').replace(/<[^>]+>/g, '')))
+    .map((value) => collapseWhitespace(value))
+    .filter(Boolean);
+}
+
+function extractXlsxRelationshipMap(xmlText = '') {
+  const map = new Map();
+  for (const match of String(xmlText || '').matchAll(/<Relationship\b[\s\S]*?\bId="([^"]+)"[\s\S]*?\bTarget="([^"]+)"[\s\S]*?\/>/g)) {
+    const id = String(match[1] || '').trim();
+    const target = String(match[2] || '').trim().replace(/^\/+/, '');
+    if (!id || !target) continue;
+    map.set(id, target.startsWith('xl/') ? target : `xl/${target.replace(/^(\.\.\/)+/, '')}`);
+  }
+  return map;
+}
+
+function extractXlsxSheetRowsFromXml(xmlText = '', sharedStrings = []) {
+  return Array.from(String(xmlText || '').matchAll(/<row\b[\s\S]*?>([\s\S]*?)<\/row>/g))
+    .map((rowMatch) => {
+      const rowXml = String(rowMatch[1] || '');
+      const cells = Array.from(rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)).map((cellMatch) => {
+        const attrs = String(cellMatch[1] || '');
+        const cellXml = String(cellMatch[2] || '');
+        const type = attrs.match(/\bt="([^"]+)"/)?.[1] || '';
+        if (type === 'inlineStr') {
+          return collapseWhitespace(decodeHtmlEntities(cellXml.replace(/<[^>]+>/g, '')));
+        }
+        const rawValue = cellXml.match(/<v\b[^>]*>([\s\S]*?)<\/v>/)?.[1] || '';
+        if (type === 's') {
+          const idx = parseInt(rawValue, 10);
+          return Number.isNaN(idx) ? '' : (sharedStrings[idx] || '');
+        }
+        return collapseWhitespace(decodeHtmlEntities(rawValue));
+      }).filter(Boolean);
+      return cells.join('\t').trim();
+    })
+    .filter(Boolean);
+}
+
+function extractXlsxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    'xl/sharedStrings.xml'
+  ]);
+  if (!entries.get('xl/workbook.xml')) return '';
+  const workbookXml = entries.get('xl/workbook.xml')?.toString('utf8') || '';
+  const relMap = extractXlsxRelationshipMap(entries.get('xl/_rels/workbook.xml.rels')?.toString('utf8') || '');
+  const sharedStrings = extractXlsxSharedStringsFromXml(entries.get('xl/sharedStrings.xml')?.toString('utf8') || '');
+  const sheets = Array.from(workbookXml.matchAll(/<sheet\b[\s\S]*?\bname="([^"]+)"[\s\S]*?\br:id="([^"]+)"[\s\S]*?\/>/g))
+    .map((match, index) => ({
+      name: String(match[1] || '').trim() || `Sheet ${index + 1}`,
+      path: relMap.get(String(match[2] || '').trim()) || `xl/worksheets/sheet${index + 1}.xml`
+    }));
+  const wantedSheetPaths = sheets.map((sheet) => sheet.path).slice(0, 6);
+  const sheetEntries = extractZipEntries(buffer, wantedSheetPaths);
+  const outputs = sheets.slice(0, 6).map((sheet) => {
+    const rows = extractXlsxSheetRowsFromXml(sheetEntries.get(sheet.path)?.toString('utf8') || '', sharedStrings);
+    return rows.length ? `${sheet.name}\n${rows.join('\n')}` : '';
+  }).filter(Boolean);
+  return outputs.join('\n\n').trim();
+}
+
+function isXlsxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    || filename.endsWith('.xlsx');
+}
+
+function extractPptxRelationshipMap(xmlText = '', basePrefix = 'ppt/') {
+  const map = new Map();
+  for (const match of String(xmlText || '').matchAll(/<Relationship\b[\s\S]*?\bId="([^"]+)"[\s\S]*?\bTarget="([^"]+)"[\s\S]*?\/>/g)) {
+    const id = String(match[1] || '').trim();
+    const target = String(match[2] || '').trim().replace(/^\/+/, '');
+    if (!id || !target) continue;
+    map.set(id, target.startsWith(basePrefix) ? target : `${basePrefix}${target.replace(/^(\.\.\/)+/, '')}`);
+  }
+  return map;
+}
+
+function extractPptxTextFromXml(xmlText = '') {
+  return Array.from(String(xmlText || '').matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g))
+    .map((match) => decodeHtmlEntities(match[1] || ''))
+    .map((value) => collapseWhitespace(value))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function extractPptxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'ppt/presentation.xml',
+    'ppt/_rels/presentation.xml.rels'
+  ]);
+  if (!entries.get('ppt/presentation.xml')) return '';
+  const presentationXml = entries.get('ppt/presentation.xml')?.toString('utf8') || '';
+  const relMap = extractPptxRelationshipMap(entries.get('ppt/_rels/presentation.xml.rels')?.toString('utf8') || '');
+  const slides = Array.from(presentationXml.matchAll(/<p:sldId\b[\s\S]*?\br:id="([^"]+)"[\s\S]*?\/>/g))
+    .map((match, index) => ({
+      name: `Slide ${index + 1}`,
+      path: relMap.get(String(match[1] || '').trim()) || `ppt/slides/slide${index + 1}.xml`,
+      notesPath: `ppt/notesSlides/notesSlide${index + 1}.xml`
+    }));
+  const wantedPaths = slides.slice(0, 10).flatMap((slide) => [slide.path, slide.notesPath]);
+  const slideEntries = extractZipEntries(buffer, wantedPaths);
+  const outputs = slides.slice(0, 10).map((slide) => {
+    const slideText = extractPptxTextFromXml(slideEntries.get(slide.path)?.toString('utf8') || '');
+    const notesText = extractPptxTextFromXml(slideEntries.get(slide.notesPath)?.toString('utf8') || '');
+    const combined = [
+      slideText ? `${slide.name}\n${slideText}` : '',
+      notesText ? `Notes\n${notesText}` : ''
+    ].filter(Boolean).join('\n');
+    return combined.trim();
+  }).filter(Boolean);
+  return outputs.join('\n\n').trim();
+}
+
+function isPptxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    || filename.endsWith('.pptx');
+}
+
 function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
@@ -312,6 +465,12 @@ function extractAttachmentPreview(part) {
     if (isDocxPart(part)) {
       return extractDocxTextFromBuffer(part.body_buffer).slice(0, 4000);
     }
+    if (isXlsxPart(part)) {
+      return extractXlsxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isPptxPart(part)) {
+      return extractPptxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
     return normalizeMimeTextPart(part).slice(0, 4000);
   }
   if (mime === 'application/pdf') {
@@ -322,13 +481,13 @@ function extractAttachmentPreview(part) {
 
 function collectMimeInsights(part, depth = 0) {
   if (!part || depth > 6) {
-    return { textParts: [], attachments: [] };
+    return { textParts: [], attachments: [], imageAttachments: [] };
   }
 
   const mime = String(part.contentType?.mime || '').toLowerCase();
   if (mime.startsWith('multipart/')) {
     const boundary = part.contentType?.params?.boundary;
-    if (!boundary) return { textParts: [], attachments: [] };
+    if (!boundary) return { textParts: [], attachments: [], imageAttachments: [] };
     return splitMultipartBody(part.body, boundary)
       .map(parseMimePart)
       .filter(Boolean)
@@ -336,25 +495,36 @@ function collectMimeInsights(part, depth = 0) {
         const childInsights = collectMimeInsights(child, depth + 1);
         acc.textParts.push(...childInsights.textParts);
         acc.attachments.push(...childInsights.attachments);
+        acc.imageAttachments.push(...childInsights.imageAttachments);
         return acc;
-      }, { textParts: [], attachments: [] });
+      }, { textParts: [], attachments: [], imageAttachments: [] });
   }
 
   if (isAttachmentPart(part)) {
     const preview = extractAttachmentPreview(part);
+    const imageAttachment = isImageMime(mime) && part.body_buffer?.length
+      ? {
+          kind: 'image',
+          name: getAttachmentFilename(part),
+          mime_type: mime,
+          data_url: `data:${mime};base64,${part.body_buffer.toString('base64')}`
+        }
+      : null;
     return {
       textParts: [],
       attachments: [{
         summary: summarizeAttachmentPart(part),
         preview
-      }]
+      }],
+      imageAttachments: imageAttachment ? [imageAttachment] : []
     };
   }
 
   const text = normalizeMimeTextPart(part);
   return {
     textParts: text ? [text] : [],
-    attachments: []
+    attachments: [],
+    imageAttachments: []
   };
 }
 
@@ -375,6 +545,7 @@ function normalizeEmailText(text = '') {
   let attachmentSummary = '';
   let attachmentPreviews = '';
   let attachmentPreviewCount = 0;
+  let extractedAttachments = [];
 
   const rootPart = {
     headers,
@@ -388,6 +559,9 @@ function normalizeEmailText(text = '') {
     const insights = collectMimeInsights(rootPart);
     if (insights.textParts.length) {
       extracted = insights.textParts.join('\n\n');
+    }
+    if (insights.imageAttachments.length) {
+      extractedAttachments = insights.imageAttachments.slice(0, 3);
     }
     if (insights.attachments.length) {
       attachmentSummary = `Attachments:\n${insights.attachments.map((item) => `- ${item.summary}`).join('\n')}`;
@@ -424,7 +598,8 @@ function normalizeEmailText(text = '') {
       ...metadata,
       attachment_summary: attachmentSummary || null,
       attachment_preview_count: attachmentPreviewCount
-    }
+    },
+    extracted_attachments: extractedAttachments
   };
 }
 
@@ -451,7 +626,8 @@ export function normalizeLiveIngestDocument(doc = {}) {
       mime_type: mimeType || 'message/rfc822',
       source_kind: 'email',
       normalized_text: email.normalized_text,
-      metadata: email.metadata || {}
+      metadata: email.metadata || {},
+      extracted_attachments: Array.isArray(email.extracted_attachments) ? email.extracted_attachments : []
     };
   }
 
@@ -460,7 +636,8 @@ export function normalizeLiveIngestDocument(doc = {}) {
     mime_type: mimeType || 'text/plain',
     source_kind: 'text',
     normalized_text: collapseWhitespace(text),
-    metadata: {}
+    metadata: {},
+    extracted_attachments: []
   };
 }
 
@@ -471,7 +648,10 @@ export function normalizeLiveIngestDocuments(docs = []) {
     .map((doc) => normalizeLiveIngestDocument(doc))
     .map((doc) => ({
       ...doc,
-      normalized_text: String(doc.normalized_text || '').slice(0, 30000)
+      normalized_text: String(doc.normalized_text || '').slice(0, 30000),
+      extracted_attachments: (Array.isArray(doc.extracted_attachments) ? doc.extracted_attachments : [])
+        .filter((item) => item && item.kind === 'image' && item.data_url)
+        .slice(0, 3)
     }))
     .filter((doc) => doc.normalized_text);
 }

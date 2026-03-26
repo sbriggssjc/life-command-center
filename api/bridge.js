@@ -14,6 +14,7 @@ import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { invokeChatProvider } from './_shared/ai.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -21,7 +22,7 @@ export default withErrorHandler(async function handler(req, res) {
 
   // Dispatch to chat if routed via vercel.json _route=chat
   if (req.query._route === 'chat') {
-    return handleChat(req, res);
+    return handleChatRoute(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -418,96 +419,61 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
 
   // Update sync timestamp on external identity
   await opsQuery('PATCH',
-    `external_identities?entity_id=eq.${entityId}&source_system=eq.${source_system}&external_id=eq.${external_id}`,
+    `external_identities?entity_id=eq.${entityId}&source_system=eq.${source_system}`,
     { last_synced_at: new Date().toISOString() }
   );
+
+  if (!result.ok) {
+    return res.status(result.status || 500).json({ error: 'Failed to update entity' });
+  }
 
   return res.status(200).json({
     updated: true,
     entity_id: entityId,
-    fields_updated: fieldCount,
-    entity_created: !!link.createdEntity,
-    identity_created: !!link.createdIdentity
+    fields_updated: fieldCount
   });
 }
 
 // ============================================================================
-// CHAT — AI chat handler (merged from api/chat.js)
-// POST /api/chat (routed via vercel.json: /api/chat → /api/bridge?_route=chat)
+// CHAT: Route /api/chat → invokeChatProvider (AI copilot)
 // ============================================================================
-async function handleChat(req, res) {
-  const user = await authenticate(req, res);
-  if (!user) return;
 
+async function handleChatRoute(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
 
-  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships[0]?.workspace_id;
-  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+  // Authenticate — allows transitional no-auth fallback
+  const user = await authenticate(req, res);
+  if (!user) return;
 
-  const { invokeChatProvider, logAiMetric, normalizeAiTelemetry, resolveAiRoute, getAiConfig } = await import('./_shared/ai.js');
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || '';
 
   const { message, context, history, attachments } = req.body || {};
-  if (!message || typeof message !== 'string') {
+  if (!message) {
     return res.status(400).json({ error: 'message is required' });
   }
-  const safeAttachments = Array.isArray(attachments)
-    ? attachments
-        .filter((item) => item && typeof item === 'object')
-        .slice(0, 3)
-        .map((item) => ({
-          type: typeof item.type === 'string' ? item.type : 'image',
-          mime_type: typeof item.mime_type === 'string' ? item.mime_type : '',
-          name: typeof item.name === 'string' ? item.name : '',
-          data_url: typeof item.data_url === 'string' ? item.data_url : '',
-        }))
-        .filter((item) => item.data_url)
-    : [];
-  const route = resolveAiRoute(getAiConfig(), context || {});
 
-  const startedAt = Date.now();
-  const result = await invokeChatProvider({ message, context, history, attachments: safeAttachments, user, workspaceId });
-  const durationMs = Date.now() - startedAt;
-  const normalized = normalizeAiTelemetry(result.data || {});
-  const feature = route.feature;
-  await logAiMetric(workspaceId, user.id, 'chat', durationMs, {
-    feature,
-    provider: result.provider,
-    status: result.status,
-    model: normalized.model || route.model,
-    chat_policy: getAiConfig().chatPolicy,
-    cache_hit: normalized.cache_hit,
-    cache_read_tokens: normalized.cache_read_tokens,
-    had_context: !!context && Object.keys(context || {}).length > 0,
-    history_count: Array.isArray(history) ? history.length : 0,
-    attachment_count: safeAttachments.length,
-    attachment_types: safeAttachments.map((item) => item.type || 'image'),
-    message_chars: message.length,
-    usage: normalized.usage.raw,
-    input_tokens: normalized.usage.input_tokens,
-    output_tokens: normalized.usage.output_tokens,
-    total_tokens: normalized.usage.total_tokens,
+  const result = await invokeChatProvider({
+    message,
+    context: context || {},
+    history: Array.isArray(history) ? history : [],
+    attachments: Array.isArray(attachments) ? attachments : [],
+    user,
+    workspaceId
   });
 
   if (!result.ok) {
     return res.status(result.status || 502).json({
       error: result.data?.error || 'AI provider request failed',
-      detail: result.data?.detail,
       provider: result.provider,
+      details: result.data?.details
     });
   }
 
   return res.status(200).json({
-    ...result.data,
-    provider: result.provider,
-    telemetry: {
-      ...(result.data?.telemetry || {}),
-      duration_ms: durationMs,
-      cache_hit: normalized.cache_hit,
-      cache_read_tokens: normalized.cache_read_tokens,
-    },
-    model: result.data?.model || normalized.model || route.model || null,
-    usage: result.data?.usage || normalized.usage.raw,
+    response: result.data?.response || result.data?.content?.[0]?.text || '',
+    usage: result.data?.usage || null,
+    provider: result.provider
   });
 }

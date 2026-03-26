@@ -68,6 +68,25 @@
 - Extended server-side email normalization again to recurse through nested MIME parts and include readable excerpts from text-like attachments such as CSV, JSON, HTML, and nested email content.
 - Extended server-side email normalization again to decode attached PDF payloads and surface readable embedded PDF text when available, without claiming OCR for image-only pages.
 - Extended server-side email normalization again to decode attached `docx` payloads with a minimal ZIP/XML reader and surface body text, comments, and notes when present.
+- Tightened tracked-change handling for `docx` extraction so inserted/deleted revisions now preserve author/date context in both direct `docx` intake and `.eml`-embedded `docx` normalization.
+- Extended `.eml` normalization and client extraction wiring so attached email images can flow back as extracted image attachments into the existing multimodal AI path, instead of only appearing in attachment summaries.
+- Added `.xlsx` intake support for direct uploads and `.eml` attachments, with workbook/sheet/shared-string parsing that converts spreadsheet rows into readable tabular text for extraction.
+- Added a vision-based OCR transcript step in the client live-ingest flow so attached images, screenshots, and image-only PDF pages can contribute extracted text context before proposal generation, while still being passed as images for multimodal reasoning.
+- Added an `Extraction Inputs` review block in the intake UI so normalized source text and OCR transcripts can be inspected before applying proposed operations.
+- Split OCR review into page-level transcript entries with source-image labels and confidence tags so each excerpt can be traced back to its originating screenshot or attachment.
+- Added explicit low-confidence OCR warnings in the review UI and highlighted those transcript entries so uncertain text is visible before writeback.
+- Added low-confidence OCR acknowledgment gating so `Apply Selected` stays disabled until the transcript warning is explicitly acknowledged, with the same rule enforced in the apply handler.
+- Added OCR-aware proposal tagging so operations generated from an extraction run that included low-confidence OCR are labeled individually in the review list and the proposal notes call that out explicitly.
+- Added heuristic source-lineage tagging for proposal operations by matching operation text against extraction inputs, so review cards can point to the most likely OCR page or source document.
+- Added `.pptx` intake support for direct uploads and `.eml` attachments, with slide and notes text extraction so PowerPoint decks can feed the same intake pipeline as other Office sources.
+- Extended the extraction prompt and proposal parser to support model-returned `source_refs` per operation against an indexed extraction-source catalog, with heuristic lineage retained as fallback when the model does not cite sources.
+- Added citation-aware apply gating so operations produced in a low-confidence OCR run without model-cited `source_refs` are flagged individually and require a second acknowledgment before apply.
+- Added safer batch controls so the review UI can auto-select only cited operations, letting the lower-risk subset move forward without bundling uncited OCR-dependent operations into the same apply action.
+- Tightened the default selection behavior so uncited operations from low-confidence OCR runs now start deselected automatically, making the default apply path conservative without hiding the riskier operations.
+- Added targeted OCR retry controls on low-confidence transcript entries so a single source image can be re-read and the proposal remapped without restarting the whole intake batch.
+- Added retry-result comparison for OCR retries so each retried source can show before/after transcript text and confidence changes directly in the extraction review panel.
+- Weighted proposal ordering toward model-cited and stronger-source operations so the safer subset appears first in the review list instead of being mixed evenly with heuristic or uncited OCR-dependent operations.
+- Added inline source-evidence excerpts on operation cards so model-cited quotes or heuristic source snippets are visible directly where the proposed write is reviewed.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -115,5 +134,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add fuller tracked-change handling for `docx`, OCR for image-only PDFs, and binary attachment extraction for images or more complex Office payloads inside `.eml` files.
+- Add stronger OCR quality handling such as retry-history tracking or source-aware operation grouping, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

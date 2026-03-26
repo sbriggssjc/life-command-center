@@ -77,7 +77,20 @@ Notes:
 Notes:
 - 
 
-## 9. Verification
+## 9. Government Evidence
+- `Check Evidence Health` run from Gov research tab: `Pass / Fail`
+- `GOV_API_URL` reachable through `/api/gov-evidence`: `Pass / Fail`
+- CoStar screenshot extraction tested from live LCC gov tab: `Pass / Fail`
+- Research artifact saved successfully: `Pass / Fail`
+- `Apply Safe Evidence` tested: `Pass / Fail`
+- `Promote Rows` created pending observations: `Pass / Fail`
+- Observation `Review / Dismiss / Promote` tested: `Pass / Fail`
+- GovernmentProject evidence tables present: `Pass / Fail`
+
+Notes:
+- 
+
+## 10. Verification
 - `node --test test/apply-change.test.js`: `Pass / Fail`
 - `node --test test/entity-link.test.js`: `Pass / Fail`
 - `node --test test/research-loop.test.js`: `Pass / Fail`
@@ -91,3 +104,4 @@ Notes:
 - Approved by:
 - Follow-up items:
 - Rollback needed: `Yes / No`
+

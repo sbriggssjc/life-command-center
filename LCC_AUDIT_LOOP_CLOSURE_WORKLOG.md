@@ -176,3 +176,58 @@
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.
+
+## 2026-03-25 Government Evidence Runtime Port
+
+Implemented in this pass:
+- Added `/api/gov-evidence` rewrite in `vercel.json` and gov evidence proxy routing in `api/data-proxy.js`.
+- Added a live government evidence workbench to `gov.js` inside the actual LCC research tab.
+- The LCC gov research UI can now:
+  - select a screenshot
+  - call GovernmentProject screenshot extraction through `/api/gov-evidence?endpoint=extract-screenshot-json`
+  - save a research artifact
+  - run low-risk safe apply actions
+  - promote observation rows
+  - review, dismiss, note, and promote pending observation queue rows
+- Confirmed `node --check gov.js` and `node --check api/data-proxy.js` both pass after the port.
+
+Current behavior:
+- The evidence workflow is now available in the live LCC government research UI rather than only in the standalone GovernmentProject dashboard.
+- This port depends on the GovernmentProject FastAPI app exposing the screenshot and research-artifact endpoints and being reachable through `GOV_API_URL`.
+
+Remaining gap:
+- Browser/runtime smoke testing is still required with an authenticated LCC session and a real CoStar screenshot.
+
+## 2026-03-26 Government Evidence Rollout Verification
+
+Implemented in this pass:
+- Added a GovernmentProject `GET /api/evidence-health` endpoint for the evidence workflow.
+- Added `evidence-health` support to the LCC gov evidence proxy in `api/data-proxy.js`.
+- Added a `Check Evidence Health` control to the live gov evidence workbench in `gov.js`.
+- Extended `LCC_DEPLOYMENT_SIGNOFF_TEMPLATE.md` with a dedicated Government Evidence rollout section.
+- Re-ran `node --check gov.js` and `node --check api/data-proxy.js` successfully after these changes.
+
+Current behavior:
+- Operators can now validate the core evidence rollout prerequisites directly from the live LCC government research tab before processing a screenshot.
+- Formal deployment signoff now includes explicit checks for extraction, artifact persistence, safe apply, row promotion, and observation review.
+
+Remaining gap:
+- Full authenticated browser smoke testing against a real `GOV_API_URL` target and screenshot is still required.
+
+## 2026-03-26 Government Evidence Conflict Review
+
+Implemented in this pass:
+- Added conflict detection to the live gov evidence workbench in `gov.js`.
+- The panel now compares screenshot evidence against current research values for owner, lender, RBA, and year built.
+- Added in-panel `Keep Current` / `Use Evidence` actions for each detected conflict.
+- `Apply Safe Evidence` is disabled until all detected conflicts are resolved.
+- Choosing `Keep Current` rewrites the working evidence payload so later artifact save / safe apply respects the operator decision.
+- Re-ran `node --check gov.js` successfully after the conflict-review changes.
+
+Current behavior:
+- The live LCC government research tab no longer silently safe-applies key fields when the screenshot extraction disagrees with current research values.
+- Conflict decisions append `[SAFE EVIDENCE CONFLICT]` note lines for auditability.
+
+Remaining gap:
+- This is currently screenshot-vs-current-value conflict review only.
+- Multi-source conflict resolution should be added later when document evidence is ported into the same live panel.

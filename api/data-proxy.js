@@ -40,6 +40,19 @@ const GOV_WRITE_ENDPOINT_MAP = {
   'financial':        '/api/write/financial',
   'resolve-pending':  '/api/pending-updates'
 };
+const GOV_EVIDENCE_ENDPOINT_MAP = {
+  'evidence-health': { path: '/api/evidence-health', methods: ['GET'] },
+  'extract-screenshot-json': { path: '/api/extract-screenshot-json', methods: ['POST'] },
+  'research-artifacts': { path: '/api/research-artifacts', methods: ['POST'] },
+  'apply-loan': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-loan', methods: ['POST'] },
+  'apply-ownership': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-ownership', methods: ['POST'] },
+  'apply-listing': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-listing', methods: ['POST'] },
+  'apply-activity-note': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-activity-note', methods: ['POST'] },
+  'promote-observations': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/promote-observations', methods: ['POST'] },
+  'research-observations': { path: '/api/research-observations', methods: ['GET'] },
+  'review-observation': { path: ({ observation_id }) => '/api/research-observations/' + encodeURIComponent(observation_id) + '/review', methods: ['POST'] },
+  'promote-observation': { path: ({ observation_id }) => '/api/research-observations/' + encodeURIComponent(observation_id) + '/promote', methods: ['POST'] }
+};
 
 async function handleGovWrite(req, res, user) {
   if (req.method !== 'POST') {
@@ -113,6 +126,84 @@ async function handleGovWrite(req, res, user) {
   }
 }
 
+async function handleGovEvidence(req, res, user) {
+  if (!['GET', 'POST'].includes(req.method)) {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const ws = primaryWorkspace(user);
+  if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+    return res.status(403).json({ error: 'Operator role required for government evidence actions' });
+  }
+
+  if (!GOV_API_URL) {
+    return res.status(503).json({ error: 'GOV_API_URL not configured' });
+  }
+
+  const { endpoint } = req.query;
+  const config = endpoint ? GOV_EVIDENCE_ENDPOINT_MAP[endpoint] : null;
+  if (!config) {
+    return res.status(400).json({
+      error: `Invalid endpoint. Use: ${Object.keys(GOV_EVIDENCE_ENDPOINT_MAP).join(', ')}`
+    });
+  }
+  if (!config.methods.includes(req.method)) {
+    return res.status(405).json({ error: `Method ${req.method} not allowed for ${endpoint}` });
+  }
+
+  const builtPath = typeof config.path === 'function' ? config.path(req.query) : config.path;
+  if (!builtPath || builtPath.includes('undefined')) {
+    return res.status(400).json({ error: 'Required identifier missing for government evidence endpoint' });
+  }
+
+  const govUrl = new URL(`${GOV_API_URL.replace(/\/+$/, '')}${builtPath}`);
+  ['status', 'artifact_id', 'lead_id', 'property_id', 'ownership_id', 'actor'].forEach((key) => {
+    const value = req.query[key];
+    if (value != null && value !== '') govUrl.searchParams.set(key, value);
+  });
+  if (!govUrl.searchParams.get('actor') && req.method === 'POST') {
+    govUrl.searchParams.set('actor', user.email || user.display_name || user.id);
+  }
+
+  const headers = {
+    'X-Source-App': 'lcc',
+    'X-LCC-User': user.id
+  };
+  const options = { method: req.method, headers };
+
+  if (req.method === 'POST') {
+    headers['Content-Type'] = 'application/json';
+    const body = req.body && typeof req.body === 'object' ? { ...req.body } : {};
+    if (!body.actor) body.actor = user.email || user.display_name || user.id;
+    options.body = JSON.stringify(body);
+  }
+
+  try {
+    const response = await fetch(govUrl.toString(), options);
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = { raw: responseText };
+    }
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: `Gov evidence service returned ${response.status}`,
+        detail: data
+      });
+    }
+
+    return res.status(response.status || 200).json(data);
+  } catch (err) {
+    console.error(`[gov-evidence] Error calling ${govUrl}:`, err.message);
+    return res.status(502).json({
+      error: 'Failed to reach government evidence service',
+      message: process.env.LCC_ENV === 'development' ? err.message : undefined
+    });
+  }
+}
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
 
@@ -122,6 +213,9 @@ export default async function handler(req, res) {
   // Route to gov-write sub-handler if requested
   if (req.query._route === 'gov-write') {
     return handleGovWrite(req, res, user);
+  }
+  if (req.query._route === 'gov-evidence') {
+    return handleGovEvidence(req, res, user);
   }
 
   if (!['GET', 'POST', 'PATCH'].includes(req.method)) {
@@ -297,14 +391,21 @@ export default async function handler(req, res) {
 
   try {
     const wantCount = req.query.count !== 'false';
+    // Add statement timeout for heavy views to prevent Supabase 57014 timeouts
+    const isHeavyView = table === 'v_crm_client_rollup' || table === 'v_sf_tasks_contact_rollup';
+    const fetchHeaders = {
+      'apikey': dbKey,
+      'Authorization': `Bearer ${dbKey}`,
+      'Content-Type': 'application/json',
+      ...(wantCount ? { 'Prefer': 'count=exact' } : {})
+    };
+    // Skip exact counts for heavy views to avoid sequential scan overhead
+    if (isHeavyView && wantCount) {
+      fetchHeaders['Prefer'] = 'count=planned';
+    }
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers: {
-        'apikey': dbKey,
-        'Authorization': `Bearer ${dbKey}`,
-        'Content-Type': 'application/json',
-        ...(wantCount ? { 'Prefer': 'count=exact' } : {})
-      }
+      headers: fetchHeaders
     });
 
     const body = await response.text();
@@ -332,3 +433,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
+
+
+
