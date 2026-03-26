@@ -256,6 +256,8 @@ describe('normalizeLiveIngestDocument', () => {
           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
           '<w:body>',
           '<w:p><w:r><w:t>Dialysis lease amendment</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p>',
+          '<w:p><w:ins w:author="Alex" w:date="2026-03-20T10:00:00Z"><w:r><w:t>Inserted clause text</w:t></w:r></w:ins></w:p>',
+          '<w:p><w:del w:author="Alex" w:date="2026-03-21T11:30:00Z"><w:r><w:delText>Removed legacy rate</w:delText></w:r></w:del></w:p>',
           '<w:p><w:r><w:t>Rate reset on 2026-06-01</w:t></w:r></w:p>',
           '</w:body>',
           '</w:document>'
@@ -300,6 +302,8 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /amendment\.docx \(application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document\)/);
     assert.match(doc.normalized_text, /Attachment content excerpts:/);
     assert.match(doc.normalized_text, /Dialysis lease amendment/);
+    assert.match(doc.normalized_text, /\[Inserted by Alex on 2026-03-20T10:00:00Z: Inserted clause text\]/);
+    assert.match(doc.normalized_text, /\[Deleted by Alex on 2026-03-21T11:30:00Z: Removed legacy rate\]/);
     assert.match(doc.normalized_text, /Rate reset on 2026-06-01/);
     assert.match(doc.normalized_text, /\[Comment: Signed copy received\]/);
     assert.equal(doc.metadata.attachment_preview_count, 1);

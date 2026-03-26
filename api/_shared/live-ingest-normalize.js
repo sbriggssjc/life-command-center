@@ -215,13 +215,29 @@ function extractZipEntries(buffer, wantedNames = []) {
   return entries;
 }
 
-function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
-  const commentIds = Array.from(paragraphXml.matchAll(/<w:commentReference\b[^>]*?(?:w:id|id)="([^"]+)"[^>]*\/>/g))
+function extractDocxRevisionMetaFromAttrs(attrsText = '') {
+  const author = String(attrsText.match(/(?:w:author|author)="([^"]+)"/)?.[1] || '').trim();
+  const date = String(attrsText.match(/(?:w:date|date)="([^"]+)"/)?.[1] || '').trim();
+  const bits = [];
+  if (author) bits.push(`by ${author}`);
+  if (date) bits.push(`on ${date}`);
+  return bits.length ? ` ${bits.join(' ')}` : '';
+}
+
+function extractDocxFragmentText(fragmentXml = '', commentsMap = {}, revisionContext = '', depth = 0) {
+  if (!fragmentXml || depth > 6) return '';
+  const commentIds = Array.from(String(fragmentXml || '').matchAll(/<w:commentReference\b[^>]*?(?:w:id|id)="([^"]+)"[^>]*\/>/g))
     .map((match) => String(match[1] || '').trim())
     .filter(Boolean);
+  const revised = String(fragmentXml || '').replace(/<w:(ins|del)\b([^>]*)>([\s\S]*?)<\/w:\1>/g, (_, type, attrs, inner) => {
+    const innerText = extractDocxFragmentText(inner, commentsMap, type, depth + 1);
+    if (!innerText) return ' ';
+    const label = type === 'ins' ? 'Inserted' : 'Deleted';
+    return ` [${label}${extractDocxRevisionMetaFromAttrs(attrs)}: ${innerText}] `;
+  });
   const text = decodeHtmlEntities(
-    paragraphXml
-      .replace(/<w:delText\b[^>]*>([\s\S]*?)<\/w:delText>/g, (_, value) => ` [Deleted: ${value}] `)
+    revised
+      .replace(/<w:delText\b[^>]*>([\s\S]*?)<\/w:delText>/g, (_, value) => revisionContext === 'del' ? ` ${value} ` : ` [Deleted: ${value}] `)
       .replace(/<w:(?:tab)\b[^>]*\/>/g, '\t')
       .replace(/<w:(?:br|cr)\b[^>]*\/>/g, '\n')
       .replace(/<\/w:(?:p|tr|tc)>/g, '\n')
@@ -232,6 +248,10 @@ function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
     .filter(Boolean)
     .map((value) => `[Comment: ${value}]`);
   return collapseWhitespace([text, ...comments].filter(Boolean).join(' '));
+}
+
+function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
+  return extractDocxFragmentText(paragraphXml, commentsMap);
 }
 
 function buildDocxCommentsMapFromXml(xmlText = '') {

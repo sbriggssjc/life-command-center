@@ -68,6 +68,7 @@
 - Extended server-side email normalization again to recurse through nested MIME parts and include readable excerpts from text-like attachments such as CSV, JSON, HTML, and nested email content.
 - Extended server-side email normalization again to decode attached PDF payloads and surface readable embedded PDF text when available, without claiming OCR for image-only pages.
 - Extended server-side email normalization again to decode attached `docx` payloads with a minimal ZIP/XML reader and surface body text, comments, and notes when present.
+- Tightened tracked-change handling for `docx` extraction so inserted/deleted revisions now preserve author/date context in both direct `docx` intake and `.eml`-embedded `docx` normalization.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.

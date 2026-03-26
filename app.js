@@ -6284,39 +6284,57 @@ function extractTextFromDocxXml(xmlText, commentsMap = {}) {
 }
 
 function extractDocxParagraphText(paragraph, commentsMap = {}) {
-  const parts = [];
   const commentIds = [];
 
-  function walk(node) {
+  function revisionMeta(node) {
+    const author = String(node?.getAttribute?.('w:author') || node?.getAttribute?.('author') || '').trim();
+    const date = String(node?.getAttribute?.('w:date') || node?.getAttribute?.('date') || '').trim();
+    const bits = [];
+    if (author) bits.push(`by ${author}`);
+    if (date) bits.push(`on ${date}`);
+    return bits.length ? ` ${bits.join(' ')}` : '';
+  }
+
+  function walk(node, revisionContext = '') {
     if (!node || node.nodeType !== 1) return;
     const name = docxNodeName(node);
     if (name === 't' || name === 'instrText') {
-      parts.push(node.textContent || '');
-      return;
+      return node.textContent || '';
     }
     if (name === 'delText') {
       const text = String(node.textContent || '').trim();
-      if (text) parts.push(`[Deleted: ${text}]`);
-      return;
+      if (!text) return '';
+      return revisionContext === 'del' ? text : `[Deleted: ${text}]`;
     }
     if (name === 'tab') {
-      parts.push('\t');
-      return;
+      return '\t';
     }
     if (name === 'br' || name === 'cr') {
-      parts.push('\n');
-      return;
+      return '\n';
     }
     if (name === 'commentReference') {
       const commentId = node.getAttribute('w:id') || node.getAttribute('id');
       if (commentId != null) commentIds.push(String(commentId));
-      return;
+      return '';
     }
-    Array.from(node.childNodes || []).forEach(walk);
+    if (name === 'ins' || name === 'del') {
+      const content = Array.from(node.childNodes || [])
+        .map((child) => walk(child, name))
+        .join('')
+        .replace(/\n{2,}/g, '\n')
+        .trim();
+      if (!content) return '';
+      const label = name === 'ins' ? 'Inserted' : 'Deleted';
+      return `[${label}${revisionMeta(node)}: ${content}]`;
+    }
+    return Array.from(node.childNodes || []).map((child) => walk(child, revisionContext)).join('');
   }
 
-  Array.from(paragraph.childNodes || []).forEach(walk);
-  const text = parts.join('').replace(/\n{2,}/g, '\n').trim();
+  const text = Array.from(paragraph.childNodes || [])
+    .map((child) => walk(child))
+    .join('')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
   const uniqueComments = Array.from(new Set(commentIds))
     .map((id) => commentsMap[id])
     .filter(Boolean);

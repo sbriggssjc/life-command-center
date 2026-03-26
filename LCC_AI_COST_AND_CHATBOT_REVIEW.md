@@ -115,6 +115,7 @@
 - Added `AI_CHAT_ROLLOUT_CHECKLIST.md` as a concrete post-switch validation checklist for the balanced rollout.
 - Added `AI_CHAT_ROLLOUT_RESULTS_TEMPLATE.md` so rollout outcomes can be captured consistently after the first live validation pass.
 - Added `scripts/ai-rollout-status.mjs` plus `npm run ai:status` as a single-command starting point for each rollout validation session.
+- Added `AI_CHAT_DASHBOARD_INTERPRETATION.md` as a decision guide for reading rollout readiness, mismatches, telemetry quality, and next actions.
 - Refactored `pipeline/ai_research.py` to support configurable providers:
   - `openai`
   - `ollama`
