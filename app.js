@@ -6863,7 +6863,6 @@ async function runLiveIngestExtraction(domainKey) {
   state.extractionDocs = [];
   state.lowConfidenceOcrAcknowledged = false;
   state.citationRiskAcknowledged = false;
-  state.worsenedRetryAcknowledged = false;
   rerenderLiveIngestDomain(domainKey);
 
   try {
@@ -6909,7 +6908,7 @@ async function runLiveIngestExtraction(domainKey) {
     });
     proposal.operations = sortLiveIngestOperationsByConfidence((proposal.operations || []).map((op) => ({
       ...op,
-      _selected: op._citationRisk ? false : op._selected !== false
+      _selected: shouldDefaultSelectLiveIngestOperation(op)
     })));
     if ((proposal.operations || []).some((op) => op._citationRisk)) {
       proposal.notes_for_user = [
@@ -6917,4 +6916,984 @@ async function runLiveIngestExtraction(domainKey) {
         ...(proposal.notes_for_user || [])
       ];
     }
-    state.pr
+    if ((proposal.operations || []).some((op) => op._worsenedRetryRisk)) {
+      proposal.notes_for_user = [
+        'Operations tied to OCR sources that worsened after retry were deselected by default. Re-enable them only after reconfirming the source transcript.',
+        ...(proposal.notes_for_user || [])
+      ];
+    }
+    state.proposal = proposal;
+    state.loadingSnapshots = true;
+    rerenderLiveIngestDomain(domainKey);
+    await hydrateLiveIngestSnapshots(domainKey, proposal.operations || []);
+  } catch (err) {
+    state.error = err.message || 'Extraction failed';
+  } finally {
+    state.extracting = false;
+    state.loadingSnapshots = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+async function retryLiveIngestOcrSource(domainKey, docIndex) {
+  const state = getLiveIngestState(domainKey);
+  const doc = state.extractionDocs?.[docIndex];
+  if (!doc || String(doc.source_kind || '') !== 'ocr') return;
+  const sourceName = String(doc.metadata?.source_image_name || '').trim();
+  const previousText = String(doc.normalized_text || '');
+  const previousConfidence = String(doc.metadata?.ocr_confidence || '').trim();
+  const image = (state.preparedImageAttachments || []).find((item) => String(item?.name || '').trim() === sourceName);
+  if (!image?.data_url) {
+    showToast('Could not find the original image for this OCR source', 'warning');
+    return;
+  }
+
+  state.extracting = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+  try {
+    const refreshedDocs = await extractLiveIngestOcrDocuments({
+      domainKey,
+      sourceLabel: state.sourceLabel,
+      imageAttachments: [image]
+    });
+    if (!refreshedDocs.length) {
+      showToast('OCR retry did not return usable text', 'warning');
+      return;
+    }
+    const nextDoc = {
+      ...refreshedDocs[0],
+      metadata: {
+        ...(refreshedDocs[0].metadata || {}),
+        source_image_name: sourceName || refreshedDocs[0].metadata?.source_image_name || null,
+        ocr_retry_previous_text: previousText,
+        ocr_retry_previous_confidence: previousConfidence || null,
+        ocr_promoted: getLiveIngestConfidenceRank(refreshedDocs[0].metadata?.ocr_confidence) > getLiveIngestConfidenceRank(previousConfidence),
+        ocr_worsened: getLiveIngestConfidenceRank(refreshedDocs[0].metadata?.ocr_confidence) < getLiveIngestConfidenceRank(previousConfidence),
+        ocr_retry_history: [
+          ...((Array.isArray(doc?.metadata?.ocr_retry_history) ? doc.metadata.ocr_retry_history : []).filter((entry) => entry && typeof entry === 'object')),
+          {
+            previous_text: previousText,
+            previous_confidence: previousConfidence || null,
+            next_text: String(refreshedDocs[0].normalized_text || ''),
+            next_confidence: String(refreshedDocs[0].metadata?.ocr_confidence || '').trim() || null,
+            retried_at: new Date().toISOString()
+          }
+        ]
+      }
+    };
+    const delta = describeLiveIngestConfidenceDelta(previousConfidence, nextDoc.metadata?.ocr_confidence);
+    state.extractionDocs = (state.extractionDocs || []).map((item, idx) => idx === docIndex ? nextDoc : item);
+    await rerunLiveIngestProposalFromPreparedInputs(domainKey);
+    showToast(delta?.message || 'OCR retried and proposal refreshed', delta?.tone === 'warn' ? 'warning' : 'success');
+  } catch (err) {
+    state.error = err.message || 'OCR retry failed';
+  } finally {
+    state.extracting = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+async function rerunLiveIngestProposalFromPreparedInputs(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const context = getLiveIngestEffectiveContext(domainKey);
+  const preparedTextDocs = Array.isArray(state.preparedTextDocs) ? state.preparedTextDocs : [];
+  const preparedImageAttachments = Array.isArray(state.preparedImageAttachments) ? state.preparedImageAttachments : [];
+  const lowConfidenceOcrSources = (state.extractionDocs || [])
+    .filter((doc) => String(doc?.metadata?.ocr_confidence || '').toLowerCase() === 'low')
+    .map((doc) => String(doc?.metadata?.source_image_name || doc?.name || 'OCR source'));
+  const response = await invokeLccAssistant({
+    feature: `${domainKey}_live_ingest`,
+    context: {
+      ...context,
+      source_label: state.sourceLabel || null,
+      user_notes: state.notes || null,
+      text_documents: state.extractionDocs || []
+    },
+    attachments: preparedImageAttachments,
+    message: buildLiveIngestPrompt(domainKey, state, context)
+  });
+  state.rawResponse = response;
+  const proposal = parseLiveIngestProposal(response, domainKey, {
+    lowConfidenceOcrSources,
+    extractionDocs: state.extractionDocs
+  });
+  proposal.operations = sortLiveIngestOperationsByConfidence((proposal.operations || []).map((op) => ({
+    ...op,
+    _selected: shouldDefaultSelectLiveIngestOperation(op)
+  })));
+  if ((proposal.operations || []).some((op) => op._citationRisk)) {
+    proposal.notes_for_user = [
+      'Uncited operations from a low-confidence OCR run were deselected by default. Use `Select Cited Only` to keep the safer subset selected, or review and re-enable individual risky operations manually.',
+      ...(proposal.notes_for_user || [])
+    ];
+  }
+  if ((proposal.operations || []).some((op) => op._worsenedRetryRisk)) {
+    proposal.notes_for_user = [
+      'Operations tied to OCR sources that worsened after retry were deselected by default. Re-enable them only after reconfirming the source transcript.',
+      ...(proposal.notes_for_user || [])
+    ];
+  }
+  state.lowConfidenceOcrAcknowledged = false;
+  state.citationRiskAcknowledged = false;
+  state.worsenedRetryAcknowledged = false;
+  state.proposal = proposal;
+  state.loadingSnapshots = true;
+  rerenderLiveIngestDomain(domainKey);
+  try {
+    await hydrateLiveIngestSnapshots(domainKey, proposal.operations || []);
+  } finally {
+    state.loadingSnapshots = false;
+  }
+}
+
+async function extractLiveIngestOcrDocuments({ domainKey, sourceLabel, imageAttachments = [] }) {
+  const images = (Array.isArray(imageAttachments) ? imageAttachments : [])
+    .filter((item) => item && item.data_url)
+    .slice(0, 3);
+  if (!images.length) return [];
+
+  try {
+    const response = await invokeLccAssistant({
+      feature: 'detail_intake_assistant',
+      context: {
+        domain: domainKey,
+        source_label: sourceLabel || null,
+        task: 'ocr_transcription'
+      },
+      attachments: images,
+      message: [
+        'Read the attached images and transcribe visible text for downstream data ingestion.',
+        'Return JSON only with schema: {"pages":[{"name":string,"text":string,"confidence":"high"|"medium"|"low"}],"notes":[string]}.',
+        'Keep layout hints for tables/lists when visible, but do not infer missing text.',
+        'If an image is mostly non-text, return an empty text string for that page.',
+        'Use low confidence when text is partial, obstructed, or visually ambiguous.'
+      ].join('\n')
+    });
+    const payload = parseLiveIngestJsonPayload(response);
+    const pages = Array.isArray(payload?.pages) ? payload.pages : [];
+    const docs = pages
+      .map((page, index) => {
+        const sourceImageName = String(images[index]?.name || `Image ${index + 1}`).trim();
+        const name = String(page?.name || sourceImageName).trim();
+        const text = String(page?.text || '').trim();
+        const confidence = String(page?.confidence || '').toLowerCase();
+        if (!text) return null;
+        return {
+          name: `${sourceLabel || `${domainKey} intake`} - OCR - ${name}`,
+          mime_type: 'text/plain',
+          source_kind: 'ocr',
+          normalized_text: `${name}\n${text}`.slice(0, 30000),
+          metadata: {
+            source_image_name: sourceImageName,
+            ocr_page_name: name,
+            ocr_confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : null,
+            ocr_page_index: index + 1,
+            generated_from_images: 1
+          }
+        };
+      })
+      .filter(Boolean);
+    return docs;
+  } catch (err) {
+    console.warn('Live ingest OCR fallback failed:', err);
+    return [];
+  }
+}
+
+function parseLiveIngestJsonPayload(raw) {
+  const text = String(raw || '').trim();
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('The AI response did not include valid JSON.');
+  }
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+async function hydrateLiveIngestSnapshots(domainKey, operations) {
+  const updates = (Array.isArray(operations) ? operations : []).filter((op) =>
+    op.kind === 'update' && op.table && op.id_column && op.record_identifier != null
+  );
+  await Promise.all(updates.map(async (op) => {
+    try {
+      op._currentFields = await fetchLiveIngestCurrentFields(domainKey, op);
+      op._snapshotError = '';
+    } catch (err) {
+      op._snapshotError = err.message || 'Unable to load current values';
+    }
+  }));
+}
+
+async function fetchLiveIngestCurrentFields(domainKey, op) {
+  const proxyBase = domainKey === 'government' ? '/api/gov-query' : '/api/dia-query';
+  const fields = Object.keys(op.fields || {}).filter(Boolean);
+  if (!fields.length) return {};
+  const primaryRows = await fetchLiveIngestSnapshotRows(proxyBase, op, fields, true);
+  if (primaryRows.length) return primaryRows[0] || {};
+  const fallbackRows = await fetchLiveIngestSnapshotRows(proxyBase, op, fields, false);
+  if (fallbackRows.length) return fallbackRows[0] || {};
+  throw new Error('Snapshot lookup returned no matching rows');
+}
+
+async function fetchLiveIngestSnapshotRows(proxyBase, op, fields, includeMatchFilters) {
+  const url = new URL(proxyBase, window.location.origin);
+  url.searchParams.set('table', op.table);
+  url.searchParams.set('select', fields.join(','));
+  url.searchParams.set('filter', `${op.id_column}=eq.${op.record_identifier}`);
+  if (includeMatchFilters) {
+    (Array.isArray(op.match_filters) ? op.match_filters : []).forEach((filter, idx) => {
+      if (!filter?.column) return;
+      url.searchParams.set(`filter${idx + 2}`, `${filter.column}=eq.${filter.value}`);
+    });
+  }
+  url.searchParams.set('limit', '1');
+  const res = await fetch(url.toString());
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Snapshot lookup failed (${res.status})`);
+  }
+  return Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+}
+
+async function normalizeLiveIngestTextDocuments(textDocs) {
+  if (!Array.isArray(textDocs) || !textDocs.length) return [];
+  try {
+    const res = await fetch('/api/live-ingest?action=normalize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-LCC-Workspace': LCC_USER.workspace_id || ''
+      },
+      body: JSON.stringify({ action: 'normalize', documents: textDocs })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Normalize failed (${res.status})`);
+    return Array.isArray(data.documents) ? data.documents : [];
+  } catch (err) {
+    console.warn('Live ingest normalization fallback:', err);
+    return textDocs.map((doc) => ({
+      ...doc,
+      source_kind: 'text',
+      normalized_text: doc.text || ''
+    }));
+  }
+}
+
+async function searchLiveIngestRecords(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const term = String(state.lookupQuery || '').trim();
+  if (!term) {
+    state.lookupResults = [];
+    rerenderLiveIngestDomain(domainKey);
+    return;
+  }
+
+  state.lookupLoading = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+
+  const like = `*${term}*`;
+  try {
+    let results = [];
+    if (domainKey === 'government') {
+      const [leads, properties, ownership] = await Promise.all([
+        govQuery('prospect_leads', 'lead_id,lease_number,address,city,state,tenant_agency,lessor_name,matched_property_id,property_id', { filter: `or=(address.ilike.${like},tenant_agency.ilike.${like},lessor_name.ilike.${like},lease_number.ilike.${like})`, limit: 8 }),
+        govQuery('properties', 'property_id,address,city,state,property_name,agency', { filter: `or=(address.ilike.${like},city.ilike.${like},state.ilike.${like},agency.ilike.${like},property_name.ilike.${like})`, limit: 8 }),
+        govQuery('ownership_history', 'ownership_id,property_id,address,city,state,new_owner,prior_owner,recorded_owner_name', { filter: `or=(address.ilike.${like},new_owner.ilike.${like},prior_owner.ilike.${like},recorded_owner_name.ilike.${like})`, limit: 8 })
+      ]);
+      results = [
+        ...(leads.data || []).map((row) => ({
+          source_table: 'prospect_leads',
+          label: row.address || row.lease_number || `Lead ${row.lead_id}`,
+          subtitle: [row.city, row.state, row.tenant_agency, row.lead_id ? `lead ${row.lead_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            lead_id: row.lead_id || null,
+            property_id: row.matched_property_id || row.property_id || null,
+            lease_number: row.lease_number || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        })),
+        ...(properties.data || []).map((row) => ({
+          source_table: 'properties',
+          label: row.address || row.property_name || `Property ${row.property_id}`,
+          subtitle: [row.city, row.state, row.agency, row.property_id ? `property ${row.property_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            property_id: row.property_id || null,
+            property_name: row.property_name || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        })),
+        ...(ownership.data || []).map((row) => ({
+          source_table: 'ownership_history',
+          label: row.address || `Ownership ${row.ownership_id}`,
+          subtitle: [row.city, row.state, row.new_owner || row.prior_owner || row.recorded_owner_name, row.ownership_id ? `ownership ${row.ownership_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            ownership_id: row.ownership_id || null,
+            property_id: row.property_id || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        }))
+      ];
+    } else {
+      const [clinics, properties, queue] = await Promise.all([
+        diaQuery('v_cms_data', 'clinic_id,facility_name,address,city,state,operator_name,ccn', { filter: `or=(facility_name.ilike.${like},operator_name.ilike.${like},address.ilike.${like},city.ilike.${like},state.ilike.${like},ccn.ilike.${like},clinic_id.ilike.${like})`, limit: 8 }),
+        diaQuery('properties', 'property_id,address,city,state,property_name,tenant_operator', { filter: `or=(address.ilike.${like},city.ilike.${like},state.ilike.${like},property_name.ilike.${like},tenant_operator.ilike.${like})`, limit: 8 }),
+        diaQuery('v_clinic_property_link_review_queue', 'clinic_id,facility_name,operator_name,state,property_id,review_type', { filter: `or=(facility_name.ilike.${like},operator_name.ilike.${like},state.ilike.${like},clinic_id.ilike.${like})`, limit: 8 }).catch(() => [])
+      ]);
+      results = [
+        ...(clinics || []).map((row) => ({
+          source_table: 'v_cms_data',
+          label: row.facility_name || `Clinic ${row.clinic_id}`,
+          subtitle: [row.city, row.state, row.operator_name, row.clinic_id ? `clinic ${row.clinic_id}` : row.ccn ? `ccn ${row.ccn}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            clinic_id: row.clinic_id || null,
+            medicare_id: row.ccn || null,
+            facility_name: row.facility_name || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null,
+            operator_name: row.operator_name || null
+          }
+        })),
+        ...(properties || []).map((row) => ({
+          source_table: 'properties',
+          label: row.address || row.property_name || `Property ${row.property_id}`,
+          subtitle: [row.city, row.state, row.tenant_operator, row.property_id ? `property ${row.property_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            property_id: row.property_id || null,
+            property_name: row.property_name || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null
+          }
+        })),
+        ...(queue || []).map((row) => ({
+          source_table: 'v_clinic_property_link_review_queue',
+          label: row.facility_name || `Clinic ${row.clinic_id}`,
+          subtitle: [row.state, row.operator_name, row.review_type, row.clinic_id ? `clinic ${row.clinic_id}` : ''].filter(Boolean).join(' | '),
+          current_record: {
+            clinic_id: row.clinic_id || null,
+            property_id: row.property_id || null,
+            facility_name: row.facility_name || null,
+            state: row.state || null,
+            operator_name: row.operator_name || null
+          }
+        }))
+      ];
+    }
+
+    state.lookupResults = results.slice(0, 12);
+  } catch (err) {
+    state.error = `Record lookup failed: ${err.message}`;
+    state.lookupResults = [];
+  } finally {
+    state.lookupLoading = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+function deriveLiveIngestEntityQuery(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const context = getLiveIngestEffectiveContext(domainKey);
+  if (state.boundTarget?.label) return state.boundTarget.label;
+  const rec = context?.current_record || {};
+  return rec.facility_name || rec.property_name || rec.address || rec.lease_number || rec.operator_name || rec.city || '';
+}
+
+async function searchLiveIngestEntities(domainKey, rawTerm) {
+  const state = getLiveIngestState(domainKey);
+  const context = getLiveIngestEffectiveContext(domainKey);
+  const queries = buildLiveIngestEntityQueries(domainKey, rawTerm, context);
+  if (!queries.length) {
+    state.entityResults = [];
+    rerenderLiveIngestDomain(domainKey);
+    return;
+  }
+
+  state.entityLoading = true;
+  rerenderLiveIngestDomain(domainKey);
+  try {
+    const results = await Promise.all(queries.map((query) => fetchLiveIngestEntityCandidates(domainKey, query, context)));
+    const merged = mergeLiveIngestEntityCandidates(results.flat(), context, domainKey);
+    const suggestions = merged.slice(0, 8);
+    const autoSelected = pickLiveIngestAutoEntity(suggestions);
+    if (autoSelected) {
+      state.selectedEntity = autoSelected;
+      state.entityResults = [];
+    } else {
+      state.entityResults = suggestions;
+    }
+  } catch (err) {
+    state.error = `Entity search failed: ${err.message}`;
+    state.entityResults = [];
+  } finally {
+    state.entityLoading = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+function buildLiveIngestEntityQueries(domainKey, rawTerm, context) {
+  const rec = context?.current_record || {};
+  const candidates = [
+    rawTerm,
+    rec.facility_name,
+    rec.property_name,
+    rec.operator_name,
+    rec.address,
+    rec.lease_number,
+    deriveLiveIngestEntityQuery(domainKey)
+  ]
+    .map((value) => String(value || '').trim())
+    .filter((value) => value.length >= 2);
+
+  return Array.from(new Set(candidates)).slice(0, 4);
+}
+
+async function fetchLiveIngestEntityCandidates(domainKey, query, context) {
+  const url = new URL('/api/entities', window.location.origin);
+  url.searchParams.set('action', 'search');
+  url.searchParams.set('q', query);
+  if (domainKey === 'government') {
+    url.searchParams.set('domain', 'government');
+  } else if (domainKey === 'dialysis') {
+    url.searchParams.set('domain', 'dialysis');
+  }
+  if (context?.current_record?.property_id) {
+    url.searchParams.set('entity_type', 'asset');
+  }
+  const res = await fetch(url.toString(), {
+    headers: { 'X-LCC-Workspace': LCC_USER.workspace_id || '' }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Entity search failed (${res.status})`);
+  return Array.isArray(data.entities)
+    ? data.entities.map((entity) => ({ ...entity, _query: query }))
+    : [];
+}
+
+function mergeLiveIngestEntityCandidates(candidates, context, domainKey) {
+  const byId = new Map();
+  for (const entity of candidates) {
+    const key = entity.id || `${entity.name}|${entity.entity_type}|${entity.domain}`;
+    const scored = { ...entity, _score: scoreLiveIngestEntity(entity, context, domainKey) };
+    const existing = byId.get(key);
+    if (!existing || scored._score > existing._score) {
+      byId.set(key, scored);
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => (b._score || 0) - (a._score || 0) || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+function pickLiveIngestAutoEntity(candidates) {
+  const ranked = Array.isArray(candidates) ? candidates : [];
+  if (!ranked.length) return null;
+  const top = ranked[0];
+  const second = ranked[1];
+  const topScore = Number(top?._score || 0);
+  const secondScore = Number(second?._score || 0);
+  const scoreGap = topScore - secondScore;
+  if (topScore >= 85 && (ranked.length === 1 || scoreGap >= 20)) {
+    return {
+      ...top,
+      _autoSelected: true,
+      _confidenceLabel: scoreGap >= 35 ? 'very high confidence' : 'high confidence'
+    };
+  }
+  return null;
+}
+
+function scoreLiveIngestEntity(entity, context, domainKey) {
+  const rec = context?.current_record || {};
+  const name = String(entity.name || '').toLowerCase();
+  const query = String(entity._query || '').toLowerCase();
+  let score = 0;
+  if (entity.domain === domainKey) score += 20;
+  if (query && name === query) score += 40;
+  if (query && name.includes(query)) score += 18;
+  if (rec.city && entity.city && String(rec.city).toLowerCase() === String(entity.city).toLowerCase()) score += 10;
+  if (rec.state && entity.state && String(rec.state).toLowerCase() === String(entity.state).toLowerCase()) score += 8;
+  if (rec.property_id && entity.entity_type === 'asset') score += 12;
+  if (rec.clinic_id && (entity.entity_type === 'asset' || entity.entity_type === 'org')) score += 8;
+
+  const identities = Array.isArray(entity.external_identities) ? entity.external_identities : [];
+  const expectedIds = [rec.property_id, rec.lead_id, rec.ownership_id, rec.clinic_id, rec.medicare_id].filter((value) => value != null).map(String);
+  identities.forEach((identity) => {
+    if (expectedIds.includes(String(identity.external_id))) score += 60;
+    if (domainKey === 'government' && identity.source_system === 'gov_supabase') score += 8;
+    if (domainKey === 'dialysis' && identity.source_system === 'dialysis') score += 8;
+    if (identity.source_system === 'salesforce') score += 4;
+  });
+
+  const assetType = String(entity.asset_type || '').toLowerCase();
+  const orgType = String(entity.org_type || '').toLowerCase();
+  const operatorName = String(rec.operator_name || '').toLowerCase();
+  const address = String(rec.address || '').toLowerCase();
+  const facilityName = String(rec.facility_name || '').toLowerCase();
+  const propertyName = String(rec.property_name || '').toLowerCase();
+
+  if (domainKey === 'government') {
+    if (rec.property_id && entity.entity_type === 'asset') score += 16;
+    if (rec.lead_id && entity.entity_type === 'asset') score += 10;
+    if (address && name.includes(address)) score += 20;
+    if (propertyName && name.includes(propertyName)) score += 14;
+    if (orgType.includes('owner') || orgType.includes('landlord')) score += 6;
+    if (assetType.includes('government')) score += 10;
+  }
+
+  if (domainKey === 'dialysis') {
+    if (facilityName && name.includes(facilityName)) score += 18;
+    if (operatorName && name.includes(operatorName)) score += 14;
+    if (rec.clinic_id && entity.entity_type === 'org' && operatorName) score += 8;
+    if (rec.property_id && entity.entity_type === 'asset') score += 14;
+    if (assetType.includes('medical') || assetType.includes('dialysis')) score += 10;
+    if (orgType.includes('operator') || orgType.includes('healthcare')) score += 8;
+  }
+
+  return score;
+}
+
+function buildLiveIngestPrompt(domainKey, state, context) {
+  const allowedTables = LIVE_INGEST_ALLOWED_TABLES[domainKey];
+  const sourceCatalog = buildLiveIngestSourceCatalog(state.extractionDocs || []);
+  return [
+    `You are mapping multimodal source material into audited ${domainKey} database updates for Life Command Center.`,
+    'Return JSON only. Do not wrap it in markdown.',
+    'Never invent record IDs, table names, or values not supported by the source material or provided context.',
+    'If a change cannot be safely targeted, put it in missing_information instead of making an operation.',
+    `Allowed target tables: ${allowedTables.join(', ')}.`,
+    'Allowed operation kinds:',
+    '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters?, source_refs? }',
+    '- insert: { kind, target_source, table, id_column?, record_identifier?, fields, reason, propagation_scope?, source_refs? }',
+    '- bridge: { kind, action, payload, reason, source_refs? }',
+    'Allowed bridge actions: update_entity, complete_research, save_ownership, log_activity.',
+    'JSON schema:',
+    '{ "summary": string, "confidence": "high"|"medium"|"low", "notes_for_user": string[], "missing_information": string[], "operations": [] }',
+    `Source label: ${state.sourceLabel || 'not provided'}.`,
+    `User instructions: ${state.notes || 'Extract facts and map them to the right writes.'}.`,
+    `Current context: ${JSON.stringify(context.current_record || null)}`,
+    'If possible, include source_refs on each operation using the provided source indexes.',
+    'source_refs format: [{ source_index: number, quote?: string }]. Keep quotes short and only when directly supported.',
+    `Extraction source catalog: ${JSON.stringify(sourceCatalog)}`
+  ].join('\n');
+}
+
+function buildLiveIngestSourceCatalog(docs) {
+  return (Array.isArray(docs) ? docs : []).map((doc, index) => ({
+    source_index: index,
+    name: doc?.name || `Source ${index + 1}`,
+    source_kind: doc?.source_kind || 'text',
+    source_image_name: doc?.metadata?.source_image_name || null,
+    ocr_confidence: doc?.metadata?.ocr_confidence || null
+  }));
+}
+
+function parseLiveIngestProposal(raw, domainKey, options = {}) {
+  const text = String(raw || '').trim();
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('The AI response did not include valid JSON.');
+  }
+  const parsed = JSON.parse(cleaned.slice(start, end + 1));
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('The AI response JSON was empty.');
+  }
+  parsed.summary = typeof parsed.summary === 'string' ? parsed.summary : '';
+  parsed.notes_for_user = Array.isArray(parsed.notes_for_user) ? parsed.notes_for_user : [];
+  parsed.missing_information = Array.isArray(parsed.missing_information) ? parsed.missing_information : [];
+  const lowConfidenceOcrSources = Array.isArray(options.lowConfidenceOcrSources) ? options.lowConfidenceOcrSources : [];
+  const hasLowConfidenceOcr = lowConfidenceOcrSources.length > 0;
+  const extractionDocs = Array.isArray(options.extractionDocs) ? options.extractionDocs : [];
+  if (hasLowConfidenceOcr) {
+    parsed.notes_for_user.unshift(`Low-confidence OCR was part of this extraction: ${lowConfidenceOcrSources.join(', ')}`);
+  }
+  parsed.operations = Array.isArray(parsed.operations) ? parsed.operations.filter((op) => {
+    if (!op || typeof op !== 'object' || !op.kind) return false;
+    if (op.kind === 'bridge') return !!op.action;
+    return op.target_source === domainKey && LIVE_INGEST_ALLOWED_TABLES[domainKey].includes(op.table);
+  }).map((op) => ({
+    ...op,
+    _sourceLineage: deriveLiveIngestOperationSourceLineage(op, extractionDocs),
+    source_refs: normalizeLiveIngestSourceRefs(op.source_refs, extractionDocs)
+  })) : [];
+  parsed.operations = parsed.operations.map((op) => ({
+    ...op,
+    _sourceLineage: deriveLiveIngestDisplayLineage(op, extractionDocs),
+    _lowConfidenceOcr: liveIngestOperationHasLowConfidenceExposure(op, extractionDocs, hasLowConfidenceOcr),
+    _worsenedRetryRisk: liveIngestOperationHasWorsenedRetryExposure(op, extractionDocs),
+    _citationRisk: hasLowConfidenceOcr && (!Array.isArray(op.source_refs) || !op.source_refs.length)
+  }));
+  return parsed;
+}
+
+function normalizeLiveIngestSourceRefs(sourceRefs, extractionDocs) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  return (Array.isArray(sourceRefs) ? sourceRefs : [])
+    .map((ref) => {
+      const idx = Number(ref?.source_index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= docs.length) return null;
+      return {
+        source_index: idx,
+        quote: String(ref?.quote || '').trim().slice(0, 220)
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function sortLiveIngestOperationsByConfidence(operations) {
+  return (Array.isArray(operations) ? operations.slice() : []).sort((a, b) => {
+    const scoreDiff = scoreLiveIngestOperationConfidence(b) - scoreLiveIngestOperationConfidence(a);
+    if (scoreDiff) return scoreDiff;
+    return String(a?.table || a?.action || '').localeCompare(String(b?.table || b?.action || ''));
+  });
+}
+
+function scoreLiveIngestOperationConfidence(op) {
+  let score = 0;
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) score += 40;
+  if (op?._sourceLineage?.label === 'Model cited source') score += 20;
+  if (op?._sourceLineage?.label === 'Source matched OCR' || op?._sourceLineage?.label === 'Source matched') score += 10;
+  if (op?._citationRisk) score -= 50;
+  if (op?._worsenedRetryRisk) score -= 35;
+  if (op?._lowConfidenceOcr) score -= 10;
+  return score;
+}
+
+function liveIngestOperationHasLowConfidenceExposure(op, extractionDocs, hasLowConfidenceRun) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
+    return op.source_refs.some((ref) => {
+      const doc = docs[Number(ref?.source_index)];
+      return getLiveIngestDocConfidenceState(doc) === 'low';
+    });
+  }
+  const lineageConfidence = String(op?._sourceLineage?.ocr_confidence || '').trim().toLowerCase();
+  if (lineageConfidence) return lineageConfidence === 'low';
+  return !!hasLowConfidenceRun;
+}
+
+function liveIngestOperationHasWorsenedRetryExposure(op, extractionDocs) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
+    return op.source_refs.some((ref) => {
+      const doc = docs[Number(ref?.source_index)];
+      return isLiveIngestDocWorsened(doc);
+    });
+  }
+  const sourceName = String(op?._sourceLineage?.source_name || '').trim().toLowerCase();
+  if (!sourceName) return false;
+  return docs.some((doc) => {
+    const docName = String(doc?.metadata?.source_image_name || doc?.name || '').trim().toLowerCase();
+    return docName && docName === sourceName && isLiveIngestDocWorsened(doc);
+  });
+}
+
+function shouldDefaultSelectLiveIngestOperation(op) {
+  if (!op || typeof op !== 'object') return false;
+  if (op._citationRisk) return false;
+  if (op._worsenedRetryRisk) return false;
+  return op._selected !== false;
+}
+
+function deriveLiveIngestDisplayLineage(op, extractionDocs) {
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
+    const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+    const refs = op.source_refs
+      .map((ref) => {
+        const doc = docs[ref.source_index];
+        if (!doc) return null;
+        const sourceName = String(doc.metadata?.source_image_name || doc.name || `Source ${ref.source_index + 1}`).trim();
+        const confidence = String(doc.metadata?.ocr_confidence || '').toLowerCase();
+        return {
+          sourceName,
+          confidence,
+          quote: ref.quote || ''
+        };
+      })
+      .filter(Boolean);
+    if (refs.length) {
+      const first = refs[0];
+      return {
+        label: 'Model cited source',
+        detail: `Model-cited source: ${first.sourceName}${first.confidence ? ` | OCR confidence: ${first.confidence}` : ''}${first.quote ? ` | Quote: ${first.quote}` : ''}`,
+        source_name: first.sourceName,
+        source_kind: 'model_citation',
+        ocr_confidence: first.confidence || null,
+        evidence: first.quote || ''
+      };
+    }
+  }
+  return deriveLiveIngestOperationSourceLineage(op, extractionDocs);
+}
+
+function deriveLiveIngestOperationSourceLineage(op, extractionDocs) {
+  const docs = (Array.isArray(extractionDocs) ? extractionDocs : []).filter((doc) => doc && doc.normalized_text);
+  if (!docs.length) return null;
+  const opText = buildLiveIngestOperationSearchText(op);
+  if (!opText) return null;
+  const opTokens = tokenizeLiveIngestText(opText);
+  if (!opTokens.length) return null;
+  let bestDoc = null;
+  let bestScore = 0;
+  docs.forEach((doc) => {
+    const docTokens = tokenizeLiveIngestText(String(doc.normalized_text || '').slice(0, 4000));
+    if (!docTokens.length) return;
+    const docSet = new Set(docTokens);
+    let overlap = 0;
+    opTokens.forEach((token) => {
+      if (docSet.has(token)) overlap += token.length > 8 ? 2 : 1;
+    });
+    if (overlap > bestScore) {
+      bestScore = overlap;
+      bestDoc = doc;
+    }
+  });
+  if (!bestDoc || bestScore < 2) return null;
+  const sourceKind = String(bestDoc.source_kind || 'text');
+  const sourceName = String(bestDoc.metadata?.source_image_name || bestDoc.name || 'source').trim();
+  const confidence = String(bestDoc.metadata?.ocr_confidence || '').toLowerCase();
+  const label = sourceKind === 'ocr' ? 'Source matched OCR' : 'Source matched';
+  const evidence = extractLiveIngestEvidenceSnippet(String(bestDoc.normalized_text || ''), opTokens);
+  const detailBits = [sourceName];
+  if (confidence) detailBits.push(`OCR confidence: ${confidence}`);
+  return {
+    label,
+    detail: `Most likely source: ${detailBits.join(' | ')}`,
+    source_name: sourceName,
+    source_kind: sourceKind,
+    ocr_confidence: confidence || null,
+    score: bestScore,
+    evidence
+  };
+}
+
+function buildLiveIngestOperationSearchText(op) {
+  const parts = [
+    op?.table,
+    op?.action,
+    op?.reason,
+    JSON.stringify(op?.fields || {}),
+    JSON.stringify(op?.payload || {})
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function tokenizeLiveIngestText(text) {
+  const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'your', 'their', 'will', 'have', 'has', 'had', 'are', 'was', 'were', 'but', 'not', 'can', 'could', 'should', 'would', 'about', 'after', 'before', 'table', 'update', 'insert', 'bridge', 'action', 'reason', 'field', 'value', 'null', 'true', 'false']);
+  return Array.from(new Set(
+    String(text || '')
+      .toLowerCase()
+      .match(/[a-z0-9]{3,}/g) || []
+  )).filter((token) => !STOPWORDS.has(token));
+}
+
+function extractLiveIngestEvidenceSnippet(text, tokens) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!source) return '';
+  const searchTokens = (Array.isArray(tokens) ? tokens : []).filter(Boolean).slice(0, 12);
+  if (!searchTokens.length) return source.slice(0, 180);
+  let bestIndex = -1;
+  let bestToken = '';
+  searchTokens.forEach((token) => {
+    const idx = source.toLowerCase().indexOf(String(token).toLowerCase());
+    if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
+      bestIndex = idx;
+      bestToken = token;
+    }
+  });
+  if (bestIndex === -1) return source.slice(0, 180);
+  const start = Math.max(0, bestIndex - 60);
+  const end = Math.min(source.length, bestIndex + Math.max(120, bestToken.length + 80));
+  const snippet = source.slice(start, end).trim();
+  return `${start > 0 ? '...' : ''}${snippet}${end < source.length ? '...' : ''}`.slice(0, 220);
+}
+
+async function applyLiveIngestProposal(domainKey) {
+  const state = getLiveIngestState(domainKey);
+  const ops = (state.proposal?.operations || []).filter((op) => op._selected !== false);
+  if (!ops.length) {
+    showToast('Select at least one proposed operation', 'warning');
+    return;
+  }
+  const invalidOp = ops.find((op) => op._parseError);
+  if (invalidOp) {
+    showToast('Fix invalid JSON in the selected operations before applying', 'error');
+    return;
+  }
+  if (liveIngestHasLowConfidenceOcr(state.extractionDocs || []) && !state.lowConfidenceOcrAcknowledged) {
+    showToast('Review and acknowledge the low-confidence OCR transcript before applying', 'warning');
+    return;
+  }
+  if (liveIngestHasCitationRisk(ops || [], false) && !state.citationRiskAcknowledged) {
+    showToast('Acknowledge operations without model-cited sources before applying', 'warning');
+    return;
+  }
+  if (liveIngestHasWorsenedRetryRisk(ops || [], false) && !state.worsenedRetryAcknowledged) {
+    showToast('Acknowledge operations tied to worsened OCR retries before applying', 'warning');
+    return;
+  }
+
+  state.applying = true;
+  state.error = '';
+  rerenderLiveIngestDomain(domainKey);
+
+  const proxyBase = domainKey === 'government' ? '/api/gov-query' : '/api/dia-query';
+  const sourceSurface = domainKey === 'government' ? 'gov_live_ingest' : 'dia_live_ingest';
+  const effectiveContext = getLiveIngestEffectiveContext(domainKey);
+
+  try {
+    for (const op of ops) {
+      if (op.kind === 'update') {
+        const result = await applyChangeWithFallback({
+          proxyBase,
+          table: op.table,
+          idColumn: op.id_column,
+          idValue: op.record_identifier,
+          data: op.fields || {},
+          source_surface: sourceSurface,
+          notes: op.reason || state.notes || null,
+          propagation_scope: op.propagation_scope || 'live_ingest',
+          matchFilters: Array.isArray(op.match_filters) ? op.match_filters : []
+        });
+        if (!result.ok) throw new Error((result.errors || []).join(', ') || `Failed to update ${op.table}`);
+      } else if (op.kind === 'insert') {
+        const result = await applyInsertWithFallback({
+          proxyBase,
+          table: op.table,
+          idColumn: op.id_column || null,
+          recordIdentifier: op.record_identifier || null,
+          data: op.fields || {},
+          source_surface: sourceSurface,
+          notes: op.reason || state.notes || null,
+          propagation_scope: op.propagation_scope || 'live_ingest'
+        });
+        if (!result.ok) throw new Error((result.errors || []).join(', ') || `Failed to insert ${op.table}`);
+      } else if (op.kind === 'bridge') {
+        await canonicalBridge(op.action, op.payload || {});
+      }
+    }
+
+    await logLiveIngestProvenance({
+      domainKey,
+      proxyBase,
+      sourceSurface,
+      state,
+      effectiveContext,
+      appliedCount: ops.length
+    });
+
+    state.lastAppliedAt = new Date().toLocaleString();
+    showToast(`Applied ${ops.length} ingest operation${ops.length === 1 ? '' : 's'}`, 'success');
+    if (domainKey === 'government') {
+      await loadGovData();
+    } else {
+      await loadDiaData();
+    }
+  } catch (err) {
+    state.error = err.message || 'Failed to apply proposed changes';
+    showToast(state.error, 'error');
+  } finally {
+    state.applying = false;
+    rerenderLiveIngestDomain(domainKey);
+  }
+}
+
+async function logLiveIngestProvenance({ domainKey, proxyBase, sourceSurface, state, effectiveContext, appliedCount }) {
+  const record = effectiveContext?.current_record || {};
+  const notes = buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount);
+  const payload = {
+    queue_type: 'live_ingest',
+    status: 'applied',
+    notes,
+    assigned_at: new Date().toISOString()
+  };
+
+  if (record.property_id != null && record.property_id !== '') {
+    payload.selected_property_id = record.property_id;
+  }
+  if (domainKey === 'dialysis' && (record.clinic_id != null && record.clinic_id !== '')) {
+    payload.clinic_id = record.clinic_id;
+  }
+
+  // Provenance should never block the underlying writeback flow.
+  try {
+    await applyInsertWithFallback({
+      proxyBase,
+      table: 'research_queue_outcomes',
+      idColumn: domainKey === 'dialysis' ? 'clinic_id' : 'selected_property_id',
+      recordIdentifier: domainKey === 'dialysis'
+        ? (payload.clinic_id != null ? payload.clinic_id : null)
+        : (payload.selected_property_id != null ? payload.selected_property_id : null),
+      data: payload,
+      source_surface: sourceSurface,
+      notes: 'Automatic live ingest provenance log',
+      propagation_scope: 'research_queue_outcome'
+    });
+  } catch (err) {
+    console.error('Live ingest provenance log failed:', err);
+  }
+}
+
+function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount) {
+  const record = effectiveContext?.current_record || {};
+  const attachmentNames = (state.attachments || []).map((item) => item.name || item.kind || 'attachment').slice(0, 8);
+  const bits = [
+    '[live_ingest]',
+    state.sourceLabel ? `source=${state.sourceLabel}` : null,
+    `applied_ops=${appliedCount}`,
+    state.proposal?.summary ? `summary=${state.proposal.summary}` : null,
+    attachmentNames.length ? `attachments=${attachmentNames.join(', ')}` : null,
+    record.lead_id ? `lead_id=${record.lead_id}` : null,
+    record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
+    record.property_id ? `property_id=${record.property_id}` : null,
+    record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
+    state.notes ? `notes=${state.notes}` : null
+  ].filter(Boolean);
+  return bits.join(' | ').slice(0, 4000);
+}
+
+window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
+window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
+
+// Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {
+  if (!localStorage.getItem('lcc-install-dismissed')) {
+    setTimeout(() => {
+      const iosBanner = document.createElement('div');
+      iosBanner.id = 'installBanner';
+      iosBanner.innerHTML = `
+        <div style="position:fixed;bottom:0;left:0;right:0;z-index:9999;padding:16px;
+          background:linear-gradient(135deg,#1a1d27,#242836);border-top:1px solid var(--accent);
+          text-align:center;font-family:Outfit,sans-serif;
+          padding-bottom:max(16px,env(safe-area-inset-bottom))">
+          <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:6px">
+            <img src="icons/icon-192.png" style="width:32px;height:32px;border-radius:8px" alt="LCC">
+            <span style="font-weight:600;color:var(--text);font-size:14px">Install Life Command Center</span>
+          </div>
+          <div style="color:var(--text2);font-size:13px">
+            Tap <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> then <strong style="color:var(--text)">"Add to Home Screen"</strong>
+          </div>
+          <button onclick="dismissInstall()" style="position:absolute;top:8px;right:12px;background:none;
+            border:none;color:var(--text3);font-size:18px;cursor:pointer">&times;</button>
+        </div>`;
+      document.body.appendChild(iosBanner);
+    }, 3000);
+  }
+}
+

@@ -139,7 +139,9 @@
 - Added OCR retry confidence-delta handling so each retry history entry shows whether confidence improved, worsened, or stayed flat, and the retry toast now reports that outcome directly.
 - Added OCR retry-result promotion rules so improved OCR sources are marked as promoted and operation-level low-confidence badges now follow the actual cited or matched source instead of inheriting run-level OCR risk across the board.
 - Added source-level apply gating for worsened OCR retries so retried sources that lose confidence are flagged in the source list, propagate `Retry Worsened` risk to affected operations, and require a separate acknowledgment before selected risky operations can be applied.
+- Repaired a truncated `app.js` live-ingest tail by restoring the missing extraction/parser/apply section from the last good commit and reapplying the newer OCR retry safeguards on top of the repaired block.
+- Added default auto-deselection for operations tied to OCR sources that worsened after retry, alongside the existing citation-risk auto-deselection behavior.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as selective auto-deselection for worsened-retry operations, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
+- Add stronger OCR quality handling such as explicit bulk actions for worsened-retry operations, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
