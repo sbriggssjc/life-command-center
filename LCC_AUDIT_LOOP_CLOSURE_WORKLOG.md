@@ -197,3 +197,19 @@ Current behavior:
 
 Remaining gap:
 - Browser/runtime smoke testing is still required with an authenticated LCC session and a real CoStar screenshot.
+
+## 2026-03-26 Government Evidence Rollout Verification
+
+Implemented in this pass:
+- Added a GovernmentProject `GET /api/evidence-health` endpoint for the evidence workflow.
+- Added `evidence-health` support to the LCC gov evidence proxy in `api/data-proxy.js`.
+- Added a `Check Evidence Health` control to the live gov evidence workbench in `gov.js`.
+- Extended `LCC_DEPLOYMENT_SIGNOFF_TEMPLATE.md` with a dedicated Government Evidence rollout section.
+- Re-ran `node --check gov.js` and `node --check api/data-proxy.js` successfully after these changes.
+
+Current behavior:
+- Operators can now validate the core evidence rollout prerequisites directly from the live LCC government research tab before processing a screenshot.
+- Formal deployment signoff now includes explicit checks for extraction, artifact persistence, safe apply, row promotion, and observation review.
+
+Remaining gap:
+- Full authenticated browser smoke testing against a real `GOV_API_URL` target and screenshot is still required.

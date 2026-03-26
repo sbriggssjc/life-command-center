@@ -418,6 +418,82 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /Alpha Clinic\s+14500/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
+
+  it('extracts readable text from attached pptx payloads when present', () => {
+    const pptxLike = buildStoredZip([
+      {
+        name: 'ppt/presentation.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+          '<p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>',
+          '</p:presentation>'
+        ].join('')
+      },
+      {
+        name: 'ppt/_rels/presentation.xml.rels',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>',
+          '</Relationships>'
+        ].join('')
+      },
+      {
+        name: 'ppt/slides/slide1.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">',
+          '<p:cSld><p:spTree><p:sp><p:txBody>',
+          '<a:p><a:r><a:t>Operator update</a:t></a:r></a:p>',
+          '<a:p><a:r><a:t>Renewal target rent 16500</a:t></a:r></a:p>',
+          '</p:txBody></p:sp></p:spTree></p:cSld>',
+          '</p:sld>'
+        ].join('')
+      },
+      {
+        name: 'ppt/notesSlides/notesSlide1.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">',
+          '<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Discuss with landlord next week</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>',
+          '</p:notes>'
+        ].join('')
+      }
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: PPTX Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pptx123"',
+      '',
+      '--pptx123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached deck.',
+      '--pptx123',
+      'Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation; name="market-deck.pptx"',
+      'Content-Disposition: attachment; filename="market-deck.pptx"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pptxLike,
+      '--pptx123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pptx-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /market-deck\.pptx \(application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation\)/);
+    assert.match(doc.normalized_text, /Slide 1/);
+    assert.match(doc.normalized_text, /Operator update/);
+    assert.match(doc.normalized_text, /Renewal target rent 16500/);
+    assert.match(doc.normalized_text, /Discuss with landlord next week/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {

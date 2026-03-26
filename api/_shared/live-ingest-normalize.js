@@ -143,6 +143,7 @@ function isTextLikeMime(mime = '') {
   return value.startsWith('text/')
     || [
       'application/json',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/xml',
@@ -383,6 +384,61 @@ function isXlsxPart(part) {
     || filename.endsWith('.xlsx');
 }
 
+function extractPptxRelationshipMap(xmlText = '', basePrefix = 'ppt/') {
+  const map = new Map();
+  for (const match of String(xmlText || '').matchAll(/<Relationship\b[\s\S]*?\bId="([^"]+)"[\s\S]*?\bTarget="([^"]+)"[\s\S]*?\/>/g)) {
+    const id = String(match[1] || '').trim();
+    const target = String(match[2] || '').trim().replace(/^\/+/, '');
+    if (!id || !target) continue;
+    map.set(id, target.startsWith(basePrefix) ? target : `${basePrefix}${target.replace(/^(\.\.\/)+/, '')}`);
+  }
+  return map;
+}
+
+function extractPptxTextFromXml(xmlText = '') {
+  return Array.from(String(xmlText || '').matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g))
+    .map((match) => decodeHtmlEntities(match[1] || ''))
+    .map((value) => collapseWhitespace(value))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function extractPptxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'ppt/presentation.xml',
+    'ppt/_rels/presentation.xml.rels'
+  ]);
+  if (!entries.get('ppt/presentation.xml')) return '';
+  const presentationXml = entries.get('ppt/presentation.xml')?.toString('utf8') || '';
+  const relMap = extractPptxRelationshipMap(entries.get('ppt/_rels/presentation.xml.rels')?.toString('utf8') || '');
+  const slides = Array.from(presentationXml.matchAll(/<p:sldId\b[\s\S]*?\br:id="([^"]+)"[\s\S]*?\/>/g))
+    .map((match, index) => ({
+      name: `Slide ${index + 1}`,
+      path: relMap.get(String(match[1] || '').trim()) || `ppt/slides/slide${index + 1}.xml`,
+      notesPath: `ppt/notesSlides/notesSlide${index + 1}.xml`
+    }));
+  const wantedPaths = slides.slice(0, 10).flatMap((slide) => [slide.path, slide.notesPath]);
+  const slideEntries = extractZipEntries(buffer, wantedPaths);
+  const outputs = slides.slice(0, 10).map((slide) => {
+    const slideText = extractPptxTextFromXml(slideEntries.get(slide.path)?.toString('utf8') || '');
+    const notesText = extractPptxTextFromXml(slideEntries.get(slide.notesPath)?.toString('utf8') || '');
+    const combined = [
+      slideText ? `${slide.name}\n${slideText}` : '',
+      notesText ? `Notes\n${notesText}` : ''
+    ].filter(Boolean).join('\n');
+    return combined.trim();
+  }).filter(Boolean);
+  return outputs.join('\n\n').trim();
+}
+
+function isPptxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    || filename.endsWith('.pptx');
+}
+
 function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
@@ -411,6 +467,9 @@ function extractAttachmentPreview(part) {
     }
     if (isXlsxPart(part)) {
       return extractXlsxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isPptxPart(part)) {
+      return extractPptxTextFromBuffer(part.body_buffer).slice(0, 4000);
     }
     return normalizeMimeTextPart(part).slice(0, 4000);
   }

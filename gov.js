@@ -2586,6 +2586,125 @@ function pickGovEvidenceValue(...values) {
   return null;
 }
 
+function normalizeGovEvidenceCompareValue(value) {
+  return String(value == null ? '' : value).trim().toLowerCase();
+}
+
+function readGovEvidenceCurrentField(kind, rec) {
+  const selectors = {
+    owner: ['#res-true-owner', '#res-intel-true-owner', '#res-recorded-owner', '#res-intel-recorded-owner'],
+    lender: ['#res-lender', '#res-intel-lender'],
+    rba: ['#res-rba', '#res-intel-rba'],
+    year_built: ['#res-year-built', '#res-intel-year-built']
+  };
+  for (const selector of (selectors[kind] || [])) {
+    const el = document.querySelector(selector);
+    const value = el?.value;
+    if (value != null && String(value).trim() !== '') return value;
+  }
+  if (!rec) return '';
+  if (kind === 'owner') return rec.true_owner || rec.recorded_owner || rec.new_owner || rec.prior_owner || '';
+  if (kind === 'lender') return rec._loan?.index_name || '';
+  if (kind === 'rba') return rec.rba || rec.square_feet || '';
+  if (kind === 'year_built') return rec.year_built || '';
+  return '';
+}
+
+function buildGovEvidenceConflictList(review, rec) {
+  if (!review || typeof review !== 'object') return [];
+  const candidates = [
+    {
+      key: 'owner',
+      label: 'Owner',
+      currentValue: readGovEvidenceCurrentField('owner', rec),
+      evidenceValue: pickGovEvidenceValue(review.ownership?.true_owner, review.ownership?.current_owner, review.property?.owner_name)
+    },
+    {
+      key: 'lender',
+      label: 'Lender',
+      currentValue: readGovEvidenceCurrentField('lender', rec),
+      evidenceValue: pickGovEvidenceValue(review.loan?.lender, review.loan?.index_name)
+    },
+    {
+      key: 'rba',
+      label: 'RBA',
+      currentValue: readGovEvidenceCurrentField('rba', rec),
+      evidenceValue: pickGovEvidenceValue(review.property?.rba, review.property?.building_sf, review.building?.rba)
+    },
+    {
+      key: 'year_built',
+      label: 'Year Built',
+      currentValue: readGovEvidenceCurrentField('year_built', rec),
+      evidenceValue: pickGovEvidenceValue(review.property?.year_built, review.building?.year_built)
+    }
+  ];
+  return candidates.filter((item) => {
+    if (item.currentValue == null || item.currentValue === '') return false;
+    if (item.evidenceValue == null || item.evidenceValue === '') return false;
+    return normalizeGovEvidenceCompareValue(item.currentValue) !== normalizeGovEvidenceCompareValue(item.evidenceValue);
+  }).map((item, idx) => ({
+    id: `${item.key}:${idx}`,
+    resolution: '',
+    ...item
+  }));
+}
+
+function applyGovEvidenceConflictResolution(conflictId, resolution) {
+  const conflict = govEvidenceState.conflicts.find((item) => item.id === conflictId);
+  if (!conflict || !govEvidenceState.review) return;
+  conflict.resolution = resolution;
+  if (resolution !== 'keep_current') return;
+
+  if (conflict.key === 'owner') {
+    govEvidenceState.review.ownership = govEvidenceState.review.ownership || {};
+    govEvidenceState.review.property = govEvidenceState.review.property || {};
+    govEvidenceState.review.ownership.true_owner = conflict.currentValue;
+    govEvidenceState.review.ownership.current_owner = conflict.currentValue;
+    govEvidenceState.review.property.owner_name = conflict.currentValue;
+  }
+  if (conflict.key === 'lender') {
+    govEvidenceState.review.loan = govEvidenceState.review.loan || {};
+    govEvidenceState.review.loan.lender = conflict.currentValue;
+    govEvidenceState.review.loan.index_name = conflict.currentValue;
+  }
+  if (conflict.key === 'rba') {
+    govEvidenceState.review.property = govEvidenceState.review.property || {};
+    govEvidenceState.review.building = govEvidenceState.review.building || {};
+    govEvidenceState.review.property.rba = conflict.currentValue;
+    govEvidenceState.review.property.building_sf = conflict.currentValue;
+    govEvidenceState.review.building.rba = conflict.currentValue;
+  }
+  if (conflict.key === 'year_built') {
+    govEvidenceState.review.property = govEvidenceState.review.property || {};
+    govEvidenceState.review.building = govEvidenceState.review.building || {};
+    govEvidenceState.review.property.year_built = conflict.currentValue;
+    govEvidenceState.review.building.year_built = conflict.currentValue;
+  }
+}
+
+function unresolvedGovEvidenceConflicts() {
+  return (govEvidenceState.conflicts || []).filter((item) => !item.resolution);
+}
+
+function renderGovEvidenceConflictPanel() {
+  if (!govEvidenceState.conflicts?.length) return '';
+  const unresolved = unresolvedGovEvidenceConflicts();
+  return `<div class="live-ingest-callout warn" style="margin-top:12px">
+    <div style="font-weight:700;margin-bottom:8px">Conflict Review Required</div>
+    <div style="margin-bottom:10px">The screenshot evidence disagrees with current research values on ${unresolved.length} field${unresolved.length === 1 ? '' : 's'}. Choose whether to keep the current value or trust the screenshot before safe apply.</div>
+    <div style="display:grid;gap:8px">
+      ${govEvidenceState.conflicts.map((conflict) => `<div style="border:1px solid rgba(248,113,113,0.25);border-radius:8px;padding:10px;background:rgba(248,113,113,0.04)">
+        <div style="font-size:12px;font-weight:700;color:var(--text)">${esc(conflict.label)}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px">Current: ${esc(String(conflict.currentValue || ''))}</div>
+        <div style="font-size:12px;color:var(--text2)">Evidence: ${esc(String(conflict.evidenceValue || ''))}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn-secondary" type="button" data-gov-evidence-conflict="${esc(conflict.id)}:keep_current">Keep Current${conflict.resolution === 'keep_current' ? ' ✓' : ''}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-conflict="${esc(conflict.id)}:use_evidence">Use Evidence${conflict.resolution === 'use_evidence' ? ' ✓' : ''}</button>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
 function applyGovEvidenceReviewToForm(review) {
   if (!review || typeof review !== 'object') return;
   const owner = pickGovEvidenceValue(
@@ -5321,6 +5440,7 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
 
 
 

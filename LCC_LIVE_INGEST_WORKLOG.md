@@ -78,6 +78,10 @@
 - Added low-confidence OCR acknowledgment gating so `Apply Selected` stays disabled until the transcript warning is explicitly acknowledged, with the same rule enforced in the apply handler.
 - Added OCR-aware proposal tagging so operations generated from an extraction run that included low-confidence OCR are labeled individually in the review list and the proposal notes call that out explicitly.
 - Added heuristic source-lineage tagging for proposal operations by matching operation text against extraction inputs, so review cards can point to the most likely OCR page or source document.
+- Added `.pptx` intake support for direct uploads and `.eml` attachments, with slide and notes text extraction so PowerPoint decks can feed the same intake pipeline as other Office sources.
+- Extended the extraction prompt and proposal parser to support model-returned `source_refs` per operation against an indexed extraction-source catalog, with heuristic lineage retained as fallback when the model does not cite sources.
+- Added citation-aware apply gating so operations produced in a low-confidence OCR run without model-cited `source_refs` are flagged individually and require a second acknowledgment before apply.
+- Added safer batch controls so the review UI can auto-select only cited operations, letting the lower-risk subset move forward without bundling uncited OCR-dependent operations into the same apply action.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -125,5 +129,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as retry prompts or model-returned source citations, plus deeper extraction for more complex Office payloads such as legacy Excel or PowerPoint files.
+- Add stronger OCR quality handling such as retry prompts or per-operation retry requests, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

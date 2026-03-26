@@ -5470,6 +5470,7 @@ function createLiveIngestDomainState() {
     proposal: null,
     extractionDocs: [],
     lowConfidenceOcrAcknowledged: false,
+    citationRiskAcknowledged: false,
     loadingSnapshots: false,
     extracting: false,
     applying: false,
@@ -5502,6 +5503,7 @@ function renderLiveIngestWorkbench(domainKey) {
   const effectiveContext = getLiveIngestEffectiveContext(domainKey);
   const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
   const hasLowConfidenceOcr = liveIngestHasLowConfidenceOcr(state.extractionDocs || []);
+  const hasCitationRisk = liveIngestHasCitationRisk(proposal?.operations || [], true);
   const proposalHtml = proposal
     ? `<div class="live-ingest-results">
         <div class="live-ingest-results-head">
@@ -5517,6 +5519,7 @@ function renderLiveIngestWorkbench(domainKey) {
         ${state.loadingSnapshots ? '<div class="live-ingest-callout">Loading current record snapshots for before/after review...</div>' : ''}
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
+          <button class="btn-secondary" type="button" data-live-ingest-select-cited="${domainKey}">Select Cited Only</button>
           <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
@@ -5528,7 +5531,11 @@ function renderLiveIngestWorkbench(domainKey) {
             <input type="checkbox" data-live-ingest-ack="${domainKey}" ${state.lowConfidenceOcrAcknowledged ? 'checked' : ''}>
             <span>I reviewed the low-confidence OCR transcript before applying.</span>
           </label>` : ''}
-          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          ${hasCitationRisk ? `<label class="live-ingest-ack">
+            <input type="checkbox" data-live-ingest-citation-ack="${domainKey}" ${state.citationRiskAcknowledged ? 'checked' : ''}>
+            <span>I reviewed operations that rely on low-confidence OCR without model-cited sources.</span>
+          </label>` : ''}
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
           ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
         </div>
@@ -5547,7 +5554,7 @@ function renderLiveIngestWorkbench(domainKey) {
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
         <div class="live-ingest-dropzone" id="${prefix}-dropzone" tabindex="0">
-          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.xlsx" style="display:none">
+          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.xlsx,.pptx" style="display:none">
           <div class="live-ingest-drop-title">Drop screenshots or source files here</div>
           <div class="live-ingest-drop-sub">Click to browse, paste from clipboard, or capture a screen snapshot.</div>
           <div class="live-ingest-button-row">
@@ -5636,6 +5643,14 @@ function liveIngestHasLowConfidenceOcr(docs) {
   return (Array.isArray(docs) ? docs : []).some((doc) => String(doc?.metadata?.ocr_confidence || '').toLowerCase() === 'low');
 }
 
+function liveIngestHasCitationRisk(operations, selectedOnly = false) {
+  return (Array.isArray(operations) ? operations : []).some((op) => {
+    if (!op?._citationRisk) return false;
+    if (!selectedOnly) return true;
+    return op._selected !== false;
+  });
+}
+
 function renderLiveIngestOperation(domainKey, op, idx) {
   const opType = esc(op.kind || 'update');
   const table = esc(op.table || op.action || 'operation');
@@ -5657,11 +5672,13 @@ function renderLiveIngestOperation(domainKey, op, idx) {
         <span class="live-ingest-op-kind">${opType}</span>
         <span class="live-ingest-op-target">${target}</span>
         ${op._lowConfidenceOcr ? `<span class="live-ingest-op-flag warn">Low-confidence OCR</span>` : ''}
+        ${op._citationRisk ? `<span class="live-ingest-op-flag warn">No cited source</span>` : ''}
         ${op._sourceLineage?.label ? `<span class="live-ingest-op-flag">${esc(op._sourceLineage.label)}</span>` : ''}
         ${op.kind === 'update' ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-refresh-op="${domainKey}:${idx}">Refresh</button>` : ''}
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
       ${op._lowConfidenceOcr ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation was proposed while low-confidence OCR text was part of the extraction input. Review the related transcript before applying.</div>` : ''}
+      ${op._citationRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation does not include a model-cited source reference even though low-confidence OCR was present in the extraction run.</div>` : ''}
       ${op._sourceLineage?.detail ? `<div class="live-ingest-op-reason">${esc(op._sourceLineage.detail)}</div>` : ''}
       ${diffHtml}
       <div class="live-ingest-editor-head">
@@ -5868,6 +5885,11 @@ function bindLiveIngestWorkbench(domainKey) {
     (state.proposal?.operations || []).forEach((op) => { op._selected = true; });
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-select-cited="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = !op._citationRisk; });
+    state.citationRiskAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
     rerenderLiveIngestDomain(domainKey);
@@ -5888,11 +5910,16 @@ function bindLiveIngestWorkbench(domainKey) {
     state.proposal = null;
     state.extractionDocs = [];
     state.lowConfidenceOcrAcknowledged = false;
+    state.citationRiskAcknowledged = false;
     state.error = '';
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
     state.lowConfidenceOcrAcknowledged = !!e.target.checked;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-citation-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
+    state.citationRiskAcknowledged = !!e.target.checked;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-apply="${domainKey}"]`)?.addEventListener('click', () => applyLiveIngestProposal(domainKey));
@@ -5902,6 +5929,9 @@ function bindLiveIngestWorkbench(domainKey) {
       const idx = parseInt(idxText, 10);
       if (!Array.isArray(state.proposal?.operations) || Number.isNaN(idx) || !state.proposal.operations[idx]) return;
       state.proposal.operations[idx]._selected = checkbox.checked;
+      if (!liveIngestHasCitationRisk(state.proposal.operations || [], true)) {
+        state.citationRiskAcknowledged = false;
+      }
     };
   });
   document.querySelectorAll(`[data-live-ingest-json^="${domainKey}:"]`).forEach((editor) => {
@@ -6167,6 +6197,9 @@ async function normalizeLiveIngestFile(file) {
   if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || lowerName.endsWith('.xlsx')) {
     return await convertXlsxToTextAttachment(file);
   }
+  if (file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || lowerName.endsWith('.pptx')) {
+    return await convertPptxToTextAttachment(file);
+  }
   if (file.type.startsWith('image/')) {
     const dataUrl = await readFileAsDataUrl(file);
     return [{
@@ -6182,7 +6215,7 @@ async function normalizeLiveIngestFile(file) {
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images, PDFs, DOCX/XLSX files, and text-based exports are supported directly.');
+    throw new Error('Only images, PDFs, DOCX/XLSX/PPTX files, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
   return [{
@@ -6353,6 +6386,39 @@ async function convertXlsxToTextAttachment(file) {
     kind: 'text',
     name: file.name || 'workbook.xlsx',
     mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    text: text.slice(0, 30000)
+  }];
+}
+
+async function convertPptxToTextAttachment(file) {
+  if (typeof window.JSZip === 'undefined') {
+    throw new Error('PPTX extractor not available');
+  }
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const zip = await window.JSZip.loadAsync(buffer);
+  const presentationXml = await zip.file('ppt/presentation.xml')?.async('string');
+  if (!presentationXml) {
+    throw new Error('PPTX is missing ppt/presentation.xml');
+  }
+
+  const relsXml = await zip.file('ppt/_rels/presentation.xml.rels')?.async('string') || '';
+  const slideEntries = await extractTextFromPptxPackage({
+    presentationXml,
+    relsXml,
+    getSlideXml: (path) => zip.file(path)?.async('string') || Promise.resolve(''),
+    getNotesXml: (path) => zip.file(path)?.async('string') || Promise.resolve('')
+  });
+  const text = slideEntries.join('\n\n').trim();
+  if (!text) {
+    throw new Error('PPTX did not contain readable slide text');
+  }
+
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'deck.pptx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     text: text.slice(0, 30000)
   }];
 }
@@ -6534,6 +6600,47 @@ function extractXlsxSheetRows(xml, sharedStrings = []) {
   }).filter(Boolean);
 }
 
+async function extractTextFromPptxPackage(pkg) {
+  const parser = new DOMParser();
+  const relsXml = parser.parseFromString(String(pkg.relsXml || ''), 'application/xml');
+  const relMap = new Map(Array.from(relsXml.getElementsByTagName('Relationship')).map((rel) => [
+    rel.getAttribute('Id'),
+    `ppt/${String(rel.getAttribute('Target') || '').replace(/^\/+/, '')}`
+  ]));
+  const presentationXml = parser.parseFromString(String(pkg.presentationXml || ''), 'application/xml');
+  const slides = Array.from(presentationXml.getElementsByTagName('p:sldId')).map((slide, index) => ({
+    name: `Slide ${index + 1}`,
+    path: relMap.get(slide.getAttribute('r:id')) || `ppt/slides/slide${index + 1}.xml`,
+    notesPath: `ppt/notesSlides/notesSlide${index + 1}.xml`
+  }));
+  const outputs = [];
+  for (const slide of slides.slice(0, 10)) {
+    const [slideXml, notesXml] = await Promise.all([
+      pkg.getSlideXml(slide.path),
+      pkg.getNotesXml(slide.notesPath)
+    ]);
+    const slideText = extractPptxTextFromXml(parser.parseFromString(String(slideXml || ''), 'application/xml'));
+    const notesText = extractPptxTextFromXml(parser.parseFromString(String(notesXml || ''), 'application/xml'));
+    const combined = [
+      slideText ? `${slide.name}\n${slideText}` : '',
+      notesText ? `Notes\n${notesText}` : ''
+    ].filter(Boolean).join('\n');
+    if (combined) outputs.push(combined.trim());
+  }
+  return outputs;
+}
+
+function extractPptxTextFromXml(xml) {
+  const paragraphs = Array.from(xml?.getElementsByTagName?.('a:p') || []);
+  return paragraphs.map((paragraph) => {
+    return Array.from(paragraph.getElementsByTagName('a:t'))
+      .map((node) => node.textContent || '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }).filter(Boolean).join('\n').trim();
+}
+
 async function runLiveIngestExtraction(domainKey) {
   const state = getLiveIngestState(domainKey);
   const imageAttachments = state.attachments.filter((item) => item.kind === 'image').slice(0, 3).map((item) => ({
@@ -6559,6 +6666,7 @@ async function runLiveIngestExtraction(domainKey) {
   state.error = '';
   state.extractionDocs = [];
   state.lowConfidenceOcrAcknowledged = false;
+  state.citationRiskAcknowledged = false;
   rerenderLiveIngestDomain(domainKey);
 
   try {
@@ -7032,6 +7140,7 @@ function scoreLiveIngestEntity(entity, context, domainKey) {
 
 function buildLiveIngestPrompt(domainKey, state, context) {
   const allowedTables = LIVE_INGEST_ALLOWED_TABLES[domainKey];
+  const sourceCatalog = buildLiveIngestSourceCatalog(state.extractionDocs || []);
   return [
     `You are mapping multimodal source material into audited ${domainKey} database updates for Life Command Center.`,
     'Return JSON only. Do not wrap it in markdown.',
@@ -7039,16 +7148,29 @@ function buildLiveIngestPrompt(domainKey, state, context) {
     'If a change cannot be safely targeted, put it in missing_information instead of making an operation.',
     `Allowed target tables: ${allowedTables.join(', ')}.`,
     'Allowed operation kinds:',
-    '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters? }',
-    '- insert: { kind, target_source, table, id_column?, record_identifier?, fields, reason, propagation_scope? }',
-    '- bridge: { kind, action, payload, reason }',
+    '- update: { kind, target_source, table, id_column, record_identifier, fields, reason, propagation_scope?, match_filters?, source_refs? }',
+    '- insert: { kind, target_source, table, id_column?, record_identifier?, fields, reason, propagation_scope?, source_refs? }',
+    '- bridge: { kind, action, payload, reason, source_refs? }',
     'Allowed bridge actions: update_entity, complete_research, save_ownership, log_activity.',
     'JSON schema:',
     '{ "summary": string, "confidence": "high"|"medium"|"low", "notes_for_user": string[], "missing_information": string[], "operations": [] }',
     `Source label: ${state.sourceLabel || 'not provided'}.`,
     `User instructions: ${state.notes || 'Extract facts and map them to the right writes.'}.`,
-    `Current context: ${JSON.stringify(context.current_record || null)}`
+    `Current context: ${JSON.stringify(context.current_record || null)}`,
+    'If possible, include source_refs on each operation using the provided source indexes.',
+    'source_refs format: [{ source_index: number, quote?: string }]. Keep quotes short and only when directly supported.',
+    `Extraction source catalog: ${JSON.stringify(sourceCatalog)}`
   ].join('\n');
+}
+
+function buildLiveIngestSourceCatalog(docs) {
+  return (Array.isArray(docs) ? docs : []).map((doc, index) => ({
+    source_index: index,
+    name: doc?.name || `Source ${index + 1}`,
+    source_kind: doc?.source_kind || 'text',
+    source_image_name: doc?.metadata?.source_image_name || null,
+    ocr_confidence: doc?.metadata?.ocr_confidence || null
+  }));
 }
 
 function parseLiveIngestProposal(raw, domainKey, options = {}) {
@@ -7082,9 +7204,60 @@ function parseLiveIngestProposal(raw, domainKey, options = {}) {
   }).map((op) => ({
     ...op,
     _lowConfidenceOcr: hasLowConfidenceOcr,
-    _sourceLineage: deriveLiveIngestOperationSourceLineage(op, extractionDocs)
+    _sourceLineage: deriveLiveIngestOperationSourceLineage(op, extractionDocs),
+    source_refs: normalizeLiveIngestSourceRefs(op.source_refs, extractionDocs)
   })) : [];
+  parsed.operations = parsed.operations.map((op) => ({
+    ...op,
+    _sourceLineage: deriveLiveIngestDisplayLineage(op, extractionDocs),
+    _citationRisk: hasLowConfidenceOcr && (!Array.isArray(op.source_refs) || !op.source_refs.length)
+  }));
   return parsed;
+}
+
+function normalizeLiveIngestSourceRefs(sourceRefs, extractionDocs) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  return (Array.isArray(sourceRefs) ? sourceRefs : [])
+    .map((ref) => {
+      const idx = Number(ref?.source_index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= docs.length) return null;
+      return {
+        source_index: idx,
+        quote: String(ref?.quote || '').trim().slice(0, 220)
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function deriveLiveIngestDisplayLineage(op, extractionDocs) {
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
+    const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+    const refs = op.source_refs
+      .map((ref) => {
+        const doc = docs[ref.source_index];
+        if (!doc) return null;
+        const sourceName = String(doc.metadata?.source_image_name || doc.name || `Source ${ref.source_index + 1}`).trim();
+        const confidence = String(doc.metadata?.ocr_confidence || '').toLowerCase();
+        return {
+          sourceName,
+          confidence,
+          quote: ref.quote || ''
+        };
+      })
+      .filter(Boolean);
+    if (refs.length) {
+      const first = refs[0];
+      return {
+        label: 'Model cited source',
+        detail: `Model-cited source: ${first.sourceName}${first.confidence ? ` | OCR confidence: ${first.confidence}` : ''}${first.quote ? ` | Quote: ${first.quote}` : ''}`,
+        source_name: first.sourceName,
+        source_kind: 'model_citation',
+        ocr_confidence: first.confidence || null
+      };
+    }
+  }
+  return deriveLiveIngestOperationSourceLineage(op, extractionDocs);
 }
 
 function deriveLiveIngestOperationSourceLineage(op, extractionDocs) {
@@ -7160,6 +7333,10 @@ async function applyLiveIngestProposal(domainKey) {
   }
   if (liveIngestHasLowConfidenceOcr(state.extractionDocs || []) && !state.lowConfidenceOcrAcknowledged) {
     showToast('Review and acknowledge the low-confidence OCR transcript before applying', 'warning');
+    return;
+  }
+  if (liveIngestHasCitationRisk(ops || [], false) && !state.citationRiskAcknowledged) {
+    showToast('Acknowledge operations without model-cited sources before applying', 'warning');
     return;
   }
 
