@@ -391,14 +391,21 @@ export default async function handler(req, res) {
 
   try {
     const wantCount = req.query.count !== 'false';
+    // Add statement timeout for heavy views to prevent Supabase 57014 timeouts
+    const isHeavyView = table === 'v_crm_client_rollup' || table === 'v_sf_tasks_contact_rollup';
+    const fetchHeaders = {
+      'apikey': dbKey,
+      'Authorization': `Bearer ${dbKey}`,
+      'Content-Type': 'application/json',
+      ...(wantCount ? { 'Prefer': 'count=exact' } : {})
+    };
+    // Skip exact counts for heavy views to avoid sequential scan overhead
+    if (isHeavyView && wantCount) {
+      fetchHeaders['Prefer'] = 'count=planned';
+    }
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers: {
-        'apikey': dbKey,
-        'Authorization': `Bearer ${dbKey}`,
-        'Content-Type': 'application/json',
-        ...(wantCount ? { 'Prefer': 'count=exact' } : {})
-      }
+      headers: fetchHeaders
     });
 
     const body = await response.text();
