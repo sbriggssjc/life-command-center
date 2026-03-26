@@ -275,7 +275,7 @@ tr.clickable-row:hover td { background: var(--s2); }
 .copilot-input-row { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; flex-shrink: 0; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 .copilot-input { flex: 1; background: var(--s2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; color: var(--text); font-size: 14px; outline: none; font-family: inherit; resize: none; max-height: 80px; }
 .copilot-input:focus { border-color: var(--accent); }
-.copilot-send { background: var(--accent2); border: none; color: #fff; width: 40px; height: 40px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.copilot-send { background: var(--accent2); border: none; color: #fff; width: 44px; height: 44px; min-width: 44px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; z-index: 1; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 .copilot-send:hover { background: var(--accent); }
 .copilot-send:disabled { opacity: 0.4; cursor: default; }
 .copilot-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
