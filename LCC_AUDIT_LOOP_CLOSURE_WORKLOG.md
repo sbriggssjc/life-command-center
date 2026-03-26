@@ -264,3 +264,16 @@ Current behavior:
 
 Remaining gap:
 - LoopNet and other platforms still use the generic fallback extractor rather than a platform-specific schema.
+
+## 2026-03-26 LoopNet Screenshot Extraction Routing
+
+Implemented in this pass:
+- GovernmentProject now has a dedicated `loopnet_screenshot` extraction prompt.
+- Automatic screenshot source routing now dispatches detected `loopnet` screenshots to that specialized prompt instead of the generic market screenshot fallback.
+
+Current behavior:
+- The live LCC single-upload gov evidence flow still looks the same in the UI.
+- When the backend detects a LoopNet screenshot, extraction quality should improve because it now uses a LoopNet-specific schema rather than the generic market prompt.
+
+Remaining gap:
+- This path still needs tuning against real LoopNet screenshots and any later LoopNet-specific normalization rules.

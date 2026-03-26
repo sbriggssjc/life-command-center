@@ -5547,11 +5547,13 @@ function renderLiveIngestWorkbench(domainKey) {
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
           <button class="btn-secondary" type="button" data-live-ingest-select-cited="${domainKey}">Select Cited Only</button>
+          ${hasWorsenedRetryRisk ? `<button class="btn-secondary" type="button" data-live-ingest-select-worsened="${domainKey}">Select Worsened Only</button>
+          <button class="btn-secondary" type="button" data-live-ingest-clear-worsened="${domainKey}">Clear Worsened</button>` : ''}
           <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         <div class="live-ingest-op-list">
-          ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
+          ${ops.length ? renderLiveIngestOperationGroups(domainKey, ops) : '<div class="live-ingest-empty">No operations were proposed.</div>'}
         </div>
         <div class="live-ingest-actions">
           ${hasLowConfidenceOcr ? `<label class="live-ingest-ack">
@@ -5765,12 +5767,14 @@ function renderLiveIngestOperation(domainKey, op, idx) {
         <span class="live-ingest-op-target">${target}</span>
         ${op._lowConfidenceOcr ? `<span class="live-ingest-op-flag warn">Low-confidence OCR</span>` : ''}
         ${op._citationRisk ? `<span class="live-ingest-op-flag warn">No cited source</span>` : ''}
+        ${op._worsenedRetryRisk ? `<span class="live-ingest-op-flag warn">Retry Worsened</span>` : ''}
         ${op._sourceLineage?.label ? `<span class="live-ingest-op-flag">${esc(op._sourceLineage.label)}</span>` : ''}
         ${op.kind === 'update' ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-refresh-op="${domainKey}:${idx}">Refresh</button>` : ''}
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
       ${op._lowConfidenceOcr ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation was proposed while low-confidence OCR text was part of the extraction input. Review the related transcript before applying.</div>` : ''}
       ${op._citationRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation does not include a model-cited source reference even though low-confidence OCR was present in the extraction run.</div>` : ''}
+      ${op._worsenedRetryRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation points to a source whose OCR confidence decreased after retry. Reconfirm the source transcript before applying.</div>` : ''}
       ${op._sourceLineage?.detail ? `<div class="live-ingest-op-reason">${esc(op._sourceLineage.detail)}</div>` : ''}
       ${op._sourceLineage?.evidence ? `<div class="live-ingest-source-evidence">
         <div class="live-ingest-retry-label">Source Evidence</div>
@@ -5785,6 +5789,54 @@ function renderLiveIngestOperation(domainKey, op, idx) {
       ${op._parseError ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(op._parseError)}</div>` : ''}
     </div>
   </label>`;
+}
+
+function renderLiveIngestOperationGroups(domainKey, operations) {
+  const groups = buildLiveIngestOperationGroups(operations);
+  return groups.map((group, groupIdx) => {
+    const countBits = [
+      `${group.indices.length} op${group.indices.length === 1 ? '' : 's'}`,
+      group.selectedCount ? `${group.selectedCount} selected` : null,
+      group.worsenedCount ? `${group.worsenedCount} worsened` : null
+    ].filter(Boolean).join(' | ');
+    return `<section class="live-ingest-op-group">
+      <div class="live-ingest-op-group-head">
+        <div>
+          <strong>${esc(group.label)}</strong>
+          <div>${esc(countBits)}</div>
+        </div>
+        <div class="live-ingest-op-group-controls">
+          <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select="${domainKey}:${groupIdx}">Select Group</button>
+          ${group.worsenedCount ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select-risk="${domainKey}:${groupIdx}">Include Worsened</button>` : ''}
+          <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-clear="${domainKey}:${groupIdx}">Clear Group</button>
+        </div>
+      </div>
+      ${group.detail ? `<div class="live-ingest-op-reason">${esc(group.detail)}</div>` : ''}
+      ${group.worsenedCount ? `<div class="live-ingest-callout warn">Group selection keeps worsened-retry operations deselected by default. Use "Include Worsened" to opt them back in for this source.</div>` : ''}
+      ${group.indices.map((opIdx) => renderLiveIngestOperation(domainKey, operations[opIdx], opIdx)).join('')}
+    </section>`;
+  }).join('');
+}
+
+function buildLiveIngestOperationGroups(operations) {
+  const groups = [];
+  const byKey = new Map();
+  (Array.isArray(operations) ? operations : []).forEach((op, idx) => {
+    const sourceName = String(op?._sourceLineage?.source_name || '').trim();
+    const label = sourceName || 'Unattributed source';
+    const detail = op?._sourceLineage?.detail || (sourceName ? `Source: ${sourceName}` : 'Operations without clear source lineage');
+    const key = `${label}__${detail}`;
+    if (!byKey.has(key)) {
+      const group = { key, label, detail, indices: [], selectedCount: 0, worsenedCount: 0 };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    const group = byKey.get(key);
+    group.indices.push(idx);
+    if (op?._selected !== false) group.selectedCount += 1;
+    if (op?._worsenedRetryRisk) group.worsenedCount += 1;
+  });
+  return groups;
 }
 
 function renderLiveIngestFieldValue(value) {
@@ -5981,16 +6033,76 @@ function bindLiveIngestWorkbench(domainKey) {
   });
   document.querySelector(`[data-live-ingest-select-all="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = true; });
+    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-cited="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = !op._citationRisk; });
     state.citationRiskAcknowledged = false;
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-select-worsened="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = !!op._worsenedRetryRisk; });
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-clear-worsened="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => {
+      if (op._worsenedRetryRisk) op._selected = false;
+    });
+    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
+    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelectorAll(`[data-live-ingest-group-select^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupSelect.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      group.indices.forEach((opIdx) => {
+        const op = state.proposal?.operations?.[opIdx];
+        if (op) op._selected = !op._worsenedRetryRisk;
+      });
+      state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-select-risk^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupSelectRisk.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      group.indices.forEach((opIdx) => {
+        const op = state.proposal?.operations?.[opIdx];
+        if (op) op._selected = true;
+      });
+      state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-clear^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupClear.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      group.indices.forEach((opIdx) => {
+        const op = state.proposal?.operations?.[opIdx];
+        if (op) op._selected = false;
+      });
+      state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
   });
   document.querySelector(`[data-live-ingest-refresh-snapshots="${domainKey}"]`)?.addEventListener('click', async () => {
     if (!state.proposal?.operations?.length) return;

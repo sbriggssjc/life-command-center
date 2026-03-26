@@ -141,7 +141,9 @@
 - Added source-level apply gating for worsened OCR retries so retried sources that lose confidence are flagged in the source list, propagate `Retry Worsened` risk to affected operations, and require a separate acknowledgment before selected risky operations can be applied.
 - Repaired a truncated `app.js` live-ingest tail by restoring the missing extraction/parser/apply section from the last good commit and reapplying the newer OCR retry safeguards on top of the repaired block.
 - Added default auto-deselection for operations tied to OCR sources that worsened after retry, alongside the existing citation-risk auto-deselection behavior.
+- Added bulk toolbar actions for worsened-retry operations so the review surface can select only that subset or clear it in one step, while also clearing stale worsened-risk acknowledgments when bulk selection changes.
+- Restored source-group review rendering in the proposal panel and added safe group controls: `Select Group`, `Include Worsened`, and `Clear Group`, with default group selection continuing to keep worsened-retry operations deselected unless explicitly included.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as explicit bulk actions for worsened-retry operations, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
+- Add stronger OCR quality handling such as source-group status summaries or source-level acknowledgment shortcuts, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
