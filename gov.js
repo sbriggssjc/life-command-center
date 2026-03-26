@@ -5321,10 +5321,21 @@ function renderGovSearch() {
     } else {
       html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 16px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' found</div>';
 
+      // Store flat search results array for onclick references (avoids massive inline JSON in DOM)
+      window._govSearchFlat = [];
+      window._govSearchSources = [];
+      function pushSearchRef(record, source) {
+        var idx = window._govSearchFlat.length;
+        window._govSearchFlat.push(record);
+        window._govSearchSources.push(source);
+        return idx;
+      }
+
       if (leads.length > 0) {
         html += '<div class="search-results-section"><h4>Prospect Leads (' + leads.length + ')</h4>';
         leads.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-lead")\'>';
+          var idx = pushSearchRef(r, 'gov-lead');
+          html += '<div class="search-card" onclick="showDetail(window._govSearchFlat[' + idx + '], window._govSearchSources[' + idx + '])">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.tenant_agency) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(52,211,153,0.15); color: #34d399;">Lead</span></div>';
           html += '<div class="search-card-meta">';
@@ -5342,7 +5353,8 @@ function renderGovSearch() {
       if (ownership.length > 0) {
         html += '<div class="search-results-section"><h4>Ownership Records (' + ownership.length + ')</h4>';
         ownership.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-ownership")\'>';
+          var idx = pushSearchRef(r, 'gov-ownership');
+          html += '<div class="search-card" onclick="showDetail(window._govSearchFlat[' + idx + '], window._govSearchSources[' + idx + '])">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || r.lease_number || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(108,140,255,0.15); color: #6c8cff;">Ownership</span></div>';
           html += '<div class="search-card-meta">';
@@ -5358,7 +5370,8 @@ function renderGovSearch() {
       if (listings.length > 0) {
         html += '<div class="search-results-section"><h4>Listings (' + listings.length + ')</h4>';
         listings.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-listing")\'>';
+          var idx = pushSearchRef(r, 'gov-listing');
+          html += '<div class="search-card" onclick="showDetail(window._govSearchFlat[' + idx + '], window._govSearchSources[' + idx + '])">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.tenant_agency) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24;">Listing</span></div>';
           html += '<div class="search-card-meta">';
@@ -5391,7 +5404,8 @@ function renderGovSearch() {
       if (properties.length > 0) {
         html += '<div class="search-results-section"><h4>Properties (' + properties.length + ')</h4>';
         properties.forEach(r => {
-          html += '<div class="search-card" onclick=\'showDetail(' + safeJSON(r) + ', "gov-ownership")\'>';
+          var idx = pushSearchRef(r, 'gov-ownership');
+          html += '<div class="search-card" onclick="showDetail(window._govSearchFlat[' + idx + '], window._govSearchSources[' + idx + '])">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.address) || norm(r.property_name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(34,211,238,0.15); color: #22d3ee;">Property</span></div>';
           html += '<div class="search-card-meta">';

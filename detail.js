@@ -93,8 +93,11 @@ async function openUnifiedDetail(db, ids, fallback) {
   const mainFilter = propFilter || leaseFilter;
 
   if (!mainFilter) {
-    document.getElementById('detailBody').innerHTML =
-      '<div class="detail-empty">No property identifier available</div>';
+    // No property_id or lease_number — render a fallback detail panel
+    // using the fields already present on the search card record
+    _udCache = { db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true };
+    _udRenderFallbackHeader(db, fallback);
+    document.getElementById('detailBody').innerHTML = _udRenderTab('Property');
     return;
   }
 
@@ -136,12 +139,16 @@ async function openUnifiedDetail(db, ids, fallback) {
     const chain = extract(results[3]) || [];
     const rankings = extract(results[4])[0] || null;
 
-    _udCache = { db, ids, property, leases, ownership, chain, rankings, fallback };
+    // If all views returned empty, use the fallback record's fields as a synthetic property
+    const allEmpty = !property && leases.length === 0 && !ownership && chain.length === 0;
+    const synthProperty = allEmpty ? _udSynthPropertyFromFallback(fallback, db) : property;
+
+    _udCache = { db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, _fallbackOnly: allEmpty };
 
     // Update header with real data (page_title or fallback to tenant/address)
-    if (property) {
-      const realTitle = property.page_title || property.facility_name || fallback.tenant_operator || fallback.agency || property.address || fallback.address || '(Unknown)';
-      const loc2 = (property.city || '') + (property.state ? ', ' + property.state : '');
+    if (synthProperty) {
+      const realTitle = synthProperty.page_title || synthProperty.facility_name || fallback.tenant_operator || fallback.agency || synthProperty.address || fallback.address || '(Unknown)';
+      const loc2 = (synthProperty.city || '') + (synthProperty.state ? ', ' + synthProperty.state : '');
       // "Not a Lead" button for dia-clinic records (dismiss from clinic lead pipeline)
       const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
@@ -397,6 +404,56 @@ function switchUnifiedTab(tabName) {
 }
 
 // ============================================================================
+// FALLBACK HELPERS — render detail from search card record fields
+// ============================================================================
+
+/** Build a synthetic property object from the raw search card record */
+function _udSynthPropertyFromFallback(fb, db) {
+  if (!fb) return null;
+  return {
+    address: fb.address || fb.property_address || null,
+    city: fb.city || fb.property_city || null,
+    state: fb.state || fb.property_state || null,
+    zip_code: fb.zip || fb.zip_code || null,
+    county: fb.county || null,
+    page_title: fb.page_title || fb.tenant_operator || fb.tenant_agency || fb.facility_name || fb.agency || null,
+    facility_name: fb.facility_name || null,
+    agency_short: fb.tenant_agency || fb.agency || null,
+    agency_full: fb.tenant_agency || fb.agency_full || null,
+    building_sf: fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft || null,
+    lease_number: fb.lease_number || null,
+    estimated_value: fb.value || fb.estimated_value || fb.annual_rent || null,
+    // Gov-specific fields from prospect_leads / ownership_history
+    rent_per_sf: fb.rent_per_sf || fb.shell_rent || null,
+    annual_rent: fb.annual_rent || null,
+    lease_start: fb.lease_start || fb.firm_term_start || null,
+    lease_end: fb.lease_end || fb.firm_term_end || null,
+    term_remaining: fb.term_remaining || null,
+    owner_name: fb.owner_name || fb.lessor_name || fb.grantor || null,
+    buyer_name: fb.buyer_name || fb.grantee || null,
+    sale_date: fb.sale_date || fb.transfer_date || null,
+    sale_price: fb.sale_price || fb.price || null,
+    operator_name: fb.operator_name || null,
+    _synthetic: true
+  };
+}
+
+/** Render header for fallback-only records (no property_id) */
+function _udRenderFallbackHeader(db, fb) {
+  const title = fb.page_title || fb.tenant_operator || fb.tenant_agency || fb.agency || fb.facility_name || fb.address || '(Unknown)';
+  const loc = (fb.city || '') + (fb.city && fb.state ? ', ' : '') + (fb.state || '');
+  document.getElementById('detailHeader').innerHTML = `
+    <div class="detail-header-info">
+      <div style="flex:1">
+        <div class="detail-title">${esc(title)}</div>
+        <div class="detail-subtitle">${esc(loc)}${fb.county ? ' &middot; ' + esc(fb.county) + ' County' : ''}</div>
+      </div>
+      <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
+      <button class="detail-close" onclick="closeDetail()">&times;</button>
+    </div>`;
+}
+
+// ============================================================================
 // TAB RENDERERS
 // ============================================================================
 
@@ -417,7 +474,12 @@ function _udRenderTab(tab) {
 
 function _udTabProperty() {
   const p = _udCache.property;
-  if (!p) return '<div class="detail-empty">No property data available</div>';
+  if (!p) {
+    // Last resort: render raw fallback fields if available
+    const fb = _udCache.fallback;
+    if (fb) return _udTabFallbackSummary(fb);
+    return '<div class="detail-empty">No property data available</div>';
+  }
 
   let html = '<div class="detail-section">';
   html += '<div class="detail-section-title">Property Information</div>';
@@ -472,9 +534,61 @@ function _udTabProperty() {
     html += '</div></div>';
   }
 
+  // ── ACTION BUTTONS ─────────────────────────────────────────────────────────
+  html += _udActionButtons();
+
   // ── RESEARCH QUICK LINKS ──────────────────────────────────────────────────
   html += _udResearchLinks();
 
+  return html;
+}
+
+/** Render a summary from the raw fallback record when detail views return empty */
+function _udTabFallbackSummary(fb) {
+  let html = '';
+  if (_udCache._fallbackOnly) {
+    html += '<div style="padding:8px 12px;margin-bottom:12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:8px;font-size:12px;color:var(--text2)">Showing summary from search record. Detailed views are not yet available for this property.</div>';
+  }
+  html += '<div class="detail-section"><div class="detail-section-title">Property Summary</div><div class="detail-grid">';
+  html += _row('Address', fb.address || fb.property_address);
+  html += _row('City / State', (fb.city || '') + (fb.state ? ', ' + fb.state : ''));
+  html += _row('County', fb.county);
+  html += _row('Zip', fb.zip || fb.zip_code);
+  html += _row('Agency / Tenant', fb.tenant_agency || fb.agency || fb.tenant_operator);
+  html += _row('Lease Number', fb.lease_number);
+  html += _row('Building Size', fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft ? fmtN(fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft) + ' SF' : null);
+  html += '</div></div>';
+
+  // Financial section
+  if (fb.annual_rent || fb.rent_per_sf || fb.value || fb.estimated_value || fb.sale_price) {
+    html += '<div class="detail-section"><div class="detail-section-title">Financial</div><div class="detail-grid">';
+    html += _rowMoney('Annual Rent', fb.annual_rent);
+    html += _rowMoney('Rent / SF', fb.rent_per_sf || fb.shell_rent);
+    html += _rowMoney('Estimated Value', fb.value || fb.estimated_value);
+    html += _rowMoney('Sale Price', fb.sale_price || fb.price);
+    html += '</div></div>';
+  }
+
+  // Lease section
+  if (fb.lease_start || fb.lease_end || fb.firm_term_start || fb.firm_term_end || fb.term_remaining) {
+    html += '<div class="detail-section"><div class="detail-section-title">Lease Terms</div><div class="detail-grid">';
+    html += _row('Lease Start', _fmtDate(fb.lease_start || fb.firm_term_start));
+    html += _row('Lease End', _fmtDate(fb.lease_end || fb.firm_term_end));
+    html += _row('Term Remaining', fb.term_remaining ? fb.term_remaining + ' years' : null);
+    html += '</div></div>';
+  }
+
+  // Ownership section
+  if (fb.owner_name || fb.lessor_name || fb.grantor || fb.grantee) {
+    html += '<div class="detail-section"><div class="detail-section-title">Ownership</div><div class="detail-grid">';
+    html += _row('Owner / Lessor', fb.owner_name || fb.lessor_name || fb.grantor);
+    html += _row('Buyer / Grantee', fb.buyer_name || fb.grantee);
+    html += _row('Transfer Date', _fmtDate(fb.sale_date || fb.transfer_date));
+    html += '</div></div>';
+  }
+
+  html += _udActionButtons();
+  html += _udResearchLinks();
   return html;
 }
 
@@ -482,7 +596,24 @@ function _udTabProperty() {
 
 function _udTabLease() {
   const leases = _udCache.leases;
-  if (!leases || leases.length === 0) return '<div class="detail-empty">No lease data available</div>';
+  // If no lease view data, try to show lease info from the fallback record
+  if (!leases || leases.length === 0) {
+    const fb = _udCache.fallback;
+    if (fb && (fb.lease_start || fb.lease_end || fb.firm_term_start || fb.annual_rent || fb.lease_number)) {
+      let html = '<div class="detail-section"><div class="detail-section-title">Lease Details (from search record)</div><div class="detail-grid">';
+      html += _row('Lease Number', fb.lease_number);
+      html += _row('Tenant', fb.tenant_agency || fb.tenant_operator);
+      html += _row('Lease Start', _fmtDate(fb.lease_start || fb.firm_term_start));
+      html += _row('Lease End', _fmtDate(fb.lease_end || fb.firm_term_end));
+      html += _row('Term Remaining', fb.term_remaining ? fb.term_remaining + ' years' : null);
+      html += _rowMoney('Annual Rent', fb.annual_rent);
+      html += _rowMoney('Rent / SF', fb.rent_per_sf || fb.shell_rent);
+      html += _row('Lessor', fb.lessor_name);
+      html += '</div></div>';
+      return html;
+    }
+    return '<div class="detail-empty">No lease data available</div>';
+  }
 
   let html = '';
 
@@ -765,6 +896,21 @@ function _udTabOwnership() {
   const db = _udCache.db;
 
   let html = '';
+
+  // If no ownership data but fallback has ownership fields, show them
+  if (!own && chain.length === 0) {
+    const fb = _udCache.fallback;
+    if (fb && (fb.owner_name || fb.lessor_name || fb.grantor || fb.grantee || fb.buyer_name)) {
+      html += '<div class="detail-section"><div class="detail-section-title">Ownership (from search record)</div><div class="detail-grid">';
+      html += _row('Owner / Lessor', fb.owner_name || fb.lessor_name || fb.grantor);
+      html += _row('Buyer / Grantee', fb.buyer_name || fb.grantee);
+      html += _row('Transfer Date', _fmtDate(fb.sale_date || fb.transfer_date));
+      html += _rowMoney('Sale Price', fb.sale_price || fb.price);
+      html += _row('Cap Rate', fb.cap_rate ? Number(fb.cap_rate).toFixed(2) + '%' : null);
+      html += '</div></div>';
+      return html;
+    }
+  }
 
   // ── DATA GAP INDICATOR ──────────────────────────────────────────────
   const gaps = [];
@@ -1957,6 +2103,100 @@ function _qlActionBtn(label, onclick, icon, color) {
 }
 
 /** Research Quick Links — property-level research shortcuts */
+/** Action buttons for advancing records through the pipeline */
+function _udActionButtons() {
+  if (!_udCache) return '';
+  const db = _udCache.db;
+  const fb = _udCache.fallback || {};
+  const p = _udCache.property || {};
+
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Actions</div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">';
+
+  if (db === 'gov') {
+    html += `<button class="q-action primary" onclick="_udAction('add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Add to Pipeline</button>`;
+    html += `<button class="q-action" onclick="_udAction('log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
+    html += `<button class="q-action" onclick="_udAction('create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
+  } else if (db === 'dia') {
+    html += `<button class="q-action primary" onclick="_udAction('mark_lead')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Mark as Lead</button>`;
+    html += `<button class="q-action" onclick="_udAction('add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Add to Pipeline</button>`;
+    html += `<button class="q-action" onclick="_udAction('log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
+    html += `<button class="q-action" onclick="_udAction('create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+async function _udAction(action) {
+  if (!_udCache) return;
+  const db = _udCache.db;
+  const fb = _udCache.fallback || {};
+  const p = _udCache.property || {};
+  const id = p.property_id || fb.property_id || fb.clinic_id || fb.lead_id || fb.id;
+  const title = p.page_title || p.facility_name || fb.tenant_operator || fb.tenant_agency || fb.facility_name || fb.address || 'Unknown';
+
+  if (action === 'add_to_pipeline' && db === 'gov') {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      const res = await fetch('/api/gov-write?endpoint=lead-research', {
+        method: 'POST', headers,
+        body: JSON.stringify({ property_id: id, pipeline_status: 'prospect', address: p.address || fb.address, source_app: 'lcc' })
+      });
+      if (res.ok) { alert('Added to pipeline!'); return; }
+      const err = await res.json().catch(() => ({}));
+      alert('Could not add: ' + (err.error || res.status));
+    } catch (e) { alert('Error: ' + e.message); }
+    return;
+  }
+
+  if (action === 'mark_lead' && db === 'dia') {
+    try {
+      const qFn = typeof diaQuery === 'function' ? diaQuery : null;
+      if (!qFn) { alert('Dialysis query not available'); return; }
+      await qFn('research_queue_outcomes', null, {
+        method: 'POST',
+        body: { clinic_id: fb.clinic_id || fb.medicare_id, queue_type: 'lead', status: 'prospect', source_bucket: 'manual', notes: 'Marked as lead from detail panel' }
+      });
+      alert('Marked as lead!');
+    } catch (e) { alert('Error: ' + e.message); }
+    return;
+  }
+
+  if (action === 'log_touchpoint') {
+    const notes = prompt('Touchpoint notes:');
+    if (!notes) return;
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      await fetch('/api/actions', {
+        method: 'POST', headers,
+        body: JSON.stringify({ action_type: 'log_activity', title: 'Touchpoint: ' + title, domain: db === 'gov' ? 'government' : 'dialysis', notes, entity_id: id })
+      });
+      alert('Touchpoint logged!');
+    } catch (e) { alert('Error: ' + e.message); }
+    return;
+  }
+
+  if (action === 'create_task') {
+    const taskTitle = prompt('Task description:', 'Follow up on ' + title);
+    if (!taskTitle) return;
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+      await fetch('/api/actions', {
+        method: 'POST', headers,
+        body: JSON.stringify({ action_type: 'create_task', title: taskTitle, domain: db === 'gov' ? 'government' : 'dialysis', entity_id: id, status: 'open' })
+      });
+      alert('Task created!');
+    } catch (e) { alert('Error: ' + e.message); }
+    return;
+  }
+}
+window._udAction = _udAction;
+
 function _udResearchLinks() {
   if (!_udCache || !_udCache.property) return '';
   const p = _udCache.property;
