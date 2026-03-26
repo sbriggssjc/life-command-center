@@ -87,6 +87,8 @@
 - Added retry-result comparison for OCR retries so each retried source can show before/after transcript text and confidence changes directly in the extraction review panel.
 - Weighted proposal ordering toward model-cited and stronger-source operations so the safer subset appears first in the review list instead of being mixed evenly with heuristic or uncited OCR-dependent operations.
 - Added inline source-evidence excerpts on operation cards so model-cited quotes or heuristic source snippets are visible directly where the proposed write is reviewed.
+- Grouped proposal cards by strongest supporting source so related operations cluster under the same cited document or OCR page instead of rendering as a flat list.
+- Added source-group actions so each grouped source section can select or clear all of its operations at once during review.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -134,5 +136,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as retry-history tracking or source-aware operation grouping, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
+- Add stronger OCR quality handling such as retry-history tracking, plus deeper extraction for legacy Office payloads such as `.doc` and `.xls`.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

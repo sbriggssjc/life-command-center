@@ -2775,13 +2775,13 @@ function renderGovEvidenceWorkbench() {
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
         <div class="form-group">
-          <label for="gov-evidence-file">Screenshot</label>
-          <input id="gov-evidence-file" type="file" accept="image/*" />
-          <div class="live-ingest-stamp" style="margin-top:8px">${esc(govEvidenceState.screenshotName || 'No screenshot selected')}</div>
+          <label>Evidence Source</label>
+          <div class="live-ingest-stamp" style="margin-top:8px">Using latest image from Live Intake: ${esc(getGovEvidenceSourceLabel())}</div>
+          <div class="live-ingest-stamp" style="margin-top:6px">Upload once in the shared Live Intake panel above. The government evidence workflow will auto-use the latest screenshot image from that queue.</div>
         </div>
         <div class="live-ingest-actions">
-          <button class="btn-primary" type="button" data-gov-evidence-extract ${govEvidenceState.loading || !rec || !govEvidenceState.screenshotDataUrl ? 'disabled' : ''}>${govEvidenceState.loading ? 'Extracting...' : 'Extract Screenshot'}</button>
-          <button class="btn-secondary" type="button" data-gov-evidence-clear ${govEvidenceState.loading ? 'disabled' : ''}>Clear</button>
+          <button class="btn-primary" type="button" data-gov-evidence-extract ${govEvidenceState.loading || !rec || !getGovEvidenceSourceAttachment() ? 'disabled' : ''}>${govEvidenceState.loading ? 'Extracting...' : 'Extract Latest Screenshot'}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-clear ${govEvidenceState.loading ? 'disabled' : ''}>Clear Review</button>
         </div>
         ${govEvidenceState.review ? `<div class="live-ingest-callout" style="margin-top:12px">${esc(buildGovEvidenceSummary(govEvidenceState.review))}</div>` : ''}
         ${renderGovEvidenceConflictPanel()}
@@ -2796,6 +2796,7 @@ function renderGovEvidenceWorkbench() {
           <button class="btn-secondary" type="button" data-gov-evidence-health ${govEvidenceState.healthLoading ? 'disabled' : ''}>${govEvidenceState.healthLoading ? 'Checking...' : 'Check Evidence Health'}</button>
         </div>
         <div class="live-ingest-stamp">Artifact: ${esc(govEvidenceState.artifactId || 'not saved yet')}</div>
+        <div class="live-ingest-stamp" style="margin-top:6px">Source detection: auto-routed from shared intake image</div>
         ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
           <div class="live-ingest-results-title">Pending Observation Queue</div>
@@ -5466,6 +5467,7 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
 
 
 

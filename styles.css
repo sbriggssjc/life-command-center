@@ -651,6 +651,10 @@ body.compact .greeting { font-size: 18px; }
 .live-ingest-op-reason { color: var(--text2); font-size: 12px; line-height: 1.45; }
 .live-ingest-source-evidence { margin-top: 8px; padding: 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; background: rgba(255,255,255,0.02); }
 .live-ingest-source-evidence blockquote { margin: 0; color: #d8e4ff; font-size: 11px; line-height: 1.5; }
+.live-ingest-op-group { display: grid; gap: 8px; }
+.live-ingest-op-group-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 6px 2px 2px; color: var(--text3); font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; }
+.live-ingest-op-group-head strong { color: var(--text2); font-size: 11px; }
+.live-ingest-op-group-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .live-ingest-field-grid { display: grid; gap: 6px; margin-top: 8px; margin-bottom: 10px; }
 .live-ingest-field-row { display: grid; grid-template-columns: minmax(120px, 180px) 1fr; gap: 10px; padding: 7px 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(255,255,255,0.02); }
 .live-ingest-field-row span { color: var(--text3); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; }

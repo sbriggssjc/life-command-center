@@ -5526,7 +5526,7 @@ function renderLiveIngestWorkbench(domainKey) {
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         <div class="live-ingest-op-list">
-          ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
+          ${ops.length ? renderLiveIngestOperationGroups(domainKey, ops) : '<div class="live-ingest-empty">No operations were proposed.</div>'}
         </div>
         <div class="live-ingest-actions">
           ${hasLowConfidenceOcr ? `<label class="live-ingest-ack">
@@ -5604,6 +5604,33 @@ function renderLiveIngestWorkbench(domainKey) {
     </div>
     ${proposalHtml}
   </section>`;
+}
+
+function renderLiveIngestOperationGroups(domainKey, ops) {
+  const groups = new Map();
+  (Array.isArray(ops) ? ops : []).forEach((op, idx) => {
+    const groupKey = String(op?._sourceLineage?.source_name || op?._sourceLineage?.label || 'Other evidence');
+    const groupLabel = op?._sourceLineage?.source_name
+      ? `${op._sourceLineage.source_name}${op?._sourceLineage?.label ? ` (${op._sourceLineage.label})` : ''}`
+      : (op?._sourceLineage?.label || 'Other evidence');
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, { key: groupKey, label: groupLabel, items: [] });
+    }
+    groups.get(groupKey).items.push({ op, idx });
+  });
+  return Array.from(groups.values()).map((group) => {
+    return `<section class="live-ingest-op-group">
+      <div class="live-ingest-op-group-head">
+        <strong>${esc(group.label)}</strong>
+        <div class="live-ingest-op-group-controls">
+          <span>${group.items.length} op${group.items.length === 1 ? '' : 's'}</span>
+          <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select="${esc(group.key)}">Select Group</button>
+          <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-clear="${esc(group.key)}">Clear Group</button>
+        </div>
+      </div>
+      ${group.items.map(({ op, idx }) => renderLiveIngestOperation(domainKey, op, idx)).join('')}
+    </section>`;
+  }).join('');
 }
 
 function renderLiveIngestExtractionDocs(docs) {
@@ -5930,6 +5957,29 @@ function bindLiveIngestWorkbench(domainKey) {
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
     rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelectorAll('[data-live-ingest-group-select]').forEach((button) => {
+    button.onclick = () => {
+      const groupKey = button.dataset.liveIngestGroupSelect;
+      (state.proposal?.operations || []).forEach((op) => {
+        const opGroupKey = String(op?._sourceLineage?.source_name || op?._sourceLineage?.label || 'Other evidence');
+        if (opGroupKey === groupKey) op._selected = true;
+      });
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll('[data-live-ingest-group-clear]').forEach((button) => {
+    button.onclick = () => {
+      const groupKey = button.dataset.liveIngestGroupClear;
+      (state.proposal?.operations || []).forEach((op) => {
+        const opGroupKey = String(op?._sourceLineage?.source_name || op?._sourceLineage?.label || 'Other evidence');
+        if (opGroupKey === groupKey) op._selected = false;
+      });
+      if (!liveIngestHasCitationRisk(state.proposal?.operations || [], true)) {
+        state.citationRiskAcknowledged = false;
+      }
+      rerenderLiveIngestDomain(domainKey);
+    };
   });
   document.querySelector(`[data-live-ingest-refresh-snapshots="${domainKey}"]`)?.addEventListener('click', async () => {
     if (!state.proposal?.operations?.length) return;
