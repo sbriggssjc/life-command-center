@@ -5564,7 +5564,11 @@ function renderLiveIngestWorkbench(domainKey) {
             <input type="checkbox" data-live-ingest-citation-ack="${domainKey}" ${state.citationRiskAcknowledged ? 'checked' : ''}>
             <span>I reviewed operations that rely on low-confidence OCR without model-cited sources.</span>
           </label>` : ''}
-          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          ${hasWorsenedRetryRisk ? `<label class="live-ingest-ack">
+            <input type="checkbox" data-live-ingest-worsened-ack="${domainKey}" ${state.worsenedRetryAcknowledged ? 'checked' : ''}>
+            <span>I reviewed operations tied to OCR sources that got worse after retry.</span>
+          </label>` : ''}
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged) || (hasWorsenedRetryRisk && !state.worsenedRetryAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
           ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
         </div>
@@ -5794,6 +5798,11 @@ function renderLiveIngestOperation(domainKey, op, idx) {
 function renderLiveIngestOperationGroups(domainKey, operations) {
   const groups = buildLiveIngestOperationGroups(operations);
   return groups.map((group, groupIdx) => {
+    const statuses = [];
+    if (group.lowConfidenceCount) statuses.push(`<span class="live-ingest-op-flag warn">Low-confidence OCR ${group.lowConfidenceCount}</span>`);
+    if (group.citationCount) statuses.push(`<span class="live-ingest-op-flag warn">No cited source ${group.citationCount}</span>`);
+    if (group.worsenedCount) statuses.push(`<span class="live-ingest-op-flag warn">Retry worsened ${group.worsenedCount}</span>`);
+    if (!group.lowConfidenceCount && !group.citationCount && !group.worsenedCount) statuses.push('<span class="live-ingest-op-flag">No source risk</span>');
     const countBits = [
       `${group.indices.length} op${group.indices.length === 1 ? '' : 's'}`,
       group.selectedCount ? `${group.selectedCount} selected` : null,
@@ -5809,8 +5818,10 @@ function renderLiveIngestOperationGroups(domainKey, operations) {
           <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select="${domainKey}:${groupIdx}">Select Group</button>
           ${group.worsenedCount ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select-risk="${domainKey}:${groupIdx}">Include Worsened</button>` : ''}
           <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-clear="${domainKey}:${groupIdx}">Clear Group</button>
+          ${group.canAcknowledgeShortcut ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-group-ack="${domainKey}:${groupIdx}">Acknowledge Group Risk</button>` : ''}
         </div>
       </div>
+      <div class="live-ingest-op-group-status">${statuses.join('')}</div>
       ${group.detail ? `<div class="live-ingest-op-reason">${esc(group.detail)}</div>` : ''}
       ${group.worsenedCount ? `<div class="live-ingest-callout warn">Group selection keeps worsened-retry operations deselected by default. Use "Include Worsened" to opt them back in for this source.</div>` : ''}
       ${group.indices.map((opIdx) => renderLiveIngestOperation(domainKey, operations[opIdx], opIdx)).join('')}
@@ -5827,14 +5838,30 @@ function buildLiveIngestOperationGroups(operations) {
     const detail = op?._sourceLineage?.detail || (sourceName ? `Source: ${sourceName}` : 'Operations without clear source lineage');
     const key = `${label}__${detail}`;
     if (!byKey.has(key)) {
-      const group = { key, label, detail, indices: [], selectedCount: 0, worsenedCount: 0 };
+      const group = { key, label, detail, indices: [], selectedCount: 0, worsenedCount: 0, lowConfidenceCount: 0, citationCount: 0, canAcknowledgeShortcut: false };
       byKey.set(key, group);
       groups.push(group);
     }
     const group = byKey.get(key);
     group.indices.push(idx);
     if (op?._selected !== false) group.selectedCount += 1;
+    if (op?._lowConfidenceOcr) group.lowConfidenceCount += 1;
+    if (op?._citationRisk) group.citationCount += 1;
     if (op?._worsenedRetryRisk) group.worsenedCount += 1;
+  });
+  const selectedOps = (Array.isArray(operations) ? operations : []).map((op, idx) => ({ op, idx })).filter(({ op }) => op?._selected !== false);
+  groups.forEach((group) => {
+    const groupIndexSet = new Set(group.indices);
+    const selectedInGroup = selectedOps.filter(({ idx }) => groupIndexSet.has(idx));
+    if (!selectedInGroup.length) {
+      group.canAcknowledgeShortcut = false;
+      return;
+    }
+    const outsideGroup = selectedOps.filter(({ idx }) => !groupIndexSet.has(idx));
+    const lowConfidenceOnlyInGroup = selectedInGroup.some(({ op }) => op?._lowConfidenceOcr) && !outsideGroup.some(({ op }) => op?._lowConfidenceOcr);
+    const citationOnlyInGroup = selectedInGroup.some(({ op }) => op?._citationRisk) && !outsideGroup.some(({ op }) => op?._citationRisk);
+    const worsenedOnlyInGroup = selectedInGroup.some(({ op }) => op?._worsenedRetryRisk) && !outsideGroup.some(({ op }) => op?._worsenedRetryRisk);
+    group.canAcknowledgeShortcut = lowConfidenceOnlyInGroup || citationOnlyInGroup || worsenedOnlyInGroup;
   });
   return groups;
 }
@@ -6101,6 +6128,29 @@ function bindLiveIngestWorkbench(domainKey) {
         if (op) op._selected = false;
       });
       state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-ack^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupAck.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      const groupIndexSet = new Set(group.indices);
+      const selectedOps = (state.proposal?.operations || []).map((op, idx) => ({ op, idx })).filter(({ op }) => op?._selected !== false);
+      const selectedInGroup = selectedOps.filter(({ idx }) => groupIndexSet.has(idx));
+      const outsideGroup = selectedOps.filter(({ idx }) => !groupIndexSet.has(idx));
+      if (selectedInGroup.some(({ op }) => op?._lowConfidenceOcr) && !outsideGroup.some(({ op }) => op?._lowConfidenceOcr)) {
+        state.lowConfidenceOcrAcknowledged = true;
+      }
+      if (selectedInGroup.some(({ op }) => op?._citationRisk) && !outsideGroup.some(({ op }) => op?._citationRisk)) {
+        state.citationRiskAcknowledged = true;
+      }
+      if (selectedInGroup.some(({ op }) => op?._worsenedRetryRisk) && !outsideGroup.some(({ op }) => op?._worsenedRetryRisk)) {
+        state.worsenedRetryAcknowledged = true;
+      }
       rerenderLiveIngestDomain(domainKey);
     };
   });

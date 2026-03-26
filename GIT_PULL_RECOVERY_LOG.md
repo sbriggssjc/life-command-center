@@ -4,6 +4,9 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-26, another GUI-style commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` existed as a 0-byte file created at `2026-03-26 14:45:41` local time.
+- A process check for that recurrence showed three active `git.exe` processes (`27372`, `34904`, `54584`) started at `2026-03-26 15:21:40` local time.
+- `git status --short --branch` still succeeds during this recurrence and currently reports `main...origin/main` with `MM app.js` plus modified worklogs, which means the repository is readable while `HEAD` writes are blocked.
 - On 2026-03-26, `app.js` was resolved by keeping the richer `theirs` side of the single remaining Live Ingest conflict block and removing the conflict markers.
 - `node --check app.js` succeeded after that resolution.
 - `git diff --name-only --diff-filter=U` is now empty.
