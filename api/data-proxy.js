@@ -43,14 +43,14 @@ const GOV_WRITE_ENDPOINT_MAP = {
 const GOV_EVIDENCE_ENDPOINT_MAP = {
   'extract-screenshot-json': { path: '/api/extract-screenshot-json', methods: ['POST'] },
   'research-artifacts': { path: '/api/research-artifacts', methods: ['POST'] },
-  'apply-loan': { path: ({ artifact_id }) => /api/research-artifacts//apply-loan, methods: ['POST'] },
-  'apply-ownership': { path: ({ artifact_id }) => /api/research-artifacts//apply-ownership, methods: ['POST'] },
-  'apply-listing': { path: ({ artifact_id }) => /api/research-artifacts//apply-listing, methods: ['POST'] },
-  'apply-activity-note': { path: ({ artifact_id }) => /api/research-artifacts//apply-activity-note, methods: ['POST'] },
-  'promote-observations': { path: ({ artifact_id }) => /api/research-artifacts//promote-observations, methods: ['POST'] },
+  'apply-loan': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-loan', methods: ['POST'] },
+  'apply-ownership': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-ownership', methods: ['POST'] },
+  'apply-listing': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-listing', methods: ['POST'] },
+  'apply-activity-note': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-activity-note', methods: ['POST'] },
+  'promote-observations': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/promote-observations', methods: ['POST'] },
   'research-observations': { path: '/api/research-observations', methods: ['GET'] },
-  'review-observation': { path: ({ observation_id }) => /api/research-observations//review, methods: ['POST'] },
-  'promote-observation': { path: ({ observation_id }) => /api/research-observations//promote, methods: ['POST'] }
+  'review-observation': { path: ({ observation_id }) => '/api/research-observations/' + encodeURIComponent(observation_id) + '/review', methods: ['POST'] },
+  'promote-observation': { path: ({ observation_id }) => '/api/research-observations/' + encodeURIComponent(observation_id) + '/promote', methods: ['POST'] }
 };
 
 async function handleGovWrite(req, res, user) {
@@ -425,4 +425,6 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
+
 

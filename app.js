@@ -5468,6 +5468,7 @@ function createLiveIngestDomainState() {
     entityResults: [],
     selectedEntity: null,
     proposal: null,
+    extractionDocs: [],
     loadingSnapshots: false,
     extracting: false,
     applying: false,
@@ -5498,6 +5499,7 @@ function renderLiveIngestWorkbench(domainKey) {
   const proposal = state.proposal;
   const ops = Array.isArray(proposal?.operations) ? proposal.operations : [];
   const effectiveContext = getLiveIngestEffectiveContext(domainKey);
+  const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
   const proposalHtml = proposal
     ? `<div class="live-ingest-results">
         <div class="live-ingest-results-head">
@@ -5509,6 +5511,7 @@ function renderLiveIngestWorkbench(domainKey) {
         </div>
         ${proposal.missing_information?.length ? `<div class="live-ingest-callout warn">${proposal.missing_information.map(esc).join('<br>')}</div>` : ''}
         ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
+        ${extractionDocsHtml}
         ${state.loadingSnapshots ? '<div class="live-ingest-callout">Loading current record snapshots for before/after review...</div>' : ''}
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
@@ -5586,6 +5589,35 @@ function renderLiveIngestWorkbench(domainKey) {
     </div>
     ${proposalHtml}
   </section>`;
+}
+
+function renderLiveIngestExtractionDocs(docs) {
+  const items = (Array.isArray(docs) ? docs : []).filter((doc) => doc && doc.normalized_text);
+  if (!items.length) return '';
+  return `<div class="live-ingest-source-block">
+    <div class="live-ingest-editor-head" style="margin-top:0">
+      <span>Extraction Inputs</span>
+      <span>${items.length} source${items.length === 1 ? '' : 's'}</span>
+    </div>
+    <div class="live-ingest-source-list">
+      ${items.map((doc) => {
+        const sourceKind = String(doc.source_kind || 'text');
+        const label = sourceKind === 'ocr' ? 'OCR transcript' : sourceKind;
+        const meta = [];
+        if (doc.metadata?.generated_from_images) meta.push(`${doc.metadata.generated_from_images} image${doc.metadata.generated_from_images === 1 ? '' : 's'}`);
+        if (doc.metadata?.attachment_preview_count) meta.push(`${doc.metadata.attachment_preview_count} attachment preview${doc.metadata.attachment_preview_count === 1 ? '' : 's'}`);
+        if (doc.metadata?.source_image_name) meta.push(`source: ${doc.metadata.source_image_name}`);
+        if (doc.metadata?.ocr_confidence) meta.push(`confidence: ${doc.metadata.ocr_confidence}`);
+        return `<details class="live-ingest-source-item" ${sourceKind === 'ocr' ? 'open' : ''}>
+          <summary>
+            <strong>${esc(doc.name || 'Source document')}</strong>
+            <span>${esc([label, ...meta].filter(Boolean).join(' | '))}</span>
+          </summary>
+          <pre>${esc(String(doc.normalized_text || '').slice(0, 4000))}</pre>
+        </details>`;
+      }).join('')}
+    </div>
+  </div>`;
 }
 
 function renderLiveIngestOperation(domainKey, op, idx) {
@@ -5834,6 +5866,7 @@ function bindLiveIngestWorkbench(domainKey) {
   document.querySelector(`[data-live-ingest-extract="${domainKey}"]`)?.addEventListener('click', () => runLiveIngestExtraction(domainKey));
   document.querySelector(`[data-live-ingest-clear-proposal="${domainKey}"]`)?.addEventListener('click', () => {
     state.proposal = null;
+    state.extractionDocs = [];
     state.error = '';
     rerenderLiveIngestDomain(domainKey);
   });
@@ -6499,6 +6532,7 @@ async function runLiveIngestExtraction(domainKey) {
   state.extracting = true;
   state.loadingSnapshots = false;
   state.error = '';
+  state.extractionDocs = [];
   rerenderLiveIngestDomain(domainKey);
 
   try {
@@ -6514,13 +6548,19 @@ async function runLiveIngestExtraction(domainKey) {
         name: item.name || 'email image',
         data_url: item.data_url
       }));
+    const ocrDocs = await extractLiveIngestOcrDocuments({
+      domainKey,
+      sourceLabel: state.sourceLabel,
+      imageAttachments: [...imageAttachments, ...normalizedImageAttachments]
+    });
+    state.extractionDocs = [...normalizedDocs, ...ocrDocs];
     const response = await invokeLccAssistant({
       feature: `${domainKey}_live_ingest`,
       context: {
         ...context,
         source_label: state.sourceLabel || null,
         user_notes: state.notes || null,
-        text_documents: normalizedDocs
+        text_documents: [...normalizedDocs, ...ocrDocs]
       },
       attachments: [...imageAttachments, ...normalizedImageAttachments],
       message: buildLiveIngestPrompt(domainKey, state, context)
@@ -6540,6 +6580,74 @@ async function runLiveIngestExtraction(domainKey) {
     state.loadingSnapshots = false;
     rerenderLiveIngestDomain(domainKey);
   }
+}
+
+async function extractLiveIngestOcrDocuments({ domainKey, sourceLabel, imageAttachments = [] }) {
+  const images = (Array.isArray(imageAttachments) ? imageAttachments : [])
+    .filter((item) => item && item.data_url)
+    .slice(0, 3);
+  if (!images.length) return [];
+
+  try {
+    const response = await invokeLccAssistant({
+      feature: 'detail_intake_assistant',
+      context: {
+        domain: domainKey,
+        source_label: sourceLabel || null,
+        task: 'ocr_transcription'
+      },
+      attachments: images,
+      message: [
+        'Read the attached images and transcribe visible text for downstream data ingestion.',
+        'Return JSON only with schema: {"pages":[{"name":string,"text":string,"confidence":"high"|"medium"|"low"}],"notes":[string]}.',
+        'Keep layout hints for tables/lists when visible, but do not infer missing text.',
+        'If an image is mostly non-text, return an empty text string for that page.',
+        'Use low confidence when text is partial, obstructed, or visually ambiguous.'
+      ].join('\n')
+    });
+    const payload = parseLiveIngestJsonPayload(response);
+    const pages = Array.isArray(payload?.pages) ? payload.pages : [];
+    const docs = pages
+      .map((page, index) => {
+        const sourceImageName = String(images[index]?.name || `Image ${index + 1}`).trim();
+        const name = String(page?.name || sourceImageName).trim();
+        const text = String(page?.text || '').trim();
+        const confidence = String(page?.confidence || '').toLowerCase();
+        if (!text) return null;
+        return {
+          name: `${sourceLabel || `${domainKey} intake`} - OCR - ${name}`,
+          mime_type: 'text/plain',
+          source_kind: 'ocr',
+          normalized_text: `${name}\n${text}`.slice(0, 30000),
+          metadata: {
+            source_image_name: sourceImageName,
+            ocr_page_name: name,
+            ocr_confidence: ['high', 'medium', 'low'].includes(confidence) ? confidence : null,
+            ocr_page_index: index + 1,
+            generated_from_images: 1
+          }
+        };
+      })
+      .filter(Boolean);
+    return docs;
+  } catch (err) {
+    console.warn('Live ingest OCR fallback failed:', err);
+    return [];
+  }
+}
+
+function parseLiveIngestJsonPayload(raw) {
+  const text = String(raw || '').trim();
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('The AI response did not include valid JSON.');
+  }
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
 async function hydrateLiveIngestSnapshots(domainKey, operations) {

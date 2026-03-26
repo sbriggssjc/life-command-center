@@ -3635,6 +3635,7 @@ function renderGovResearch() {
     </div>`;
     html += '</div>';
     setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+    setTimeout(() => bindGovEvidenceWorkbench(), 0);
     return html;
   }
 
@@ -3642,6 +3643,7 @@ function renderGovResearch() {
   html += renderResearchInner();
   html += '</div>';
   setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+  setTimeout(() => bindGovEvidenceWorkbench(), 0);
   return html;
 }
 
@@ -5283,4 +5285,6 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
+
 

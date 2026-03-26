@@ -4,6 +4,10 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-26, `git add -A -- .` failed with `fatal: Unable to create ... .git/index.lock: File exists.`
+- The current lock file is `.git/index.lock`, not `.git/HEAD.lock`.
+- `.git/index.lock` is 0 bytes with `CreationTime` `2026-03-26 10:03:56` and `LastWriteTime` `2026-03-26 10:03:59` local time.
+- A process check at `2026-03-26 10:12` local time showed no active `git.exe` process, only `Code` processes.
 - Branch state: `main...origin/main [ahead 1, behind 2]`
 - Blocking files for pull: `index.html`, `sw.js`
 - Additional modified file: `gov.js`
@@ -63,6 +67,8 @@
   - `sql/20260320_crm_rollup_sf_tasks_union.sql`: lines `2`, `37`, `46`, `59`, `61`, `62`, `67`, `136`, `175`
 
 ## What This Means
+- The current blocker is a stale index lock file left behind by an interrupted staging operation.
+- Because no `git.exe` process is active, removing `.git/index.lock` is the safe next step.
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.
 - Even after the lock issue is cleared, `git pull` will still fail until local changes in `index.html` and `sw.js` are either committed, stashed, or discarded.
 - Because `app.js` and `sw.js` currently show `MM`, there is staged and unstaged local work that must be preserved during recovery.
@@ -73,6 +79,10 @@
 - In this Codex environment, outbound GitHub access is also currently blocked, so pull verification from here is limited without escalation.
 
 ## Safe Recovery Path
+1. Confirm there is no active `git.exe` process.
+2. Remove `.git/index.lock`.
+3. Retry `git add -A -- .` to confirm the index is writable again.
+4. If the lock immediately returns, stop any Git-enabled editor sync flow and repeat the process check before removing it again.
 1. End any stuck Git/editor process that is holding the repository lock.
 2. Remove `.git/HEAD.lock` only after no Git processes remain.
 3. Preserve local work with `git stash push -u` or by committing.

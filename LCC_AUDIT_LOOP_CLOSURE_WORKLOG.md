@@ -176,3 +176,24 @@
 - A deployment-oriented rollout summary now exists so implementation, validation, exemptions, and residual risk are captured outside the running worklog.
 - A current-state changeset manifest now exists so the remaining loop-closure files can be separated cleanly from unrelated local edits.
 - Existing tests are sparse and test execution is sandbox-limited in this environment.
+
+## 2026-03-25 Government Evidence Runtime Port
+
+Implemented in this pass:
+- Added `/api/gov-evidence` rewrite in `vercel.json` and gov evidence proxy routing in `api/data-proxy.js`.
+- Added a live government evidence workbench to `gov.js` inside the actual LCC research tab.
+- The LCC gov research UI can now:
+  - select a screenshot
+  - call GovernmentProject screenshot extraction through `/api/gov-evidence?endpoint=extract-screenshot-json`
+  - save a research artifact
+  - run low-risk safe apply actions
+  - promote observation rows
+  - review, dismiss, note, and promote pending observation queue rows
+- Confirmed `node --check gov.js` and `node --check api/data-proxy.js` both pass after the port.
+
+Current behavior:
+- The evidence workflow is now available in the live LCC government research UI rather than only in the standalone GovernmentProject dashboard.
+- This port depends on the GovernmentProject FastAPI app exposing the screenshot and research-artifact endpoints and being reachable through `GOV_API_URL`.
+
+Remaining gap:
+- Browser/runtime smoke testing is still required with an authenticated LCC session and a real CoStar screenshot.
