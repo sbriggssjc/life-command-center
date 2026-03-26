@@ -4,6 +4,10 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-26, a later commit attempt failed with `fatal: cannot lock ref 'HEAD': Unable to create ... .git/HEAD.lock: File exists.`
+- `.git/HEAD.lock` is 0 bytes with `CreationTime` and `LastWriteTime` `2026-03-26 10:14:26` local time.
+- A process check at `2026-03-26 10:20:45` local time showed three active `git.exe` processes (`22892`, `27072`, `36924`) alongside multiple `Code` processes.
+- `git status --short --branch` still succeeds during this failure and reports `main...origin/main [ahead 1]`, which indicates the repository remains readable while `HEAD` writes are blocked.
 - On 2026-03-26, `git add -A -- .` failed with `fatal: Unable to create ... .git/index.lock: File exists.`
 - The current lock file is `.git/index.lock`, not `.git/HEAD.lock`.
 - `.git/index.lock` is 0 bytes with `CreationTime` `2026-03-26 10:03:56` and `LastWriteTime` `2026-03-26 10:03:59` local time.
@@ -67,6 +71,8 @@
   - `sql/20260320_crm_rollup_sf_tasks_union.sql`: lines `2`, `37`, `46`, `59`, `61`, `62`, `67`, `136`, `175`
 
 ## What This Means
+- This recurrence matches the earlier pattern where a GUI-driven commit flow leaves orphaned `git.exe` processes behind and blocks `HEAD` updates.
+- `.git/HEAD.lock` should not be removed until those active `git.exe` processes are terminated.
 - The current blocker is a stale index lock file left behind by an interrupted staging operation.
 - Because no `git.exe` process is active, removing `.git/index.lock` is the safe next step.
 - The `HEAD.lock` file should not be removed until those active Git processes are no longer running.

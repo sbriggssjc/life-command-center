@@ -74,6 +74,10 @@
 - Added a vision-based OCR transcript step in the client live-ingest flow so attached images, screenshots, and image-only PDF pages can contribute extracted text context before proposal generation, while still being passed as images for multimodal reasoning.
 - Added an `Extraction Inputs` review block in the intake UI so normalized source text and OCR transcripts can be inspected before applying proposed operations.
 - Split OCR review into page-level transcript entries with source-image labels and confidence tags so each excerpt can be traced back to its originating screenshot or attachment.
+- Added explicit low-confidence OCR warnings in the review UI and highlighted those transcript entries so uncertain text is visible before writeback.
+- Added low-confidence OCR acknowledgment gating so `Apply Selected` stays disabled until the transcript warning is explicitly acknowledged, with the same rule enforced in the apply handler.
+- Added OCR-aware proposal tagging so operations generated from an extraction run that included low-confidence OCR are labeled individually in the review list and the proposal notes call that out explicitly.
+- Added heuristic source-lineage tagging for proposal operations by matching operation text against extraction inputs, so review cards can point to the most likely OCR page or source document.
 - Added client-side PDF rendering into page images for multimodal intake.
 - Added client-side PDF text extraction via `pdf.js` text content when the PDF contains selectable text.
 - Added client-side `docx` text extraction via document XML parsing.
@@ -121,5 +125,5 @@
 - Updated email normalization tests passed `node --test test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Add stronger OCR quality handling such as low-confidence warnings or retry prompts, plus deeper extraction for more complex Office payloads such as legacy Excel or PowerPoint files.
+- Add stronger OCR quality handling such as retry prompts or model-returned source citations, plus deeper extraction for more complex Office payloads such as legacy Excel or PowerPoint files.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

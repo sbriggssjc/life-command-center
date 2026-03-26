@@ -20,7 +20,9 @@ let govEvidenceState = {
   queue: [],
   queueLoading: false,
   queueLoaded: false,
-  queueError: ''
+  queueError: '',
+  healthLoading: false,
+  health: null
 };
 
 // State code to full name mapping
@@ -2661,8 +2663,10 @@ function renderGovEvidenceWorkbench() {
           <button class="btn-primary" type="button" data-gov-evidence-safe ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Apply Safe Evidence</button>
           <button class="btn-secondary" type="button" data-gov-evidence-promote-rows ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Promote Rows</button>
           <button class="btn-secondary" type="button" data-gov-evidence-refresh-queue ${govEvidenceState.queueLoading || !rec ? 'disabled' : ''}>${govEvidenceState.queueLoading ? 'Refreshing...' : 'Refresh Queue'}</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-health ${govEvidenceState.healthLoading ? 'disabled' : ''}>${govEvidenceState.healthLoading ? 'Checking...' : 'Check Evidence Health'}</button>
         </div>
         <div class="live-ingest-stamp">Artifact: ${esc(govEvidenceState.artifactId || 'not saved yet')}</div>
+        ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
           <div class="live-ingest-results-title">Pending Observation Queue</div>
           ${queueHtml}
@@ -2672,6 +2676,37 @@ function renderGovEvidenceWorkbench() {
   </section>`;
 }
 
+function buildGovEvidenceHealthSummary(health) {
+  if (!health || typeof health !== 'object') return 'Evidence health unavailable.';
+  const bits = [];
+  bits.push(`status: ${health.status || 'unknown'}`);
+  if (health.configuration) {
+    bits.push(`openai: ${health.configuration.openai_api_key_configured ? 'ok' : 'missing'}`);
+    bits.push(`supabase: ${health.configuration.supabase_service_role_configured ? 'ok' : 'missing'}`);
+  }
+  if (health.database) {
+    bits.push(`db: ${health.database.connected ? 'ok' : 'down'}`);
+    bits.push(`artifacts: ${health.database.research_artifacts_table ? 'ok' : 'missing'}`);
+    bits.push(`observations: ${health.database.research_artifact_observations_table ? 'ok' : 'missing'}`);
+    if (health.database.error) bits.push(`error: ${health.database.error}`);
+  }
+  return bits.join(' | ');
+}
+
+async function checkGovEvidenceHealth() {
+  govEvidenceState.healthLoading = true;
+  rerenderGovEvidenceOnly();
+  try {
+    govEvidenceState.health = await govEvidenceApi('evidence-health');
+    showToast(govEvidenceState.health.status === 'ok' ? 'Evidence health check passed' : 'Evidence health check degraded', govEvidenceState.health.status === 'ok' ? 'success' : 'warning');
+  } catch (err) {
+    govEvidenceState.health = { status: 'error', database: { connected: false, error: err.message } };
+    showToast(`Evidence health check failed: ${err.message}`, 'error');
+  } finally {
+    govEvidenceState.healthLoading = false;
+    rerenderGovEvidenceOnly();
+  }
+}
 function buildGovEvidenceSummary(review) {
   const bits = [];
   const address = pickGovEvidenceValue(review.property?.address, review.property?.property_name);
@@ -2923,6 +2958,7 @@ function bindGovEvidenceWorkbench() {
   document.querySelector('[data-gov-evidence-safe]')?.addEventListener('click', () => applyGovEvidenceSafeBundle());
   document.querySelector('[data-gov-evidence-promote-rows]')?.addEventListener('click', () => promoteGovEvidenceRows());
   document.querySelector('[data-gov-evidence-refresh-queue]')?.addEventListener('click', () => loadGovEvidenceObservations(true));
+  document.querySelector('[data-gov-evidence-health]')?.addEventListener('click', () => checkGovEvidenceHealth());
   document.querySelectorAll('[data-gov-evidence-note]').forEach((button) => {
     button.onclick = () => {
       const idx = Number(button.dataset.govEvidenceNote);
@@ -5285,6 +5321,7 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
 
 
 

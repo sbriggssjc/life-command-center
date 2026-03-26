@@ -41,6 +41,7 @@ const GOV_WRITE_ENDPOINT_MAP = {
   'resolve-pending':  '/api/pending-updates'
 };
 const GOV_EVIDENCE_ENDPOINT_MAP = {
+  'evidence-health': { path: '/api/evidence-health', methods: ['GET'] },
   'extract-screenshot-json': { path: '/api/extract-screenshot-json', methods: ['POST'] },
   'research-artifacts': { path: '/api/research-artifacts', methods: ['POST'] },
   'apply-loan': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-loan', methods: ['POST'] },
@@ -425,6 +426,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
 
 
 
