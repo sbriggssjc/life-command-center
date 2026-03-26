@@ -231,3 +231,49 @@ Current behavior:
 Remaining gap:
 - This is currently screenshot-vs-current-value conflict review only.
 - Multi-source conflict resolution should be added later when document evidence is ported into the same live panel.
+
+## 2026-03-26 Single Upload Government Evidence Intake
+
+Implemented in this pass:
+- Removed the practical need for a second upload box in the live gov evidence flow.
+- The gov evidence panel now reuses the latest image from the shared `Live Intake` attachment queue in `gov.js`.
+- The panel now labels that source explicitly and extracts from the latest shared intake image with `source: 'auto'`.
+- GovernmentProject now accepts `auto` screenshot source handling for the screenshot extraction endpoints.
+- Re-ran `node --check gov.js` successfully after the single-upload refactor.
+
+Current behavior:
+- Operators upload once in the shared Live Intake area.
+- The gov evidence panel then uses that same uploaded image for extraction, artifact save, conflict review, safe apply, and row promotion.
+- There is no longer a separate CoStar-specific upload path exposed in the live LCC gov research UI.
+
+Remaining gap:
+- `auto` currently normalizes to the CoStar screenshot path rather than classifying among multiple screenshot platforms.
+
+## 2026-03-26 Automatic Screenshot Source Detection
+
+Implemented in this pass:
+- GovernmentProject now performs backend screenshot source detection for `source=auto`.
+- The screenshot extraction path now distinguishes detected CoStar screenshots from generic market screenshots.
+- The live gov evidence panel in `gov.js` now displays the detected source returned by the backend after extraction.
+- Re-ran `node --check gov.js` successfully after wiring the detected-source state back into the single-upload flow.
+
+Current behavior:
+- Operators still upload once in the shared Live Intake area.
+- The live gov evidence panel now shows what source the backend recognized instead of silently assuming CoStar.
+- CoStar screenshots continue down the richer CoStar extraction prompt; other screenshots fall back to the generic market screenshot extractor.
+
+Remaining gap:
+- LoopNet and other platforms still use the generic fallback extractor rather than a platform-specific schema.
+
+## 2026-03-26 LoopNet Screenshot Extraction Routing
+
+Implemented in this pass:
+- GovernmentProject now has a dedicated `loopnet_screenshot` extraction prompt.
+- Automatic screenshot source routing now dispatches detected `loopnet` screenshots to that specialized prompt instead of the generic market screenshot fallback.
+
+Current behavior:
+- The live LCC single-upload gov evidence flow still looks the same in the UI.
+- When the backend detects a LoopNet screenshot, extraction quality should improve because it now uses a LoopNet-specific schema rather than the generic market prompt.
+
+Remaining gap:
+- This path still needs tuning against real LoopNet screenshots and any later LoopNet-specific normalization rules.

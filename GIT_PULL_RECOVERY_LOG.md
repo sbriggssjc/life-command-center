@@ -4,6 +4,18 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-26, another GUI-style commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` existed as a 0-byte file created at `2026-03-26 14:45:41` local time.
+- A process check for that recurrence showed three active `git.exe` processes (`27372`, `34904`, `54584`) started at `2026-03-26 15:21:40` local time.
+- `git status --short --branch` still succeeds during this recurrence and currently reports `main...origin/main` with `MM app.js` plus modified worklogs, which means the repository is readable while `HEAD` writes are blocked.
+- On 2026-03-26, `app.js` was resolved by keeping the richer `theirs` side of the single remaining Live Ingest conflict block and removing the conflict markers.
+- `node --check app.js` succeeded after that resolution.
+- `git diff --name-only --diff-filter=U` is now empty.
+- `git commit --dry-run --no-edit` now reports `All conflicts fixed but you are still merging`, which confirms the merge blocker has been cleared and only the merge commit remains.
+- On 2026-03-26, `git pull --tags origin main` failed with `Pulling is not possible because you have unmerged files`.
+- `git diff --name-only --diff-filter=U` now reports a single unresolved file: `app.js`.
+- `git status --short --branch` at this point reports `main...origin/main [ahead 1, behind 6]`.
+- Additional local changes present during this merge state: `api/data-proxy.js`, `flow-loopnet-backfill.json`, `flow-rcm-backfill.json`, `ops.js`, and `styles.css`.
+- A follow-up attempt to resolve `app.js` mechanically was reverted with `git checkout --conflict=merge -- app.js` so the file is back in its original conflict-marker state.
 - On 2026-03-26, a later commit attempt failed with `fatal: cannot lock ref 'HEAD': Unable to create ... .git/HEAD.lock: File exists.`
 - `.git/HEAD.lock` is 0 bytes with `CreationTime` and `LastWriteTime` `2026-03-26 10:14:26` local time.
 - A process check at `2026-03-26 10:20:45` local time showed three active `git.exe` processes (`22892`, `27072`, `36924`) alongside multiple `Code` processes.
@@ -71,6 +83,8 @@
   - `sql/20260320_crm_rollup_sf_tasks_union.sql`: lines `2`, `37`, `46`, `59`, `61`, `62`, `67`, `136`, `175`
 
 ## What This Means
+- The sync blocker has moved from lock files to a real content merge in `app.js`.
+- The repository should not be pulled again until `app.js` is resolved, staged, and the in-progress merge is completed with a commit.
 - This recurrence matches the earlier pattern where a GUI-driven commit flow leaves orphaned `git.exe` processes behind and blocks `HEAD` updates.
 - `.git/HEAD.lock` should not be removed until those active `git.exe` processes are terminated.
 - The current blocker is a stale index lock file left behind by an interrupted staging operation.

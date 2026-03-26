@@ -1089,7 +1089,7 @@ async function loadMarketing() {
 
   if (!mktLoaded) {
     if (currentBizTab === 'marketing') {
-      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading your CRM activity hub...</p></div>';
+      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px" id="mktLoadStatus">Loading your CRM activity hub...</p></div>';
     }
     try {
       // Fetch domain-classified opportunities (for routing to domain tabs)
@@ -1168,6 +1168,8 @@ async function loadMarketing() {
             if (!batch || batch.length === 0) break;
             allRows = allRows.concat(batch);
             console.log('[Marketing] Loaded page ' + (page + 1) + ': ' + batch.length + ' rows (total: ' + allRows.length + ')');
+            var statusEl = document.getElementById('mktLoadStatus');
+            if (statusEl) statusEl.textContent = 'Loading contacts... ' + allRows.length.toLocaleString() + ' rows';
             if (batch.length < BATCH_SIZE) break; // last page
             batchOffset += BATCH_SIZE;
           }
@@ -1189,6 +1191,8 @@ async function loadMarketing() {
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
         if (clientRollupRaw && clientRollupRaw.length > 0) {
           try {
+            var statusEl = document.getElementById('mktLoadStatus');
+            if (statusEl) statusEl.textContent = 'Enriching contacts with tasks...';
             const tasksData = await fetchAllPages('sf_contact_id,open_tasks', 'open_task_count=gt.0');
             if (tasksData && tasksData.length > 0) {
               const taskMap = {};
@@ -1218,6 +1222,8 @@ async function loadMarketing() {
           if (!batch || batch.length === 0) break;
           opportunitiesRaw = opportunitiesRaw.concat(batch);
           console.log('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
+          var statusEl = document.getElementById('mktLoadStatus');
+          if (statusEl) statusEl.textContent = 'Loading opportunities... ' + opportunitiesRaw.length.toLocaleString() + ' rows';
           if (batch.length < OPP_PAGE) break;
           oppOffset += OPP_PAGE;
         }
@@ -2532,7 +2538,8 @@ function renderDomainProspects(domain, containerId) {
   const ownerSet = new Set();
   combinedProspects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
   const owners = Array.from(ownerSet).sort();
-  const overdue = combinedProspects.filter(d => d.due_date && d.due_date < today).length;
+  const overdueItems = combinedProspects.filter(d => d.due_date && d.due_date < today);
+  const overdue = new Set(overdueItems.map(d => d.deal_name)).size;
   const totalDeals = new Set(combinedProspects.map(d => d.deal_name)).size;
   const totalContacts = combinedProspects.length;
   const domainLabel = domain === 'government' ? 'Government' : domain === 'dialysis' ? 'Dialysis' : 'All Other';
@@ -2555,7 +2562,7 @@ function renderDomainProspects(domain, containerId) {
   // Metrics
   html += '<div class="widget-grid">';
   html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${totalContacts} contacts</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">${overdueItems.length} contacts past due</div></div>`;
   html += '</div>';
 
   // Status filters
@@ -3987,7 +3994,7 @@ async function applyInsertWithFallback(opts) {
 let activitiesLoaded = false;
 async function loadActivities() {
   try {
-    const res = await fetch(`${API}/sync/sf-activities?limit=5000&sort_dir=desc&assigned_to=all`);
+    const res = await fetch(`${API}/sync/sf-activities?limit=2000&sort_dir=desc&assigned_to=all`);
     if (!res.ok) { console.warn('Activities API returned', res.status); return; }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Activities API returned non-JSON'); return; }
@@ -5142,9 +5149,12 @@ function sendCopilotSuggestion(text) {
 
 async function sendCopilotMessage() {
   const input = document.getElementById('copilotInput');
+  const sendBtn = document.getElementById('copilotSend');
   const msg = input.value.trim();
   if (!msg) return;
 
+  // Disable input during request to prevent double-submission
+  if (sendBtn) sendBtn.disabled = true;
   input.value = '';
   input.style.height = 'auto';
 
@@ -5184,6 +5194,8 @@ async function sendCopilotMessage() {
     const localReply = handleLocalCopilotQuery(msg);
     appendCopilotMsg(localReply, 'bot');
     copilotHistory.push({ role: 'assistant', content: localReply });
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
@@ -5545,11 +5557,13 @@ function renderLiveIngestWorkbench(domainKey) {
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
           <button class="btn-secondary" type="button" data-live-ingest-select-cited="${domainKey}">Select Cited Only</button>
+          ${hasWorsenedRetryRisk ? `<button class="btn-secondary" type="button" data-live-ingest-select-worsened="${domainKey}">Select Worsened Only</button>
+          <button class="btn-secondary" type="button" data-live-ingest-clear-worsened="${domainKey}">Clear Worsened</button>` : ''}
           <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         <div class="live-ingest-op-list">
-          ${ops.length ? ops.map((op, idx) => renderLiveIngestOperation(domainKey, op, idx)).join('') : '<div class="live-ingest-empty">No operations were proposed.</div>'}
+          ${ops.length ? renderLiveIngestOperationGroups(domainKey, ops) : '<div class="live-ingest-empty">No operations were proposed.</div>'}
         </div>
         <div class="live-ingest-actions">
           ${hasLowConfidenceOcr ? `<label class="live-ingest-ack">
@@ -5560,7 +5574,11 @@ function renderLiveIngestWorkbench(domainKey) {
             <input type="checkbox" data-live-ingest-citation-ack="${domainKey}" ${state.citationRiskAcknowledged ? 'checked' : ''}>
             <span>I reviewed operations that rely on low-confidence OCR without model-cited sources.</span>
           </label>` : ''}
-          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          ${hasWorsenedRetryRisk ? `<label class="live-ingest-ack">
+            <input type="checkbox" data-live-ingest-worsened-ack="${domainKey}" ${state.worsenedRetryAcknowledged ? 'checked' : ''}>
+            <span>I reviewed operations tied to OCR sources that got worse after retry.</span>
+          </label>` : ''}
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged) || (hasWorsenedRetryRisk && !state.worsenedRetryAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
           ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
         </div>
@@ -5668,29 +5686,65 @@ function renderLiveIngestExtractionDocs(docs) {
 }
 
 function renderLiveIngestOcrRetryComparison(doc) {
-  const previousText = String(doc?.metadata?.ocr_retry_previous_text || '').trim();
-  const previousConfidence = String(doc?.metadata?.ocr_retry_previous_confidence || '').trim();
-  const currentConfidence = String(doc?.metadata?.ocr_confidence || '').trim();
-  if (!previousText && !previousConfidence) return '';
+  const history = Array.isArray(doc?.metadata?.ocr_retry_history)
+    ? doc.metadata.ocr_retry_history.filter((entry) => entry && typeof entry === 'object')
+    : [];
+  if (!history.length) {
+    const previousText = String(doc?.metadata?.ocr_retry_previous_text || '').trim();
+    const previousConfidence = String(doc?.metadata?.ocr_retry_previous_confidence || '').trim();
+    const currentConfidence = String(doc?.metadata?.ocr_confidence || '').trim();
+    if (!previousText && !previousConfidence) return '';
+    history.push({
+      previous_text: previousText,
+      previous_confidence: previousConfidence,
+      next_text: String(doc.normalized_text || '').trim(),
+      next_confidence: currentConfidence,
+      retried_at: null
+    });
+  }
+  const entries = history.slice().reverse();
   return `<div class="live-ingest-retry-compare">
     <div class="live-ingest-editor-head" style="margin-top:0">
-      <span>Retry Comparison</span>
-      <span>${esc([
-        previousConfidence ? `was ${previousConfidence}` : null,
-        currentConfidence ? `now ${currentConfidence}` : null
-      ].filter(Boolean).join(' | ') || 'updated transcript')}</span>
+      <span>Retry History</span>
+      <span>${entries.length} attempt${entries.length === 1 ? '' : 's'}</span>
     </div>
-    <div class="live-ingest-retry-grid">
-      <div>
-        <div class="live-ingest-retry-label">Before Retry</div>
-        <pre>${esc(previousText.slice(0, 2000) || 'No prior transcript saved.')}</pre>
-      </div>
-      <div>
-        <div class="live-ingest-retry-label">After Retry</div>
-        <pre>${esc(String(doc.normalized_text || '').slice(0, 2000))}</pre>
-      </div>
+    <div class="live-ingest-retry-history">
+      ${entries.map((entry, idx) => {
+        const labelBits = [
+          entry.retried_at ? formatLiveIngestRetryTimestamp(entry.retried_at) : null,
+          entry.previous_confidence ? `was ${entry.previous_confidence}` : null,
+          entry.next_confidence ? `now ${entry.next_confidence}` : null
+        ].filter(Boolean);
+        return `<div class="live-ingest-retry-entry">
+          <div class="live-ingest-editor-head" style="margin-top:0">
+            <span>Retry ${entries.length - idx}</span>
+            <span>${esc(labelBits.join(' | ') || 'updated transcript')}</span>
+          </div>
+          <div class="live-ingest-retry-grid">
+            <div>
+              <div class="live-ingest-retry-label">Before Retry</div>
+              <pre>${esc(String(entry.previous_text || '').slice(0, 2000) || 'No prior transcript saved.')}</pre>
+            </div>
+            <div>
+              <div class="live-ingest-retry-label">After Retry</div>
+              <pre>${esc(String(entry.next_text || '').slice(0, 2000) || 'No refreshed transcript saved.')}</pre>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
     </div>
   </div>`;
+}
+
+function formatLiveIngestRetryTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
 }
 
 function liveIngestHasLowConfidenceOcr(docs) {
@@ -5727,12 +5781,14 @@ function renderLiveIngestOperation(domainKey, op, idx) {
         <span class="live-ingest-op-target">${target}</span>
         ${op._lowConfidenceOcr ? `<span class="live-ingest-op-flag warn">Low-confidence OCR</span>` : ''}
         ${op._citationRisk ? `<span class="live-ingest-op-flag warn">No cited source</span>` : ''}
+        ${op._worsenedRetryRisk ? `<span class="live-ingest-op-flag warn">Retry Worsened</span>` : ''}
         ${op._sourceLineage?.label ? `<span class="live-ingest-op-flag">${esc(op._sourceLineage.label)}</span>` : ''}
         ${op.kind === 'update' ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-refresh-op="${domainKey}:${idx}">Refresh</button>` : ''}
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
       ${op._lowConfidenceOcr ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation was proposed while low-confidence OCR text was part of the extraction input. Review the related transcript before applying.</div>` : ''}
       ${op._citationRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation does not include a model-cited source reference even though low-confidence OCR was present in the extraction run.</div>` : ''}
+      ${op._worsenedRetryRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation points to a source whose OCR confidence decreased after retry. Reconfirm the source transcript before applying.</div>` : ''}
       ${op._sourceLineage?.detail ? `<div class="live-ingest-op-reason">${esc(op._sourceLineage.detail)}</div>` : ''}
       ${op._sourceLineage?.evidence ? `<div class="live-ingest-source-evidence">
         <div class="live-ingest-retry-label">Source Evidence</div>
@@ -5747,6 +5803,77 @@ function renderLiveIngestOperation(domainKey, op, idx) {
       ${op._parseError ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(op._parseError)}</div>` : ''}
     </div>
   </label>`;
+}
+
+function renderLiveIngestOperationGroups(domainKey, operations) {
+  const groups = buildLiveIngestOperationGroups(operations);
+  return groups.map((group, groupIdx) => {
+    const statuses = [];
+    if (group.lowConfidenceCount) statuses.push(`<span class="live-ingest-op-flag warn">Low-confidence OCR ${group.lowConfidenceCount}</span>`);
+    if (group.citationCount) statuses.push(`<span class="live-ingest-op-flag warn">No cited source ${group.citationCount}</span>`);
+    if (group.worsenedCount) statuses.push(`<span class="live-ingest-op-flag warn">Retry worsened ${group.worsenedCount}</span>`);
+    if (!group.lowConfidenceCount && !group.citationCount && !group.worsenedCount) statuses.push('<span class="live-ingest-op-flag">No source risk</span>');
+    const countBits = [
+      `${group.indices.length} op${group.indices.length === 1 ? '' : 's'}`,
+      group.selectedCount ? `${group.selectedCount} selected` : null,
+      group.worsenedCount ? `${group.worsenedCount} worsened` : null
+    ].filter(Boolean).join(' | ');
+    return `<section class="live-ingest-op-group">
+      <div class="live-ingest-op-group-head">
+        <div>
+          <strong>${esc(group.label)}</strong>
+          <div>${esc(countBits)}</div>
+        </div>
+        <div class="live-ingest-op-group-controls">
+          <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select="${domainKey}:${groupIdx}">Select Group</button>
+          ${group.worsenedCount ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-group-select-risk="${domainKey}:${groupIdx}">Include Worsened</button>` : ''}
+          <button class="live-ingest-inline-btn" type="button" data-live-ingest-group-clear="${domainKey}:${groupIdx}">Clear Group</button>
+          ${group.canAcknowledgeShortcut ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-group-ack="${domainKey}:${groupIdx}">Acknowledge Group Risk</button>` : ''}
+        </div>
+      </div>
+      <div class="live-ingest-op-group-status">${statuses.join('')}</div>
+      ${group.detail ? `<div class="live-ingest-op-reason">${esc(group.detail)}</div>` : ''}
+      ${group.worsenedCount ? `<div class="live-ingest-callout warn">Group selection keeps worsened-retry operations deselected by default. Use "Include Worsened" to opt them back in for this source.</div>` : ''}
+      ${group.indices.map((opIdx) => renderLiveIngestOperation(domainKey, operations[opIdx], opIdx)).join('')}
+    </section>`;
+  }).join('');
+}
+
+function buildLiveIngestOperationGroups(operations) {
+  const groups = [];
+  const byKey = new Map();
+  (Array.isArray(operations) ? operations : []).forEach((op, idx) => {
+    const sourceName = String(op?._sourceLineage?.source_name || '').trim();
+    const label = sourceName || 'Unattributed source';
+    const detail = op?._sourceLineage?.detail || (sourceName ? `Source: ${sourceName}` : 'Operations without clear source lineage');
+    const key = `${label}__${detail}`;
+    if (!byKey.has(key)) {
+      const group = { key, label, detail, indices: [], selectedCount: 0, worsenedCount: 0, lowConfidenceCount: 0, citationCount: 0, canAcknowledgeShortcut: false };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    const group = byKey.get(key);
+    group.indices.push(idx);
+    if (op?._selected !== false) group.selectedCount += 1;
+    if (op?._lowConfidenceOcr) group.lowConfidenceCount += 1;
+    if (op?._citationRisk) group.citationCount += 1;
+    if (op?._worsenedRetryRisk) group.worsenedCount += 1;
+  });
+  const selectedOps = (Array.isArray(operations) ? operations : []).map((op, idx) => ({ op, idx })).filter(({ op }) => op?._selected !== false);
+  groups.forEach((group) => {
+    const groupIndexSet = new Set(group.indices);
+    const selectedInGroup = selectedOps.filter(({ idx }) => groupIndexSet.has(idx));
+    if (!selectedInGroup.length) {
+      group.canAcknowledgeShortcut = false;
+      return;
+    }
+    const outsideGroup = selectedOps.filter(({ idx }) => !groupIndexSet.has(idx));
+    const lowConfidenceOnlyInGroup = selectedInGroup.some(({ op }) => op?._lowConfidenceOcr) && !outsideGroup.some(({ op }) => op?._lowConfidenceOcr);
+    const citationOnlyInGroup = selectedInGroup.some(({ op }) => op?._citationRisk) && !outsideGroup.some(({ op }) => op?._citationRisk);
+    const worsenedOnlyInGroup = selectedInGroup.some(({ op }) => op?._worsenedRetryRisk) && !outsideGroup.some(({ op }) => op?._worsenedRetryRisk);
+    group.canAcknowledgeShortcut = lowConfidenceOnlyInGroup || citationOnlyInGroup || worsenedOnlyInGroup;
+  });
+  return groups;
 }
 
 function renderLiveIngestFieldValue(value) {
@@ -5943,16 +6070,99 @@ function bindLiveIngestWorkbench(domainKey) {
   });
   document.querySelector(`[data-live-ingest-select-all="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = true; });
+    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-cited="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = !op._citationRisk; });
     state.citationRiskAcknowledged = false;
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-select-worsened="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = !!op._worsenedRetryRisk; });
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-clear-worsened="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => {
+      if (op._worsenedRetryRisk) op._selected = false;
+    });
+    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
+    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelectorAll(`[data-live-ingest-group-select^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupSelect.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      group.indices.forEach((opIdx) => {
+        const op = state.proposal?.operations?.[opIdx];
+        if (op) op._selected = !op._worsenedRetryRisk;
+      });
+      state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-select-risk^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupSelectRisk.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      group.indices.forEach((opIdx) => {
+        const op = state.proposal?.operations?.[opIdx];
+        if (op) op._selected = true;
+      });
+      state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-clear^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupClear.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      group.indices.forEach((opIdx) => {
+        const op = state.proposal?.operations?.[opIdx];
+        if (op) op._selected = false;
+      });
+      state.worsenedRetryAcknowledged = false;
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-ack^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupAck.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const group = groups[groupIdx];
+      if (!group) return;
+      const groupIndexSet = new Set(group.indices);
+      const selectedOps = (state.proposal?.operations || []).map((op, idx) => ({ op, idx })).filter(({ op }) => op?._selected !== false);
+      const selectedInGroup = selectedOps.filter(({ idx }) => groupIndexSet.has(idx));
+      const outsideGroup = selectedOps.filter(({ idx }) => !groupIndexSet.has(idx));
+      if (selectedInGroup.some(({ op }) => op?._lowConfidenceOcr) && !outsideGroup.some(({ op }) => op?._lowConfidenceOcr)) {
+        state.lowConfidenceOcrAcknowledged = true;
+      }
+      if (selectedInGroup.some(({ op }) => op?._citationRisk) && !outsideGroup.some(({ op }) => op?._citationRisk)) {
+        state.citationRiskAcknowledged = true;
+      }
+      if (selectedInGroup.some(({ op }) => op?._worsenedRetryRisk) && !outsideGroup.some(({ op }) => op?._worsenedRetryRisk)) {
+        state.worsenedRetryAcknowledged = true;
+      }
+      rerenderLiveIngestDomain(domainKey);
+    };
   });
   document.querySelector(`[data-live-ingest-refresh-snapshots="${domainKey}"]`)?.addEventListener('click', async () => {
     if (!state.proposal?.operations?.length) return;
@@ -6835,7 +7045,17 @@ async function retryLiveIngestOcrSource(domainKey, docIndex) {
         ...(refreshedDocs[0].metadata || {}),
         source_image_name: sourceName || refreshedDocs[0].metadata?.source_image_name || null,
         ocr_retry_previous_text: previousText,
-        ocr_retry_previous_confidence: previousConfidence || null
+        ocr_retry_previous_confidence: previousConfidence || null,
+        ocr_retry_history: [
+          ...((Array.isArray(doc?.metadata?.ocr_retry_history) ? doc.metadata.ocr_retry_history : []).filter((entry) => entry && typeof entry === 'object')),
+          {
+            previous_text: previousText,
+            previous_confidence: previousConfidence || null,
+            next_text: String(refreshedDocs[0].normalized_text || ''),
+            next_confidence: String(refreshedDocs[0].metadata?.ocr_confidence || '').trim() || null,
+            retried_at: new Date().toISOString()
+          }
+        ]
       }
     };
     state.extractionDocs = (state.extractionDocs || []).map((item, idx) => idx === docIndex ? nextDoc : item);
@@ -7702,3 +7922,4 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !is
     }, 3000);
   }
 }
+
