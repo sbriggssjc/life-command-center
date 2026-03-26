@@ -413,8 +413,10 @@ function navToFromMore(pageId) {
   // Force reflow so the instant hide takes effect
   void drawer.offsetHeight;
   // Restore transitions for next open
-  drawer.style.transition = '';
-  overlay.style.transition = '';
+  requestAnimationFrame(function() {
+    drawer.style.transition = '';
+    overlay.style.transition = '';
+  });
   // Deactivate all nav buttons
   document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
@@ -4343,33 +4345,42 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function renderHomeStats() {
-  // Prefer canonical work_counts when available
-  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.inbox_new > 0)) {
+  // --- Activities stat ---
+  // Prefer canonical work_counts when non-zero
+  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0)) {
     document.getElementById('statActivities').textContent = (canonicalCounts.my_actions || 0).toLocaleString();
-    document.getElementById('statEmails').textContent = (canonicalCounts.inbox_new || 0).toLocaleString();
-    document.getElementById('statDue').textContent = (canonicalCounts.due_this_week || 0).toLocaleString();
   } else if (mktLoaded && mktData.length > 0) {
     // CRM rollup fallback — use marketing pipeline data from Salesforce
-    const today = new Date().toISOString().split('T')[0];
     const userName = LCC_USER.display_name || 'Scott Briggs';
     const myTasks = mktData.filter(d => d.assigned_to === userName);
     const allProspects = (window._mktOpportunities ? (window._mktOpportunities.government.length + window._mktOpportunities.dialysis.length + window._mktOpportunities.all_other.length) : 0)
       + (window._mktProspectContacts ? (window._mktProspectContacts.government.length + window._mktProspectContacts.dialysis.length + window._mktProspectContacts.all_other.length) : 0);
     document.getElementById('statActivities').textContent = (myTasks.length + allProspects).toLocaleString();
+  } else if (activitiesLoaded && activities.length > 0) {
+    document.getElementById('statActivities').textContent = activities.length.toLocaleString();
+  }
+  // Don't write 0 — keep the "-" placeholder until real data arrives
+
+  // --- Emails stat — always use edge function count when available ---
+  if (emailTotalCount > 0 || emails.length > 0) {
+    document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
+  } else if (canonicalCounts && canonicalCounts.inbox_new > 0) {
+    document.getElementById('statEmails').textContent = canonicalCounts.inbox_new.toLocaleString();
+  }
+
+  // --- Due This Week stat ---
+  if (canonicalCounts && canonicalCounts.due_this_week > 0) {
+    document.getElementById('statDue').textContent = canonicalCounts.due_this_week.toLocaleString();
+  } else if (mktLoaded && mktData.length > 0) {
     const now = Date.now(); const week = 7 * 86400000;
     const due = mktData.filter(d => { if (!d.due_date) return false; var t = new Date(d.due_date).getTime(); return t >= now && t <= now + week; });
     document.getElementById('statDue').textContent = due.length;
-    document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
-  } else {
-    // Legacy fallback — only update activity-dependent stats once loaded (prevents 0-flash)
-    if (activitiesLoaded) {
-      document.getElementById('statActivities').textContent = activities.length.toLocaleString();
-      const now = Date.now(); const week = 7 * 86400000;
-      const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
-      document.getElementById('statDue').textContent = due.length;
-    }
-    document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
+  } else if (activitiesLoaded && activities.length > 0) {
+    const now = Date.now(); const week = 7 * 86400000;
+    const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
+    document.getElementById('statDue').textContent = due.length;
   }
+
   // Calendar events always from edge function (individual calendar)
   const today = tzDateStr(new Date());
   const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));

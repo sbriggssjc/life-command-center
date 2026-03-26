@@ -293,7 +293,7 @@
 
   <!-- More Drawer — additional nav items -->
   <div class="more-drawer-overlay" id="moreDrawerOverlay" onclick="toggleMoreDrawer()"></div>
-  <div class="more-drawer" id="moreDrawer">
+  <div class="more-drawer" id="moreDrawer" onclick="event.stopPropagation()">
     <div class="more-drawer-handle"></div>
     <div class="more-drawer-grid">
       <button class="more-drawer-item" data-page="pageBiz" onclick="navToFromMore('pageBiz')">
