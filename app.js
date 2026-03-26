@@ -1087,7 +1087,7 @@ async function loadMarketing() {
 
   if (!mktLoaded) {
     if (currentBizTab === 'marketing') {
-      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading your CRM activity hub...</p></div>';
+      el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px" id="mktLoadStatus">Loading your CRM activity hub...</p></div>';
     }
     try {
       // Fetch domain-classified opportunities (for routing to domain tabs)
@@ -1159,6 +1159,8 @@ async function loadMarketing() {
             if (!batch || batch.length === 0) break;
             allRows = allRows.concat(batch);
             console.log('[Marketing] Loaded page ' + (page + 1) + ': ' + batch.length + ' rows (total: ' + allRows.length + ')');
+            var statusEl = document.getElementById('mktLoadStatus');
+            if (statusEl) statusEl.textContent = 'Loading contacts... ' + allRows.length.toLocaleString() + ' rows';
             if (batch.length < BATCH_SIZE) break; // last page
             batchOffset += BATCH_SIZE;
           }
@@ -1180,6 +1182,8 @@ async function loadMarketing() {
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
         if (clientRollupRaw && clientRollupRaw.length > 0) {
           try {
+            var statusEl = document.getElementById('mktLoadStatus');
+            if (statusEl) statusEl.textContent = 'Enriching contacts with tasks...';
             const tasksData = await fetchAllPages('sf_contact_id,open_tasks', 'open_task_count=gt.0');
             if (tasksData && tasksData.length > 0) {
               const taskMap = {};
@@ -1209,6 +1213,8 @@ async function loadMarketing() {
           if (!batch || batch.length === 0) break;
           opportunitiesRaw = opportunitiesRaw.concat(batch);
           console.log('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
+          var statusEl = document.getElementById('mktLoadStatus');
+          if (statusEl) statusEl.textContent = 'Loading opportunities... ' + opportunitiesRaw.length.toLocaleString() + ' rows';
           if (batch.length < OPP_PAGE) break;
           oppOffset += OPP_PAGE;
         }
@@ -2518,7 +2524,8 @@ function renderDomainProspects(domain, containerId) {
   const ownerSet = new Set();
   combinedProspects.forEach(d => { if (d.assigned_to) ownerSet.add(d.assigned_to); });
   const owners = Array.from(ownerSet).sort();
-  const overdue = combinedProspects.filter(d => d.due_date && d.due_date < today).length;
+  const overdueItems = combinedProspects.filter(d => d.due_date && d.due_date < today);
+  const overdue = new Set(overdueItems.map(d => d.deal_name)).size;
   const totalDeals = new Set(combinedProspects.map(d => d.deal_name)).size;
   const totalContacts = combinedProspects.length;
   const domainLabel = domain === 'government' ? 'Government' : domain === 'dialysis' ? 'Dialysis' : 'All Other';
@@ -2541,7 +2548,7 @@ function renderDomainProspects(domain, containerId) {
   // Metrics
   html += '<div class="widget-grid">';
   html += `<div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value" style="color:var(--accent)">${totalDeals}</div><div class="stat-sub">${totalContacts} contacts</div></div>`;
-  html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">Past due date</div></div>`;
+  html += `<div class="stat-card" style="cursor:pointer" onclick="prospectFilter['${domain}']='overdue';prospectPage['${domain}']=0;${renderCall}"><div class="stat-label">Overdue</div><div class="stat-value" style="color:var(--red)">${overdue}</div><div class="stat-sub">${overdueItems.length} contacts past due</div></div>`;
   html += '</div>';
 
   // Status filters
@@ -4331,8 +4338,9 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function renderHomeStats() {
-  // Prefer canonical work_counts when available
-  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.inbox_new > 0)) {
+  // Prefer canonical work_counts when available — trust them even if 0
+  // This prevents CRM rollup fallback from overriding with inflated numbers
+  if (canonicalCounts && canonicalLoaded) {
     document.getElementById('statActivities').textContent = (canonicalCounts.my_actions || 0).toLocaleString();
     document.getElementById('statEmails').textContent = (canonicalCounts.inbox_new || 0).toLocaleString();
     document.getElementById('statDue').textContent = (canonicalCounts.due_this_week || 0).toLocaleString();
@@ -5119,9 +5127,12 @@ function sendCopilotSuggestion(text) {
 
 async function sendCopilotMessage() {
   const input = document.getElementById('copilotInput');
+  const sendBtn = document.getElementById('copilotSend');
   const msg = input.value.trim();
   if (!msg) return;
 
+  // Disable input during request to prevent double-submission
+  if (sendBtn) sendBtn.disabled = true;
   input.value = '';
   input.style.height = 'auto';
 
@@ -5161,6 +5172,8 @@ async function sendCopilotMessage() {
     const localReply = handleLocalCopilotQuery(msg);
     appendCopilotMsg(localReply, 'bot');
     copilotHistory.push({ role: 'assistant', content: localReply });
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
