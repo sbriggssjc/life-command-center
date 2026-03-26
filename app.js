@@ -1117,10 +1117,14 @@ async function loadMarketing() {
       }
 
       // Fetch with auto-retry: Supabase often returns 57014 timeout during initial load burst
+      // Each attempt uses a 15-second AbortController timeout to prevent hanging forever
       async function fetchRollupWithRetry(url, retries) {
         for (var attempt = 0; attempt <= retries; attempt++) {
           try {
-            var r = await fetch(url);
+            var controller = new AbortController();
+            var timeoutId = setTimeout(function() { controller.abort(); }, 15000);
+            var r = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeoutId);
             if (!r.ok && attempt < retries) {
               console.warn('[Marketing] Rollup attempt ' + (attempt+1) + ' HTTP ' + r.status + ', retrying in 3s...');
               await new Promise(function(ok) { setTimeout(ok, 3000); });
@@ -1135,6 +1139,9 @@ async function loadMarketing() {
             }
             return d.data || [];
           } catch(e) {
+            if (e.name === 'AbortError') {
+              console.warn('[Marketing] Rollup attempt ' + (attempt+1) + ' timed out after 15s');
+            }
             if (attempt < retries) {
               console.warn('[Marketing] Rollup fetch error, retrying in 3s:', e.message);
               await new Promise(function(ok) { setTimeout(ok, 3000); });
@@ -1518,8 +1525,13 @@ async function loadMarketing() {
       if (otherBadge) otherBadge.textContent = (window._mktOpportunities.all_other.length + window._mktProspectContacts.all_other.length) || '—';
     } catch (e) {
       console.error('Marketing load error:', e);
-      el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)">Error loading marketing pipeline.</div>';
       _mktLoading = false;
+      // Show retry UI instead of permanent error so the tab isn't stuck
+      el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)">'
+        + '<div style="font-size:14px;color:var(--red);margin-bottom:12px">Unable to load CRM data</div>'
+        + '<div style="font-size:12px;margin-bottom:16px">' + esc(e.message || 'Request timed out') + '</div>'
+        + '<button onclick="mktLoaded=false;_mktLoading=false;loadMarketing()" style="padding:8px 20px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:13px">Retry</button>'
+        + '</div>';
       return;
     }
   }
