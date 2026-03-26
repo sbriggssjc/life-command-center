@@ -2098,14 +2098,21 @@ async function updateHomeStats() {
     const res = await opsApi('/api/queue?view=work_counts');
     if (res.ok) {
       const c = res.data || {};
-      const el = id => document.getElementById(id);
-      if (el('statActivities')) el('statActivities').textContent = c.my_actions || c.my_open || 0;
-      if (el('statEmails')) el('statEmails').textContent = c.inbox_new || 0;
-      if (el('statDue')) el('statDue').textContent = c.due_this_week || c.overdue || 0;
+      // Only overwrite stat cards when canonical queue has real data —
+      // prevents clobbering edge-function values with zeros
+      const hasData = (c.my_actions || 0) + (c.my_open || 0) + (c.inbox_new || 0) + (c.due_this_week || 0) + (c.overdue || 0) > 0;
+      if (hasData) {
+        const el = id => document.getElementById(id);
+        if (el('statActivities')) el('statActivities').textContent = c.my_actions || c.my_open || 0;
+        if (el('statEmails')) el('statEmails').textContent = c.inbox_new || 0;
+        if (el('statDue')) el('statDue').textContent = c.due_this_week || c.overdue || 0;
+      }
     }
   } catch (e) {
     console.log('Home stats update failed:', e);
   }
+  // Always re-apply edge-function stats so they get the last word
+  if (typeof renderHomeStats === 'function') renderHomeStats();
 }
 
 // Run on load — update home stats from canonical model
