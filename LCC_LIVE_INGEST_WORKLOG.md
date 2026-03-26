@@ -146,7 +146,8 @@
 - Added source-group risk summaries plus an `Acknowledge Group Risk` shortcut when the currently selected risky operations are isolated to one source group, so low-confidence/citation/worsened acknowledgments can be applied from the group header instead of only in the global footer.
 - Added legacy Office intake coverage for `.doc` and `.xls` by extracting readable string previews from binary files in both direct-upload handling and server-side email attachment normalization, with regression coverage in `test/live-ingest-normalize.test.js`.
 - Added per-group acknowledgment state indicators in the grouped review header so each source cluster can show whether OCR/citation/retry gates are pending, already acknowledged, or not active for the currently selected operations.
+- Added legacy `.ppt` intake coverage alongside the earlier `.doc` and `.xls` support, using the same readable-string preview strategy for direct uploads and email attachments, with regression coverage in `test/live-ingest-normalize.test.js`.
 
 ## Next Follow-Up Candidates
-- Move to broader legacy Office coverage such as `.ppt` and richer binary attachment heuristics, or add similar group-state indicators to the top-level review toolbar summary.
+- Move to richer binary attachment heuristics beyond legacy Office previews, or add similar group-state indicators to the top-level review toolbar summary.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

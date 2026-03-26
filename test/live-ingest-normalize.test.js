@@ -572,6 +572,45 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /14500/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
+
+  it('extracts readable text from attached legacy ppt payloads when present', () => {
+    const pptLike = Buffer.concat([
+      Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]),
+      Buffer.from('Legacy deck overview\nOperator update\nRent target 17500\n', 'latin1'),
+      Buffer.from('Discuss next committee meeting', 'utf16le')
+    ]).toString('base64');
+
+    const raw = [
+      'Subject: PPT Attachment Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="ppt123"',
+      '',
+      '--ppt123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached legacy deck.',
+      '--ppt123',
+      'Content-Type: application/vnd.ms-powerpoint; name="legacy-deck.ppt"',
+      'Content-Disposition: attachment; filename="legacy-deck.ppt"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pptLike,
+      '--ppt123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'ppt-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /legacy-deck\.ppt \(application\/vnd\.ms-powerpoint\)/);
+    assert.match(doc.normalized_text, /Legacy PowerPoint text preview/);
+    assert.match(doc.normalized_text, /Operator update/);
+    assert.match(doc.normalized_text, /Rent target 17500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
 });
 
 describe('normalizeLiveIngestDocuments', () => {

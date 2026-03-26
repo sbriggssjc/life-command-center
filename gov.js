@@ -2794,6 +2794,7 @@ function renderGovEvidenceWorkbench() {
       <div class="live-ingest-pane">
         <div class="live-ingest-actions" style="margin-bottom:8px;flex-wrap:wrap">
           <button class="btn-secondary" type="button" data-gov-evidence-save ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Save Artifact</button>
+          <button class="btn-secondary" type="button" data-gov-evidence-broker ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Apply Broker</button>
           <button class="btn-primary" type="button" data-gov-evidence-safe ${govEvidenceState.loading || !govEvidenceState.review || unresolvedGovEvidenceConflicts().length ? 'disabled' : ''}>${unresolvedGovEvidenceConflicts().length ? 'Resolve Conflicts First' : 'Apply Safe Evidence'}</button>
           <button class="btn-secondary" type="button" data-gov-evidence-promote-rows ${govEvidenceState.loading || !govEvidenceState.review ? 'disabled' : ''}>Promote Rows</button>
           <button class="btn-secondary" type="button" data-gov-evidence-refresh-queue ${govEvidenceState.queueLoading || !rec ? 'disabled' : ''}>${govEvidenceState.queueLoading ? 'Refreshing...' : 'Refresh Queue'}</button>

@@ -145,6 +145,7 @@ function isTextLikeMime(mime = '') {
       'application/msword',
       'application/json',
       'application/vnd.ms-excel',
+      'application/vnd.ms-powerpoint',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -345,7 +346,11 @@ function extractLegacyOfficeStringsFromBuffer(buffer, label = 'office') {
     .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
     .slice(0, 120);
   if (!merged.length) return '';
-  const header = label === 'xls' ? 'Legacy Excel text preview' : 'Legacy Word text preview';
+  const header = label === 'xls'
+    ? 'Legacy Excel text preview'
+    : label === 'ppt'
+      ? 'Legacy PowerPoint text preview'
+      : 'Legacy Word text preview';
   return `${header}\n${merged.join('\n')}`.trim();
 }
 
@@ -433,6 +438,13 @@ function isLegacyXlsPart(part) {
   const filename = getAttachmentFilename(part).toLowerCase();
   return mime === 'application/vnd.ms-excel'
     || filename.endsWith('.xls');
+}
+
+function isLegacyPptPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.ms-powerpoint'
+    || filename.endsWith('.ppt');
 }
 
 function extractPptxRelationshipMap(xmlText = '', basePrefix = 'ppt/') {
@@ -524,6 +536,9 @@ function extractAttachmentPreview(part) {
     }
     if (isXlsxPart(part)) {
       return extractXlsxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isLegacyPptPart(part)) {
+      return extractLegacyOfficeStringsFromBuffer(part.body_buffer, 'ppt').slice(0, 4000);
     }
     if (isPptxPart(part)) {
       return extractPptxTextFromBuffer(part.body_buffer).slice(0, 4000);

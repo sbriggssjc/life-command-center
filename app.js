@@ -5597,7 +5597,7 @@ function renderLiveIngestWorkbench(domainKey) {
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
         <div class="live-ingest-dropzone" id="${prefix}-dropzone" tabindex="0">
-          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.doc,.docx,.xls,.xlsx,.pptx" style="display:none">
+          <input id="${prefix}-file" type="file" multiple accept="image/*,.txt,.md,.csv,.json,.html,.htm,.eml,.doc,.docx,.xls,.xlsx,.ppt,.pptx" style="display:none">
           <div class="live-ingest-drop-title">Drop screenshots or source files here</div>
           <div class="live-ingest-drop-sub">Click to browse, paste from clipboard, or capture a screen snapshot.</div>
           <div class="live-ingest-button-row">
@@ -6529,6 +6529,9 @@ async function normalizeLiveIngestFile(file) {
   if (file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || lowerName.endsWith('.pptx')) {
     return await convertPptxToTextAttachment(file);
   }
+  if (file.type === 'application/vnd.ms-powerpoint' || lowerName.endsWith('.ppt')) {
+    return await convertLegacyPptToTextAttachment(file);
+  }
   if (file.type.startsWith('image/')) {
     const dataUrl = await readFileAsDataUrl(file);
     return [{
@@ -6544,7 +6547,7 @@ async function normalizeLiveIngestFile(file) {
     || ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.eml'].some((ext) => lowerName.endsWith(ext))
     || ['application/json', 'message/rfc822'].includes(file.type);
   if (!isTextLike) {
-    throw new Error('Only images, PDFs, DOC/DOCX/XLS/XLSX/PPTX files, and text-based exports are supported directly.');
+    throw new Error('Only images, PDFs, DOC/DOCX/XLS/XLSX/PPT/PPTX files, and text-based exports are supported directly.');
   }
   const text = await readFileAsText(file);
   return [{
@@ -6782,6 +6785,21 @@ async function convertPptxToTextAttachment(file) {
   }];
 }
 
+async function convertLegacyPptToTextAttachment(file) {
+  const buffer = await readFileAsArrayBuffer(file);
+  const text = extractLegacyOfficeTextFromArrayBuffer(buffer, 'ppt');
+  if (!text.trim()) {
+    throw new Error('PPT did not contain readable text');
+  }
+  return [{
+    id: `li-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'text',
+    name: file.name || 'deck.ppt',
+    mime_type: 'application/vnd.ms-powerpoint',
+    text: text.slice(0, 30000)
+  }];
+}
+
 function extractLegacyOfficeTextFromArrayBuffer(arrayBuffer, label = 'office') {
   const bytes = new Uint8Array(arrayBuffer || new ArrayBuffer(0));
   if (!bytes.length) return '';
@@ -6791,7 +6809,11 @@ function extractLegacyOfficeTextFromArrayBuffer(arrayBuffer, label = 'office') {
     .map((value) => value.replace(/\s+/g, ' ').trim())
     .filter((value) => value.length >= 4);
   if (!merged.length) return '';
-  const header = label === 'xls' ? 'Legacy Excel text preview' : 'Legacy Word text preview';
+  const header = label === 'xls'
+    ? 'Legacy Excel text preview'
+    : label === 'ppt'
+      ? 'Legacy PowerPoint text preview'
+      : 'Legacy Word text preview';
   return `${header}\n${merged.slice(0, 120).join('\n')}`.trim();
 }
 
