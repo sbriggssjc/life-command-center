@@ -5498,7 +5498,6 @@ function createLiveIngestDomainState() {
     preparedImageAttachments: [],
     lowConfidenceOcrAcknowledged: false,
     citationRiskAcknowledged: false,
-    worsenedRetryAcknowledged: false,
     loadingSnapshots: false,
     extracting: false,
     applying: false,
@@ -5532,7 +5531,6 @@ function renderLiveIngestWorkbench(domainKey) {
   const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
   const hasLowConfidenceOcr = liveIngestHasLowConfidenceOcr(state.extractionDocs || []);
   const hasCitationRisk = liveIngestHasCitationRisk(proposal?.operations || [], true);
-  const hasWorsenedRetryRisk = liveIngestHasWorsenedRetryRisk(proposal?.operations || [], true);
   const proposalHtml = proposal
     ? `<div class="live-ingest-results">
         <div class="live-ingest-results-head">
@@ -5564,11 +5562,7 @@ function renderLiveIngestWorkbench(domainKey) {
             <input type="checkbox" data-live-ingest-citation-ack="${domainKey}" ${state.citationRiskAcknowledged ? 'checked' : ''}>
             <span>I reviewed operations that rely on low-confidence OCR without model-cited sources.</span>
           </label>` : ''}
-          ${hasWorsenedRetryRisk ? `<label class="live-ingest-ack">
-            <input type="checkbox" data-live-ingest-worsened-ack="${domainKey}" ${state.worsenedRetryAcknowledged ? 'checked' : ''}>
-            <span>I reviewed operations tied to OCR sources that got worse after retry.</span>
-          </label>` : ''}
-          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged) || (hasWorsenedRetryRisk && !state.worsenedRetryAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
+          <button class="btn-primary" type="button" data-live-ingest-apply="${domainKey}" ${(state.applying || (hasLowConfidenceOcr && !state.lowConfidenceOcrAcknowledged) || (hasCitationRisk && !state.citationRiskAcknowledged)) ? 'disabled' : ''}>${state.applying ? 'Applying...' : 'Apply Selected'}</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-proposal="${domainKey}">Clear Proposal</button>
           ${state.lastAppliedAt ? `<div class="live-ingest-stamp">Last applied ${esc(state.lastAppliedAt)}</div>` : ''}
         </div>
@@ -5640,7 +5634,7 @@ function renderLiveIngestWorkbench(domainKey) {
 function renderLiveIngestExtractionDocs(docs) {
   const items = (Array.isArray(docs) ? docs : []).filter((doc) => doc && doc.normalized_text);
   if (!items.length) return '';
-  const lowConfidenceItems = items.filter((doc) => getLiveIngestDocConfidenceState(doc) === 'low');
+  const lowConfidenceItems = items.filter((doc) => String(doc.metadata?.ocr_confidence || '').toLowerCase() === 'low');
   return `<div class="live-ingest-source-block">
     <div class="live-ingest-editor-head" style="margin-top:0">
       <span>Extraction Inputs</span>
@@ -5659,11 +5653,9 @@ function renderLiveIngestExtractionDocs(docs) {
         if (doc.metadata?.attachment_preview_count) meta.push(`${doc.metadata.attachment_preview_count} attachment preview${doc.metadata.attachment_preview_count === 1 ? '' : 's'}`);
         if (doc.metadata?.source_image_name) meta.push(`source: ${doc.metadata.source_image_name}`);
         if (doc.metadata?.ocr_confidence) meta.push(`confidence: ${doc.metadata.ocr_confidence}`);
-        if (isLiveIngestDocPromoted(doc)) meta.push('retry-promoted');
-        if (isLiveIngestDocWorsened(doc)) meta.push('retry-worsened');
-        const lowConfidence = getLiveIngestDocConfidenceState(doc) === 'low';
+        const lowConfidence = String(doc.metadata?.ocr_confidence || '').toLowerCase() === 'low';
         const retryComparison = renderLiveIngestOcrRetryComparison(doc);
-        return `<details class="live-ingest-source-item ${lowConfidence ? 'low-confidence' : ''} ${isLiveIngestDocPromoted(doc) ? 'promoted' : ''} ${isLiveIngestDocWorsened(doc) ? 'worsened' : ''}" ${(sourceKind === 'ocr' || lowConfidence || isLiveIngestDocWorsened(doc)) ? 'open' : ''}>
+        return `<details class="live-ingest-source-item ${lowConfidence ? 'low-confidence' : ''}" ${(sourceKind === 'ocr' || lowConfidence) ? 'open' : ''}>
           <summary>
             <strong>${esc(doc.name || 'Source document')}</strong>
             <span>${esc([label, ...meta].filter(Boolean).join(' | '))}</span>
@@ -5702,10 +5694,8 @@ function renderLiveIngestOcrRetryComparison(doc) {
     </div>
     <div class="live-ingest-retry-history">
       ${entries.map((entry, idx) => {
-        const delta = describeLiveIngestConfidenceDelta(entry.previous_confidence, entry.next_confidence);
         const labelBits = [
           entry.retried_at ? formatLiveIngestRetryTimestamp(entry.retried_at) : null,
-          delta?.label || null,
           entry.previous_confidence ? `was ${entry.previous_confidence}` : null,
           entry.next_confidence ? `now ${entry.next_confidence}` : null
         ].filter(Boolean);
@@ -5714,7 +5704,6 @@ function renderLiveIngestOcrRetryComparison(doc) {
             <span>Retry ${entries.length - idx}</span>
             <span>${esc(labelBits.join(' | ') || 'updated transcript')}</span>
           </div>
-          ${delta?.message ? `<div class="live-ingest-retry-delta ${esc(delta.tone || 'neutral')}">${esc(delta.message)}</div>` : ''}
           <div class="live-ingest-retry-grid">
             <div>
               <div class="live-ingest-retry-label">Before Retry</div>
@@ -5742,77 +5731,13 @@ function formatLiveIngestRetryTimestamp(value) {
   });
 }
 
-function getLiveIngestConfidenceRank(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'high') return 3;
-  if (normalized === 'medium') return 2;
-  if (normalized === 'low') return 1;
-  return 0;
-}
-
-function getLiveIngestDocConfidenceState(doc) {
-  return String(doc?.metadata?.ocr_confidence || '').trim().toLowerCase();
-}
-
-function isLiveIngestDocPromoted(doc) {
-  return !!doc?.metadata?.ocr_promoted;
-}
-
-function isLiveIngestDocWorsened(doc) {
-  return !!doc?.metadata?.ocr_worsened;
-}
-
-function describeLiveIngestConfidenceDelta(previous, next) {
-  const previousValue = String(previous || '').trim().toLowerCase();
-  const nextValue = String(next || '').trim().toLowerCase();
-  if (!previousValue && !nextValue) return null;
-  const previousRank = getLiveIngestConfidenceRank(previousValue);
-  const nextRank = getLiveIngestConfidenceRank(nextValue);
-  if (previousRank && nextRank) {
-    if (nextRank > previousRank) {
-      return {
-        label: 'Improved',
-        tone: 'success',
-        message: `Retry improved OCR confidence from ${previousValue} to ${nextValue}.`
-      };
-    }
-    if (nextRank < previousRank) {
-      return {
-        label: 'Worsened',
-        tone: 'warn',
-        message: `Retry reduced OCR confidence from ${previousValue} to ${nextValue}.`
-      };
-    }
-  }
-  if (previousValue && nextValue && previousValue === nextValue) {
-    return {
-      label: 'Unchanged',
-      tone: 'neutral',
-      message: `Retry kept OCR confidence at ${nextValue}.`
-    };
-  }
-  return {
-    label: 'Updated',
-    tone: 'neutral',
-    message: `Retry updated OCR confidence from ${previousValue || 'unknown'} to ${nextValue || 'unknown'}.`
-  };
-}
-
 function liveIngestHasLowConfidenceOcr(docs) {
-  return (Array.isArray(docs) ? docs : []).some((doc) => getLiveIngestDocConfidenceState(doc) === 'low');
+  return (Array.isArray(docs) ? docs : []).some((doc) => String(doc?.metadata?.ocr_confidence || '').toLowerCase() === 'low');
 }
 
 function liveIngestHasCitationRisk(operations, selectedOnly = false) {
   return (Array.isArray(operations) ? operations : []).some((op) => {
     if (!op?._citationRisk) return false;
-    if (!selectedOnly) return true;
-    return op._selected !== false;
-  });
-}
-
-function liveIngestHasWorsenedRetryRisk(operations, selectedOnly = false) {
-  return (Array.isArray(operations) ? operations : []).some((op) => {
-    if (!op?._worsenedRetryRisk) return false;
     if (!selectedOnly) return true;
     return op._selected !== false;
   });
@@ -5840,14 +5765,12 @@ function renderLiveIngestOperation(domainKey, op, idx) {
         <span class="live-ingest-op-target">${target}</span>
         ${op._lowConfidenceOcr ? `<span class="live-ingest-op-flag warn">Low-confidence OCR</span>` : ''}
         ${op._citationRisk ? `<span class="live-ingest-op-flag warn">No cited source</span>` : ''}
-        ${op._worsenedRetryRisk ? `<span class="live-ingest-op-flag warn">Retry Worsened</span>` : ''}
         ${op._sourceLineage?.label ? `<span class="live-ingest-op-flag">${esc(op._sourceLineage.label)}</span>` : ''}
         ${op.kind === 'update' ? `<button class="live-ingest-inline-btn" type="button" data-live-ingest-refresh-op="${domainKey}:${idx}">Refresh</button>` : ''}
       </div>
       ${op.reason ? `<div class="live-ingest-op-reason">${esc(op.reason)}</div>` : ''}
       ${op._lowConfidenceOcr ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation was proposed while low-confidence OCR text was part of the extraction input. Review the related transcript before applying.</div>` : ''}
       ${op._citationRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation does not include a model-cited source reference even though low-confidence OCR was present in the extraction run.</div>` : ''}
-      ${op._worsenedRetryRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation points to a source whose OCR confidence decreased after retry. Reconfirm the source transcript before applying.</div>` : ''}
       ${op._sourceLineage?.detail ? `<div class="live-ingest-op-reason">${esc(op._sourceLineage.detail)}</div>` : ''}
       ${op._sourceLineage?.evidence ? `<div class="live-ingest-source-evidence">
         <div class="live-ingest-retry-label">Source Evidence</div>
@@ -6058,18 +5981,15 @@ function bindLiveIngestWorkbench(domainKey) {
   });
   document.querySelector(`[data-live-ingest-select-all="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = true; });
-    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-cited="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = !op._citationRisk; });
     state.citationRiskAcknowledged = false;
-    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
-    state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-refresh-snapshots="${domainKey}"]`)?.addEventListener('click', async () => {
@@ -6091,7 +6011,6 @@ function bindLiveIngestWorkbench(domainKey) {
     state.preparedImageAttachments = [];
     state.lowConfidenceOcrAcknowledged = false;
     state.citationRiskAcknowledged = false;
-    state.worsenedRetryAcknowledged = false;
     state.error = '';
     rerenderLiveIngestDomain(domainKey);
   });
@@ -6101,10 +6020,6 @@ function bindLiveIngestWorkbench(domainKey) {
   });
   document.querySelector(`[data-live-ingest-citation-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
     state.citationRiskAcknowledged = !!e.target.checked;
-    rerenderLiveIngestDomain(domainKey);
-  });
-  document.querySelector(`[data-live-ingest-worsened-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
-    state.worsenedRetryAcknowledged = !!e.target.checked;
     rerenderLiveIngestDomain(domainKey);
   });
   document.querySelector(`[data-live-ingest-apply="${domainKey}"]`)?.addEventListener('click', () => applyLiveIngestProposal(domainKey));
@@ -6124,9 +6039,6 @@ function bindLiveIngestWorkbench(domainKey) {
       state.proposal.operations[idx]._selected = checkbox.checked;
       if (!liveIngestHasCitationRisk(state.proposal.operations || [], true)) {
         state.citationRiskAcknowledged = false;
-      }
-      if (!liveIngestHasWorsenedRetryRisk(state.proposal.operations || [], true)) {
-        state.worsenedRetryAcknowledged = false;
       }
     };
   });
@@ -6908,17 +6820,11 @@ async function runLiveIngestExtraction(domainKey) {
     });
     proposal.operations = sortLiveIngestOperationsByConfidence((proposal.operations || []).map((op) => ({
       ...op,
-      _selected: shouldDefaultSelectLiveIngestOperation(op)
+      _selected: op._citationRisk ? false : op._selected !== false
     })));
     if ((proposal.operations || []).some((op) => op._citationRisk)) {
       proposal.notes_for_user = [
         'Uncited operations from a low-confidence OCR run were deselected by default. Use `Select Cited Only` to keep the safer subset selected, or review and re-enable individual risky operations manually.',
-        ...(proposal.notes_for_user || [])
-      ];
-    }
-    if ((proposal.operations || []).some((op) => op._worsenedRetryRisk)) {
-      proposal.notes_for_user = [
-        'Operations tied to OCR sources that worsened after retry were deselected by default. Re-enable them only after reconfirming the source transcript.',
         ...(proposal.notes_for_user || [])
       ];
     }
@@ -6968,8 +6874,6 @@ async function retryLiveIngestOcrSource(domainKey, docIndex) {
         source_image_name: sourceName || refreshedDocs[0].metadata?.source_image_name || null,
         ocr_retry_previous_text: previousText,
         ocr_retry_previous_confidence: previousConfidence || null,
-        ocr_promoted: getLiveIngestConfidenceRank(refreshedDocs[0].metadata?.ocr_confidence) > getLiveIngestConfidenceRank(previousConfidence),
-        ocr_worsened: getLiveIngestConfidenceRank(refreshedDocs[0].metadata?.ocr_confidence) < getLiveIngestConfidenceRank(previousConfidence),
         ocr_retry_history: [
           ...((Array.isArray(doc?.metadata?.ocr_retry_history) ? doc.metadata.ocr_retry_history : []).filter((entry) => entry && typeof entry === 'object')),
           {
@@ -6982,10 +6886,9 @@ async function retryLiveIngestOcrSource(domainKey, docIndex) {
         ]
       }
     };
-    const delta = describeLiveIngestConfidenceDelta(previousConfidence, nextDoc.metadata?.ocr_confidence);
     state.extractionDocs = (state.extractionDocs || []).map((item, idx) => idx === docIndex ? nextDoc : item);
     await rerunLiveIngestProposalFromPreparedInputs(domainKey);
-    showToast(delta?.message || 'OCR retried and proposal refreshed', delta?.tone === 'warn' ? 'warning' : 'success');
+    showToast('OCR retried and proposal refreshed', 'success');
   } catch (err) {
     state.error = err.message || 'OCR retry failed';
   } finally {
@@ -7020,7 +6923,7 @@ async function rerunLiveIngestProposalFromPreparedInputs(domainKey) {
   });
   proposal.operations = sortLiveIngestOperationsByConfidence((proposal.operations || []).map((op) => ({
     ...op,
-    _selected: shouldDefaultSelectLiveIngestOperation(op)
+    _selected: op._citationRisk ? false : op._selected !== false
   })));
   if ((proposal.operations || []).some((op) => op._citationRisk)) {
     proposal.notes_for_user = [
@@ -7028,15 +6931,8 @@ async function rerunLiveIngestProposalFromPreparedInputs(domainKey) {
       ...(proposal.notes_for_user || [])
     ];
   }
-  if ((proposal.operations || []).some((op) => op._worsenedRetryRisk)) {
-    proposal.notes_for_user = [
-      'Operations tied to OCR sources that worsened after retry were deselected by default. Re-enable them only after reconfirming the source transcript.',
-      ...(proposal.notes_for_user || [])
-    ];
-  }
   state.lowConfidenceOcrAcknowledged = false;
   state.citationRiskAcknowledged = false;
-  state.worsenedRetryAcknowledged = false;
   state.proposal = proposal;
   state.loadingSnapshots = true;
   rerenderLiveIngestDomain(domainKey);
@@ -7528,14 +7424,13 @@ function parseLiveIngestProposal(raw, domainKey, options = {}) {
     return op.target_source === domainKey && LIVE_INGEST_ALLOWED_TABLES[domainKey].includes(op.table);
   }).map((op) => ({
     ...op,
+    _lowConfidenceOcr: hasLowConfidenceOcr,
     _sourceLineage: deriveLiveIngestOperationSourceLineage(op, extractionDocs),
     source_refs: normalizeLiveIngestSourceRefs(op.source_refs, extractionDocs)
   })) : [];
   parsed.operations = parsed.operations.map((op) => ({
     ...op,
     _sourceLineage: deriveLiveIngestDisplayLineage(op, extractionDocs),
-    _lowConfidenceOcr: liveIngestOperationHasLowConfidenceExposure(op, extractionDocs, hasLowConfidenceOcr),
-    _worsenedRetryRisk: liveIngestOperationHasWorsenedRetryExposure(op, extractionDocs),
     _citationRisk: hasLowConfidenceOcr && (!Array.isArray(op.source_refs) || !op.source_refs.length)
   }));
   return parsed;
@@ -7570,45 +7465,8 @@ function scoreLiveIngestOperationConfidence(op) {
   if (op?._sourceLineage?.label === 'Model cited source') score += 20;
   if (op?._sourceLineage?.label === 'Source matched OCR' || op?._sourceLineage?.label === 'Source matched') score += 10;
   if (op?._citationRisk) score -= 50;
-  if (op?._worsenedRetryRisk) score -= 35;
   if (op?._lowConfidenceOcr) score -= 10;
   return score;
-}
-
-function liveIngestOperationHasLowConfidenceExposure(op, extractionDocs, hasLowConfidenceRun) {
-  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
-  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
-    return op.source_refs.some((ref) => {
-      const doc = docs[Number(ref?.source_index)];
-      return getLiveIngestDocConfidenceState(doc) === 'low';
-    });
-  }
-  const lineageConfidence = String(op?._sourceLineage?.ocr_confidence || '').trim().toLowerCase();
-  if (lineageConfidence) return lineageConfidence === 'low';
-  return !!hasLowConfidenceRun;
-}
-
-function liveIngestOperationHasWorsenedRetryExposure(op, extractionDocs) {
-  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
-  if (Array.isArray(op?.source_refs) && op.source_refs.length) {
-    return op.source_refs.some((ref) => {
-      const doc = docs[Number(ref?.source_index)];
-      return isLiveIngestDocWorsened(doc);
-    });
-  }
-  const sourceName = String(op?._sourceLineage?.source_name || '').trim().toLowerCase();
-  if (!sourceName) return false;
-  return docs.some((doc) => {
-    const docName = String(doc?.metadata?.source_image_name || doc?.name || '').trim().toLowerCase();
-    return docName && docName === sourceName && isLiveIngestDocWorsened(doc);
-  });
-}
-
-function shouldDefaultSelectLiveIngestOperation(op) {
-  if (!op || typeof op !== 'object') return false;
-  if (op._citationRisk) return false;
-  if (op._worsenedRetryRisk) return false;
-  return op._selected !== false;
 }
 
 function deriveLiveIngestDisplayLineage(op, extractionDocs) {
@@ -7742,10 +7600,6 @@ async function applyLiveIngestProposal(domainKey) {
   }
   if (liveIngestHasCitationRisk(ops || [], false) && !state.citationRiskAcknowledged) {
     showToast('Acknowledge operations without model-cited sources before applying', 'warning');
-    return;
-  }
-  if (liveIngestHasWorsenedRetryRisk(ops || [], false) && !state.worsenedRetryAcknowledged) {
-    showToast('Acknowledge operations tied to worsened OCR retries before applying', 'warning');
     return;
   }
 
