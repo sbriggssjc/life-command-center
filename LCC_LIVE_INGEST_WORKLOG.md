@@ -147,7 +147,8 @@
 - Added legacy Office intake coverage for `.doc` and `.xls` by extracting readable string previews from binary files in both direct-upload handling and server-side email attachment normalization, with regression coverage in `test/live-ingest-normalize.test.js`.
 - Added per-group acknowledgment state indicators in the grouped review header so each source cluster can show whether OCR/citation/retry gates are pending, already acknowledged, or not active for the currently selected operations.
 - Added legacy `.ppt` intake coverage alongside the earlier `.doc` and `.xls` support, using the same readable-string preview strategy for direct uploads and email attachments, with regression coverage in `test/live-ingest-normalize.test.js`.
+- Added a top-level review toolbar summary that aggregates the currently selected operation gates, showing selected-count plus OCR/citation/retry gate status as pending or acknowledged without requiring group expansion.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics beyond legacy Office previews, or add similar group-state indicators to the top-level review toolbar summary.
+- Move to richer binary attachment heuristics beyond legacy Office previews.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

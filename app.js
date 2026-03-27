@@ -5541,6 +5541,8 @@ function renderLiveIngestWorkbench(domainKey) {
   const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
   const hasLowConfidenceOcr = liveIngestHasLowConfidenceOcr(state.extractionDocs || []);
   const hasCitationRisk = liveIngestHasCitationRisk(proposal?.operations || [], true);
+  const hasWorsenedRetryRisk = liveIngestHasWorsenedRetryRisk(proposal?.operations || [], true);
+  const toolbarSummaryHtml = renderLiveIngestToolbarSummary(ops, state);
   const proposalHtml = proposal
     ? `<div class="live-ingest-results">
         <div class="live-ingest-results-head">
@@ -5554,6 +5556,7 @@ function renderLiveIngestWorkbench(domainKey) {
         ${proposal.notes_for_user?.length ? `<div class="live-ingest-callout">${proposal.notes_for_user.map(esc).join('<br>')}</div>` : ''}
         ${extractionDocsHtml}
         ${state.loadingSnapshots ? '<div class="live-ingest-callout">Loading current record snapshots for before/after review...</div>' : ''}
+        ${toolbarSummaryHtml}
         ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
           <button class="btn-secondary" type="button" data-live-ingest-select-cited="${domainKey}">Select Cited Only</button>
@@ -5856,6 +5859,30 @@ function renderLiveIngestGroupAckIndicator(group, state) {
     return `<span class="live-ingest-op-flag ok">${esc(labels.join(' | '))}</span>`;
   }
   return '<span class="live-ingest-op-flag">No active group gate</span>';
+}
+
+function renderLiveIngestToolbarSummary(operations, state) {
+  const selected = (Array.isArray(operations) ? operations : []).filter((op) => op?._selected !== false);
+  if (!selected.length) return '';
+  const chips = [];
+  const lowConfidenceCount = selected.filter((op) => op?._lowConfidenceOcr).length;
+  const citationCount = selected.filter((op) => op?._citationRisk).length;
+  const worsenedCount = selected.filter((op) => op?._worsenedRetryRisk).length;
+
+  chips.push(`<span class="live-ingest-op-flag">${selected.length} selected</span>`);
+  if (lowConfidenceCount) {
+    chips.push(`<span class="live-ingest-op-flag ${state?.lowConfidenceOcrAcknowledged ? 'ok' : 'warn'}">${esc(`${lowConfidenceCount} OCR ${state?.lowConfidenceOcrAcknowledged ? 'acknowledged' : 'pending'}`)}</span>`);
+  }
+  if (citationCount) {
+    chips.push(`<span class="live-ingest-op-flag ${state?.citationRiskAcknowledged ? 'ok' : 'warn'}">${esc(`${citationCount} citation ${state?.citationRiskAcknowledged ? 'acknowledged' : 'pending'}`)}</span>`);
+  }
+  if (worsenedCount) {
+    chips.push(`<span class="live-ingest-op-flag ${state?.worsenedRetryAcknowledged ? 'ok' : 'warn'}">${esc(`${worsenedCount} retry ${state?.worsenedRetryAcknowledged ? 'acknowledged' : 'pending'}`)}</span>`);
+  }
+  if (!lowConfidenceCount && !citationCount && !worsenedCount) {
+    chips.push('<span class="live-ingest-op-flag ok">No active apply gate</span>');
+  }
+  return `<div class="live-ingest-toolbar-summary">${chips.join('')}</div>`;
 }
 
 function buildLiveIngestOperationGroups(operations) {
