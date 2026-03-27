@@ -602,7 +602,10 @@ function renderNorthmarqInner() {
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmComps = comps.filter(r => r.sold_date && new Date(r.sold_date) >= ttmStart);
-  const isNM = r => ((r.listing_broker||'')+(r.procuring_broker||'')).toLowerCase().includes('northmarq');
+  const isNM = r => {
+    var brokers = ((r.listing_broker||'')+(r.procuring_broker||'')+(r.broker_name||'')+(r.seller_broker||'')+(r.buyer_broker||'')).toLowerCase();
+    return brokers.includes('northmarq') || brokers.includes('north marq') || brokers.includes('nm capital');
+  };
   const nmComps = ttmComps.filter(isNM);
   const nmWithPrice = nmComps.filter(r => r.price > 0);
   const nmVolume = nmWithPrice.reduce((s,r) => s + parseFloat(r.price || 0), 0);
@@ -635,17 +638,24 @@ function renderOnMarketInner() {
     return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading listings...</div></div></div>';
   }
   const listings = diaAvailListings;
-  const withPrice = listings.filter(r => r.ask_price > 0);
-  const validCaps = listings.filter(r => { const v = parseFloat(r.ask_cap); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.ask_cap)).sort((a,b) => a-b);
+  // Check multiple possible field names for price, cap rate, and days on market
+  const getPrice = r => parseFloat(r.ask_price || r.asking_price || r.listing_price || r.price || 0);
+  const getCap = r => parseFloat(r.ask_cap || r.asking_cap_rate || r.cap_rate || 0);
+  const getDom = r => parseInt(r.dom || r.days_on_market || 0);
+  const withPrice = listings.filter(r => getPrice(r) > 0);
+  const validCaps = listings.filter(r => { const v = getCap(r); return v > 0.01 && v < 0.25; }).map(r => getCap(r)).sort((a,b) => a-b);
   const avgAskCap = validCaps.length > 0 ? (validCaps.reduce((s,v)=>s+v,0)/validCaps.length*100).toFixed(2) + '%' : '—';
   const q1Idx = Math.floor(validCaps.length * 0.25);
   const q3Idx = Math.floor(validCaps.length * 0.75);
   const lowerQ = validCaps.length > 4 ? (validCaps[q1Idx]*100).toFixed(2)+'%' : '—';
   const upperQ = validCaps.length > 4 ? (validCaps[q3Idx]*100).toFixed(2)+'%' : '—';
-  const avgDom = listings.filter(r => r.dom > 0);
-  const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,r)=>s+r.dom,0)/avgDom.length) : '—';
-  const isNM = r => ((r.listing_broker||'')).toLowerCase().includes('northmarq');
-  const nmListings = listings.filter(isNM);
+  const avgDom = listings.filter(r => getDom(r) > 0);
+  const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,r)=>s+getDom(r),0)/avgDom.length) : '—';
+  const isNMListing = r => {
+    var b = ((r.listing_broker||'')+(r.broker_name||'')).toLowerCase();
+    return b.includes('northmarq') || b.includes('north marq') || b.includes('nm capital');
+  };
+  const nmListings = listings.filter(isNMListing);
 
   let h = '<div class="dia-grid dia-grid-5">';
   h += infoCard({ title: 'Active Listings', value: fmtN(listings.length), sub: 'clinics on market', color: 'blue', tab: 'sales' });
@@ -657,7 +667,7 @@ function renderOnMarketInner() {
 
   // Additional row
   h += '<div class="dia-grid dia-grid-3" style="margin-top:10px">';
-  const avgAskPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s,r)=>s+parseFloat(r.ask_price),0)/withPrice.length)) : '—';
+  const avgAskPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s,r)=>s+getPrice(r),0)/withPrice.length)) : '—';
   h += infoCard({ title: 'Avg Ask Price', value: avgAskPrice, sub: fmtN(withPrice.length) + ' priced', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Days on Market', value: avgDomVal, sub: fmtN(avgDom.length) + ' with dates', color: 'yellow', tab: 'sales' });
   h += infoCard({ title: 'NM Market Share', value: listings.length > 0 ? (nmListings.length/listings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
