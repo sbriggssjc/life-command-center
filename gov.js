@@ -3194,6 +3194,34 @@ function bindGovEvidenceWorkbench() {
 // TAB RENDERERS
 // ============================================================================
 
+// ── Shared Gov-overview helpers (used by renderGovOutreachInner & renderGovOverview) ──
+const _colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
+function govCard(opts) {
+  const c = _colors[opts.color] || _colors.blue;
+  const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+  return `<div class="gov-info-card"${clickAttr}>
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
+    <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
+    ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
+  </div>`;
+}
+function govSectionHeader(title, icon, tab) {
+  const viewLink = tab ? `<span onclick="goToGovTab('${tab}')" style="cursor:pointer;font-size:11px;color:var(--accent);font-weight:500">View Details →</span>` : '';
+  return `<div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+    <div style="font-size:13px;font-weight:700;color:var(--text1)">${icon} ${title}</div>${viewLink}</div>`;
+}
+function inlineBar(items, maxVal) {
+  let out = '';
+  items.forEach(item => {
+    const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
+    out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div title="${esc(item.label)}" style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
+      <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
+      <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
+    </div>`;
+  });
+  return out;
+}
 
 function renderGovOutreachInner() {
   const now = new Date();
@@ -3304,34 +3332,7 @@ function renderGovOverview() {
     }
   </style>`;
 
-  // ── Helpers ──
-  const _colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
-  function govCard(opts) {
-    const c = _colors[opts.color] || _colors.blue;
-    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
-    return `<div class="gov-info-card"${clickAttr}>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
-      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
-      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
-    </div>`;
-  }
-  function govSectionHeader(title, icon, tab) {
-    const viewLink = tab ? `<span onclick="goToGovTab('${tab}')" style="cursor:pointer;font-size:11px;color:var(--accent);font-weight:500">View Details →</span>` : '';
-    return `<div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)">
-      <div style="font-size:13px;font-weight:700;color:var(--text1)">${icon} ${title}</div>${viewLink}</div>`;
-  }
-  function inlineBar(items, maxVal) {
-    let out = '';
-    items.forEach(item => {
-      const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
-      out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div title="${esc(item.label)}" style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
-        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
-        <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
-      </div>`;
-    });
-    return out;
-  }
+  // ── Helpers (now at module scope — see above renderGovOutreachInner) ──
 
   // ──────────────────────────────────────
   // DATA COMPUTATIONS (portfolio, mv, useMV declared above)
