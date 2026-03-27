@@ -2920,7 +2920,8 @@ async function loadGovEvidenceObservations(force = false) {
         ownership_id: binding.ownership_id
       }
     });
-    govEvidenceState.queue = Array.isArray(result?.observations) ? result.observations : [];
+    const observations = Array.isArray(result?.observations) ? result.observations : (Array.isArray(result?.items) ? result.items : []);
+    govEvidenceState.queue = observations;
     govEvidenceState.queueLoaded = true;
   } catch (err) {
     govEvidenceState.queueError = err.message || 'Could not load evidence queue';
@@ -5498,6 +5499,7 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
+
 
 
 

@@ -547,11 +547,11 @@ function extractPdfTextPreviewFromBuffer(buffer) {
   const operatorText = extractPdfOperatorText(latin);
   if (operatorText) return operatorText.slice(0, 4000);
   const asciiRuns = latin.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_-]{20,}/g) || [];
-  const filtered = asciiRuns
+  const filtered = dedupePdfPreviewLines(asciiRuns
     .map((text) => collapseWhitespace(text))
     .filter((text) => /[A-Za-z]{4,}/.test(text))
-    .filter((text) => !/^endobj|stream|endstream|xref|trailer/i.test(text));
-  return collapseWhitespace(filtered.join(' ')).slice(0, 4000);
+    .filter((text) => !/^endobj|stream|endstream|xref|trailer/i.test(text)));
+  return collapseWhitespace(filtered.join('\n')).slice(0, 4000);
 }
 
 function extractPdfOperatorText(latin = '') {
@@ -575,11 +575,30 @@ function extractPdfOperatorText(latin = '') {
       if (text) lines.push(text);
     });
   });
-  const merged = Array.from(new Set(lines))
+  const merged = dedupePdfPreviewLines(lines
     .map((line) => collapseWhitespace(line))
     .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
-    .filter((line) => !/^(BT|ET|Tj|TJ|Tm|Tf)$/i.test(line));
+    .filter((line) => !/^(BT|ET|Tj|TJ|Tm|Tf)$/i.test(line)));
   return merged.join('\n').trim();
+}
+
+function dedupePdfPreviewLines(lines = []) {
+  const sorted = (Array.isArray(lines) ? lines : [])
+    .map((line) => collapseWhitespace(line))
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const kept = [];
+  sorted.forEach((line) => {
+    const normalized = line.toLowerCase();
+    const duplicate = kept.some((existing) => {
+      const compare = existing.toLowerCase();
+      return compare === normalized
+        || compare.includes(normalized)
+        || normalized.includes(compare);
+    });
+    if (!duplicate) kept.push(line);
+  });
+  return kept.sort((a, b) => a.localeCompare(b));
 }
 
 function decodePdfLiteralString(text = '') {

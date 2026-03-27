@@ -277,3 +277,27 @@ Current behavior:
 
 Remaining gap:
 - This path still needs tuning against real LoopNet screenshots and any later LoopNet-specific normalization rules.
+## 2026-03-26 LoopNet Broker Contact Promotion
+
+Implemented in this pass:
+- Added the live gov evidence panel `Apply Broker` action in `gov.js`.
+- Added the LCC proxy route for `apply-broker-contact` in `api/data-proxy.js`.
+
+Current behavior:
+- Reviewed evidence artifacts that carry listing broker metadata can now push that broker information into the GovernmentProject broker/contact flow from the live LCC runtime.
+
+Remaining gap:
+- This still needs validation against a real LoopNet screenshot with visible broker contact details.
+
+## 2026-03-26 Broker Observation Queue Compatibility
+
+Implemented in this pass:
+- Hardened the live gov evidence queue loader in `gov.js` to accept either `observations` or `items` from the backend.
+- Updated the LCC queue note text so row promotion is source-agnostic.
+
+Current behavior:
+- The live LCC evidence queue no longer depends on a single backend response key during rollout.
+- Broker observations can now appear in the same pending review queue as tenant and lease-activity rows once the backend promotes them.
+
+Remaining gap:
+- The live runtime still needs a browser smoke test with a real screenshot to confirm broker rows render and promote correctly.
