@@ -4,6 +4,9 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-27, another commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` still existed as a 0-byte file with `CreationTime` and `LastWriteTime` `2026-03-26 20:00:50` local time.
+- A process check for this March 27 recurrence showed three active `git.exe` processes (`29216`, `50800`, `55556`) started at `2026-03-27 06:27:48` local time.
+- `git status --short --branch` during this recurrence reports `main...origin/main [ahead 1, behind 2]` with staged changes in `LCC_LIVE_INGEST_WORKLOG.md` and `test/live-ingest-normalize.test.js`, plus an unstaged change in `api/_shared/live-ingest-normalize.js`.
 - On 2026-03-26, another commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` existed as a 0-byte file created at `2026-03-26 15:33:33` local time.
 - A process check for this recurrence showed three active `git.exe` processes (`11280`, `24512`, `54352`) started at `2026-03-26 15:39:36` local time.
 - `git status --short --branch` still succeeds during this recurrence and reports `main...origin/main [ahead 1]` with staged modifications in `LCC_LIVE_INGEST_WORKLOG.md`, `app.js`, and `styles.css`.

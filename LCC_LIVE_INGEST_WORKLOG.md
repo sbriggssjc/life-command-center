@@ -151,7 +151,8 @@
 - Tightened the legacy binary attachment heuristics for `.doc`, `.xls`, and `.ppt` so previews preserve cleaner business text and more table-like rows while filtering out more OLE/container noise, with updated regression coverage for the legacy Excel row/header case.
 - Improved server-side PDF text preview heuristics so attachment normalization can extract cleaner text from `BT`/`ET` text blocks, `TJ` arrays, and escaped PDF literal strings instead of relying mainly on broad ASCII runs.
 - Added PDF preview de-duplication across repeated text fragments and multi-block extracts so recurring headers or duplicated lease lines do not get overrepresented in normalized attachment text.
+- Extended PDF preview extraction to handle hex-encoded text operators across separate text blocks, improving coverage for noisier multi-stream PDFs that mix literal and hex string content.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially noisier PDFs with multiple content streams.
+- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially compressed or otherwise opaque PDF content streams.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

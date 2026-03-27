@@ -562,7 +562,9 @@ function extractPdfOperatorText(latin = '') {
       .replace(/\]\s*TJ/g, '] TJ')
       .replace(/\)\s*Tj/g, ') Tj')
       .replace(/\)\s*'/g, ") '")
-      .replace(/\)\s*"/g, ') "');
+      .replace(/\)\s*"/g, ') "')
+      .replace(/>\s*Tj/g, '> Tj')
+      .replace(/>\s*TJ/g, '> TJ');
     Array.from(normalized.matchAll(/\[((?:\s*\([^)]*\)\s*-?\d*\s*)+)\]\s*TJ/g)).forEach((match) => {
       const fragments = Array.from(String(match[1] || '').matchAll(/\(([^)]*)\)/g))
         .map((part) => decodePdfLiteralString(part[1] || ''))
@@ -570,8 +572,19 @@ function extractPdfOperatorText(latin = '') {
         .filter(Boolean);
       if (fragments.length) lines.push(fragments.join(' '));
     });
+    Array.from(normalized.matchAll(/\[((?:\s*<[^>]+>\s*-?\d*\s*)+)\]\s*TJ/g)).forEach((match) => {
+      const fragments = Array.from(String(match[1] || '').matchAll(/<([^>]+)>/g))
+        .map((part) => decodePdfHexString(part[1] || ''))
+        .map((part) => collapseWhitespace(part))
+        .filter(Boolean);
+      if (fragments.length) lines.push(fragments.join(' '));
+    });
     Array.from(normalized.matchAll(/\(([^)]*)\)\s*(?:Tj|'|")/g)).forEach((match) => {
       const text = collapseWhitespace(decodePdfLiteralString(match[1] || ''));
+      if (text) lines.push(text);
+    });
+    Array.from(normalized.matchAll(/<([^>]+)>\s*(?:Tj|')/g)).forEach((match) => {
+      const text = collapseWhitespace(decodePdfHexString(match[1] || ''));
       if (text) lines.push(text);
     });
   });
@@ -612,6 +625,18 @@ function decodePdfLiteralString(text = '') {
     .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
     .replace(/\\\r?\n/g, '')
     .trim();
+}
+
+function decodePdfHexString(text = '') {
+  const clean = String(text || '').replace(/[^0-9A-Fa-f]/g, '');
+  const padded = clean.length % 2 ? `${clean}0` : clean;
+  let output = '';
+  for (let index = 0; index < padded.length; index += 2) {
+    const code = parseInt(padded.slice(index, index + 2), 16);
+    if (!Number.isFinite(code)) continue;
+    output += code >= 32 || code === 9 || code === 10 || code === 13 ? String.fromCharCode(code) : ' ';
+  }
+  return output.trim();
 }
 
 function extractAttachmentPreview(part) {

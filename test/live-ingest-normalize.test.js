@@ -343,6 +343,54 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts hex-encoded pdf text across separate text blocks', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Page >>',
+      'stream',
+      'BT',
+      '<4C65617365204162737472616374> Tj',
+      'ET',
+      'BT',
+      '[<426173652052656E7420> 40 <3139303030>] TJ',
+      '<4F7074696F6E205465726D203130205965617273> Tj',
+      'ET',
+      'endstream',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Hex Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfHex123"',
+      '',
+      '--pdfHex123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached hex-encoded abstract.',
+      '--pdfHex123',
+      'Content-Type: application/pdf; name="hex.pdf"',
+      'Content-Disposition: attachment; filename="hex.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfHex123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-hex-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /hex\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Lease Abstract/);
+    assert.match(doc.normalized_text, /Base Rent 19000/);
+    assert.match(doc.normalized_text, /Option Term 10 Years/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {
