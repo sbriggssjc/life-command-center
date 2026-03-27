@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v113';
+const CACHE_NAME = 'lcc-v114';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -11,7 +11,7 @@ const STATIC_ASSETS = [
   './manifest.json'
 ];
 
-// Install: cache static shell
+// Install: cache static shell (always skip waiting to activate immediately)
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
@@ -20,7 +20,7 @@ self.addEventListener('install', event => {
   );
 });
 
-// Activate: clean old caches
+// Activate: clean old caches and claim clients immediately
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -29,8 +29,9 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Network fetch with timeout — falls back to cache if network is slow or fails
-function fetchWithTimeout(request, timeoutMs) {
+// Network fetch with timeout — bypasses HTTP cache for same-origin JS/CSS/HTML
+function fetchWithTimeout(request, timeoutMs, bypassCache) {
+  var fetchOpts = bypassCache ? { cache: 'no-cache' } : {};
   return new Promise(function(resolve, reject) {
     var timedOut = false;
     var timer = setTimeout(function() {
@@ -38,7 +39,7 @@ function fetchWithTimeout(request, timeoutMs) {
       reject(new Error('Network timeout'));
     }, timeoutMs);
 
-    fetch(request).then(function(response) {
+    fetch(request, fetchOpts).then(function(response) {
       if (!timedOut) {
         clearTimeout(timer);
         resolve(response);
@@ -60,10 +61,12 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
 
   // Network-first with 4s timeout for same-origin resources
-  // Falls back to cache if network is slow or unavailable (critical for mobile)
+  // Uses cache: 'no-cache' for JS/CSS/HTML to always revalidate with server
+  // Falls back to SW cache if network is slow or unavailable (critical for mobile)
   if (url.origin === self.location.origin) {
+    var isAppCode = /\.(js|css|html)$/.test(url.pathname) || url.pathname === '/' || url.pathname === './';
     event.respondWith(
-      fetchWithTimeout(event.request, 4000)
+      fetchWithTimeout(event.request, 4000, isAppCode)
         .then(response => {
           if (response.ok) {
             const clone = response.clone();
@@ -78,7 +81,7 @@ self.addEventListener('fetch', event => {
 
   // External APIs: network with cache fallback (longer timeout)
   event.respondWith(
-    fetchWithTimeout(event.request, 6000)
+    fetchWithTimeout(event.request, 6000, false)
       .then(response => {
         if (response.ok) {
           const clone = response.clone();
