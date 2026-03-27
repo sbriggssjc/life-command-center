@@ -311,3 +311,15 @@ Current behavior:
 
 Remaining gap:
 - This still needs live validation against a real broker screenshot to tune the usefulness of the cues.
+## 2026-03-27 Broker Promotion Guard
+
+Implemented in this pass:
+- The live gov evidence queue now shows a broker promotion warning when the backend flags a likely lead-contact conflict.
+- The `Promote` button now becomes a confirm step for those guarded broker rows.
+
+Current behavior:
+- Clean broker rows still promote normally.
+- Broker rows that appear to conflict with the lead's current matched contact now require explicit confirmation before promotion.
+
+Remaining gap:
+- This still needs a live screenshot test against a lead that already has a different matched contact.

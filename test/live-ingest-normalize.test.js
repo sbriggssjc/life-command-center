@@ -124,6 +124,78 @@ function encodeRunLength(buffer) {
   return Buffer.from(bytes);
 }
 
+function encodePngPredictorRows(buffer, columns, filter = 0) {
+  const source = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const rowLength = Math.max(1, columns);
+  const rows = [];
+  for (let offset = 0; offset < source.length; offset += rowLength) {
+    const row = source.subarray(offset, Math.min(offset + rowLength, source.length));
+    if (row.length < rowLength) break;
+    rows.push(Buffer.concat([Buffer.from([filter]), row]));
+  }
+  return Buffer.concat(rows);
+}
+
+function encodePdfLzw(buffer) {
+  const source = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const CLEAR = 256;
+  const EOD = 257;
+  let codeSize = 9;
+  let nextCode = 258;
+  let dictionary = new Map();
+  const resetDictionary = () => {
+    dictionary = new Map();
+    for (let code = 0; code < 256; code += 1) {
+      dictionary.set(String.fromCharCode(code), code);
+    }
+    codeSize = 9;
+    nextCode = 258;
+  };
+  const codes = [];
+  const pushCode = (value) => {
+    codes.push({ value, width: codeSize });
+  };
+  resetDictionary();
+  pushCode(CLEAR);
+  let phrase = '';
+  for (const byte of source) {
+    const char = String.fromCharCode(byte);
+    const combined = phrase + char;
+    if (dictionary.has(combined)) {
+      phrase = combined;
+      continue;
+    }
+    if (phrase) pushCode(dictionary.get(phrase));
+    if (nextCode < 4096) {
+      dictionary.set(combined, nextCode);
+      nextCode += 1;
+      if (nextCode === 512) codeSize = 10;
+      else if (nextCode === 1024) codeSize = 11;
+      else if (nextCode === 2048) codeSize = 12;
+    } else {
+      pushCode(CLEAR);
+      resetDictionary();
+    }
+    phrase = char;
+  }
+  if (phrase) pushCode(dictionary.get(phrase));
+  pushCode(EOD);
+  const bytes = [];
+  let accumulator = 0;
+  let bits = 0;
+  codes.forEach(({ value, width }) => {
+    accumulator = (accumulator << width) | value;
+    bits += width;
+    while (bits >= 8) {
+      bits -= 8;
+      bytes.push((accumulator >> bits) & 0xff);
+    }
+    accumulator &= (1 << bits) - 1;
+  });
+  if (bits > 0) bytes.push((accumulator << (8 - bits)) & 0xff);
+  return Buffer.from(bytes);
+}
+
 describe('normalizeLiveIngestDocument', () => {
   it('strips html into readable text', () => {
     const doc = normalizeLiveIngestDocument({
@@ -639,6 +711,193 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /runlength\.pdf \(application\/pdf\)/);
     assert.match(doc.normalized_text, /RunLength Summary/);
     assert.match(doc.normalized_text, /Annual Escalation 3%/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text from Flate streams with PNG predictor decode params', () => {
+    const predictorSource = Buffer.from([
+      'BT\n(Predictor Summary) Tj\n',
+      '[(Base Rent ) 20 (24000)]',
+      ' TJ\nET\n'
+    ].join(''), 'utf8');
+    const predictorEncoded = encodePngPredictorRows(predictorSource, 2, 0);
+    const compressedStream = deflateSync(predictorEncoded).toString('latin1');
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 128 /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 2 /Colors 1 /BitsPerComponent 8 >> >>',
+      'stream',
+      compressedStream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF Predictor Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfPredictor123"',
+      '',
+      '--pdfPredictor123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached predictor abstract.',
+      '--pdfPredictor123',
+      'Content-Type: application/pdf; name="predictor.pdf"',
+      'Content-Disposition: attachment; filename="predictor.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfPredictor123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-predictor-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /predictor\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Predictor Summary/);
+    assert.match(doc.normalized_text, /Base Rent 24000/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text from LZW encoded pdf streams', () => {
+    const lzwStream = encodePdfLzw(Buffer.from([
+      'BT',
+      '(LZW Summary) Tj',
+      '[(Tenant Improvement ) 20 (75000)] TJ',
+      'ET'
+    ].join('\n'), 'utf8')).toString('latin1');
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 128 /Filter /LZWDecode >>',
+      'stream',
+      lzwStream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF LZW Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfLzw123"',
+      '',
+      '--pdfLzw123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached LZW abstract.',
+      '--pdfLzw123',
+      'Content-Type: application/pdf; name="lzw.pdf"',
+      'Content-Disposition: attachment; filename="lzw.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfLzw123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-lzw-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /lzw\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /LZW Summary/);
+    assert.match(doc.normalized_text, /Tenant Improvement 75000/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text-like runs from decoded pdf streams without text operators', () => {
+    const compressedStream = deflateSync(Buffer.from(
+      'LEASE ABSTRACT|Base Rent 31000|Expiration 2031-12-31|Facility Dialysis Center',
+      'utf8'
+    )).toString('latin1');
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 128 /Filter /FlateDecode >>',
+      'stream',
+      compressedStream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF Mixed Payload Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfMixed123"',
+      '',
+      '--pdfMixed123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached mixed payload export.',
+      '--pdfMixed123',
+      'Content-Type: application/pdf; name="mixed.pdf"',
+      'Content-Disposition: attachment; filename="mixed.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfMixed123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-mixed-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /mixed\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /LEASE ABSTRACT/);
+    assert.match(doc.normalized_text, /Base Rent 31000/);
+    assert.match(doc.normalized_text, /Expiration 2031-12-31/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts pdf document metadata when page text is sparse', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Title (Dialysis Lease Abstract) /Subject (Renewal Package) /Keywords (rent roll, amendment) >>',
+      'endobj',
+      '2 0 obj',
+      '<< /Type /Metadata >>',
+      'stream',
+      '<x:xmpmeta><rdf:RDF><rdf:Description><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Operator Packet</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>',
+      'endstream',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Metadata Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfMeta123"',
+      '',
+      '--pdfMeta123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached metadata-heavy PDF.',
+      '--pdfMeta123',
+      'Content-Type: application/pdf; name="metadata.pdf"',
+      'Content-Disposition: attachment; filename="metadata.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfMeta123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-metadata-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /metadata\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Title: Dialysis Lease Abstract/);
+    assert.match(doc.normalized_text, /Subject: Renewal Package/);
+    assert.match(doc.normalized_text, /Keywords: rent roll, amendment/);
+    assert.match(doc.normalized_text, /Operator Packet/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 

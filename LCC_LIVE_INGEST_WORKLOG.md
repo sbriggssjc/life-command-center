@@ -155,7 +155,11 @@
 - Added `FlateDecode` PDF stream extraction so compressed text streams can be inflated and passed through the same PDF operator parser, improving preview coverage for more realistic attachment PDFs.
 - Extended PDF stream decoding to support `ASCIIHexDecode` and `ASCII85Decode` filter chains before operator parsing, improving preview coverage for encoded multi-stream attachment PDFs.
 - Added `RunLengthDecode` PDF stream support so another common opaque stream wrapper can still feed readable operator text into live-ingest normalization.
+- Added PDF `/DecodeParms` predictor handling on top of `FlateDecode`, including PNG-style predictor reversal for row-prefixed streams, so predictor-heavy compressed PDFs can still surface readable operator text during normalization.
+- Added `LZWDecode` PDF stream support, including predictor pass-through after LZW expansion, so older or export-heavy PDFs using LZW-compressed text streams can still produce readable preview text.
+- Added decoded-stream text fallback for PDFs so compressed or filtered streams without standard `BT`/`ET` text operators can still contribute clean text-like runs into normalized attachment previews.
+- Added PDF document-metadata harvesting for document-info and XMP-style fields so metadata-heavy attachments can still contribute useful labels when page-text extraction is sparse.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially other opaque PDF stream filters, predictor-heavy streams, or embedded mixed payloads.
+- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially remaining opaque PDF stream filters or embedded mixed payloads.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

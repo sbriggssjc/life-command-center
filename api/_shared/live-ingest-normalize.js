@@ -545,6 +545,7 @@ function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
   const operatorText = dedupePdfPreviewLines([
+    ...extractPdfMetadataLines(latin),
     ...extractPdfOperatorTextLines(latin),
     ...extractCompressedPdfOperatorTextLines(latin)
   ]).join('\n').trim();
@@ -559,6 +560,29 @@ function extractPdfTextPreviewFromBuffer(buffer) {
 
 function extractPdfOperatorText(latin = '') {
   return extractPdfOperatorTextLines(latin).join('\n').trim();
+}
+
+function extractPdfMetadataLines(latin = '') {
+  const lines = [];
+  const text = String(latin || '');
+  const keys = ['Title', 'Subject', 'Author', 'Keywords', 'Creator', 'Producer'];
+  keys.forEach((key) => {
+    Array.from(text.matchAll(new RegExp(`/${key}\\s*\\(([^)]*)\\)`, 'g'))).forEach((match) => {
+      const value = collapseWhitespace(decodePdfLiteralString(match[1] || ''));
+      if (value) lines.push(`${key}: ${value}`);
+    });
+    Array.from(text.matchAll(new RegExp(`/${key}\\s*<([^>]+)>`, 'g'))).forEach((match) => {
+      const value = collapseWhitespace(decodePdfHexString(match[1] || ''));
+      if (value) lines.push(`${key}: ${value}`);
+    });
+  });
+  Array.from(text.matchAll(/<(?:dc:title|dc:description|pdf:Keywords)[^>]*>([\s\S]*?)<\/(?:dc:title|dc:description|pdf:Keywords)>/gi))
+    .forEach((match) => {
+      const xml = String(match[1] || '');
+      const value = collapseWhitespace(stripHtml(xml));
+      if (value) lines.push(value);
+    });
+  return dedupePdfPreviewLines(lines);
 }
 
 function extractPdfOperatorTextLines(latin = '') {
@@ -603,14 +627,21 @@ function extractPdfOperatorTextLines(latin = '') {
 }
 
 function extractCompressedPdfOperatorTextLines(latin = '') {
-  const matches = Array.from(String(latin || '').matchAll(/(<<[\s\S]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  const matches = Array.from(String(latin || '').matchAll(/(<<[\s\S]*>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
   const lines = [];
   matches.forEach((match) => {
     const dict = String(match[1] || '');
     const raw = Buffer.from(String(match[2] || ''), 'latin1');
-    const decoded = decodePdfStreamByFilters(raw, extractPdfStreamFilters(dict));
+    const filters = extractPdfStreamFilters(dict);
+    const decoded = decodePdfStreamByFilters(raw, filters, extractPdfDecodeParams(dict, filters.length));
     if (!decoded) return;
-    lines.push(...extractPdfOperatorTextLines(decoded.toString('latin1')));
+    const decodedText = decoded.toString('latin1');
+    const operatorLines = extractPdfOperatorTextLines(decodedText);
+    if (operatorLines.length) {
+      lines.push(...operatorLines);
+      return;
+    }
+    lines.push(...extractPdfTextLikeRuns(decodedText));
   });
   return lines;
 }
@@ -627,12 +658,58 @@ function extractPdfStreamFilters(dict = '') {
   return singleMatch ? [String(singleMatch[1] || '').trim()] : [];
 }
 
-function decodePdfStreamByFilters(buffer, filters = []) {
+function extractPdfDecodeParams(dict = '', filterCount = 0) {
+  const text = String(dict || '');
+  const requestedCount = Number.isFinite(filterCount) && filterCount > 0 ? filterCount : 0;
+  const arrayMatch = text.match(/\/DecodeParms\s*\[([\s\S]*?)\]/);
+  if (arrayMatch) {
+    const entries = [];
+    const body = String(arrayMatch[1] || '');
+    Array.from(body.matchAll(/<<(.*?)>>|null/gs)).forEach((match) => {
+      const chunk = String(match[0] || '').trim();
+      if (/^null$/i.test(chunk)) {
+        entries.push(null);
+        return;
+      }
+      entries.push(parsePdfDecodeParamsDict(chunk));
+    });
+    if (requestedCount && entries.length < requestedCount) {
+      while (entries.length < requestedCount) entries.push(null);
+    }
+    return entries;
+  }
+  const singleMatch = text.match(/\/DecodeParms\s*(<<[\s\S]*?>>)/);
+  if (singleMatch) {
+    const params = parsePdfDecodeParamsDict(singleMatch[1] || '');
+    return requestedCount ? Array.from({ length: requestedCount }, (_, index) => (index === requestedCount - 1 ? params : null)) : [params];
+  }
+  return requestedCount ? Array.from({ length: requestedCount }, () => null) : [];
+}
+
+function parsePdfDecodeParamsDict(dictText = '') {
+  const text = String(dictText || '');
+  return {
+    predictor: readPdfDecodeParamInt(text, 'Predictor'),
+    columns: readPdfDecodeParamInt(text, 'Columns'),
+    colors: readPdfDecodeParamInt(text, 'Colors'),
+    bitsPerComponent: readPdfDecodeParamInt(text, 'BitsPerComponent')
+  };
+}
+
+function readPdfDecodeParamInt(dictText = '', key = '') {
+  const match = String(dictText || '').match(new RegExp(`/${key}\\s+(\\d+)`));
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function decodePdfStreamByFilters(buffer, filters = [], decodeParams = []) {
   let current = Buffer.isBuffer(buffer) ? buffer : null;
   const chain = Array.isArray(filters) ? filters : [];
-  for (const filter of chain) {
+  const params = Array.isArray(decodeParams) ? decodeParams : [];
+  for (let index = 0; index < chain.length; index += 1) {
+    const filter = chain[index];
     if (!current) return null;
     const name = String(filter || '').trim();
+    const filterParams = params[index] || null;
     if (!name) continue;
     if (name === 'ASCIIHexDecode' || name === 'AHx') {
       current = decodePdfAsciiHexBuffer(current);
@@ -644,6 +721,12 @@ function decodePdfStreamByFilters(buffer, filters = []) {
     }
     if (name === 'FlateDecode' || name === 'Fl') {
       current = tryInflatePdfStream(current);
+      current = decodePdfPredictorBuffer(current, filterParams);
+      continue;
+    }
+    if (name === 'LZWDecode' || name === 'LZW') {
+      current = decodePdfLzwBuffer(current);
+      current = decodePdfPredictorBuffer(current, filterParams);
       continue;
     }
     if (name === 'RunLengthDecode' || name === 'RL') {
@@ -731,6 +814,140 @@ function decodePdfRunLengthBuffer(buffer) {
     index += 1;
   }
   return Buffer.from(bytes);
+}
+
+function extractPdfTextLikeRuns(latin = '') {
+  const normalized = String(latin || '').replace(/[|]+/g, '\n');
+  const asciiRuns = normalized.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_\-\n]{12,}/g) || [];
+  return dedupePdfPreviewLines(asciiRuns
+    .map((text) => collapseWhitespace(text))
+    .filter((text) => /[A-Za-z]{4,}/.test(text))
+    .filter((text) => !/^endobj|stream|endstream|xref|trailer|obj|Length\s+\d+/i.test(text)));
+}
+
+function decodePdfLzwBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return null;
+  const CLEAR = 256;
+  const EOD = 257;
+  let bitPos = 0;
+  let codeSize = 9;
+  let nextCode = 258;
+  const dictionary = new Map();
+  const resetDictionary = () => {
+    dictionary.clear();
+    for (let code = 0; code < 256; code += 1) dictionary.set(code, [code]);
+    codeSize = 9;
+    nextCode = 258;
+  };
+  const readCode = () => {
+    let value = 0;
+    for (let bit = 0; bit < codeSize; bit += 1) {
+      const absolute = bitPos + bit;
+      const byteIndex = Math.floor(absolute / 8);
+      if (byteIndex >= buffer.length) return null;
+      const byte = buffer[byteIndex];
+      const shift = 7 - (absolute % 8);
+      value = (value << 1) | ((byte >> shift) & 1);
+    }
+    bitPos += codeSize;
+    return value;
+  };
+  resetDictionary();
+  const output = [];
+  let previous = null;
+  while (true) {
+    const code = readCode();
+    if (code == null) break;
+    if (code === CLEAR) {
+      resetDictionary();
+      previous = null;
+      continue;
+    }
+    if (code === EOD) break;
+    let entry = dictionary.get(code);
+    if (!entry && code === nextCode && previous) {
+      entry = previous.concat(previous[0]);
+    }
+    if (!entry) return null;
+    output.push(...entry);
+    if (previous) {
+      dictionary.set(nextCode, previous.concat(entry[0]));
+      nextCode += 1;
+      if (nextCode === 512) codeSize = 10;
+      else if (nextCode === 1024) codeSize = 11;
+      else if (nextCode === 2048) codeSize = 12;
+    }
+    previous = entry;
+  }
+  return Buffer.from(output);
+}
+
+function decodePdfPredictorBuffer(buffer, params = null) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length || !params) return buffer;
+  const predictor = Number(params.predictor || 1);
+  if (predictor <= 1) return buffer;
+  const colors = Math.max(1, Number(params.colors || 1));
+  const bitsPerComponent = Math.max(1, Number(params.bitsPerComponent || 8));
+  const columns = Math.max(1, Number(params.columns || 1));
+  if (predictor === 2) return decodeTiffPredictorBuffer(buffer, colors, bitsPerComponent, columns);
+  if (predictor >= 10 && predictor <= 15) {
+    return decodePngPredictorBuffer(buffer, colors, bitsPerComponent, columns);
+  }
+  return buffer;
+}
+
+function decodeTiffPredictorBuffer(buffer, colors = 1, bitsPerComponent = 8, columns = 1) {
+  if (!buffer || !Buffer.isBuffer(buffer) || bitsPerComponent !== 8) return buffer;
+  const bytesPerPixel = Math.max(1, Math.ceil((colors * bitsPerComponent) / 8));
+  const rowLength = Math.max(1, columns * bytesPerPixel);
+  if (buffer.length < rowLength) return buffer;
+  const output = Buffer.from(buffer);
+  for (let rowStart = 0; rowStart + rowLength <= output.length; rowStart += rowLength) {
+    for (let index = rowStart + bytesPerPixel; index < rowStart + rowLength; index += 1) {
+      output[index] = (output[index] + output[index - bytesPerPixel]) & 0xff;
+    }
+  }
+  return output;
+}
+
+function decodePngPredictorBuffer(buffer, colors = 1, bitsPerComponent = 8, columns = 1) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length || bitsPerComponent % 8 !== 0) return buffer;
+  const bytesPerPixel = Math.max(1, Math.ceil((colors * bitsPerComponent) / 8));
+  const rowLength = Math.max(1, Math.ceil((colors * columns * bitsPerComponent) / 8));
+  const stride = rowLength + 1;
+  if (buffer.length < stride) return buffer;
+  const rows = [];
+  let previous = Buffer.alloc(rowLength, 0);
+  for (let offset = 0; offset + stride <= buffer.length; offset += stride) {
+    const filter = buffer[offset];
+    const encoded = buffer.subarray(offset + 1, offset + 1 + rowLength);
+    const row = Buffer.alloc(rowLength);
+    for (let index = 0; index < rowLength; index += 1) {
+      const left = index >= bytesPerPixel ? row[index - bytesPerPixel] : 0;
+      const up = previous[index] || 0;
+      const upLeft = index >= bytesPerPixel ? previous[index - bytesPerPixel] || 0 : 0;
+      const value = encoded[index];
+      if (filter === 0) row[index] = value;
+      else if (filter === 1) row[index] = (value + left) & 0xff;
+      else if (filter === 2) row[index] = (value + up) & 0xff;
+      else if (filter === 3) row[index] = (value + Math.floor((left + up) / 2)) & 0xff;
+      else if (filter === 4) row[index] = (value + paethPredictor(left, up, upLeft)) & 0xff;
+      else return buffer;
+    }
+    rows.push(row);
+    previous = row;
+  }
+  return rows.length ? Buffer.concat(rows) : buffer;
+}
+
+function paethPredictor(left, up, upLeft) {
+  const initial = left + up - upLeft;
+  const leftDistance = Math.abs(initial - left);
+  const upDistance = Math.abs(initial - up);
+  const upLeftDistance = Math.abs(initial - upLeft);
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
+  if (upDistance <= upLeftDistance) return up;
+  return upLeft;
 }
 
 function dedupePdfPreviewLines(lines = []) {
