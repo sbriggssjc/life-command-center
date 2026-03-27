@@ -3363,17 +3363,17 @@ function renderGovOverview() {
   const withRentPSF = useMV ? [] : portfolio.filter(p => p.gross_rent_psf > 0);
   const avgRentPSF = useMV ? (mv.avg_rent_psf ? Number(mv.avg_rent_psf).toFixed(2) : '—') : (withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—');
   const totalNOI = useMV ? (mv.total_noi || 0) : portfolio.reduce((s, p) => s + (p.noi || 0), 0);
-  const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+  const distinctAgencies = useMV ? (mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
   const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
   const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
   const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
 
   // Lease expiration analysis
   const withTerm = useMV ? [] : portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
-  const expiring1yr = useMV ? (mv.expiring_lt_1yr || mv.expiring_1yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 1).length;
-  const expiring2yr = useMV ? (mv.expiring_lt_2yr || mv.expiring_2yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 2).length;
-  const expiring5yr = useMV ? (mv.term_2_5yr || mv.expiring_2_5yr || 0) : withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
-  const longTerm = useMV ? (mv.term_5plus || mv.long_term_5plus || 0) : withTerm.filter(p => p.firm_term_remaining > 5).length;
+  const expiring1yr = useMV ? (mv.expiring_1yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 1).length;
+  const expiring2yr = useMV ? (mv.expiring_2yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 2).length;
+  const expiring5yr = useMV ? (mv.expiring_2_5yr || 0) : withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
+  const longTerm = useMV ? (mv.long_term_5plus || 0) : withTerm.filter(p => p.firm_term_remaining > 5).length;
   const avgFirmTerm = useMV ? (mv.avg_firm_term ? Number(mv.avg_firm_term).toFixed(1) : '—') : (withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—');
   const withTermCount = useMV ? (mv.properties_with_term || withTerm.length) : withTerm.length;
 
@@ -3391,10 +3391,9 @@ function renderGovOverview() {
   }
   // Try to use MV agency breakdown if available (JSON columns)
   let topAgencies, topAgenciesByRent;
-  if (useMV && (mv.top_agencies_by_count || mv.top_agencies_json)) {
+  if (useMV && mv.top_agencies_json) {
     try {
-      const raw = mv.top_agencies_by_count || mv.top_agencies_json;
-      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const parsed = typeof mv.top_agencies_json === 'string' ? JSON.parse(mv.top_agencies_json) : mv.top_agencies_json;
       topAgencies = (parsed || []).map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
       topAgenciesByRent = [...topAgencies].sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
       topAgencies = topAgencies.slice(0, 12);
@@ -3416,11 +3415,10 @@ function renderGovOverview() {
     });
   }
   let topStates;
-  if (useMV && (mv.top_states_by_count || mv.top_states_json)) {
+  if (useMV && mv.top_states_json) {
     try {
-      const raw = mv.top_states_by_count || mv.top_states_json;
-      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      topStates = (parsed || []).map(s => [s.state || s.name, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
+      const parsed = typeof mv.top_states_json === 'string' ? JSON.parse(mv.top_states_json) : mv.top_states_json;
+      topStates = (parsed || []).map(s => [s.state, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
     } catch { topStates = []; }
   } else {
     topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
@@ -3442,11 +3440,9 @@ function renderGovOverview() {
   if (totalNOI > 0) {
     html += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
     html += govCard({ title: 'Total NOI', value: '$' + fmtN(Math.round(totalNOI / 1e6)) + 'M', sub: 'net operating income', color: 'green', tab: 'search' });
-    const noiDenom = useMV ? (mv.properties_with_sf || totalPropCount) : withSF.length;
-    const avgNOI = noiDenom > 0 ? totalNOI / noiDenom : 0;
+    const avgNOI = withSF.length > 0 ? totalNOI / withSF.length : 0;
     html += govCard({ title: 'Avg NOI / Property', value: avgNOI > 0 ? '$' + fmtN(Math.round(avgNOI / 1000)) + 'K' : '—', sub: 'across portfolio', color: 'blue', tab: 'search' });
-    const contactCount = useMV ? (mv.total_contacts || contacts.length) : contacts.length;
-    html += govCard({ title: 'Contacts', value: fmtN(contactCount), sub: 'owners & principals', color: 'purple', tab: 'search' });
+    html += govCard({ title: 'Contacts', value: fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
     html += '</div>';
   }
 
