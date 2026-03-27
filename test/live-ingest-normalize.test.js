@@ -901,6 +901,49 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts pdf annotation and accessibility text when present', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Annot /Subtype /Text /Contents (Escalation note: verify CAM cap) /T (Analyst Review) >>',
+      'endobj',
+      '2 0 obj',
+      '<< /Type /StructElem /Alt (Dialysis Floorplan) /ActualText (Suite B buildout) >>',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Annotation Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfAnnot123"',
+      '',
+      '--pdfAnnot123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached annotated PDF.',
+      '--pdfAnnot123',
+      'Content-Type: application/pdf; name="annotated.pdf"',
+      'Content-Disposition: attachment; filename="annotated.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfAnnot123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-annotation-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /annotated\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Annotation: Escalation note: verify CAM cap/);
+    assert.match(doc.normalized_text, /Annotation Author: Analyst Review/);
+    assert.match(doc.normalized_text, /Alt: Dialysis Floorplan/);
+    assert.match(doc.normalized_text, /ActualText: Suite B buildout/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {

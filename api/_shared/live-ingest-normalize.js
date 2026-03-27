@@ -582,7 +582,28 @@ function extractPdfMetadataLines(latin = '') {
       const value = collapseWhitespace(stripHtml(xml));
       if (value) lines.push(value);
     });
+  extractPdfAnnotationLines(text).forEach((line) => lines.push(line));
   return dedupePdfPreviewLines(lines);
+}
+
+function extractPdfAnnotationLines(latin = '') {
+  const text = String(latin || '');
+  const outputs = [];
+  const patterns = [
+    { label: 'Annotation', regex: /\/Contents\s*\\?\(([^)]*)\)|\/Contents\s*<([^>]+)>/g },
+    { label: 'Annotation Author', regex: /\/T(?![A-Za-z])\s*\\?\(([^)]*)\)|\/T(?![A-Za-z])\s*<([^>]+)>/g },
+    { label: 'Alt', regex: /\/Alt\s*\\?\(([^)]*)\)|\/Alt\s*<([^>]+)>/g },
+    { label: 'ActualText', regex: /\/ActualText\s*\\?\(([^)]*)\)|\/ActualText\s*<([^>]+)>/g }
+  ];
+  patterns.forEach(({ label, regex }) => {
+    Array.from(text.matchAll(regex)).forEach((match) => {
+      const literal = match[1] || '';
+      const hex = match[2] || '';
+      const value = collapseWhitespace(literal ? decodePdfLiteralString(literal) : decodePdfHexString(hex));
+      if (value) outputs.push(`${label}: ${value}`);
+    });
+  });
+  return outputs;
 }
 
 function extractPdfOperatorTextLines(latin = '') {

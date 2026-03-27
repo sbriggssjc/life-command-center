@@ -159,6 +159,7 @@
 - Added `LZWDecode` PDF stream support, including predictor pass-through after LZW expansion, so older or export-heavy PDFs using LZW-compressed text streams can still produce readable preview text.
 - Added decoded-stream text fallback for PDFs so compressed or filtered streams without standard `BT`/`ET` text operators can still contribute clean text-like runs into normalized attachment previews.
 - Added PDF document-metadata harvesting for document-info and XMP-style fields so metadata-heavy attachments can still contribute useful labels when page-text extraction is sparse.
+- Added PDF annotation and accessibility text harvesting for keys like `/Contents`, `/T`, `/Alt`, and `/ActualText`, so authored sidecar labels can supplement sparse page-text extraction.
 
 ## Next Follow-Up Candidates
 - Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially remaining opaque PDF stream filters or embedded mixed payloads.
