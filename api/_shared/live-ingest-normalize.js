@@ -726,6 +726,7 @@ function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
   if (isIcsLikeBuffer(buffer, subtype)) return extractIcsText(buffer.toString('utf8')).slice(0, 4000);
   if (isDelimitedTextLikeBuffer(buffer, subtype)) return extractDelimitedText(buffer.toString('utf8')).slice(0, 4000);
   if (isYamlLikeBuffer(buffer, subtype)) return extractYamlText(buffer.toString('utf8')).slice(0, 4000);
+  if (isXmlLikeBuffer(buffer, subtype)) return extractXmlText(buffer.toString('utf8')).slice(0, 4000);
   if (subtype === 'text/html') return stripHtml(buffer.toString('utf8')).slice(0, 4000);
   if (subtype === 'application/json' || subtype === 'text/csv' || subtype === 'text/plain' || subtype.startsWith('text/')) {
     return collapseWhitespace(buffer.toString('utf8')).slice(0, 4000);
@@ -830,6 +831,22 @@ function extractYamlText(text = '') {
     .slice(0, 20)
     .map((line) => collapseWhitespace(line.replace(/^-\s*/, '- ')));
   return collapseWhitespace(lines.join('\n'));
+}
+
+function isXmlLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 256).toString('utf8');
+  return lowered === 'application/xml'
+    || lowered === 'text/xml'
+    || /^\s*<\?xml\b/i.test(head)
+    || /^\s*<[A-Za-z_:][\w:.-]*/.test(head);
+}
+
+function extractXmlText(text = '') {
+  return stripHtml(
+    String(text || '')
+      .replace(/<\?xml[\s\S]*?\?>/gi, ' ')
+  );
 }
 
 function extractGenericZipTextPreview(buffer) {

@@ -1363,6 +1363,46 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts embedded xml text from pdf payload streams when present', () => {
+    const embeddedXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<lease>',
+      '<tenant>Dialysis Central</tenant>',
+      '<monthlyRent>90500</monthlyRent>',
+      '<noticeDays>150</noticeDays>',
+      '</lease>'
+    ].join('');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /application#2Fxml >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedXml, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded XML Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedXml123"',
+      '',
+      '--pdfEmbeddedXml123',
+      'Content-Type: application/pdf; name="bundle-xml.pdf"',
+      'Content-Disposition: attachment; filename="bundle-xml.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedXml123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-xml.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-xml\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Dialysis Central\s+90500\s+150/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('returns embedded pdf images as extracted attachments for email pdf bundles', () => {
     const imageBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     const pdfBuffer = Buffer.concat([

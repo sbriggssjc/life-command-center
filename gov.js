@@ -2803,6 +2803,7 @@ function renderGovEvidenceWorkbench() {
                 ${Array.isArray(row.review_cues) && row.review_cues.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${row.review_cues.map((cue) => `<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text2)">${esc(cue)}</span>`).join('')}</div>` : ''}
                 ${row.promotion_guard?.message ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(row.promotion_guard.message)}</div>` : ''}
                 ${row.promotion_guard?.current_contact_display ? `<div style="font-size:11px;color:var(--text2);margin-top:6px">Current matched contact: ${esc(row.promotion_guard.current_contact_display)}</div>` : ''}
+                ${row.promotion_guard?.candidate_contact_display ? `<div style="font-size:11px;color:var(--text2);margin-top:4px">Evidence broker: ${esc(row.promotion_guard.candidate_contact_display)}</div>` : ''}
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                 <button class="btn-secondary" type="button" data-gov-evidence-note="${idx}">Note</button>

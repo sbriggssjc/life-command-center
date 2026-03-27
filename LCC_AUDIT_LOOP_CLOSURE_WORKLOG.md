@@ -333,3 +333,13 @@ Current behavior:
 
 Remaining gap:
 - This still needs a live screenshot test to confirm the extra line improves operator decisions without cluttering the queue card.
+## 2026-03-27 Structured Broker Comparison
+
+Implemented in this pass:
+- The live gov evidence queue now renders an `Evidence broker:` line beneath the existing `Current matched contact:` line for guarded broker rows.
+
+Current behavior:
+- Guarded broker rows can now show the current matched contact and the candidate evidence broker together before confirmation.
+
+Remaining gap:
+- This still needs a live screenshot test to confirm the side-by-side broker comparison is clear and not too noisy.

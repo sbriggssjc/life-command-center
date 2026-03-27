@@ -171,6 +171,7 @@
 - Added embedded calendar handling for PDF payloads so packaged `.ics` content now converts to a cleaner event summary instead of falling back to raw RFC lines.
 - Added embedded delimited-text handling for PDF payloads so packaged TSV-style exports now render as readable rows instead of generic plain-text fallback.
 - Added embedded YAML handling for PDF payloads so packaged `.yaml`/`.yml`-style sidecars now normalize cleanly instead of relying on the generic text fallback.
+- Added embedded XML handling for PDF payloads so packaged XML sidecars now strip tags into readable text instead of exposing raw markup through the fallback path.
 
 ## Next Follow-Up Candidates
 - Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially additional niche embedded binary families or the remaining opaque PDF stream filters.
