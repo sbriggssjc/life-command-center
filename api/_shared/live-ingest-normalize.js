@@ -92,6 +92,43 @@ function extractIcsText(ics = '') {
   return collapseWhitespace(summaries.join('\n\n'));
 }
 
+function extractVcardText(vcard = '') {
+  const unfolded = String(vcard || '').replace(/\r?\n[ \t]/g, '');
+  const lines = unfolded.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const cards = [];
+  let current = null;
+  lines.forEach((line) => {
+    if (/^BEGIN:VCARD$/i.test(line)) {
+      current = {};
+      return;
+    }
+    if (/^END:VCARD$/i.test(line)) {
+      if (current) cards.push(current);
+      current = null;
+      return;
+    }
+    if (!current) return;
+    const idx = line.indexOf(':');
+    if (idx === -1) return;
+    const rawKey = line.slice(0, idx);
+    const value = decodeHtmlEntities(line.slice(idx + 1).replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';'));
+    const key = rawKey.split(';')[0].toUpperCase();
+    if (!value) return;
+    current[key] = collapseWhitespace(value);
+  });
+  const summaries = cards.slice(0, 6).map((card) => {
+    const parts = [
+      card.FN || card.N,
+      card.ORG ? `Org: ${card.ORG}` : '',
+      card.TITLE ? `Title: ${card.TITLE}` : '',
+      card.EMAIL ? `Email: ${card.EMAIL}` : '',
+      card.TEL ? `Phone: ${card.TEL}` : ''
+    ].filter(Boolean);
+    return parts.join('\n');
+  }).filter(Boolean);
+  return collapseWhitespace(summaries.join('\n\n'));
+}
+
 function decodeQuotedPrintable(text = '') {
   return String(text)
     .replace(/=\r?\n/g, '')
@@ -724,6 +761,7 @@ function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
   if (isZipLikeBuffer(buffer, subtype)) return extractGenericZipTextPreview(buffer).slice(0, 4000);
   if (isRtfLikeBuffer(buffer, subtype)) return extractRtfText(buffer.toString('utf8')).slice(0, 4000);
   if (isIcsLikeBuffer(buffer, subtype)) return extractIcsText(buffer.toString('utf8')).slice(0, 4000);
+  if (isVcardLikeBuffer(buffer, subtype)) return extractVcardText(buffer.toString('utf8')).slice(0, 4000);
   if (isDelimitedTextLikeBuffer(buffer, subtype)) return extractDelimitedText(buffer.toString('utf8')).slice(0, 4000);
   if (isYamlLikeBuffer(buffer, subtype)) return extractYamlText(buffer.toString('utf8')).slice(0, 4000);
   if (isXmlLikeBuffer(buffer, subtype)) return extractXmlText(buffer.toString('utf8')).slice(0, 4000);
@@ -793,6 +831,15 @@ function isIcsLikeBuffer(buffer, subtype = '') {
   return lowered === 'text/calendar'
     || lowered === 'application/ics'
     || head.includes('BEGIN:VCALENDAR');
+}
+
+function isVcardLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 128).toString('utf8').toUpperCase();
+  return lowered === 'text/vcard'
+    || lowered === 'text/x-vcard'
+    || lowered === 'application/vcard'
+    || head.includes('BEGIN:VCARD');
 }
 
 function isDelimitedTextLikeBuffer(buffer, subtype = '') {

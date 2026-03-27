@@ -1284,6 +1284,50 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts embedded vcard text from pdf payload streams when present', () => {
+    const embeddedVcard = [
+      'BEGIN:VCARD',
+      'FN:Alex Morgan',
+      'ORG:Dialysis Partners',
+      'TITLE:Regional Director',
+      'EMAIL:alex@example.com',
+      'TEL:+1-555-0100',
+      'END:VCARD'
+    ].join('\r\n');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /text#2Fx-vcard >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedVcard, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded VCARD Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedVcard123"',
+      '',
+      '--pdfEmbeddedVcard123',
+      'Content-Type: application/pdf; name="bundle-vcard.pdf"',
+      'Content-Disposition: attachment; filename="bundle-vcard.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedVcard123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-vcard.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-vcard\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Alex Morgan/);
+    assert.match(doc.normalized_text, /Embedded Payload: Org: Dialysis Partners/);
+    assert.match(doc.normalized_text, /Embedded Payload: Email: alex@example.com/);
+    assert.match(doc.normalized_text, /Embedded Payload: Phone: \+1-555-0100/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts embedded delimited text from pdf payload streams when present', () => {
     const embeddedTsv = [
       'tenant\tmonthly_rent\tnotice_days',
