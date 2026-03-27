@@ -37,6 +37,61 @@ function stripHtml(html = '') {
   );
 }
 
+function extractRtfText(rtf = '') {
+  return collapseWhitespace(
+    decodeHtmlEntities(
+      String(rtf || '')
+        .replace(/\\par[d]?/gi, '\n')
+        .replace(/\\tab/gi, '\t')
+        .replace(/\\'[0-9a-f]{2}/gi, (match) => String.fromCharCode(parseInt(match.slice(2), 16)))
+        .replace(/\\u(-?\d+)\??/g, (_, code) => {
+          const value = Number.parseInt(code, 10);
+          if (!Number.isFinite(value)) return ' ';
+          return String.fromCharCode(value < 0 ? value + 65536 : value);
+        })
+        .replace(/\\[a-z]+-?\d* ?/gi, ' ')
+        .replace(/[{}]/g, ' ')
+    )
+  );
+}
+
+function extractIcsText(ics = '') {
+  const unfolded = String(ics || '').replace(/\r?\n[ \t]/g, '');
+  const lines = unfolded.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const events = [];
+  let current = null;
+  lines.forEach((line) => {
+    if (line === 'BEGIN:VEVENT') {
+      current = {};
+      return;
+    }
+    if (line === 'END:VEVENT') {
+      if (current) events.push(current);
+      current = null;
+      return;
+    }
+    if (!current) return;
+    const idx = line.indexOf(':');
+    if (idx === -1) return;
+    const rawKey = line.slice(0, idx);
+    const value = decodeHtmlEntities(line.slice(idx + 1).replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';'));
+    const key = rawKey.split(';')[0].toUpperCase();
+    if (!value) return;
+    current[key] = collapseWhitespace(value);
+  });
+  const summaries = events.slice(0, 6).map((event) => {
+    const parts = [
+      event.SUMMARY,
+      event.DTSTART ? `Start: ${event.DTSTART}` : '',
+      event.DTEND ? `End: ${event.DTEND}` : '',
+      event.LOCATION ? `Location: ${event.LOCATION}` : '',
+      event.DESCRIPTION ? `Description: ${event.DESCRIPTION}` : ''
+    ].filter(Boolean);
+    return parts.join('\n');
+  }).filter(Boolean);
+  return collapseWhitespace(summaries.join('\n\n'));
+}
+
 function decodeQuotedPrintable(text = '') {
   return String(text)
     .replace(/=\r?\n/g, '')
@@ -659,12 +714,16 @@ function extractPdfEmbeddedImagesFromBuffer(buffer) {
 function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const subtype = extractPdfEmbeddedSubtype(dict);
+  if (subtype === 'message/rfc822') return normalizeEmailText(buffer.toString('utf8')).normalized_text.slice(0, 4000);
   if (isLegacyDocLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'doc').slice(0, 4000);
   if (isLegacyXlsLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'xls').slice(0, 4000);
   if (isLegacyPptLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'ppt').slice(0, 4000);
   if (isDocxLikeBuffer(buffer)) return extractDocxTextFromBuffer(buffer).slice(0, 4000);
   if (isXlsxLikeBuffer(buffer)) return extractXlsxTextFromBuffer(buffer).slice(0, 4000);
   if (isPptxLikeBuffer(buffer)) return extractPptxTextFromBuffer(buffer).slice(0, 4000);
+  if (isZipLikeBuffer(buffer, subtype)) return extractGenericZipTextPreview(buffer).slice(0, 4000);
+  if (isRtfLikeBuffer(buffer, subtype)) return extractRtfText(buffer.toString('utf8')).slice(0, 4000);
+  if (isIcsLikeBuffer(buffer, subtype)) return extractIcsText(buffer.toString('utf8')).slice(0, 4000);
   if (subtype === 'text/html') return stripHtml(buffer.toString('utf8')).slice(0, 4000);
   if (subtype === 'application/json' || subtype === 'text/csv' || subtype === 'text/plain' || subtype.startsWith('text/')) {
     return collapseWhitespace(buffer.toString('utf8')).slice(0, 4000);
@@ -708,6 +767,46 @@ function isXlsxLikeBuffer(buffer) {
 function isPptxLikeBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
   return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('ppt/presentation.xml', 'utf8'));
+}
+
+function isZipLikeBuffer(buffer, subtype = '') {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  const lowered = String(subtype || '').toLowerCase();
+  return (buffer[0] === 0x50 && buffer[1] === 0x4b)
+    || lowered === 'application/zip'
+    || lowered === 'application/x-zip-compressed';
+}
+
+function isRtfLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered === 'application/rtf'
+    || lowered === 'text/rtf'
+    || buffer.subarray(0, 5).toString('latin1').toLowerCase() === '{\\rtf';
+}
+
+function isIcsLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 64).toString('utf8').toUpperCase();
+  return lowered === 'text/calendar'
+    || lowered === 'application/ics'
+    || head.includes('BEGIN:VCALENDAR');
+}
+
+function extractGenericZipTextPreview(buffer) {
+  const entries = Array.from(extractZipEntries(buffer).entries()).slice(0, 12);
+  const outputs = [];
+  entries.forEach(([name, content]) => {
+    const lowerName = String(name || '').toLowerCase();
+    let preview = '';
+    if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) preview = stripHtml(content.toString('utf8'));
+    else if (lowerName.endsWith('.eml')) preview = normalizeEmailText(content.toString('utf8')).normalized_text;
+    else if (lowerName.endsWith('.json') || lowerName.endsWith('.csv') || lowerName.endsWith('.txt') || lowerName.endsWith('.md') || lowerName.endsWith('.xml')) {
+      preview = collapseWhitespace(content.toString('utf8'));
+    }
+    if (!preview) return;
+    outputs.push(`${name}\n${preview.slice(0, 800)}`);
+  });
+  return collapseWhitespace(outputs.join('\n\n'));
 }
 
 function extractPdfAnnotationLines(latin = '') {

@@ -2802,6 +2802,7 @@ function renderGovEvidenceWorkbench() {
                 <div style="font-size:13px;color:var(--text);margin-top:4px">${esc(row.summary || row.observation_value || 'Pending evidence row')}</div>
                 ${Array.isArray(row.review_cues) && row.review_cues.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${row.review_cues.map((cue) => `<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text2)">${esc(cue)}</span>`).join('')}</div>` : ''}
                 ${row.promotion_guard?.message ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(row.promotion_guard.message)}</div>` : ''}
+                ${row.promotion_guard?.current_contact_display ? `<div style="font-size:11px;color:var(--text2);margin-top:6px">Current matched contact: ${esc(row.promotion_guard.current_contact_display)}</div>` : ''}
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                 <button class="btn-secondary" type="button" data-gov-evidence-note="${idx}">Note</button>
@@ -3088,18 +3089,18 @@ async function reviewGovEvidenceObservation(idx, action) {
     showToast(`Observation update failed: ${err.message}`, 'error');
   }
 }
-
 async function promoteGovEvidenceObservation(idx) {
+  const row = govEvidenceState.queue[idx];
+  if (!row) return;
   if (row.promotion_guard?.message) {
     const confirmed = window.confirm(`${row.promotion_guard.message}\n\nContinue with promotion?`);
     if (!confirmed) return;
   }
-  if (!row) return;
   try {
-      body: { actor: getGovEvidenceActor(), resolution_note: row.promotion_guard?.message || 'Promoted from LCC evidence queue' }
+    await govEvidenceApi('promote-observation', {
       method: 'POST',
       query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
-      body: { actor: getGovEvidenceActor(), resolution_note: 'Promoted from LCC evidence queue' }
+      body: { actor: getGovEvidenceActor(), resolution_note: row.promotion_guard?.message || 'Promoted from LCC evidence queue' }
     });
     appendGovEvidenceNote(`Promoted evidence row: ${row.summary || row.observation_value || row.observation_type || 'observation'}`);
     showToast('Observation promoted', 'success');

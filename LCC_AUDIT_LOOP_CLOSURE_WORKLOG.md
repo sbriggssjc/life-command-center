@@ -323,3 +323,13 @@ Current behavior:
 
 Remaining gap:
 - This still needs a live screenshot test against a lead that already has a different matched contact.
+## 2026-03-27 Structured Current Contact Display
+
+Implemented in this pass:
+- The live gov evidence queue now renders the broker guard's current matched contact as a distinct secondary line beneath the warning.
+
+Current behavior:
+- Guarded broker rows now show both the warning sentence and a dedicated `Current matched contact:` line when that metadata is available.
+
+Remaining gap:
+- This still needs a live screenshot test to confirm the extra line improves operator decisions without cluttering the queue card.

@@ -1120,6 +1120,170 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts embedded email text from pdf payload streams when present', () => {
+    const embeddedEmail = [
+      'Subject: Embedded Approval',
+      'From: analyst@example.com',
+      'To: team@example.com',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'Approval granted for the amendment package.'
+    ].join('\r\n');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /message#2Frfc822 >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedEmail, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded Email Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedEmail123"',
+      '',
+      '--pdfEmbeddedEmail123',
+      'Content-Type: application/pdf; name="bundle-email.pdf"',
+      'Content-Disposition: attachment; filename="bundle-email.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedEmail123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-email.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-email\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Subject: Embedded Approval/);
+    assert.match(doc.normalized_text, /Embedded Payload: From: analyst@example.com/);
+    assert.match(doc.normalized_text, /Embedded Payload: Approval granted for the amendment package/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts generic zip text from embedded pdf payload streams when present', () => {
+    const embeddedZip = buildStoredZip([
+      { name: 'notes.txt', content: 'Embedded package note for renewal review' },
+      { name: 'rent-roll.csv', content: 'tenant,monthly_rent\nDialysis West,51000' },
+      { name: 'summary.json', content: '{"status":"approved","term":"10 years"}' }
+    ]);
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /application#2Fzip >>\nstream\n', 'latin1'),
+      embeddedZip,
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded ZIP Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedZip123"',
+      '',
+      '--pdfEmbeddedZip123',
+      'Content-Type: application/pdf; name="bundle-zip.pdf"',
+      'Content-Disposition: attachment; filename="bundle-zip.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedZip123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-zip.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-zip\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: notes\.txt/);
+    assert.match(doc.normalized_text, /Embedded Payload: Embedded package note for renewal review/);
+    assert.match(doc.normalized_text, /Embedded Payload: rent-roll\.csv/);
+    assert.match(doc.normalized_text, /Embedded Payload: Dialysis West,51000/);
+    assert.match(doc.normalized_text, /Embedded Payload: summary\.json/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts embedded rtf text from pdf payload streams when present', () => {
+    const embeddedRtf = String.raw`{\rtf1\ansi Embedded RTF Amendment\par Base Rent 61000\par Notice Period 90 Days}`;
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /application#2Frtf >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedRtf, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded RTF Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedRtf123"',
+      '',
+      '--pdfEmbeddedRtf123',
+      'Content-Type: application/pdf; name="bundle-rtf.pdf"',
+      'Content-Disposition: attachment; filename="bundle-rtf.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedRtf123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-rtf.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-rtf\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Embedded RTF Amendment/);
+    assert.match(doc.normalized_text, /Embedded Payload: Base Rent 61000/);
+    assert.match(doc.normalized_text, /Embedded Payload: Notice Period 90 Days/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts embedded calendar text from pdf payload streams when present', () => {
+    const embeddedIcs = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'SUMMARY:Lease Review Call',
+      'DTSTART:20260414T150000Z',
+      'DTEND:20260414T153000Z',
+      'LOCATION:Teams',
+      'DESCRIPTION:Review renewal pricing and notice dates',
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /text#2Fcalendar >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedIcs, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded ICS Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedIcs123"',
+      '',
+      '--pdfEmbeddedIcs123',
+      'Content-Type: application/pdf; name="bundle-ics.pdf"',
+      'Content-Disposition: attachment; filename="bundle-ics.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedIcs123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-ics.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-ics\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Lease Review Call/);
+    assert.match(doc.normalized_text, /Embedded Payload: Start: 20260414T150000Z/);
+    assert.match(doc.normalized_text, /Embedded Payload: Location: Teams/);
+    assert.match(doc.normalized_text, /Embedded Payload: Description: Review renewal pricing and notice dates/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('returns embedded pdf images as extracted attachments for email pdf bundles', () => {
     const imageBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     const pdfBuffer = Buffer.concat([

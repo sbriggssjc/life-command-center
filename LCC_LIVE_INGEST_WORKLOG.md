@@ -165,7 +165,11 @@
 - Extended PDF embedded-payload extraction to recognize richer payload types, including OOXML documents and common text-like subtypes, so embedded DOCX/XLSX/PPTX-style content can feed into the same preview pipeline.
 - Added PDF embedded-image extraction so image-like `/EmbeddedFile` payloads now surface as `extracted_attachments` for both direct PDF intake and PDF email attachments, feeding the existing OCR/multimodal path.
 - Extended PDF embedded-payload extraction to recognize legacy Office binaries as well, so embedded `.doc`/`.xls`/`.ppt` content now uses the same cleaned preview heuristics as direct legacy Office attachments.
+- Extended PDF embedded-payload extraction to recognize embedded email exports too, so packaged `.eml` content now flows through the same email normalizer instead of degrading to generic text-run extraction.
+- Added generic ZIP handling for embedded PDF payloads so non-OOXML archives can contribute readable text-like entries such as `.txt`, `.csv`, `.json`, `.html`, and nested `.eml` sidecars.
+- Added embedded RTF handling for PDF payloads so packaged `.rtf` content now converts to readable text instead of leaking control words through the generic fallback path.
+- Added embedded calendar handling for PDF payloads so packaged `.ics` content now converts to a cleaner event summary instead of falling back to raw RFC lines.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially additional non-Office embedded binary families or the remaining opaque PDF stream filters.
+- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially additional niche embedded binary families or the remaining opaque PDF stream filters.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
