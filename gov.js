@@ -73,25 +73,6 @@ async function govQuery(table, select, params = {}) {
   }
 }
 
-// Fast overview stats from materialized view (single row, <100ms)
-async function loadGovOverviewStats() {
-  try {
-    const res = await govQuery('mv_gov_overview_stats', '*', { limit: 1 });
-    if (res.data && res.data.length > 0) {
-      const s = res.data[0];
-      // Parse JSONB columns (PostgREST returns them as strings)
-      if (typeof s.lease_distribution === 'string') s.lease_distribution = JSON.parse(s.lease_distribution);
-      if (typeof s.top_agencies_by_count === 'string') s.top_agencies_by_count = JSON.parse(s.top_agencies_by_count);
-      if (typeof s.top_agencies_by_rent === 'string') s.top_agencies_by_rent = JSON.parse(s.top_agencies_by_rent);
-      if (typeof s.top_states_by_count === 'string') s.top_states_by_count = JSON.parse(s.top_states_by_count);
-      if (typeof s.top_states_by_rent === 'string') s.top_states_by_rent = JSON.parse(s.top_states_by_rent);
-      govData.overviewStats = s;
-      return true;
-    }
-  } catch (e) { console.warn('Fast overview stats unavailable, falling back to full load:', e); }
-  return false;
-}
-
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
 async function govQueryAll(table, select, params = {}) {
   let all = [], offset = 0;
@@ -134,10 +115,41 @@ function metricHTML(label, value, sub, color) {
 // DATA LOADING
 // ============================================================================
 
+// Fast-path: load pre-computed overview stats from materialized view (~100ms)
+// This renders the overview immediately while the full 20s data load runs in background
+let govOverviewStats = null;
+let govOverviewStatsLoading = false;
+
+async function loadGovOverviewStats() {
+  if (govOverviewStats || govOverviewStatsLoading) return;
+  govOverviewStatsLoading = true;
+  try {
+    const res = await govQuery('mv_gov_overview_stats', '*', { limit: 1 });
+    const rows = res.data || [];
+    if (rows.length > 0) {
+      govOverviewStats = rows[0];
+      console.log('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
+      // If we're on the overview tab, render immediately
+      if (typeof currentGovTab !== 'undefined' && currentGovTab === 'overview') {
+        renderGovTab();
+      }
+    }
+  } catch (e) {
+    console.warn('[Gov] mv_gov_overview_stats not available, will use full data load:', e.message);
+  }
+  govOverviewStatsLoading = false;
+}
+
 async function loadGovData() {
-  // Show loading indicator
+  // Kick off fast overview stats immediately (non-blocking)
+  // This renders the overview in ~100ms while the full data load takes 20s
+  if (!govOverviewStats && !govOverviewStatsLoading) {
+    loadGovOverviewStats();
+  }
+
+  // Show loading indicator (only if overview stats haven't rendered yet)
   const inner = document.getElementById('bizPageInner');
-  if (inner) {
+  if (inner && !govOverviewStats) {
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading government data...</p></div>';
   }
 
@@ -155,13 +167,8 @@ async function loadGovData() {
   govData.loans = [];
   
   showToast('Loading government data...', 'info');
-
+  
   try {
-    // ── Fast-path: load pre-computed overview stats first (<100ms) ──
-    await loadGovOverviewStats();
-    if (govData.overviewStats) {
-      console.log('GOV FAST STATS loaded in <100ms:', govData.overviewStats.total_properties, 'properties');
-    }
     // Load ALL ownership changes (paginated past PostgREST cap — 4500+ rows)
     const ownershipRes = await govQueryAll('ownership_history',
       'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
@@ -258,11 +265,23 @@ async function loadGovData() {
     );
     govData.properties = [{ count: propsRes.count || 0 }];
 
-    // Portfolio properties (16K rows) — deferred to lazy-load when needed
-    // Overview stats now served from mv_gov_overview_stats (single row, <100ms)
-    // portfolioProperties only needed by Research "intel" tab and Leases tab
-    // Both have their own lazy-load triggers, so skip the expensive fetch here
-    govData.portfolioProperties = [];
+    // Load property portfolio data for overview analytics (agency, lease term, rent, SF)
+    // Pull lightweight columns only — paginate to get all ~16K rows
+    // NOTE: PostgREST caps at 1000 rows per request regardless of limit param
+    try {
+      let allProps = [], offset = 0;
+      const pageSize = 1000;
+      while (true) {
+        const batch = await govQuery('properties',
+          'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type',
+          { limit: pageSize, offset }
+        );
+        allProps = allProps.concat(batch.data || []);
+        if (!batch.data || batch.data.length < pageSize) break;
+        offset += pageSize;
+      }
+      govData.portfolioProperties = allProps;
+    } catch (e) { console.warn('Portfolio properties load error:', e); govData.portfolioProperties = []; }
 
     // Load sales transactions
     // Paginate sales — 2600+ rows
@@ -3189,6 +3208,11 @@ function renderGovOverview() {
 
   let html = '<div style="padding:4px 0">';
 
+  // Show background loading indicator when using MV fast path
+  if (useMV && !govDataLoaded) {
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:8px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--text2)"><span class="spinner" style="width:14px;height:14px"></span> Loading detailed data in background...</div>';
+  }
+
   // ── STYLE ──
   html += `<style>
     .gov-info-card { background: var(--s2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; transition: all 0.15s; position: relative; overflow: hidden; }
@@ -3235,10 +3259,10 @@ function renderGovOverview() {
   }
 
   // ──────────────────────────────────────
-  // DATA COMPUTATIONS (fast-path from materialized view when available)
+  // DATA COMPUTATIONS
   // ──────────────────────────────────────
-  const mv = govData.overviewStats; // pre-computed stats from mv_gov_overview_stats
   const portfolio = govData.portfolioProperties || [];
+  const propCount = govData.properties[0]?.count || portfolio.length;
   const ownership = govData.ownership || [];
   const leads = govData.leads || [];
   const contacts = govData.contacts || [];
@@ -3250,56 +3274,34 @@ function renderGovOverview() {
   const now = new Date();
   const yearStart = new Date(now.getFullYear(), 0, 1);
 
-  // Portfolio aggregates — use MV when available, else compute from rows
-  let propCount, totalSF, propertiesWithSF, totalGrossRent, avgRentPSF, propertiesWithRentPSF;
-  let totalNOI, distinctAgencies;
-  let withTermCount, expiring1yr, expiring2yr, expiring5yr, longTerm, avgFirmTerm;
-  let topAgencies, topAgenciesByRent, topStates;
-  let leaseBuckets;
+  // Use materialized view stats when available (instant), fall back to computed values from full data
+  const mv = govOverviewStats;
+  const useMV = mv && portfolio.length === 0; // Use MV when full data hasn't loaded yet
 
-  if (mv) {
-    // ── Fast path: all stats pre-computed in <100ms ──
-    propCount = mv.total_properties;
-    totalSF = parseFloat(mv.total_sf);
-    propertiesWithSF = mv.properties_with_sf;
-    totalGrossRent = parseFloat(mv.total_gross_rent);
-    avgRentPSF = parseFloat(mv.avg_rent_psf) > 0 ? parseFloat(mv.avg_rent_psf).toFixed(2) : '—';
-    propertiesWithRentPSF = mv.properties_with_rent_psf;
-    totalNOI = parseFloat(mv.total_noi);
-    distinctAgencies = mv.agencies_tracked;
-    withTermCount = mv.properties_with_term;
-    expiring1yr = mv.expiring_lt_1yr;
-    expiring2yr = mv.expiring_lt_2yr;
-    expiring5yr = mv.term_2_5yr;
-    longTerm = mv.term_5plus;
-    avgFirmTerm = parseFloat(mv.avg_firm_term) > 0 ? parseFloat(mv.avg_firm_term).toFixed(1) : '—';
-    leaseBuckets = mv.lease_distribution || [];
-    // Agency/state breakdowns from JSONB
-    topAgencies = (mv.top_agencies_by_count || []).map(a => [a.name, { count: a.count, rent: parseFloat(a.rent), sf: parseFloat(a.sf), termSum: parseFloat(a.termSum), termCount: a.termCount }]);
-    topAgenciesByRent = (mv.top_agencies_by_rent || []).map(a => [a.name, { count: a.count, rent: parseFloat(a.rent) }]);
-    topStates = (mv.top_states_by_count || []).map(s => [s.name, { count: s.count, rent: parseFloat(s.rent), sf: parseFloat(s.sf) }]);
-  } else {
-    // ── Slow path: compute from full portfolio array ──
-    propCount = govData.properties[0]?.count || portfolio.length;
-    const withSF = portfolio.filter(p => p.sf_leased > 0);
-    propertiesWithSF = withSF.length;
-    totalSF = withSF.reduce((s, p) => s + (p.sf_leased || 0), 0);
-    totalGrossRent = portfolio.reduce((s, p) => s + (p.gross_rent || 0), 0);
-    const withRentPSF = portfolio.filter(p => p.gross_rent_psf > 0);
-    propertiesWithRentPSF = withRentPSF.length;
-    avgRentPSF = withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—';
-    totalNOI = portfolio.reduce((s, p) => s + (p.noi || 0), 0);
-    distinctAgencies = new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
-    const withTerm = portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
-    withTermCount = withTerm.length;
-    expiring1yr = withTerm.filter(p => p.firm_term_remaining <= 1).length;
-    expiring2yr = withTerm.filter(p => p.firm_term_remaining <= 2).length;
-    expiring5yr = withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
-    longTerm = withTerm.filter(p => p.firm_term_remaining > 5).length;
-    avgFirmTerm = withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—';
-    leaseBuckets = null; // will use inline computation below
-    // Agency breakdown
-    const agencyMap = {};
+  // Portfolio aggregates
+  const withSF = useMV ? [] : portfolio.filter(p => p.sf_leased > 0);
+  const totalSF = useMV ? (mv.total_sf || mv.total_sf_leased || 0) : withSF.reduce((s, p) => s + (p.sf_leased || 0), 0);
+  const totalGrossRent = useMV ? (mv.total_gross_rent || 0) : portfolio.reduce((s, p) => s + (p.gross_rent || 0), 0);
+  const withRentPSF = useMV ? [] : portfolio.filter(p => p.gross_rent_psf > 0);
+  const avgRentPSF = useMV ? (mv.avg_rent_psf ? Number(mv.avg_rent_psf).toFixed(2) : '—') : (withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—');
+  const totalNOI = useMV ? (mv.total_noi || 0) : portfolio.reduce((s, p) => s + (p.noi || 0), 0);
+  const distinctAgencies = useMV ? (mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+  const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
+  const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
+  const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
+
+  // Lease expiration analysis
+  const withTerm = useMV ? [] : portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
+  const expiring1yr = useMV ? (mv.expiring_1yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 1).length;
+  const expiring2yr = useMV ? (mv.expiring_2yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 2).length;
+  const expiring5yr = useMV ? (mv.expiring_2_5yr || 0) : withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
+  const longTerm = useMV ? (mv.long_term_5plus || 0) : withTerm.filter(p => p.firm_term_remaining > 5).length;
+  const avgFirmTerm = useMV ? (mv.avg_firm_term ? Number(mv.avg_firm_term).toFixed(1) : '—') : (withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—');
+  const withTermCount = useMV ? (mv.properties_with_term || withTerm.length) : withTerm.length;
+
+  // Agency breakdown (top 10 by count) — only available with full data
+  const agencyMap = {};
+  if (!useMV) {
     portfolio.forEach(p => {
       const a = p.agency || 'Unknown';
       if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
@@ -3308,10 +3310,24 @@ function renderGovOverview() {
       agencyMap[a].sf += (p.sf_leased || 0);
       if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
     });
+  }
+  // Try to use MV agency breakdown if available (JSON columns)
+  let topAgencies, topAgenciesByRent;
+  if (useMV && mv.top_agencies_json) {
+    try {
+      const parsed = typeof mv.top_agencies_json === 'string' ? JSON.parse(mv.top_agencies_json) : mv.top_agencies_json;
+      topAgencies = (parsed || []).map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
+      topAgenciesByRent = [...topAgencies].sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
+      topAgencies = topAgencies.slice(0, 12);
+    } catch { topAgencies = []; topAgenciesByRent = []; }
+  } else {
     topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
     topAgenciesByRent = Object.entries(agencyMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
-    // State breakdown
-    const stateMap = {};
+  }
+
+  // State breakdown — only available with full data or MV JSON
+  const stateMap = {};
+  if (!useMV) {
     portfolio.forEach(p => {
       const s = p.state || 'UNK';
       if (!stateMap[s]) stateMap[s] = { count: 0, rent: 0, sf: 0 };
@@ -3319,6 +3335,14 @@ function renderGovOverview() {
       stateMap[s].rent += (p.gross_rent || 0);
       stateMap[s].sf += (p.sf_leased || 0);
     });
+  }
+  let topStates;
+  if (useMV && mv.top_states_json) {
+    try {
+      const parsed = typeof mv.top_states_json === 'string' ? JSON.parse(mv.top_states_json) : mv.top_states_json;
+      topStates = (parsed || []).map(s => [s.state, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
+    } catch { topStates = []; }
+  } else {
     topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
   }
 
@@ -3327,10 +3351,10 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Portfolio at a Glance', '🏛️', 'search');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Total Properties', value: fmtN(propCount), sub: 'government-leased nationwide', color: 'blue', tab: 'search' });
-  html += govCard({ title: 'Total SF Leased', value: fmtN(Math.round(totalSF / 1e6)) + 'M', sub: fmtN(propertiesWithSF) + ' properties with data', color: 'green', tab: 'search' });
+  html += govCard({ title: 'Total Properties', value: fmtN(totalPropCount), sub: 'government-leased nationwide', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Total SF Leased', value: fmtN(Math.round(totalSF / 1e6)) + 'M', sub: fmtN(totalSFCount) + ' properties with data', color: 'green', tab: 'search' });
   html += govCard({ title: 'Total Gross Rent', value: '$' + fmtN(Math.round(totalGrossRent / 1e9)) + 'B', sub: 'annual government rent', color: 'cyan', tab: 'search' });
-  html += govCard({ title: 'Avg Rent / SF', value: '$' + avgRentPSF, sub: fmtN(propertiesWithRentPSF) + ' properties', color: 'purple', tab: 'search' });
+  html += govCard({ title: 'Avg Rent / SF', value: '$' + avgRentPSF, sub: fmtN(totalRentPSFCount) + ' properties', color: 'purple', tab: 'search' });
   html += govCard({ title: 'Agencies Tracked', value: fmtN(distinctAgencies), sub: 'distinct tenants', color: 'yellow', tab: 'search' });
   html += '</div>';
 
@@ -3338,7 +3362,7 @@ function renderGovOverview() {
   if (totalNOI > 0) {
     html += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
     html += govCard({ title: 'Total NOI', value: '$' + fmtN(Math.round(totalNOI / 1e6)) + 'M', sub: 'net operating income', color: 'green', tab: 'search' });
-    const avgNOI = propertiesWithSF > 0 ? totalNOI / propertiesWithSF : 0;
+    const avgNOI = withSF.length > 0 ? totalNOI / withSF.length : 0;
     html += govCard({ title: 'Avg NOI / Property', value: avgNOI > 0 ? '$' + fmtN(Math.round(avgNOI / 1000)) + 'K' : '—', sub: 'across portfolio', color: 'blue', tab: 'search' });
     html += govCard({ title: 'Contacts', value: fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
     html += '</div>';
@@ -3356,27 +3380,19 @@ function renderGovOverview() {
   html += govCard({ title: 'Avg Firm Term', value: avgFirmTerm + ' yrs', sub: fmtN(withTermCount) + ' with term data', color: 'blue', tab: 'search' });
   html += '</div>';
 
-  // Expiration timeline bar
-  if (withTermCount > 0) {
+  // Expiration timeline bar (requires full portfolio data or MV expiration JSON)
+  if (withTermCount > 0 && !useMV) {
     html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lease Expiration Distribution</div>';
-    let buckets;
-    if (leaseBuckets && leaseBuckets.length > 0) {
-      // Use pre-computed buckets from materialized view
-      buckets = leaseBuckets;
-    } else {
-      // Compute from portfolio rows
-      const withTerm = portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
-      buckets = [
-        { label: 'Expired / < 0 yrs', count: withTerm.filter(p => p.firm_term_remaining < 0).length, color: '#ef4444' },
-        { label: '0 – 1 years', count: withTerm.filter(p => p.firm_term_remaining >= 0 && p.firm_term_remaining <= 1).length, color: '#f87171' },
-        { label: '1 – 2 years', count: withTerm.filter(p => p.firm_term_remaining > 1 && p.firm_term_remaining <= 2).length, color: '#fb923c' },
-        { label: '2 – 3 years', count: withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 3).length, color: '#fbbf24' },
-        { label: '3 – 5 years', count: withTerm.filter(p => p.firm_term_remaining > 3 && p.firm_term_remaining <= 5).length, color: '#34d399' },
-        { label: '5 – 10 years', count: withTerm.filter(p => p.firm_term_remaining > 5 && p.firm_term_remaining <= 10).length, color: '#22d3ee' },
-        { label: '10+ years', count: withTerm.filter(p => p.firm_term_remaining > 10).length, color: '#60a5fa' },
-      ];
-    }
+    const buckets = [
+      { label: 'Expired / < 0 yrs', count: withTerm.filter(p => p.firm_term_remaining < 0).length, color: '#ef4444' },
+      { label: '0 – 1 years', count: withTerm.filter(p => p.firm_term_remaining >= 0 && p.firm_term_remaining <= 1).length, color: '#f87171' },
+      { label: '1 – 2 years', count: withTerm.filter(p => p.firm_term_remaining > 1 && p.firm_term_remaining <= 2).length, color: '#fb923c' },
+      { label: '2 – 3 years', count: withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 3).length, color: '#fbbf24' },
+      { label: '3 – 5 years', count: withTerm.filter(p => p.firm_term_remaining > 3 && p.firm_term_remaining <= 5).length, color: '#34d399' },
+      { label: '5 – 10 years', count: withTerm.filter(p => p.firm_term_remaining > 5 && p.firm_term_remaining <= 10).length, color: '#22d3ee' },
+      { label: '10+ years', count: withTerm.filter(p => p.firm_term_remaining > 10).length, color: '#60a5fa' },
+    ];
     const maxBucket = Math.max(...buckets.map(b => b.count));
     html += inlineBar(buckets.map(b => ({
       label: b.label, value: b.count, display: fmtN(b.count), barColor: b.color, labelWidth: 100, valueWidth: 40
@@ -3444,14 +3460,7 @@ function renderGovOverview() {
     html += '</div>';
 
     // By rent
-    let topStatesByRent;
-    if (mv && mv.top_states_by_rent) {
-      topStatesByRent = mv.top_states_by_rent.map(s => [s.name, { rent: parseFloat(s.rent) }]);
-    } else {
-      const stateMap2 = {};
-      portfolio.forEach(p => { const s = p.state || 'UNK'; if (!stateMap2[s]) stateMap2[s] = { rent: 0 }; stateMap2[s].rent += (p.gross_rent || 0); });
-      topStatesByRent = Object.entries(stateMap2).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
-    }
+    const topStatesByRent = Object.entries(stateMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
     html += '<div class="gov-info-card" style="padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Annual Rent</div>';
     const maxStRent = topStatesByRent[0][1].rent;
@@ -5507,4 +5516,68 @@ async function execGovSearch() {
       govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',new_owner.ilike.' + like + ',prior_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }),
       govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ',contact_name.ilike.' + like + ')', limit: 25 }),
       govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ')', limit: 25 }),
-      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',contact_type.ilike.' + like + ',phone.i
+      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',contact_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
+      govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency.ilike.' + like + ')', limit: 25 })
+    ]);
+
+    govSearchResults = {
+      ownership: ownership.data || [],
+      leads: leads.data || [],
+      listings: listings.data || [],
+      contacts: contacts.data || [],
+      properties: properties.data || []
+    };
+  } catch (err) {
+    console.error('Gov search error:', err);
+    govSearchResults = { ownership: [], leads: [], listings: [], contacts: [], properties: [] };
+  }
+
+  govSearching = false;
+  renderGovTab();
+}
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
+// Helper to programmatically navigate to gov sub-tabs
+function goToGovTab(tabName) {
+  currentGovTab = tabName;
+  if (typeof window.syncDomainTabGroup === 'function') {
+    window.syncDomainTabGroup('government', tabName);
+  } else {
+    document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
+    const btn = document.querySelector('[data-gov-tab="' + tabName + '"]');
+    if (btn) btn.classList.add('active');
+  }
+  if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
+    renderGovTab();
+  }
+}
+
+window.goToGovTab = goToGovTab;
+window.renderGovDetailBody = renderGovDetailBody;
+window.saveGovDetailLead = saveGovDetailLead;
+window.renderGovSearch = renderGovSearch;
+window.execGovSearch = execGovSearch;
+window.renderGovSales = renderGovSales;
+window.renderGovLeases = renderGovLeases;
+window.renderGovLoans = renderGovLoans;
+window.renderGovPlayers = renderGovPlayers;
+window.renderPlayersTable = renderPlayersTable;
+window.renderGovOverview = renderGovOverview;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

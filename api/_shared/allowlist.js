@@ -29,6 +29,8 @@ export const GOV_READ_TABLES = new Set([
   'v_ownership_current',
   'v_property_intel',
   'v_property_history',
+  // Overview pre-computed stats
+  'mv_gov_overview_stats',
   // Unified Contact Hub
   'unified_contacts',
   'contact_change_log',
