@@ -150,7 +150,8 @@
 - Added a top-level review toolbar summary that aggregates the currently selected operation gates, showing selected-count plus OCR/citation/retry gate status as pending or acknowledged without requiring group expansion.
 - Tightened the legacy binary attachment heuristics for `.doc`, `.xls`, and `.ppt` so previews preserve cleaner business text and more table-like rows while filtering out more OLE/container noise, with updated regression coverage for the legacy Excel row/header case.
 - Improved server-side PDF text preview heuristics so attachment normalization can extract cleaner text from `BT`/`ET` text blocks, `TJ` arrays, and escaped PDF literal strings instead of relying mainly on broad ASCII runs.
+- Added PDF preview de-duplication across repeated text fragments and multi-block extracts so recurring headers or duplicated lease lines do not get overrepresented in normalized attachment text.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths.
+- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially noisier PDFs with multiple content streams.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

@@ -293,6 +293,56 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('deduplicates repeated pdf text fragments across multiple text blocks', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Page >>',
+      'stream',
+      'BT',
+      '(Lease Abstract) Tj',
+      '(Base Rent 17500) Tj',
+      'ET',
+      'BT',
+      '(Lease Abstract) Tj',
+      '(Base Rent 17500) Tj',
+      '(Termination Option 2 x 5 years) Tj',
+      'ET',
+      'endstream',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Dedup Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfDup123"',
+      '',
+      '--pdfDup123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached repeated abstract.',
+      '--pdfDup123',
+      'Content-Type: application/pdf; name="repeated.pdf"',
+      'Content-Disposition: attachment; filename="repeated.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfDup123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-dedup-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    const repeatedMatches = doc.normalized_text.match(/Lease Abstract/g) || [];
+    assert.equal(repeatedMatches.length, 1);
+    assert.match(doc.normalized_text, /Base Rent 17500/);
+    assert.match(doc.normalized_text, /Termination Option 2 x 5 years/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {
