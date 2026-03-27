@@ -301,3 +301,13 @@ Current behavior:
 
 Remaining gap:
 - The live runtime still needs a browser smoke test with a real screenshot to confirm broker rows render and promote correctly.
+## 2026-03-27 Broker Review Cues
+
+Implemented in this pass:
+- The live gov evidence queue in `gov.js` now renders backend-provided `review_cues` beneath pending observation rows.
+
+Current behavior:
+- Broker rows can now show hints like likely existing-contact matches or whether the lead already has a matched contact before promotion.
+
+Remaining gap:
+- This still needs live validation against a real broker screenshot to tune the usefulness of the cues.

@@ -603,15 +603,57 @@ function extractPdfOperatorTextLines(latin = '') {
 }
 
 function extractCompressedPdfOperatorTextLines(latin = '') {
-  const matches = Array.from(String(latin || '').matchAll(/<<[\s\S]*?\/FlateDecode[\s\S]*?>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  const matches = Array.from(String(latin || '').matchAll(/(<<[\s\S]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
   const lines = [];
   matches.forEach((match) => {
-    const raw = Buffer.from(String(match[1] || ''), 'latin1');
-    const decoded = tryInflatePdfStream(raw);
+    const dict = String(match[1] || '');
+    const raw = Buffer.from(String(match[2] || ''), 'latin1');
+    const decoded = decodePdfStreamByFilters(raw, extractPdfStreamFilters(dict));
     if (!decoded) return;
     lines.push(...extractPdfOperatorTextLines(decoded.toString('latin1')));
   });
   return lines;
+}
+
+function extractPdfStreamFilters(dict = '') {
+  const text = String(dict || '');
+  const arrayMatch = text.match(/\/Filter\s*\[([\s\S]*?)\]/);
+  if (arrayMatch) {
+    return Array.from(String(arrayMatch[1] || '').matchAll(/\/([A-Za-z0-9]+)/g))
+      .map((match) => String(match[1] || '').trim())
+      .filter(Boolean);
+  }
+  const singleMatch = text.match(/\/Filter\s*\/([A-Za-z0-9]+)/);
+  return singleMatch ? [String(singleMatch[1] || '').trim()] : [];
+}
+
+function decodePdfStreamByFilters(buffer, filters = []) {
+  let current = Buffer.isBuffer(buffer) ? buffer : null;
+  const chain = Array.isArray(filters) ? filters : [];
+  for (const filter of chain) {
+    if (!current) return null;
+    const name = String(filter || '').trim();
+    if (!name) continue;
+    if (name === 'ASCIIHexDecode' || name === 'AHx') {
+      current = decodePdfAsciiHexBuffer(current);
+      continue;
+    }
+    if (name === 'ASCII85Decode' || name === 'A85') {
+      current = decodePdfAscii85Buffer(current);
+      continue;
+    }
+    if (name === 'FlateDecode' || name === 'Fl') {
+      current = tryInflatePdfStream(current);
+      continue;
+    }
+    if (name === 'RunLengthDecode' || name === 'RL') {
+      current = decodePdfRunLengthBuffer(current);
+      continue;
+    }
+    return null;
+  }
+  if (!chain.length) return tryInflatePdfStream(current);
+  return current;
 }
 
 function tryInflatePdfStream(buffer) {
@@ -625,6 +667,70 @@ function tryInflatePdfStream(buffer) {
       return null;
     }
   }
+}
+
+function decodePdfAsciiHexBuffer(buffer) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString('latin1') : String(buffer || '');
+  const body = text.split('>')[0] || '';
+  const clean = body.replace(/[^0-9A-Fa-f]/g, '');
+  const padded = clean.length % 2 ? `${clean}0` : clean;
+  return Buffer.from(padded, 'hex');
+}
+
+function decodePdfAscii85Buffer(buffer) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString('latin1') : String(buffer || '');
+  const clean = text
+    .replace(/<~/g, '')
+    .replace(/~>/g, '')
+    .replace(/\s+/g, '');
+  const bytes = [];
+  let chunk = [];
+  for (const char of clean) {
+    if (char === 'z' && !chunk.length) {
+      bytes.push(0, 0, 0, 0);
+      continue;
+    }
+    const code = char.charCodeAt(0);
+    if (code < 33 || code > 117) continue;
+    chunk.push(code - 33);
+    if (chunk.length === 5) {
+      let value = 0;
+      chunk.forEach((digit) => { value = value * 85 + digit; });
+      bytes.push((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+      chunk = [];
+    }
+  }
+  if (chunk.length) {
+    const padLength = 5 - chunk.length;
+    while (chunk.length < 5) chunk.push(84);
+    let value = 0;
+    chunk.forEach((digit) => { value = value * 85 + digit; });
+    const tail = [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+    bytes.push(...tail.slice(0, 4 - padLength));
+  }
+  return Buffer.from(bytes);
+}
+
+function decodePdfRunLengthBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return null;
+  const bytes = [];
+  for (let index = 0; index < buffer.length; index += 1) {
+    const control = buffer[index];
+    if (control === 128) break;
+    if (control <= 127) {
+      const length = control + 1;
+      const end = Math.min(index + 1 + length, buffer.length);
+      for (let cursor = index + 1; cursor < end; cursor += 1) bytes.push(buffer[cursor]);
+      index += length;
+      continue;
+    }
+    const repeat = 257 - control;
+    const value = buffer[index + 1];
+    if (typeof value !== 'number') break;
+    for (let count = 0; count < repeat; count += 1) bytes.push(value);
+    index += 1;
+  }
+  return Buffer.from(bytes);
 }
 
 function dedupePdfPreviewLines(lines = []) {

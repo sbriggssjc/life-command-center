@@ -63,6 +63,67 @@ function buildStoredZip(entries) {
   return Buffer.concat([...localParts, centralDirectory, end]);
 }
 
+function encodeAscii85(buffer) {
+  const source = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  let output = '';
+  for (let index = 0; index < source.length; index += 4) {
+    const chunk = source.subarray(index, index + 4);
+    if (chunk.length === 4 && chunk[0] === 0 && chunk[1] === 0 && chunk[2] === 0 && chunk[3] === 0) {
+      output += 'z';
+      continue;
+    }
+    const padded = Buffer.alloc(4);
+    chunk.copy(padded);
+    let value = padded.readUInt32BE(0);
+    const chars = new Array(5);
+    for (let i = 4; i >= 0; i--) {
+      chars[i] = String.fromCharCode((value % 85) + 33);
+      value = Math.floor(value / 85);
+    }
+    output += chars.slice(0, chunk.length + 1).join('');
+  }
+  return `<~${output}~>`;
+}
+
+function encodeRunLength(buffer) {
+  const source = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const bytes = [];
+  let index = 0;
+  while (index < source.length) {
+    let repeatLength = 1;
+    while (
+      index + repeatLength < source.length
+      && source[index + repeatLength] === source[index]
+      && repeatLength < 128
+    ) {
+      repeatLength += 1;
+    }
+    if (repeatLength >= 3) {
+      bytes.push(257 - repeatLength, source[index]);
+      index += repeatLength;
+      continue;
+    }
+    const literalStart = index;
+    index += 1;
+    while (index < source.length) {
+      let nextRepeatLength = 1;
+      while (
+        index + nextRepeatLength < source.length
+        && source[index + nextRepeatLength] === source[index]
+        && nextRepeatLength < 128
+      ) {
+        nextRepeatLength += 1;
+      }
+      if (nextRepeatLength >= 3 || (index - literalStart) >= 128) break;
+      index += 1;
+    }
+    const literal = source.subarray(literalStart, index);
+    bytes.push(literal.length - 1, ...literal);
+  }
+  bytes.push(128);
+  return Buffer.from(bytes);
+}
+
 describe('normalizeLiveIngestDocument', () => {
   it('strips html into readable text', () => {
     const doc = normalizeLiveIngestDocument({
@@ -436,6 +497,148 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /compressed\.pdf \(application\/pdf\)/);
     assert.match(doc.normalized_text, /Compressed Lease Summary/);
     assert.match(doc.normalized_text, /Annual Rent 210000/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text from ASCIIHex encoded pdf streams', () => {
+    const hexStream = Buffer.from([
+      'BT',
+      '(Hex Filter Summary) Tj',
+      '[(Monthly Rent ) 40 (18500)] TJ',
+      'ET'
+    ].join('\n'), 'utf8').toString('hex') + '>';
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 96 /Filter /ASCIIHexDecode >>',
+      'stream',
+      hexStream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF ASCIIHex Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfHexFilter123"',
+      '',
+      '--pdfHexFilter123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached hex-filter abstract.',
+      '--pdfHexFilter123',
+      'Content-Type: application/pdf; name="hex-filter.pdf"',
+      'Content-Disposition: attachment; filename="hex-filter.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfHexFilter123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-asciihex-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /hex-filter\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Hex Filter Summary/);
+    assert.match(doc.normalized_text, /Monthly Rent 18500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text from ASCII85 and Flate encoded pdf streams', () => {
+    const flated = deflateSync(Buffer.from([
+      'BT',
+      '(Encoded Stream Summary) Tj',
+      '<4E65742052656E74203232303030> Tj',
+      'ET'
+    ].join('\n'), 'utf8'));
+    const ascii85Stream = encodeAscii85(flated);
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 96 /Filter [/ASCII85Decode /FlateDecode] >>',
+      'stream',
+      ascii85Stream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF ASCII85 Flate Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfA85Flate123"',
+      '',
+      '--pdfA85Flate123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached encoded abstract.',
+      '--pdfA85Flate123',
+      'Content-Type: application/pdf; name="encoded-filter.pdf"',
+      'Content-Disposition: attachment; filename="encoded-filter.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfA85Flate123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-ascii85-flate-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /encoded-filter\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Encoded Stream Summary/);
+    assert.match(doc.normalized_text, /Net Rent 22000/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text from RunLength encoded pdf streams', () => {
+    const runLengthStream = encodeRunLength(Buffer.from([
+      'BT',
+      '(RunLength Summary) Tj',
+      '[(Annual Escalation ) 20 (3%)] TJ',
+      'ET'
+    ].join('\n'), 'utf8')).toString('latin1');
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 96 /Filter /RunLengthDecode >>',
+      'stream',
+      runLengthStream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF RunLength Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfRunLength123"',
+      '',
+      '--pdfRunLength123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached run-length abstract.',
+      '--pdfRunLength123',
+      'Content-Type: application/pdf; name="runlength.pdf"',
+      'Content-Disposition: attachment; filename="runlength.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfRunLength123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-runlength-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /runlength\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /RunLength Summary/);
+    assert.match(doc.normalized_text, /Annual Escalation 3%/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
