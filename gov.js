@@ -115,10 +115,41 @@ function metricHTML(label, value, sub, color) {
 // DATA LOADING
 // ============================================================================
 
+// Fast-path: load pre-computed overview stats from materialized view (~100ms)
+// This renders the overview immediately while the full 20s data load runs in background
+let govOverviewStats = null;
+let govOverviewStatsLoading = false;
+
+async function loadGovOverviewStats() {
+  if (govOverviewStats || govOverviewStatsLoading) return;
+  govOverviewStatsLoading = true;
+  try {
+    const res = await govQuery('mv_gov_overview_stats', '*', { limit: 1 });
+    const rows = res.data || [];
+    if (rows.length > 0) {
+      govOverviewStats = rows[0];
+      console.log('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
+      // If we're on the overview tab, render immediately
+      if (typeof currentGovTab !== 'undefined' && currentGovTab === 'overview') {
+        renderGovTab();
+      }
+    }
+  } catch (e) {
+    console.warn('[Gov] mv_gov_overview_stats not available, will use full data load:', e.message);
+  }
+  govOverviewStatsLoading = false;
+}
+
 async function loadGovData() {
-  // Show loading indicator
+  // Kick off fast overview stats immediately (non-blocking)
+  // This renders the overview in ~100ms while the full data load takes 20s
+  if (!govOverviewStats && !govOverviewStatsLoading) {
+    loadGovOverviewStats();
+  }
+
+  // Show loading indicator (only if overview stats haven't rendered yet)
   const inner = document.getElementById('bizPageInner');
-  if (inner) {
+  if (inner && !govOverviewStats) {
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading government data...</p></div>';
   }
 
@@ -3177,6 +3208,11 @@ function renderGovOverview() {
 
   let html = '<div style="padding:4px 0">';
 
+  // Show background loading indicator when using MV fast path
+  if (useMV && !govDataLoaded) {
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:8px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--text2)"><span class="spinner" style="width:14px;height:14px"></span> Loading detailed data in background...</div>';
+  }
+
   // ── STYLE ──
   html += `<style>
     .gov-info-card { background: var(--s2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; transition: all 0.15s; position: relative; overflow: hidden; }
@@ -3238,56 +3274,87 @@ function renderGovOverview() {
   const now = new Date();
   const yearStart = new Date(now.getFullYear(), 0, 1);
 
+  // Use materialized view stats when available (instant), fall back to computed values from full data
+  const mv = govOverviewStats;
+  const useMV = mv && portfolio.length === 0; // Use MV when full data hasn't loaded yet
+
   // Portfolio aggregates
-  const withSF = portfolio.filter(p => p.sf_leased > 0);
-  const totalSF = withSF.reduce((s, p) => s + (p.sf_leased || 0), 0);
-  const totalGrossRent = portfolio.reduce((s, p) => s + (p.gross_rent || 0), 0);
-  const withRentPSF = portfolio.filter(p => p.gross_rent_psf > 0);
-  const avgRentPSF = withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—';
-  const totalNOI = portfolio.reduce((s, p) => s + (p.noi || 0), 0);
-  const distinctAgencies = new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+  const withSF = useMV ? [] : portfolio.filter(p => p.sf_leased > 0);
+  const totalSF = useMV ? (mv.total_sf || mv.total_sf_leased || 0) : withSF.reduce((s, p) => s + (p.sf_leased || 0), 0);
+  const totalGrossRent = useMV ? (mv.total_gross_rent || 0) : portfolio.reduce((s, p) => s + (p.gross_rent || 0), 0);
+  const withRentPSF = useMV ? [] : portfolio.filter(p => p.gross_rent_psf > 0);
+  const avgRentPSF = useMV ? (mv.avg_rent_psf ? Number(mv.avg_rent_psf).toFixed(2) : '—') : (withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—');
+  const totalNOI = useMV ? (mv.total_noi || 0) : portfolio.reduce((s, p) => s + (p.noi || 0), 0);
+  const distinctAgencies = useMV ? (mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+  const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
+  const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
+  const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
 
   // Lease expiration analysis
-  const withTerm = portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
-  const expiring1yr = withTerm.filter(p => p.firm_term_remaining <= 1).length;
-  const expiring2yr = withTerm.filter(p => p.firm_term_remaining <= 2).length;
-  const expiring5yr = withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
-  const longTerm = withTerm.filter(p => p.firm_term_remaining > 5).length;
-  const avgFirmTerm = withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—';
+  const withTerm = useMV ? [] : portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
+  const expiring1yr = useMV ? (mv.expiring_1yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 1).length;
+  const expiring2yr = useMV ? (mv.expiring_2yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 2).length;
+  const expiring5yr = useMV ? (mv.expiring_2_5yr || 0) : withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
+  const longTerm = useMV ? (mv.long_term_5plus || 0) : withTerm.filter(p => p.firm_term_remaining > 5).length;
+  const avgFirmTerm = useMV ? (mv.avg_firm_term ? Number(mv.avg_firm_term).toFixed(1) : '—') : (withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—');
+  const withTermCount = useMV ? (mv.properties_with_term || withTerm.length) : withTerm.length;
 
-  // Agency breakdown (top 10 by count)
+  // Agency breakdown (top 10 by count) — only available with full data
   const agencyMap = {};
-  portfolio.forEach(p => {
-    const a = p.agency || 'Unknown';
-    if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
-    agencyMap[a].count++;
-    agencyMap[a].rent += (p.gross_rent || 0);
-    agencyMap[a].sf += (p.sf_leased || 0);
-    if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
-  });
-  const topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
-  const topAgenciesByRent = Object.entries(agencyMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
+  if (!useMV) {
+    portfolio.forEach(p => {
+      const a = p.agency || 'Unknown';
+      if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
+      agencyMap[a].count++;
+      agencyMap[a].rent += (p.gross_rent || 0);
+      agencyMap[a].sf += (p.sf_leased || 0);
+      if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
+    });
+  }
+  // Try to use MV agency breakdown if available (JSON columns)
+  let topAgencies, topAgenciesByRent;
+  if (useMV && mv.top_agencies_json) {
+    try {
+      const parsed = typeof mv.top_agencies_json === 'string' ? JSON.parse(mv.top_agencies_json) : mv.top_agencies_json;
+      topAgencies = (parsed || []).map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
+      topAgenciesByRent = [...topAgencies].sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
+      topAgencies = topAgencies.slice(0, 12);
+    } catch { topAgencies = []; topAgenciesByRent = []; }
+  } else {
+    topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
+    topAgenciesByRent = Object.entries(agencyMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
+  }
 
-  // State breakdown
+  // State breakdown — only available with full data or MV JSON
   const stateMap = {};
-  portfolio.forEach(p => {
-    const s = p.state || 'UNK';
-    if (!stateMap[s]) stateMap[s] = { count: 0, rent: 0, sf: 0 };
-    stateMap[s].count++;
-    stateMap[s].rent += (p.gross_rent || 0);
-    stateMap[s].sf += (p.sf_leased || 0);
-  });
-  const topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
+  if (!useMV) {
+    portfolio.forEach(p => {
+      const s = p.state || 'UNK';
+      if (!stateMap[s]) stateMap[s] = { count: 0, rent: 0, sf: 0 };
+      stateMap[s].count++;
+      stateMap[s].rent += (p.gross_rent || 0);
+      stateMap[s].sf += (p.sf_leased || 0);
+    });
+  }
+  let topStates;
+  if (useMV && mv.top_states_json) {
+    try {
+      const parsed = typeof mv.top_states_json === 'string' ? JSON.parse(mv.top_states_json) : mv.top_states_json;
+      topStates = (parsed || []).map(s => [s.state, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
+    } catch { topStates = []; }
+  } else {
+    topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
+  }
 
   // ═══════════════════════════════════════════════
   // SECTION 1: PORTFOLIO AT A GLANCE
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Portfolio at a Glance', '🏛️', 'search');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Total Properties', value: fmtN(propCount), sub: 'government-leased nationwide', color: 'blue', tab: 'search' });
-  html += govCard({ title: 'Total SF Leased', value: fmtN(Math.round(totalSF / 1e6)) + 'M', sub: fmtN(withSF.length) + ' properties with data', color: 'green', tab: 'search' });
+  html += govCard({ title: 'Total Properties', value: fmtN(totalPropCount), sub: 'government-leased nationwide', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Total SF Leased', value: fmtN(Math.round(totalSF / 1e6)) + 'M', sub: fmtN(totalSFCount) + ' properties with data', color: 'green', tab: 'search' });
   html += govCard({ title: 'Total Gross Rent', value: '$' + fmtN(Math.round(totalGrossRent / 1e9)) + 'B', sub: 'annual government rent', color: 'cyan', tab: 'search' });
-  html += govCard({ title: 'Avg Rent / SF', value: '$' + avgRentPSF, sub: fmtN(withRentPSF.length) + ' properties', color: 'purple', tab: 'search' });
+  html += govCard({ title: 'Avg Rent / SF', value: '$' + avgRentPSF, sub: fmtN(totalRentPSFCount) + ' properties', color: 'purple', tab: 'search' });
   html += govCard({ title: 'Agencies Tracked', value: fmtN(distinctAgencies), sub: 'distinct tenants', color: 'yellow', tab: 'search' });
   html += '</div>';
 
@@ -3306,15 +3373,15 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Lease Expiration Risk', '⏰', 'pipeline');
   html += '<div class="gov-grid gov-grid-5">';
-  html += govCard({ title: 'Expiring < 1 Year', value: fmtN(expiring1yr), sub: withTerm.length > 0 ? (expiring1yr/withTerm.length*100).toFixed(1) + '% of portfolio' : '', color: 'red', tab: 'pipeline' });
-  html += govCard({ title: 'Expiring < 2 Years', value: fmtN(expiring2yr), sub: withTerm.length > 0 ? (expiring2yr/withTerm.length*100).toFixed(1) + '% of portfolio' : '', color: 'orange', tab: 'pipeline' });
+  html += govCard({ title: 'Expiring < 1 Year', value: fmtN(expiring1yr), sub: withTermCount > 0 ? (expiring1yr/withTermCount*100).toFixed(1) + '% of portfolio' : '', color: 'red', tab: 'pipeline' });
+  html += govCard({ title: 'Expiring < 2 Years', value: fmtN(expiring2yr), sub: withTermCount > 0 ? (expiring2yr/withTermCount*100).toFixed(1) + '% of portfolio' : '', color: 'orange', tab: 'pipeline' });
   html += govCard({ title: '2–5 Year Term', value: fmtN(expiring5yr), sub: 'mid-range leases', color: 'yellow', tab: 'search' });
   html += govCard({ title: '5+ Year Term', value: fmtN(longTerm), sub: 'long-term secured', color: 'green', tab: 'search' });
-  html += govCard({ title: 'Avg Firm Term', value: avgFirmTerm + ' yrs', sub: fmtN(withTerm.length) + ' with term data', color: 'blue', tab: 'search' });
+  html += govCard({ title: 'Avg Firm Term', value: avgFirmTerm + ' yrs', sub: fmtN(withTermCount) + ' with term data', color: 'blue', tab: 'search' });
   html += '</div>';
 
-  // Expiration timeline bar
-  if (withTerm.length > 0) {
+  // Expiration timeline bar (requires full portfolio data or MV expiration JSON)
+  if (withTermCount > 0 && !useMV) {
     html += '<div class="gov-info-card" style="padding:14px 16px;margin-top:10px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Lease Expiration Distribution</div>';
     const buckets = [
