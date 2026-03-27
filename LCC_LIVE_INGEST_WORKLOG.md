@@ -161,7 +161,9 @@
 - Added PDF document-metadata harvesting for document-info and XMP-style fields so metadata-heavy attachments can still contribute useful labels when page-text extraction is sparse.
 - Added PDF annotation and accessibility text harvesting for keys like `/Contents`, `/T`, `/Alt`, and `/ActualText`, so authored sidecar labels can supplement sparse page-text extraction.
 - Added PDF embedded-file metadata harvesting for `/Filespec` labels like file names and descriptions, so package-style PDFs can expose useful attachment labels even before deeper embedded-file extraction exists.
+- Added conservative PDF embedded-payload extraction for readable `/EmbeddedFile` streams, so package-style PDFs can contribute actual text-like embedded content instead of only file-spec labels.
+- Extended PDF embedded-payload extraction to recognize richer payload types, including OOXML documents and common text-like subtypes, so embedded DOCX/XLSX/PPTX-style content can feed into the same preview pipeline.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially remaining opaque PDF stream filters or embedded mixed payloads.
+- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially additional embedded binary families or remaining opaque PDF stream filters.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

@@ -982,6 +982,104 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts readable text from embedded pdf payload streams when present', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Filespec /F (rent-roll.csv) /Desc (Embedded rent roll) >>',
+      'endobj',
+      '2 0 obj',
+      '<< /Type /EmbeddedFile /Subtype /text#2Fcsv >>',
+      'stream',
+      'tenant,monthly_rent',
+      'Dialysis Center,42000',
+      'endstream',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Embedded Payload Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedPayload123"',
+      '',
+      '--pdfEmbeddedPayload123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached PDF bundle.',
+      '--pdfEmbeddedPayload123',
+      'Content-Type: application/pdf; name="bundle.pdf"',
+      'Content-Disposition: attachment; filename="bundle.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfEmbeddedPayload123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-payload-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded File: rent-roll\.csv/);
+    assert.match(doc.normalized_text, /Embedded Payload: tenant,monthly_rent/);
+    assert.match(doc.normalized_text, /Embedded Payload: Dialysis Center,42000/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts OOXML text from embedded pdf payload streams when present', () => {
+    const embeddedDocx = buildStoredZip([
+      {
+        name: 'word/document.xml',
+        content: [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+          '<w:body>',
+          '<w:p><w:r><w:t>Embedded DOCX Amendment</w:t></w:r></w:p>',
+          '<w:p><w:r><w:t>Rate reset to 27500</w:t></w:r></w:p>',
+          '</w:body>',
+          '</w:document>'
+        ].join('')
+      }
+    ]);
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /application#2Fvnd.openxmlformats-officedocument.wordprocessingml.document >>\nstream\n', 'latin1'),
+      embeddedDocx,
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const pdfLike = pdfBuffer.toString('base64');
+    const raw = [
+      'Subject: PDF Embedded DOCX Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedDocx123"',
+      '',
+      '--pdfEmbeddedDocx123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached PDF bundle with DOCX.',
+      '--pdfEmbeddedDocx123',
+      'Content-Type: application/pdf; name="bundle-docx.pdf"',
+      'Content-Disposition: attachment; filename="bundle-docx.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfEmbeddedDocx123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-docx-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-docx\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Embedded DOCX Amendment/);
+    assert.match(doc.normalized_text, /Embedded Payload: Rate reset to 27500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {

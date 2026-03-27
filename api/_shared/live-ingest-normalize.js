@@ -583,6 +583,7 @@ function extractPdfMetadataLines(latin = '') {
       if (value) lines.push(value);
     });
   extractPdfEmbeddedFileLines(text).forEach((line) => lines.push(line));
+  extractPdfEmbeddedPayloadLines(text).forEach((line) => lines.push(line));
   extractPdfAnnotationLines(text).forEach((line) => lines.push(line));
   return dedupePdfPreviewLines(lines);
 }
@@ -608,6 +609,62 @@ function extractPdfEmbeddedFileLines(latin = '') {
     });
   });
   return outputs;
+}
+
+function extractPdfEmbeddedPayloadLines(latin = '') {
+  const text = String(latin || '');
+  const outputs = [];
+  const streamMatches = Array.from(text.matchAll(/(<<[\s\S]*?\/Type\s*\/EmbeddedFile[\s\S]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  streamMatches.forEach((match) => {
+    const dict = String(match[1] || '');
+    const raw = Buffer.from(String(match[2] || ''), 'latin1');
+    const filters = extractPdfStreamFilters(dict);
+    const decoded = filters.length
+      ? decodePdfStreamByFilters(raw, filters, extractPdfDecodeParams(dict, filters.length))
+      : raw;
+    if (!decoded || !Buffer.isBuffer(decoded) || !decoded.length) return;
+    const payloadLines = extractPdfEmbeddedPayloadPreview(decoded, dict).split(/\r?\n/).map((line) => collapseWhitespace(line)).filter(Boolean).slice(0, 6);
+    payloadLines.forEach((line) => {
+      outputs.push(`Embedded Payload: ${line}`);
+    });
+  });
+  return outputs;
+}
+
+function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const subtype = extractPdfEmbeddedSubtype(dict);
+  if (isDocxLikeBuffer(buffer)) return extractDocxTextFromBuffer(buffer).slice(0, 4000);
+  if (isXlsxLikeBuffer(buffer)) return extractXlsxTextFromBuffer(buffer).slice(0, 4000);
+  if (isPptxLikeBuffer(buffer)) return extractPptxTextFromBuffer(buffer).slice(0, 4000);
+  if (subtype === 'text/html') return stripHtml(buffer.toString('utf8')).slice(0, 4000);
+  if (subtype === 'application/json' || subtype === 'text/csv' || subtype === 'text/plain' || subtype.startsWith('text/')) {
+    return collapseWhitespace(buffer.toString('utf8')).slice(0, 4000);
+  }
+  if (buffer.subarray(0, 5).toString('latin1') === '%PDF-') return extractPdfTextPreviewFromBuffer(buffer).slice(0, 4000);
+  return extractPdfTextLikeRuns(buffer.toString('latin1')).join('\n').slice(0, 4000);
+}
+
+function extractPdfEmbeddedSubtype(dict = '') {
+  const text = String(dict || '');
+  const match = text.match(/\/Subtype\s*\/([A-Za-z0-9#.+-]+)/);
+  if (!match) return '';
+  return String(match[1] || '').replace(/#([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).toLowerCase();
+}
+
+function isDocxLikeBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('word/document.xml', 'utf8'));
+}
+
+function isXlsxLikeBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('xl/workbook.xml', 'utf8'));
+}
+
+function isPptxLikeBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('ppt/presentation.xml', 'utf8'));
 }
 
 function extractPdfAnnotationLines(latin = '') {
