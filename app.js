@@ -4013,6 +4013,9 @@ async function loadActivities() {
     renderHomeStats();
     document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
     document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
+    // Refresh gov outreach section if it's visible (it renders a placeholder while activities load)
+    const govOutEl = document.getElementById('govOutreachInner');
+    if (govOutEl && typeof renderGovOutreachInner === 'function') govOutEl.innerHTML = renderGovOutreachInner();
   } catch (e) {
     console.error('Activities load error:', e);
     activitiesLoaded = true;

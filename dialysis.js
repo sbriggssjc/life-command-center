@@ -360,7 +360,7 @@ function renderDiaOverview() {
     (async () => {
       try {
         // Load latest primary estimates (highest-confidence per clinic)
-        const batch = await diaQuery('clinic_financial_estimates', 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,patient_count,chairs_used,confidence_score', {
+        const batch = await diaQuery('clinic_financial_estimates', 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score', {
           filter: 'is_latest=eq.true',
           limit: 10000,
         });
@@ -695,13 +695,16 @@ function renderFinancialMetricsInner() {
   const best = Object.values(byClinic);
   const withRev = best.filter(e => e.estimated_annual_revenue > 0);
   const withProfit = best.filter(e => e.estimated_annual_profit > 0);
-  const withEbitda = best.filter(e => e.estimated_ebitda > 0);
+  // estimated_ebitda is NULL in clinic_financial_estimates; v_cms_data maps
+  // estimated_operating_profit → estimated_ebitda, so use that as fallback
+  const ebitdaVal = e => parseFloat(e.estimated_ebitda || e.estimated_operating_profit || 0);
+  const withEbitda = best.filter(e => ebitdaVal(e) > 0);
 
   const totalRev = withRev.reduce((s, e) => s + parseFloat(e.estimated_annual_revenue), 0);
   const avgRev = withRev.length > 0 ? totalRev / withRev.length : 0;
   const totalProfit = withProfit.reduce((s, e) => s + parseFloat(e.estimated_annual_profit), 0);
   const avgProfit = withProfit.length > 0 ? totalProfit / withProfit.length : 0;
-  const avgEbitda = withEbitda.length > 0 ? withEbitda.reduce((s, e) => s + parseFloat(e.estimated_ebitda), 0) / withEbitda.length : 0;
+  const avgEbitda = withEbitda.length > 0 ? withEbitda.reduce((s, e) => s + ebitdaVal(e), 0) / withEbitda.length : 0;
   const avgMargin = avgRev > 0 ? (avgProfit / avgRev * 100).toFixed(1) : '—';
 
   // By source breakdown
