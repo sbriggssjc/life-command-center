@@ -438,6 +438,63 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
 // CHAT: Route /api/chat → invokeChatProvider (AI copilot)
 // ============================================================================
 
+// Fetch key portfolio stats from Supabase materialized views for AI copilot context.
+// Returns an object with gov_stats and dia_stats (both may be null on failure).
+async function fetchPortfolioStats() {
+  const stats = { gov_stats: null, dia_stats: null };
+
+  const govUrl = process.env.GOV_SUPABASE_URL;
+  const govKey = process.env.GOV_SUPABASE_KEY;
+  const diaUrl = process.env.DIA_SUPABASE_URL;
+  const diaKey = process.env.DIA_SUPABASE_KEY;
+
+  const fetches = [];
+
+  if (govUrl && govKey) {
+    fetches.push(
+      fetch(`${govUrl}/rest/v1/mv_gov_overview_stats?select=*&limit=1`, {
+        headers: { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` }
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(rows => { if (Array.isArray(rows) && rows[0]) stats.gov_stats = rows[0]; })
+        .catch(() => {})
+    );
+  }
+
+  if (diaUrl && diaKey) {
+    fetches.push(
+      fetch(`${diaUrl}/rest/v1/v_counts_freshness?select=*&limit=1`, {
+        headers: { 'apikey': diaKey, 'Authorization': `Bearer ${diaKey}` }
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(rows => { if (Array.isArray(rows) && rows[0]) stats.dia_stats = rows[0]; })
+        .catch(() => {})
+    );
+    // Also fetch clinic financial estimates summary
+    fetches.push(
+      fetch(`${diaUrl}/rest/v1/clinic_financial_estimates?select=count&limit=1`, {
+        headers: {
+          'apikey': diaKey,
+          'Authorization': `Bearer ${diaKey}`,
+          'Prefer': 'count=exact'
+        }
+      })
+        .then(r => {
+          const range = r.headers.get('content-range');
+          if (range) {
+            const match = range.match(/\/(\d+)/);
+            if (match) stats.dia_clinic_count = parseInt(match[1], 10);
+          }
+          return null;
+        })
+        .catch(() => {})
+    );
+  }
+
+  await Promise.all(fetches);
+  return stats;
+}
+
 async function handleChatRoute(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
@@ -454,9 +511,23 @@ async function handleChatRoute(req, res) {
     return res.status(400).json({ error: 'message is required' });
   }
 
+  // Fetch live portfolio stats in parallel with nothing else — fast fire-and-forget style.
+  // Inject into context so the LLM can reference real numbers from materialized views.
+  let portfolioStats = {};
+  try {
+    portfolioStats = await fetchPortfolioStats();
+  } catch {
+    // Non-fatal — copilot still works without live stats
+  }
+
+  const enrichedContext = {
+    ...(context || {}),
+    ...portfolioStats,
+  };
+
   const result = await invokeChatProvider({
     message,
-    context: context || {},
+    context: enrichedContext,
     history: Array.isArray(history) ? history : [],
     attachments: Array.isArray(attachments) ? attachments : [],
     user,
