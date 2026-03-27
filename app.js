@@ -300,7 +300,11 @@ const labelMap = {
   'pending': 'Pending', 'verified': 'Verified', 'matched': 'Matched',
   'filtered_multi_tenant': 'Multi-Tenant', 'active': 'Active',
   'under_contract': 'Under Contract', 'added': 'Added', 'removed': 'Removed',
-  'persistent': 'Persistent'
+  'persistent': 'Persistent',
+  'missing_inventory_npi': 'Missing from Inventory',
+  'duplicate_inventory_npi': 'Duplicate NPI',
+  'snapshot_inventory_npi_mismatch': 'NPI Mismatch',
+  'snapshot_npi_not_in_inventory': 'NPI Not in Inventory'
 };
 function cleanLabel(s) { return labelMap[s] || norm(s); }
 
