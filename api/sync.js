@@ -1989,40 +1989,4 @@ async function handleLeadHealth(req, res) {
       );
       checks.marketing_leads_accessible = countRes.ok;
       if (!countRes.ok) checks.marketing_leads_error = await countRes.text();
-    } catch (e) {
-      checks.marketing_leads_accessible = false;
-      checks.marketing_leads_error = e.message;
-    }
-  }
-
-  return res.status(200).json(checks);
-}
-
-// ============================================================================
-// LIVE INGEST — Document normalization (merged from api/live-ingest.js)
-// POST /api/live-ingest?action=normalize
-// (routed via vercel.json: /api/live-ingest → /api/sync?_route=live-ingest)
-// ============================================================================
-async function handleLiveIngest(req, res) {
-  const user = await authenticate(req, res);
-  if (!user) return;
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: `Method ${req.method} not allowed` });
-  }
-
-  const action = req.query?.action || req.body?.action || 'normalize';
-  if (action !== 'normalize') {
-    return res.status(400).json({ error: 'Unsupported action. Use action=normalize.' });
-  }
-
-  const { normalizeLiveIngestDocuments } = await import('./_shared/live-ingest-normalize.js');
-  const docs = Array.isArray(req.body?.documents) ? req.body.documents : [];
-  const normalized = normalizeLiveIngestDocuments(docs);
-
-  return res.status(200).json({
-    ok: true,
-    documents: normalized,
-    count: normalized.length
-  });
-}
+    } catc
