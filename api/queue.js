@@ -111,7 +111,11 @@ export default withErrorHandler(async function handler(req, res) {
       path += paginationParams({ ...req.query, order: req.query.order || 'priority.asc,created_at.asc' });
 
       const result = await opsQuery('GET', path);
-      const items = (result.data || []).map(r => ({
+      if (!result.ok) {
+        return res.status(result.status || 500).json({ error: 'Failed to fetch research tasks', detail: result.data });
+      }
+      const rows = Array.isArray(result.data) ? result.data : [];
+      const items = rows.map(r => ({
         ...r,
         entity_name: r.entities?.name || null,
         assignee_name: r.users?.display_name || r['users!research_tasks_assigned_to_fkey']?.display_name || null
@@ -304,7 +308,11 @@ async function v2GetResearch(req, user, workspaceId) {
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path);
-  const items = (result.data || []).map(r => ({
+  if (!result.ok) {
+    return { view: 'research', items: [], error: result.data?.message || 'Failed to fetch research tasks', pagination: v2PaginationMeta(page, perPage, 0) };
+  }
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const items = rows.map(r => ({
     ...r,
     entity_name: r.entities?.name || null,
     assignee_name: r['users!research_tasks_assigned_to_fkey']?.display_name || null,
