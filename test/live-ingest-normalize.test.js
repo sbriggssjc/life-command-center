@@ -247,6 +247,52 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts readable text from pdf TJ arrays and escaped literals', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Page >>',
+      'stream',
+      'BT',
+      '[(Base Rent ) 120 (17500)] TJ',
+      '(Lease\\040Start\\0402026-07-01) Tj',
+      "[(Notice ) 80 (Period ) 50 (180 Days)] TJ",
+      'ET',
+      'endstream',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF TJ Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfTJ123"',
+      '',
+      '--pdfTJ123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached lease abstract.',
+      '--pdfTJ123',
+      'Content-Type: application/pdf; name="abstract.pdf"',
+      'Content-Disposition: attachment; filename="abstract.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfTJ123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-tj-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /abstract\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Base Rent 17500/);
+    assert.match(doc.normalized_text, /Lease Start 2026-07-01/);
+    assert.match(doc.normalized_text, /Notice Period 180 Days/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {
@@ -568,6 +614,7 @@ describe('normalizeLiveIngestDocument', () => {
 
     assert.match(doc.normalized_text, /legacy-rent-roll\.xls \(application\/vnd\.ms-excel\)/);
     assert.match(doc.normalized_text, /Legacy Excel text preview/);
+    assert.match(doc.normalized_text, /Tenant\s+Rent/);
     assert.match(doc.normalized_text, /Alpha Clinic/);
     assert.match(doc.normalized_text, /14500/);
     assert.equal(doc.metadata.attachment_preview_count, 1);

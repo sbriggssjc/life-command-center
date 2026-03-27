@@ -317,20 +317,22 @@ function isDocxPart(part) {
 
 function extractLegacyOfficeStringsFromBuffer(buffer, label = 'office') {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
-  const ascii = Array.from(new Set(
+  const ascii = extractLegacyOfficeLinesFromText(
     buffer
       .toString('latin1')
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, ' ')
-      .split(/\r?\n+/)
-      .map((line) => collapseWhitespace(line))
-      .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
-  ));
-  const utf16Lines = [];
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, ' '),
+    label
+  );
+  let utf16Text = '';
   let current = '';
   for (let index = 0; index + 1 < buffer.length; index += 2) {
     const code = buffer.readUInt16LE(index);
-    if (code === 9 || code === 10 || code === 13) {
-      if (current.trim()) utf16Lines.push(collapseWhitespace(current));
+    if (code === 9) {
+      current += '\t';
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      if (current.trim()) utf16Text += `${current}\n`;
       current = '';
       continue;
     }
@@ -338,12 +340,13 @@ function extractLegacyOfficeStringsFromBuffer(buffer, label = 'office') {
       current += String.fromCharCode(code);
       continue;
     }
-    if (current.trim()) utf16Lines.push(collapseWhitespace(current));
+    if (current.trim()) utf16Text += `${current}\n`;
     current = '';
   }
-  if (current.trim()) utf16Lines.push(collapseWhitespace(current));
+  if (current.trim()) utf16Text += current;
+  const utf16Lines = extractLegacyOfficeLinesFromText(utf16Text, label);
   const merged = Array.from(new Set([...ascii, ...utf16Lines]))
-    .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
+    .filter((line) => isUsefulLegacyOfficeLine(line, label))
     .slice(0, 120);
   if (!merged.length) return '';
   const header = label === 'xls'
@@ -352,6 +355,42 @@ function extractLegacyOfficeStringsFromBuffer(buffer, label = 'office') {
       ? 'Legacy PowerPoint text preview'
       : 'Legacy Word text preview';
   return `${header}\n${merged.join('\n')}`.trim();
+}
+
+function extractLegacyOfficeLinesFromText(text = '', label = 'office') {
+  return Array.from(new Set(
+    String(text || '')
+      .split(/\r?\n+/)
+      .map((line) => normalizeLegacyOfficePreviewLine(line, label))
+      .filter((line) => isUsefulLegacyOfficeLine(line, label))
+  ));
+}
+
+function normalizeLegacyOfficePreviewLine(line = '', label = 'office') {
+  const raw = String(line || '')
+    .replace(/[^\S\r\n\t]+/g, ' ')
+    .replace(/ ?\t ?/g, '\t')
+    .trim();
+  if (label === 'xls') {
+    return raw
+      .split('\t')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join('\t');
+  }
+  return collapseWhitespace(raw);
+}
+
+function isUsefulLegacyOfficeLine(line = '', label = 'office') {
+  const value = String(line || '').trim();
+  if (value.length < 4) return false;
+  if (!/[A-Za-z]{3,}/.test(value)) return false;
+  if (/^[A-Z0-9_\/\\.-]{12,}$/.test(value)) return false;
+  if (/^(root entry|objectpool|compobj|summaryinformation|documentsummaryinformation)$/i.test(value)) return false;
+  if (label === 'xls') {
+    return value.includes('\t') || /[A-Za-z]{3,}.*\d{2,}/.test(value) || /\d{2,}.*[A-Za-z]{3,}/.test(value);
+  }
+  return true;
 }
 
 function isLegacyDocPart(part) {
@@ -505,20 +544,55 @@ function isPptxPart(part) {
 function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
-  const parenStrings = Array.from(latin.matchAll(/\(([^()\\]{6,})\)/g))
-    .map((match) => match[1])
-    .map((text) => text.replace(/\\([nrtbf()\\])/g, ' '))
-    .map((text) => collapseWhitespace(text))
-    .filter((text) => /[A-Za-z]{3,}/.test(text));
-  if (parenStrings.length) {
-    return collapseWhitespace(parenStrings.join(' ')).slice(0, 4000);
-  }
+  const operatorText = extractPdfOperatorText(latin);
+  if (operatorText) return operatorText.slice(0, 4000);
   const asciiRuns = latin.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_-]{20,}/g) || [];
   const filtered = asciiRuns
     .map((text) => collapseWhitespace(text))
     .filter((text) => /[A-Za-z]{4,}/.test(text))
     .filter((text) => !/^endobj|stream|endstream|xref|trailer/i.test(text));
   return collapseWhitespace(filtered.join(' ')).slice(0, 4000);
+}
+
+function extractPdfOperatorText(latin = '') {
+  const lines = [];
+  const textBlocks = Array.from(String(latin || '').matchAll(/BT([\s\S]*?)ET/g)).map((match) => match[1] || '');
+  textBlocks.forEach((block) => {
+    const normalized = String(block)
+      .replace(/\]\s*TJ/g, '] TJ')
+      .replace(/\)\s*Tj/g, ') Tj')
+      .replace(/\)\s*'/g, ") '")
+      .replace(/\)\s*"/g, ') "');
+    Array.from(normalized.matchAll(/\[((?:\s*\([^)]*\)\s*-?\d*\s*)+)\]\s*TJ/g)).forEach((match) => {
+      const fragments = Array.from(String(match[1] || '').matchAll(/\(([^)]*)\)/g))
+        .map((part) => decodePdfLiteralString(part[1] || ''))
+        .map((part) => collapseWhitespace(part))
+        .filter(Boolean);
+      if (fragments.length) lines.push(fragments.join(' '));
+    });
+    Array.from(normalized.matchAll(/\(([^)]*)\)\s*(?:Tj|'|")/g)).forEach((match) => {
+      const text = collapseWhitespace(decodePdfLiteralString(match[1] || ''));
+      if (text) lines.push(text);
+    });
+  });
+  const merged = Array.from(new Set(lines))
+    .map((line) => collapseWhitespace(line))
+    .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
+    .filter((line) => !/^(BT|ET|Tj|TJ|Tm|Tf)$/i.test(line));
+  return merged.join('\n').trim();
+}
+
+function decodePdfLiteralString(text = '') {
+  return String(text || '')
+    .replace(/\\([nrtbf()\\])/g, (_, code) => {
+      if (code === 'n' || code === 'r') return '\n';
+      if (code === 't') return '\t';
+      if (code === 'b' || code === 'f') return ' ';
+      return code;
+    })
+    .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
+    .replace(/\\\r?\n/g, '')
+    .trim();
 }
 
 function extractAttachmentPreview(part) {

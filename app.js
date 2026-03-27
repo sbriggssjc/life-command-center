@@ -6830,11 +6830,11 @@ async function convertLegacyPptToTextAttachment(file) {
 function extractLegacyOfficeTextFromArrayBuffer(arrayBuffer, label = 'office') {
   const bytes = new Uint8Array(arrayBuffer || new ArrayBuffer(0));
   if (!bytes.length) return '';
-  const ascii = extractLegacyOfficeAsciiRuns(bytes);
-  const utf16 = extractLegacyOfficeUtf16Runs(bytes);
+  const ascii = extractLegacyOfficeAsciiRuns(bytes, label);
+  const utf16 = extractLegacyOfficeUtf16Runs(bytes, label);
   const merged = Array.from(new Set([...ascii, ...utf16]))
-    .map((value) => value.replace(/\s+/g, ' ').trim())
-    .filter((value) => value.length >= 4);
+    .map((value) => normalizeLegacyOfficePreviewLine(value, label))
+    .filter((value) => isUsefulLegacyOfficeLine(value, label));
   if (!merged.length) return '';
   const header = label === 'xls'
     ? 'Legacy Excel text preview'
@@ -6844,26 +6844,26 @@ function extractLegacyOfficeTextFromArrayBuffer(arrayBuffer, label = 'office') {
   return `${header}\n${merged.slice(0, 120).join('\n')}`.trim();
 }
 
-function extractLegacyOfficeAsciiRuns(bytes) {
+function extractLegacyOfficeAsciiRuns(bytes, label = 'office') {
   const text = Array.from(bytes, (value) => {
-    if (value === 9 || value === 10 || value === 13) return '\n';
+    if (value === 9) return '\t';
+    if (value === 10 || value === 13) return '\n';
     return value >= 32 && value <= 126 ? String.fromCharCode(value) : ' ';
   }).join('');
-  return Array.from(new Set(
-    text
-      .split(/\n+/)
-      .map((line) => line.replace(/\s+/g, ' ').trim())
-      .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
-  ));
+  return extractLegacyOfficeLinesFromText(text, label);
 }
 
-function extractLegacyOfficeUtf16Runs(bytes) {
-  const lines = [];
+function extractLegacyOfficeUtf16Runs(bytes, label = 'office') {
+  let text = '';
   let current = '';
   for (let index = 0; index + 1 < bytes.length; index += 2) {
     const code = bytes[index] | (bytes[index + 1] << 8);
-    if (code === 9 || code === 10 || code === 13) {
-      if (current.trim()) lines.push(current.trim());
+    if (code === 9) {
+      current += '\t';
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      if (current.trim()) text += `${current}\n`;
       current = '';
       continue;
     }
@@ -6871,11 +6871,47 @@ function extractLegacyOfficeUtf16Runs(bytes) {
       current += String.fromCharCode(code);
       continue;
     }
-    if (current.trim()) lines.push(current.trim());
+    if (current.trim()) text += `${current}\n`;
     current = '';
   }
-  if (current.trim()) lines.push(current.trim());
-  return Array.from(new Set(lines.filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)));
+  if (current.trim()) text += current;
+  return extractLegacyOfficeLinesFromText(text, label);
+}
+
+function extractLegacyOfficeLinesFromText(text, label = 'office') {
+  return Array.from(new Set(
+    String(text || '')
+      .split(/\n+/)
+      .map((line) => normalizeLegacyOfficePreviewLine(line, label))
+      .filter((line) => isUsefulLegacyOfficeLine(line, label))
+  ));
+}
+
+function normalizeLegacyOfficePreviewLine(value, label = 'office') {
+  const raw = String(value || '')
+    .replace(/[^\S\r\n\t]+/g, ' ')
+    .replace(/ ?\t ?/g, '\t')
+    .trim();
+  if (label === 'xls') {
+    return raw
+      .split('\t')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join('\t');
+  }
+  return raw.replace(/\s+/g, ' ');
+}
+
+function isUsefulLegacyOfficeLine(value, label = 'office') {
+  const line = String(value || '').trim();
+  if (line.length < 4) return false;
+  if (!/[A-Za-z]{3,}/.test(line)) return false;
+  if (/^[A-Z0-9_\/\\.-]{12,}$/.test(line)) return false;
+  if (/^(root entry|objectpool|compobj|summaryinformation|documentsummaryinformation)$/i.test(line)) return false;
+  if (label === 'xls') {
+    return line.includes('\t') || /[A-Za-z]{3,}.*\d{2,}/.test(line) || /\d{2,}.*[A-Za-z]{3,}/.test(line);
+  }
+  return true;
 }
 
 function extractTextFromDocxPackage(pkg) {
