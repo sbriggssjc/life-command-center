@@ -161,7 +161,7 @@ async function loadDiaData() {
     // ── BATCH 2: NPI + research tab data (all independent, run in parallel) ──
     const [npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon] = await Promise.all([
       diaQuery('v_npi_inventory_signal_summary', '*').catch(() => []),
-      diaQuery('v_npi_inventory_signals', '*', { limit: 300 }).catch(() => []),
+      diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(() => []),
       diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(() => []),
       diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }).catch(() => []),
       diaQuery('research_queue_outcomes', '*', { limit: 500 }).catch(() => []),
@@ -1090,7 +1090,7 @@ function renderDiaNpi() {
     html += '<div style="flex: 1; text-align: right;">Patients</div>';
     html += '</div>';
     
-    filtered.slice(0, 150).forEach(row => {
+    filtered.slice(0, 500).forEach(row => {
       const signalColor = row.signal_type === 'npi_changed' ? 'var(--accent)' : 'var(--text2)';
       
       html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
