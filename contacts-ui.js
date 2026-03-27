@@ -182,9 +182,11 @@ function orderOpt(val, label) {
 }
 
 function buildContactCard(c) {
-  const heat = engagementHeat(c.engagement_score);
+  // Estimate engagement from total_touches + last_activity_date when engagement_score is 0
+  const rawScore = c.engagement_score || 0;
+  const score = rawScore > 0 ? Math.round(rawScore) : estimateEngagement(c);
+  const heat = engagementHeat(score);
   const heatClass = `uc-heat-${heat}`;
-  const score = Math.round(c.engagement_score || 0);
   const company = c.company_name || '';
   const title = c.title || '';
   const meta = [title, company].filter(Boolean).join(' at ');
@@ -225,6 +227,35 @@ function engagementHeat(score) {
   if (score >= 30) return 'warm';
   if (score > 0) return 'cool';
   return 'cold';
+}
+
+/** Estimate engagement from total_touches + last_activity_date when the real score is 0 */
+function estimateEngagement(c) {
+  var score = 0;
+  var touches = c.total_touches || 0;
+  // Touch frequency (max 40)
+  if (touches > 10) score += 40;
+  else if (touches > 5) score += 30;
+  else if (touches > 2) score += 20;
+  else if (touches > 0) score += 10;
+  // Recency (max 35)
+  if (c.last_activity_date) {
+    var days = (Date.now() - new Date(c.last_activity_date).getTime()) / 86400000;
+    if (days < 7) score += 35;
+    else if (days < 30) score += 25;
+    else if (days < 90) score += 15;
+    else if (days < 365) score += 5;
+  }
+  // Multi-source bonus (max 15)
+  var sources = 0;
+  if (c.sf_contact_id) sources++;
+  if (c.webex_person_id) sources++;
+  if (c.teams_user_id) sources++;
+  if (c.outlook_contact_id) sources++;
+  if (sources >= 3) score += 15;
+  else if (sources >= 2) score += 10;
+  else if (sources >= 1) score += 5;
+  return Math.min(score, 100);
 }
 
 function relativeDate(dateStr) {

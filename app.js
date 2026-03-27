@@ -5064,7 +5064,7 @@ function renderSettings() {
           <div class="settings-row-label">Outlook Sync</div>
           <div class="settings-row-desc">Flagged email sync via Edge Function</div>
         </div>
-        <div class="settings-val" style="color:${emails.length > 0 ? 'var(--green)' : 'var(--yellow)'}">${emails.length > 0 ? emails.length + ' emails' : 'No data'}</div>
+        <div class="settings-val" style="color:${(emailTotalCount || emails.length) > 0 ? 'var(--green)' : 'var(--yellow)'}">${emailTotalCount > 0 ? emailTotalCount.toLocaleString() + ' emails' : emails.length > 0 ? emails.length + ' emails' : 'No data'}</div>
       </div>
     </div>
 
@@ -5244,17 +5244,55 @@ async function invokeLccAssistant({ message, context = {}, history = [], attachm
 
 function buildCopilotContext() {
   const ctx = {};
+  const now = new Date();
+  const today = tzDateStr(now);
+  const weekAgo = new Date(now - 7 * 86400000);
+  const userName = LCC_USER.display_name || 'User';
+
+  ctx.user_name = userName;
+  ctx.current_date = today;
   ctx.total_activities = activities.length;
-  ctx.total_emails = emails.length;
-  ctx.today_events = calEvents.filter(e => tzDateStr(e.start_time) === tzDateStr(new Date())).length;
+  ctx.total_flagged_emails = emailTotalCount || emails.length;
   ctx.gov_connected = govConnected;
   ctx.dia_connected = diaConnected;
 
-  // Recent activities summary
-  const now = new Date();
-  const weekAgo = new Date(now - 7 * 86400000);
+  // Today's calendar events with details (not just count)
+  const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
+  ctx.today_events = todayEvents.slice(0, 10).map(e => ({
+    subject: e.subject || '(No title)',
+    time: e.is_all_day ? 'All day' : new Date(e.start_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+    attendees: (e.attendees || []).length
+  }));
+
+  // Overdue CRM tasks
+  if (typeof mktLoaded !== 'undefined' && mktLoaded && typeof mktData !== 'undefined' && mktData.length > 0) {
+    const overdue = mktData.filter(d => d.due_date && d.due_date < today && d.assigned_to === userName);
+    ctx.overdue_tasks = overdue.slice(0, 5).map(d => ({
+      contact: d.contact_name || d.deal_display_name,
+      company: d.company_name,
+      due: d.due_date
+    }));
+    ctx.overdue_count = overdue.length;
+
+    // Due today
+    const dueToday = mktData.filter(d => d.due_date === today && d.assigned_to === userName);
+    ctx.due_today = dueToday.slice(0, 5).map(d => ({
+      contact: d.contact_name || d.deal_display_name,
+      company: d.company_name
+    }));
+    ctx.due_today_count = dueToday.length;
+  }
+
+  // Recent activities with details
   const thisWeek = activities.filter(a => a.activity_date && new Date(a.activity_date) >= weekAgo);
   ctx.activities_this_week = thisWeek.length;
+  ctx.recent_activities = thisWeek.slice(0, 8).map(a => ({
+    subject: a.subject,
+    contact: a.contact_name || a.first_name,
+    company: a.company_name,
+    category: a.computed_category || 'General',
+    date: a.activity_date
+  }));
 
   // Category breakdown
   const cats = {};
@@ -5263,6 +5301,23 @@ function buildCopilotContext() {
     cats[c] = (cats[c] || 0) + 1;
   }
   ctx.category_breakdown = cats;
+
+  // Flagged email senders (top 5)
+  if (emails.length > 0) {
+    ctx.recent_emails = emails.slice(0, 5).map(e => ({
+      from: e.sender_name || e.sender_email,
+      subject: e.subject
+    }));
+  }
+
+  // Pipeline summary
+  if (typeof window !== 'undefined' && window._mktOpportunities) {
+    ctx.pipeline = {
+      government: (window._mktOpportunities.government || []).length,
+      dialysis: (window._mktOpportunities.dialysis || []).length,
+      all_other: (window._mktOpportunities.all_other || []).length
+    };
+  }
 
   return ctx;
 }
