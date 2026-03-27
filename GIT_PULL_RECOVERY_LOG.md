@@ -4,6 +4,10 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-27, a later commit failure was caused by a real merge conflict in `gov.js`, not by a lock file.
+- `git diff --name-only --diff-filter=U` reported `gov.js` as the only unmerged file.
+- The `gov.js` conflict spanned the full file, and the richer side was preserved by keeping the `theirs` block content and removing the conflict markers.
+- `node --check gov.js` succeeded after the resolution, `git diff --name-only --diff-filter=U` became empty, and `git commit --dry-run --allow-empty-message --file - --allow-empty` now reports `All conflicts fixed but you are still merging`.
 - On 2026-03-27, another commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` still existed as a 0-byte file with `CreationTime` and `LastWriteTime` `2026-03-26 20:00:50` local time.
 - A process check for this March 27 recurrence showed three active `git.exe` processes (`29216`, `50800`, `55556`) started at `2026-03-27 06:27:48` local time.
 - `git status --short --branch` during this recurrence reports `main...origin/main [ahead 1, behind 2]` with staged changes in `LCC_LIVE_INGEST_WORKLOG.md` and `test/live-ingest-normalize.test.js`, plus an unstaged change in `api/_shared/live-ingest-normalize.js`.
