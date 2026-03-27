@@ -1080,6 +1080,100 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts legacy office text from embedded pdf payload streams when present', () => {
+    const legacyDoc = Buffer.from([
+      'Word.Document',
+      'Legacy amendment summary',
+      'Annual Rent 330000',
+      'Notice Period 120 Days'
+    ].join('\n'), 'latin1');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /application#2Fmsword >>\nstream\n', 'latin1'),
+      legacyDoc,
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded Legacy Office Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedLegacy123"',
+      '',
+      '--pdfEmbeddedLegacy123',
+      'Content-Type: application/pdf; name="bundle-legacy.pdf"',
+      'Content-Disposition: attachment; filename="bundle-legacy.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedLegacy123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-legacy.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-legacy\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: Legacy amendment summary/);
+    assert.match(doc.normalized_text, /Embedded Payload: Annual Rent 330000/);
+    assert.match(doc.normalized_text, /Embedded Payload: Notice Period 120 Days/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('returns embedded pdf images as extracted attachments for email pdf bundles', () => {
+    const imageBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /image#2Fpng >>\nstream\n', 'latin1'),
+      imageBuffer,
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded Image Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedImage123"',
+      '',
+      '--pdfEmbeddedImage123',
+      'Content-Type: application/pdf; name="bundle-image.pdf"',
+      'Content-Disposition: attachment; filename="bundle-image.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedImage123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-image.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.equal(Array.isArray(doc.extracted_attachments), true);
+    assert.equal(doc.extracted_attachments.length, 1);
+    assert.equal(doc.extracted_attachments[0].mime_type, 'image/png');
+    assert.match(doc.extracted_attachments[0].data_url, /^data:image\/png;base64,/);
+  });
+
+  it('returns embedded pdf images as extracted attachments for direct pdf intake', () => {
+    const imageBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /image#2Fjpeg >>\nstream\n', 'latin1'),
+      imageBuffer,
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'bundle-direct.pdf',
+      mime_type: 'application/pdf',
+      buffer_base64: pdfBuffer.toString('base64')
+    });
+
+    assert.equal(doc.source_kind, 'pdf');
+    assert.equal(doc.extracted_attachments.length, 1);
+    assert.equal(doc.extracted_attachments[0].mime_type, 'image/jpeg');
+    assert.match(doc.extracted_attachments[0].data_url, /^data:image\/jpeg;base64,/);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {

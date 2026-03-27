@@ -631,9 +631,37 @@ function extractPdfEmbeddedPayloadLines(latin = '') {
   return outputs;
 }
 
+function extractPdfEmbeddedImagesFromBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return [];
+  const text = buffer.toString('latin1');
+  const streamMatches = Array.from(text.matchAll(/(<<[\s\S]*?\/Type\s*\/EmbeddedFile[\s\S]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  const outputs = [];
+  streamMatches.forEach((match, index) => {
+    const dict = String(match[1] || '');
+    const subtype = extractPdfEmbeddedSubtype(dict);
+    if (!isImageMime(subtype)) return;
+    const raw = Buffer.from(String(match[2] || ''), 'latin1');
+    const filters = extractPdfStreamFilters(dict);
+    const decoded = filters.length
+      ? decodePdfStreamByFilters(raw, filters, extractPdfDecodeParams(dict, filters.length))
+      : raw;
+    if (!decoded || !Buffer.isBuffer(decoded) || !decoded.length) return;
+    outputs.push({
+      kind: 'image',
+      name: `pdf-embedded-image-${index + 1}.${subtype.split('/')[1] || 'bin'}`,
+      mime_type: subtype,
+      data_url: `data:${subtype};base64,${decoded.toString('base64')}`
+    });
+  });
+  return outputs.slice(0, 3);
+}
+
 function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const subtype = extractPdfEmbeddedSubtype(dict);
+  if (isLegacyDocLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'doc').slice(0, 4000);
+  if (isLegacyXlsLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'xls').slice(0, 4000);
+  if (isLegacyPptLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'ppt').slice(0, 4000);
   if (isDocxLikeBuffer(buffer)) return extractDocxTextFromBuffer(buffer).slice(0, 4000);
   if (isXlsxLikeBuffer(buffer)) return extractXlsxTextFromBuffer(buffer).slice(0, 4000);
   if (isPptxLikeBuffer(buffer)) return extractPptxTextFromBuffer(buffer).slice(0, 4000);
@@ -655,6 +683,21 @@ function extractPdfEmbeddedSubtype(dict = '') {
 function isDocxLikeBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
   return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('word/document.xml', 'utf8'));
+}
+
+function isLegacyDocLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered.includes('msword') || buffer.includes(Buffer.from('Word.Document', 'utf8'));
+}
+
+function isLegacyXlsLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered.includes('excel') || buffer.includes(Buffer.from('Workbook', 'utf8'));
+}
+
+function isLegacyPptLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered.includes('powerpoint') || buffer.includes(Buffer.from('PowerPoint Document', 'utf8'));
 }
 
 function isXlsxLikeBuffer(buffer) {
@@ -1149,6 +1192,7 @@ function collectMimeInsights(part, depth = 0) {
 
   if (isAttachmentPart(part)) {
     const preview = extractAttachmentPreview(part);
+    const embeddedPdfImages = mime === 'application/pdf' ? extractPdfEmbeddedImagesFromBuffer(part.body_buffer) : [];
     const imageAttachment = isImageMime(mime) && part.body_buffer?.length
       ? {
           kind: 'image',
@@ -1163,7 +1207,10 @@ function collectMimeInsights(part, depth = 0) {
         summary: summarizeAttachmentPart(part),
         preview
       }],
-      imageAttachments: imageAttachment ? [imageAttachment] : []
+      imageAttachments: [
+        ...(imageAttachment ? [imageAttachment] : []),
+        ...embeddedPdfImages
+      ]
     };
   }
 
@@ -1275,6 +1322,20 @@ export function normalizeLiveIngestDocument(doc = {}) {
       normalized_text: email.normalized_text,
       metadata: email.metadata || {},
       extracted_attachments: Array.isArray(email.extracted_attachments) ? email.extracted_attachments : []
+    };
+  }
+
+  if (mimeType === 'application/pdf' || lowerName.endsWith('.pdf')) {
+    const buffer = doc.buffer_base64
+      ? Buffer.from(String(doc.buffer_base64 || ''), 'base64')
+      : Buffer.from(text, 'latin1');
+    return {
+      name,
+      mime_type: mimeType || 'application/pdf',
+      source_kind: 'pdf',
+      normalized_text: extractPdfTextPreviewFromBuffer(buffer),
+      metadata: {},
+      extracted_attachments: extractPdfEmbeddedImagesFromBuffer(buffer)
     };
   }
 

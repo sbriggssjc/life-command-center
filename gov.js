@@ -2800,12 +2800,14 @@ function renderGovEvidenceWorkbench() {
               <div>
                 <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em">${esc(row.observation_type || 'observation')}</div>
                 <div style="font-size:13px;color:var(--text);margin-top:4px">${esc(row.summary || row.observation_value || 'Pending evidence row')}</div>
+                ${Array.isArray(row.review_cues) && row.review_cues.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${row.review_cues.map((cue) => `<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text2)">${esc(cue)}</span>`).join('')}</div>` : ''}
+                ${row.promotion_guard?.message ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(row.promotion_guard.message)}</div>` : ''}
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                 <button class="btn-secondary" type="button" data-gov-evidence-note="${idx}">Note</button>
                 <button class="btn-secondary" type="button" data-gov-evidence-review="${idx}">Review</button>
                 <button class="btn-secondary" type="button" data-gov-evidence-dismiss="${idx}">Dismiss</button>
-                <button class="btn-primary" type="button" data-gov-evidence-promote="${idx}">Promote</button>
+                <button class="btn-primary" type="button" data-gov-evidence-promote="${idx}">${row.promotion_guard?.message ? 'Confirm Promote' : 'Promote'}</button>
               </div>
             </div>
           </div>`).join('')}</div>`
@@ -3088,10 +3090,13 @@ async function reviewGovEvidenceObservation(idx, action) {
 }
 
 async function promoteGovEvidenceObservation(idx) {
-  const row = govEvidenceState.queue[idx];
+  if (row.promotion_guard?.message) {
+    const confirmed = window.confirm(`${row.promotion_guard.message}\n\nContinue with promotion?`);
+    if (!confirmed) return;
+  }
   if (!row) return;
   try {
-    await govEvidenceApi('promote-observation', {
+      body: { actor: getGovEvidenceActor(), resolution_note: row.promotion_guard?.message || 'Promoted from LCC evidence queue' }
       method: 'POST',
       query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
       body: { actor: getGovEvidenceActor(), resolution_note: 'Promoted from LCC evidence queue' }
