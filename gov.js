@@ -3208,6 +3208,11 @@ function renderGovOverview() {
 
   let html = '<div style="padding:4px 0">';
 
+  // ── Early MV check (needed before style/helper blocks) ──
+  const portfolio = govData.portfolioProperties || [];
+  const mv = govOverviewStats;
+  const useMV = mv && portfolio.length === 0; // Use MV when full data hasn't loaded yet
+
   // Show background loading indicator when using MV fast path
   if (useMV && !govDataLoaded) {
     html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:8px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--text2)"><span class="spinner" style="width:14px;height:14px"></span> Loading detailed data in background...</div>';
@@ -3259,9 +3264,8 @@ function renderGovOverview() {
   }
 
   // ──────────────────────────────────────
-  // DATA COMPUTATIONS
+  // DATA COMPUTATIONS (portfolio, mv, useMV declared above)
   // ──────────────────────────────────────
-  const portfolio = govData.portfolioProperties || [];
   const propCount = govData.properties[0]?.count || portfolio.length;
   const ownership = govData.ownership || [];
   const leads = govData.leads || [];
@@ -3273,10 +3277,6 @@ function renderGovOverview() {
   const loans = govData.loans || [];
   const now = new Date();
   const yearStart = new Date(now.getFullYear(), 0, 1);
-
-  // Use materialized view stats when available (instant), fall back to computed values from full data
-  const mv = govOverviewStats;
-  const useMV = mv && portfolio.length === 0; // Use MV when full data hasn't loaded yet
 
   // Portfolio aggregates
   const withSF = useMV ? [] : portfolio.filter(p => p.sf_leased > 0);
