@@ -1043,14 +1043,23 @@ function renderDiaNpi() {
   
   let totalSignals = 0;
   const signalTypes = {};
+
+  // Use pre-aggregated summary (not truncated by PostgREST row limit)
+  if (diaData.npiSummary && Object.keys(diaData.npiSummary).length > 0) {
+    Object.entries(diaData.npiSummary).forEach(([type, row]) => {
+      const cnt = row.signal_count || 0;
+      signalTypes[type] = cnt;
+      totalSignals += cnt;
+    });
+  } else {
+    diaData.npiSignals.forEach(row => {
+      totalSignals++;
+      const type = row.signal_type || 'unknown';
+      signalTypes[type] = (signalTypes[type] || 0) + 1;
+    });
+  }
   
-  diaData.npiSignals.forEach(row => {
-    totalSignals++;
-    const type = row.signal_type || 'unknown';
-    signalTypes[type] = (signalTypes[type] || 0) + 1;
-  });
-  
-  html += metricHTML('Total Signals', totalSignals >= 500 ? '500+' : fmtN(totalSignals), 'NPI intelligence signals', '');
+  html += metricHTML('Total Signals', fmtN(totalSignals), 'NPI intelligence signals', '');
   html += metricHTML('Signal Types', fmtN(Object.keys(signalTypes).length), 'different categories', '');
   
   Object.entries(signalTypes).slice(0, 2).forEach(([type, count]) => {
