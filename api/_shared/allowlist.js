@@ -68,6 +68,8 @@ export const DIA_READ_TABLES = new Set([
   'v_npi_inventory_signals',
   'v_clinic_property_link_review_queue',
   'v_clinic_lease_backfill_candidates',
+  'v_clinic_lease_data_gaps',
+  'v_clinic_lease_renewal_watchlist',
   'v_ingestion_reconciliation',
   'v_clinic_research_priority',
   'v_cms_data',
@@ -95,6 +97,8 @@ export const DIA_READ_TABLES = new Set([
   'true_owners',
   'contacts',
   'sales_transactions',
+  'sale_brokers',
+  'brokers',
   'loans',
   // Detail panel views (shared with GOV)
   'v_property_detail',
