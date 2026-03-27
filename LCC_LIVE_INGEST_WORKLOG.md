@@ -160,6 +160,7 @@
 - Added decoded-stream text fallback for PDFs so compressed or filtered streams without standard `BT`/`ET` text operators can still contribute clean text-like runs into normalized attachment previews.
 - Added PDF document-metadata harvesting for document-info and XMP-style fields so metadata-heavy attachments can still contribute useful labels when page-text extraction is sparse.
 - Added PDF annotation and accessibility text harvesting for keys like `/Contents`, `/T`, `/Alt`, and `/ActualText`, so authored sidecar labels can supplement sparse page-text extraction.
+- Added PDF embedded-file metadata harvesting for `/Filespec` labels like file names and descriptions, so package-style PDFs can expose useful attachment labels even before deeper embedded-file extraction exists.
 
 ## Next Follow-Up Candidates
 - Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially remaining opaque PDF stream filters or embedded mixed payloads.

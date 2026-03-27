@@ -582,8 +582,32 @@ function extractPdfMetadataLines(latin = '') {
       const value = collapseWhitespace(stripHtml(xml));
       if (value) lines.push(value);
     });
+  extractPdfEmbeddedFileLines(text).forEach((line) => lines.push(line));
   extractPdfAnnotationLines(text).forEach((line) => lines.push(line));
   return dedupePdfPreviewLines(lines);
+}
+
+function extractPdfEmbeddedFileLines(latin = '') {
+  const text = String(latin || '');
+  const outputs = [];
+  const objectMatches = Array.from(text.matchAll(/<<[\s\S]*?\/Type\s*\/Filespec[\s\S]*?>>/g));
+  objectMatches.forEach((match) => {
+    const objectText = String(match[0] || '');
+    const entries = [
+      { label: 'Embedded File', key: 'UF' },
+      { label: 'Embedded File', key: 'F' },
+      { label: 'Embedded Description', key: 'Desc' }
+    ];
+    entries.forEach(({ label, key }) => {
+      const literalMatch = objectText.match(new RegExp(`/${key}\\s*\\(([^)]*)\\)`));
+      const hexMatch = objectText.match(new RegExp(`/${key}\\s*<([^>]+)>`));
+      const value = collapseWhitespace(literalMatch
+        ? decodePdfLiteralString(literalMatch[1] || '')
+        : decodePdfHexString(hexMatch?.[1] || ''));
+      if (value) outputs.push(`${label}: ${value}`);
+    });
+  });
+  return outputs;
 }
 
 function extractPdfAnnotationLines(latin = '') {

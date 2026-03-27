@@ -944,6 +944,44 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts embedded file labels from pdf file-spec metadata', () => {
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Type /Filespec /F (lease-summary.xlsx) /UF (lease-summary.xlsx) /Desc (Updated rent roll workbook) >>',
+      'endobj'
+    ].join('\n'), 'utf8').toString('base64');
+    const raw = [
+      'Subject: PDF Embedded File Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfFileSpec123"',
+      '',
+      '--pdfFileSpec123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached PDF package.',
+      '--pdfFileSpec123',
+      'Content-Type: application/pdf; name="package.pdf"',
+      'Content-Disposition: attachment; filename="package.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfFileSpec123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-filespec-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /package\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded File: lease-summary\.xlsx/);
+    assert.match(doc.normalized_text, /Embedded Description: Updated rent roll workbook/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('extracts readable text from attached docx payloads when present', () => {
     const docxLike = buildStoredZip([
       {
