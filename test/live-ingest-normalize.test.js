@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { deflateSync } from 'node:zlib';
 import {
   normalizeLiveIngestDocument,
   normalizeLiveIngestDocuments
@@ -388,6 +389,53 @@ describe('normalizeLiveIngestDocument', () => {
     assert.match(doc.normalized_text, /Lease Abstract/);
     assert.match(doc.normalized_text, /Base Rent 19000/);
     assert.match(doc.normalized_text, /Option Term 10 Years/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts text from flate-compressed pdf streams', () => {
+    const compressedStream = deflateSync(Buffer.from([
+      'BT',
+      '(Compressed Lease Summary) Tj',
+      '[(Annual Rent ) 60 (210000)] TJ',
+      'ET'
+    ].join('\n'), 'utf8')).toString('latin1');
+    const pdfLike = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj',
+      '<< /Length 64 /Filter /FlateDecode >>',
+      'stream',
+      compressedStream,
+      'endstream',
+      'endobj'
+    ].join('\n'), 'latin1').toString('base64');
+    const raw = [
+      'Subject: PDF Flate Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfFlate123"',
+      '',
+      '--pdfFlate123',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'See attached compressed abstract.',
+      '--pdfFlate123',
+      'Content-Type: application/pdf; name="compressed.pdf"',
+      'Content-Disposition: attachment; filename="compressed.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfLike,
+      '--pdfFlate123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-flate-attachment.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /compressed\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Compressed Lease Summary/);
+    assert.match(doc.normalized_text, /Annual Rent 210000/);
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 

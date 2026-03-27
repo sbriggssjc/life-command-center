@@ -1,4 +1,4 @@
-import { inflateRawSync } from 'node:zlib';
+import { inflateRawSync, inflateSync } from 'node:zlib';
 
 function decodeHtmlEntities(text = '') {
   return String(text)
@@ -544,7 +544,10 @@ function isPptxPart(part) {
 function extractPdfTextPreviewFromBuffer(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
   const latin = buffer.toString('latin1');
-  const operatorText = extractPdfOperatorText(latin);
+  const operatorText = dedupePdfPreviewLines([
+    ...extractPdfOperatorTextLines(latin),
+    ...extractCompressedPdfOperatorTextLines(latin)
+  ]).join('\n').trim();
   if (operatorText) return operatorText.slice(0, 4000);
   const asciiRuns = latin.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_-]{20,}/g) || [];
   const filtered = dedupePdfPreviewLines(asciiRuns
@@ -555,6 +558,10 @@ function extractPdfTextPreviewFromBuffer(buffer) {
 }
 
 function extractPdfOperatorText(latin = '') {
+  return extractPdfOperatorTextLines(latin).join('\n').trim();
+}
+
+function extractPdfOperatorTextLines(latin = '') {
   const lines = [];
   const textBlocks = Array.from(String(latin || '').matchAll(/BT([\s\S]*?)ET/g)).map((match) => match[1] || '');
   textBlocks.forEach((block) => {
@@ -592,7 +599,32 @@ function extractPdfOperatorText(latin = '') {
     .map((line) => collapseWhitespace(line))
     .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
     .filter((line) => !/^(BT|ET|Tj|TJ|Tm|Tf)$/i.test(line)));
-  return merged.join('\n').trim();
+  return merged;
+}
+
+function extractCompressedPdfOperatorTextLines(latin = '') {
+  const matches = Array.from(String(latin || '').matchAll(/<<[\s\S]*?\/FlateDecode[\s\S]*?>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  const lines = [];
+  matches.forEach((match) => {
+    const raw = Buffer.from(String(match[1] || ''), 'latin1');
+    const decoded = tryInflatePdfStream(raw);
+    if (!decoded) return;
+    lines.push(...extractPdfOperatorTextLines(decoded.toString('latin1')));
+  });
+  return lines;
+}
+
+function tryInflatePdfStream(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return null;
+  try {
+    return inflateSync(buffer);
+  } catch {
+    try {
+      return inflateRawSync(buffer);
+    } catch {
+      return null;
+    }
+  }
 }
 
 function dedupePdfPreviewLines(lines = []) {

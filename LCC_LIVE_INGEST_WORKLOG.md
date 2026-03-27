@@ -152,7 +152,8 @@
 - Improved server-side PDF text preview heuristics so attachment normalization can extract cleaner text from `BT`/`ET` text blocks, `TJ` arrays, and escaped PDF literal strings instead of relying mainly on broad ASCII runs.
 - Added PDF preview de-duplication across repeated text fragments and multi-block extracts so recurring headers or duplicated lease lines do not get overrepresented in normalized attachment text.
 - Extended PDF preview extraction to handle hex-encoded text operators across separate text blocks, improving coverage for noisier multi-stream PDFs that mix literal and hex string content.
+- Added `FlateDecode` PDF stream extraction so compressed text streams can be inflated and passed through the same PDF operator parser, improving preview coverage for more realistic attachment PDFs.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially compressed or otherwise opaque PDF content streams.
+- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially other opaque PDF stream filters or embedded mixed payloads.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
