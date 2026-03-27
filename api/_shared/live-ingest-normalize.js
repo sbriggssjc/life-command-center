@@ -724,6 +724,8 @@ function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
   if (isZipLikeBuffer(buffer, subtype)) return extractGenericZipTextPreview(buffer).slice(0, 4000);
   if (isRtfLikeBuffer(buffer, subtype)) return extractRtfText(buffer.toString('utf8')).slice(0, 4000);
   if (isIcsLikeBuffer(buffer, subtype)) return extractIcsText(buffer.toString('utf8')).slice(0, 4000);
+  if (isDelimitedTextLikeBuffer(buffer, subtype)) return extractDelimitedText(buffer.toString('utf8')).slice(0, 4000);
+  if (isYamlLikeBuffer(buffer, subtype)) return extractYamlText(buffer.toString('utf8')).slice(0, 4000);
   if (subtype === 'text/html') return stripHtml(buffer.toString('utf8')).slice(0, 4000);
   if (subtype === 'application/json' || subtype === 'text/csv' || subtype === 'text/plain' || subtype.startsWith('text/')) {
     return collapseWhitespace(buffer.toString('utf8')).slice(0, 4000);
@@ -790,6 +792,44 @@ function isIcsLikeBuffer(buffer, subtype = '') {
   return lowered === 'text/calendar'
     || lowered === 'application/ics'
     || head.includes('BEGIN:VCALENDAR');
+}
+
+function isDelimitedTextLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 256).toString('utf8');
+  return lowered === 'text/tab-separated-values'
+    || lowered === 'application/tab-separated-values'
+    || (head.includes('\t') && /\r?\n/.test(head));
+}
+
+function extractDelimitedText(text = '') {
+  const rows = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((line) => collapseWhitespace(line.replace(/\t+/g, ' | ')));
+  return collapseWhitespace(rows.join('\n'));
+}
+
+function isYamlLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 256).toString('utf8');
+  return lowered === 'application/yaml'
+    || lowered === 'application/x-yaml'
+    || lowered === 'text/yaml'
+    || /^[A-Za-z0-9_-]+:\s*\S/m.test(head);
+}
+
+function extractYamlText(text = '') {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\t/g, '  '))
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() && !line.trim().startsWith('#'))
+    .slice(0, 20)
+    .map((line) => collapseWhitespace(line.replace(/^-\s*/, '- ')));
+  return collapseWhitespace(lines.join('\n'));
 }
 
 function extractGenericZipTextPreview(buffer) {

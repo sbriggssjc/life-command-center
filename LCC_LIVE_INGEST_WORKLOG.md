@@ -169,6 +169,8 @@
 - Added generic ZIP handling for embedded PDF payloads so non-OOXML archives can contribute readable text-like entries such as `.txt`, `.csv`, `.json`, `.html`, and nested `.eml` sidecars.
 - Added embedded RTF handling for PDF payloads so packaged `.rtf` content now converts to readable text instead of leaking control words through the generic fallback path.
 - Added embedded calendar handling for PDF payloads so packaged `.ics` content now converts to a cleaner event summary instead of falling back to raw RFC lines.
+- Added embedded delimited-text handling for PDF payloads so packaged TSV-style exports now render as readable rows instead of generic plain-text fallback.
+- Added embedded YAML handling for PDF payloads so packaged `.yaml`/`.yml`-style sidecars now normalize cleanly instead of relying on the generic text fallback.
 
 ## Next Follow-Up Candidates
 - Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially additional niche embedded binary families or the remaining opaque PDF stream filters.

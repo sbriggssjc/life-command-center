@@ -1284,6 +1284,85 @@ describe('normalizeLiveIngestDocument', () => {
     assert.equal(doc.metadata.attachment_preview_count, 1);
   });
 
+  it('extracts embedded delimited text from pdf payload streams when present', () => {
+    const embeddedTsv = [
+      'tenant\tmonthly_rent\tnotice_days',
+      'Dialysis North\t72000\t120',
+      'Dialysis South\t68000\t90'
+    ].join('\r\n');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /text#2Ftab-separated-values >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedTsv, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded TSV Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedTsv123"',
+      '',
+      '--pdfEmbeddedTsv123',
+      'Content-Type: application/pdf; name="bundle-tsv.pdf"',
+      'Content-Disposition: attachment; filename="bundle-tsv.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedTsv123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-tsv.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-tsv\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: tenant \| monthly_rent \| notice_days/);
+    assert.match(doc.normalized_text, /Embedded Payload: Dialysis North \| 72000 \| 120/);
+    assert.match(doc.normalized_text, /Embedded Payload: Dialysis South \| 68000 \| 90/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
+  it('extracts embedded yaml text from pdf payload streams when present', () => {
+    const embeddedYaml = [
+      'status: approved',
+      'tenant: Dialysis East',
+      'monthly_rent: 84500',
+      'notice_days: 180'
+    ].join('\n');
+    const pdfBuffer = Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /EmbeddedFile /Subtype /application#2Fx-yaml >>\nstream\n', 'latin1'),
+      Buffer.from(embeddedYaml, 'utf8'),
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const raw = [
+      'Subject: PDF Embedded YAML Intake',
+      'From: sender@example.com',
+      'To: receiver@example.com',
+      'Content-Type: multipart/mixed; boundary="pdfEmbeddedYaml123"',
+      '',
+      '--pdfEmbeddedYaml123',
+      'Content-Type: application/pdf; name="bundle-yaml.pdf"',
+      'Content-Disposition: attachment; filename="bundle-yaml.pdf"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      pdfBuffer.toString('base64'),
+      '--pdfEmbeddedYaml123--'
+    ].join('\r\n');
+
+    const doc = normalizeLiveIngestDocument({
+      name: 'pdf-embedded-yaml.eml',
+      mime_type: 'message/rfc822',
+      text: raw
+    });
+
+    assert.match(doc.normalized_text, /bundle-yaml\.pdf \(application\/pdf\)/);
+    assert.match(doc.normalized_text, /Embedded Payload: status: approved/);
+    assert.match(doc.normalized_text, /Embedded Payload: tenant: Dialysis East/);
+    assert.match(doc.normalized_text, /Embedded Payload: monthly_rent: 84500/);
+    assert.equal(doc.metadata.attachment_preview_count, 1);
+  });
+
   it('returns embedded pdf images as extracted attachments for email pdf bundles', () => {
     const imageBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     const pdfBuffer = Buffer.concat([
