@@ -5817,6 +5817,14 @@ function liveIngestHasCitationRisk(operations, selectedOnly = false) {
   });
 }
 
+function liveIngestHasWorsenedRetryRisk(operations, selectedOnly = false) {
+  return (Array.isArray(operations) ? operations : []).some((op) => {
+    if (!op?._worsenedRetry) return false;
+    if (!selectedOnly) return true;
+    return op._selected !== false;
+  });
+}
+
 function renderLiveIngestOperation(domainKey, op, idx) {
   const opType = esc(op.kind || 'update');
   const table = esc(op.table || op.action || 'operation');
