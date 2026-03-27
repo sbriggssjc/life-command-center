@@ -173,7 +173,8 @@
 - Added embedded delimited-text handling for PDF payloads so packaged TSV-style exports now render as readable rows instead of generic plain-text fallback.
 - Added embedded YAML handling for PDF payloads so packaged `.yaml`/`.yml`-style sidecars now normalize cleanly instead of relying on the generic text fallback.
 - Added embedded XML handling for PDF payloads so packaged XML sidecars now strip tags into readable text instead of exposing raw markup through the fallback path.
+- Added field-level live-ingest provenance logging in `app.js` so persisted `research_queue_outcomes` notes now include per-operation field names plus model-cited or matched source evidence instead of only a run-level summary.
 
 ## Next Follow-Up Candidates
-- Move to richer binary attachment heuristics for embedded mixed-content binaries beyond the current PDF and legacy Office preview paths, especially additional niche embedded binary families or the remaining opaque PDF stream filters.
+- Surface the new field-level provenance directly in the live-ingest review UI and applied-history views, not just the persisted outcome notes.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.

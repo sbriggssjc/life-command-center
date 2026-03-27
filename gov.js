@@ -2811,6 +2811,7 @@ function renderGovEvidenceWorkbench() {
                 <button class="btn-secondary" type="button" data-gov-evidence-dismiss="${idx}">Dismiss</button>
                 <button class="btn-primary" type="button" data-gov-evidence-promote="${idx}">${row.promotion_guard?.message ? 'Confirm Promote' : 'Promote'}</button>
               </div>
+              ${Array.isArray(row.dismiss_reason_options) && row.dismiss_reason_options.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;justify-content:flex-end">${row.dismiss_reason_options.map((reason) => `<button class="btn-secondary" type="button" data-gov-evidence-dismiss-reason="${idx}::${esc(reason)}">Dismiss: ${esc(reason)}</button>`).join('')}</div>` : ''}
             </div>
           </div>`).join('')}</div>`
       : '<div class="live-ingest-empty" style="margin-top:8px">No pending observation rows for this record.</div>';
@@ -3075,14 +3076,14 @@ async function promoteGovEvidenceRows() {
   }
 }
 
-async function reviewGovEvidenceObservation(idx, action) {
+async function reviewGovEvidenceObservation(idx, action, resolutionNote = null) {
   const row = govEvidenceState.queue[idx];
   if (!row) return;
   try {
     await govEvidenceApi('review-observation', {
       method: 'POST',
       query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
-      body: { action, actor: getGovEvidenceActor(), resolution_note: `LCC ${action}` }
+      body: { action, actor: getGovEvidenceActor(), resolution_note: resolutionNote || `LCC ${action}` }
     });
     showToast(`Observation ${action}`, 'success');
     await loadGovEvidenceObservations(true);

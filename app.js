@@ -8102,7 +8102,8 @@ async function applyLiveIngestProposal(domainKey) {
       sourceSurface,
       state,
       effectiveContext,
-      appliedCount: ops.length
+      appliedCount: ops.length,
+      appliedOps: ops
     });
 
     state.lastAppliedAt = new Date().toLocaleString();
@@ -8121,9 +8122,9 @@ async function applyLiveIngestProposal(domainKey) {
   }
 }
 
-async function logLiveIngestProvenance({ domainKey, proxyBase, sourceSurface, state, effectiveContext, appliedCount }) {
+async function logLiveIngestProvenance({ domainKey, proxyBase, sourceSurface, state, effectiveContext, appliedCount, appliedOps }) {
   const record = effectiveContext?.current_record || {};
-  const notes = buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount);
+  const notes = buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount, appliedOps);
   const payload = {
     queue_type: 'live_ingest',
     status: 'applied',
@@ -8157,9 +8158,10 @@ async function logLiveIngestProvenance({ domainKey, proxyBase, sourceSurface, st
   }
 }
 
-function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount) {
+function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount, appliedOps) {
   const record = effectiveContext?.current_record || {};
   const attachmentNames = (state.attachments || []).map((item) => item.name || item.kind || 'attachment').slice(0, 8);
+  const fieldProvenance = buildLiveIngestFieldProvenanceSummary(appliedOps, state.extractionDocs || []);
   const bits = [
     '[live_ingest]',
     state.sourceLabel ? `source=${state.sourceLabel}` : null,
@@ -8170,9 +8172,47 @@ function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount) {
     record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
     record.property_id ? `property_id=${record.property_id}` : null,
     record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
-    state.notes ? `notes=${state.notes}` : null
+    state.notes ? `notes=${state.notes}` : null,
+    fieldProvenance ? `field_provenance=${fieldProvenance}` : null
   ].filter(Boolean);
   return bits.join(' | ').slice(0, 4000);
+}
+
+function buildLiveIngestFieldProvenanceSummary(appliedOps, extractionDocs) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  const summaries = (Array.isArray(appliedOps) ? appliedOps : [])
+    .slice(0, 12)
+    .map((op) => buildLiveIngestOperationProvenanceSummary(op, docs))
+    .filter(Boolean);
+  if (!summaries.length) return '';
+  return summaries.join(' || ').slice(0, 1800);
+}
+
+function buildLiveIngestOperationProvenanceSummary(op, extractionDocs) {
+  if (!op || typeof op !== 'object') return '';
+  const target = op.kind === 'bridge'
+    ? `bridge:${String(op.action || 'action')}`
+    : `${String(op.kind || 'op')}:${String(op.table || 'table')}`;
+  const fieldNames = Object.keys(op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {}))
+    .filter(Boolean)
+    .slice(0, 8);
+  const refs = Array.isArray(op.source_refs) ? op.source_refs : [];
+  const refSummary = refs.slice(0, 2).map((ref) => {
+    const doc = extractionDocs[ref.source_index];
+    const label = String(doc?.metadata?.source_image_name || doc?.name || `source_${Number(ref.source_index) + 1}`).trim();
+    const quote = String(ref?.quote || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return quote ? `${label}:"${quote}"` : label;
+  }).filter(Boolean).join(',');
+  const lineage = !refSummary && op._sourceLineage
+    ? `${String(op._sourceLineage.source_name || op._sourceLineage.label || 'source').trim()}${op._sourceLineage.evidence ? `:"${String(op._sourceLineage.evidence).replace(/\s+/g, ' ').trim().slice(0, 80)}"` : ''}`
+    : '';
+  const bits = [
+    target,
+    fieldNames.length ? `fields=${fieldNames.join(',')}` : '',
+    refSummary ? `refs=${refSummary}` : '',
+    lineage ? `lineage=${lineage}` : ''
+  ].filter(Boolean);
+  return bits.join('|');
 }
 
 window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;

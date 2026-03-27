@@ -343,3 +343,14 @@ Current behavior:
 
 Remaining gap:
 - This still needs a live screenshot test to confirm the side-by-side broker comparison is clear and not too noisy.
+## 2026-03-27 Broker Dismiss Reason Buttons
+
+Implemented in this pass:
+- The live gov evidence queue now renders quick broker dismiss buttons for common reasons.
+- Those buttons reuse the existing observation review endpoint by sending the selected reason through `resolution_note`.
+
+Current behavior:
+- Broker rows can now be dismissed quickly as `same as current contact`, `bad OCR`, or `not relevant` without ad hoc typing.
+
+Remaining gap:
+- This still needs live runtime validation to confirm the suggested reasons cover most broker-dismiss decisions.
