@@ -118,6 +118,7 @@
 - `node --check app.js` passed.
 - `node --check gov.js` passed.
 - `node --check dialysis.js` passed.
+- Trust-filter follow-up changes in `app.js` also passed `node --check app.js`.
 - Follow-up record-lookup changes in `app.js` also passed `node --check app.js`.
 - `node --check api/live-ingest.js` passed.
 - `node --check api/_shared/live-ingest-normalize.js` passed.
@@ -174,7 +175,12 @@
 - Added embedded YAML handling for PDF payloads so packaged `.yaml`/`.yml`-style sidecars now normalize cleanly instead of relying on the generic text fallback.
 - Added embedded XML handling for PDF payloads so packaged XML sidecars now strip tags into readable text instead of exposing raw markup through the fallback path.
 - Added field-level live-ingest provenance logging in `app.js` so persisted `research_queue_outcomes` notes now include per-operation field names plus model-cited or matched source evidence instead of only a run-level summary.
+- Surfaced field-level live-ingest provenance directly in the review UI so each operation card now shows per-field source attribution before apply, not just in persisted outcome notes after writeback.
+- Surfaced persisted live-ingest field provenance in the Dialysis applied-history timeline so `research_queue_outcomes` cards can render readable per-operation attribution instead of leaving the provenance buried in raw note text.
+- Surfaced the same persisted live-ingest field provenance in Government detail activity views by loading `research_queue_outcomes` into `govData` and rendering live-ingest outcome cards alongside Government activity history.
+- Added trust-based provenance prioritization so review cards and applied-history provenance now sort higher-confidence cited entries first and label them as `High trust`, `Medium trust`, or `Needs review`.
+- Added explicit provenance trust filters in both review and applied-history views, and fixed the review-side implementation so filtering stays display-only against original operation indexes rather than reindexing the underlying proposal array.
 
 ## Next Follow-Up Candidates
-- Surface the new field-level provenance directly in the live-ingest review UI and applied-history views, not just the persisted outcome notes.
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
+- Add more trust-filter modes such as `Medium trust` or `Cited only`, and consider preserving separate filter state per dashboard/history surface.

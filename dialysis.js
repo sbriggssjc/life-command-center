@@ -2612,6 +2612,7 @@ function renderDiaDetailActivity(record) {
   
   outcomes.slice().reverse().forEach((outcome, idx) => {
     const statusColor = outcome.status === 'verified_lease' || outcome.status === 'approved_link' ? 'color: var(--success);' : 'color: var(--text2);';
+    const liveIngestMeta = window.parseLiveIngestOutcomeNotes ? window.parseLiveIngestOutcomeNotes(outcome.notes) : null;
     
     html += '<div class="detail-timeline-item">';
     html += '<div style="display: flex; justify-content: space-between; margin-bottom: 8px;">';
@@ -2624,6 +2625,11 @@ function renderDiaDetailActivity(record) {
       html += '<div style="color: var(--text2); font-size: 12px;">by ' + esc(outcome.assigned_to) + '</div>';
     }
     html += '</div>';
+    if (liveIngestMeta && window.renderLiveIngestOutcomeProvenance) {
+      html += window.renderLiveIngestOutcomeProvenance(liveIngestMeta, { limit: 4 });
+    } else if (outcome.notes) {
+      html += '<div style="margin-top:8px;color:var(--text2);font-size:12px;white-space:pre-wrap">' + esc(outcome.notes) + '</div>';
+    }
     html += '</div>';
   });
   

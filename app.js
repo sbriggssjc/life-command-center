@@ -5570,6 +5570,7 @@ function createLiveIngestDomainState() {
     preparedImageAttachments: [],
     lowConfidenceOcrAcknowledged: false,
     citationRiskAcknowledged: false,
+    provenanceTrustFilter: 'all',
     loadingSnapshots: false,
     extracting: false,
     applying: false,
@@ -5599,6 +5600,7 @@ function renderLiveIngestWorkbench(domainKey) {
 
   const proposal = state.proposal;
   const ops = Array.isArray(proposal?.operations) ? proposal.operations : [];
+  const visibleOpIndices = filterLiveIngestOperationIndexesByTrust(ops, state.provenanceTrustFilter);
   const effectiveContext = getLiveIngestEffectiveContext(domainKey);
   const extractionDocsHtml = renderLiveIngestExtractionDocs(state.extractionDocs || []);
   const hasLowConfidenceOcr = liveIngestHasLowConfidenceOcr(state.extractionDocs || []);
@@ -5627,8 +5629,9 @@ function renderLiveIngestWorkbench(domainKey) {
           <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
+        ${ops.length ? renderLiveIngestTrustFilterBar(domainKey, state.provenanceTrustFilter, visibleOpIndices.length, ops.length) : ''}
         <div class="live-ingest-op-list">
-          ${ops.length ? renderLiveIngestOperationGroups(domainKey, ops, state) : '<div class="live-ingest-empty">No operations were proposed.</div>'}
+          ${visibleOpIndices.length ? renderLiveIngestOperationGroups(domainKey, ops, state, visibleOpIndices) : '<div class="live-ingest-empty">No operations match the current trust filter.</div>'}
         </div>
         <div class="live-ingest-actions">
           ${hasLowConfidenceOcr ? `<label class="live-ingest-ack">
@@ -5841,6 +5844,7 @@ function renderLiveIngestOperation(domainKey, op, idx) {
   const bodyObj = op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {});
   const fields = esc(JSON.stringify(bodyObj, null, 2));
   const fieldEntries = Object.entries(bodyObj || {});
+  const fieldProvenance = renderLiveIngestFieldProvenance(domainKey, op);
   const diffHtml = op.kind === 'update'
     ? renderLiveIngestDiffTable(op, fieldEntries)
     : (fieldEntries.length ? `<div class="live-ingest-field-grid">
@@ -5863,6 +5867,7 @@ function renderLiveIngestOperation(domainKey, op, idx) {
       ${op._citationRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation does not include a model-cited source reference even though low-confidence OCR was present in the extraction run.</div>` : ''}
       ${op._worsenedRetryRisk ? `<div class="live-ingest-callout warn" style="margin-top:8px">This operation points to a source whose OCR confidence decreased after retry. Reconfirm the source transcript before applying.</div>` : ''}
       ${op._sourceLineage?.detail ? `<div class="live-ingest-op-reason">${esc(op._sourceLineage.detail)}</div>` : ''}
+      ${fieldProvenance}
       ${op._sourceLineage?.evidence ? `<div class="live-ingest-source-evidence">
         <div class="live-ingest-retry-label">Source Evidence</div>
         <blockquote>${esc(op._sourceLineage.evidence)}</blockquote>
@@ -5878,8 +5883,55 @@ function renderLiveIngestOperation(domainKey, op, idx) {
   </label>`;
 }
 
-function renderLiveIngestOperationGroups(domainKey, operations, state) {
-  const groups = buildLiveIngestOperationGroups(operations);
+function renderLiveIngestFieldProvenance(domainKey, op) {
+  const rows = buildLiveIngestFieldProvenanceRows(domainKey, op);
+  if (!rows.length) return '';
+  const trust = getLiveIngestTrustBadge(scoreLiveIngestOperationConfidence(op));
+  return `<div class="live-ingest-field-provenance">
+    <div class="live-ingest-editor-head">
+      <span>Field Provenance</span>
+      <span class="live-ingest-op-flag ${trust.tone}">${esc(trust.label)}</span>
+    </div>
+    <div class="live-ingest-field-provenance-list">
+      ${rows.map((row) => `<div class="live-ingest-field-provenance-row">
+        <strong>${esc(row.field)}</strong>
+        <span>${esc(row.source)}</span>
+        ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function buildLiveIngestFieldProvenanceRows(domainKey, op) {
+  if (!op || typeof op !== 'object') return [];
+  const fields = Object.keys(op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {})).filter(Boolean).slice(0, 8);
+  if (!fields.length) return [];
+  const docs = getLiveIngestState(domainKey)?.extractionDocs || [];
+  const refs = Array.isArray(op.source_refs) ? op.source_refs : [];
+  const refLabel = refs.slice(0, 2).map((ref) => {
+    const idx = Number(ref?.source_index);
+    const doc = Number.isInteger(idx) && idx >= 0 && idx < docs.length ? docs[idx] : null;
+    const source = String(doc?.metadata?.source_image_name || doc?.name || `Source ${idx + 1}`).trim();
+    const quote = String(ref?.quote || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    return { source, quote };
+  }).filter((item) => item.source);
+  const lineageSource = String(op._sourceLineage?.source_name || op._sourceLineage?.label || '').trim();
+  const lineageQuote = String(op._sourceLineage?.evidence || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  return fields.map((field, idx) => {
+    const ref = refLabel[idx % refLabel.length] || refLabel[0] || null;
+    if (ref) {
+      return { field, source: ref.source, quote: ref.quote };
+    }
+    return {
+      field,
+      source: lineageSource || 'Unattributed source',
+      quote: lineageQuote
+    };
+  });
+}
+
+function renderLiveIngestOperationGroups(domainKey, operations, state, visibleIndices = null) {
+  const groups = buildLiveIngestOperationGroups(operations, visibleIndices);
   return groups.map((group, groupIdx) => {
     const statuses = [];
     if (group.lowConfidenceCount) statuses.push(`<span class="live-ingest-op-flag warn">Low-confidence OCR ${group.lowConfidenceCount}</span>`);
@@ -5955,10 +6007,11 @@ function renderLiveIngestToolbarSummary(operations, state) {
   return `<div class="live-ingest-toolbar-summary">${chips.join('')}</div>`;
 }
 
-function buildLiveIngestOperationGroups(operations) {
+function buildLiveIngestOperationGroups(operations, visibleIndices = null) {
   const groups = [];
   const byKey = new Map();
-  (Array.isArray(operations) ? operations : []).forEach((op, idx) => {
+  const rows = getLiveIngestOperationRows(operations, visibleIndices);
+  rows.forEach(({ op, idx }) => {
     const sourceName = String(op?._sourceLineage?.source_name || '').trim();
     const label = sourceName || 'Unattributed source';
     const detail = op?._sourceLineage?.detail || (sourceName ? `Source: ${sourceName}` : 'Operations without clear source lineage');
@@ -5996,7 +6049,7 @@ function buildLiveIngestOperationGroups(operations) {
     if (op?._citationRisk) group.citationCount += 1;
     if (op?._worsenedRetryRisk) group.worsenedCount += 1;
   });
-  const selectedOps = (Array.isArray(operations) ? operations : []).map((op, idx) => ({ op, idx })).filter(({ op }) => op?._selected !== false);
+  const selectedOps = rows.filter(({ op }) => op?._selected !== false);
   groups.forEach((group) => {
     const groupIndexSet = new Set(group.indices);
     const selectedInGroup = selectedOps.filter(({ idx }) => groupIndexSet.has(idx));
@@ -6014,6 +6067,19 @@ function buildLiveIngestOperationGroups(operations) {
     group.canAcknowledgeShortcut = lowConfidenceOnlyInGroup || citationOnlyInGroup || worsenedOnlyInGroup;
   });
   return groups;
+}
+
+function getLiveIngestOperationRows(operations, visibleIndices = null) {
+  const list = Array.isArray(operations) ? operations : [];
+  if (!Array.isArray(visibleIndices)) {
+    return list.map((op, idx) => ({ op, idx }));
+  }
+  return visibleIndices
+    .map((idx) => {
+      const op = list[idx];
+      return Number.isInteger(idx) && op ? { op, idx } : null;
+    })
+    .filter(Boolean);
 }
 
 function renderLiveIngestFieldValue(value) {
@@ -6115,6 +6181,7 @@ function renderLiveIngestEntityResults(domainKey, state) {
 
 function bindLiveIngestWorkbench(domainKey) {
   const state = getLiveIngestState(domainKey);
+  const visibleOpIndices = filterLiveIngestOperationIndexesByTrust(state.proposal?.operations || [], state.provenanceTrustFilter);
   const prefix = `live-ingest-${domainKey}`;
   const fileInput = document.getElementById(`${prefix}-file`);
   const dropzone = document.getElementById(`${prefix}-dropzone`);
@@ -6236,11 +6303,18 @@ function bindLiveIngestWorkbench(domainKey) {
     state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelectorAll(`[data-live-ingest-trust-filter^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, filterMode] = button.dataset.liveIngestTrustFilter.split(':');
+      state.provenanceTrustFilter = String(filterMode || 'all');
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
   document.querySelectorAll(`[data-live-ingest-group-select^="${domainKey}:"]`).forEach((button) => {
     button.onclick = () => {
       const [, idxText] = button.dataset.liveIngestGroupSelect.split(':');
       const groupIdx = parseInt(idxText, 10);
-      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || [], visibleOpIndices);
       const group = groups[groupIdx];
       if (!group) return;
       group.indices.forEach((opIdx) => {
@@ -6255,7 +6329,7 @@ function bindLiveIngestWorkbench(domainKey) {
     button.onclick = () => {
       const [, idxText] = button.dataset.liveIngestGroupSelectRisk.split(':');
       const groupIdx = parseInt(idxText, 10);
-      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || [], visibleOpIndices);
       const group = groups[groupIdx];
       if (!group) return;
       group.indices.forEach((opIdx) => {
@@ -6270,7 +6344,7 @@ function bindLiveIngestWorkbench(domainKey) {
     button.onclick = () => {
       const [, idxText] = button.dataset.liveIngestGroupClear.split(':');
       const groupIdx = parseInt(idxText, 10);
-      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || [], visibleOpIndices);
       const group = groups[groupIdx];
       if (!group) return;
       group.indices.forEach((opIdx) => {
@@ -6285,7 +6359,7 @@ function bindLiveIngestWorkbench(domainKey) {
     button.onclick = () => {
       const [, idxText] = button.dataset.liveIngestGroupAck.split(':');
       const groupIdx = parseInt(idxText, 10);
-      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || []);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || [], visibleOpIndices);
       const group = groups[groupIdx];
       if (!group) return;
       const groupIndexSet = new Set(group.indices);
@@ -7922,6 +7996,55 @@ function scoreLiveIngestOperationConfidence(op) {
   return score;
 }
 
+function filterLiveIngestOperationsByTrust(operations, filterMode = 'all') {
+  const list = Array.isArray(operations) ? operations : [];
+  if (filterMode === 'high') return list.filter((op) => scoreLiveIngestOperationConfidence(op) >= 60);
+  if (filterMode === 'review') return list.filter((op) => scoreLiveIngestOperationConfidence(op) < 20);
+  return list;
+}
+
+function filterLiveIngestOperationIndexesByTrust(operations, filterMode = 'all') {
+  return (Array.isArray(operations) ? operations : [])
+    .map((op, idx) => ({ op, idx }))
+    .filter(({ op }) => {
+      const score = scoreLiveIngestOperationConfidence(op);
+      if (filterMode === 'high') return score >= 60;
+      if (filterMode === 'review') return score < 20;
+      return true;
+    })
+    .map(({ idx }) => idx);
+}
+
+function renderLiveIngestTrustFilterBar(domainKey, filterMode, visibleCount, totalCount) {
+  const current = String(filterMode || 'all');
+  const options = [
+    { key: 'all', label: 'All' },
+    { key: 'high', label: 'High Trust' },
+    { key: 'review', label: 'Needs Review' }
+  ];
+  return `<div class="live-ingest-trust-filters">
+    <span class="live-ingest-retry-label">View</span>
+    ${options.map((option) => `<button class="live-ingest-inline-btn ${current === option.key ? 'active' : ''}" type="button" data-live-ingest-trust-filter="${domainKey}:${option.key}">${esc(option.label)}</button>`).join('')}
+    <span class="live-ingest-trust-count">${esc(`${visibleCount} of ${totalCount}`)}</span>
+  </div>`;
+}
+
+function scoreLiveIngestProvenanceEntry(entry) {
+  if (!entry || typeof entry !== 'object') return 0;
+  let score = 0;
+  if (entry.refs) score += 60;
+  if (/source matched ocr/i.test(String(entry.lineage || ''))) score += 25;
+  else if (/source matched/i.test(String(entry.lineage || ''))) score += 20;
+  else if (entry.lineage) score += 10;
+  return score;
+}
+
+function getLiveIngestTrustBadge(score) {
+  if (score >= 60) return { label: 'High trust', tone: 'ok' };
+  if (score >= 20) return { label: 'Medium trust', tone: '' };
+  return { label: 'Needs review', tone: 'warn' };
+}
+
 function deriveLiveIngestDisplayLineage(op, extractionDocs) {
   if (Array.isArray(op?.source_refs) && op.source_refs.length) {
     const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
@@ -8215,8 +8338,115 @@ function buildLiveIngestOperationProvenanceSummary(op, extractionDocs) {
   return bits.join('|');
 }
 
+function parseLiveIngestOutcomeNotes(notes) {
+  const text = String(notes || '').trim();
+  if (!text.includes('[live_ingest]')) return null;
+  const segments = text.split(' | ').map((part) => String(part || '').trim()).filter(Boolean);
+  const parsed = {
+    raw: text,
+    fieldProvenance: []
+  };
+  segments.forEach((segment) => {
+    if (segment === '[live_ingest]') return;
+    const idx = segment.indexOf('=');
+    if (idx === -1) return;
+    const key = segment.slice(0, idx).trim();
+    const value = segment.slice(idx + 1).trim();
+    if (!key) return;
+    if (key === 'field_provenance') {
+      parsed.fieldProvenance = value
+        .split(' || ')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map(parseLiveIngestFieldProvenanceEntry)
+        .filter(Boolean);
+      return;
+    }
+    parsed[key] = value;
+  });
+  return parsed;
+}
+
+function parseLiveIngestFieldProvenanceEntry(entryText) {
+  const parts = String(entryText || '').split('|').map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const entry = { target: parts[0], fields: [], refs: '', lineage: '' };
+  parts.slice(1).forEach((part) => {
+    const idx = part.indexOf('=');
+    if (idx === -1) return;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key === 'fields') entry.fields = value.split(',').map((field) => field.trim()).filter(Boolean);
+    else if (key === 'refs') entry.refs = value;
+    else if (key === 'lineage') entry.lineage = value;
+  });
+  return entry;
+}
+
+function renderLiveIngestOutcomeProvenance(parsed, options = {}) {
+  if (!parsed?.fieldProvenance?.length) return '';
+  const limit = Number.isInteger(options.limit) ? options.limit : 6;
+  const filterMode = String(options.filterMode || window._liveIngestHistoryTrustFilter || 'all');
+  const filteredEntries = filterLiveIngestProvenanceEntries(parsed.fieldProvenance, filterMode);
+  const rows = parsed.fieldProvenance
+    .slice()
+    .sort((a, b) => {
+      const diff = scoreLiveIngestProvenanceEntry(b) - scoreLiveIngestProvenanceEntry(a);
+      if (diff) return diff;
+      return String(a?.target || '').localeCompare(String(b?.target || ''));
+    })
+    .filter((entry) => filteredEntries.includes(entry))
+    .slice(0, limit)
+    .map((entry) => {
+      const source = entry.refs || entry.lineage || '';
+      const trust = getLiveIngestTrustBadge(scoreLiveIngestProvenanceEntry(entry));
+      return `<div class="live-ingest-history-row">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+          <strong>${esc(entry.target || 'operation')}</strong>
+          <span class="live-ingest-op-flag ${trust.tone}">${esc(trust.label)}</span>
+        </div>
+        ${entry.fields?.length ? `<span>${esc(entry.fields.join(', '))}</span>` : ''}
+        ${source ? `<div class="live-ingest-history-source">${esc(source)}</div>` : ''}
+      </div>`;
+    }).join('');
+  return `<div class="live-ingest-history-block">
+    ${renderLiveIngestHistoryTrustFilterBar(filterMode, filteredEntries.length, parsed.fieldProvenance.length)}
+    <div class="live-ingest-history-list">${rows}</div>
+  </div>`;
+}
+
+function filterLiveIngestProvenanceEntries(entries, filterMode = 'all') {
+  const list = Array.isArray(entries) ? entries : [];
+  if (filterMode === 'high') return list.filter((entry) => scoreLiveIngestProvenanceEntry(entry) >= 60);
+  if (filterMode === 'review') return list.filter((entry) => scoreLiveIngestProvenanceEntry(entry) < 20);
+  return list;
+}
+
+function renderLiveIngestHistoryTrustFilterBar(filterMode, visibleCount, totalCount) {
+  const current = String(filterMode || 'all');
+  const options = [
+    { key: 'all', label: 'All' },
+    { key: 'high', label: 'High Trust' },
+    { key: 'review', label: 'Needs Review' }
+  ];
+  return `<div class="live-ingest-trust-filters">
+    <span class="live-ingest-retry-label">Field Provenance</span>
+    ${options.map((option) => `<button class="live-ingest-inline-btn ${current === option.key ? 'active' : ''}" type="button" onclick="setLiveIngestHistoryTrustFilter('${option.key}')">${esc(option.label)}</button>`).join('')}
+    <span class="live-ingest-trust-count">${esc(`${visibleCount} of ${totalCount}`)}</span>
+  </div>`;
+}
+
+function setLiveIngestHistoryTrustFilter(filterMode) {
+  window._liveIngestHistoryTrustFilter = String(filterMode || 'all');
+  if (window._detailRecord && window._detailSource) {
+    if (typeof showDetail === 'function') showDetail(window._detailRecord, window._detailSource);
+  }
+}
+
 window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
 window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
+window.parseLiveIngestOutcomeNotes = parseLiveIngestOutcomeNotes;
+window.renderLiveIngestOutcomeProvenance = renderLiveIngestOutcomeProvenance;
 
 // Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {

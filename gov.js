@@ -165,6 +165,7 @@ async function loadGovData() {
   govData.frppRecords = [];
   govData.countyAuth = [];
   govData.loans = [];
+  govData.researchOutcomes = [];
   
   showToast('Loading government data...', 'info');
   
@@ -211,6 +212,15 @@ async function loadGovData() {
       }
     );
     govData.gsaEvents = gsaEventsRes.data || [];
+
+    const researchOutcomesRes = await govQuery('research_queue_outcomes',
+      'queue_type, status, notes, assigned_at, created_at, assigned_to, selected_property_id, clinic_id',
+      {
+        order: 'assigned_at.desc',
+        limit: 500
+      }
+    );
+    govData.researchOutcomes = researchOutcomesRes.data || [];
     
     // Load GSA snapshots
     const gsaSnapshotsRes = await govQuery('gsa_snapshots',
@@ -3065,14 +3075,15 @@ async function promoteGovEvidenceRows() {
       body: { actor: getGovEvidenceActor() }
     });
     const count = result?.promoted_count || 0;
-    appendGovEvidenceNote(`Promoted ${count} screenshot observation row${count === 1 ? '' : 's'} into the review queue.`);
+    appendGovEvidenceNote(`Promoted ${count} evidence row${count === 1 ? '' : 's'} into the review queue.`);
     showToast(`Promoted ${count} evidence row${count === 1 ? '' : 's'}`, 'success');
     govEvidenceState.queueLoaded = false;
     await loadGovEvidenceObservations(true);
   } catch (err) {
+    showToast(`Promote rows failed: ${err.message}`, 'error');
+  } finally {
     govEvidenceState.loading = false;
     rerenderGovEvidenceOnly();
-    showToast(`Promote rows failed: ${err.message}`, 'error');
   }
 }
 
@@ -3091,6 +3102,7 @@ async function reviewGovEvidenceObservation(idx, action, resolutionNote = null) 
     showToast(`Observation update failed: ${err.message}`, 'error');
   }
 }
+
 async function promoteGovEvidenceObservation(idx) {
   const row = govEvidenceState.queue[idx];
   if (!row) return;
@@ -3190,12 +3202,24 @@ function bindGovEvidenceWorkbench() {
   document.querySelectorAll('[data-gov-evidence-dismiss]').forEach((button) => {
     button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
   });
+  document.querySelectorAll('[data-gov-evidence-dismiss-reason]').forEach((button) => {
+    button.onclick = () => {
+      const raw = button.dataset.govEvidenceDismissReason || '';
+      const splitAt = raw.indexOf('::');
+      if (splitAt <= 0) return;
+      const idx = Number(raw.slice(0, splitAt));
+      const reason = raw.slice(splitAt + 2);
+      reviewGovEvidenceObservation(idx, 'dismissed', `Broker dismiss reason: ${reason}`);
+    };
+  });
   document.querySelectorAll('[data-gov-evidence-promote]').forEach((button) => {
     button.onclick = () => promoteGovEvidenceObservation(Number(button.dataset.govEvidencePromote));
   });
   if (!govEvidenceState.queueLoaded && !govEvidenceState.queueLoading && getGovEvidenceContextRecord()) {
     loadGovEvidenceObservations(false);
   }
+}
+
 }
 
 // ============================================================================
@@ -4190,6 +4214,7 @@ function renderOwnershipActivity(record) {
   });
   
   html += '</div>';
+  html += renderGovLiveIngestOutcomeTimeline(record);
   html += '</div>';
   
   return html;
@@ -4400,8 +4425,46 @@ function renderLeadActivity(record) {
   });
   
   html += '</div>';
+  html += renderGovLiveIngestOutcomeTimeline(record);
   html += '</div>';
   
+  return html;
+}
+
+function renderGovLiveIngestOutcomeTimeline(record) {
+  const propertyId = record?.property_id || record?.matched_property_id || null;
+  if (!propertyId) return '';
+  const outcomes = (govData.researchOutcomes || []).filter((row) =>
+    row
+    && row.queue_type === 'live_ingest'
+    && String(row.selected_property_id || '') === String(propertyId)
+  );
+  if (!outcomes.length) return '';
+  let html = '<div class="detail-section" style="margin-top:12px">';
+  html += '<div class="detail-section-title">Live Ingest Outcomes</div>';
+  html += '<div class="detail-timeline">';
+  outcomes.slice().reverse().slice(0, 12).forEach((outcome) => {
+    const meta = window.parseLiveIngestOutcomeNotes ? window.parseLiveIngestOutcomeNotes(outcome.notes) : null;
+    html += '<div class="detail-timeline-item">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:8px">';
+    html += '<div style="font-weight:600;">' + esc(outcome.queue_type || 'live_ingest') + '</div>';
+    html += '<div style="color:var(--text2);font-size:12px;">' + fmt(outcome.assigned_at || outcome.created_at) + '</div>';
+    html += '</div>';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<div style="color:var(--text2);">' + esc(outcome.status || 'unknown') + '</div>';
+    if (outcome.assigned_to) {
+      html += '<div style="color:var(--text2);font-size:12px;">by ' + esc(outcome.assigned_to) + '</div>';
+    }
+    html += '</div>';
+    if (meta && window.renderLiveIngestOutcomeProvenance) {
+      html += window.renderLiveIngestOutcomeProvenance(meta, { limit: 4 });
+    } else if (outcome.notes) {
+      html += '<div style="margin-top:8px;color:var(--text2);font-size:12px;white-space:pre-wrap">' + esc(outcome.notes) + '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
   return html;
 }
 
@@ -5619,7 +5682,6 @@ window.renderGovLoans = renderGovLoans;
 window.renderGovPlayers = renderGovPlayers;
 window.renderPlayersTable = renderPlayersTable;
 window.renderGovOverview = renderGovOverview;
-
 
 
 
