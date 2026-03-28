@@ -5326,6 +5326,38 @@ function buildCopilotContext() {
     };
   }
 
+  // Gov portfolio stats from materialized view (loaded by gov.js)
+  if (typeof govOverviewStats !== 'undefined' && govOverviewStats) {
+    ctx.gov_portfolio = {
+      total_properties: govOverviewStats.total_properties,
+      total_sf_leased: govOverviewStats.total_sf_leased,
+      total_gross_rent: govOverviewStats.total_gross_rent,
+      avg_rent_per_sf: govOverviewStats.avg_rent_per_sf,
+      agencies_tracked: govOverviewStats.agencies_tracked,
+      expiring_lt_1yr: govOverviewStats.expiring_lt_1yr,
+      expiring_lt_2yr: govOverviewStats.expiring_lt_2yr,
+      term_2_5yr: govOverviewStats.term_2_5yr,
+      term_5plus: govOverviewStats.term_5plus,
+      total_noi: govOverviewStats.total_noi,
+      total_contacts: govOverviewStats.total_contacts,
+      top_agencies_by_count: govOverviewStats.top_agencies_by_count,
+      top_states_by_count: govOverviewStats.top_states_by_count
+    };
+  }
+
+  // Dialysis portfolio stats (loaded by dialysis.js)
+  if (typeof diaData !== 'undefined' && diaData && diaData.freshness) {
+    ctx.dia_portfolio = {
+      freshness: diaData.freshness,
+      inventory_summary: diaData.inventorySummary,
+      property_review_queue_count: (diaData.propertyReviewQueue || []).length,
+      lease_backfill_count: (diaData.leaseBackfillRows || []).length,
+      research_outcomes_count: (diaData.researchOutcomes || []).length,
+      movers_up_count: (diaData.moversUp || []).length,
+      movers_down_count: (diaData.moversDown || []).length
+    };
+  }
+
   return ctx;
 }
 
@@ -8292,6 +8324,7 @@ function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount, a
     state.proposal?.summary ? `summary=${state.proposal.summary}` : null,
     attachmentNames.length ? `attachments=${attachmentNames.join(', ')}` : null,
     record.lead_id ? `lead_id=${record.lead_id}` : null,
+<<<<<<< HEAD
     record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
     record.property_id ? `property_id=${record.property_id}` : null,
     record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
@@ -8447,6 +8480,56 @@ window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
 window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
 window.parseLiveIngestOutcomeNotes = parseLiveIngestOutcomeNotes;
 window.renderLiveIngestOutcomeProvenance = renderLiveIngestOutcomeProvenance;
+=======
+    record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
+    record.property_id ? `property_id=${record.property_id}` : null,
+    record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
+    state.notes ? `notes=${state.notes}` : null,
+    fieldProvenance ? `field_provenance=${fieldProvenance}` : null
+  ].filter(Boolean);
+  return bits.join(' | ').slice(0, 4000);
+}
+
+function buildLiveIngestFieldProvenanceSummary(appliedOps, extractionDocs) {
+  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
+  const summaries = (Array.isArray(appliedOps) ? appliedOps : [])
+    .slice(0, 12)
+    .map((op) => buildLiveIngestOperationProvenanceSummary(op, docs))
+    .filter(Boolean);
+  if (!summaries.length) return '';
+  return summaries.join(' || ').slice(0, 1800);
+}
+
+function buildLiveIngestOperationProvenanceSummary(op, extractionDocs) {
+  if (!op || typeof op !== 'object') return '';
+  const target = op.kind === 'bridge'
+    ? `bridge:${String(op.action || 'action')}`
+    : `${String(op.kind || 'op')}:${String(op.table || 'table')}`;
+  const fieldNames = Object.keys(op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {}))
+    .filter(Boolean)
+    .slice(0, 8);
+  const refs = Array.isArray(op.source_refs) ? op.source_refs : [];
+  const refSummary = refs.slice(0, 2).map((ref) => {
+    const doc = extractionDocs[ref.source_index];
+    const label = String(doc?.metadata?.source_image_name || doc?.name || `source_${Number(ref.source_index) + 1}`).trim();
+    const quote = String(ref?.quote || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return quote ? `${label}:"${quote}"` : label;
+  }).filter(Boolean).join(',');
+  const lineage = !refSummary && op._sourceLineage
+    ? `${String(op._sourceLineage.source_name || op._sourceLineage.label || 'source').trim()}${op._sourceLineage.evidence ? `:"${String(op._sourceLineage.evidence).replace(/\s+/g, ' ').trim().slice(0, 80)}"` : ''}`
+    : '';
+  const bits = [
+    target,
+    fieldNames.length ? `fields=${fieldNames.join(',')}` : '',
+    refSummary ? `refs=${refSummary}` : '',
+    lineage ? `lineage=${lineage}` : ''
+  ].filter(Boolean);
+  return bits.join('|');
+}
+
+window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
+window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
+>>>>>>> 1ebee09e74908181e5c356886684d5995018d8bf
 
 // Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {

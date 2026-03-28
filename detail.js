@@ -74,15 +74,23 @@ async function openUnifiedDetail(db, ids, fallback) {
   const leaseNumber = ids.lease_number;
 
   // For Dialysis clinics without property_id, resolve via medicare_clinics
-  if (!propertyId && db === 'dia' && fallback.clinic_id) {
+  const clinicIdent = fallback.clinic_id || fallback.medicare_id || fallback.ccn;
+  if (!propertyId && db === 'dia' && (clinicIdent || fallback.npi || fallback.medicare_npi)) {
     try {
-      const mcRes = await diaQuery('medicare_clinics', 'property_id', {
-        filter: `medicare_id=eq.${encodeURIComponent(fallback.clinic_id)}`,
+      // Try medicare_id first, then NPI
+      const lookupField = clinicIdent ? 'medicare_id' : 'npi';
+      const lookupVal = clinicIdent || fallback.npi || fallback.medicare_npi;
+      const mcRes = await diaQuery('medicare_clinics', 'property_id,medicare_id', {
+        filter: `${lookupField}=eq.${encodeURIComponent(lookupVal)}`,
         limit: 1
       });
       const mcArr = Array.isArray(mcRes) ? mcRes : (mcRes?.data || []);
       if (mcArr.length && mcArr[0].property_id) {
         propertyId = mcArr[0].property_id;
+      }
+      // Backfill clinic_id on fallback so downstream tabs work
+      if (mcArr.length && mcArr[0].medicare_id && !fallback.clinic_id) {
+        fallback.clinic_id = mcArr[0].medicare_id;
       }
     } catch (e) { console.warn('clinic→property lookup failed', e); }
   }
@@ -557,6 +565,17 @@ function _udTabFallbackSummary(fb) {
   html += _row('Agency / Tenant', fb.tenant_agency || fb.agency || fb.tenant_operator);
   html += _row('Lease Number', fb.lease_number);
   html += _row('Building Size', fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft ? fmtN(fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft) + ' SF' : null);
+
+  // Dialysis-specific fields from search results
+  if (fb.facility_name) html += _row('Facility', fb.facility_name);
+  if (fb.operator_name) html += _row('Operator', fb.operator_name);
+  if (fb.medicare_npi || fb.npi) html += _row('NPI', fb.medicare_npi || fb.npi);
+  if (fb.ccn || fb.clinic_id || fb.medicare_id) html += _row('CCN / Medicare ID', fb.ccn || fb.clinic_id || fb.medicare_id);
+  if (fb.latest_total_patients) html += _row('Patients', typeof fmtN === 'function' ? fmtN(fb.latest_total_patients) : fb.latest_total_patients);
+  if (fb.stations || fb.number_of_chairs) html += _row('Stations', fb.stations || fb.number_of_chairs);
+  if (fb.change_type) html += _row('Inventory Status', fb.change_type);
+  if (fb.signal_type) html += _row('NPI Signal', fb.signal_type);
+  if (fb.review_type) html += _row('Review Type', fb.review_type);
   html += '</div></div>';
 
   // Financial section

@@ -3673,6 +3673,8 @@ function renderDiaPlayers() {
 let diaSearchTerm = '';
 let diaSearchResults = null;
 let diaSearching = false;
+const DIA_SEARCH_COLLAPSED_LIMIT = 5;
+let _diaSearchExpanded = {}; // Track which categories are expanded
 
 function renderDiaSearch() {
   let html = '<div class="biz-section">';
@@ -3695,7 +3697,22 @@ function renderDiaSearch() {
     if (total === 0) {
       html += '<div class="search-empty"><p>No results found for "' + esc(diaSearchTerm) + '"</p></div>';
     } else {
-      html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 16px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' found</div>';
+      html += '<div style="color: var(--text2); font-size: 13px; margin-bottom: 12px;">' + total + ' result' + (total !== 1 ? 's' : '') + ' found</div>';
+
+      // Category anchor bar — clickable jump links for each result type
+      const categories = [
+        { key: 'clinics', label: 'Clinics', count: clinics.length, color: '#a78bfa' },
+        { key: 'npi', label: 'NPI Signals', count: npiSignals.length, color: '#f87171' },
+        { key: 'property', label: 'Property Queue', count: propQueue.length, color: '#fbbf24' },
+        { key: 'outcomes', label: 'Research', count: outcomes.length, color: '#34d399' }
+      ].filter(c => c.count > 0);
+
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
+      categories.forEach(c => {
+        html += '<a href="#dia-search-' + c.key + '" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:600;text-decoration:none;background:' + c.color + '20;color:' + c.color + ';border:1px solid ' + c.color + '30;cursor:pointer" onclick="event.preventDefault();document.getElementById(\'dia-search-' + c.key + '\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})">';
+        html += c.label + ' <span style="opacity:0.8">(' + c.count + ')</span></a>';
+      });
+      html += '</div>';
 
       // Store flat search results array for onclick references (avoids massive inline JSON in DOM)
       window._diaSearchFlat = [];
@@ -3706,8 +3723,10 @@ function renderDiaSearch() {
       }
 
       if (clinics.length > 0) {
-        html += '<div class="search-results-section"><h4>Clinics (' + clinics.length + ')</h4>';
-        clinics.forEach(r => {
+        var isExpanded = _diaSearchExpanded.clinics || false;
+        var visibleClinics = isExpanded ? clinics : clinics.slice(0, DIA_SEARCH_COLLAPSED_LIMIT);
+        html += '<div class="search-results-section" id="dia-search-clinics"><h4>Clinics (' + clinics.length + ')</h4>';
+        visibleClinics.forEach(r => {
           var idx = pushDiaRef(r);
           html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || '—') + '</span>';
@@ -3720,12 +3739,21 @@ function renderDiaSearch() {
           if (r.change_type) html += '<span>' + esc(cleanLabel(r.change_type)) + '</span>';
           html += '</div></div>';
         });
+        if (clinics.length > DIA_SEARCH_COLLAPSED_LIMIT) {
+          if (!isExpanded) {
+            html += '<button onclick="_diaSearchExpanded.clinics=true;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer">Show all ' + clinics.length + ' clinics</button>';
+          } else {
+            html += '<button onclick="_diaSearchExpanded.clinics=false;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">Collapse</button>';
+          }
+        }
         html += '</div>';
       }
 
       if (npiSignals.length > 0) {
-        html += '<div class="search-results-section"><h4>NPI Signals (' + npiSignals.length + ')</h4>';
-        npiSignals.forEach(r => {
+        var isExpanded = _diaSearchExpanded.npi || false;
+        var visibleNpi = isExpanded ? npiSignals : npiSignals.slice(0, DIA_SEARCH_COLLAPSED_LIMIT);
+        html += '<div class="search-results-section" id="dia-search-npi"><h4>NPI Signals (' + npiSignals.length + ')</h4>';
+        visibleNpi.forEach(r => {
           var idx = pushDiaRef(r);
           html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.npi || '—') + '</span>';
@@ -3736,12 +3764,21 @@ function renderDiaSearch() {
           if (r.npi) html += '<span>NPI: ' + esc(r.npi) + '</span>';
           html += '</div></div>';
         });
+        if (npiSignals.length > DIA_SEARCH_COLLAPSED_LIMIT) {
+          if (!isExpanded) {
+            html += '<button onclick="_diaSearchExpanded.npi=true;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer">Show all ' + npiSignals.length + ' NPI signals</button>';
+          } else {
+            html += '<button onclick="_diaSearchExpanded.npi=false;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">Collapse</button>';
+          }
+        }
         html += '</div>';
       }
 
       if (propQueue.length > 0) {
-        html += '<div class="search-results-section"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
-        propQueue.forEach(r => {
+        var isExpanded = _diaSearchExpanded.property || false;
+        var visibleProp = isExpanded ? propQueue : propQueue.slice(0, DIA_SEARCH_COLLAPSED_LIMIT);
+        html += '<div class="search-results-section" id="dia-search-property"><h4>Property Review Queue (' + propQueue.length + ')</h4>';
+        visibleProp.forEach(r => {
           var idx = pushDiaRef(r);
           html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.facility_name) || r.clinic_id || '—') + '</span>';
@@ -3752,12 +3789,21 @@ function renderDiaSearch() {
           if (r.review_type) html += '<span>Review: ' + esc(cleanLabel(r.review_type)) + '</span>';
           html += '</div></div>';
         });
+        if (propQueue.length > DIA_SEARCH_COLLAPSED_LIMIT) {
+          if (!isExpanded) {
+            html += '<button onclick="_diaSearchExpanded.property=true;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer">Show all ' + propQueue.length + ' properties</button>';
+          } else {
+            html += '<button onclick="_diaSearchExpanded.property=false;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">Collapse</button>';
+          }
+        }
         html += '</div>';
       }
 
       if (outcomes.length > 0) {
-        html += '<div class="search-results-section"><h4>Research Outcomes (' + outcomes.length + ')</h4>';
-        outcomes.forEach(r => {
+        var isExpanded = _diaSearchExpanded.outcomes || false;
+        var visibleOutcomes = isExpanded ? outcomes : outcomes.slice(0, DIA_SEARCH_COLLAPSED_LIMIT);
+        html += '<div class="search-results-section" id="dia-search-outcomes"><h4>Research Outcomes (' + outcomes.length + ')</h4>';
+        visibleOutcomes.forEach(r => {
           var idx = pushDiaRef(r);
           html += '<div class="search-card" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\')">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(r.queue_type || r.clinic_id || '—') + '</span>';
@@ -3768,6 +3814,13 @@ function renderDiaSearch() {
           if (r.source_bucket) html += '<span>Source: ' + esc(r.source_bucket) + '</span>';
           html += '</div></div>';
         });
+        if (outcomes.length > DIA_SEARCH_COLLAPSED_LIMIT) {
+          if (!isExpanded) {
+            html += '<button onclick="_diaSearchExpanded.outcomes=true;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer">Show all ' + outcomes.length + ' outcomes</button>';
+          } else {
+            html += '<button onclick="_diaSearchExpanded.outcomes=false;renderDiaTab()" style="width:100%;padding:8px;margin-top:4px;background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">Collapse</button>';
+          }
+        }
         html += '</div>';
       }
     }
@@ -3794,15 +3847,16 @@ async function execDiaSearch() {
 
   diaSearchTerm = term;
   diaSearching = true;
+  _diaSearchExpanded = {}; // Reset expansion state on new search
   renderDiaTab();
 
   const like = '*' + term + '*';
   try {
     const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
-      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 50 }),
-      diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',npi.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 25 }),
-      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',operator_name.ilike.' + like + ',state.ilike.' + like + ')', limit: 25 }).catch(() => []),
-      diaQuery('research_queue_outcomes', '*', { filter: 'or=(queue_type.ilike.' + like + ',status.ilike.' + like + ',notes.ilike.' + like + ')', limit: 25 })
+      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 100 }),
+      diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',npi.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 50 }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',operator_name.ilike.' + like + ',state.ilike.' + like + ')', limit: 50 }).catch(() => []),
+      diaQuery('research_queue_outcomes', '*', { filter: 'or=(queue_type.ilike.' + like + ',status.ilike.' + like + ',notes.ilike.' + like + ')', limit: 50 })
     ]);
 
     diaSearchResults = {
@@ -4431,6 +4485,7 @@ window.renderDiaDetailBody = renderDiaDetailBody;
 window.saveDiaDetailResearch = saveDiaDetailResearch;
 window.renderDiaSearch = renderDiaSearch;
 window.execDiaSearch = execDiaSearch;
+window._diaSearchExpanded = _diaSearchExpanded;
 window.renderDiaSales = renderDiaSales;
 window.renderDiaPlayers = renderDiaPlayers;
 window.renderDiaLeases = renderDiaLeases;
