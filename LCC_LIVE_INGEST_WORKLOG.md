@@ -119,6 +119,7 @@
 - `node --check gov.js` passed.
 - `node --check dialysis.js` passed.
 - Trust-filter follow-up changes in `app.js` also passed `node --check app.js`.
+- Trust-filter expansion and provenance merge-conflict repair in `app.js` also passed `node --check app.js`.
 - Follow-up record-lookup changes in `app.js` also passed `node --check app.js`.
 - `node --check api/live-ingest.js` passed.
 - `node --check api/_shared/live-ingest-normalize.js` passed.
@@ -180,7 +181,9 @@
 - Surfaced the same persisted live-ingest field provenance in Government detail activity views by loading `research_queue_outcomes` into `govData` and rendering live-ingest outcome cards alongside Government activity history.
 - Added trust-based provenance prioritization so review cards and applied-history provenance now sort higher-confidence cited entries first and label them as `High trust`, `Medium trust`, or `Needs review`.
 - Added explicit provenance trust filters in both review and applied-history views, and fixed the review-side implementation so filtering stays display-only against original operation indexes rather than reindexing the underlying proposal array.
+- Expanded the provenance trust filters with `Medium Trust` and `Cited Only` modes in both review and applied-history views, and repaired an `app.js` merge-conflict in the provenance/history block so the live-ingest renderer is syntactically valid again.
 
 ## Next Follow-Up Candidates
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
-- Add more trust-filter modes such as `Medium trust` or `Cited only`, and consider preserving separate filter state per dashboard/history surface.
+- Consider preserving separate trust-filter state per dashboard/history surface instead of using one shared history filter.
+- Add higher-signal review shortcuts on top of the trust filters, such as `Low-confidence OCR only` or `Uncited only`.

@@ -8031,6 +8031,11 @@ function scoreLiveIngestOperationConfidence(op) {
 function filterLiveIngestOperationsByTrust(operations, filterMode = 'all') {
   const list = Array.isArray(operations) ? operations : [];
   if (filterMode === 'high') return list.filter((op) => scoreLiveIngestOperationConfidence(op) >= 60);
+  if (filterMode === 'medium') return list.filter((op) => {
+    const score = scoreLiveIngestOperationConfidence(op);
+    return score >= 20 && score < 60;
+  });
+  if (filterMode === 'cited') return list.filter((op) => Array.isArray(op?.source_refs) && op.source_refs.length);
   if (filterMode === 'review') return list.filter((op) => scoreLiveIngestOperationConfidence(op) < 20);
   return list;
 }
@@ -8041,6 +8046,8 @@ function filterLiveIngestOperationIndexesByTrust(operations, filterMode = 'all')
     .filter(({ op }) => {
       const score = scoreLiveIngestOperationConfidence(op);
       if (filterMode === 'high') return score >= 60;
+      if (filterMode === 'medium') return score >= 20 && score < 60;
+      if (filterMode === 'cited') return Array.isArray(op?.source_refs) && op.source_refs.length;
       if (filterMode === 'review') return score < 20;
       return true;
     })
@@ -8052,6 +8059,8 @@ function renderLiveIngestTrustFilterBar(domainKey, filterMode, visibleCount, tot
   const options = [
     { key: 'all', label: 'All' },
     { key: 'high', label: 'High Trust' },
+    { key: 'medium', label: 'Medium Trust' },
+    { key: 'cited', label: 'Cited Only' },
     { key: 'review', label: 'Needs Review' }
   ];
   return `<div class="live-ingest-trust-filters">
@@ -8324,7 +8333,6 @@ function buildLiveIngestProvenanceNotes(state, effectiveContext, appliedCount, a
     state.proposal?.summary ? `summary=${state.proposal.summary}` : null,
     attachmentNames.length ? `attachments=${attachmentNames.join(', ')}` : null,
     record.lead_id ? `lead_id=${record.lead_id}` : null,
-<<<<<<< HEAD
     record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
     record.property_id ? `property_id=${record.property_id}` : null,
     record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
@@ -8451,6 +8459,11 @@ function renderLiveIngestOutcomeProvenance(parsed, options = {}) {
 function filterLiveIngestProvenanceEntries(entries, filterMode = 'all') {
   const list = Array.isArray(entries) ? entries : [];
   if (filterMode === 'high') return list.filter((entry) => scoreLiveIngestProvenanceEntry(entry) >= 60);
+  if (filterMode === 'medium') return list.filter((entry) => {
+    const score = scoreLiveIngestProvenanceEntry(entry);
+    return score >= 20 && score < 60;
+  });
+  if (filterMode === 'cited') return list.filter((entry) => !!entry?.refs);
   if (filterMode === 'review') return list.filter((entry) => scoreLiveIngestProvenanceEntry(entry) < 20);
   return list;
 }
@@ -8460,6 +8473,8 @@ function renderLiveIngestHistoryTrustFilterBar(filterMode, visibleCount, totalCo
   const options = [
     { key: 'all', label: 'All' },
     { key: 'high', label: 'High Trust' },
+    { key: 'medium', label: 'Medium Trust' },
+    { key: 'cited', label: 'Cited Only' },
     { key: 'review', label: 'Needs Review' }
   ];
   return `<div class="live-ingest-trust-filters">
@@ -8480,56 +8495,6 @@ window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
 window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
 window.parseLiveIngestOutcomeNotes = parseLiveIngestOutcomeNotes;
 window.renderLiveIngestOutcomeProvenance = renderLiveIngestOutcomeProvenance;
-=======
-    record.ownership_id ? `ownership_id=${record.ownership_id}` : null,
-    record.property_id ? `property_id=${record.property_id}` : null,
-    record.clinic_id ? `clinic_id=${record.clinic_id}` : null,
-    state.notes ? `notes=${state.notes}` : null,
-    fieldProvenance ? `field_provenance=${fieldProvenance}` : null
-  ].filter(Boolean);
-  return bits.join(' | ').slice(0, 4000);
-}
-
-function buildLiveIngestFieldProvenanceSummary(appliedOps, extractionDocs) {
-  const docs = Array.isArray(extractionDocs) ? extractionDocs : [];
-  const summaries = (Array.isArray(appliedOps) ? appliedOps : [])
-    .slice(0, 12)
-    .map((op) => buildLiveIngestOperationProvenanceSummary(op, docs))
-    .filter(Boolean);
-  if (!summaries.length) return '';
-  return summaries.join(' || ').slice(0, 1800);
-}
-
-function buildLiveIngestOperationProvenanceSummary(op, extractionDocs) {
-  if (!op || typeof op !== 'object') return '';
-  const target = op.kind === 'bridge'
-    ? `bridge:${String(op.action || 'action')}`
-    : `${String(op.kind || 'op')}:${String(op.table || 'table')}`;
-  const fieldNames = Object.keys(op.kind === 'bridge' ? (op.payload || {}) : (op.fields || {}))
-    .filter(Boolean)
-    .slice(0, 8);
-  const refs = Array.isArray(op.source_refs) ? op.source_refs : [];
-  const refSummary = refs.slice(0, 2).map((ref) => {
-    const doc = extractionDocs[ref.source_index];
-    const label = String(doc?.metadata?.source_image_name || doc?.name || `source_${Number(ref.source_index) + 1}`).trim();
-    const quote = String(ref?.quote || '').replace(/\s+/g, ' ').trim().slice(0, 80);
-    return quote ? `${label}:"${quote}"` : label;
-  }).filter(Boolean).join(',');
-  const lineage = !refSummary && op._sourceLineage
-    ? `${String(op._sourceLineage.source_name || op._sourceLineage.label || 'source').trim()}${op._sourceLineage.evidence ? `:"${String(op._sourceLineage.evidence).replace(/\s+/g, ' ').trim().slice(0, 80)}"` : ''}`
-    : '';
-  const bits = [
-    target,
-    fieldNames.length ? `fields=${fieldNames.join(',')}` : '',
-    refSummary ? `refs=${refSummary}` : '',
-    lineage ? `lineage=${lineage}` : ''
-  ].filter(Boolean);
-  return bits.join('|');
-}
-
-window.renderLiveIngestWorkbench = renderLiveIngestWorkbench;
-window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
->>>>>>> 1ebee09e74908181e5c356886684d5995018d8bf
 
 // Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {
