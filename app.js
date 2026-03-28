@@ -8036,6 +8036,8 @@ function filterLiveIngestOperationsByTrust(operations, filterMode = 'all') {
     return score >= 20 && score < 60;
   });
   if (filterMode === 'cited') return list.filter((op) => Array.isArray(op?.source_refs) && op.source_refs.length);
+  if (filterMode === 'uncited') return list.filter((op) => !!op?._citationRisk);
+  if (filterMode === 'low_ocr') return list.filter((op) => !!op?._lowConfidenceOcr);
   if (filterMode === 'review') return list.filter((op) => scoreLiveIngestOperationConfidence(op) < 20);
   return list;
 }
@@ -8048,6 +8050,8 @@ function filterLiveIngestOperationIndexesByTrust(operations, filterMode = 'all')
       if (filterMode === 'high') return score >= 60;
       if (filterMode === 'medium') return score >= 20 && score < 60;
       if (filterMode === 'cited') return Array.isArray(op?.source_refs) && op.source_refs.length;
+      if (filterMode === 'uncited') return !!op?._citationRisk;
+      if (filterMode === 'low_ocr') return !!op?._lowConfidenceOcr;
       if (filterMode === 'review') return score < 20;
       return true;
     })
@@ -8061,6 +8065,8 @@ function renderLiveIngestTrustFilterBar(domainKey, filterMode, visibleCount, tot
     { key: 'high', label: 'High Trust' },
     { key: 'medium', label: 'Medium Trust' },
     { key: 'cited', label: 'Cited Only' },
+    { key: 'uncited', label: 'Uncited Only' },
+    { key: 'low_ocr', label: 'Low OCR Only' },
     { key: 'review', label: 'Needs Review' }
   ];
   return `<div class="live-ingest-trust-filters">
@@ -8370,11 +8376,15 @@ function buildLiveIngestOperationProvenanceSummary(op, extractionDocs) {
   const lineage = !refSummary && op._sourceLineage
     ? `${String(op._sourceLineage.source_name || op._sourceLineage.label || 'source').trim()}${op._sourceLineage.evidence ? `:"${String(op._sourceLineage.evidence).replace(/\s+/g, ' ').trim().slice(0, 80)}"` : ''}`
     : '';
+  const flags = [];
+  if (op._citationRisk || !refSummary) flags.push('uncited');
+  if (op._lowConfidenceOcr || String(op?._sourceLineage?.ocr_confidence || '').toLowerCase() === 'low') flags.push('low_ocr');
   const bits = [
     target,
     fieldNames.length ? `fields=${fieldNames.join(',')}` : '',
     refSummary ? `refs=${refSummary}` : '',
-    lineage ? `lineage=${lineage}` : ''
+    lineage ? `lineage=${lineage}` : '',
+    flags.length ? `flags=${flags.join(',')}` : ''
   ].filter(Boolean);
   return bits.join('|');
 }
@@ -8411,7 +8421,7 @@ function parseLiveIngestOutcomeNotes(notes) {
 function parseLiveIngestFieldProvenanceEntry(entryText) {
   const parts = String(entryText || '').split('|').map((part) => part.trim()).filter(Boolean);
   if (!parts.length) return null;
-  const entry = { target: parts[0], fields: [], refs: '', lineage: '' };
+  const entry = { target: parts[0], fields: [], refs: '', lineage: '', flags: [] };
   parts.slice(1).forEach((part) => {
     const idx = part.indexOf('=');
     if (idx === -1) return;
@@ -8420,7 +8430,12 @@ function parseLiveIngestFieldProvenanceEntry(entryText) {
     if (key === 'fields') entry.fields = value.split(',').map((field) => field.trim()).filter(Boolean);
     else if (key === 'refs') entry.refs = value;
     else if (key === 'lineage') entry.lineage = value;
+    else if (key === 'flags') entry.flags = value.split(',').map((flag) => flag.trim()).filter(Boolean);
   });
+  if (!entry.flags.length) {
+    if (!entry.refs) entry.flags.push('uncited');
+    if (/ocr confidence:\s*low/i.test(String(entry.lineage || ''))) entry.flags.push('low_ocr');
+  }
   return entry;
 }
 
@@ -8464,6 +8479,8 @@ function filterLiveIngestProvenanceEntries(entries, filterMode = 'all') {
     return score >= 20 && score < 60;
   });
   if (filterMode === 'cited') return list.filter((entry) => !!entry?.refs);
+  if (filterMode === 'uncited') return list.filter((entry) => Array.isArray(entry?.flags) && entry.flags.includes('uncited'));
+  if (filterMode === 'low_ocr') return list.filter((entry) => Array.isArray(entry?.flags) && entry.flags.includes('low_ocr'));
   if (filterMode === 'review') return list.filter((entry) => scoreLiveIngestProvenanceEntry(entry) < 20);
   return list;
 }
@@ -8475,6 +8492,8 @@ function renderLiveIngestHistoryTrustFilterBar(filterMode, visibleCount, totalCo
     { key: 'high', label: 'High Trust' },
     { key: 'medium', label: 'Medium Trust' },
     { key: 'cited', label: 'Cited Only' },
+    { key: 'uncited', label: 'Uncited Only' },
+    { key: 'low_ocr', label: 'Low OCR Only' },
     { key: 'review', label: 'Needs Review' }
   ];
   return `<div class="live-ingest-trust-filters">
