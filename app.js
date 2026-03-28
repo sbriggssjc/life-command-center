@@ -5326,6 +5326,38 @@ function buildCopilotContext() {
     };
   }
 
+  // Gov portfolio stats from materialized view (loaded by gov.js)
+  if (typeof govOverviewStats !== 'undefined' && govOverviewStats) {
+    ctx.gov_portfolio = {
+      total_properties: govOverviewStats.total_properties,
+      total_sf_leased: govOverviewStats.total_sf_leased,
+      total_gross_rent: govOverviewStats.total_gross_rent,
+      avg_rent_per_sf: govOverviewStats.avg_rent_per_sf,
+      agencies_tracked: govOverviewStats.agencies_tracked,
+      expiring_lt_1yr: govOverviewStats.expiring_lt_1yr,
+      expiring_lt_2yr: govOverviewStats.expiring_lt_2yr,
+      term_2_5yr: govOverviewStats.term_2_5yr,
+      term_5plus: govOverviewStats.term_5plus,
+      total_noi: govOverviewStats.total_noi,
+      total_contacts: govOverviewStats.total_contacts,
+      top_agencies_by_count: govOverviewStats.top_agencies_by_count,
+      top_states_by_count: govOverviewStats.top_states_by_count
+    };
+  }
+
+  // Dialysis portfolio stats (loaded by dialysis.js)
+  if (typeof diaData !== 'undefined' && diaData && diaData.freshness) {
+    ctx.dia_portfolio = {
+      freshness: diaData.freshness,
+      inventory_summary: diaData.inventorySummary,
+      property_review_queue_count: (diaData.propertyReviewQueue || []).length,
+      lease_backfill_count: (diaData.leaseBackfillRows || []).length,
+      research_outcomes_count: (diaData.researchOutcomes || []).length,
+      movers_up_count: (diaData.moversUp || []).length,
+      movers_down_count: (diaData.moversDown || []).length
+    };
+  }
+
   return ctx;
 }
 
