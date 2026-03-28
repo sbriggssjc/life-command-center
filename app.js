@@ -4356,6 +4356,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = e.target.closest('button[data-range]');
     if (btn) loadYieldChart(btn.dataset.range);
   });
+
+  // Eager-load gov overview stats so buildCopilotContext() always has them
+  try {
+    if (typeof loadGovOverviewStats === 'function') {
+      loadGovOverviewStats();
+    }
+  } catch (e) {
+    console.warn('[App] Failed to eager-load gov overview stats:', e.message);
+  }
 });
 
 function renderHomeStats() {
