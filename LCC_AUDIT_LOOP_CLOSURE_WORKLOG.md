@@ -354,3 +354,23 @@ Current behavior:
 
 Remaining gap:
 - This still needs live runtime validation to confirm the suggested reasons cover most broker-dismiss decisions.
+## 2026-03-30 Broker Feedback Summary Route
+
+Implemented in this pass:
+- Added the LCC proxy route for `broker-feedback` in `api/data-proxy.js`.
+
+Current behavior:
+- The live LCC runtime can now request the GovernmentProject broker-feedback summary endpoint through the existing gov evidence proxy layer.
+
+Remaining gap:
+- The live gov evidence panel does not render the summary yet; this pass only exposes the route.
+## 2026-03-30 Broker Feedback Summary Callout
+
+Implemented in this pass:
+- The live gov evidence panel now reads the broker-feedback summary endpoint and renders a small read-only broker-review feedback callout.
+
+Current behavior:
+- Operators can now see recent broker review totals and top dismiss reasons in the evidence workbench without opening raw observation rows.
+
+Remaining gap:
+- This still needs a live browser check against real review history to confirm the summary is clear and useful.

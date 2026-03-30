@@ -20,6 +20,8 @@ let govEvidenceState = {
   queueLoaded: false,
   queueError: '',
   healthLoading: false,
+  brokerFeedback: null,
+  brokerFeedbackLoading: false,
   health: null,
   conflicts: [],
   detectedSource: null
@@ -985,25 +987,60 @@ async function loadResearchQueue() {
   }
 }
 
+// ──────────────────────────────────────────────────────────────
+// RESEARCH CARD STEP NAVIGATION
+// ──────────────────────────────────────────────────────────────
+let govResearchStep = 0;
+window.govStepNav = function(idx) {
+  govResearchStep = idx;
+  renderGovTab();
+};
+
+// ──────────────────────────────────────────────────────────────
+// PIPELINE OPS STATE VARIABLES
+// ──────────────────────────────────────────────────────────────
+let govResearchSection = 'research'; // 'research' | 'pipeline_ops'
+let govPendingUpdates = null;
+let govPendingUpdatesLoading = false;
+let govPendingUpdatesIdx = 0;
+let govPendingFilter = 'all'; // reason filter
+let govFinOverrideRec = null;
+let govPipelineRuns = null;
+let govPipelineLoading = false;
+let govMonitorData = null;
+let govMonitorLoading = false;
+
 function renderOwnershipResearchCard(rec) {
+  // Track record changes to reset step
+  if (window._govLastRecId !== (rec.property_id)) {
+    govResearchStep = 0;
+    window._govLastRecId = rec.property_id;
+  }
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = govData.loans.find(l => l.property_id === rec.property_id) || {};
-  
+
   let html = '<div class="research-card">';
-  
-  // Context panel
+
+  // ────────────────────────────────────────────────────────────
+  // CONTEXT PANEL (LEFT)
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
+
+  // Task header
+  html += '<div class="task-header">';
+  html += '<div>Ownership Change Research</div>';
+  let badge = 'ready';
+  if (!rec.sale_price) badge = 'urgent';
+  else if (!rec.recorded_owner_name || !rec.true_owner_name || !rec.rba) badge = 'needs-input';
+  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += '</div>';
+
   html += `<div class="context-block">
     <div class="context-label">Property</div>
     <div class="context-value">${esc(rec.address || '')}</div>
     <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')}</div>
-  </div>`;
-  
-  html += `<div class="context-block">
-    <div class="context-label">Lease / Annual Rent</div>
-    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
   </div>`;
 
   html += `<div class="context-block">
@@ -1011,12 +1048,18 @@ function renderOwnershipResearchCard(rec) {
     <div class="context-value">${esc(rec.prior_owner || '')}</div>
     <div class="context-sub">→ ${esc(rec.new_owner || '')}</div>
   </div>`;
-  
+
   html += `<div class="context-block">
     <div class="context-label">Transfer Date</div>
     <div class="context-value">${rec.transfer_date ? rec.transfer_date.substring(0, 10) : 'Unknown'}</div>
   </div>`;
-  
+
+  html += `<div class="context-block">
+    <div class="context-label">Lease / Annual Rent</div>
+    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
+    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
+  </div>`;
+
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
@@ -1032,179 +1075,133 @@ function renderOwnershipResearchCard(rec) {
       <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
     </div>`;
   }
-  
+
   html += '</div>';
-  
-  // Research form
+
+  // ────────────────────────────────────────────────────────────
+  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
-  
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Sale Date</label>';
-  html += `<input type="date" id="res-own-sale-date" value="${rec.sale_date ? rec.sale_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Sale Price</label>';
-  html += `<input type="number" id="res-own-sale-price" value="${rec.sale_price || ''}" placeholder="e.g. 5000000">`;
-  html += '</div>';
+
+  // Completeness bar
+  const allFields = [rec.sale_price, rec.recorded_owner_name, rec.true_owner_name, rec.rba, loan.index_name];
+  const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1, 2, 3].includes(i) })));
+  html += renderCompletenessBar(completeness);
+
+  // Step navigation
+  const steps = [
+    {label: 'Sale Details', complete: !!rec.sale_price},
+    {label: 'Entity', complete: !!rec.recorded_owner_name},
+    {label: 'True Owner', complete: !!rec.true_owner_name},
+    {label: 'Property', complete: !!rec.rba},
+    {label: 'Financing', complete: !!loan.index_name}
+  ];
+  html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
+
+  // ──── STEP 0: SALE DETAILS ────
+  html += `<div class="form-step${govResearchStep === 0 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">1</span> Sale Details</div>';
+  html += guidedField('res-own-sale-date', 'Sale Date', rec.sale_date ? rec.sale_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-own-sale-price', 'Sale Price', rec.sale_price || '', {type:'number', required:true, placeholder:'e.g. 5000000'});
+  html += guidedField('res-own-cap-rate', 'Cap Rate (%)', rec.cap_rate || '', {type:'number', step:'0.1', placeholder:'e.g. 4.5'});
+  html += guidedField('res-own-price-source', 'Price Source', '', {placeholder:'CoStar, CBRE, etc.'});
+  html += guidedField('res-own-buyer', 'Buyer', rec.new_owner || '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-own-seller', 'Seller', rec.prior_owner || '', {placeholder:'Selling entity'});
   html += '</div>';
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate (%)</label>';
-  html += `<input type="number" id="res-own-cap-rate" value="${rec.cap_rate || ''}" placeholder="e.g. 4.5" step="0.1">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-own-price-source" value="" placeholder="CoStar, CBRE, etc.">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Buyer</label>';
-  html += `<input type="text" id="res-own-buyer" value="${esc(rec.new_owner || '')}" placeholder="Purchasing entity">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Seller</label>';
-  html += `<input type="text" id="res-own-seller" value="${esc(rec.prior_owner || '')}" placeholder="Selling entity">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-divider">Entity Details</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Recorded Owner Name</label>';
-  html += `<input type="text" id="res-own-recorded-owner" value="${esc(rec.recorded_owner_name || '')}" placeholder="From deed">`;
-  html += '<div id="res-own-recorded-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-own-incorporation" value="${esc(rec.state_of_incorporation || '')}" placeholder="e.g. DE">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Phone</label>';
-  html += `<input type="text" id="res-own-phone" value="${esc(rec.recorded_owner_phone || '')}" placeholder="(555) 123-4567">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address</label>';
-  html += `<input type="text" id="res-own-mailing" value="${esc(rec.mailing_address || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">True Owner / Parents</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>True Owner / Parent Company</label>';
-  html += `<input type="text" id="res-own-true-owner" value="${esc(rec.true_owner_name || '')}" placeholder="">`;
-  html += '<div id="res-own-true-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-own-principal-names" value="${esc(rec.principal_names || '')}" placeholder="CEO, Owner, etc.">`;
-  html += '<div id="res-own-principal-names-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-own-principal-email" value="" placeholder="contact@example.com">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Phone 2</label>';
-  html += `<input type="text" id="res-own-phone-2" value="${esc(rec.phone_2 || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address 2</label>';
-  html += `<input type="text" id="res-own-mailing-2" value="${esc(rec.mailing_address_2 || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">Property Details</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>RBA (Rentable Building Area)</label>';
-  html += `<input type="number" id="res-own-rba" value="${rec.rba || ''}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Land Acres</label>';
-  html += `<input type="number" id="res-own-land-acres" value="${rec.land_acres || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Year Built</label>';
-  html += `<input type="number" id="res-own-year-built" value="${rec.year_built || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Year Renovated</label>';
-  html += `<input type="number" id="res-own-year-renovated" value="${rec.year_renovated || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">Loan / Financing</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Lender Name</label>';
-  html += `<input type="text" id="res-own-lender" value="${esc(loan.index_name || '')}" placeholder="">`;
-  html += '<div id="res-own-lender-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Loan Amount</label>';
-  html += `<input type="number" id="res-own-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Loan Type</label>';
-  html += `<input type="text" id="res-own-loan-type" value="${esc(loan.loan_type || '')}" placeholder="Refinance, Construction, etc.">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Loan Status</label>';
-  html += `<input type="text" id="res-own-loan-status" value="${esc(loan.status || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Research Notes</label>';
-  html += `<textarea id="res-own-notes" placeholder="Key findings..." rows="4">${esc(rec.research_notes || '')}</textarea>`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">Quick Actions</div>';
-  
+  // ──── STEP 1: ENTITY DETAILS ────
+  html += `<div class="form-step${govResearchStep === 1 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">2</span> Entity</div>';
+  html += guidedField('res-own-recorded-owner', 'Recorded Owner Name', rec.recorded_owner_name || '', {required:true, placeholder:'From deed'});
+  html += guidedField('res-own-incorporation', 'State of Incorporation', rec.state_of_incorporation || '', {placeholder:'e.g. DE'});
+  html += guidedField('res-own-phone', 'Phone', rec.recorded_owner_phone || '', {placeholder:'(555) 123-4567'});
+  html += guidedField('res-own-mailing', 'Mailing Address', rec.mailing_address || '', {});
   html += '<div class="quick-actions">';
-  html += searchBtn('Google Search', `${rec.address} ${rec.city} ${rec.state} sale`);
+  html += searchBtn('Google Search', `${rec.recorded_owner_name || rec.address}`);
   html += sosBtns(rec.state, rec.state_of_incorporation);
-  html += countyBtns(rec.city, rec.state);
   html += '</div>';
-  
   html += '</div>';
-  
-  html += '<div class="research-actions">';
-  html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
+
+  // ──── STEP 2: TRUE OWNER / PARENTS ────
+  html += `<div class="form-step${govResearchStep === 2 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">3</span> True Owner</div>';
+  html += guidedField('res-own-true-owner', 'True Owner / Parent Company', rec.true_owner_name || '', {required:true});
+  html += guidedField('res-own-principal-names', 'Principal Names', rec.principal_names || '', {placeholder:'CEO, Owner, etc.'});
+  html += guidedField('res-own-principal-email', 'Contact Email', '', {type:'email', placeholder:'contact@example.com'});
+  html += guidedField('res-own-phone-2', 'Phone 2', rec.phone_2 || '', {});
+  html += guidedField('res-own-mailing-2', 'Mailing Address 2', rec.mailing_address_2 || '', {});
   html += '</div>';
-  
+
+  // ──── STEP 3: PROPERTY DETAILS ────
+  html += `<div class="form-step${govResearchStep === 3 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">4</span> Property</div>';
+  html += guidedField('res-own-rba', 'RBA (Rentable Building Area)', rec.rba || '', {type:'number', required:true});
+  html += guidedField('res-own-land-acres', 'Land Acres', rec.land_acres || '', {type:'number', step:'0.01'});
+  html += guidedField('res-own-year-built', 'Year Built', rec.year_built || '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-own-year-renovated', 'Year Renovated', rec.year_renovated || '', {type:'number', placeholder:'YYYY'});
   html += '</div>';
-  
+
+  // ──── STEP 4: FINANCING ────
+  html += `<div class="form-step${govResearchStep === 4 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">5</span> Financing</div>';
+  html += guidedField('res-own-lender', 'Lender Name', loan.index_name || '', {source: loan.index_name ? 'loan records' : null});
+  html += guidedField('res-own-loan-amount', 'Loan Amount', loan.loan_amount || '', {type:'number', source: loan.loan_amount ? 'loan records' : null});
+  html += guidedField('res-own-loan-type', 'Loan Type', loan.loan_type || '', {placeholder:'Refinance, Construction, etc.'});
+  html += guidedField('res-own-loan-status', 'Loan Status', loan.status || '', {});
+  html += guidedField('res-own-notes', 'Research Notes', rec.research_notes || '', {type:'textarea', rows:4, placeholder:'Key findings...'});
+  html += '</div>';
+
+  html += '</div>';
+
+  // ────────────────────────────────────────────────────────────
+  // ACTION ROW
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row">';
+  if (govResearchStep > 0) {
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
+  }
+  if (govResearchStep < 4) {
+    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+  } else {
+    html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
+  }
+  html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
+  html += '</div>';
+
+  html += '</div>';
+
   return html;
 }
 
 function renderLeadResearchCard(rec) {
+  // Track record changes to reset step
+  if (window._govLastRecId !== (rec.lead_id || rec.id)) {
+    govResearchStep = 0;
+    window._govLastRecId = rec.lead_id || rec.id;
+  }
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = govData.loans.find(l => l.property_id === rec.matched_property_id) || {};
 
   let html = '<div class="research-card">';
 
-  // Context panel
+  // ────────────────────────────────────────────────────────────
+  // CONTEXT PANEL (LEFT)
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
+
+  // Task header
+  html += '<div class="task-header">';
+  html += '<div>Lead Research</div>';
+  let badge = 'ready';
+  if (rec.lead_temperature === 'hot') badge = 'urgent';
+  else if (!rec.recorded_owner || !rec.true_owner) badge = 'needs-input';
+  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += '</div>';
+
   html += `<div class="context-block">
     <div class="context-label">Property</div>
     <div class="context-value">${esc(rec.address || '')}</div>
@@ -1212,21 +1209,15 @@ function renderLeadResearchCard(rec) {
   </div>`;
 
   html += `<div class="context-block">
+    <div class="context-label">Lessor / Owner</div>
+    <div class="context-value">${esc(rec.lessor_name || '')}</div>
+    <div class="context-sub">Lead Temp: ${rec.lead_temperature || 'cool'}</div>
+  </div>`;
+
+  html += `<div class="context-block">
     <div class="context-label">Lease / Annual Rent</div>
     <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
     <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lessor / Owner</div>
-    <div class="context-value">${esc(rec.lessor_name || '')}</div>
-    <div class="context-sub">True Owner: ${esc(rec.true_owner || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lead Temperature</div>
-    <div class="context-value">${rec.lead_temperature || 'cool'}</div>
-    <div class="context-sub">Score: ${rec.priority_score || 0}</div>
   </div>`;
 
   if (snapshot.lease_effective) {
@@ -1255,317 +1246,127 @@ function renderLeadResearchCard(rec) {
 
   html += '</div>';
 
-  // Research form
+  // ────────────────────────────────────────────────────────────
+  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
-  // ── PRIOR SALE / TRANSACTION ──
-  html += '<div class="form-divider">Prior Sale / Transaction</div>';
+  // Completeness bar
+  const allFields = [rec.square_feet, rec.recorded_owner, rec.true_owner, loan.index_name, rec.annual_rent];
+  const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [1, 2].includes(i) })));
+  html += renderCompletenessBar(completeness);
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Sale Date</label>';
-  html += `<input type="date" id="res-lead-sale-date" value="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Sale Price ($)</label>';
-  html += `<input type="number" id="res-lead-sale-price" value="" placeholder="e.g. 5000000">`;
-  html += '</div>';
-  html += '</div>';
+  // Step navigation
+  const steps = [
+    {label: 'Transaction', complete: false},
+    {label: 'Ownership', complete: !!(rec.recorded_owner || rec.true_owner)},
+    {label: 'Property', complete: !!rec.square_feet},
+    {label: 'Financing', complete: !!loan.index_name},
+    {label: 'Valuation', complete: !!rec.annual_rent}
+  ];
+  html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate at Sale (%)</label>';
-  html += `<input type="number" id="res-lead-cap-rate" value="" placeholder="e.g. 6.25" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-lead-price-source" value="" placeholder="CoStar, County Records, etc.">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Buyer</label>';
-  html += `<input type="text" id="res-lead-buyer" value="" placeholder="Purchasing entity">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Seller</label>';
-  html += `<input type="text" id="res-lead-seller" value="${esc(rec.lessor_name || '')}" placeholder="Selling entity">`;
-  html += '</div>';
+  // ──── STEP 0: TRANSACTION ────
+  html += `<div class="form-step${govResearchStep === 0 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">1</span> Transaction</div>';
+  html += guidedField('res-lead-sale-date', 'Sale Date', '', {type:'date'});
+  html += guidedField('res-lead-sale-price', 'Sale Price', '', {type:'number', placeholder:'e.g. 5000000'});
+  html += guidedField('res-lead-cap-rate', 'Cap Rate (%)', '', {type:'number', step:'0.01', placeholder:'e.g. 6.25'});
+  html += guidedField('res-lead-price-source', 'Price Source', '', {placeholder:'CoStar, County Records, etc.'});
+  html += guidedField('res-lead-buyer', 'Buyer', '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-lead-seller', 'Seller', rec.lessor_name || '', {placeholder:'Selling entity'});
   html += '</div>';
 
-  // ── OWNERSHIP RESEARCH ──
-  html += '<div class="form-divider">Ownership Research</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Recorded Owner</label>';
-  html += `<input type="text" id="res-lead-recorded-owner" value="${esc(rec.recorded_owner || '')}" placeholder="From deed / public records">`;
-  html += '<div id="res-lead-recorded-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>True Owner / Parent</label>';
-  html += `<input type="text" id="res-lead-true-owner" value="${esc(rec.true_owner || '')}" placeholder="Beneficial owner">`;
-  html += '<div id="res-lead-true-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-lead-incorporation" value="${esc(rec.state_of_incorporation || '')}" placeholder="e.g. DE">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Owner Type</label>';
-  html += `<select id="res-lead-owner-type">
-    <option value="">—</option>
-    <option value="Private">Private</option>
-    <option value="Institutional">Institutional</option>
-    <option value="REIT">REIT</option>
-    <option value="Government">Government</option>
-    <option value="Non-Profit">Non-Profit</option>
-    <option value="SPE / LLC">SPE / LLC</option>
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-lead-principal-names" value="${esc(rec.principal_names || '')}" placeholder="CEO, Managing Member, etc.">`;
-  html += '<div id="res-lead-principal-names-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-lead-principal-email" value="" placeholder="contact@example.com">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Phone</label>';
-  html += `<input type="text" id="res-lead-phone" value="${esc(rec.phone_2 || '')}" placeholder="(555) 123-4567">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address</label>';
-  html += `<input type="text" id="res-lead-mailing" value="" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address 2</label>';
-  html += `<input type="text" id="res-lead-mailing-2" value="" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── PROPERTY DETAILS ──
-  html += '<div class="form-divider">Property Details</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>RBA (Rentable Building Area)</label>';
-  html += `<input type="number" id="res-lead-rba" value="${rec.square_feet || ''}" placeholder="SF">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Land Size (Acres)</label>';
-  html += `<input type="number" id="res-lead-land-acres" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Year Built</label>';
-  html += `<input type="number" id="res-lead-year-built" value="" placeholder="YYYY">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Year Renovated</label>';
-  html += `<input type="number" id="res-lead-year-renovated" value="" placeholder="YYYY">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Building Class</label>';
-  html += `<select id="res-lead-building-class">
-    <option value="">—</option>
-    <option value="A">Class A</option>
-    <option value="B">Class B</option>
-    <option value="C">Class C</option>
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Stories / Floors</label>';
-  html += `<input type="number" id="res-lead-stories" value="" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Parking Spaces</label>';
-  html += `<input type="number" id="res-lead-parking" value="" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Zoning</label>';
-  html += `<input type="text" id="res-lead-zoning" value="" placeholder="e.g. C-2, Industrial">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Property Condition</label>';
-  html += `<select id="res-lead-condition">
-    <option value="">—</option>
-    <option value="Excellent">Excellent</option>
-    <option value="Good">Good</option>
-    <option value="Average">Average</option>
-    <option value="Fair">Fair</option>
-    <option value="Poor">Poor</option>
-  </select>`;
-  html += '</div>';
-
-  // ── LOAN / DEBT ──
-  html += '<div class="form-divider">Loan / Debt</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Lender</label>';
-  html += `<input type="text" id="res-lead-lender" value="${esc(loan.index_name || '')}" placeholder="Bank or fund name">`;
-  html += '<div id="res-lead-lender-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Amount ($)</label>';
-  html += `<input type="number" id="res-lead-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Interest Rate (%)</label>';
-  html += `<input type="number" id="res-lead-interest-rate" value="${loan.interest_rate_percent || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Type</label>';
-  html += `<select id="res-lead-loan-type">
-    <option value="">—</option>
-    ${['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Construction', 'SBA', 'Other'].map(t =>
-      `<option value="${t}" ${(loan.loan_type || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Origination Date</label>';
-  html += `<input type="date" id="res-lead-loan-orig" value="${loan.origination_date ? loan.origination_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Maturity Date</label>';
-  html += `<input type="date" id="res-lead-loan-maturity" value="${loan.maturity_date ? loan.maturity_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>LTV (%)</label>';
-  html += `<input type="number" id="res-lead-ltv" value="${loan.loan_to_value || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Recourse</label>';
-  html += `<select id="res-lead-recourse">
-    <option value="">—</option>
-    ${['Recourse', 'Non-Recourse', 'Partial'].map(t =>
-      `<option value="${t}" ${(loan.recourse || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── CASH FLOW / VALUATION ──
-  html += '<div class="form-divider">Cash Flow / Valuation</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Annual Rent / NOI ($)</label>';
-  html += `<input type="number" id="res-lead-annual-rent" value="${rec.annual_rent || ''}" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Rent Per SF ($/SF)</label>';
-  html += `<input type="number" id="res-lead-rent-psf" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Expense Type</label>';
-  html += `<select id="res-lead-expense-type">
-    <option value="">—</option>
-    ${['NNN', 'Modified Gross', 'Full Service Gross', 'Industrial Gross', 'Ground Lease'].map(t =>
-      `<option value="${t}">${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Estimated Property Value ($)</label>';
-  html += `<input type="number" id="res-lead-est-value" value="${rec.estimated_value || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Current Cap Rate (%)</label>';
-  html += `<input type="number" id="res-lead-current-cap" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-
-  // ── PIPELINE STATUS ──
-  html += '<div class="form-divider">Pipeline Status</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Quick Status</label>';
-  html += `<select id="res-lead-quick-status">
-    <option value="">Select status...</option>
-    <option value="new_lead">New Lead</option>
-    <option value="researching">Researching</option>
-    <option value="contacted">Contacted</option>
-    <option value="meeting_set">Meeting Set</option>
-    <option value="proposal_sent">Proposal Sent</option>
-    <option value="not_for_sale">Not For Sale</option>
-    <option value="dead">Dead</option>
-  </select>`;
-  html += '</div>';
-
-  // ── RESEARCH NOTES ──
-  html += '<div class="form-divider">Research Notes</div>';
-
-  html += '<div class="form-group">';
-  html += `<textarea id="res-lead-notes" placeholder="Key findings, data sources, observations..." rows="4">${esc(rec.research_notes || '')}</textarea>`;
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Research Source</label>';
-  html += `<input type="text" id="res-lead-source" value="" placeholder="CoStar, County, Call, Loopnet">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Research Date</label>';
-  html += `<input type="date" id="res-lead-date" value="${new Date().toISOString().substring(0, 10)}">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── QUICK ACTIONS ──
-  html += '<div class="form-divider">Quick Actions</div>';
-
+  // ──── STEP 1: OWNERSHIP ────
+  html += `<div class="form-step${govResearchStep === 1 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">2</span> Ownership</div>';
+  html += guidedField('res-lead-recorded-owner', 'Recorded Owner', rec.recorded_owner || '', {placeholder:'From deed / public records'});
+  html += guidedField('res-lead-true-owner', 'True Owner / Parent', rec.true_owner || '', {placeholder:'Beneficial owner'});
+  html += guidedField('res-lead-incorporation', 'State of Incorporation', rec.state_of_incorporation || '', {placeholder:'e.g. DE'});
+  html += guidedField('res-lead-owner-type', 'Owner Type', '', {
+    options: [{value:'Private', label:'Private'}, {value:'Institutional', label:'Institutional'}, {value:'REIT', label:'REIT'}, {value:'Government', label:'Government'}, {value:'Non-Profit', label:'Non-Profit'}, {value:'SPE / LLC', label:'SPE / LLC'}]
+  });
+  html += guidedField('res-lead-principal-names', 'Principal Names', rec.principal_names || '', {placeholder:'CEO, Managing Member, etc.'});
+  html += guidedField('res-lead-principal-email', 'Contact Email', '', {type:'email', placeholder:'contact@example.com'});
+  html += guidedField('res-lead-phone', 'Phone', rec.phone_2 || '', {placeholder:'(555) 123-4567'});
+  html += guidedField('res-lead-mailing', 'Mailing Address', '', {});
+  html += guidedField('res-lead-mailing-2', 'Mailing Address 2', '', {});
   html += '<div class="quick-actions">';
-  html += searchBtn('Google Search', `${rec.lessor_name} ${rec.address} ${rec.city}`);
-  html += searchBtn('Property Search', `${rec.address} ${rec.city} ${rec.state} sale owner`);
+  html += searchBtn('Google Search', `${rec.lessor_name} ${rec.address}`);
   html += sosBtns(rec.state, rec.state_of_incorporation);
   html += countyBtns(rec.city, rec.state);
   html += '</div>';
+  html += '</div>';
+
+  // ──── STEP 2: PROPERTY ────
+  html += `<div class="form-step${govResearchStep === 2 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">3</span> Property</div>';
+  html += guidedField('res-lead-rba', 'RBA (Rentable Building Area)', rec.square_feet || '', {type:'number', placeholder:'SF'});
+  html += guidedField('res-lead-land-acres', 'Land Size (Acres)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-year-built', 'Year Built', '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-lead-year-renovated', 'Year Renovated', '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-lead-building-class', 'Building Class', '', {
+    options: [{value:'A', label:'Class A'}, {value:'B', label:'Class B'}, {value:'C', label:'Class C'}]
+  });
+  html += guidedField('res-lead-stories', 'Stories / Floors', '', {type:'number'});
+  html += guidedField('res-lead-parking', 'Parking Spaces', '', {type:'number'});
+  html += guidedField('res-lead-zoning', 'Zoning', '', {placeholder:'e.g. C-2, Industrial'});
+  html += guidedField('res-lead-condition', 'Property Condition', '', {
+    options: [{value:'Excellent', label:'Excellent'}, {value:'Good', label:'Good'}, {value:'Average', label:'Average'}, {value:'Fair', label:'Fair'}, {value:'Poor', label:'Poor'}]
+  });
+  html += '</div>';
+
+  // ──── STEP 3: FINANCING ────
+  html += `<div class="form-step${govResearchStep === 3 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">4</span> Financing</div>';
+  html += guidedField('res-lead-lender', 'Lender', loan.index_name || '', {placeholder:'Bank or fund name', source: loan.index_name ? 'loan records' : null});
+  html += guidedField('res-lead-loan-amount', 'Loan Amount', loan.loan_amount || '', {type:'number', source: loan.loan_amount ? 'loan records' : null});
+  html += guidedField('res-lead-interest-rate', 'Interest Rate (%)', loan.interest_rate_percent || '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-loan-type', 'Loan Type', '', {
+    options: [{value:'Fixed', label:'Fixed'}, {value:'Variable', label:'Variable'}, {value:'Bridge', label:'Bridge'}, {value:'CMBS', label:'CMBS'}, {value:'Agency', label:'Agency'}, {value:'Construction', label:'Construction'}, {value:'SBA', label:'SBA'}, {value:'Other', label:'Other'}]
+  });
+  html += guidedField('res-lead-loan-orig', 'Origination Date', loan.origination_date ? loan.origination_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-lead-loan-maturity', 'Maturity Date', loan.maturity_date ? loan.maturity_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-lead-ltv', 'LTV (%)', loan.loan_to_value || '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-recourse', 'Recourse', '', {
+    options: [{value:'Recourse', label:'Recourse'}, {value:'Non-Recourse', label:'Non-Recourse'}, {value:'Partial', label:'Partial'}]
+  });
+  html += '</div>';
+
+  // ──── STEP 4: VALUATION & NOTES ────
+  html += `<div class="form-step${govResearchStep === 4 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">5</span> Valuation & Notes</div>';
+  html += guidedField('res-lead-annual-rent', 'Annual Rent / NOI', rec.annual_rent || '', {type:'number'});
+  html += guidedField('res-lead-rent-psf', 'Rent Per SF ($/SF)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-expense-type', 'Expense Type', '', {
+    options: [{value:'NNN', label:'NNN'}, {value:'Modified Gross', label:'Modified Gross'}, {value:'Full Service Gross', label:'Full Service Gross'}, {value:'Industrial Gross', label:'Industrial Gross'}, {value:'Ground Lease', label:'Ground Lease'}]
+  });
+  html += guidedField('res-lead-est-value', 'Estimated Property Value', rec.estimated_value || '', {type:'number'});
+  html += guidedField('res-lead-current-cap', 'Current Cap Rate (%)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-quick-status', 'Quick Status', '', {
+    options: [{value:'new_lead', label:'New Lead'}, {value:'researching', label:'Researching'}, {value:'contacted', label:'Contacted'}, {value:'meeting_set', label:'Meeting Set'}, {value:'proposal_sent', label:'Proposal Sent'}, {value:'not_for_sale', label:'Not For Sale'}, {value:'dead', label:'Dead'}]
+  });
+  html += guidedField('res-lead-notes', 'Research Notes', rec.research_notes || '', {type:'textarea', rows:4, placeholder:'Key findings, data sources, observations...'});
+  html += guidedField('res-lead-source', 'Research Source', '', {placeholder:'CoStar, County, Call, Loopnet'});
+  html += guidedField('res-lead-date', 'Research Date', new Date().toISOString().substring(0, 10), {type:'date'});
+  html += '</div>';
 
   html += '</div>';
 
-  html += '<div class="research-actions">';
-  html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
+  // ────────────────────────────────────────────────────────────
+  // ACTION ROW
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row">';
+  if (govResearchStep > 0) {
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
+  }
+  if (govResearchStep < 4) {
+    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+  } else {
+    html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
+  }
+  html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -1574,14 +1375,31 @@ function renderLeadResearchCard(rec) {
 }
 
 function renderIntelResearchCard(rec) {
+  // Track record changes to reset step
+  if (window._govLastRecId !== (rec.property_id)) {
+    govResearchStep = 0;
+    window._govLastRecId = rec.property_id;
+  }
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
   const loan = rec._loan || govData.loans.find(l => l.property_id === rec.property_id) || {};
 
   let html = '<div class="research-card">';
 
-  // ── CONTEXT PANEL ──
+  // ────────────────────────────────────────────────────────────
+  // CONTEXT PANEL (LEFT)
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
+
+  // Task header
+  html += '<div class="task-header">';
+  html += '<div>Intel Research</div>';
+  let badge = 'ready';
+  if (!rec.rba || !rec.recorded_owner) badge = 'needs-input';
+  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += '</div>';
+
   html += `<div class="context-block">
     <div class="context-label">Property</div>
     <div class="context-value">${esc(rec.address || '')}</div>
@@ -1635,291 +1453,123 @@ function renderIntelResearchCard(rec) {
 
   html += '</div>';
 
-  // ── RESEARCH FORM ──
+  // ────────────────────────────────────────────────────────────
+  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
-  // ── PRIOR SALE / TRANSACTION ──
-  html += '<div class="form-divider">Prior Sale / Transaction</div>';
+  // Completeness bar
+  const allFields = [rec.rba, rec.recorded_owner, loan.index_name, rec.annual_rent];
+  const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1].includes(i) })));
+  html += renderCompletenessBar(completeness);
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Sale Date</label>';
-  html += `<input type="date" id="res-intel-sale-date" value="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Sale Price ($)</label>';
-  html += `<input type="number" id="res-intel-sale-price" value="" placeholder="e.g. 5000000">`;
-  html += '</div>';
-  html += '</div>';
+  // Step navigation
+  const steps = [
+    {label: 'Transaction', complete: false},
+    {label: 'Property', complete: !!rec.rba},
+    {label: 'Ownership', complete: !!(rec.recorded_owner || rec.lessor_name)},
+    {label: 'Financing', complete: !!loan.index_name},
+    {label: 'Valuation', complete: !!(rec.last_known_rent || rec.gross_rent)}
+  ];
+  html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate at Sale (%)</label>';
-  html += `<input type="number" id="res-intel-cap-rate" value="" placeholder="e.g. 6.25" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-intel-price-source" value="" placeholder="CoStar, County Records, etc.">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Buyer</label>';
-  html += `<input type="text" id="res-intel-buyer" value="" placeholder="Purchasing entity">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Seller</label>';
-  html += `<input type="text" id="res-intel-seller" value="" placeholder="Selling entity">`;
-  html += '</div>';
+  // ──── STEP 0: TRANSACTION ────
+  html += `<div class="form-step${govResearchStep === 0 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">1</span> Transaction</div>';
+  html += guidedField('res-intel-sale-date', 'Sale Date', '', {type:'date'});
+  html += guidedField('res-intel-sale-price', 'Sale Price', '', {type:'number', placeholder:'e.g. 5000000'});
+  html += guidedField('res-intel-cap-rate', 'Cap Rate (%)', '', {type:'number', step:'0.01', placeholder:'e.g. 6.25'});
+  html += guidedField('res-intel-price-source', 'Price Source', '', {placeholder:'CoStar, County Records, etc.'});
+  html += guidedField('res-intel-buyer', 'Buyer', '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-intel-seller', 'Seller', '', {placeholder:'Selling entity'});
   html += '</div>';
 
-  // ── PROPERTY PHYSICAL DETAILS ──
-  html += '<div class="form-divider">Property Details</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>RBA (Rentable Building Area)</label>';
-  html += `<input type="number" id="res-intel-rba" value="${rec.rba || ''}" placeholder="SF">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Land Size (Acres)</label>';
-  html += `<input type="number" id="res-intel-land-acres" value="${rec.land_acres || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Year Built</label>';
-  html += `<input type="number" id="res-intel-year-built" value="${rec.year_built || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Year Renovated</label>';
-  html += `<input type="number" id="res-intel-year-renovated" value="${rec.year_renovated || ''}" placeholder="YYYY">`;
-  html += '</div>';
+  // ──── STEP 1: PROPERTY ────
+  html += `<div class="form-step${govResearchStep === 1 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">2</span> Property</div>';
+  html += guidedField('res-intel-rba', 'RBA (Rentable Building Area)', rec.rba || '', {type:'number', placeholder:'SF'});
+  html += guidedField('res-intel-land-acres', 'Land Size (Acres)', rec.land_acres || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-year-built', 'Year Built', rec.year_built || '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-intel-year-renovated', 'Year Renovated', rec.year_renovated || '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-intel-building-class', 'Building Class', '', {
+    options: [{value:'A', label:'Class A'}, {value:'B', label:'Class B'}, {value:'C', label:'Class C'}]
+  });
+  html += guidedField('res-intel-stories', 'Stories / Floors', rec.stories || '', {type:'number'});
+  html += guidedField('res-intel-parking', 'Parking Spaces', rec.parking_spaces || '', {type:'number'});
+  html += guidedField('res-intel-zoning', 'Zoning', rec.zoning || '', {placeholder:'e.g. C-2, Industrial'});
+  html += guidedField('res-intel-condition', 'Property Condition', '', {
+    options: [{value:'Excellent', label:'Excellent'}, {value:'Good', label:'Good'}, {value:'Average', label:'Average'}, {value:'Fair', label:'Fair'}, {value:'Poor', label:'Poor'}]
+  });
   html += '</div>';
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Building Class</label>';
-  html += `<select id="res-intel-building-class">
-    <option value="">—</option>
-    <option value="A">Class A</option>
-    <option value="B">Class B</option>
-    <option value="C">Class C</option>
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Stories / Floors</label>';
-  html += `<input type="number" id="res-intel-stories" value="${rec.stories || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Parking Spaces</label>';
-  html += `<input type="number" id="res-intel-parking" value="${rec.parking_spaces || ''}" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Zoning</label>';
-  html += `<input type="text" id="res-intel-zoning" value="${esc(rec.zoning || '')}" placeholder="e.g. C-2, Industrial">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Property Condition</label>';
-  html += `<select id="res-intel-condition">
-    <option value="">—</option>
-    <option value="Excellent">Excellent</option>
-    <option value="Good">Good</option>
-    <option value="Average">Average</option>
-    <option value="Fair">Fair</option>
-    <option value="Poor">Poor</option>
-  </select>`;
-  html += '</div>';
-
-  // ── OWNERSHIP / ENTITY ──
-  html += '<div class="form-divider">Ownership / Entity</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Recorded Owner</label>';
-  html += `<input type="text" id="res-intel-recorded-owner" value="${esc(rec.recorded_owner || rec.lessor_name || '')}" placeholder="From deed / public records">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>True Owner / Parent</label>';
-  html += `<input type="text" id="res-intel-true-owner" value="${esc(rec.true_owner || '')}" placeholder="Beneficial owner">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-intel-incorp-state" value="" placeholder="e.g. DE">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Owner Type</label>';
-  html += `<select id="res-intel-owner-type">
-    <option value="">—</option>
-    <option value="Private">Private</option>
-    <option value="Institutional">Institutional</option>
-    <option value="REIT">REIT</option>
-    <option value="Government">Government</option>
-    <option value="Non-Profit">Non-Profit</option>
-    <option value="SPE / LLC">SPE / LLC</option>
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-intel-principals" value="" placeholder="CEO, Managing Member, etc.">`;
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-intel-email" value="" placeholder="contact@example.com">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Contact Phone</label>';
-  html += `<input type="text" id="res-intel-phone" value="" placeholder="(555) 123-4567">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address</label>';
-  html += `<input type="text" id="res-intel-mailing" value="" placeholder="">`;
-  html += '</div>';
-
-  // ── LOAN / DEBT ──
-  html += '<div class="form-divider">Loan / Debt</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Lender</label>';
-  html += `<input type="text" id="res-intel-lender" value="${esc(loan.index_name || '')}" placeholder="Bank or fund name">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Amount ($)</label>';
-  html += `<input type="number" id="res-intel-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Interest Rate (%)</label>';
-  html += `<input type="number" id="res-intel-interest-rate" value="${loan.interest_rate_percent || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Type</label>';
-  html += `<select id="res-intel-loan-type">
-    <option value="">—</option>
-    ${['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Construction', 'SBA', 'Other'].map(t =>
-      `<option value="${t}" ${(loan.loan_type || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Origination Date</label>';
-  html += `<input type="date" id="res-intel-loan-orig" value="${loan.origination_date ? loan.origination_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Maturity Date</label>';
-  html += `<input type="date" id="res-intel-loan-maturity" value="${loan.maturity_date ? loan.maturity_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>LTV (%)</label>';
-  html += `<input type="number" id="res-intel-ltv" value="${loan.loan_to_value || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Recourse</label>';
-  html += `<select id="res-intel-recourse">
-    <option value="">—</option>
-    ${['Recourse', 'Non-Recourse', 'Partial'].map(t =>
-      `<option value="${t}" ${(loan.recourse || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── CASH FLOW / VALUATION ──
-  html += '<div class="form-divider">Cash Flow / Valuation</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Annual Rent / NOI ($)</label>';
-  html += `<input type="number" id="res-intel-annual-rent" value="${rec.last_known_rent || rec.gross_rent || ''}" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Rent Per SF ($/SF)</label>';
-  html += `<input type="number" id="res-intel-rent-psf" value="${rec.gross_rent_psf || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Expense Type</label>';
-  html += `<select id="res-intel-expense-type">
-    <option value="">—</option>
-    ${['NNN', 'Modified Gross', 'Full Service Gross', 'Industrial Gross', 'Ground Lease'].map(t =>
-      `<option value="${t}">${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Estimated Property Value ($)</label>';
-  html += `<input type="number" id="res-intel-est-value" value="${rec.current_value_estimate || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Current Cap Rate (%)</label>';
-  html += `<input type="number" id="res-intel-current-cap" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-
-  // ── RESEARCH NOTES ──
-  html += '<div class="form-divider">Research Notes</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Notes</label>';
-  html += `<textarea id="res-intel-notes" placeholder="Key findings, observations, data sources..." rows="4"></textarea>`;
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Research Source</label>';
-  html += `<input type="text" id="res-intel-source" value="" placeholder="CoStar, County, Call, etc.">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Research Date</label>';
-  html += `<input type="date" id="res-intel-date" value="${new Date().toISOString().substring(0, 10)}">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── QUICK ACTIONS ──
-  html += '<div class="form-divider">Quick Actions</div>';
-
+  // ──── STEP 2: OWNERSHIP ────
+  html += `<div class="form-step${govResearchStep === 2 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">3</span> Ownership</div>';
+  html += guidedField('res-intel-recorded-owner', 'Recorded Owner', rec.recorded_owner || rec.lessor_name || '', {placeholder:'From deed / public records'});
+  html += guidedField('res-intel-true-owner', 'True Owner / Parent', rec.true_owner || '', {placeholder:'Beneficial owner'});
+  html += guidedField('res-intel-incorp-state', 'State of Incorporation', '', {placeholder:'e.g. DE'});
+  html += guidedField('res-intel-owner-type', 'Owner Type', '', {
+    options: [{value:'Private', label:'Private'}, {value:'Institutional', label:'Institutional'}, {value:'REIT', label:'REIT'}, {value:'Government', label:'Government'}, {value:'Non-Profit', label:'Non-Profit'}, {value:'SPE / LLC', label:'SPE / LLC'}]
+  });
+  html += guidedField('res-intel-principals', 'Principal Names', '', {placeholder:'CEO, Managing Member, etc.'});
+  html += guidedField('res-intel-email', 'Contact Email', '', {type:'email', placeholder:'contact@example.com'});
+  html += guidedField('res-intel-phone', 'Contact Phone', '', {placeholder:'(555) 123-4567'});
+  html += guidedField('res-intel-mailing', 'Mailing Address', '', {});
   html += '<div class="quick-actions">';
-  html += searchBtn('Google Search', `${rec.address} ${rec.city} ${rec.state} owner`);
-  html += searchBtn('CoStar Search', `${rec.address} ${rec.city} ${rec.state}`);
+  html += searchBtn('Google Search', `${rec.address} ${rec.city} ${rec.state}`);
   html += sosBtns(rec.state, null);
   html += countyBtns(rec.city, rec.state);
   html += '</div>';
+  html += '</div>';
+
+  // ──── STEP 3: FINANCING ────
+  html += `<div class="form-step${govResearchStep === 3 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">4</span> Financing</div>';
+  html += guidedField('res-intel-lender', 'Lender', loan.index_name || '', {placeholder:'Bank or fund name', source: loan.index_name ? 'loan records' : null});
+  html += guidedField('res-intel-loan-amount', 'Loan Amount', loan.loan_amount || '', {type:'number', source: loan.loan_amount ? 'loan records' : null});
+  html += guidedField('res-intel-interest-rate', 'Interest Rate (%)', loan.interest_rate_percent || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-loan-type', 'Loan Type', '', {
+    options: [{value:'Fixed', label:'Fixed'}, {value:'Variable', label:'Variable'}, {value:'Bridge', label:'Bridge'}, {value:'CMBS', label:'CMBS'}, {value:'Agency', label:'Agency'}, {value:'Construction', label:'Construction'}, {value:'SBA', label:'SBA'}, {value:'Other', label:'Other'}]
+  });
+  html += guidedField('res-intel-loan-orig', 'Origination Date', loan.origination_date ? loan.origination_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-intel-loan-maturity', 'Maturity Date', loan.maturity_date ? loan.maturity_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-intel-ltv', 'LTV (%)', loan.loan_to_value || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-recourse', 'Recourse', '', {
+    options: [{value:'Recourse', label:'Recourse'}, {value:'Non-Recourse', label:'Non-Recourse'}, {value:'Partial', label:'Partial'}]
+  });
+  html += '</div>';
+
+  // ──── STEP 4: VALUATION & NOTES ────
+  html += `<div class="form-step${govResearchStep === 4 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">5</span> Valuation & Notes</div>';
+  html += guidedField('res-intel-annual-rent', 'Annual Rent / NOI', rec.last_known_rent || rec.gross_rent || '', {type:'number'});
+  html += guidedField('res-intel-rent-psf', 'Rent Per SF ($/SF)', rec.gross_rent_psf || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-expense-type', 'Expense Type', '', {
+    options: [{value:'NNN', label:'NNN'}, {value:'Modified Gross', label:'Modified Gross'}, {value:'Full Service Gross', label:'Full Service Gross'}, {value:'Industrial Gross', label:'Industrial Gross'}, {value:'Ground Lease', label:'Ground Lease'}]
+  });
+  html += guidedField('res-intel-est-value', 'Estimated Property Value', rec.current_value_estimate || '', {type:'number'});
+  html += guidedField('res-intel-current-cap', 'Current Cap Rate (%)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-notes', 'Research Notes', '', {type:'textarea', rows:4, placeholder:'Key findings, observations, data sources...'});
+  html += guidedField('res-intel-source', 'Research Source', '', {placeholder:'CoStar, County, Call, etc.'});
+  html += guidedField('res-intel-date', 'Research Date', new Date().toISOString().substring(0, 10), {type:'date'});
+  html += '</div>';
 
   html += '</div>';
 
-  html += '<div class="research-actions">';
-  html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
+  // ────────────────────────────────────────────────────────────
+  // ACTION ROW
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row">';
+  if (govResearchStep > 0) {
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
+  }
+  if (govResearchStep < 4) {
+    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+  } else {
+    html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
+  }
+  html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -2555,9 +2205,16 @@ function researchNav(dir) {
 function setResearchMode(mode) {
   researchMode = mode;
   researchIdx = 0;
-  loadResearchQueue().then(() => {
+
+  // For pipeline ops modes, don't load research queue
+  if (['pending_updates', 'financial_overrides', 'pipeline_control', 'monitor'].includes(mode)) {
     renderGovTab();
-  });
+  } else {
+    // For research modes, load the queue
+    loadResearchQueue().then(() => {
+      renderGovTab();
+    });
+  }
 }
 
 function setResearchFilter(filter) {
@@ -2618,6 +2275,8 @@ function syncGovEvidenceContext() {
     queueLoaded: false,
     queueError: '',
     healthLoading: false,
+    brokerFeedback: null,
+    brokerFeedbackLoading: false,
     health: null,
     conflicts: [],
     detectedSource: null
@@ -2864,6 +2523,7 @@ function renderGovEvidenceWorkbench() {
         ${govEvidenceState.detectedSource ? `<div class="live-ingest-stamp" style="margin-top:6px">Detected source: ${esc(govEvidenceState.detectedSource.platform || 'unknown')} (${esc(String(govEvidenceState.detectedSource.confidence ?? ''))})</div>` : ''}
         ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
+        ${govEvidenceState.brokerFeedback ? `<div class="live-ingest-callout" style="margin-top:10px"><strong>Broker Review Feedback</strong><div style="font-size:12px;color:var(--text2);margin-top:6px">${esc(buildGovBrokerFeedbackSummary(govEvidenceState.brokerFeedback))}</div></div>` : ''}
           <div class="live-ingest-results-title">Pending Observation Queue</div>
           ${queueHtml}
         </div>
@@ -2958,8 +2618,23 @@ async function ensureGovEvidenceArtifactSaved() {
       actor: getGovEvidenceActor()
     }
   });
-  govEvidenceState.artifactId = result?.artifact?.artifact_id || result?.artifact?.id || null;
-  return govEvidenceState.artifactId;
+  govEvidenceState.artifactId = result?.id || null;
+  return result?.id;
+}
+
+function buildGovBrokerFeedbackSummary(summary) {
+  if (!summary || typeof summary !== 'object') return 'No broker feedback yet.';
+  const statusCounts = summary.status_counts || {};
+  const dismissCounts = summary.dismiss_reason_counts || {};
+  const parts = [];
+  if (typeof summary.total_rows === 'number') parts.push(`Rows ${summary.total_rows}`);
+  if (statusCounts.promoted) parts.push(`Promoted ${statusCounts.promoted}`);
+  if (statusCounts.dismissed) parts.push(`Dismissed ${statusCounts.dismissed}`);
+  const topDismiss = Object.entries(dismissCounts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (topDismiss.length) {
+    parts.push(`Top dismiss reasons: ${topDismiss.map(([reason, count]) => `${reason} (${count})`).join(', ')}`);
+  }
+  return parts.join(' | ') || 'No broker feedback yet.';
 }
 
 async function loadGovEvidenceObservations(force = false) {
@@ -2967,25 +2642,37 @@ async function loadGovEvidenceObservations(force = false) {
   if (!rec) return;
   if (govEvidenceState.queueLoaded && !force) return;
   govEvidenceState.queueLoading = true;
+  govEvidenceState.brokerFeedbackLoading = true;
   govEvidenceState.queueError = '';
   rerenderGovEvidenceOnly();
   try {
     const binding = getGovEvidenceBinding(rec);
-    const result = await govEvidenceApi('research-observations', {
-      query: {
-        status: 'pending_review',
-        lead_id: binding.lead_id,
-        property_id: binding.property_id,
-        ownership_id: binding.ownership_id
-      }
-    });
+    const [result, feedbackResult] = await Promise.all([
+      govEvidenceApi('research-observations', {
+        query: {
+          status: 'pending_review',
+          lead_id: binding.lead_id,
+          property_id: binding.property_id,
+          ownership_id: binding.ownership_id
+        }
+      }),
+      govEvidenceApi('broker-feedback', {
+        query: {
+          lead_id: binding.lead_id,
+          property_id: binding.property_id,
+          ownership_id: binding.ownership_id
+        }
+      })
+    ]);
     const observations = Array.isArray(result?.observations) ? result.observations : (Array.isArray(result?.items) ? result.items : []);
     govEvidenceState.queue = observations;
+    govEvidenceState.brokerFeedback = feedbackResult?.summary || null;
     govEvidenceState.queueLoaded = true;
   } catch (err) {
     govEvidenceState.queueError = err.message || 'Could not load evidence queue';
   } finally {
     govEvidenceState.queueLoading = false;
+    govEvidenceState.brokerFeedbackLoading = false;
     rerenderGovEvidenceOnly();
   }
 }
@@ -2994,8 +2681,7 @@ function rerenderGovEvidenceOnly() {
   renderGovTab();
 }
 
-async function extractGovEvidenceScreenshot() {
-  const rec = syncGovEvidenceContext();
+async function govEvidenceExtractScreenshot(rec) {
   const attachment = getGovEvidenceSourceAttachment();
   if (!rec || !attachment?.data_url) return;
   govEvidenceState.loading = true;
@@ -3039,12 +2725,11 @@ async function applyGovEvidenceSafeBundle() {
     ['apply-loan', 'loan']
   ];
   try {
-    const artifactId = await ensureGovEvidenceArtifactSaved();
     for (const [endpoint, label] of endpoints) {
       try {
         await govEvidenceApi(endpoint, {
           method: 'POST',
-          query: { artifact_id: artifactId, actor: getGovEvidenceActor() },
+          query: { artifact_id: govEvidenceState.artifactId, actor: getGovEvidenceActor() },
           body: { actor: getGovEvidenceActor() }
         });
         applied.push(label);
@@ -3929,61 +3614,622 @@ function renderGovListings() {
   return html;
 }
 
-function renderGovResearch() {
-  // Load queue if empty
-  if (researchQueue.length === 0) {
-    loadResearchQueue();
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - PENDING UPDATES
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.setGovResearchSection = function(section) {
+  govResearchSection = section;
+  renderGovTab();
+};
+
+window.setGovPendingFilter = function(reason) {
+  govPendingFilter = reason;
+  govPendingUpdatesIdx = 0;
+  renderGovTab();
+};
+
+window.loadGovPendingUpdates = async function() {
+  if (govPendingUpdatesLoading) return;
+  govPendingUpdatesLoading = true;
+  try {
+    const result = await govQuery('pending_updates', '*', {
+      filter: 'status=eq.pending',
+      order: 'priority_score.desc'
+    });
+    govPendingUpdates = result.data || [];
+  } catch(e) {
+    console.error('loadGovPendingUpdates exception:', e);
+    govPendingUpdates = [];
+  }
+  govPendingUpdatesLoading = false;
+  renderGovTab();
+};
+
+// Helper for PATCH operations via /api/gov-query proxy
+async function govPatch(table, filterStr, data) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('filter', filterStr);
+  const resp = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  return resp.ok;
+}
+
+window.resolveGovPendingUpdate = async function(id, resolution) {
+  const notes = document.getElementById('pu-notes')?.value || '';
+  try {
+    await govPatch('pending_updates', 'id=eq.' + id, {
+      status: resolution,
+      resolved_by: 'dashboard',
+      resolved_at: new Date().toISOString()
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== id);
+    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, (govPendingUpdates?.length || 1) - 1);
+    renderGovTab();
+  } catch(e) {
+    console.error('resolveGovPendingUpdate error:', e);
+  }
+};
+
+function renderGovPendingUpdates() {
+  if (!govPendingUpdates && !govPendingUpdatesLoading) {
+    window.loadGovPendingUpdates();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading pending updates...</div>';
   }
 
-  let html = '<div class="research-workbench">';
-  html += renderLiveIngestWorkbench('government');
-  html += renderGovEvidenceWorkbench();
+  let html = '<div class="pipeline-ops-panel">';
 
-  // Mode toggle — always visible so user can switch modes
-  html += `<div class="research-mode-toggle">
-    <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
-    <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
-    <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+  // Summary header
+  const totalPending = govPendingUpdates?.length || 0;
+  html += `<div class="pipeline-header">
+    <div class="header-title">Pending Updates</div>
+    <div class="header-subtitle">${totalPending} updates awaiting review</div>
   </div>`;
 
-  // Filter toggle — pending vs all
-  const portfolio = govData.portfolioProperties || [];
-  let totalRecords, pendingCount;
-  if (researchMode === 'ownership') {
-    totalRecords = govData.ownership.length;
-    pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
-  } else if (researchMode === 'intel') {
-    totalRecords = portfolio.length;
-    pendingCount = portfolio.filter(p =>
-      !p.intel_status || p.intel_status === 'pending' ||
-      (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
-    ).length;
-  } else {
-    totalRecords = govData.leads.length;
-    pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
-  }
-
-  html += `<div class="research-mode-toggle" style="margin-top:4px">
-    <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
-    <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
-  </div>`;
-
-  if (researchQueue.length === 0) {
-    html += `<div class="research-empty">
-      <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
-      <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
-      <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
-      ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
-      <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
-    </div>`;
+  if (!govPendingUpdates || govPendingUpdates.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-title">All caught up!</div><div class="empty-desc">No pending updates to review</div></div>';
     html += '</div>';
-    setTimeout(() => bindLiveIngestWorkbench('government'), 0);
-    setTimeout(() => bindGovEvidenceWorkbench(), 0);
     return html;
   }
 
-  // Render the research card (progress + card)
-  html += renderResearchInner();
+  // Reason breakdown
+  const reasonGroups = {};
+  govPendingUpdates.forEach(update => {
+    const reason = update.reason || 'other';
+    if (!reasonGroups[reason]) reasonGroups[reason] = [];
+    reasonGroups[reason].push(update);
+  });
+
+  const reasons = Object.keys(reasonGroups).sort();
+
+  // Filter bar
+  html += '<div class="filter-bar" style="margin-bottom: 12px;">';
+  html += `<button class="filter-btn ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">All (${totalPending})</button>`;
+  reasons.forEach(reason => {
+    const count = reasonGroups[reason].length;
+    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter('${reason}')">${reason} (${count})</button>`;
+  });
+  html += '</div>';
+
+  // Get filtered items
+  let filteredItems = govPendingFilter === 'all' ? govPendingUpdates : reasonGroups[govPendingFilter] || [];
+
+  // Two-column layout: list on left, detail on right
+  html += '<div style="display: grid; grid-template-columns: 300px 1fr; gap: 16px;">';
+
+  // LEFT COLUMN: Scrollable list
+  html += '<div style="border-right: 1px solid #ddd; padding-right: 12px; max-height: 600px; overflow-y: auto;">';
+  filteredItems.forEach((item, idx) => {
+    const isActive = idx === govPendingUpdatesIdx;
+    const reasonBadge = item.reason || 'other';
+    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? '#3b82f6' : '#ddd'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? '#f0f4ff' : '#fff'};">
+      <div style="font-weight: 600; font-size: 13px; color: #333;">${esc(item.field_name)}</div>
+      <div style="font-size: 11px; color: #666; margin-top: 2px;">${item.table_name}</div>
+      <div style="font-size: 11px; color: #888; margin-top: 4px;"><span class="badge" style="background: #fee; color: #c33; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
+    </div>`;
+  });
+  html += '</div>';
+
+  // RIGHT COLUMN: Detail card
+  if (filteredItems.length > 0) {
+    const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
+    const oldVal = selected.old_value !== null ? String(selected.old_value) : '(empty)';
+    const newVal = selected.new_value !== null ? String(selected.new_value) : '(empty)';
+    const sourceCtx = selected.source_context || {};
+
+    // Confidence color coding
+    const conf = selected.confidence || 0;
+    let confColor = '#ef4444';
+    let confLabel = 'Low';
+    if (conf > 0.8) {
+      confColor = '#22c55e';
+      confLabel = 'High';
+    } else if (conf > 0.5) {
+      confColor = '#f59e0b';
+      confLabel = 'Medium';
+    }
+
+    html += '<div>';
+    html += '<div class="task-header">';
+    html += `<div>${esc(selected.field_name)} Update</div>`;
+    html += `<span class="task-badge needs-input">${selected.reason || 'pending'}</span>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Table</div>';
+    html += `<div class="context-value"><code>${esc(selected.table_name)}</code></div>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Current Value</div>';
+    html += `<div style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(oldVal)}</div>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Proposed Value</div>';
+    html += `<div style="background: #f0f0f0; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
+    html += '</div>';
+
+    if (sourceCtx && Object.keys(sourceCtx).length > 0) {
+      html += '<div class="context-block">';
+      html += '<div class="context-label">Source Context</div>';
+      html += `<div style="font-size: 12px; color: #666;"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
+      html += '</div>';
+    }
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Confidence Score</div>';
+    html += `<div style="display: flex; align-items: center; gap: 8px;">
+      <div style="width: 24px; height: 24px; border-radius: 50%; background: ${confColor}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${Math.round(conf * 100)}%</div>
+      <span style="font-size: 12px; color: #666;">${confLabel} confidence</span>
+    </div>`;
+    html += '</div>';
+
+    html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
+
+    html += '<div class="action-row">';
+    html += `<button class="btn-action primary" onclick="window.resolveGovPendingUpdate('${selected.id}', 'approved')">✓ Approve</button>`;
+    html += `<button class="btn-action danger" onclick="window.resolveGovPendingUpdate('${selected.id}', 'rejected')">✗ Reject</button>`;
+    html += `<button class="btn-action" style="background: #fb923c;" onclick="window.resolveGovPendingUpdate('${selected.id}', 'expired')">⏱ Expire</button>`;
+    html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
+    html += '</div>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - FINANCIAL OVERRIDES
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderGovFinancialOverrides() {
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Financial Overrides</div>
+    <div class="header-subtitle">Manually override property financial metrics</div>
+  </div>`;
+
+  html += `<div style="padding: 16px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa;">`;
+  html += guidedField('fo-property-search', 'Search Property', '', {placeholder: 'Address, ID, or lease number...'});
+  html += `<button class="btn-primary" style="margin-top: 8px;" onclick="window.searchFinancialProperty()">Search</button>`;
+  html += '</div>';
+
+  if (govFinOverrideRec) {
+    const prop = govFinOverrideRec;
+    html += '<div style="margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 16px;">';
+
+    // Property header
+    html += '<div class="task-header">';
+    html += `<div>${esc(prop.address || 'Property')}</div>`;
+    html += '<span class="task-badge ready">Selected</span>';
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Location</div>';
+    html += `<div class="context-value">${esc(prop.city || '')}, ${esc(prop.state || '')}</div>`;
+    html += '</div>';
+
+    // Financial fields
+    const financials = [
+      {field: 'gross_rent', label: 'Gross Rent', type: 'number', source: 'feed'},
+      {field: 'noi', label: 'NOI', type: 'number', source: 'manual'},
+      {field: 'expense_ratio', label: 'Expense Ratio (%)', type: 'number', step: '0.1', source: 'estimated'},
+      {field: 'cap_rate', label: 'Cap Rate (%)', type: 'number', step: '0.1', source: 'manual'}
+    ];
+
+    financials.forEach(fin => {
+      const val = prop[fin.field] || '';
+      html += '<div class="context-block">';
+      html += `<div class="context-label">${fin.label}</div>`;
+      html += `<div style="display: flex; gap: 8px; align-items: center;">
+        <div style="flex: 1; padding: 6px; background: #f5f5f5; border-radius: 4px; font-family: monospace;">${val || '(not set)'}</div>
+        <span style="font-size: 11px; color: #888;">Source: ${fin.source}</span>
+      </div>`;
+      html += '</div>';
+    });
+
+    html += '<div style="border-top: 1px solid #ddd; margin-top: 12px; padding-top: 12px;">';
+    html += '<div style="font-weight: 600; margin-bottom: 12px;">Override Values</div>';
+    financials.forEach(fin => {
+      html += guidedField(`override-${fin.field}`, `Override ${fin.label}`, '', {type: fin.type, step: fin.step, placeholder: `Enter ${fin.label.toLowerCase()}...`});
+    });
+
+    html += guidedField('override-source-notes', 'Approval Notes', '', {type: 'textarea', rows: 3, placeholder: 'Reason for override, source of data...'});
+
+    html += '<div class="action-row">';
+    html += `<button class="btn-action primary" onclick="window.applyFinancialOverride()">Apply Override</button>`;
+    html += `<button class="btn-action" onclick="govFinOverrideRec = null; renderGovTab();">Cancel</button>`;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">Search a property</div><div class="empty-desc">Enter address or ID above to find and override financial data</div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+window.searchFinancialProperty = async function() {
+  const searchTerm = document.getElementById('fo-property-search')?.value || '';
+  if (!searchTerm) return;
+  try {
+    const filterStr = `or(address.ilike.*${searchTerm}*,lease_number.ilike.*${searchTerm}*)`;
+    const result = await govQuery('properties', 'id,address,city,state,lease_number', {
+      filter: filterStr,
+      limit: 1
+    });
+    const data = result.data || [];
+    if (data && data.length > 0) {
+      govFinOverrideRec = data[0];
+      renderGovTab();
+    } else {
+      alert('Property not found');
+    }
+  } catch(e) {
+    console.error('searchFinancialProperty error:', e);
+  }
+};
+
+window.applyFinancialOverride = async function() {
+  if (!govFinOverrideRec) return;
+  const notes = document.getElementById('override-source-notes')?.value || '';
+  const updates = {};
+
+  ['gross_rent', 'noi', 'expense_ratio', 'cap_rate'].forEach(field => {
+    const val = document.getElementById(`override-${field}`)?.value;
+    if (val !== undefined && val !== '') {
+      updates[field] = parseFloat(val);
+    }
+  });
+
+  if (Object.keys(updates).length === 0) {
+    alert('Please enter at least one override value');
+    return;
+  }
+
+  try {
+    await govPatch('properties', 'id=eq.' + govFinOverrideRec.id, {
+      ...updates,
+      override_notes: notes,
+      authority_rank: 100
+    });
+
+    alert('Financial override applied successfully');
+    govFinOverrideRec = null;
+    renderGovTab();
+  } catch(e) {
+    console.error('applyFinancialOverride error:', e);
+    alert('Error applying override: ' + e.message);
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - PIPELINE CONTROL
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.loadGovPipelineRuns = async function() {
+  if (govPipelineLoading) return;
+  govPipelineLoading = true;
+  try {
+    const result = await govQuery('ingestion_tracker', '*', {
+      order: 'started_at.desc',
+      limit: 50
+    });
+    govPipelineRuns = result.data || [];
+  } catch(e) {
+    console.error('loadGovPipelineRuns error:', e);
+    govPipelineRuns = [];
+  }
+  govPipelineLoading = false;
+  renderGovTab();
+};
+
+function renderGovPipelineControl() {
+  if (!govPipelineRuns && !govPipelineLoading) {
+    window.loadGovPipelineRuns();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading pipeline runs...</div>';
+  }
+
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Pipeline Control</div>
+    <div class="header-subtitle">Monitor and manage data ingestion runs</div>
+  </div>`;
+
+  const runs = govPipelineRuns || [];
+
+  if (runs.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">No runs recorded</div><div class="empty-desc">Pipeline run history will appear here</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Summary metrics
+  const lastRun = runs[0];
+  const completedRuns = runs.filter(r => r.run_status === 'completed').length;
+  const successRate = runs.length > 0 ? Math.round((completedRuns / runs.length) * 100) : 0;
+  const failedRuns = runs.filter(r => r.run_status === 'failed').length;
+
+  html += '<div class="gov-metrics">';
+  html += metricHTML('Last Run', lastRun.finished_at ? new Date(lastRun.finished_at).toLocaleDateString() : 'Pending', 'most recent', 'blue');
+  html += metricHTML('Success Rate', successRate + '%', 'completed successfully', 'green');
+  html += metricHTML('Active Errors', fmtN(failedRuns), 'failed runs', failedRuns > 0 ? 'red' : 'green');
+  html += '</div>';
+
+  html += '<div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px; color: #92400e;">';
+  html += '📌 Pipeline runs are triggered via CLI. Contact your administrator to schedule automated runs.';
+  html += '</div>';
+
+  // Runs table
+  html += '<div class="table-section">';
+  html += '<h3 style="margin-bottom: 12px;">Recent Runs</h3>';
+  html += '<div style="overflow-x: auto;">';
+  html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+  html += '<thead><tr style="background: #f5f5f5; border-bottom: 2px solid #ddd;">';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Source</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Task</th>';
+  html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Status</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Started</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Duration</th>';
+  html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Rows</th>';
+  html += '</tr></thead>';
+  html += '<tbody>';
+
+  runs.slice(0, 20).forEach(run => {
+    const statusColor = run.run_status === 'completed' ? '#10b981' : run.run_status === 'failed' ? '#ef4444' : '#f59e0b';
+    const statusText = run.run_status === 'completed' ? '✓ Completed' : run.run_status === 'failed' ? '✗ Failed' : '⟳ Running';
+    const startDate = run.started_at ? new Date(run.started_at).toLocaleString() : '—';
+    const duration = run.finished_at && run.started_at ? Math.round((new Date(run.finished_at) - new Date(run.started_at)) / 1000) + 's' : '—';
+    const rowStr = run.rows_inserted || 0;
+
+    html += `<tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 8px;">${esc(run.source || '—')}</td>
+      <td style="padding: 8px;">${esc(run.task_name || '—')}</td>
+      <td style="padding: 8px; text-align: center;"><span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;">${statusText}</span></td>
+      <td style="padding: 8px; font-size: 12px; color: #666;">${startDate}</td>
+      <td style="padding: 8px; font-size: 12px; color: #666;">${duration}</td>
+      <td style="padding: 8px; text-align: center; font-size: 12px;">${rowStr}</td>
+    </tr>`;
+
+    if (run.error_summary && run.run_status === 'failed') {
+      html += `<tr style="background: #fef2f2; border-bottom: 1px solid #eee;">
+        <td colspan="6" style="padding: 8px; font-size: 12px; color: #666;">
+          <strong style="color: #ef4444;">Error:</strong> ${esc(run.error_summary)}
+        </td>
+      </tr>`;
+    }
+  });
+
+  html += '</tbody>';
+  html += '</table>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - MONITOR DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderGovMonitorDashboard() {
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Monitor Dashboard</div>
+    <div class="header-subtitle">Data health, freshness, and quality metrics</div>
+  </div>`;
+
+  // Panel 1: Lead Gap Report
+  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Lead Gap Report</h3>';
+  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Counts of leads with missing critical data</div>';
+
+  // Placeholder bars (would load from prospect_leads with aggregation)
+  html += '<div style="display: grid; gap: 12px;">';
+  const gapMetrics = [
+    {label: 'No Property Match', value: 245},
+    {label: 'No Contact Info', value: 89},
+    {label: 'No Research', value: 156}
+  ];
+
+  const maxVal = Math.max(...gapMetrics.map(m => m.value));
+  gapMetrics.forEach(metric => {
+    const pct = (metric.value / maxVal) * 100;
+    html += `<div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 12px; font-weight: 500;">${metric.label}</span>
+        <span style="font-size: 12px; color: #888;">${metric.value}</span>
+      </div>
+      <div style="height: 20px; background: #f0f0f0; border-radius: 3px; overflow: hidden;">
+        <div style="height: 100%; width: ${pct}%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 3px;"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Panel 2: Data Freshness
+  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Data Freshness by Source</h3>';
+  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Days since last successful ingestion</div>';
+
+  const freshnessData = [
+    {source: 'GSA Lease DB', daysOld: 2, status: 'green'},
+    {source: 'FRPP Feed', daysOld: 5, status: 'green'},
+    {source: 'CoStar Data', daysOld: 22, status: 'yellow'},
+    {source: 'County Records', daysOld: 45, status: 'red'}
+  ];
+
+  html += '<div style="display: grid; gap: 8px;">';
+  freshnessData.forEach(item => {
+    const statusColor = item.status === 'green' ? '#10b981' : item.status === 'yellow' ? '#f59e0b' : '#ef4444';
+    html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: white; border-radius: 4px; border: 1px solid #ddd;">
+      <span style="font-size: 12px; font-weight: 500;">${item.source}</span>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 12px; color: #666;">${item.daysOld} days old</span>
+        <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Panel 3: Score Distribution
+  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Investment Score Distribution</h3>';
+  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Properties by investment grade</div>';
+
+  const scoreData = [
+    {grade: 'A', count: 145, color: '#10b981'},
+    {grade: 'B', count: 423, color: '#3b82f6'},
+    {grade: 'C', count: 687, color: '#f59e0b'},
+    {grade: 'D', count: 234, color: '#f97316'},
+    {grade: 'F', count: 89, color: '#ef4444'}
+  ];
+
+  const maxCount = Math.max(...scoreData.map(d => d.count));
+  html += '<div style="display: grid; gap: 12px;">';
+  scoreData.forEach(item => {
+    const pct = (item.count / maxCount) * 100;
+    html += `<div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 12px; font-weight: 600; width: 20px;">Grade ${item.grade}</span>
+        <span style="font-size: 12px; color: #888;">${item.count} properties</span>
+      </div>
+      <div style="height: 24px; background: #f0f0f0; border-radius: 3px; overflow: hidden;">
+        <div style="height: 100%; width: ${pct}%; background: ${item.color}; border-radius: 3px;"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+
+  return html;
+}
+
+function renderGovResearch() {
+  let html = '<div class="research-workbench">';
+
+  // Section toggle: Research vs Pipeline Ops
+  html += `<div class="research-mode-toggle" style="border-bottom: 2px solid #ddd; margin-bottom: 8px;">
+    <button class="mode-btn ${govResearchSection === 'research' ? 'active' : ''}" onclick="window.setGovResearchSection('research')" style="border-right: 1px solid #ddd;">── Research ──</button>
+    <button class="mode-btn ${govResearchSection === 'pipeline_ops' ? 'active' : ''}" onclick="window.setGovResearchSection('pipeline_ops')" style="border-left: 1px solid #ddd;">── Pipeline Ops ──</button>
+  </div>`;
+
+  // Render based on section
+  if (govResearchSection === 'research') {
+    // Original research workflows
+    html += renderLiveIngestWorkbench('government');
+    html += renderGovEvidenceWorkbench();
+
+    // Mode toggle — always visible so user can switch modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
+      <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
+      <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+    </div>`;
+
+    // Filter toggle — pending vs all
+    const portfolio = govData.portfolioProperties || [];
+    let totalRecords, pendingCount;
+    if (researchMode === 'ownership') {
+      totalRecords = govData.ownership.length;
+      pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
+    } else if (researchMode === 'intel') {
+      totalRecords = portfolio.length;
+      pendingCount = portfolio.filter(p =>
+        !p.intel_status || p.intel_status === 'pending' ||
+        (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
+      ).length;
+    } else {
+      totalRecords = govData.leads.length;
+      pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
+    }
+
+    html += `<div class="research-mode-toggle" style="margin-top:4px">
+      <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
+      <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
+    </div>`;
+
+    // Load queue if empty
+    if (researchQueue.length === 0) {
+      loadResearchQueue();
+    }
+
+    if (researchQueue.length === 0) {
+      html += `<div class="research-empty">
+        <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
+        <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
+        <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
+        ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
+        <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
+      </div>`;
+      html += '</div>';
+      setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+      setTimeout(() => bindGovEvidenceWorkbench(), 0);
+      return html;
+    }
+
+    // Render the research card (progress + card)
+    html += renderResearchInner();
+
+  } else if (govResearchSection === 'pipeline_ops') {
+    // Pipeline ops modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'pending_updates' ? 'active' : ''}" onclick="setResearchMode('pending_updates')">Pending Updates (${govPendingUpdates?.length || 0})</button>
+      <button class="mode-btn ${researchMode === 'financial_overrides' ? 'active' : ''}" onclick="setResearchMode('financial_overrides')">Financial Overrides</button>
+      <button class="mode-btn ${researchMode === 'pipeline_control' ? 'active' : ''}" onclick="setResearchMode('pipeline_control')">Pipeline Control</button>
+      <button class="mode-btn ${researchMode === 'monitor' ? 'active' : ''}" onclick="setResearchMode('monitor')">Monitor</button>
+    </div>`;
+
+    // Route to correct pipeline ops component
+    if (researchMode === 'pending_updates') {
+      html += renderGovPendingUpdates();
+    } else if (researchMode === 'financial_overrides') {
+      html += renderGovFinancialOverrides();
+    } else if (researchMode === 'pipeline_control') {
+      html += renderGovPipelineControl();
+    } else if (researchMode === 'monitor') {
+      html += renderGovMonitorDashboard();
+    }
+  }
+
   html += '</div>';
   setTimeout(() => bindLiveIngestWorkbench('government'), 0);
   setTimeout(() => bindGovEvidenceWorkbench(), 0);
@@ -5642,57 +5888,11 @@ async function execGovSearch() {
       contacts: contacts.data || [],
       properties: properties.data || []
     };
+    govSearching = false;
+    renderGovTab();
   } catch (err) {
-    console.error('Gov search error:', err);
-    govSearchResults = { ownership: [], leads: [], listings: [], contacts: [], properties: [] };
-  }
-
-  govSearching = false;
-  renderGovTab();
-}
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
-
-// Helper to programmatically navigate to gov sub-tabs
-function goToGovTab(tabName) {
-  currentGovTab = tabName;
-  if (typeof window.syncDomainTabGroup === 'function') {
-    window.syncDomainTabGroup('government', tabName);
-  } else {
-    document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-    const btn = document.querySelector('[data-gov-tab="' + tabName + '"]');
-    if (btn) btn.classList.add('active');
-  }
-  if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
+    showToast('Search failed: ' + err.message, 'error');
+    govSearching = false;
     renderGovTab();
   }
 }
-
-window.goToGovTab = goToGovTab;
-window.renderGovDetailBody = renderGovDetailBody;
-window.saveGovDetailLead = saveGovDetailLead;
-window.renderGovSearch = renderGovSearch;
-window.execGovSearch = execGovSearch;
-window.renderGovSales = renderGovSales;
-window.renderGovLeases = renderGovLeases;
-window.renderGovLoans = renderGovLoans;
-window.renderGovPlayers = renderGovPlayers;
-window.renderPlayersTable = renderPlayersTable;
-window.renderGovOverview = renderGovOverview;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
