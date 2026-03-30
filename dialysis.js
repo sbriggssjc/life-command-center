@@ -14,6 +14,7 @@ let diaResearchIdx = 0;
 let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
 let diaLeaseFilter = { priority: null, selectedIdx: undefined };
 let diaClinicLeadFilter = { category: null, tier: null, state: null, selectedIdx: undefined, hideResolved: true };
+let diaClinicLeadStep = 0; // step counter for 2-step workflow
 let diaClinicLeadQueue = null; // lazy-loaded from v_clinic_research_priority
 let diaClinicLeadLoading = false;
 let diaChangeFilter = 'all'; // 'all' | 'added' | 'removed' | 'persistent'
@@ -1429,98 +1430,155 @@ function renderDiaPropertyResearch() {
  */
 function renderDiaPropertyCard(item) {
   let html = '<div class="research-card" style="display: grid; grid-template-columns: 1fr 460px; gap: 20px; margin-top: 20px;">';
-  
-  // Context
+
+  // Context panel (left)
   html += '<div class="research-context">';
+
+  // Task header
+  const isMismatch = (item.review_reason || '').toLowerCase().includes('mismatch') || (item.review_reason || '').toLowerCase().includes('conflict');
+  const badgeClass = isMismatch ? 'urgent' : !item.outcome ? 'needs-input' : 'ready';
+  const badgeText = isMismatch ? 'Urgent' : !item.outcome ? 'Needs Input' : 'Ready';
+
+  html += '<div class="task-header">';
+  html += '<div>';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700">Property Link Verification</h4>';
+  html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(item.review_type || '')} — ${esc(item.review_reason || '')}</div>`;
+  html += '</div>';
+  html += `<span class="task-badge ${badgeClass}">${badgeText}</span>`;
+  html += '</div>';
+
+  // Context blocks
   html += `<div class="context-block">`;
   html += `<div class="context-label">Facility</div>`;
   html += `<div class="context-value">${esc(item.facility_name || '')}</div>`;
   html += `</div>`;
-  
+
   html += `<div class="context-block">`;
   html += `<div class="context-label">Operator / Clinic ID</div>`;
   html += `<div class="context-value">${esc(item.operator_name || '')} / ${item.clinic_id}</div>`;
   html += `</div>`;
-  
+
   html += `<div class="context-block">`;
   html += `<div class="context-label">Location</div>`;
   html += `<div class="context-value">${item.state || ''}</div>`;
   html += `</div>`;
-  
+
   html += `<div class="context-block">`;
   html += `<div class="context-label">Patients</div>`;
   html += `<div class="context-value">${fmtN(item.total_patients || 0)}</div>`;
   html += `</div>`;
-  
+
   if (item.candidate_types) {
     html += `<div class="context-block">`;
     html += `<div class="context-label">Candidate Types</div>`;
     html += `<div class="context-value">${esc(item.candidate_types)}</div>`;
     html += `</div>`;
   }
-  
+
   if (item.review_reason) {
     html += `<div class="context-block">`;
     html += `<div class="context-label">Review Reason</div>`;
     html += `<div class="context-value">${esc(item.review_reason)}</div>`;
     html += `</div>`;
   }
-  
+
   html += '</div>';
-  
-  // Form
+
+  // Form panel (right)
   html += '<div class="research-form">';
-  html += '<div class="form-group">';
-  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Outcome</label>';
-  html += `<select id="propOutcome" style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">`;
-  html += '<option value="">Select status...</option>';
-  html += '<option value="pending_review">Pending Review</option>';
-  html += '<option value="approved_link">Approved Link</option>';
-  html += '<option value="needs_research">Needs Research</option>';
-  html += '<option value="rejected_candidate">Rejected Candidate</option>';
-  html += '<option value="escalated">Escalated</option>';
-  html += '</select>';
+
+  // Completeness bar
+  const fields = [
+    { name: 'outcome', value: item.outcome, required: true },
+    { name: 'property_id', value: item.property_id, required: item.outcome === 'approved_link' },
+    { name: 'source', value: item.verification_source },
+    { name: 'notes', value: item.notes }
+  ];
+  const completeness = computeCompleteness(fields);
+  html += renderCompletenessBar(completeness);
+
+  // Outcome
+  html += guidedField('propOutcome', 'Outcome', item.outcome, {
+    type: 'select',
+    required: true,
+    options: [
+      { label: 'Pending Review', value: 'pending_review' },
+      { label: 'Approved Link', value: 'approved_link' },
+      { label: 'Needs Research', value: 'needs_research' },
+      { label: 'Rejected Candidate', value: 'rejected_candidate' },
+      { label: 'Escalated', value: 'escalated' }
+    ]
+  });
+
+  // Property ID
+  html += guidedField('propPropertyId', 'Property ID', item.property_id, {
+    type: 'text',
+    required: item.outcome === 'approved_link',
+    placeholder: 'Enter linked property ID'
+  });
+
+  // Verification Source
+  html += guidedField('propSource', 'Verification Source', item.verification_source, {
+    type: 'select',
+    options: [
+      { label: 'CoStar', value: 'costar' },
+      { label: 'County Records', value: 'county_records' },
+      { label: 'Google', value: 'google' },
+      { label: 'Manual Verify', value: 'manual_verify' },
+      { label: 'Other', value: 'other' }
+    ]
+  });
+
+  // Notes
+  html += guidedField('propNotes', 'Notes', item.notes, {
+    type: 'textarea',
+    placeholder: 'Add notes...',
+    rows: 3
+  });
+
+  // Action row
+  html += '<div class="action-row">';
+  html += `<button class="btn-action primary" data-confirm-prop="${item.clinic_id}">Confirm Link</button>`;
+  html += `<button class="btn-action danger" data-reject-prop="${item.clinic_id}">Reject</button>`;
+  html += `<button class="btn-action" data-skip-prop="${item.clinic_id}">Skip</button>`;
   html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Property ID (if approved)</label>';
-  html += `<input type="text" id="propPropertyId" placeholder="Property ID" style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" />`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Notes</label>';
-  html += `<textarea id="propNotes" placeholder="Add notes..." style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical; min-height: 100px;"></textarea>`;
-  html += '</div>';
-  
-  html += '<div class="form-divider"></div>';
-  
-  html += '<div style="display: flex; gap: 10px;">';
-  html += `<button class="btn-primary" data-save-prop="${item.clinic_id}" style="flex: 1;">Save Outcome</button>`;
-  html += `<button class="pill" data-skip-prop="${item.clinic_id}" style="flex: 1; padding: 10px 20px; font-size: 13px; font-weight: 600;">Skip</button>`;
-  html += '</div>';
-  
+
   html += '</div>';
   html += '</div>';
-  
+
   setTimeout(() => {
-    const saveBtn = document.querySelector(`[data-save-prop="${item.clinic_id}"]`);
+    const confirmBtn = document.querySelector(`[data-confirm-prop="${item.clinic_id}"]`);
+    const rejectBtn = document.querySelector(`[data-reject-prop="${item.clinic_id}"]`);
     const skipBtn = document.querySelector(`[data-skip-prop="${item.clinic_id}"]`);
-    
-    if (saveBtn) {
-      saveBtn.addEventListener('click', () => {
+
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', () => {
         const outcome = q('#propOutcome')?.value;
         const propId = q('#propPropertyId')?.value;
+        const source = q('#propSource')?.value;
         const notes = q('#propNotes')?.value;
-        
+
         if (!outcome) {
           showToast('Please select an outcome', 'warning');
           return;
         }
-        
-        saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes);
+
+        if (outcome === 'approved_link' && !propId) {
+          showToast('Property ID required when approving link', 'warning');
+          return;
+        }
+
+        saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes, source);
       });
     }
-    
+
+    if (rejectBtn) {
+      rejectBtn.addEventListener('click', () => {
+        const notes = q('#propNotes')?.value;
+        saveDiaOutcome('property_review', item.clinic_id, 'rejected_candidate', '', notes);
+      });
+    }
+
     if (skipBtn) {
       skipBtn.addEventListener('click', () => {
         diaPropertyFilter.selectedIdx = undefined;
@@ -1528,13 +1586,11 @@ function renderDiaPropertyCard(item) {
       });
     }
   }, 0);
-  
+
   return html;
 }
 
-/**
- * Render lease backfill queue section
- */
+
 function renderDiaLeaseResearch() {
   let html = '<div class="research-progress" style="margin-bottom: 30px;">';
   
@@ -1647,92 +1703,174 @@ function renderDiaLeaseResearch() {
  */
 function renderDiaLeaseCard(item) {
   let html = '<div class="research-card" style="display: grid; grid-template-columns: 1fr 460px; gap: 20px; margin-top: 20px;">';
-  
-  // Context
+
+  // Context panel (left)
   html += '<div class="research-context">';
+
+  // Task header
+  const isUrgent = item.closure_watch_level === 'high';
+  const badgeClass = isUrgent ? 'urgent' : 'needs-input';
+  const badgeText = isUrgent ? 'Urgent' : 'Needs Input';
+
+  html += '<div class="task-header">';
+  html += '<div>';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700">Lease Data Backfill</h4>';
+  html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">Closure Watch: ${esc(item.closure_watch_level || 'none')} — ${esc(item.backfill_reason || '')}</div>`;
+  html += '</div>';
+  html += `<span class="task-badge ${badgeClass}">${badgeText}</span>`;
+  html += '</div>';
+
+  // Context blocks
   html += `<div class="context-block">`;
   html += `<div class="context-label">Facility</div>`;
   html += `<div class="context-value">${esc(item.facility_name || '')}</div>`;
   html += `</div>`;
-  
+
   html += `<div class="context-block">`;
   html += `<div class="context-label">Operator / Clinic ID</div>`;
   html += `<div class="context-value">${esc(item.operator_name || '')} / ${item.clinic_id}</div>`;
   html += `</div>`;
-  
+
   html += `<div class="context-block">`;
   html += `<div class="context-label">Patients</div>`;
   html += `<div class="context-value">${fmtN(item.total_patients || 0)}</div>`;
   html += `</div>`;
-  
+
   html += `<div class="context-block">`;
   html += `<div class="context-label">Closure Watch Level</div>`;
   const watchColor = item.closure_watch_level === 'high' ? '#f87171' : 'var(--text2)';
   html += `<div class="context-value" style="color: ${watchColor};">${item.closure_watch_level || 'none'}</div>`;
   html += `</div>`;
-  
+
   if (item.backfill_reason) {
     html += `<div class="context-block">`;
     html += `<div class="context-label">Backfill Reason</div>`;
     html += `<div class="context-value">${esc(item.backfill_reason)}</div>`;
     html += `</div>`;
   }
-  
+
   html += '</div>';
-  
-  // Form
+
+  // Form panel (right)
   html += '<div class="research-form">';
-  html += '<div class="form-group">';
-  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Outcome</label>';
-  html += `<select id="leaseOutcome" style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">`;
-  html += '<option value="">Select status...</option>';
-  html += '<option value="pending_backfill">Pending Backfill</option>';
-  html += '<option value="requested_lease">Requested Lease</option>';
-  html += '<option value="verified_lease">Verified Lease</option>';
-  html += '<option value="not_owned">Not Owned</option>';
-  html += '<option value="escalated">Escalated</option>';
-  html += '</select>';
+
+  // Completeness bar
+  const fields = [
+    { name: 'outcome', value: item.outcome, required: true },
+    { name: 'property_id', value: item.property_id, required: item.outcome === 'verified_lease' },
+    { name: 'lease_term', value: item.lease_term },
+    { name: 'annual_rent', value: item.annual_rent },
+    { name: 'rent_per_sf', value: item.rent_per_sf },
+    { name: 'source', value: item.lease_source },
+    { name: 'notes', value: item.notes }
+  ];
+  const completeness = computeCompleteness(fields);
+  html += renderCompletenessBar(completeness);
+
+  // Outcome
+  html += guidedField('leaseOutcome', 'Outcome', item.outcome, {
+    type: 'select',
+    required: true,
+    options: [
+      { label: 'Pending Backfill', value: 'pending_backfill' },
+      { label: 'Requested Lease', value: 'requested_lease' },
+      { label: 'Verified Lease', value: 'verified_lease' },
+      { label: 'Not Owned', value: 'not_owned' },
+      { label: 'Escalated', value: 'escalated' }
+    ]
+  });
+
+  // Property ID
+  html += guidedField('leasePropertyId', 'Property ID', item.property_id, {
+    type: 'text',
+    required: item.outcome === 'verified_lease',
+    placeholder: 'Enter property ID'
+  });
+
+  // Lease Term
+  html += guidedField('leaseTerm', 'Lease Term', item.lease_term, {
+    type: 'text',
+    placeholder: 'e.g., 10 years'
+  });
+
+  // Annual Rent
+  html += guidedField('leaseRent', 'Annual Rent', item.annual_rent, {
+    type: 'number',
+    placeholder: '$'
+  });
+
+  // Rent/SF
+  html += guidedField('leaseRentSF', 'Rent/SF', item.rent_per_sf, {
+    type: 'number',
+    placeholder: '$',
+    step: 0.01
+  });
+
+  // Lease Source
+  html += guidedField('leaseSource', 'Lease Source', item.lease_source, {
+    type: 'select',
+    options: [
+      { label: 'CoStar', value: 'costar' },
+      { label: 'Direct Contact', value: 'direct_contact' },
+      { label: 'County Records', value: 'county_records' },
+      { label: 'Broker', value: 'broker' },
+      { label: 'Other', value: 'other' }
+    ]
+  });
+
+  // Notes
+  html += guidedField('leaseNotes', 'Notes', item.notes, {
+    type: 'textarea',
+    placeholder: 'Add notes...',
+    rows: 3
+  });
+
+  // Action row
+  html += '<div class="action-row">';
+  html += `<button class="btn-action primary" data-verify-lease="${item.clinic_id}">Verify Lease</button>`;
+  html += `<button class="btn-action warn" data-notowned-lease="${item.clinic_id}">Not Owned</button>`;
+  html += `<button class="btn-action" data-skip-lease="${item.clinic_id}">Skip</button>`;
   html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Property ID (if verified)</label>';
-  html += `<input type="text" id="leasePropertyId" placeholder="Property ID" style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" />`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label style="display: block; color: var(--text2); font-size: 12px; margin-bottom: 8px; font-weight: 600;">Notes</label>';
-  html += `<textarea id="leaseNotes" placeholder="Add notes..." style="width: 100%; padding: 8px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical; min-height: 100px;"></textarea>`;
-  html += '</div>';
-  
-  html += '<div class="form-divider"></div>';
-  
-  html += '<div style="display: flex; gap: 10px;">';
-  html += `<button class="btn-primary" data-save-lease="${item.clinic_id}" style="flex: 1;">Save Outcome</button>`;
-  html += `<button class="pill" data-skip-lease="${item.clinic_id}" style="flex: 1; padding: 10px 20px; font-size: 13px; font-weight: 600;">Skip</button>`;
-  html += '</div>';
-  
+
   html += '</div>';
   html += '</div>';
-  
+
   setTimeout(() => {
-    const saveBtn = document.querySelector(`[data-save-lease="${item.clinic_id}"]`);
+    const verifyBtn = document.querySelector(`[data-verify-lease="${item.clinic_id}"]`);
+    const notownedBtn = document.querySelector(`[data-notowned-lease="${item.clinic_id}"]`);
     const skipBtn = document.querySelector(`[data-skip-lease="${item.clinic_id}"]`);
-    
-    if (saveBtn) {
-      saveBtn.addEventListener('click', () => {
+
+    if (verifyBtn) {
+      verifyBtn.addEventListener('click', () => {
         const outcome = q('#leaseOutcome')?.value;
         const propId = q('#leasePropertyId')?.value;
+        const term = q('#leaseTerm')?.value;
+        const rent = q('#leaseRent')?.value;
+        const rentSF = q('#leaseRentSF')?.value;
+        const source = q('#leaseSource')?.value;
         const notes = q('#leaseNotes')?.value;
-        
+
         if (!outcome) {
           showToast('Please select an outcome', 'warning');
           return;
         }
-        
-        saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes);
+
+        if (outcome === 'verified_lease' && !propId) {
+          showToast('Property ID required when verifying lease', 'warning');
+          return;
+        }
+
+        saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes, source, term, rent, rentSF);
       });
     }
-    
+
+    if (notownedBtn) {
+      notownedBtn.addEventListener('click', () => {
+        const notes = q('#leaseNotes')?.value;
+        saveDiaOutcome('lease_backfill', item.clinic_id, 'not_owned', '', notes);
+      });
+    }
+
     if (skipBtn) {
       skipBtn.addEventListener('click', () => {
         diaLeaseFilter.selectedIdx = undefined;
@@ -1740,17 +1878,11 @@ function renderDiaLeaseCard(item) {
       });
     }
   }, 0);
-  
+
   return html;
 }
 
-// ============================================================================
-// CLINIC LEADS RESEARCH QUEUE
-// ============================================================================
 
-/**
- * Render clinic leads research queue — prioritized by composite seller-signal score
- */
 function renderDiaClinicLeads() {
   // Lazy-load the priority queue
   if (diaClinicLeadQueue === null && !diaClinicLeadLoading) {
@@ -2020,96 +2152,180 @@ function renderClinicLeadCard(rec) {
   }
   html += '</div>';
 
-  // === RESEARCH FORM (mirrors GSA pattern) ===
+  // === RESEARCH FORM (2-STEP WORKFLOW) ===
   html += '<div style="border-top:1px solid var(--border);padding-top:16px">';
-  html += '<div style="font-weight:700;font-size:13px;margin-bottom:12px;color:var(--text)">Research Form</div>';
 
-  // Row 1: Owner info
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-  html += _clInput('Recorded Owner', 'cl-recorded-owner', '');
-  html += _clInput('True Owner / Developer', 'cl-true-owner', '');
-  html += '</div>';
+  // Completeness bar
+  const fields = [
+    { name: 'recorded_owner', value: rec.recorded_owner, required: true },
+    { name: 'true_owner', value: rec.true_owner },
+    { name: 'incorporation', value: rec.state_of_incorporation },
+    { name: 'principals', value: rec.principal_names },
+    { name: 'email', value: rec.contact_email },
+    { name: 'phone', value: rec.phone },
+    { name: 'phone2', value: rec.phone_2 },
+    { name: 'address2', value: rec.mailing_address_2 },
+    { name: 'pipeline', value: rec.pipeline_status, required: true },
+    { name: 'notes', value: rec.research_notes }
+  ];
+  const completeness = computeCompleteness(fields);
+  html += renderCompletenessBar(completeness);
 
-  // Row 2: Entity details
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">';
-  html += _clInput('State of Incorporation', 'cl-incorporation', '');
-  html += _clInput('Principal Names', 'cl-principals', '');
-  html += _clInput('Contact Email', 'cl-email', '', 'email');
-  html += '</div>';
+  // Step navigation
+  const steps = [
+    { label: 'Ownership Research', complete: !!rec.recorded_owner },
+    { label: 'Contact & Pipeline', complete: !!rec.pipeline_status }
+  ];
+  html += renderStepNav(diaClinicLeadStep || 0, steps, 'window.diaClStepNav');
 
-  // Row 3: Contact info
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">';
-  html += _clInput('Phone', 'cl-phone', '', 'tel');
-  html += _clInput('Phone 2', 'cl-phone-2', '', 'tel');
-  html += _clInput('Mailing Address', 'cl-mailing', '');
-  html += '</div>';
+  // Step 1: Ownership Research
+  const step1Active = (diaClinicLeadStep || 0) === 0 ? 'active' : '';
+  html += `<div class="form-step ${step1Active}" style="display: ${step1Active ? 'block' : 'none'};margin-top:16px">`;
+  html += '<div class="form-step-head"><h4 style="margin:0;font-size:13px;font-weight:700">Step 1: Identify Ownership</h4></div>';
 
-  // Row 4: Pipeline status
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-  html += '<div>';
-  html += '<label style="font-size:11px;font-weight:600;color:var(--text2);display:block;margin-bottom:3px">Pipeline Status</label>';
-  html += '<select id="cl-pipeline-status" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
-  html += '<option value="">— Select —</option>';
-  html += '<option value="new_lead">New Lead</option>';
-  html += '<option value="researching">Researching</option>';
-  html += '<option value="contacted">Contacted</option>';
-  html += '<option value="meeting_set">Meeting Set</option>';
-  html += '<option value="proposal_sent">Proposal Sent</option>';
-  html += '<option value="not_for_sale">Not For Sale</option>';
-  html += '<option value="dead">Dead</option>';
-  html += '</select>';
-  html += '</div>';
-  html += _clInput('Mailing Address 2', 'cl-mailing-2', '');
-  html += '</div>';
+  html += guidedField('cl-recorded-owner', 'Recorded Owner', rec.recorded_owner, {
+    type: 'text',
+    required: true
+  });
 
-  // Row 5: Research notes
-  html += '<div style="margin-bottom:14px">';
-  html += '<label style="font-size:11px;font-weight:600;color:var(--text2);display:block;margin-bottom:3px">Research Notes</label>';
-  html += `<textarea id="cl-notes" rows="3" placeholder="Research findings, next steps..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>`;
-  html += '</div>';
+  html += guidedField('cl-true-owner', 'True Owner / Developer', rec.true_owner, {
+    type: 'text'
+  });
+
+  html += guidedField('cl-incorporation', 'State of Incorporation', rec.state_of_incorporation, {
+    type: 'text'
+  });
+
+  html += guidedField('cl-principals', 'Principal Names', rec.principal_names, {
+    type: 'text'
+  });
+
+  html += guidedField('cl-mailing', 'Mailing Address', rec.mailing_address, {
+    type: 'text'
+  });
+
+  html += '</div>'; // form-step
+
+  // Step 2: Contact & Pipeline
+  const step2Active = (diaClinicLeadStep || 0) === 1 ? 'active' : '';
+  html += `<div class="form-step ${step2Active}" style="display: ${step2Active ? 'block' : 'none'};margin-top:16px">`;
+  html += '<div class="form-step-head"><h4 style="margin:0;font-size:13px;font-weight:700">Step 2: Contact & Pipeline</h4></div>';
+
+  html += guidedField('cl-email', 'Contact Email', rec.contact_email, {
+    type: 'email'
+  });
+
+  html += guidedField('cl-phone', 'Phone', rec.phone, {
+    type: 'tel'
+  });
+
+  html += guidedField('cl-phone-2', 'Phone 2', rec.phone_2, {
+    type: 'tel'
+  });
+
+  html += guidedField('cl-mailing-2', 'Mailing Address 2', rec.mailing_address_2, {
+    type: 'text'
+  });
+
+  html += guidedField('cl-pipeline-status', 'Pipeline Status', rec.pipeline_status, {
+    type: 'select',
+    required: true,
+    options: [
+      { label: 'New Lead', value: 'new_lead' },
+      { label: 'Researching', value: 'researching' },
+      { label: 'Contacted', value: 'contacted' },
+      { label: 'Meeting Set', value: 'meeting_set' },
+      { label: 'Proposal Sent', value: 'proposal_sent' },
+      { label: 'Not For Sale', value: 'not_for_sale' },
+      { label: 'Dead', value: 'dead' }
+    ]
+  });
+
+  html += guidedField('cl-notes', 'Research Notes', rec.research_notes, {
+    type: 'textarea',
+    placeholder: 'Research findings, next steps...',
+    rows: 3
+  });
+
+  html += '</div>'; // form-step
 
   // Action buttons
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  html += `<button id="clSaveBtn" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save & Next</button>`;
-  html += `<button id="clSkipBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text2)">Skip</button>`;
-  html += `<button id="clNaBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text3)">N/A</button>`;
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">';
+  const step = diaClinicLeadStep || 0;
+  if (step === 0) {
+    html += `<button id="clNextBtn" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Next →</button>`;
+    html += `<button id="clSkipBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text2)">Skip</button>`;
+  } else {
+    html += `<button id="clBackBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text2)">← Back</button>`;
+    html += `<button id="clSaveBtn" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save & Next</button>`;
+    html += `<button id="clNaBtn" style="padding:10px 16px;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;font-size:13px;cursor:pointer;color:#991b1b">N/A</button>`;
+  }
   html += '</div>';
 
   html += '</div>'; // form
   html += '</div>'; // card
 
-  // Attach save/skip handlers
+  // Attach handlers
   setTimeout(() => {
-    const saveBtn = document.getElementById('clSaveBtn');
-    const skipBtn = document.getElementById('clSkipBtn');
-    const naBtn = document.getElementById('clNaBtn');
+    if (step === 0) {
+      const nextBtn = document.getElementById('clNextBtn');
+      const skipBtn = document.getElementById('clSkipBtn');
 
-    if (saveBtn) {
-      saveBtn.addEventListener('click', async () => {
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving...';
-        await saveClinicLeadResearch(rec);
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Save & Next';
-      });
-    }
-    if (skipBtn) {
-      skipBtn.addEventListener('click', () => {
-        diaClinicLeadFilter.selectedIdx = undefined;
-        renderDiaTab();
-      });
-    }
-    if (naBtn) {
-      naBtn.addEventListener('click', async () => {
-        naBtn.disabled = true;
-        await markClinicLead(rec, 'not_applicable');
-        naBtn.disabled = false;
-      });
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          window.diaClStepNav(1);
+        });
+      }
+
+      if (skipBtn) {
+        skipBtn.addEventListener('click', () => {
+          diaClinicLeadFilter.selectedIdx = undefined;
+          renderDiaTab();
+        });
+      }
+    } else {
+      const backBtn = document.getElementById('clBackBtn');
+      const saveBtn = document.getElementById('clSaveBtn');
+      const naBtn = document.getElementById('clNaBtn');
+
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          window.diaClStepNav(0);
+        });
+      }
+
+      if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving...';
+          await saveClinicLeadResearch(rec);
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save & Next';
+        });
+      }
+
+      if (naBtn) {
+        naBtn.addEventListener('click', async () => {
+          naBtn.disabled = true;
+          await markClinicLead(rec, 'not_applicable');
+          naBtn.disabled = false;
+        });
+      }
     }
   }, 0);
 
   return html;
 }
+
+/**
+ * Step navigation handler for clinic lead multi-step form
+ */
+window.diaClStepNav = function(idx) {
+  diaClinicLeadStep = idx;
+  renderDiaTab();
+};
+
+
 
 function _clCtx(label, value) {
   return `<div><span style="color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${label}</span><div style="font-weight:500;color:var(--text)">${value}</div></div>`;
