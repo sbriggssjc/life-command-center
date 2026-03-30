@@ -39,6 +39,21 @@ let diaSalesSort = { col: null, dir: 'desc' }; // column sort state
 let diaSalesStateFilter = ''; // state filter
 const DIA_SALES_PAGE_SIZE = 50;
 
+// Pipeline/Ops Research Modes
+let diaUnmatchedQueue = null;
+let diaUnmatchedLoading = false;
+let diaUnmatchedIdx = 0;
+let diaQuarantineQueue = null;
+let diaQuarantineLoading = false;
+let diaQuarantineIdx = 0;
+let diaClarificationQueue = null;
+let diaClarificationLoading = false;
+let diaClarificationIdx = 0;
+let diaStalenessData = null;
+let diaStalenessLoading = false;
+let diaRunHealthData = null;
+let diaRunHealthLoading = false;
+
 // ============================================================================
 // QUERY FUNCTION
 // ============================================================================
@@ -1275,6 +1290,692 @@ function guidedField(id, label, value, opts = {}) {
 }
 
 // ============================================================================
+// PIPELINE/OPS RESEARCH MODES — Data loading functions
+// ============================================================================
+
+/**
+ * Load unmatched clinics queue (pending_updates where status='needs_match')
+ */
+async function loadDiaUnmatchedQueue() {
+  if (diaUnmatchedLoading) return;
+  diaUnmatchedLoading = true;
+  try {
+    const data = await diaQuery('v_pending_updates_workbench', '*', {
+      filter: "status.eq.needs_match",
+      order: "created_at.desc",
+      limit: 1000
+    });
+    diaUnmatchedQueue = data || [];
+  } catch(e) {
+    console.error('loadDiaUnmatchedQueue error:', e);
+    diaUnmatchedQueue = [];
+  }
+  diaUnmatchedLoading = false;
+  renderDiaTab();
+}
+
+/**
+ * Load quarantine queue (medicare_ingest_quarantine)
+ */
+async function loadDiaQuarantineQueue() {
+  if (diaQuarantineLoading) return;
+  diaQuarantineLoading = true;
+  try {
+    const data = await diaQuery('medicare_ingest_quarantine', '*', {
+      order: "ingested_at.desc",
+      limit: 1000
+    });
+    diaQuarantineQueue = data || [];
+  } catch(e) {
+    console.error('loadDiaQuarantineQueue error:', e);
+    diaQuarantineQueue = [];
+  }
+  diaQuarantineLoading = false;
+  renderDiaTab();
+}
+
+/**
+ * Load clarification queue (pending_updates where status='needs_clarification')
+ */
+async function loadDiaClarificationQueue() {
+  if (diaClarificationLoading) return;
+  diaClarificationLoading = true;
+  try {
+    const data = await diaQuery('pending_updates', '*', {
+      filter: "status.eq.needs_clarification",
+      order: "created_at.desc",
+      limit: 1000
+    });
+    diaClarificationQueue = data || [];
+  } catch(e) {
+    console.error('loadDiaClarificationQueue error:', e);
+    diaClarificationQueue = [];
+  }
+  diaClarificationLoading = false;
+  renderDiaTab();
+}
+
+/**
+ * Load staleness monitor data (v_source_health_dashboard or v_counts_freshness)
+ */
+async function loadDiaStalenessData() {
+  if (diaStalenessLoading) return;
+  diaStalenessLoading = true;
+  try {
+    const data = await diaQuery('v_source_health_dashboard', '*', {
+      limit: 1000
+    });
+    diaStalenessData = data || [];
+  } catch(e) {
+    console.error('loadDiaStalenessData error:', e);
+    diaStalenessData = [];
+  }
+  diaStalenessLoading = false;
+  renderDiaTab();
+}
+
+/**
+ * Load run health data (ingestion_tracker + v_ingestion_reconciliation)
+ */
+async function loadDiaRunHealthData() {
+  if (diaRunHealthLoading) return;
+  diaRunHealthLoading = true;
+  try {
+    const data = await diaQuery('ingestion_tracker', '*', {
+      order: "started_at.desc",
+      limit: 100
+    });
+    diaRunHealthData = data || [];
+  } catch(e) {
+    console.error('loadDiaRunHealthData error:', e);
+    diaRunHealthData = [];
+  }
+  diaRunHealthLoading = false;
+  renderDiaTab();
+}
+
+// ============================================================================
+// PIPELINE/OPS RESEARCH MODES — Render functions
+// ============================================================================
+
+/**
+ * Render unmatched clinics research interface
+ */
+function renderDiaUnmatchedClinics() {
+  let html = '<div class="research-progress" style="margin-bottom: 30px;">';
+
+  if (diaUnmatchedLoading || !diaUnmatchedQueue) {
+    html += '<div style="padding:20px;text-align:center;color:var(--text2);">Loading unmatched records...</div>';
+    html += '</div>';
+    return html;
+  }
+
+  const total = diaUnmatchedQueue.length;
+  html += `<div class="progress-text" style="margin-bottom:10px;"><strong>${total} unmatched records</strong> awaiting property linkage</div>`;
+  html += '</div>';
+
+  // Two-column layout: list + detail
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">';
+
+  // Left: scrollable list
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: 500px; overflow-y: auto; background: var(--s2);">';
+  html += '<div style="position: sticky; top: 0; background: var(--s3); padding: 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; color: var(--text2);">Records Needing Match</div>';
+
+  if (total === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--text2);">No unmatched records</div>';
+  } else {
+    diaUnmatchedQueue.slice(0, 100).forEach((item, idx) => {
+      const isSelected = diaUnmatchedIdx === idx;
+      const daysSince = item.created_at ? Math.floor((Date.now() - new Date(item.created_at).getTime()) / (1000 * 60 * 60 * 24)) : 0;
+      const bgColor = isSelected ? 'background: rgba(52, 211, 153, 0.15); border-left: 3px solid var(--accent);' : 'border-left: 3px solid transparent;';
+
+      html += `<div class="clickable-row" data-um-idx="${idx}" style="padding: 12px; cursor: pointer; border-bottom: 1px solid var(--border); ${bgColor}">`;
+      html += `<div style="font-weight: 500; color: var(--text); font-size: 13px; margin-bottom: 4px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(item.address || 'Unknown')}</div>`;
+      html += `<div style="color: var(--text2); font-size: 11px; margin-bottom: 3px;">${esc(item.city || '')}${item.city && item.state ? ', ' : ''}${item.state || ''}</div>`;
+      html += `<div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text2);">`;
+      html += `<span>${item.reason || 'Unknown'}</span>`;
+      html += `<span>${daysSince}d ago</span>`;
+      html += `</div>`;
+      html += `</div>`;
+    });
+  }
+  html += '</div>';
+
+  // Right: detail card
+  if (total > 0 && diaUnmatchedIdx < total) {
+    const item = diaUnmatchedQueue[diaUnmatchedIdx];
+    html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 20px; background: var(--s2);">';
+    html += '<div class="task-header" style="margin-bottom: 20px;">';
+    html += '<div style="flex: 1;">Match to Property</div>';
+    html += '<span class="task-badge urgent" style="margin-left: 10px;">Action Required</span>';
+    html += '</div>';
+
+    // Raw data display
+    html += '<div style="margin-bottom: 20px; padding: 12px; background: var(--s3); border-radius: 6px; border-left: 3px solid var(--text2);">';
+    html += `<div style="font-size: 12px; margin-bottom: 8px;"><strong>Address:</strong> ${esc(item.address || 'N/A')}</div>`;
+    html += `<div style="font-size: 12px; margin-bottom: 8px;"><strong>City/State:</strong> ${esc(item.city || '')} ${esc(item.state || '')}</div>`;
+    html += `<div style="font-size: 12px; margin-bottom: 8px;"><strong>Table:</strong> ${esc(item.table_name || 'N/A')}</div>`;
+    html += `<div style="font-size: 12px;"><strong>Reason:</strong> ${esc(item.reason || 'N/A')}</div>`;
+    html += '</div>';
+
+    // Property search
+    html += '<div style="margin-bottom: 20px;">';
+    html += '<label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; display: block;">Search Properties:</label>';
+    html += `<input type="text" id="um-property-search" placeholder="Enter address or property name..." style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--s2); color: var(--text); font-size: 12px; box-sizing: border-box;">`;
+    html += '<div id="um-search-results" style="margin-top: 10px; max-height: 150px; overflow-y: auto;"></div>';
+    html += '</div>';
+
+    // Manual property ID entry
+    html += '<div style="margin-bottom: 20px;">';
+    html += '<label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; display: block;">Or Enter Property ID:</label>';
+    html += `<input type="number" id="um-property-id" placeholder="Property ID..." style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--s2); color: var(--text); font-size: 12px; box-sizing: border-box;">`;
+    html += '</div>';
+
+    // Selected property display
+    html += `<div id="um-selected-property" style="margin-bottom: 20px;"></div>`;
+
+    // Notes field
+    html += guidedField('um-notes', 'Resolution Notes', '', { type: 'textarea', placeholder: 'Add notes about this resolution...', rows: 3 });
+
+    // Action buttons
+    html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
+    html += `<button class="btn-action primary" data-um-action="resolve" style="flex: 1; min-width: 120px;">Link to Property</button>`;
+    html += `<button class="btn-action warn" data-um-action="create" style="flex: 1; min-width: 120px;">Create New</button>`;
+    html += `<button class="btn-action default" data-um-action="skip" style="flex: 1; min-width: 120px;">Skip</button>`;
+    html += `<button class="btn-action danger" data-um-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
+    html += '</div>';
+
+    html += '</div>';
+  } else if (total === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--green); font-weight: 600;">All records matched!</div>';
+  }
+
+  html += '</div>';
+
+  // Attach handlers
+  setTimeout(() => {
+    // List item selection
+    document.querySelectorAll('[data-um-idx]').forEach(row => {
+      row.addEventListener('click', e => {
+        diaUnmatchedIdx = parseInt(e.currentTarget.dataset.umIdx);
+        renderDiaTab();
+      });
+    });
+
+    // Property search
+    const searchInput = document.getElementById('um-property-search');
+    if (searchInput) {
+      let searchTimeout;
+      searchInput.addEventListener('input', async e => {
+        clearTimeout(searchTimeout);
+        const query = e.target.value.trim();
+        const resultsDiv = document.getElementById('um-search-results');
+
+        if (query.length < 2) {
+          resultsDiv.innerHTML = '';
+          return;
+        }
+
+        searchTimeout = setTimeout(async () => {
+          try {
+            const props = await diaQuery('properties', 'id, address, city, state, property_name', {
+              filter: `or(address.ilike.%${query}%,property_name.ilike.%${query}%)`,
+              limit: 10
+            });
+
+            if (props.length === 0) {
+              resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--text2);">No properties found</div>';
+            } else {
+              resultsDiv.innerHTML = props.map(p =>
+                `<div class="clickable-row um-search-result" data-prop-id="${p.id}" style="padding: 8px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 12px;">${esc(p.address || '')} - ${esc(p.city || '')} ${esc(p.state || '')}</div>`
+              ).join('');
+
+              document.querySelectorAll('.um-search-result').forEach(el => {
+                el.addEventListener('click', e => {
+                  const propId = parseInt(e.currentTarget.dataset.propId);
+                  document.getElementById('um-property-id').value = propId;
+
+                  // Display selected property
+                  const prop = props.find(p => p.id === propId);
+                  if (prop) {
+                    document.getElementById('um-selected-property').innerHTML =
+                      `<div style="padding: 12px; background: rgba(52, 211, 153, 0.1); border-radius: 6px; border-left: 3px solid var(--accent);"><strong>Selected:</strong> ${esc(prop.address || '')} (ID: ${prop.id})</div>`;
+                  }
+                  resultsDiv.innerHTML = '';
+                });
+              });
+            }
+          } catch(err) {
+            console.error('Property search error:', err);
+            resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--red);">Search error</div>';
+          }
+        }, 300);
+      });
+    }
+
+    // Action buttons
+    document.querySelectorAll('[data-um-action]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const action = e.target.dataset.umAction;
+        const item = diaUnmatchedQueue[diaUnmatchedIdx];
+        if (!item) return;
+
+        const propertyId = document.getElementById('um-property-id')?.value ? parseInt(document.getElementById('um-property-id').value) : null;
+
+        if (action === 'resolve' && !propertyId) {
+          alert('Please select or enter a Property ID');
+          return;
+        }
+
+        resolveDiaUnmatched(item.id, action, propertyId);
+      });
+    });
+  }, 0);
+
+  return html;
+}
+
+/**
+ * Render quarantine review interface
+ */
+function renderDiaQuarantineReview() {
+  let html = '<div class="research-progress" style="margin-bottom: 30px;">';
+
+  if (diaQuarantineLoading || !diaQuarantineQueue) {
+    html += '<div style="padding:20px;text-align:center;color:var(--text2);">Loading quarantine records...</div>';
+    html += '</div>';
+    return html;
+  }
+
+  const total = diaQuarantineQueue.length;
+  html += `<div class="progress-text" style="margin-bottom:10px;"><strong>${total} quarantined records</strong> requiring review</div>`;
+  html += '</div>';
+
+  // Two-column layout
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">';
+
+  // Left: list
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: 500px; overflow-y: auto; background: var(--s2);">';
+  html += '<div style="position: sticky; top: 0; background: var(--s3); padding: 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; color: var(--text2);">Quarantine Queue</div>';
+
+  if (total === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--text2);">No quarantined records</div>';
+  } else {
+    diaQuarantineQueue.slice(0, 100).forEach((item, idx) => {
+      const isSelected = diaQuarantineIdx === idx;
+      const daysSince = item.ingested_at ? Math.floor((Date.now() - new Date(item.ingested_at).getTime()) / (1000 * 60 * 60 * 24)) : 0;
+      const bgColor = isSelected ? 'background: rgba(52, 211, 153, 0.15); border-left: 3px solid var(--accent);' : 'border-left: 3px solid transparent;';
+
+      html += `<div class="clickable-row" data-q-idx="${idx}" style="padding: 12px; cursor: pointer; border-bottom: 1px solid var(--border); ${bgColor}">`;
+      html += `<div style="font-weight: 500; color: var(--red); font-size: 13px; margin-bottom: 4px;">${esc(item.reason || 'Unknown')}</div>`;
+      html += `<div style="color: var(--text2); font-size: 11px; margin-bottom: 3px;">${esc(item.source || 'Unknown')}</div>`;
+      html += `<div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text2);">`;
+      html += `<span>${daysSince}d ago</span>`;
+      html += `</div>`;
+      html += `</div>`;
+    });
+  }
+  html += '</div>';
+
+  // Right: detail card
+  if (total > 0 && diaQuarantineIdx < total) {
+    const item = diaQuarantineQueue[diaQuarantineIdx];
+    const raw = item.raw || {};
+
+    html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 20px; background: var(--s2);">';
+    html += '<div class="task-header" style="margin-bottom: 20px;">';
+    html += '<div style="flex: 1;">Quarantine Review</div>';
+    html += '<span class="task-badge urgent">Needs Review</span>';
+    html += '</div>';
+
+    // Raw data display
+    html += '<div style="margin-bottom: 20px; padding: 12px; background: var(--s3); border-radius: 6px; border-left: 3px solid var(--red); max-height: 200px; overflow-y: auto; font-size: 12px;">';
+    html += `<div style="margin-bottom: 8px;"><strong>Reason:</strong> ${esc(item.reason || 'N/A')}</div>`;
+    html += `<div style="margin-bottom: 8px;"><strong>Source:</strong> ${esc(item.source || 'N/A')}</div>`;
+
+    if (raw.facility_name) html += `<div style="margin-bottom: 8px;"><strong>Facility:</strong> ${esc(raw.facility_name)}</div>`;
+    if (raw.ccn) html += `<div style="margin-bottom: 8px;"><strong>CCN:</strong> ${esc(raw.ccn)}</div>`;
+    if (raw.address) html += `<div style="margin-bottom: 8px;"><strong>Address:</strong> ${esc(raw.address)}</div>`;
+    if (raw.city) html += `<div style="margin-bottom: 8px;"><strong>City:</strong> ${esc(raw.city)}</div>`;
+    if (raw.state) html += `<div style="margin-bottom: 8px;"><strong>State:</strong> ${esc(raw.state)}</div>`;
+
+    html += '</div>';
+
+    // Action buttons
+    html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
+    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px;">Fix & Re-ingest</button>`;
+    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px;">Merge</button>`;
+    html += `<button class="btn-action danger" data-q-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
+    html += '</div>';
+
+    html += '</div>';
+  } else if (total === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--green); font-weight: 600;">All clear!</div>';
+  }
+
+  html += '</div>';
+
+  // Attach handlers
+  setTimeout(() => {
+    document.querySelectorAll('[data-q-idx]').forEach(row => {
+      row.addEventListener('click', e => {
+        diaQuarantineIdx = parseInt(e.currentTarget.dataset.qIdx);
+        renderDiaTab();
+      });
+    });
+
+    document.querySelectorAll('[data-q-action]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const action = e.target.dataset.qAction;
+        const item = diaQuarantineQueue[diaQuarantineIdx];
+        if (!item) return;
+
+        console.log('Quarantine action:', action, item);
+        // Placeholder for action handling
+        if (action === 'dismiss') {
+          diaQuarantineQueue = diaQuarantineQueue.filter((_, i) => i !== diaQuarantineIdx);
+          diaQuarantineIdx = Math.min(diaQuarantineIdx, (diaQuarantineQueue?.length || 1) - 1);
+          renderDiaTab();
+        }
+      });
+    });
+  }, 0);
+
+  return html;
+}
+
+/**
+ * Render clarification queue interface
+ */
+function renderDiaClarificationQueue() {
+  let html = '<div class="research-progress" style="margin-bottom: 30px;">';
+
+  if (diaClarificationLoading || !diaClarificationQueue) {
+    html += '<div style="padding:20px;text-align:center;color:var(--text2);">Loading clarification queue...</div>';
+    html += '</div>';
+    return html;
+  }
+
+  const total = diaClarificationQueue.length;
+  html += `<div class="progress-text" style="margin-bottom:10px;"><strong>${total} clarification requests</strong></div>`;
+  html += '</div>';
+
+  // Two-column layout
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">';
+
+  // Left: list
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: 500px; overflow-y: auto; background: var(--s2);">';
+  html += '<div style="position: sticky; top: 0; background: var(--s3); padding: 12px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; color: var(--text2);">Pending Clarification</div>';
+
+  if (total === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--green);">No pending clarifications</div>';
+  } else {
+    diaClarificationQueue.slice(0, 100).forEach((item, idx) => {
+      const isSelected = diaClarificationIdx === idx;
+      const bgColor = isSelected ? 'background: rgba(52, 211, 153, 0.15); border-left: 3px solid var(--accent);' : 'border-left: 3px solid transparent;';
+
+      html += `<div class="clickable-row" data-cl-idx="${idx}" style="padding: 12px; cursor: pointer; border-bottom: 1px solid var(--border); ${bgColor}">`;
+      html += `<div style="font-weight: 500; color: var(--text); font-size: 13px; margin-bottom: 4px;">${esc(item.clarification_prompt ? item.clarification_prompt.substring(0, 30) : 'Clarification')}</div>`;
+      html += `<div style="color: var(--text2); font-size: 11px;">${esc(item.table_name || 'Unknown')}</div>`;
+      html += `</div>`;
+    });
+  }
+  html += '</div>';
+
+  // Right: detail card
+  if (total > 0 && diaClarificationIdx < total) {
+    const item = diaClarificationQueue[diaClarificationIdx];
+
+    html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 20px; background: var(--s2);">';
+    html += '<div class="task-header" style="margin-bottom: 20px;">';
+    html += '<div style="flex: 1;">Provide Missing Data</div>';
+    html += '<span class="task-badge needs-input">Response Needed</span>';
+    html += '</div>';
+
+    // Clarification prompt (prominent)
+    html += '<div style="margin-bottom: 20px; padding: 12px; background: rgba(251, 191, 36, 0.1); border-radius: 6px; border-left: 3px solid #fbbf24;">';
+    html += `<div style="font-weight: 600; color: #fbbf24; font-size: 13px; margin-bottom: 8px;">Question:</div>`;
+    html += `<div style="font-size: 13px; color: var(--text);">${esc(item.clarification_prompt || 'Clarification needed')}</div>`;
+    html += '</div>';
+
+    // Input field for the missing data
+    html += `<div style="margin-bottom: 20px;">`;
+    html += `<label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; display: block;">Your Response:</label>`;
+    html += `<textarea id="cl-response" placeholder="Enter the missing information..." style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--s2); color: var(--text); font-size: 12px; box-sizing: border-box; min-height: 100px;"></textarea>`;
+    html += `</div>`;
+
+    // Action buttons
+    html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
+    html += `<button class="btn-action primary" data-cl-action="submit" style="flex: 1; min-width: 120px;">Submit Data</button>`;
+    html += `<button class="btn-action warn" data-cl-action="cannot-determine" style="flex: 1; min-width: 120px;">Cannot Determine</button>`;
+    html += `<button class="btn-action default" data-cl-action="skip" style="flex: 1; min-width: 120px;">Skip</button>`;
+    html += '</div>';
+
+    html += '</div>';
+  }
+
+  html += '</div>';
+
+  // Attach handlers
+  setTimeout(() => {
+    document.querySelectorAll('[data-cl-idx]').forEach(row => {
+      row.addEventListener('click', e => {
+        diaClarificationIdx = parseInt(e.currentTarget.dataset.clIdx);
+        renderDiaTab();
+      });
+    });
+
+    document.querySelectorAll('[data-cl-action]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const action = e.target.dataset.clAction;
+        const item = diaClarificationQueue[diaClarificationIdx];
+        if (!item) return;
+
+        const response = document.getElementById('cl-response')?.value || '';
+        const notes = action === 'submit' ? response : '';
+
+        console.log('Clarification action:', action, item);
+        // Placeholder for action handling
+        if (action === 'skip' || action === 'cannot-determine') {
+          diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
+          diaClarificationIdx = Math.min(diaClarificationIdx, (diaClarificationQueue?.length || 1) - 1);
+          renderDiaTab();
+        }
+      });
+    });
+  }, 0);
+
+  return html;
+}
+
+/**
+ * Render staleness monitor
+ */
+function renderDiaStalenessMonitor() {
+  let html = '<div style="margin-bottom: 30px;">';
+
+  if (diaStalenessLoading || !diaStalenessData) {
+    html += '<div style="padding:20px;text-align:center;color:var(--text2);">Loading staleness data...</div>';
+    html += '</div>';
+    return html;
+  }
+
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
+  html += '<div style="font-size: 16px; font-weight: 600;">Data Source Freshness</div>';
+  html += `<button class="btn-action default" id="dia-refresh-staleness" style="padding: 6px 12px; font-size: 12px;">Refresh</button>`;
+  html += '</div>';
+
+  // Grid of source health
+  html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">';
+
+  if (diaStalenessData.length === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--text2);">No staleness data available</div>';
+  } else {
+    diaStalenessData.forEach(source => {
+      const lastUpdate = source.last_update_date ? new Date(source.last_update_date) : null;
+      const daysSince = lastUpdate ? Math.floor((Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24)) : null;
+
+      let color = 'var(--text2)';
+      let badge = 'Unknown';
+      if (daysSince !== null) {
+        if (daysSince < 7) {
+          color = 'var(--green)';
+          badge = 'Fresh';
+        } else if (daysSince < 30) {
+          color = '#fbbf24';
+          badge = 'Stale';
+        } else {
+          color = 'var(--red)';
+          badge = 'Very Stale';
+        }
+      }
+
+      html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 15px; background: var(--s2);">';
+      html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">`;
+      html += `<div style="font-weight: 600; color: var(--text);">${esc(source.source || 'Unknown')}</div>`;
+      html += `<span class="task-badge" style="background: ${color}; color: white; border: none;">${badge}</span>`;
+      html += `</div>`;
+      html += `<div style="font-size: 13px; color: var(--text2); margin-bottom: 8px;">`;
+      if (daysSince !== null) {
+        html += `Last updated: <strong style="color: ${color};">${daysSince} days ago</strong>`;
+      } else {
+        html += `Last updated: Unknown`;
+      }
+      html += `</div>`;
+      if (source.run_status) {
+        html += `<div style="font-size: 12px; color: var(--text2);">Status: ${esc(source.run_status)}</div>`;
+      }
+      html += '</div>';
+    });
+  }
+
+  html += '</div>';
+  html += '</div>';
+
+  // Attach handlers
+  setTimeout(() => {
+    document.getElementById('dia-refresh-staleness')?.addEventListener('click', () => {
+      diaStalenessData = null;
+      loadDiaStalenessData();
+    });
+  }, 0);
+
+  return html;
+}
+
+/**
+ * Render run health dashboard
+ */
+function renderDiaRunHealth() {
+  let html = '<div style="margin-bottom: 30px;">';
+
+  if (diaRunHealthLoading || !diaRunHealthData) {
+    html += '<div style="padding:20px;text-align:center;color:var(--text2);">Loading run health data...</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Summary metrics
+  const successfulRuns = diaRunHealthData.filter(r => r.run_status === 'success').length;
+  const totalRuns = diaRunHealthData.length;
+  const lastRun = diaRunHealthData.length > 0 ? diaRunHealthData[0] : null;
+  const errorRate = totalRuns > 0 ? Math.round((totalRuns - successfulRuns) / totalRuns * 100) : 0;
+
+  html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px;">';
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 15px; background: var(--s2);">';
+  html += '<div style="font-size: 11px; color: var(--text2); margin-bottom: 5px;">Last Run</div>';
+  html += `<div style="font-size: 14px; font-weight: 600; color: var(--text);">${lastRun && lastRun.finished_at ? new Date(lastRun.finished_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}</div>`;
+  html += '</div>';
+
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 15px; background: var(--s2);">';
+  html += '<div style="font-size: 11px; color: var(--text2); margin-bottom: 5px;">Success Rate</div>';
+  html += `<div style="font-size: 14px; font-weight: 600; color: ${successfulRuns === totalRuns ? 'var(--green)' : 'var(--text)'};">${successfulRuns} / ${totalRuns}</div>`;
+  html += '</div>';
+
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 15px; background: var(--s2);">';
+  html += '<div style="font-size: 11px; color: var(--text2); margin-bottom: 5px;">Error Rate</div>';
+  html += `<div style="font-size: 14px; font-weight: 600; color: ${errorRate > 0 ? 'var(--red)' : 'var(--green)'};">${errorRate}%</div>`;
+  html += '</div>';
+  html += '</div>';
+
+  // Recent runs table
+  html += '<div style="margin-bottom: 30px;">';
+  html += '<div style="font-size: 14px; font-weight: 600; margin-bottom: 15px;">Recent Runs</div>';
+  html += '<div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--s2);">';
+  html += '<div style="display: grid; grid-template-columns: 1.5fr 1fr 1fr 1fr 0.8fr; gap: 0; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px; padding: 12px; background: var(--s3); color: var(--text2);">';
+  html += '<div>Task / Source</div>';
+  html += '<div>Status</div>';
+  html += '<div>Started</div>';
+  html += '<div>Stats</div>';
+  html += '<div>Actions</div>';
+  html += '</div>';
+
+  if (diaRunHealthData.length === 0) {
+    html += '<div style="padding: 30px; text-align: center; color: var(--text2);">No run data available</div>';
+  } else {
+    diaRunHealthData.slice(0, 20).forEach((run, idx) => {
+      const statusColor = run.run_status === 'success' ? 'var(--green)' : 'var(--red)';
+      const startedTime = run.started_at ? new Date(run.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
+      const stats = `${run.rows_fetched || 0}F / ${run.rows_inserted || 0}I / ${run.rows_updated || 0}U`;
+
+      html += '<div style="display: grid; grid-template-columns: 1.5fr 1fr 1fr 1fr 0.8fr; gap: 0; padding: 12px; border-bottom: 1px solid var(--border); font-size: 12px; align-items: center;">';
+      html += `<div><strong>${esc(run.task_name || run.source || 'Unknown')}</strong></div>`;
+      html += `<div><span class="task-badge" style="background: ${statusColor}; color: white; border: none; font-size: 11px;">${run.run_status || 'pending'}</span></div>`;
+      html += `<div style="color: var(--text2);">${startedTime}</div>`;
+      html += `<div style="color: var(--text2); font-size: 11px;">${stats}</div>`;
+      html += `<div><button class="btn-link" data-rh-expand="${idx}" style="font-size: 11px; cursor: pointer;">Detail</button></div>`;
+      html += '</div>';
+
+      // Expandable error detail
+      if (run.error_summary || run.error_log) {
+        html += `<div id="rh-detail-${idx}" style="display: none; padding: 12px; background: var(--s3); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text2); max-height: 150px; overflow-y: auto;"`;
+        if (run.error_summary) html += `<div><strong>Error:</strong> ${esc(run.error_summary)}</div>`;
+        if (run.error_log) html += `<div style="margin-top: 8px; font-family: monospace; white-space: pre-wrap; word-break: break-word;">${esc(run.error_log.substring(0, 300))}</div>`;
+        html += `></div>`;
+      }
+    });
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Attach handlers
+  setTimeout(() => {
+    document.querySelectorAll('[data-rh-expand]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const idx = e.target.dataset.rhExpand;
+        const detail = document.getElementById(`rh-detail-${idx}`);
+        if (detail) {
+          detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+          e.target.textContent = detail.style.display === 'none' ? 'Detail' : 'Hide';
+        }
+      });
+    });
+  }, 0);
+
+  return html;
+}
+
+// ============================================================================
+// ACTION HANDLER FUNCTIONS
+// ============================================================================
+
+/**
+ * Resolve unmatched clinic
+ */
+async function resolveDiaUnmatched(updateId, action, propertyId) {
+  const notes = document.getElementById('um-notes')?.value || '';
+  const status = action === 'dismiss' ? 'dismissed' : action === 'resolve' ? 'resolved' : 'needs_match';
+
+  console.log('Resolving unmatched:', { updateId, action, propertyId, status, notes });
+
+  // In a real implementation, this would call Supabase
+  // For now, just remove from queue
+  diaUnmatchedQueue = diaUnmatchedQueue.filter(r => r.id !== updateId);
+  diaUnmatchedIdx = Math.min(diaUnmatchedIdx, (diaUnmatchedQueue?.length || 1) - 1);
+  renderDiaTab();
+}
+
+// ============================================================================
 // RESEARCH TAB (WORKBENCH)
 // ============================================================================
 
@@ -1284,24 +1985,55 @@ function guidedField(id, label, value, opts = {}) {
 function renderDiaResearch() {
   let html = '<div class="research-workbench">';
   html += renderLiveIngestWorkbench('dialysis');
-  
-  // Mode tabs
-  html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap;">';
+
+  // Mode tabs with divider between research and pipeline ops
+  html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap; align-items: center;">';
+
+  // Research modes
   html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property" style="cursor: pointer; font-weight: ${diaResearchMode === 'property' ? '600' : '500'};">Property Review</button>`;
   html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease" style="cursor: pointer; font-weight: ${diaResearchMode === 'lease' ? '600' : '500'};">Lease Backfill</button>`;
   html += `<button class="btn-link${diaResearchMode === 'clinic_leads' ? '-green' : ''}" data-mode="clinic_leads" style="cursor: pointer; font-weight: ${diaResearchMode === 'clinic_leads' ? '600' : '500'};">Clinic Leads</button>`;
+
+  // Divider
+  html += '<div style="width: 1px; height: 20px; background: var(--border); margin: 0 5px;"></div>';
+  html += '<span style="font-size: 11px; color: var(--text2); font-weight: 600; margin-right: 5px;">Pipeline Ops</span>';
+
+  // Pipeline/Ops modes
+  const unmatchedCount = diaUnmatchedQueue ? diaUnmatchedQueue.length : 0;
+  html += `<button class="btn-link${diaResearchMode === 'unmatched' ? '-green' : ''}" data-mode="unmatched" style="cursor: pointer; font-weight: ${diaResearchMode === 'unmatched' ? '600' : '500'};">Unmatched${unmatchedCount > 0 ? ' (' + unmatchedCount + ')' : ''}</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'quarantine' ? '-green' : ''}" data-mode="quarantine" style="cursor: pointer; font-weight: ${diaResearchMode === 'quarantine' ? '600' : '500'};">Quarantine</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'clarification' ? '-green' : ''}" data-mode="clarification" style="cursor: pointer; font-weight: ${diaResearchMode === 'clarification' ? '600' : '500'};">Clarification</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'staleness' ? '-green' : ''}" data-mode="staleness" style="cursor: pointer; font-weight: ${diaResearchMode === 'staleness' ? '600' : '500'};">Staleness</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'run_health' ? '-green' : ''}" data-mode="run_health" style="cursor: pointer; font-weight: ${diaResearchMode === 'run_health' ? '600' : '500'};">Run Health</button>`;
+
   html += '</div>';
 
+  // Render selected mode
   if (diaResearchMode === 'property') {
     html += renderDiaPropertyResearch();
   } else if (diaResearchMode === 'lease') {
     html += renderDiaLeaseResearch();
   } else if (diaResearchMode === 'clinic_leads') {
     html += renderDiaClinicLeads();
+  } else if (diaResearchMode === 'unmatched') {
+    if (!diaUnmatchedQueue) loadDiaUnmatchedQueue();
+    html += renderDiaUnmatchedClinics();
+  } else if (diaResearchMode === 'quarantine') {
+    if (!diaQuarantineQueue) loadDiaQuarantineQueue();
+    html += renderDiaQuarantineReview();
+  } else if (diaResearchMode === 'clarification') {
+    if (!diaClarificationQueue) loadDiaClarificationQueue();
+    html += renderDiaClarificationQueue();
+  } else if (diaResearchMode === 'staleness') {
+    if (!diaStalenessData) loadDiaStalenessData();
+    html += renderDiaStalenessMonitor();
+  } else if (diaResearchMode === 'run_health') {
+    if (!diaRunHealthData) loadDiaRunHealthData();
+    html += renderDiaRunHealth();
   }
-  
+
   html += '</div>';
-  
+
   // Attach mode handlers
   setTimeout(() => {
     bindLiveIngestWorkbench('dialysis');
@@ -1313,7 +2045,7 @@ function renderDiaResearch() {
       });
     });
   }, 0);
-  
+
   return html;
 }
 

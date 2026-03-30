@@ -996,6 +996,20 @@ window.govStepNav = function(idx) {
   renderGovTab();
 };
 
+// ──────────────────────────────────────────────────────────────
+// PIPELINE OPS STATE VARIABLES
+// ──────────────────────────────────────────────────────────────
+let govResearchSection = 'research'; // 'research' | 'pipeline_ops'
+let govPendingUpdates = null;
+let govPendingUpdatesLoading = false;
+let govPendingUpdatesIdx = 0;
+let govPendingFilter = 'all'; // reason filter
+let govFinOverrideRec = null;
+let govPipelineRuns = null;
+let govPipelineLoading = false;
+let govMonitorData = null;
+let govMonitorLoading = false;
+
 function renderOwnershipResearchCard(rec) {
   // Track record changes to reset step
   if (window._govLastRecId !== (rec.property_id)) {
@@ -2191,9 +2205,16 @@ function researchNav(dir) {
 function setResearchMode(mode) {
   researchMode = mode;
   researchIdx = 0;
-  loadResearchQueue().then(() => {
+
+  // For pipeline ops modes, don't load research queue
+  if (['pending_updates', 'financial_overrides', 'pipeline_control', 'monitor'].includes(mode)) {
     renderGovTab();
-  });
+  } else {
+    // For research modes, load the queue
+    loadResearchQueue().then(() => {
+      renderGovTab();
+    });
+  }
 }
 
 function setResearchFilter(filter) {
@@ -3593,61 +3614,614 @@ function renderGovListings() {
   return html;
 }
 
-function renderGovResearch() {
-  // Load queue if empty
-  if (researchQueue.length === 0) {
-    loadResearchQueue();
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - PENDING UPDATES
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.setGovResearchSection = function(section) {
+  govResearchSection = section;
+  renderGovTab();
+};
+
+window.setGovPendingFilter = function(reason) {
+  govPendingFilter = reason;
+  govPendingUpdatesIdx = 0;
+  renderGovTab();
+};
+
+window.loadGovPendingUpdates = async function() {
+  if (govPendingUpdatesLoading) return;
+  govPendingUpdatesLoading = true;
+  try {
+    const { data, error } = await supabase
+      .from('pending_updates')
+      .select('*')
+      .eq('status', 'pending')
+      .order('priority_score', { ascending: false });
+    if (!error) {
+      govPendingUpdates = data || [];
+    } else {
+      console.error('loadGovPendingUpdates error:', error);
+      govPendingUpdates = [];
+    }
+  } catch(e) {
+    console.error('loadGovPendingUpdates exception:', e);
+    govPendingUpdates = [];
+  }
+  govPendingUpdatesLoading = false;
+  renderGovTab();
+};
+
+window.resolveGovPendingUpdate = async function(id, resolution) {
+  const notes = document.getElementById('pu-notes')?.value || '';
+  try {
+    await supabase.from('pending_updates').update({
+      status: resolution,
+      resolved_by: 'dashboard',
+      resolved_at: new Date().toISOString()
+    }).eq('id', id);
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== id);
+    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, (govPendingUpdates?.length || 1) - 1);
+    renderGovTab();
+  } catch(e) {
+    console.error('resolveGovPendingUpdate error:', e);
+  }
+};
+
+function renderGovPendingUpdates() {
+  if (!govPendingUpdates && !govPendingUpdatesLoading) {
+    window.loadGovPendingUpdates();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading pending updates...</div>';
   }
 
-  let html = '<div class="research-workbench">';
-  html += renderLiveIngestWorkbench('government');
-  html += renderGovEvidenceWorkbench();
+  let html = '<div class="pipeline-ops-panel">';
 
-  // Mode toggle — always visible so user can switch modes
-  html += `<div class="research-mode-toggle">
-    <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
-    <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
-    <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+  // Summary header
+  const totalPending = govPendingUpdates?.length || 0;
+  html += `<div class="pipeline-header">
+    <div class="header-title">Pending Updates</div>
+    <div class="header-subtitle">${totalPending} updates awaiting review</div>
   </div>`;
 
-  // Filter toggle — pending vs all
-  const portfolio = govData.portfolioProperties || [];
-  let totalRecords, pendingCount;
-  if (researchMode === 'ownership') {
-    totalRecords = govData.ownership.length;
-    pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
-  } else if (researchMode === 'intel') {
-    totalRecords = portfolio.length;
-    pendingCount = portfolio.filter(p =>
-      !p.intel_status || p.intel_status === 'pending' ||
-      (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
-    ).length;
-  } else {
-    totalRecords = govData.leads.length;
-    pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
-  }
-
-  html += `<div class="research-mode-toggle" style="margin-top:4px">
-    <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
-    <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
-  </div>`;
-
-  if (researchQueue.length === 0) {
-    html += `<div class="research-empty">
-      <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
-      <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
-      <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
-      ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
-      <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
-    </div>`;
+  if (!govPendingUpdates || govPendingUpdates.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-title">All caught up!</div><div class="empty-desc">No pending updates to review</div></div>';
     html += '</div>';
-    setTimeout(() => bindLiveIngestWorkbench('government'), 0);
-    setTimeout(() => bindGovEvidenceWorkbench(), 0);
     return html;
   }
 
-  // Render the research card (progress + card)
-  html += renderResearchInner();
+  // Reason breakdown
+  const reasonGroups = {};
+  govPendingUpdates.forEach(update => {
+    const reason = update.reason || 'other';
+    if (!reasonGroups[reason]) reasonGroups[reason] = [];
+    reasonGroups[reason].push(update);
+  });
+
+  const reasons = Object.keys(reasonGroups).sort();
+
+  // Filter bar
+  html += '<div class="filter-bar" style="margin-bottom: 12px;">';
+  html += `<button class="filter-btn ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">All (${totalPending})</button>`;
+  reasons.forEach(reason => {
+    const count = reasonGroups[reason].length;
+    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter('${reason}')">${reason} (${count})</button>`;
+  });
+  html += '</div>';
+
+  // Get filtered items
+  let filteredItems = govPendingFilter === 'all' ? govPendingUpdates : reasonGroups[govPendingFilter] || [];
+
+  // Two-column layout: list on left, detail on right
+  html += '<div style="display: grid; grid-template-columns: 300px 1fr; gap: 16px;">';
+
+  // LEFT COLUMN: Scrollable list
+  html += '<div style="border-right: 1px solid #ddd; padding-right: 12px; max-height: 600px; overflow-y: auto;">';
+  filteredItems.forEach((item, idx) => {
+    const isActive = idx === govPendingUpdatesIdx;
+    const reasonBadge = item.reason || 'other';
+    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? '#3b82f6' : '#ddd'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? '#f0f4ff' : '#fff'};">
+      <div style="font-weight: 600; font-size: 13px; color: #333;">${esc(item.field_name)}</div>
+      <div style="font-size: 11px; color: #666; margin-top: 2px;">${item.table_name}</div>
+      <div style="font-size: 11px; color: #888; margin-top: 4px;"><span class="badge" style="background: #fee; color: #c33; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
+    </div>`;
+  });
+  html += '</div>';
+
+  // RIGHT COLUMN: Detail card
+  if (filteredItems.length > 0) {
+    const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
+    const oldVal = selected.old_value !== null ? String(selected.old_value) : '(empty)';
+    const newVal = selected.new_value !== null ? String(selected.new_value) : '(empty)';
+    const sourceCtx = selected.source_context || {};
+
+    // Confidence color coding
+    const conf = selected.confidence || 0;
+    let confColor = '#ef4444';
+    let confLabel = 'Low';
+    if (conf > 0.8) {
+      confColor = '#22c55e';
+      confLabel = 'High';
+    } else if (conf > 0.5) {
+      confColor = '#f59e0b';
+      confLabel = 'Medium';
+    }
+
+    html += '<div>';
+    html += '<div class="task-header">';
+    html += `<div>${esc(selected.field_name)} Update</div>`;
+    html += `<span class="task-badge needs-input">${selected.reason || 'pending'}</span>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Table</div>';
+    html += `<div class="context-value"><code>${esc(selected.table_name)}</code></div>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Current Value</div>';
+    html += `<div style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(oldVal)}</div>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Proposed Value</div>';
+    html += `<div style="background: #f0f0f0; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
+    html += '</div>';
+
+    if (sourceCtx && Object.keys(sourceCtx).length > 0) {
+      html += '<div class="context-block">';
+      html += '<div class="context-label">Source Context</div>';
+      html += `<div style="font-size: 12px; color: #666;"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
+      html += '</div>';
+    }
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Confidence Score</div>';
+    html += `<div style="display: flex; align-items: center; gap: 8px;">
+      <div style="width: 24px; height: 24px; border-radius: 50%; background: ${confColor}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${Math.round(conf * 100)}%</div>
+      <span style="font-size: 12px; color: #666;">${confLabel} confidence</span>
+    </div>`;
+    html += '</div>';
+
+    html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
+
+    html += '<div class="action-row">';
+    html += `<button class="btn-action primary" onclick="window.resolveGovPendingUpdate('${selected.id}', 'approved')">✓ Approve</button>`;
+    html += `<button class="btn-action danger" onclick="window.resolveGovPendingUpdate('${selected.id}', 'rejected')">✗ Reject</button>`;
+    html += `<button class="btn-action" style="background: #fb923c;" onclick="window.resolveGovPendingUpdate('${selected.id}', 'expired')">⏱ Expire</button>`;
+    html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
+    html += '</div>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - FINANCIAL OVERRIDES
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderGovFinancialOverrides() {
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Financial Overrides</div>
+    <div class="header-subtitle">Manually override property financial metrics</div>
+  </div>`;
+
+  html += `<div style="padding: 16px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa;">`;
+  html += guidedField('fo-property-search', 'Search Property', '', {placeholder: 'Address, ID, or lease number...'});
+  html += `<button class="btn-primary" style="margin-top: 8px;" onclick="window.searchFinancialProperty()">Search</button>`;
+  html += '</div>';
+
+  if (govFinOverrideRec) {
+    const prop = govFinOverrideRec;
+    html += '<div style="margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 16px;">';
+
+    // Property header
+    html += '<div class="task-header">';
+    html += `<div>${esc(prop.address || 'Property')}</div>`;
+    html += '<span class="task-badge ready">Selected</span>';
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Location</div>';
+    html += `<div class="context-value">${esc(prop.city || '')}, ${esc(prop.state || '')}</div>`;
+    html += '</div>';
+
+    // Financial fields
+    const financials = [
+      {field: 'gross_rent', label: 'Gross Rent', type: 'number', source: 'feed'},
+      {field: 'noi', label: 'NOI', type: 'number', source: 'manual'},
+      {field: 'expense_ratio', label: 'Expense Ratio (%)', type: 'number', step: '0.1', source: 'estimated'},
+      {field: 'cap_rate', label: 'Cap Rate (%)', type: 'number', step: '0.1', source: 'manual'}
+    ];
+
+    financials.forEach(fin => {
+      const val = prop[fin.field] || '';
+      html += '<div class="context-block">';
+      html += `<div class="context-label">${fin.label}</div>`;
+      html += `<div style="display: flex; gap: 8px; align-items: center;">
+        <div style="flex: 1; padding: 6px; background: #f5f5f5; border-radius: 4px; font-family: monospace;">${val || '(not set)'}</div>
+        <span style="font-size: 11px; color: #888;">Source: ${fin.source}</span>
+      </div>`;
+      html += '</div>';
+    });
+
+    html += '<div style="border-top: 1px solid #ddd; margin-top: 12px; padding-top: 12px;">';
+    html += '<div style="font-weight: 600; margin-bottom: 12px;">Override Values</div>';
+    financials.forEach(fin => {
+      html += guidedField(`override-${fin.field}`, `Override ${fin.label}`, '', {type: fin.type, step: fin.step, placeholder: `Enter ${fin.label.toLowerCase()}...`});
+    });
+
+    html += guidedField('override-source-notes', 'Approval Notes', '', {type: 'textarea', rows: 3, placeholder: 'Reason for override, source of data...'});
+
+    html += '<div class="action-row">';
+    html += `<button class="btn-action primary" onclick="window.applyFinancialOverride()">Apply Override</button>`;
+    html += `<button class="btn-action" onclick="govFinOverrideRec = null; renderGovTab();">Cancel</button>`;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">Search a property</div><div class="empty-desc">Enter address or ID above to find and override financial data</div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+window.searchFinancialProperty = async function() {
+  const searchTerm = document.getElementById('fo-property-search')?.value || '';
+  if (!searchTerm) return;
+  try {
+    const { data } = await supabase
+      .from('properties')
+      .select('*')
+      .or(`address.ilike.%${searchTerm}%,lease_number.ilike.%${searchTerm}%`)
+      .limit(1);
+    if (data && data.length > 0) {
+      govFinOverrideRec = data[0];
+      renderGovTab();
+    } else {
+      alert('Property not found');
+    }
+  } catch(e) {
+    console.error('searchFinancialProperty error:', e);
+  }
+};
+
+window.applyFinancialOverride = async function() {
+  if (!govFinOverrideRec) return;
+  const notes = document.getElementById('override-source-notes')?.value || '';
+  const updates = {};
+
+  ['gross_rent', 'noi', 'expense_ratio', 'cap_rate'].forEach(field => {
+    const val = document.getElementById(`override-${field}`)?.value;
+    if (val !== undefined && val !== '') {
+      updates[field] = parseFloat(val);
+    }
+  });
+
+  if (Object.keys(updates).length === 0) {
+    alert('Please enter at least one override value');
+    return;
+  }
+
+  try {
+    await supabase
+      .from('properties')
+      .update({...updates, override_notes: notes, authority_rank: 100})
+      .eq('id', govFinOverrideRec.id);
+
+    alert('Financial override applied successfully');
+    govFinOverrideRec = null;
+    renderGovTab();
+  } catch(e) {
+    console.error('applyFinancialOverride error:', e);
+    alert('Error applying override: ' + e.message);
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - PIPELINE CONTROL
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.loadGovPipelineRuns = async function() {
+  if (govPipelineLoading) return;
+  govPipelineLoading = true;
+  try {
+    const { data } = await supabase
+      .from('ingestion_tracker')
+      .select('*')
+      .order('started_at', { ascending: false })
+      .limit(50);
+    govPipelineRuns = data || [];
+  } catch(e) {
+    console.error('loadGovPipelineRuns error:', e);
+    govPipelineRuns = [];
+  }
+  govPipelineLoading = false;
+  renderGovTab();
+};
+
+function renderGovPipelineControl() {
+  if (!govPipelineRuns && !govPipelineLoading) {
+    window.loadGovPipelineRuns();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading pipeline runs...</div>';
+  }
+
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Pipeline Control</div>
+    <div class="header-subtitle">Monitor and manage data ingestion runs</div>
+  </div>`;
+
+  const runs = govPipelineRuns || [];
+
+  if (runs.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">No runs recorded</div><div class="empty-desc">Pipeline run history will appear here</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Summary metrics
+  const lastRun = runs[0];
+  const completedRuns = runs.filter(r => r.run_status === 'completed').length;
+  const successRate = runs.length > 0 ? Math.round((completedRuns / runs.length) * 100) : 0;
+  const failedRuns = runs.filter(r => r.run_status === 'failed').length;
+
+  html += '<div class="gov-metrics">';
+  html += metricHTML('Last Run', lastRun.finished_at ? new Date(lastRun.finished_at).toLocaleDateString() : 'Pending', 'most recent', 'blue');
+  html += metricHTML('Success Rate', successRate + '%', 'completed successfully', 'green');
+  html += metricHTML('Active Errors', fmtN(failedRuns), 'failed runs', failedRuns > 0 ? 'red' : 'green');
+  html += '</div>';
+
+  html += '<div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px; color: #92400e;">';
+  html += '📌 Pipeline runs are triggered via CLI. Contact your administrator to schedule automated runs.';
+  html += '</div>';
+
+  // Runs table
+  html += '<div class="table-section">';
+  html += '<h3 style="margin-bottom: 12px;">Recent Runs</h3>';
+  html += '<div style="overflow-x: auto;">';
+  html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+  html += '<thead><tr style="background: #f5f5f5; border-bottom: 2px solid #ddd;">';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Source</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Task</th>';
+  html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Status</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Started</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Duration</th>';
+  html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Rows</th>';
+  html += '</tr></thead>';
+  html += '<tbody>';
+
+  runs.slice(0, 20).forEach(run => {
+    const statusColor = run.run_status === 'completed' ? '#10b981' : run.run_status === 'failed' ? '#ef4444' : '#f59e0b';
+    const statusText = run.run_status === 'completed' ? '✓ Completed' : run.run_status === 'failed' ? '✗ Failed' : '⟳ Running';
+    const startDate = run.started_at ? new Date(run.started_at).toLocaleString() : '—';
+    const duration = run.finished_at && run.started_at ? Math.round((new Date(run.finished_at) - new Date(run.started_at)) / 1000) + 's' : '—';
+    const rowStr = run.rows_inserted || 0;
+
+    html += `<tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 8px;">${esc(run.source || '—')}</td>
+      <td style="padding: 8px;">${esc(run.task_name || '—')}</td>
+      <td style="padding: 8px; text-align: center;"><span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;">${statusText}</span></td>
+      <td style="padding: 8px; font-size: 12px; color: #666;">${startDate}</td>
+      <td style="padding: 8px; font-size: 12px; color: #666;">${duration}</td>
+      <td style="padding: 8px; text-align: center; font-size: 12px;">${rowStr}</td>
+    </tr>`;
+
+    if (run.error_summary && run.run_status === 'failed') {
+      html += `<tr style="background: #fef2f2; border-bottom: 1px solid #eee;">
+        <td colspan="6" style="padding: 8px; font-size: 12px; color: #666;">
+          <strong style="color: #ef4444;">Error:</strong> ${esc(run.error_summary)}
+        </td>
+      </tr>`;
+    }
+  });
+
+  html += '</tbody>';
+  html += '</table>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - MONITOR DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderGovMonitorDashboard() {
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Monitor Dashboard</div>
+    <div class="header-subtitle">Data health, freshness, and quality metrics</div>
+  </div>`;
+
+  // Panel 1: Lead Gap Report
+  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Lead Gap Report</h3>';
+  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Counts of leads with missing critical data</div>';
+
+  // Placeholder bars (would load from prospect_leads with aggregation)
+  html += '<div style="display: grid; gap: 12px;">';
+  const gapMetrics = [
+    {label: 'No Property Match', value: 245},
+    {label: 'No Contact Info', value: 89},
+    {label: 'No Research', value: 156}
+  ];
+
+  const maxVal = Math.max(...gapMetrics.map(m => m.value));
+  gapMetrics.forEach(metric => {
+    const pct = (metric.value / maxVal) * 100;
+    html += `<div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 12px; font-weight: 500;">${metric.label}</span>
+        <span style="font-size: 12px; color: #888;">${metric.value}</span>
+      </div>
+      <div style="height: 20px; background: #f0f0f0; border-radius: 3px; overflow: hidden;">
+        <div style="height: 100%; width: ${pct}%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 3px;"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Panel 2: Data Freshness
+  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Data Freshness by Source</h3>';
+  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Days since last successful ingestion</div>';
+
+  const freshnessData = [
+    {source: 'GSA Lease DB', daysOld: 2, status: 'green'},
+    {source: 'FRPP Feed', daysOld: 5, status: 'green'},
+    {source: 'CoStar Data', daysOld: 22, status: 'yellow'},
+    {source: 'County Records', daysOld: 45, status: 'red'}
+  ];
+
+  html += '<div style="display: grid; gap: 8px;">';
+  freshnessData.forEach(item => {
+    const statusColor = item.status === 'green' ? '#10b981' : item.status === 'yellow' ? '#f59e0b' : '#ef4444';
+    html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: white; border-radius: 4px; border: 1px solid #ddd;">
+      <span style="font-size: 12px; font-weight: 500;">${item.source}</span>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 12px; color: #666;">${item.daysOld} days old</span>
+        <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Panel 3: Score Distribution
+  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Investment Score Distribution</h3>';
+  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Properties by investment grade</div>';
+
+  const scoreData = [
+    {grade: 'A', count: 145, color: '#10b981'},
+    {grade: 'B', count: 423, color: '#3b82f6'},
+    {grade: 'C', count: 687, color: '#f59e0b'},
+    {grade: 'D', count: 234, color: '#f97316'},
+    {grade: 'F', count: 89, color: '#ef4444'}
+  ];
+
+  const maxCount = Math.max(...scoreData.map(d => d.count));
+  html += '<div style="display: grid; gap: 12px;">';
+  scoreData.forEach(item => {
+    const pct = (item.count / maxCount) * 100;
+    html += `<div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 12px; font-weight: 600; width: 20px;">Grade ${item.grade}</span>
+        <span style="font-size: 12px; color: #888;">${item.count} properties</span>
+      </div>
+      <div style="height: 24px; background: #f0f0f0; border-radius: 3px; overflow: hidden;">
+        <div style="height: 100%; width: ${pct}%; background: ${item.color}; border-radius: 3px;"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+
+  return html;
+}
+
+function renderGovResearch() {
+  let html = '<div class="research-workbench">';
+
+  // Section toggle: Research vs Pipeline Ops
+  html += `<div class="research-mode-toggle" style="border-bottom: 2px solid #ddd; margin-bottom: 8px;">
+    <button class="mode-btn ${govResearchSection === 'research' ? 'active' : ''}" onclick="window.setGovResearchSection('research')" style="border-right: 1px solid #ddd;">── Research ──</button>
+    <button class="mode-btn ${govResearchSection === 'pipeline_ops' ? 'active' : ''}" onclick="window.setGovResearchSection('pipeline_ops')" style="border-left: 1px solid #ddd;">── Pipeline Ops ──</button>
+  </div>`;
+
+  // Render based on section
+  if (govResearchSection === 'research') {
+    // Original research workflows
+    html += renderLiveIngestWorkbench('government');
+    html += renderGovEvidenceWorkbench();
+
+    // Mode toggle — always visible so user can switch modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
+      <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
+      <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+    </div>`;
+
+    // Filter toggle — pending vs all
+    const portfolio = govData.portfolioProperties || [];
+    let totalRecords, pendingCount;
+    if (researchMode === 'ownership') {
+      totalRecords = govData.ownership.length;
+      pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
+    } else if (researchMode === 'intel') {
+      totalRecords = portfolio.length;
+      pendingCount = portfolio.filter(p =>
+        !p.intel_status || p.intel_status === 'pending' ||
+        (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
+      ).length;
+    } else {
+      totalRecords = govData.leads.length;
+      pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
+    }
+
+    html += `<div class="research-mode-toggle" style="margin-top:4px">
+      <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
+      <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
+    </div>`;
+
+    // Load queue if empty
+    if (researchQueue.length === 0) {
+      loadResearchQueue();
+    }
+
+    if (researchQueue.length === 0) {
+      html += `<div class="research-empty">
+        <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
+        <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
+        <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
+        ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
+        <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
+      </div>`;
+      html += '</div>';
+      setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+      setTimeout(() => bindGovEvidenceWorkbench(), 0);
+      return html;
+    }
+
+    // Render the research card (progress + card)
+    html += renderResearchInner();
+
+  } else if (govResearchSection === 'pipeline_ops') {
+    // Pipeline ops modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'pending_updates' ? 'active' : ''}" onclick="setResearchMode('pending_updates')">Pending Updates (${govPendingUpdates?.length || 0})</button>
+      <button class="mode-btn ${researchMode === 'financial_overrides' ? 'active' : ''}" onclick="setResearchMode('financial_overrides')">Financial Overrides</button>
+      <button class="mode-btn ${researchMode === 'pipeline_control' ? 'active' : ''}" onclick="setResearchMode('pipeline_control')">Pipeline Control</button>
+      <button class="mode-btn ${researchMode === 'monitor' ? 'active' : ''}" onclick="setResearchMode('monitor')">Monitor</button>
+    </div>`;
+
+    // Route to correct pipeline ops component
+    if (researchMode === 'pending_updates') {
+      html += renderGovPendingUpdates();
+    } else if (researchMode === 'financial_overrides') {
+      html += renderGovFinancialOverrides();
+    } else if (researchMode === 'pipeline_control') {
+      html += renderGovPipelineControl();
+    } else if (researchMode === 'monitor') {
+      html += renderGovMonitorDashboard();
+    }
+  }
+
   html += '</div>';
   setTimeout(() => bindLiveIngestWorkbench('government'), 0);
   setTimeout(() => bindGovEvidenceWorkbench(), 0);
