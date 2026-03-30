@@ -4966,10 +4966,10 @@ async function execDiaSearch() {
   const like = '*' + term + '*';
   try {
     const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
-      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,address=ilike.*' + like + '*)', limit: 100 }),
-      diaQuery('v_npi_inventory_signals', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,npi=ilike.*' + like + '*,operator_name=ilike.*' + like + '*)', limit: 50 }),
-      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or(facility_name=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,state=ilike.*' + like + '*)', limit: 50 }).catch(() => []),
-      diaQuery('research_queue_outcomes', '*', { filter: 'or(queue_type=ilike.*' + like + '*,status=ilike.*' + like + '*,notes=ilike.*' + like + '*)', limit: 50 })
+      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,address=ilike.*' + like + '*)', limit: 100 }).catch(e => { console.warn('[DiaSearch] clinic inventory query failed:', e.message); return []; }),
+      diaQuery('v_npi_inventory_signals', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,npi=ilike.*' + like + '*,operator_name=ilike.*' + like + '*)', limit: 50 }).catch(e => { console.warn('[DiaSearch] NPI signals query failed:', e.message); return []; }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or(facility_name=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,state=ilike.*' + like + '*)', limit: 50 }).catch(e => { console.warn('[DiaSearch] property queue query failed:', e.message); return []; }),
+      diaQuery('research_queue_outcomes', '*', { filter: 'or(queue_type=ilike.*' + like + '*,status=ilike.*' + like + '*,notes=ilike.*' + like + '*)', limit: 50 }).catch(e => { console.warn('[DiaSearch] outcomes query failed:', e.message); return []; })
     ]);
 
     diaSearchResults = {

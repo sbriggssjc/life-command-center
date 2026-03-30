@@ -655,9 +655,9 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
     }
   } else if (currentBizTab === 'other') {
     // All Other tab — show domain prospects if loaded, else trigger load first
-    if (_mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
+    if (_mktOpportunitiesLoaded) {
       renderDomainProspects('all_other');
-    } else if (!_mktOpportunitiesLoaded && typeof loadMarketing === 'function') {
+    } else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
       loadMarketing().then(() => renderDomainProspects('all_other'));
@@ -869,10 +869,10 @@ function renderBizContent() {
   }
   // If "other" tab — show domain prospects if loaded, trigger load if not
   if (currentBizTab === 'other') {
-    if (_mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
+    if (_mktOpportunitiesLoaded) {
       renderDomainProspects('all_other');
       return;
-    } else if (!_mktOpportunitiesLoaded) {
+    } else if (typeof loadMarketing === 'function') {
       const innerEl = document.getElementById('bizPageInner');
       if (innerEl) innerEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
       loadMarketing().then(() => renderDomainProspects('all_other'));
@@ -3789,11 +3789,11 @@ function triggerCanonicalSync() {
       });
       if (!isStale) return;
 
-      fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(() => {});
-      fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(() => {});
-      fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(() => {});
+      fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(e => console.warn('[BackgroundSync] Email ingest failed:', e.message));
+      fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(e => console.warn('[BackgroundSync] Calendar ingest failed:', e.message));
+      fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(e => console.warn('[BackgroundSync] SF activities ingest failed:', e.message));
     })
-    .catch(() => {});
+    .catch(e => console.warn('[BackgroundSync] Health check failed:', e.message));
 }
 
 // ============================================================

@@ -359,7 +359,7 @@ async function openContactDetail(id) {
     contactsApi('GET', 'history', { id }).then(h => {
       _cui.selectedHistory = h.history || [];
       if (_cui.detailTab === 'history') renderContactDetailBody();
-    }).catch(() => {});
+    }).catch(e => console.warn('[Contacts] History load failed:', e.message));
 
     renderContactDetailFull();
   } catch (e) {
