@@ -1214,16 +1214,65 @@ function parseRcmEmail(rawBody, subject) {
     return null;
   }
 
-  const name = extractAfterLabel(['Full Name:', 'Name:', 'Contact:', 'Requestor:']);
-  const company = extractAfterLabel(['Company:', 'Firm:', 'Organization:', 'Affiliation:']);
+  // ── Inline format detection ──
+  // RCM "Html_to_text" often collapses fields onto a single line:
+  //   "Name:James DurandCompany:Mapleton InvestmentsFrom Phone:(310) 209-7243"
+  // Detect and split this pattern before falling back to line-by-line extraction.
+  let inlineName = null, inlineCompany = null, inlinePhone = null;
+  const inlinePattern = /Name:\s*(.+?)(?:Company:|Firm:|Organization:)\s*(.+?)(?:From Phone:|Phone:|Tel:)\s*(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i;
+  for (const line of lines) {
+    const m = line.match(inlinePattern);
+    if (m) {
+      inlineName = m[1].trim();
+      inlineCompany = m[2].trim();
+      inlinePhone = m[3].trim();
+      break;
+    }
+  }
+
+  // Also try a two-field inline pattern (Name + Company, no phone on same line)
+  if (!inlineName) {
+    const twoFieldPattern = /Name:\s*(.+?)(?:Company:|Firm:|Organization:)\s*(.+?)$/i;
+    for (const line of lines) {
+      const m = line.match(twoFieldPattern);
+      if (m) {
+        inlineName = m[1].trim();
+        inlineCompany = m[2].trim();
+        break;
+      }
+    }
+  }
+
+  const name = inlineName || extractAfterLabel(['Full Name:', 'Name:', 'Contact:', 'Requestor:']);
+  const company = inlineCompany || extractAfterLabel(['Company:', 'Firm:', 'Organization:', 'Affiliation:']);
   const inquiryType = extractAfterLabel(['Request Type:', 'Inquiry:', 'Action:', 'Type:']);
   const propertyRef = extractAfterLabel(['Property:', 'Listing:', 'Asset:']);
 
   const emailMatch = rawBody.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
   const email = emailMatch ? emailMatch[0] : null;
 
-  const phoneMatch = rawBody.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-  const phone = phoneMatch ? phoneMatch[0] : null;
+  // ── Phone extraction ──
+  // Prefer the inline-parsed contact phone; fall back to scanning the body
+  // but skip the RCM boilerplate footer phone (usually after "call (760) 602-5080")
+  let phone = inlinePhone || null;
+  if (!phone) {
+    // Strip the RCM boilerplate header/footer before scanning for phone numbers
+    // so we don't accidentally grab the RCM office number.
+    const bodyWithoutBoilerplate = rawBody
+      .replace(/[-]{10,}[\s\S]*?[-]{10,}/g, '')  // remove --- header/footer blocks
+      .replace(/call\s+\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/gi, ''); // remove "call (760) 602-5080" patterns
+    const phoneMatch = bodyWithoutBoilerplate.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+    phone = phoneMatch ? phoneMatch[0] : null;
+  }
+
+  // ── Deal name / property extraction from body ──
+  // RCM notifications often say "has viewed the Agreement for {property}"
+  // or "has viewed the Offering Memorandum for {property}"
+  let bodyDeal = null;
+  const dealBodyMatch = rawBody.match(/(?:viewed|downloaded|requested|opened)\s+(?:the\s+)?(?:Agreement|Offering Memorandum|OM|Flyer|Brochure|Package)\s+for\s+(.+?)(?:\.|$)/im);
+  if (dealBodyMatch) {
+    bodyDeal = dealBodyMatch[1].trim();
+  }
 
   let firstName = null, lastName = null;
   if (name) {
@@ -1239,7 +1288,7 @@ function parseRcmEmail(rawBody, subject) {
     lead_email: email,
     lead_phone: phone,
     lead_company: company,
-    deal_name: subject || propertyRef || null,
+    deal_name: subject || bodyDeal || propertyRef || null,
     activity_type: inquiryType || 'rcm_inquiry',
     activity_detail: inquiryType
   };
@@ -1265,7 +1314,7 @@ async function handleRcmIngest(req, res) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
   }
 
-  const { source, source_ref, deal_name, raw_body, status } = req.body || {};
+  const { source, source_ref, deal_name, subject, raw_body, status } = req.body || {};
 
   if (!raw_body) {
     return res.status(400).json({ error: 'raw_body is required' });
@@ -1274,7 +1323,9 @@ async function handleRcmIngest(req, res) {
     return res.status(400).json({ error: 'source must be "rcm"' });
   }
 
-  const parsed = parseRcmEmail(raw_body, deal_name);
+  // Power Automate sends `subject` (email subject line); API callers may send `deal_name`.
+  // Use whichever is provided, preferring deal_name if both are present.
+  const parsed = parseRcmEmail(raw_body, deal_name || subject);
 
   const insertPayload = {
     source: 'rcm',
