@@ -4356,6 +4356,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = e.target.closest('button[data-range]');
     if (btn) loadYieldChart(btn.dataset.range);
   });
+
+  // Eager-load gov overview stats so buildCopilotContext() always has them
+  try {
+    if (typeof loadGovOverviewStats === 'function') {
+      loadGovOverviewStats();
+    }
+  } catch (e) {
+    console.warn('[App] Failed to eager-load gov overview stats:', e.message);
+  }
 });
 
 function renderHomeStats() {
@@ -5662,6 +5671,18 @@ function renderLiveIngestWorkbench(domainKey) {
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         ${ops.length ? renderLiveIngestTrustFilterBar(domainKey, state.provenanceTrustFilter, visibleOpIndices.length, ops.length) : ''}
+        <div class="live-ingest-op-list">
+          ${visibleOpIndices.length ? renderLiveIngestOperationGroups(domainKey, ops, state, visibleOpIndices) : '<div class="live-ingest-empty">No operations match the current trust filter.</div>'}
+        </div>
+        ${ops.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
+          <button class="btn-secondary" type="button" data-live-ingest-select-all="${domainKey}">Select All</button>
+          <button class="btn-secondary" type="button" data-live-ingest-select-cited="${domainKey}">Select Cited Only</button>
+          ${hasWorsenedRetryRisk ? `<button class="btn-secondary" type="button" data-live-ingest-select-worsened="${domainKey}">Select Worsened Only</button>
+          <button class="btn-secondary" type="button" data-live-ingest-clear-worsened="${domainKey}">Clear Worsened</button>` : ''}
+          <button class="btn-secondary" type="button" data-live-ingest-select-none="${domainKey}">Select None</button>
+          <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
+        </div>` : ''}
+        ${ops.length ? renderLiveIngestTrustFilterBar(domainKey, state.provenanceTrustFilter, visibleOpIndices.length, ops.length) : ''}
         ${visibleOpIndices.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
           <button class="btn-secondary" type="button" data-live-ingest-select-visible="${domainKey}">Select Visible</button>
           <button class="btn-secondary" type="button" data-live-ingest-clear-visible="${domainKey}">Clear Visible</button>
@@ -6335,6 +6356,25 @@ function bindLiveIngestWorkbench(domainKey) {
     state.worsenedRetryAcknowledged = false;
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
+    (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelectorAll(`[data-live-ingest-trust-filter^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, filterMode] = button.dataset.liveIngestTrustFilter.split(':');
+      state.provenanceTrustFilter = String(filterMode || 'all');
+      rerenderLiveIngestDomain(domainKey);
+    };
+  });
+  document.querySelectorAll(`[data-live-ingest-group-select^="${domainKey}:"]`).forEach((button) => {
+    button.onclick = () => {
+      const [, idxText] = button.dataset.liveIngestGroupSelect.split(':');
+      const groupIdx = parseInt(idxText, 10);
+      const groups = buildLiveIngestOperationGroups(state.proposal?.operations || [], visibleOpIndices);
+      const group = groups[groupIdx];
+      if (!group) return;
   document.querySelector(`[data-live-ingest-select-none="${domainKey}"]`)?.addEventListener('click', () => {
     (state.proposal?.operations || []).forEach((op) => { op._selected = false; });
     state.worsenedRetryAcknowledged = false;
@@ -8047,6 +8087,79 @@ function sortLiveIngestOperationsByConfidence(operations) {
   });
 }
 
+function scoreLiveIngestOperationConfidence(op) {
+  let score = 0;
+  if (Array.isArray(op?.source_refs) && op.source_refs.length) score += 40;
+  if (op?._sourceLineage?.label === 'Model cited source') score += 20;
+  if (op?._sourceLineage?.label === 'Source matched OCR' || op?._sourceLineage?.label === 'Source matched') score += 10;
+  if (op?._citationRisk) score -= 50;
+  if (op?._lowConfidenceOcr) score -= 10;
+  return score;
+}
+
+function filterLiveIngestOperationsByTrust(operations, filterMode = 'all') {
+  const list = Array.isArray(operations) ? operations : [];
+  if (filterMode === 'high') return list.filter((op) => scoreLiveIngestOperationConfidence(op) >= 60);
+  if (filterMode === 'medium') return list.filter((op) => {
+    const score = scoreLiveIngestOperationConfidence(op);
+    return score >= 20 && score < 60;
+  });
+  if (filterMode === 'cited') return list.filter((op) => Array.isArray(op?.source_refs) && op.source_refs.length);
+  if (filterMode === 'uncited') return list.filter((op) => !!op?._citationRisk);
+  if (filterMode === 'low_ocr') return list.filter((op) => !!op?._lowConfidenceOcr);
+  if (filterMode === 'review') return list.filter((op) => scoreLiveIngestOperationConfidence(op) < 20);
+  return list;
+}
+
+function filterLiveIngestOperationIndexesByTrust(operations, filterMode = 'all') {
+  return (Array.isArray(operations) ? operations : [])
+    .map((op, idx) => ({ op, idx }))
+    .filter(({ op }) => {
+      const score = scoreLiveIngestOperationConfidence(op);
+      if (filterMode === 'high') return score >= 60;
+      if (filterMode === 'medium') return score >= 20 && score < 60;
+      if (filterMode === 'cited') return Array.isArray(op?.source_refs) && op.source_refs.length;
+      if (filterMode === 'uncited') return !!op?._citationRisk;
+      if (filterMode === 'low_ocr') return !!op?._lowConfidenceOcr;
+      if (filterMode === 'review') return score < 20;
+      return true;
+    })
+    .map(({ idx }) => idx);
+}
+
+function renderLiveIngestTrustFilterBar(domainKey, filterMode, visibleCount, totalCount) {
+  const current = String(filterMode || 'all');
+  const options = [
+    { key: 'all', label: 'All' },
+    { key: 'high', label: 'High Trust' },
+    { key: 'medium', label: 'Medium Trust' },
+    { key: 'cited', label: 'Cited Only' },
+    { key: 'uncited', label: 'Uncited Only' },
+    { key: 'low_ocr', label: 'Low OCR Only' },
+    { key: 'review', label: 'Needs Review' }
+  ];
+  return `<div class="live-ingest-trust-filters">
+    <span class="live-ingest-retry-label">View</span>
+    ${options.map((option) => `<button class="live-ingest-inline-btn ${current === option.key ? 'active' : ''}" type="button" data-live-ingest-trust-filter="${domainKey}:${option.key}">${esc(option.label)}</button>`).join('')}
+    <span class="live-ingest-trust-count">${esc(`${visibleCount} of ${totalCount}`)}</span>
+  </div>`;
+}
+
+function scoreLiveIngestProvenanceEntry(entry) {
+  if (!entry || typeof entry !== 'object') return 0;
+  let score = 0;
+  if (entry.refs) score += 60;
+  if (/source matched ocr/i.test(String(entry.lineage || ''))) score += 25;
+  else if (/source matched/i.test(String(entry.lineage || ''))) score += 20;
+  else if (entry.lineage) score += 10;
+  return score;
+}
+
+function getLiveIngestTrustBadge(score) {
+  if (score >= 60) return { label: 'High trust', tone: 'ok' };
+  if (score >= 20) return { label: 'Medium trust', tone: '' };
+  return { label: 'Needs review', tone: 'warn' };
+}
 function scoreLiveIngestOperationConfidence(op) {
   let score = 0;
   if (Array.isArray(op?.source_refs) && op.source_refs.length) score += 40;
