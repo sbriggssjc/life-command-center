@@ -2006,29 +2006,30 @@ async function resolveDiaUnmatched(updateId, action, propertyId) {
  */
 function renderDiaResearch() {
   let html = '<div class="research-workbench">';
-  html += renderLiveIngestWorkbench('dialysis');
 
-  // Mode tabs with divider between research and pipeline ops
-  html += '<div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-wrap: wrap; align-items: center;">';
-
-  // Research modes
+  // ROW 1: Research mode tabs (always visible)
+  html += '<div style="display: flex; gap: 8px; margin-bottom: 20px; align-items: center;">';
   html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property" style="cursor: pointer; font-weight: ${diaResearchMode === 'property' ? '600' : '500'};">Property Review</button>`;
   html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease" style="cursor: pointer; font-weight: ${diaResearchMode === 'lease' ? '600' : '500'};">Lease Backfill</button>`;
   html += `<button class="btn-link${diaResearchMode === 'clinic_leads' ? '-green' : ''}" data-mode="clinic_leads" style="cursor: pointer; font-weight: ${diaResearchMode === 'clinic_leads' ? '600' : '500'};">Clinic Leads</button>`;
+  html += '</div>';
 
-  // Divider
-  html += '<div style="width: 1px; height: 20px; background: var(--border); margin: 0 5px;"></div>';
+  // ROW 2: Pipeline Ops modes (separated)
+  html += '<div style="display: flex; gap: 8px; margin-bottom: 20px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--border); align-items: center;">';
   html += '<span style="font-size: 11px; color: var(--text2); font-weight: 600; margin-right: 5px;">Pipeline Ops</span>';
-
-  // Pipeline/Ops modes
   const unmatchedCount = diaUnmatchedQueue ? diaUnmatchedQueue.length : 0;
   html += `<button class="btn-link${diaResearchMode === 'unmatched' ? '-green' : ''}" data-mode="unmatched" style="cursor: pointer; font-weight: ${diaResearchMode === 'unmatched' ? '600' : '500'};">Unmatched${unmatchedCount > 0 ? ' (' + unmatchedCount + ')' : ''}</button>`;
   html += `<button class="btn-link${diaResearchMode === 'quarantine' ? '-green' : ''}" data-mode="quarantine" style="cursor: pointer; font-weight: ${diaResearchMode === 'quarantine' ? '600' : '500'};">Quarantine</button>`;
   html += `<button class="btn-link${diaResearchMode === 'clarification' ? '-green' : ''}" data-mode="clarification" style="cursor: pointer; font-weight: ${diaResearchMode === 'clarification' ? '600' : '500'};">Clarification</button>`;
   html += `<button class="btn-link${diaResearchMode === 'staleness' ? '-green' : ''}" data-mode="staleness" style="cursor: pointer; font-weight: ${diaResearchMode === 'staleness' ? '600' : '500'};">Staleness</button>`;
   html += `<button class="btn-link${diaResearchMode === 'run_health' ? '-green' : ''}" data-mode="run_health" style="cursor: pointer; font-weight: ${diaResearchMode === 'run_health' ? '600' : '500'};">Run Health</button>`;
-
   html += '</div>';
+
+  // Live Intake workbench - only show for research modes
+  const isResearchMode = ['property', 'lease', 'clinic_leads'].includes(diaResearchMode);
+  if (isResearchMode) {
+    html += renderLiveIngestWorkbench('dialysis');
+  }
 
   // Render selected mode
   if (diaResearchMode === 'property') {

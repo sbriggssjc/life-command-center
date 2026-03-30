@@ -4154,16 +4154,16 @@ function renderGovResearch() {
 
   // Render based on section
   if (govResearchSection === 'research') {
-    // Original research workflows
-    html += renderLiveIngestWorkbench('government');
-    html += renderGovEvidenceWorkbench();
-
     // Mode toggle — always visible so user can switch modes
     html += `<div class="research-mode-toggle">
       <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
       <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
       <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
     </div>`;
+
+    // Original research workflows (Live Intake + Evidence Workbench)
+    html += renderLiveIngestWorkbench('government');
+    html += renderGovEvidenceWorkbench();
 
     // Filter toggle — pending vs all
     const portfolio = govData.portfolioProperties || [];
