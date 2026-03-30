@@ -1554,7 +1554,7 @@ async function loadMarketing() {
       if (badge) badge.textContent = actionableCount || mktData.length;
       // Update domain badges with combined prospect + opportunity counts
       const otherBadge = document.getElementById('bizBadgeOther');
-      if (otherBadge) otherBadge.textContent = (window._mktOpportunities.all_other.length + window._mktProspectContacts.all_other.length) || '—';
+      if (otherBadge) otherBadge.textContent = ((window._mktOpportunities?.all_other?.length || 0) + (window._mktProspectContacts?.all_other?.length || 0)) || '—';
     } catch (e) {
       console.error('Marketing load error:', e);
       _mktLoading = false;
@@ -1652,9 +1652,9 @@ function renderMarketing() {
   const unmatched = inboundLeads.filter(d => d.sf_match_status === 'unmatched').length;
 
   // Domain prospect counts for quick reference (opportunities + prospect contacts)
-  const govCount = (window._mktOpportunities.government.length || 0) + (window._mktProspectContacts.government.length || 0);
-  const diaCount = (window._mktOpportunities.dialysis.length || 0) + (window._mktProspectContacts.dialysis.length || 0);
-  const otherCount = (window._mktOpportunities.all_other.length || 0) + (window._mktProspectContacts.all_other.length || 0);
+  const govCount = (window._mktOpportunities?.government?.length || 0) + (window._mktProspectContacts?.government?.length || 0);
+  const diaCount = (window._mktOpportunities?.dialysis?.length || 0) + (window._mktProspectContacts?.dialysis?.length || 0);
+  const otherCount = (window._mktOpportunities?.all_other?.length || 0) + (window._mktProspectContacts?.all_other?.length || 0);
 
   // Task domain counts (from classified marketing contacts)
   const domainCounts = { government: 0, dialysis: 0, all_other: 0 };
@@ -3106,15 +3106,18 @@ async function mktReclassifyDeal(activityId, newDomain) {
     // Move item between domain buckets locally
     let movedItem = null;
     ['government', 'dialysis', 'all_other'].forEach(dom => {
-      const idx = window._mktOpportunities[dom].findIndex(d => d.item_id === activityId);
+      const arr = window._mktOpportunities?.[dom];
+      if (!Array.isArray(arr)) return;
+      const idx = arr.findIndex(d => d.item_id === activityId);
       if (idx !== -1) {
-        movedItem = window._mktOpportunities[dom].splice(idx, 1)[0];
+        movedItem = arr.splice(idx, 1)[0];
       }
     });
     if (movedItem) {
       movedItem.domain = newDomain;
       movedItem.prospect_domain = newDomain;
-      window._mktOpportunities[newDomain].push(movedItem);
+      const targetArr = window._mktOpportunities?.[newDomain];
+      if (Array.isArray(targetArr)) targetArr.push(movedItem);
     }
     showToast('Deal moved to ' + newDomain, 'success');
     // Re-render whichever view is active
@@ -4396,8 +4399,8 @@ function renderHomeStats() {
     // CRM rollup fallback — use marketing pipeline data from Salesforce
     const userName = LCC_USER.display_name || 'Scott Briggs';
     const myTasks = mktData.filter(d => d.assigned_to === userName);
-    const allProspects = (window._mktOpportunities ? (window._mktOpportunities.government.length + window._mktOpportunities.dialysis.length + window._mktOpportunities.all_other.length) : 0)
-      + (window._mktProspectContacts ? (window._mktProspectContacts.government.length + window._mktProspectContacts.dialysis.length + window._mktProspectContacts.all_other.length) : 0);
+    const allProspects = ((window._mktOpportunities?.government?.length || 0) + (window._mktOpportunities?.dialysis?.length || 0) + (window._mktOpportunities?.all_other?.length || 0))
+      + ((window._mktProspectContacts?.government?.length || 0) + (window._mktProspectContacts?.dialysis?.length || 0) + (window._mktProspectContacts?.all_other?.length || 0));
     document.getElementById('statActivities').textContent = (myTasks.length + allProspects).toLocaleString();
   } else if (activitiesLoaded && activities.length > 0) {
     document.getElementById('statActivities').textContent = activities.length.toLocaleString();
@@ -4741,7 +4744,16 @@ function renderCalendarFull() {
 // ============================================================
 // KEYBOARD
 // ============================================================
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDetail(); closeLogCall(); } });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeDetail();
+    closeLogCall();
+    if (typeof closeLogReschedule === 'function') closeLogReschedule();
+    if (typeof closeAssignModal === 'function') closeAssignModal();
+    if (typeof closeEscalateModal === 'function') closeEscalateModal();
+    if (typeof closeFollowupModal === 'function') closeFollowupModal();
+  }
+});
 
 // Auto-set title attribute on truncated elements for hover tooltips
 document.addEventListener('mouseover', (e) => {

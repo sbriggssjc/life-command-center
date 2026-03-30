@@ -379,7 +379,7 @@
 </div>
 
 <!-- Log Call Modal -->
-<div class="modal-overlay" id="logCallModal">
+<div class="modal-overlay" id="logCallModal" onclick="if(event.target===this)closeLogCall()">
   <div class="modal">
     <div class="modal-head"><h3>Log Activity to Salesforce</h3><button class="modal-close" onclick="closeLogCall()">&times;</button></div>
     <div class="modal-body">
@@ -406,7 +406,7 @@
 </div>
 
 <!-- Log & Reschedule Modal -->
-<div class="modal-overlay" id="logRescheduleModal">
+<div class="modal-overlay" id="logRescheduleModal" onclick="if(event.target===this)closeLogReschedule()">
   <div class="modal">
     <div class="modal-head"><h3>Log Touchpoint &amp; Reschedule</h3><button class="modal-close" onclick="closeLogReschedule()">&times;</button></div>
     <div class="modal-body">
@@ -434,7 +434,7 @@
 </div>
 
 <!-- Ops assignment modal -->
-<div class="modal-overlay" id="assignModal">
+<div class="modal-overlay" id="assignModal" onclick="if(event.target===this)closeAssignModal()">
   <div class="modal">
     <div class="modal-head"><h3>Assign Work</h3><button class="modal-close" onclick="closeAssignModal()">&times;</button></div>
     <div class="modal-body">
@@ -450,7 +450,7 @@
 </div>
 
 <!-- Ops escalation modal -->
-<div class="modal-overlay" id="escalateModal">
+<div class="modal-overlay" id="escalateModal" onclick="if(event.target===this)closeEscalateModal()">
   <div class="modal">
     <div class="modal-head"><h3>Escalate Work</h3><button class="modal-close" onclick="closeEscalateModal()">&times;</button></div>
     <div class="modal-body">
@@ -468,7 +468,7 @@
 </div>
 
 <!-- Research follow-up modal -->
-<div class="modal-overlay" id="followupModal">
+<div class="modal-overlay" id="followupModal" onclick="if(event.target===this)closeFollowupModal()">
   <div class="modal">
     <div class="modal-head"><h3>Create Follow-Up</h3><button class="modal-close" onclick="closeFollowupModal()">&times;</button></div>
     <div class="modal-body">
