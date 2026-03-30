@@ -3992,7 +3992,7 @@ function renderGovPipelineControl() {
   html += metricHTML('Active Errors', fmtN(failedRuns), 'failed runs', failedRuns > 0 ? 'red' : 'green');
   html += '</div>';
 
-  html += '<div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px; color: #92400e;">';
+  html += '<div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px; color: #fbbf24;">';
   html += '📌 Pipeline runs are triggered via CLI. Contact your administrator to schedule automated runs.';
   html += '</div>';
 
@@ -4018,7 +4018,7 @@ function renderGovPipelineControl() {
     const duration = run.finished_at && run.started_at ? Math.round((new Date(run.finished_at) - new Date(run.started_at)) / 1000) + 's' : '—';
     const rowStr = run.rows_inserted || 0;
 
-    html += `<tr style="border-bottom: 1px solid #eee;">
+    html += `<tr style="border-bottom: 1px solid var(--border);">
       <td style="padding: 8px;">${esc(run.source || '—')}</td>
       <td style="padding: 8px;">${esc(run.task_name || '—')}</td>
       <td style="padding: 8px; text-align: center;"><span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;">${statusText}</span></td>
@@ -4028,7 +4028,7 @@ function renderGovPipelineControl() {
     </tr>`;
 
     if (run.error_summary && run.run_status === 'failed') {
-      html += `<tr style="background: #fef2f2; border-bottom: 1px solid #eee;">
+      html += `<tr style="background: rgba(239,68,68,0.1); border-bottom: 1px solid var(--border);">
         <td colspan="6" style="padding: 8px; font-size: 12px; color: var(--text3);">
           <strong style="color: #ef4444;">Error:</strong> ${esc(run.error_summary)}
         </td>
@@ -4822,7 +4822,7 @@ function renderListingMarket(record) {
     const capRate = comp.cap_rate ? pct(comp.cap_rate / 100) : '—';
     const sqft = comp.square_feet ? fmtN(comp.square_feet) : '—';
     
-    html += `<tr class="clickable-row" style="border-bottom: 1px solid #eee;cursor:pointer" onclick='showDetail(${safeJSON(comp)}, "gov-ownership")'>`;
+    html += `<tr class="clickable-row" style="border-bottom: 1px solid var(--border);cursor:pointer" onclick='showDetail(${safeJSON(comp)}, "gov-ownership")'>`;
     html += `<td style="padding: 8px;">${esc(comp.address || '—')}</td>`;
     html += `<td style="text-align: right; padding: 8px; font-weight: 600;">${price}</td>`;
     html += `<td style="text-align: right; padding: 8px;">${capRate}</td>`;

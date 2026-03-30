@@ -5626,6 +5626,16 @@ function getLiveIngestState(domainKey) {
   return liveIngestState[domainKey];
 }
 
+/** Toggle Live Intake collapsed/expanded and re-render current tab */
+window.toggleLiveIntake = function() {
+  window._liveIntakeCollapsed = !(window._liveIntakeCollapsed == null ? true : window._liveIntakeCollapsed);
+  // Re-render current tab to reflect toggle
+  if (typeof currentBizTab !== 'undefined') {
+    if (currentBizTab === 'dialysis' && typeof renderDiaTab === 'function') renderDiaTab();
+    else if (currentBizTab === 'government' && typeof renderGovTab === 'function') renderGovTab();
+  }
+};
+
 function renderLiveIngestWorkbench(domainKey) {
   const state = getLiveIngestState(domainKey);
   const prefix = `live-ingest-${domainKey}`;
@@ -5699,14 +5709,22 @@ function renderLiveIngestWorkbench(domainKey) {
       </div>`
     : '';
 
-  return `<section class="live-ingest-card">
-    <div class="live-ingest-head">
+  const isCollapsed = window._liveIntakeCollapsed == null ? true : window._liveIntakeCollapsed;
+  const attachCount = state.attachments.length;
+  const hasProposal = !!proposal;
+  const collapsedSummary = attachCount ? `${attachCount} file${attachCount > 1 ? 's' : ''} loaded` : (hasProposal ? 'Proposal ready' : 'Drag files, paste screenshots, route extracted facts');
+
+  return `<section class="live-ingest-card${isCollapsed ? ' collapsed' : ''}">
+    <div class="live-ingest-head" style="${isCollapsed ? 'align-items:center' : ''}">
       <div>
-        <div class="live-ingest-kicker">Live Intake</div>
-        <h3>Drag files, paste screenshots, and route extracted facts into ${domainKey === 'government' ? 'Government' : 'Dialysis'}</h3>
-        <p>Use this for emails, web pages, screenshots, and saved text exports. The model proposes audited updates before anything is written.</p>
+        <div class="live-ingest-kicker"${isCollapsed ? ' style="margin-bottom:0"' : ''}>Live Intake${isCollapsed && attachCount ? ` · ${attachCount} file${attachCount > 1 ? 's' : ''}` : ''}${isCollapsed && hasProposal ? ' · proposal ready' : ''}</div>
+        <h3>${isCollapsed ? collapsedSummary : `Drag files, paste screenshots, and route extracted facts into ${domainKey === 'government' ? 'Government' : 'Dialysis'}`}</h3>
+        ${isCollapsed ? '' : '<p>Use this for emails, web pages, screenshots, and saved text exports. The model proposes audited updates before anything is written.</p>'}
       </div>
-      <div class="live-ingest-context">${renderLiveIngestContextSummary(effectiveContext)}</div>
+      <div style="display:flex;align-items:${isCollapsed ? 'center' : 'flex-start'};gap:12px;flex-shrink:0">
+        ${isCollapsed ? '' : `<div class="live-ingest-context">${renderLiveIngestContextSummary(effectiveContext)}</div>`}
+        <button class="live-ingest-toggle" onclick="toggleLiveIntake()" type="button">${isCollapsed ? '▼ Expand' : '▲ Collapse'}</button>
+      </div>
     </div>
     <div class="live-ingest-grid">
       <div class="live-ingest-pane">
