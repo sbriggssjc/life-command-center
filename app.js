@@ -699,6 +699,13 @@ function goToGovTab(tabName) {
 }
 window.goToGovTab = goToGovTab;
 
+/** Switch to a specific Business domain sub-tab programmatically */
+function switchBizTab(tabName) {
+  const btn = document.querySelector('.sub-tab[data-biz="' + tabName + '"]');
+  if (btn) btn.click();
+}
+window.switchBizTab = switchBizTab;
+
 document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   const tab = e.target.closest('.gov-inner-tab');
   if (!tab) return;
