@@ -686,6 +686,19 @@ document.getElementById('govInnerTabs').addEventListener('click', (e) => {
   }
 });
 
+/** Navigate to a specific Government inner tab programmatically */
+function goToGovTab(tabName) {
+  currentGovTab = tabName;
+  syncDomainTabGroup('government', tabName);
+  if (tabName === 'prospects') {
+    if (_mktOpportunitiesLoaded) renderDomainProspects('government');
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('government'));
+  } else {
+    renderGovTab();
+  }
+}
+window.goToGovTab = goToGovTab;
+
 document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   const tab = e.target.closest('.gov-inner-tab');
   if (!tab) return;
