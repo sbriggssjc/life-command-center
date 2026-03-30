@@ -4,6 +4,9 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-30, another commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` existed as a 0-byte file created at `2026-03-30 10:24:46` local time.
+- A process check for this later March 30 recurrence showed three active `git.exe` processes (`41088`, `89076`, `105416`) started at `2026-03-30 10:33:27` local time, alongside a VS Code window titled `git-error-1774884790655 - life-command-center - Visual Studio Code`.
+- `git status --short --branch` during this recurrence reports `main...origin/main [ahead 1]` with a staged new file `dialysis.js.backup`.
 - On 2026-03-30, another commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` existed as a 0-byte file created at `2026-03-30 09:32:59` local time.
 - A process check for this March 30 recurrence showed three active `git.exe` processes (`93924`, `98956`, `107664`) started at `2026-03-30 10:08:06` local time, alongside a VS Code window titled `git-error-1774883267985 - life-command-center - Visual Studio Code`.
 - `git status --short --branch` during this recurrence reports `main...origin/main [ahead 1, behind 2]` with staged `api/sync.js` and unstaged `dialysis.js` plus `styles.css`.
