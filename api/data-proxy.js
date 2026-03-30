@@ -51,6 +51,7 @@ const GOV_EVIDENCE_ENDPOINT_MAP = {
   'apply-activity-note': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/apply-activity-note', methods: ['POST'] },
   'promote-observations': { path: ({ artifact_id }) => '/api/research-artifacts/' + encodeURIComponent(artifact_id) + '/promote-observations', methods: ['POST'] },
   'research-observations': { path: '/api/research-observations', methods: ['GET'] },
+  'broker-feedback': { path: '/api/research-observations/broker-feedback', methods: ['GET'] },
   'review-observation': { path: ({ observation_id }) => '/api/research-observations/' + encodeURIComponent(observation_id) + '/review', methods: ['POST'] },
   'promote-observation': { path: ({ observation_id }) => '/api/research-observations/' + encodeURIComponent(observation_id) + '/promote', methods: ['POST'] }
 };

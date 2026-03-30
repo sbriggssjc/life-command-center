@@ -5662,6 +5662,11 @@ function renderLiveIngestWorkbench(domainKey) {
           <button class="btn-secondary" type="button" data-live-ingest-refresh-snapshots="${domainKey}" ${state.loadingSnapshots ? 'disabled' : ''}>${state.loadingSnapshots ? 'Refreshing...' : 'Refresh Snapshots'}</button>
         </div>` : ''}
         ${ops.length ? renderLiveIngestTrustFilterBar(domainKey, state.provenanceTrustFilter, visibleOpIndices.length, ops.length) : ''}
+        ${visibleOpIndices.length ? `<div class="live-ingest-actions" style="margin-bottom:12px">
+          <button class="btn-secondary" type="button" data-live-ingest-select-visible="${domainKey}">Select Visible</button>
+          <button class="btn-secondary" type="button" data-live-ingest-clear-visible="${domainKey}">Clear Visible</button>
+          <button class="btn-secondary" type="button" data-live-ingest-ack-visible="${domainKey}">Acknowledge Visible Risk</button>
+        </div>` : ''}
         <div class="live-ingest-op-list">
           ${visibleOpIndices.length ? renderLiveIngestOperationGroups(domainKey, ops, state, visibleOpIndices) : '<div class="live-ingest-empty">No operations match the current trust filter.</div>'}
         </div>
@@ -6341,6 +6346,30 @@ function bindLiveIngestWorkbench(domainKey) {
       state.provenanceTrustFilter = String(filterMode || 'all');
       rerenderLiveIngestDomain(domainKey);
     };
+  });
+  document.querySelector(`[data-live-ingest-select-visible="${domainKey}"]`)?.addEventListener('click', () => {
+    visibleOpIndices.forEach((idx) => {
+      const op = state.proposal?.operations?.[idx];
+      if (op) op._selected = true;
+    });
+    state.lowConfidenceOcrAcknowledged = false;
+    state.citationRiskAcknowledged = false;
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-clear-visible="${domainKey}"]`)?.addEventListener('click', () => {
+    visibleOpIndices.forEach((idx) => {
+      const op = state.proposal?.operations?.[idx];
+      if (op) op._selected = false;
+    });
+    state.lowConfidenceOcrAcknowledged = false;
+    state.citationRiskAcknowledged = false;
+    state.worsenedRetryAcknowledged = false;
+    rerenderLiveIngestDomain(domainKey);
+  });
+  document.querySelector(`[data-live-ingest-ack-visible="${domainKey}"]`)?.addEventListener('click', () => {
+    acknowledgeLiveIngestVisibleRisk(state, visibleOpIndices);
+    rerenderLiveIngestDomain(domainKey);
   });
   document.querySelectorAll(`[data-live-ingest-group-select^="${domainKey}:"]`).forEach((button) => {
     button.onclick = () => {
@@ -8026,6 +8055,23 @@ function scoreLiveIngestOperationConfidence(op) {
   if (op?._citationRisk) score -= 50;
   if (op?._lowConfidenceOcr) score -= 10;
   return score;
+}
+
+function acknowledgeLiveIngestVisibleRisk(state, visibleIndices) {
+  const visibleSet = new Set(Array.isArray(visibleIndices) ? visibleIndices : []);
+  const selectedOps = (state?.proposal?.operations || []).map((op, idx) => ({ op, idx })).filter(({ op }) => op?._selected !== false);
+  const selectedVisible = selectedOps.filter(({ idx }) => visibleSet.has(idx));
+  const selectedOutside = selectedOps.filter(({ idx }) => !visibleSet.has(idx));
+  if (!selectedVisible.length) return;
+  if (selectedVisible.some(({ op }) => op?._lowConfidenceOcr) && !selectedOutside.some(({ op }) => op?._lowConfidenceOcr)) {
+    state.lowConfidenceOcrAcknowledged = true;
+  }
+  if (selectedVisible.some(({ op }) => op?._citationRisk) && !selectedOutside.some(({ op }) => op?._citationRisk)) {
+    state.citationRiskAcknowledged = true;
+  }
+  if (selectedVisible.some(({ op }) => op?._worsenedRetryRisk) && !selectedOutside.some(({ op }) => op?._worsenedRetryRisk)) {
+    state.worsenedRetryAcknowledged = true;
+  }
 }
 
 function filterLiveIngestOperationsByTrust(operations, filterMode = 'all') {

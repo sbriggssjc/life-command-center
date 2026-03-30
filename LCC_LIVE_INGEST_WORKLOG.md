@@ -121,6 +121,7 @@
 - Trust-filter follow-up changes in `app.js` also passed `node --check app.js`.
 - Trust-filter expansion and provenance merge-conflict repair in `app.js` also passed `node --check app.js`.
 - Review/history risk-filter shortcut follow-up changes in `app.js` also passed `node --check app.js`.
+- Visible-scope bulk review action follow-up changes in `app.js` also passed `node --check app.js`.
 - Follow-up record-lookup changes in `app.js` also passed `node --check app.js`.
 - `node --check api/live-ingest.js` passed.
 - `node --check api/_shared/live-ingest-normalize.js` passed.
@@ -184,8 +185,9 @@
 - Added explicit provenance trust filters in both review and applied-history views, and fixed the review-side implementation so filtering stays display-only against original operation indexes rather than reindexing the underlying proposal array.
 - Expanded the provenance trust filters with `Medium Trust` and `Cited Only` modes in both review and applied-history views, and repaired an `app.js` merge-conflict in the provenance/history block so the live-ingest renderer is syntactically valid again.
 - Added higher-signal review/history filter shortcuts for `Uncited Only` and `Low OCR Only`, and persisted those provenance-risk hints into the field-level outcome summary so applied-history filtering can use structured flags instead of relying only on text heuristics.
+- Added filter-scoped bulk review actions for `Select Visible`, `Clear Visible`, and `Acknowledge Visible Risk`, so the active trust/risk filter can drive faster reviewer actions without losing the existing global selection and gating behavior.
 
 ## Next Follow-Up Candidates
 - Add deeper source-precedence weighting and identity-link heuristics from domain-specific external IDs, not just current-record metadata.
 - Consider preserving separate trust-filter state per dashboard/history surface instead of using one shared history filter.
-- Add bulk reviewer actions that pair with the new filters, such as `Select Visible`, `Clear Visible`, or `Acknowledge Visible Risk`.
+- Add toolbar summaries that explicitly describe the current visible filter scope and visible selected-count, not just overall selection.
