@@ -20,6 +20,8 @@ let govEvidenceState = {
   queueLoaded: false,
   queueError: '',
   healthLoading: false,
+  brokerFeedback: null,
+  brokerFeedbackLoading: false,
   health: null,
   conflicts: [],
   detectedSource: null
@@ -2618,6 +2620,8 @@ function syncGovEvidenceContext() {
     queueLoaded: false,
     queueError: '',
     healthLoading: false,
+    brokerFeedback: null,
+    brokerFeedbackLoading: false,
     health: null,
     conflicts: [],
     detectedSource: null
@@ -2864,6 +2868,7 @@ function renderGovEvidenceWorkbench() {
         ${govEvidenceState.detectedSource ? `<div class="live-ingest-stamp" style="margin-top:6px">Detected source: ${esc(govEvidenceState.detectedSource.platform || 'unknown')} (${esc(String(govEvidenceState.detectedSource.confidence ?? ''))})</div>` : ''}
         ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
+        ${govEvidenceState.brokerFeedback ? `<div class="live-ingest-callout" style="margin-top:10px"><strong>Broker Review Feedback</strong><div style="font-size:12px;color:var(--text2);margin-top:6px">${esc(buildGovBrokerFeedbackSummary(govEvidenceState.brokerFeedback))}</div></div>` : ''}
           <div class="live-ingest-results-title">Pending Observation Queue</div>
           ${queueHtml}
         </div>
@@ -2963,34 +2968,61 @@ async function ensureGovEvidenceArtifactSaved() {
 }
 
 async function loadGovEvidenceObservations(force = false) {
+function buildGovBrokerFeedbackSummary(summary) {
+  if (!summary || typeof summary !== 'object') return 'No broker feedback yet.';
+  const statusCounts = summary.status_counts || {};
+  const dismissCounts = summary.dismiss_reason_counts || {};
+  const parts = [];
+  if (typeof summary.total_rows === 'number') parts.push(`Rows ${summary.total_rows}`);
+  if (statusCounts.promoted) parts.push(`Promoted ${statusCounts.promoted}`);
+  if (statusCounts.dismissed) parts.push(`Dismissed ${statusCounts.dismissed}`);
+  const topDismiss = Object.entries(dismissCounts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (topDismiss.length) {
+    parts.push(`Top dismiss reasons: ${topDismiss.map(([reason, count]) => `${reason} (${count})`).join(', ')}`);
+  }
+  return parts.join(' | ') || 'No broker feedback yet.';
+}
+
+async function loadGovEvidenceObservations(force = false) {
   const rec = syncGovEvidenceContext();
   if (!rec) return;
   if (govEvidenceState.queueLoaded && !force) return;
   govEvidenceState.queueLoading = true;
+  govEvidenceState.brokerFeedbackLoading = true;
   govEvidenceState.queueError = '';
   rerenderGovEvidenceOnly();
   try {
     const binding = getGovEvidenceBinding(rec);
-    const result = await govEvidenceApi('research-observations', {
-      query: {
-        status: 'pending_review',
-        lead_id: binding.lead_id,
-        property_id: binding.property_id,
-        ownership_id: binding.ownership_id
-      }
-    });
+    const [result, feedbackResult] = await Promise.all([
+      govEvidenceApi('research-observations', {
+        query: {
+          status: 'pending_review',
+          lead_id: binding.lead_id,
+          property_id: binding.property_id,
+          ownership_id: binding.ownership_id
+        }
+      }),
+      govEvidenceApi('broker-feedback', {
+        query: {
+          lead_id: binding.lead_id,
+          property_id: binding.property_id,
+          ownership_id: binding.ownership_id
+        }
+      })
+    ]);
     const observations = Array.isArray(result?.observations) ? result.observations : (Array.isArray(result?.items) ? result.items : []);
     govEvidenceState.queue = observations;
+    govEvidenceState.brokerFeedback = feedbackResult?.summary || null;
     govEvidenceState.queueLoaded = true;
   } catch (err) {
     govEvidenceState.queueError = err.message || 'Could not load evidence queue';
   } finally {
     govEvidenceState.queueLoading = false;
+    govEvidenceState.brokerFeedbackLoading = false;
     rerenderGovEvidenceOnly();
   }
 }
 
-function rerenderGovEvidenceOnly() {
   renderGovTab();
 }
 
