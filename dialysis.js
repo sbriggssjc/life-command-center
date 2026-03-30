@@ -113,7 +113,11 @@ async function diaQueryAll(table, select, params = {}) {
 /**
  * Load all dialysis data
  */
+let _diaDataLoading = false;
 async function loadDiaData() {
+  if (_diaDataLoading) return;  // Prevent concurrent loads
+  _diaDataLoading = true;
+
   // Show loading indicator
   const inner = document.getElementById('bizPageInner');
   if (inner) {
@@ -195,6 +199,7 @@ async function loadDiaData() {
     }
     
     diaDataLoaded = true;
+    _diaDataLoading = false;
     console.log('DIA DATA LOADED:', {
       freshness: diaData.freshness,
       invSummaryKeys: Object.keys(diaData.inventorySummary),
@@ -207,9 +212,11 @@ async function loadDiaData() {
       recon: diaData.reconciliation
     });
     showToast(`Dialysis: ${(diaData.freshness || {}).total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals loaded`, 'success');
-    renderDiaTab();
+    // Only render if user is still viewing the dialysis tab
+    if (typeof currentBizTab !== 'undefined' && currentBizTab === 'dialysis') renderDiaTab();
   } catch (err) {
     console.error('loadDiaData error:', err);
+    _diaDataLoading = false;
     // Show error in the UI instead of just console
     const inner = document.getElementById('bizPageInner');
     if (inner) {
@@ -262,7 +269,7 @@ function renderDiaTab() {
       if (typeof renderDomainProspects === 'function' && window._mktOpportunities) {
         renderDomainProspects('dialysis');
       } else {
-        inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)">Loading prospects... (Marketing data not yet loaded)</div>';
+        inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
         // Trigger marketing load if not done
         if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('dialysis'));
       }

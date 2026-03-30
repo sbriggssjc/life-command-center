@@ -679,6 +679,8 @@ document.getElementById('govInnerTabs').addEventListener('click', (e) => {
     if (_mktOpportunitiesLoaded) {
       renderDomainProspects('government');
     } else if (typeof loadMarketing === 'function') {
+      const el = document.getElementById('bizPageInner');
+      if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
       loadMarketing().then(() => renderDomainProspects('government'));
     }
   } else {
@@ -692,7 +694,11 @@ function goToGovTab(tabName) {
   syncDomainTabGroup('government', tabName);
   if (tabName === 'prospects') {
     if (_mktOpportunitiesLoaded) renderDomainProspects('government');
-    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('government'));
+    else if (typeof loadMarketing === 'function') {
+      const el = document.getElementById('bizPageInner');
+      if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
+      loadMarketing().then(() => renderDomainProspects('government'));
+    }
   } else {
     renderGovTab();
   }

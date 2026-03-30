@@ -142,7 +142,11 @@ async function loadGovOverviewStats() {
   govOverviewStatsLoading = false;
 }
 
+let _govDataLoading = false;
 async function loadGovData() {
+  if (_govDataLoading) return;  // Prevent concurrent loads
+  _govDataLoading = true;
+
   // Kick off fast overview stats immediately (non-blocking)
   // This renders the overview in ~100ms while the full data load takes 20s
   if (!govOverviewStats && !govOverviewStatsLoading) {
@@ -313,6 +317,7 @@ async function loadGovData() {
     
     govConnected = true;
     govDataLoaded = true;
+    _govDataLoading = false;
     console.log('GOV DATA LOADED:', {
       properties: govData.properties,
       salesComps: govData.salesComps,
@@ -325,11 +330,13 @@ async function loadGovData() {
       county: govData.countyAuth.length
     });
     showToast(`Gov: ${govData.leads.length} leads, ${govData.ownership.length} ownership, ${govData.listings.length} listings loaded`, 'success');
-    renderGovTab();
+    // Only render if user is still viewing the government tab
+    if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government') renderGovTab();
 
   } catch (err) {
     console.error('Error loading government data:', err);
     govConnected = false;
+    _govDataLoading = false;
     showToast('Error loading data', 'error');
     const inner = document.getElementById('bizPageInner');
     if (inner) {
