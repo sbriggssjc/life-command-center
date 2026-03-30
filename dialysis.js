@@ -1301,7 +1301,7 @@ async function loadDiaUnmatchedQueue() {
   diaUnmatchedLoading = true;
   try {
     const data = await diaQuery('v_pending_updates_workbench', '*', {
-      filter: "status.eq.needs_match",
+      filter: "status=eq.needs_match",
       order: "created_at.desc",
       limit: 1000
     });
@@ -1342,7 +1342,7 @@ async function loadDiaClarificationQueue() {
   diaClarificationLoading = true;
   try {
     const data = await diaQuery('pending_updates', '*', {
-      filter: "status.eq.needs_clarification",
+      filter: "status=eq.needs_clarification",
       order: "created_at.desc",
       limit: 1000
     });
@@ -1519,7 +1519,7 @@ function renderDiaUnmatchedClinics() {
         searchTimeout = setTimeout(async () => {
           try {
             const props = await diaQuery('properties', 'id, address, city, state, property_name', {
-              filter: `or(address.ilike.%${query}%,property_name.ilike.%${query}%)`,
+              filter: `or(address=ilike.*${query}*,property_name=ilike.*${query}*)`,
               limit: 10
             });
 
@@ -1968,11 +1968,33 @@ async function resolveDiaUnmatched(updateId, action, propertyId) {
 
   console.log('Resolving unmatched:', { updateId, action, propertyId, status, notes });
 
-  // In a real implementation, this would call Supabase
-  // For now, just remove from queue
-  diaUnmatchedQueue = diaUnmatchedQueue.filter(r => r.id !== updateId);
-  diaUnmatchedIdx = Math.min(diaUnmatchedIdx, (diaUnmatchedQueue?.length || 1) - 1);
-  renderDiaTab();
+  try {
+    const updateData = {
+      status: status,
+      resolved_at: new Date().toISOString(),
+      resolved_by: 'dashboard'
+    };
+
+    if (notes) {
+      updateData.notes = notes;
+    }
+
+    if (propertyId && status === 'resolved') {
+      updateData.property_id = propertyId;
+    }
+
+    const ok = await diaPatchRecord('pending_updates', 'id', updateId, updateData);
+
+    if (ok) {
+      diaUnmatchedQueue = diaUnmatchedQueue.filter(r => r.id !== updateId);
+      diaUnmatchedIdx = Math.min(diaUnmatchedIdx, (diaUnmatchedQueue?.length || 1) - 1);
+      renderDiaTab();
+    } else {
+      console.error('Failed to resolve unmatched record:', updateId);
+    }
+  } catch(e) {
+    console.error('Error resolving unmatched:', e);
+  }
 }
 
 // ============================================================================
@@ -4943,10 +4965,10 @@ async function execDiaSearch() {
   const like = '*' + term + '*';
   try {
     const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
-      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 100 }),
-      diaQuery('v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',npi.ilike.' + like + ',operator_name.ilike.' + like + ')', limit: 50 }),
-      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or=(facility_name.ilike.' + like + ',operator_name.ilike.' + like + ',state.ilike.' + like + ')', limit: 50 }).catch(() => []),
-      diaQuery('research_queue_outcomes', '*', { filter: 'or=(queue_type.ilike.' + like + ',status.ilike.' + like + ',notes.ilike.' + like + ')', limit: 50 })
+      diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,address=ilike.*' + like + '*)', limit: 100 }),
+      diaQuery('v_npi_inventory_signals', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,npi=ilike.*' + like + '*,operator_name=ilike.*' + like + '*)', limit: 50 }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { filter: 'or(facility_name=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,state=ilike.*' + like + '*)', limit: 50 }).catch(() => []),
+      diaQuery('research_queue_outcomes', '*', { filter: 'or(queue_type=ilike.*' + like + '*,status=ilike.*' + like + '*,notes=ilike.*' + like + '*)', limit: 50 })
     ]);
 
     diaSearchResults = {

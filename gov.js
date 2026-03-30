@@ -3633,17 +3633,11 @@ window.loadGovPendingUpdates = async function() {
   if (govPendingUpdatesLoading) return;
   govPendingUpdatesLoading = true;
   try {
-    const { data, error } = await supabase
-      .from('pending_updates')
-      .select('*')
-      .eq('status', 'pending')
-      .order('priority_score', { ascending: false });
-    if (!error) {
-      govPendingUpdates = data || [];
-    } else {
-      console.error('loadGovPendingUpdates error:', error);
-      govPendingUpdates = [];
-    }
+    const result = await govQuery('pending_updates', '*', {
+      filter: 'status=eq.pending',
+      order: 'priority_score.desc'
+    });
+    govPendingUpdates = result.data || [];
   } catch(e) {
     console.error('loadGovPendingUpdates exception:', e);
     govPendingUpdates = [];
@@ -3652,14 +3646,27 @@ window.loadGovPendingUpdates = async function() {
   renderGovTab();
 };
 
+// Helper for PATCH operations via /api/gov-query proxy
+async function govPatch(table, filterStr, data) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('filter', filterStr);
+  const resp = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  return resp.ok;
+}
+
 window.resolveGovPendingUpdate = async function(id, resolution) {
   const notes = document.getElementById('pu-notes')?.value || '';
   try {
-    await supabase.from('pending_updates').update({
+    await govPatch('pending_updates', 'id=eq.' + id, {
       status: resolution,
       resolved_by: 'dashboard',
       resolved_at: new Date().toISOString()
-    }).eq('id', id);
+    });
     govPendingUpdates = govPendingUpdates.filter(r => r.id !== id);
     govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, (govPendingUpdates?.length || 1) - 1);
     renderGovTab();
@@ -3876,11 +3883,12 @@ window.searchFinancialProperty = async function() {
   const searchTerm = document.getElementById('fo-property-search')?.value || '';
   if (!searchTerm) return;
   try {
-    const { data } = await supabase
-      .from('properties')
-      .select('*')
-      .or(`address.ilike.%${searchTerm}%,lease_number.ilike.%${searchTerm}%`)
-      .limit(1);
+    const filterStr = `or(address.ilike.*${searchTerm}*,lease_number.ilike.*${searchTerm}*)`;
+    const result = await govQuery('properties', 'id,address,city,state,lease_number', {
+      filter: filterStr,
+      limit: 1
+    });
+    const data = result.data || [];
     if (data && data.length > 0) {
       govFinOverrideRec = data[0];
       renderGovTab();
@@ -3910,10 +3918,11 @@ window.applyFinancialOverride = async function() {
   }
 
   try {
-    await supabase
-      .from('properties')
-      .update({...updates, override_notes: notes, authority_rank: 100})
-      .eq('id', govFinOverrideRec.id);
+    await govPatch('properties', 'id=eq.' + govFinOverrideRec.id, {
+      ...updates,
+      override_notes: notes,
+      authority_rank: 100
+    });
 
     alert('Financial override applied successfully');
     govFinOverrideRec = null;
@@ -3932,12 +3941,11 @@ window.loadGovPipelineRuns = async function() {
   if (govPipelineLoading) return;
   govPipelineLoading = true;
   try {
-    const { data } = await supabase
-      .from('ingestion_tracker')
-      .select('*')
-      .order('started_at', { ascending: false })
-      .limit(50);
-    govPipelineRuns = data || [];
+    const result = await govQuery('ingestion_tracker', '*', {
+      order: 'started_at.desc',
+      limit: 50
+    });
+    govPipelineRuns = result.data || [];
   } catch(e) {
     console.error('loadGovPipelineRuns error:', e);
     govPipelineRuns = [];
