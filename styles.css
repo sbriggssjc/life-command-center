@@ -559,6 +559,60 @@ body.compact .greeting { font-size: 18px; }
 .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; margin-bottom: 12px; }
 .research-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
+/* ── Research Redesign: Field Indicators ── */
+.field-ind { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; font-size: 9px; font-weight: 700; margin-left: 6px; vertical-align: middle; cursor: help; flex-shrink: 0; }
+.field-ind.verified { background: var(--green, #34d399); color: #fff; }
+.field-ind.auto { background: #fbbf24; color: #1a1a2e; }
+.field-ind.missing { background: #f87171; color: #fff; }
+
+/* ── Research Redesign: Completeness Summary ── */
+.completeness-bar { display: flex; align-items: center; gap: 16px; padding: 10px 14px; background: var(--s2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; font-size: 12px; }
+.completeness-bar .cb-score { font-size: 20px; font-weight: 800; color: var(--accent); min-width: 50px; text-align: center; }
+.completeness-bar .cb-meter { flex: 1; height: 6px; background: var(--s3); border-radius: 3px; overflow: hidden; }
+.completeness-bar .cb-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+.completeness-bar .cb-counts { display: flex; gap: 12px; font-weight: 600; }
+.completeness-bar .cb-counts .ct-miss { color: #f87171; }
+.completeness-bar .cb-counts .ct-auto { color: #fbbf24; }
+.completeness-bar .cb-counts .ct-ok { color: var(--green, #34d399); }
+
+/* ── Research Redesign: Step Indicator ── */
+.step-nav { display: flex; gap: 4px; margin-bottom: 16px; }
+.step-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--s2); border: 2px solid var(--border); color: var(--text3); cursor: pointer; transition: all 0.2s; }
+.step-dot:hover { border-color: var(--accent); }
+.step-dot.current { background: var(--accent); border-color: var(--accent); color: #fff; }
+.step-dot.done { background: var(--green, #34d399); border-color: var(--green, #34d399); color: #fff; }
+.step-label { font-size: 11px; color: var(--text3); margin-top: 2px; text-align: center; max-width: 70px; }
+.step-label.current { color: var(--accent); font-weight: 600; }
+
+/* ── Research Redesign: Step Sections ── */
+.form-step { display: none; }
+.form-step.active { display: block; animation: fadeStep 0.2s ease; }
+@keyframes fadeStep { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.form-step-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 14px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); }
+.form-step-head .step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+
+/* ── Research Redesign: Action Buttons ── */
+.action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.btn-action { padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: var(--s2); color: var(--text); cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px; }
+.btn-action:hover { background: var(--s3); border-color: var(--accent); }
+.btn-action.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-action.primary:hover { opacity: 0.85; }
+.btn-action.danger { background: #f87171; color: #fff; border-color: #f87171; }
+.btn-action.warn { background: #fbbf24; color: #1a1a2e; border-color: #fbbf24; }
+.btn-action:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+
+/* ── Research Redesign: Guided Task Card ── */
+.task-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.task-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.task-subtitle { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.task-badge { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 10px; letter-spacing: 0.5px; text-transform: uppercase; }
+.task-badge.urgent { background: #f8717130; color: #f87171; }
+.task-badge.needs-input { background: #fbbf2430; color: #d97706; }
+.task-badge.ready { background: #34d39930; color: #34d399; }
+
+/* ── Research Redesign: Field Source Hint ── */
+.field-source { font-size: 10px; color: var(--text3); font-weight: 500; margin-left: 6px; font-style: italic; }
+
 .btn-primary { padding: 10px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .btn-primary:hover { opacity: 0.9; }
 .btn-secondary { padding: 10px 16px; background: var(--s2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; cursor: pointer; }

@@ -1132,6 +1132,148 @@ function renderDiaNpi() {
 }
 
 // ============================================================================
+// RESEARCH UI HELPERS — Shared by Dialysis & Government research tabs
+// ============================================================================
+
+/**
+ * Render a field-level completeness indicator dot
+ * @param {'verified'|'auto'|'missing'} state
+ * @param {string} [source] - e.g., "CoStar", "GSA", "manual"
+ * @returns {string} HTML
+ */
+function fieldInd(state, source) {
+  const icons = { verified: '✓', auto: '?', missing: '○' };
+  const tips = {
+    verified: source ? `Verified (${source})` : 'Verified',
+    auto: source ? `Auto-filled from ${source} — verify` : 'Auto-filled — needs verification',
+    missing: 'Missing — manual input needed'
+  };
+  return `<span class="field-ind ${state}" title="${tips[state]}">${icons[state]}</span>`;
+}
+
+/**
+ * Determine field state based on value and source
+ * @param {*} value - current field value
+ * @param {string} [source] - data source if auto-populated
+ * @param {boolean} [humanVerified] - true if explicitly saved by user
+ * @returns {'verified'|'auto'|'missing'}
+ */
+function fieldState(value, source, humanVerified) {
+  if (humanVerified) return 'verified';
+  if (value !== null && value !== undefined && value !== '' && value !== 0) {
+    return source ? 'auto' : 'verified';
+  }
+  return 'missing';
+}
+
+/**
+ * Compute completeness summary for a set of fields
+ * @param {Array<{name: string, value: *, source?: string, required?: boolean, verified?: boolean}>} fields
+ * @returns {{pct: number, verified: number, auto: number, missing: number, missingRequired: string[], total: number}}
+ */
+function computeCompleteness(fields) {
+  let verified = 0, auto = 0, missing = 0;
+  const missingRequired = [];
+  fields.forEach(f => {
+    const st = fieldState(f.value, f.source, f.verified);
+    if (st === 'verified') verified++;
+    else if (st === 'auto') auto++;
+    else {
+      missing++;
+      if (f.required) missingRequired.push(f.name);
+    }
+  });
+  const total = fields.length;
+  const filledCount = verified + auto;
+  const pct = total > 0 ? Math.round((filledCount / total) * 100) : 100;
+  return { pct, verified, auto, missing, missingRequired, total };
+}
+
+/**
+ * Render completeness summary bar
+ * @param {{pct: number, verified: number, auto: number, missing: number, missingRequired: string[]}} c
+ * @returns {string} HTML
+ */
+function renderCompletenessBar(c) {
+  const fillColor = c.pct >= 80 ? 'var(--green, #34d399)' : c.pct >= 50 ? '#fbbf24' : '#f87171';
+  const badge = c.missing === 0 ? '<span class="task-badge ready">Ready</span>'
+    : c.missingRequired.length > 0 ? '<span class="task-badge urgent">' + c.missingRequired.length + ' required</span>'
+    : '<span class="task-badge needs-input">' + c.missing + ' optional</span>';
+
+  let html = '<div class="completeness-bar">';
+  html += `<div class="cb-score">${c.pct}%</div>`;
+  html += `<div style="flex:1">`;
+  html += `<div class="cb-meter"><div class="cb-fill" style="width:${c.pct}%;background:${fillColor}"></div></div>`;
+  html += `<div class="cb-counts" style="margin-top:6px">`;
+  if (c.missing > 0) html += `<span class="ct-miss">○ ${c.missing} missing</span>`;
+  if (c.auto > 0) html += `<span class="ct-auto">? ${c.auto} verify</span>`;
+  if (c.verified > 0) html += `<span class="ct-ok">✓ ${c.verified} confirmed</span>`;
+  html += `</div></div>`;
+  html += badge;
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render step navigation dots
+ * @param {number} current - 0-indexed current step
+ * @param {Array<{label: string, complete: boolean}>} steps
+ * @param {string} onClickFn - JS function name to call with step index
+ * @returns {string} HTML
+ */
+function renderStepNav(current, steps, onClickFn) {
+  let html = '<div class="step-nav">';
+  steps.forEach((s, i) => {
+    const cls = i === current ? 'current' : s.complete ? 'done' : '';
+    html += `<div style="display:flex;flex-direction:column;align-items:center;">`;
+    html += `<div class="step-dot ${cls}" onclick="${onClickFn}(${i})">${s.complete && i !== current ? '✓' : i + 1}</div>`;
+    html += `<div class="step-label ${i === current ? 'current' : ''}">${s.label}</div>`;
+    html += `</div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render a guided form field with indicator and optional source hint
+ * @param {string} id - input element ID
+ * @param {string} label - display label
+ * @param {*} value - current value
+ * @param {object} opts - { type, placeholder, source, required, verified, readonly, options }
+ * @returns {string} HTML
+ */
+function guidedField(id, label, value, opts = {}) {
+  const st = fieldState(value, opts.source, opts.verified);
+  const ind = fieldInd(st, opts.source);
+  const sourceHint = opts.source ? `<span class="field-source">via ${opts.source}</span>` : '';
+  const reqMark = opts.required && st === 'missing' ? ' <span style="color:#f87171">*</span>' : '';
+
+  let html = '<div class="form-group">';
+  html += `<label>${esc(label)}${reqMark}${ind}${sourceHint}</label>`;
+
+  if (opts.options) {
+    // Select dropdown
+    html += `<select id="${id}"${opts.readonly ? ' disabled' : ''}>`;
+    html += `<option value="">Select...</option>`;
+    opts.options.forEach(o => {
+      const sel = (value === o.value || value === o.label) ? ' selected' : '';
+      html += `<option value="${esc(o.value)}"${sel}>${esc(o.label)}</option>`;
+    });
+    html += '</select>';
+  } else if (opts.type === 'textarea') {
+    html += `<textarea id="${id}" placeholder="${esc(opts.placeholder || '')}"${opts.readonly ? ' readonly' : ''} rows="${opts.rows || 3}">${esc(value || '')}</textarea>`;
+  } else if (opts.type === 'date') {
+    html += `<input type="date" id="${id}" value="${value ? String(value).substring(0, 10) : ''}"${opts.readonly ? ' readonly' : ''}>`;
+  } else {
+    const inputType = opts.type || 'text';
+    html += `<input type="${inputType}" id="${id}" value="${esc(value || '')}" placeholder="${esc(opts.placeholder || '')}"${opts.readonly ? ' readonly' : ''}${opts.step ? ' step="' + opts.step + '"' : ''}>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ============================================================================
 // RESEARCH TAB (WORKBENCH)
 // ============================================================================
 

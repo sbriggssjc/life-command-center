@@ -4,6 +4,9 @@
 - Resolve the failed `git pull --tags origin main` without losing local work.
 
 ## Current Findings
+- On 2026-03-30, another commit attempt failed with `fatal: cannot lock ref 'HEAD'` while `.git/HEAD.lock` existed as a 0-byte file created at `2026-03-30 09:32:59` local time.
+- A process check for this March 30 recurrence showed three active `git.exe` processes (`93924`, `98956`, `107664`) started at `2026-03-30 10:08:06` local time, alongside a VS Code window titled `git-error-1774883267985 - life-command-center - Visual Studio Code`.
+- `git status --short --branch` during this recurrence reports `main...origin/main [ahead 1, behind 2]` with staged `api/sync.js` and unstaged `dialysis.js` plus `styles.css`.
 - On 2026-03-27, a later commit failure was caused by a real merge conflict in `gov.js`, not by a lock file.
 - `git diff --name-only --diff-filter=U` reported `gov.js` as the only unmerged file.
 - The `gov.js` conflict spanned the full file, and the richer side was preserved by keeping the `theirs` block content and removing the conflict markers.
