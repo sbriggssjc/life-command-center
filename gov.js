@@ -3620,6 +3620,11 @@ function renderGovListings() {
 
 window.setGovResearchSection = function(section) {
   govResearchSection = section;
+  if (section === 'pipeline_ops' && !['pending_updates','financial_overrides','pipeline_control','monitor'].includes(researchMode)) {
+    researchMode = 'pending_updates';
+  } else if (section === 'research' && !['ownership','leads','intel'].includes(researchMode)) {
+    researchMode = 'leads';
+  }
   renderGovTab();
 };
 
@@ -3722,14 +3727,14 @@ function renderGovPendingUpdates() {
   html += '<div style="display: grid; grid-template-columns: 300px 1fr; gap: 16px;">';
 
   // LEFT COLUMN: Scrollable list
-  html += '<div style="border-right: 1px solid #ddd; padding-right: 12px; max-height: 600px; overflow-y: auto;">';
+  html += '<div style="border-right: 1px solid var(--border); padding-right: 12px; max-height: 600px; overflow-y: auto;">';
   filteredItems.forEach((item, idx) => {
     const isActive = idx === govPendingUpdatesIdx;
     const reasonBadge = item.reason || 'other';
-    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? '#3b82f6' : '#ddd'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? '#f0f4ff' : '#fff'};">
-      <div style="font-weight: 600; font-size: 13px; color: #333;">${esc(item.field_name)}</div>
-      <div style="font-size: 11px; color: #666; margin-top: 2px;">${item.table_name}</div>
-      <div style="font-size: 11px; color: #888; margin-top: 4px;"><span class="badge" style="background: #fee; color: #c33; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
+    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? 'rgba(108,140,255,0.1)' : 'var(--s1)'};">
+      <div style="font-weight: 600; font-size: 13px; color: var(--text);">${esc(item.field_name)}</div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${item.table_name}</div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: #fee; color: #c33; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
     </div>`;
   });
   html += '</div>';
@@ -3766,18 +3771,18 @@ function renderGovPendingUpdates() {
 
     html += '<div class="context-block">';
     html += '<div class="context-label">Current Value</div>';
-    html += `<div style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(oldVal)}</div>`;
+    html += `<div style="background: var(--s2); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto; color: var(--text);">${esc(oldVal)}</div>`;
     html += '</div>';
 
     html += '<div class="context-block">';
     html += '<div class="context-label">Proposed Value</div>';
-    html += `<div style="background: #f0f0f0; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
+    html += `<div style="background: var(--s3); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
     html += '</div>';
 
     if (sourceCtx && Object.keys(sourceCtx).length > 0) {
       html += '<div class="context-block">';
       html += '<div class="context-label">Source Context</div>';
-      html += `<div style="font-size: 12px; color: #666;"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
+      html += `<div style="font-size: 12px; color: var(--text3);"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
       html += '</div>';
     }
 
@@ -3785,7 +3790,7 @@ function renderGovPendingUpdates() {
     html += '<div class="context-label">Confidence Score</div>';
     html += `<div style="display: flex; align-items: center; gap: 8px;">
       <div style="width: 24px; height: 24px; border-radius: 50%; background: ${confColor}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${Math.round(conf * 100)}%</div>
-      <span style="font-size: 12px; color: #666;">${confLabel} confidence</span>
+      <span style="font-size: 12px; color: var(--text3);">${confLabel} confidence</span>
     </div>`;
     html += '</div>';
 
@@ -3818,14 +3823,14 @@ function renderGovFinancialOverrides() {
     <div class="header-subtitle">Manually override property financial metrics</div>
   </div>`;
 
-  html += `<div style="padding: 16px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa;">`;
+  html += `<div style="padding: 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--s1);">`;
   html += guidedField('fo-property-search', 'Search Property', '', {placeholder: 'Address, ID, or lease number...'});
   html += `<button class="btn-primary" style="margin-top: 8px;" onclick="window.searchFinancialProperty()">Search</button>`;
   html += '</div>';
 
   if (govFinOverrideRec) {
     const prop = govFinOverrideRec;
-    html += '<div style="margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 16px;">';
+    html += '<div style="margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; padding: 16px;">';
 
     // Property header
     html += '<div class="task-header">';
@@ -3851,13 +3856,13 @@ function renderGovFinancialOverrides() {
       html += '<div class="context-block">';
       html += `<div class="context-label">${fin.label}</div>`;
       html += `<div style="display: flex; gap: 8px; align-items: center;">
-        <div style="flex: 1; padding: 6px; background: #f5f5f5; border-radius: 4px; font-family: monospace;">${val || '(not set)'}</div>
-        <span style="font-size: 11px; color: #888;">Source: ${fin.source}</span>
+        <div style="flex: 1; padding: 6px; background: var(--s2); border-radius: 4px; font-family: monospace; color: var(--text);">${val || '(not set)'}</div>
+        <span style="font-size: 11px; color: var(--text3);">Source: ${fin.source}</span>
       </div>`;
       html += '</div>';
     });
 
-    html += '<div style="border-top: 1px solid #ddd; margin-top: 12px; padding-top: 12px;">';
+    html += '<div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">';
     html += '<div style="font-weight: 600; margin-bottom: 12px;">Override Values</div>';
     financials.forEach(fin => {
       html += guidedField(`override-${fin.field}`, `Override ${fin.label}`, '', {type: fin.type, step: fin.step, placeholder: `Enter ${fin.label.toLowerCase()}...`});
@@ -3996,7 +4001,7 @@ function renderGovPipelineControl() {
   html += '<h3 style="margin-bottom: 12px;">Recent Runs</h3>';
   html += '<div style="overflow-x: auto;">';
   html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
-  html += '<thead><tr style="background: #f5f5f5; border-bottom: 2px solid #ddd;">';
+  html += '<thead><tr style="background: var(--s2); border-bottom: 2px solid var(--border);">';
   html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Source</th>';
   html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Task</th>';
   html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Status</th>';
@@ -4017,14 +4022,14 @@ function renderGovPipelineControl() {
       <td style="padding: 8px;">${esc(run.source || '—')}</td>
       <td style="padding: 8px;">${esc(run.task_name || '—')}</td>
       <td style="padding: 8px; text-align: center;"><span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;">${statusText}</span></td>
-      <td style="padding: 8px; font-size: 12px; color: #666;">${startDate}</td>
-      <td style="padding: 8px; font-size: 12px; color: #666;">${duration}</td>
+      <td style="padding: 8px; font-size: 12px; color: var(--text3);">${startDate}</td>
+      <td style="padding: 8px; font-size: 12px; color: var(--text3);">${duration}</td>
       <td style="padding: 8px; text-align: center; font-size: 12px;">${rowStr}</td>
     </tr>`;
 
     if (run.error_summary && run.run_status === 'failed') {
       html += `<tr style="background: #fef2f2; border-bottom: 1px solid #eee;">
-        <td colspan="6" style="padding: 8px; font-size: 12px; color: #666;">
+        <td colspan="6" style="padding: 8px; font-size: 12px; color: var(--text3);">
           <strong style="color: #ef4444;">Error:</strong> ${esc(run.error_summary)}
         </td>
       </tr>`;
@@ -4054,9 +4059,9 @@ function renderGovMonitorDashboard() {
   </div>`;
 
   // Panel 1: Lead Gap Report
-  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
   html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Lead Gap Report</h3>';
-  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Counts of leads with missing critical data</div>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Counts of leads with missing critical data</div>';
 
   // Placeholder bars (would load from prospect_leads with aggregation)
   html += '<div style="display: grid; gap: 12px;">';
@@ -4072,9 +4077,9 @@ function renderGovMonitorDashboard() {
     html += `<div>
       <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
         <span style="font-size: 12px; font-weight: 500;">${metric.label}</span>
-        <span style="font-size: 12px; color: #888;">${metric.value}</span>
+        <span style="font-size: 12px; color: var(--text3);">${metric.value}</span>
       </div>
-      <div style="height: 20px; background: #f0f0f0; border-radius: 3px; overflow: hidden;">
+      <div style="height: 20px; background: var(--s3); border-radius: 3px; overflow: hidden;">
         <div style="height: 100%; width: ${pct}%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 3px;"></div>
       </div>
     </div>`;
@@ -4083,9 +4088,9 @@ function renderGovMonitorDashboard() {
   html += '</div>';
 
   // Panel 2: Data Freshness
-  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
   html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Data Freshness by Source</h3>';
-  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Days since last successful ingestion</div>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Days since last successful ingestion</div>';
 
   const freshnessData = [
     {source: 'GSA Lease DB', daysOld: 2, status: 'green'},
@@ -4097,10 +4102,10 @@ function renderGovMonitorDashboard() {
   html += '<div style="display: grid; gap: 8px;">';
   freshnessData.forEach(item => {
     const statusColor = item.status === 'green' ? '#10b981' : item.status === 'yellow' ? '#f59e0b' : '#ef4444';
-    html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: white; border-radius: 4px; border: 1px solid #ddd;">
+    html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--s2); border-radius: 4px; border: 1px solid var(--border);">
       <span style="font-size: 12px; font-weight: 500;">${item.source}</span>
       <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 12px; color: #666;">${item.daysOld} days old</span>
+        <span style="font-size: 12px; color: var(--text3);">${item.daysOld} days old</span>
         <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
       </div>
     </div>`;
@@ -4109,9 +4114,9 @@ function renderGovMonitorDashboard() {
   html += '</div>';
 
   // Panel 3: Score Distribution
-  html += '<div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 6px; padding: 16px; background: #fafafa;">';
+  html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
   html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Investment Score Distribution</h3>';
-  html += '<div style="font-size: 13px; color: #666; margin-bottom: 12px;">Properties by investment grade</div>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Properties by investment grade</div>';
 
   const scoreData = [
     {grade: 'A', count: 145, color: '#10b981'},
@@ -4128,9 +4133,9 @@ function renderGovMonitorDashboard() {
     html += `<div>
       <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
         <span style="font-size: 12px; font-weight: 600; width: 20px;">Grade ${item.grade}</span>
-        <span style="font-size: 12px; color: #888;">${item.count} properties</span>
+        <span style="font-size: 12px; color: var(--text3);">${item.count} properties</span>
       </div>
-      <div style="height: 24px; background: #f0f0f0; border-radius: 3px; overflow: hidden;">
+      <div style="height: 24px; background: var(--s3); border-radius: 3px; overflow: hidden;">
         <div style="height: 100%; width: ${pct}%; background: ${item.color}; border-radius: 3px;"></div>
       </div>
     </div>`;
@@ -4147,9 +4152,9 @@ function renderGovResearch() {
   let html = '<div class="research-workbench">';
 
   // Section toggle: Research vs Pipeline Ops
-  html += `<div class="research-mode-toggle" style="border-bottom: 2px solid #ddd; margin-bottom: 8px;">
-    <button class="mode-btn ${govResearchSection === 'research' ? 'active' : ''}" onclick="window.setGovResearchSection('research')" style="border-right: 1px solid #ddd;">── Research ──</button>
-    <button class="mode-btn ${govResearchSection === 'pipeline_ops' ? 'active' : ''}" onclick="window.setGovResearchSection('pipeline_ops')" style="border-left: 1px solid #ddd;">── Pipeline Ops ──</button>
+  html += `<div class="research-mode-toggle" style="border-bottom: 2px solid var(--border); margin-bottom: 8px;">
+    <button class="mode-btn ${govResearchSection === 'research' ? 'active' : ''}" onclick="window.setGovResearchSection('research')" style="border-right: 1px solid var(--border);">── Research ──</button>
+    <button class="mode-btn ${govResearchSection === 'pipeline_ops' ? 'active' : ''}" onclick="window.setGovResearchSection('pipeline_ops')" style="border-left: 1px solid var(--border);">── Pipeline Ops ──</button>
   </div>`;
 
   // Render based on section
