@@ -3734,7 +3734,7 @@ function renderGovPendingUpdates() {
     html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? 'rgba(108,140,255,0.1)' : 'var(--s1)'};">
       <div style="font-weight: 600; font-size: 13px; color: var(--text);">${esc(item.field_name)}</div>
       <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${item.table_name}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: #fee; color: #c33; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
     </div>`;
   });
   html += '</div>';
@@ -4596,7 +4596,7 @@ function renderLeadPipeline(record) {
   
   html += '<div class="detail-row">';
   html += '<label class="detail-lbl">Research Notes</label>';
-  html += '<textarea id="govDetailNotes" class="detail-val" style="min-height: 100px; font-family: monospace; font-size: 12px; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">' + esc(record.research_notes || '') + '</textarea>';
+  html += '<textarea id="govDetailNotes" class="detail-val" style="min-height: 100px; font-family: monospace; font-size: 12px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--s2); color: var(--text);">' + esc(record.research_notes || '') + '</textarea>';
   html += '</div>';
   
   html += '<div class="detail-row" style="margin-top: 16px;">';
@@ -4808,7 +4808,7 @@ function renderListingMarket(record) {
   
   html += '<div style="overflow-x: auto;">';
   html += '<table style="width: 100%; font-size: 12px; border-collapse: collapse;">';
-  html += '<thead><tr style="border-bottom: 2px solid #ccc;">';
+  html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
   html += '<th style="text-align: left; padding: 8px;">Address</th>';
   html += '<th style="text-align: right; padding: 8px;">Sale Price</th>';
   html += '<th style="text-align: right; padding: 8px;">Cap Rate</th>';

@@ -3013,7 +3013,7 @@ function renderClinicLeadCard(rec) {
   } else {
     html += `<button id="clBackBtn" style="padding:10px 16px;background:var(--s2);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;color:var(--text2)">← Back</button>`;
     html += `<button id="clSaveBtn" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save & Next</button>`;
-    html += `<button id="clNaBtn" style="padding:10px 16px;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;font-size:13px;cursor:pointer;color:#991b1b">N/A</button>`;
+    html += `<button id="clNaBtn" style="padding:10px 16px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:13px;cursor:pointer;color:#f87171">N/A</button>`;
   }
   html += '</div>';
 
