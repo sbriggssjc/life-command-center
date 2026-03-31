@@ -632,7 +632,7 @@ async function loadCountyAuthorities(states) {
     
     countyCache[state] = {};
     res.data.forEach(c => {
-      countyCache[state][c.county_name.toLowerCase()] = c;
+      if (c.county_name) countyCache[state][c.county_name.toLowerCase()] = c;
     });
   }
 }

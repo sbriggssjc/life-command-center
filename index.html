@@ -11,6 +11,7 @@
 <meta name="application-name" content="LCC">
 <meta name="msapplication-TileColor" content="#0f1117">
 <meta name="msapplication-TileImage" content="icons/icon-192.png">
+<meta name="description" content="Life Command Center — CRE operations dashboard for deal pipeline, research, and team workflow management">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/x-icon" href="favicon.ico">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
@@ -272,7 +273,7 @@
   </div>
 
   <!-- Bottom Nav — 5 primary tabs + More -->
-  <div class="bottom-nav">
+  <nav class="bottom-nav" role="navigation" aria-label="Main navigation">
     <button class="bnav active" data-page="pageHome">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       Today
@@ -289,11 +290,11 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
       Inbox
     </button>
-    <button class="bnav" id="moreNavBtn" onclick="toggleMoreDrawer()">
+    <button class="bnav" id="moreNavBtn" onclick="toggleMoreDrawer()" aria-label="More navigation options" aria-haspopup="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
       More
     </button>
-  </div>
+  </nav>
 
   <!-- More Drawer — additional nav items -->
   <div class="more-drawer-overlay" id="moreDrawerOverlay" onclick="toggleMoreDrawer()"></div>
@@ -383,12 +384,12 @@
 </div>
 
 <!-- Log Call Modal -->
-<div class="modal-overlay" id="logCallModal" onclick="if(event.target===this)closeLogCall()">
+<div class="modal-overlay" id="logCallModal" role="dialog" aria-label="Log Activity" onclick="if(event.target===this)closeLogCall()">
   <div class="modal">
-    <div class="modal-head"><h3>Log Activity to Salesforce</h3><button class="modal-close" onclick="closeLogCall()">&times;</button></div>
+    <div class="modal-head"><h3>Log Activity to Salesforce</h3><button class="modal-close" onclick="closeLogCall()" aria-label="Close">&times;</button></div>
     <div class="modal-body">
       <div id="logCallContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label>Activity Type</label>
+      <label for="logCallType">Activity Type</label>
       <select id="logCallType">
         <option value="Client Outreach">Client Outreach</option>
         <option value="Follow-up">Follow-up</option>
@@ -397,9 +398,9 @@
         <option value="Email Correspondence">Email Correspondence</option>
         <option value="Market Update">Market Update</option>
       </select>
-      <label>Date</label>
+      <label for="logCallDate">Date</label>
       <input type="date" id="logCallDate">
-      <label>Notes <span style="font-weight:400;color:var(--text3)">(optional)</span></label>
+      <label for="logCallNotes">Notes <span style="font-weight:400;color:var(--text3)">(optional)</span></label>
       <textarea id="logCallNotes" rows="3" placeholder="Call notes, discussion topics, next steps..." style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
     </div>
     <div class="modal-foot">
@@ -410,13 +411,13 @@
 </div>
 
 <!-- Log & Reschedule Modal -->
-<div class="modal-overlay" id="logRescheduleModal" onclick="if(event.target===this)closeLogReschedule()">
+<div class="modal-overlay" id="logRescheduleModal" role="dialog" aria-label="Log and Reschedule" onclick="if(event.target===this)closeLogReschedule()">
   <div class="modal">
-    <div class="modal-head"><h3>Log Touchpoint &amp; Reschedule</h3><button class="modal-close" onclick="closeLogReschedule()">&times;</button></div>
+    <div class="modal-head"><h3>Log Touchpoint &amp; Reschedule</h3><button class="modal-close" onclick="closeLogReschedule()" aria-label="Close">&times;</button></div>
     <div class="modal-body">
       <div id="lrContext" style="font-size:13px;color:var(--text2);margin-bottom:8px"></div>
       <div id="lrTaskInfo" style="font-size:12px;color:var(--text3);margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px"></div>
-      <label>Activity Type</label>
+      <label for="lrType">Activity Type</label>
       <select id="lrType">
         <option value="Client Outreach">Client Outreach</option>
         <option value="Follow-up" selected>Follow-up</option>
@@ -425,9 +426,9 @@
         <option value="Email Correspondence">Email Correspondence</option>
         <option value="Market Update">Market Update</option>
       </select>
-      <label>Notes <span style="font-weight:400;color:var(--text3)">(what happened today)</span></label>
+      <label for="lrNotes">Notes <span style="font-weight:400;color:var(--text3)">(what happened today)</span></label>
       <textarea id="lrNotes" rows="2" placeholder="Call notes, discussion topics..." style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
-      <label>Next Touchpoint Date</label>
+      <label for="lrNextDate">Next Touchpoint Date</label>
       <input type="date" id="lrNextDate">
     </div>
     <div class="modal-foot">
@@ -438,12 +439,12 @@
 </div>
 
 <!-- Ops assignment modal -->
-<div class="modal-overlay" id="assignModal" onclick="if(event.target===this)closeAssignModal()">
+<div class="modal-overlay" id="assignModal" role="dialog" aria-label="Assign Work" onclick="if(event.target===this)closeAssignModal()">
   <div class="modal">
-    <div class="modal-head"><h3>Assign Work</h3><button class="modal-close" onclick="closeAssignModal()">&times;</button></div>
+    <div class="modal-head"><h3>Assign Work</h3><button class="modal-close" onclick="closeAssignModal()" aria-label="Close">&times;</button></div>
     <div class="modal-body">
       <div id="assignContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label>Assignee</label>
+      <label for="assignUserSelect">Assignee</label>
       <select id="assignUserSelect"></select>
     </div>
     <div class="modal-foot">
@@ -454,14 +455,14 @@
 </div>
 
 <!-- Ops escalation modal -->
-<div class="modal-overlay" id="escalateModal" onclick="if(event.target===this)closeEscalateModal()">
+<div class="modal-overlay" id="escalateModal" role="dialog" aria-label="Escalate Work" onclick="if(event.target===this)closeEscalateModal()">
   <div class="modal">
-    <div class="modal-head"><h3>Escalate Work</h3><button class="modal-close" onclick="closeEscalateModal()">&times;</button></div>
+    <div class="modal-head"><h3>Escalate Work</h3><button class="modal-close" onclick="closeEscalateModal()" aria-label="Close">&times;</button></div>
     <div class="modal-body">
       <div id="escalateContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label>Escalate To</label>
+      <label for="escalateUserSelect">Escalate To</label>
       <select id="escalateUserSelect"></select>
-      <label>Reason</label>
+      <label for="escalateReason">Reason</label>
       <textarea id="escalateReason" rows="3" placeholder="Why does this need escalation?" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
     </div>
     <div class="modal-foot">
@@ -472,18 +473,18 @@
 </div>
 
 <!-- Research follow-up modal -->
-<div class="modal-overlay" id="followupModal" onclick="if(event.target===this)closeFollowupModal()">
+<div class="modal-overlay" id="followupModal" role="dialog" aria-label="Create Follow-Up" onclick="if(event.target===this)closeFollowupModal()">
   <div class="modal">
-    <div class="modal-head"><h3>Create Follow-Up</h3><button class="modal-close" onclick="closeFollowupModal()">&times;</button></div>
+    <div class="modal-head"><h3>Create Follow-Up</h3><button class="modal-close" onclick="closeFollowupModal()" aria-label="Close">&times;</button></div>
     <div class="modal-body">
       <div id="followupContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label>Title</label>
+      <label for="followupTitleInput">Title</label>
       <input type="text" id="followupTitleInput" placeholder="Follow-up action title">
-      <label>Assignee</label>
+      <label for="followupUserSelect">Assignee</label>
       <select id="followupUserSelect"></select>
-      <label>Due Date</label>
+      <label for="followupDueInput">Due Date</label>
       <input type="date" id="followupDueInput">
-      <label>Notes</label>
+      <label for="followupNotesInput">Notes</label>
       <textarea id="followupNotesInput" rows="4" placeholder="Optional follow-up notes" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
     </div>
     <div class="modal-foot">
