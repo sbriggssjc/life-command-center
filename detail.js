@@ -282,7 +282,7 @@ function _udDismissLead() {
       </div>
 
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-        <button onclick="document.getElementById('ud-dismiss-form').remove()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);font-size:12px;cursor:pointer;font-family:Outfit,sans-serif">Cancel</button>
+        <button onclick="var _df=document.getElementById('ud-dismiss-form');if(_df)_df.remove()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);font-size:12px;cursor:pointer;font-family:Outfit,sans-serif">Cancel</button>
         <button onclick="_udSubmitDismiss()" style="padding:6px 14px;border:none;border-radius:6px;background:var(--red,#ef4444);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif">Dismiss Lead</button>
       </div>
     </div>`;
@@ -2635,22 +2635,26 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
 
 /** Write FULL private activity details to outbound_activities (Supabase only — never SF) */
 async function _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes) {
-  await applyInsertWithFallback({
-    proxyBase: '/api/dia-query',
-    table: 'outbound_activities',
-    data: {
-      sf_contact_id: sfContactId || null,
-      sf_company_id: sfCompanyId || null,
-      activity_type: actType,
-      activity_date: actDate,
-      status: outcome,
-      notes: notes || null,
-      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
-      ref_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null
-    },
-    source_surface: 'detail_outbound_activity',
-    propagation_scope: 'outbound_activity'
-  });
+  try {
+    await applyInsertWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'outbound_activities',
+      data: {
+        sf_contact_id: sfContactId || null,
+        sf_company_id: sfCompanyId || null,
+        activity_type: actType,
+        activity_date: actDate,
+        status: outcome,
+        notes: notes || null,
+        user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+        ref_id: _udCache?.property?.property_id ? String(_udCache.property.property_id) : null
+      },
+      source_surface: 'detail_outbound_activity',
+      propagation_scope: 'outbound_activity'
+    });
+  } catch (e) {
+    console.warn('_udLogOutbound error:', e);
+  }
 }
 
 // ============================================================================
