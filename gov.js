@@ -3743,8 +3743,8 @@ function renderGovPendingUpdates() {
     const reasonBadge = item.reason || 'other';
     html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? 'rgba(108,140,255,0.1)' : 'var(--s1)'};">
       <div style="font-weight: 600; font-size: 13px; color: var(--text);">${esc(item.field_name)}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${item.table_name}</div>
-      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; padding: 2px 6px; border-radius: 3px;">${reasonBadge}</span></div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${esc(item.table_name)}</div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; padding: 2px 6px; border-radius: 3px;">${esc(reasonBadge)}</span></div>
     </div>`;
   });
   html += '</div>';
@@ -3866,8 +3866,8 @@ function renderGovFinancialOverrides() {
       html += '<div class="context-block">';
       html += `<div class="context-label">${fin.label}</div>`;
       html += `<div style="display: flex; gap: 8px; align-items: center;">
-        <div style="flex: 1; padding: 6px; background: var(--s2); border-radius: 4px; font-family: monospace; color: var(--text);">${val || '(not set)'}</div>
-        <span style="font-size: 11px; color: var(--text3);">Source: ${fin.source}</span>
+        <div style="flex: 1; padding: 6px; background: var(--s2); border-radius: 4px; font-family: monospace; color: var(--text);">${esc(val || '(not set)')}</div>
+        <span style="font-size: 11px; color: var(--text3);">Source: ${esc(fin.source)}</span>
       </div>`;
       html += '</div>';
     });
@@ -4113,7 +4113,7 @@ function renderGovMonitorDashboard() {
   freshnessData.forEach(item => {
     const statusColor = item.status === 'green' ? '#10b981' : item.status === 'yellow' ? '#f59e0b' : '#ef4444';
     html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--s2); border-radius: 4px; border: 1px solid var(--border);">
-      <span style="font-size: 12px; font-weight: 500;">${item.source}</span>
+      <span style="font-size: 12px; font-weight: 500;">${esc(item.source)}</span>
       <div style="display: flex; align-items: center; gap: 8px;">
         <span style="font-size: 12px; color: var(--text3);">${item.daysOld} days old</span>
         <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
@@ -4142,7 +4142,7 @@ function renderGovMonitorDashboard() {
     const pct = (item.count / maxCount) * 100;
     html += `<div>
       <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-        <span style="font-size: 12px; font-weight: 600; width: 20px;">Grade ${item.grade}</span>
+        <span style="font-size: 12px; font-weight: 600; width: 20px;">Grade ${esc(String(item.grade))}</span>
         <span style="font-size: 12px; color: var(--text3);">${item.count} properties</span>
       </div>
       <div style="height: 24px; background: var(--s3); border-radius: 3px; overflow: hidden;">
@@ -5330,7 +5330,7 @@ function buildGovLeasesHTML() {
   for (const b of buckets) {
     const pct = ((b.count / maxBucket) * 100).toFixed(0);
     html += `<div style="display:flex;align-items:center;gap:8px">
-      <div style="width:90px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">${b.label}</div>
+      <div style="width:90px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">${esc(b.label)}</div>
       <div style="flex:1;background:var(--s2);border-radius:4px;height:22px;overflow:hidden">
         <div style="width:${pct}%;background:${b.color};height:100%;border-radius:4px;min-width:${b.count > 0 ? '2px' : '0'}"></div>
       </div>

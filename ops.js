@@ -183,19 +183,19 @@ function priBadge(pri) {
 }
 
 function statusBadge(status) {
-  const cls = `status-${(status || '').replace(/ /g, '_')}`;
+  const cls = `status-${(status || '').replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const label = (status || 'unknown').replace(/_/g, ' ');
-  return `<span class="q-badge ${cls}">${label}</span>`;
+  return `<span class="q-badge ${cls}">${esc(label)}</span>`;
 }
 
 function typeBadge(type) {
   if (!type) return '';
-  return `<span class="q-badge type">${type.replace(/_/g, ' ')}</span>`;
+  return `<span class="q-badge type">${esc(type.replace(/_/g, ' '))}</span>`;
 }
 
 function domainBadge(domain) {
   if (!domain) return '';
-  return `<span class="q-badge domain">${domain}</span>`;
+  return `<span class="q-badge domain">${esc(domain)}</span>`;
 }
 
 function researchAssistantPanelHTML(itemId) {
@@ -809,15 +809,15 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
     );
   } else {
     filtered.forEach(entity => {
-      html += `<div class="entity-card" onclick="viewEntity('${entity.id}')">
+      html += `<div class="entity-card" onclick="viewEntity('${esc(entity.id)}')">
         <div class="entity-card-header">
           <span class="entity-card-name">${esc(entity.name)}</span>
-          <span class="entity-card-type">${entity.entity_type || 'unknown'}</span>
+          <span class="entity-card-type">${esc(entity.entity_type || 'unknown')}</span>
         </div>
         <div class="entity-card-meta">
-          ${entity.domain ? `<span>${entity.domain}</span>` : ''}
-          ${entity.status ? `<span>${entity.status}</span>` : ''}
-          ${entity.city || entity.state ? `<span>${[entity.city, entity.state].filter(Boolean).join(', ')}</span>` : ''}
+          ${entity.domain ? `<span>${esc(entity.domain)}</span>` : ''}
+          ${entity.status ? `<span>${esc(entity.status)}</span>` : ''}
+          ${entity.city || entity.state ? `<span>${esc([entity.city, entity.state].filter(Boolean).join(', '))}</span>` : ''}
           ${freshnessHTML(entity.updated_at)}
         </div>
       </div>`;
@@ -1434,10 +1434,10 @@ async function renderMetricsPage() {
     oversightRes.data.team.forEach(member => {
       const initials = (member.display_name || '??').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
       html += `<div class="team-row">
-        <div class="team-avatar">${initials}</div>
+        <div class="team-avatar">${esc(initials)}</div>
         <div class="team-info">
           <div class="team-name">${esc(member.display_name)}</div>
-          <div class="team-role">${member.role || 'viewer'}</div>
+          <div class="team-role">${esc(member.role || 'viewer')}</div>
         </div>
         <div class="team-stats">
           <div class="stat"><span class="stat-n">${member.active_actions || 0}</span>Active</div>
@@ -1453,13 +1453,13 @@ async function renderMetricsPage() {
   // Open escalations
   if (oversightRes.ok && oversightRes.data?.open_escalations?.length) {
     html += '<div class="widget" style="border-color:var(--orange)"><div class="widget-title">Open Escalations</div>';
-    oversightRes.data.open_escalations.forEach(esc => {
+    oversightRes.data.open_escalations.forEach(escalation => {
       html += `<div class="q-item high-pri">
-        <div class="q-item-title">${esc.action_items?.title || 'Unknown action'}</div>
+        <div class="q-item-title">${esc(escalation.action_items?.title || 'Unknown action')}</div>
         <div class="q-item-meta">
-          <span>From: ${esc.users?.display_name || 'unknown'}</span>
-          <span>Reason: ${esc.reason}</span>
-          ${freshnessHTML(esc.created_at)}
+          <span>From: ${esc(escalation.users?.display_name || 'unknown')}</span>
+          <span>Reason: ${esc(escalation.reason || '')}</span>
+          ${freshnessHTML(escalation.created_at)}
         </div>
       </div>`;
     });
@@ -1517,13 +1517,13 @@ async function renderSyncHealthPage() {
         <div class="sync-card-info">
           <div class="sync-card-name">${esc(conn.connector_type || 'Unknown')} ${conn.label ? '(' + esc(conn.label) + ')' : ''}</div>
           <div class="sync-card-status">
-            Status: ${conn.status || 'unknown'}
+            Status: ${esc(conn.status || 'unknown')}
             ${conn.last_synced_at ? ' \u00b7 Last sync: ' + freshnessHTML(conn.last_synced_at) : ''}
             ${conn.error_message ? ' \u00b7 <span style="color:var(--red)">' + esc(conn.error_message) + '</span>' : ''}
           </div>
         </div>
         <div class="sync-card-actions">
-          <button class="q-action" onclick="triggerSync('${conn.connector_type}')">Sync Now</button>
+          <button class="q-action" onclick="triggerSync('${esc(conn.connector_type)}')">Sync Now</button>
         </div>
       </div>`;
     });

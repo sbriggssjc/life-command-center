@@ -1438,9 +1438,9 @@ function renderDiaUnmatchedClinics() {
 
       html += `<div class="clickable-row" data-um-idx="${idx}" style="padding: 12px; cursor: pointer; border-bottom: 1px solid var(--border); ${bgColor}">`;
       html += `<div style="font-weight: 500; color: var(--text); font-size: 13px; margin-bottom: 4px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(item.address || 'Unknown')}</div>`;
-      html += `<div style="color: var(--text2); font-size: 11px; margin-bottom: 3px;">${esc(item.city || '')}${item.city && item.state ? ', ' : ''}${item.state || ''}</div>`;
+      html += `<div style="color: var(--text2); font-size: 11px; margin-bottom: 3px;">${esc(item.city || '')}${item.city && item.state ? ', ' : ''}${esc(item.state || '')}</div>`;
       html += `<div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text2);">`;
-      html += `<span>${item.reason || 'Unknown'}</span>`;
+      html += `<span>${esc(item.reason || 'Unknown')}</span>`;
       html += `<span>${daysSince}d ago</span>`;
       html += `</div>`;
       html += `</div>`;
@@ -2146,12 +2146,12 @@ function renderDiaPropertyResearch() {
       const isResolved = diaData.researchOutcomes.some(o => o.clinic_id === row.clinic_id && o.queue_type === 'property_review');
       const rowStyle = isSelected ? 'background: rgba(52, 211, 153, 0.1); border-left: 3px solid var(--accent);' : isResolved ? 'background: rgba(52, 211, 153, 0.05); opacity: 0.7;' : '';
       html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-prop-idx="${idx}">`;
-      html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
+      html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
-      html += `<div style="flex: 0.5;">${row.state}</div>`;
+      html += `<div style="flex: 0.5;">${esc(row.state || '')}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
-      html += `<div style="flex: 1; color: var(--text2);">${row.review_type}</div>`;
+      html += `<div style="flex: 1; color: var(--text2);">${esc(row.review_type || '')}</div>`;
       if (isResolved) {
         html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--green);font-size:16px" title="Resolved">✓</span></div>`;
       } else {
@@ -2222,12 +2222,12 @@ function renderDiaPropertyCard(item) {
 
   html += `<div class="context-block">`;
   html += `<div class="context-label">Operator / Clinic ID</div>`;
-  html += `<div class="context-value">${esc(item.operator_name || '')} / ${item.clinic_id}</div>`;
+  html += `<div class="context-value">${esc(item.operator_name || '')} / ${esc(String(item.clinic_id || ''))}</div>`;
   html += `</div>`;
 
   html += `<div class="context-block">`;
   html += `<div class="context-label">Location</div>`;
-  html += `<div class="context-value">${item.state || ''}</div>`;
+  html += `<div class="context-value">${esc(item.state || '')}</div>`;
   html += `</div>`;
 
   html += `<div class="context-block">`;
@@ -2419,12 +2419,12 @@ function renderDiaLeaseResearch() {
       const rowStyle = isSelected ? 'background: rgba(52, 211, 153, 0.1); border-left: 3px solid var(--accent);' : isResolved ? 'background: rgba(52, 211, 153, 0.05); opacity: 0.7;' : '';
       
       html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-lease-idx="${idx}">`;
-      html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
+      html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
-      html += `<div style="flex: 1; color: ${watchColor};">${row.closure_watch_level || 'none'}</div>`;
-      html += `<div style="flex: 1; color: var(--text2);">${row.lease_backfill_priority || 'unknown'}</div>`;
+      html += `<div style="flex: 1; color: ${watchColor};">${esc(row.closure_watch_level || 'none')}</div>`;
+      html += `<div style="flex: 1; color: var(--text2);">${esc(row.lease_backfill_priority || 'unknown')}</div>`;
       if (isResolved) {
         html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--green);font-size:16px" title="Resolved">✓</span></div>`;
       } else {
@@ -2495,7 +2495,7 @@ function renderDiaLeaseCard(item) {
 
   html += `<div class="context-block">`;
   html += `<div class="context-label">Operator / Clinic ID</div>`;
-  html += `<div class="context-value">${esc(item.operator_name || '')} / ${item.clinic_id}</div>`;
+  html += `<div class="context-value">${esc(item.operator_name || '')} / ${esc(String(item.clinic_id || ''))}</div>`;
   html += `</div>`;
 
   html += `<div class="context-block">`;
@@ -2506,7 +2506,7 @@ function renderDiaLeaseCard(item) {
   html += `<div class="context-block">`;
   html += `<div class="context-label">Closure Watch Level</div>`;
   const watchColor = item.closure_watch_level === 'high' ? '#f87171' : 'var(--text2)';
-  html += `<div class="context-value" style="color: ${watchColor};">${item.closure_watch_level || 'none'}</div>`;
+  html += `<div class="context-value" style="color: ${watchColor};">${esc(item.closure_watch_level || 'none')}</div>`;
   html += `</div>`;
 
   if (item.backfill_reason) {
@@ -3320,9 +3320,9 @@ function renderDiaActivity() {
       const statusColor = row.status === 'verified_lease' || row.status === 'approved_link' ? '#34d399' : 'var(--text2)';
       
       html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
-      html += `<div style="flex: 1;">${row.queue_type || 'unknown'}</div>`;
-      html += `<div style="flex: 0.5; color: var(--text2);">${row.clinic_id}</div>`;
-      html += `<div style="flex: 1; color: ${statusColor};">${row.status || 'unknown'}</div>`;
+      html += `<div style="flex: 1;">${esc(row.queue_type || 'unknown')}</div>`;
+      html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
+      html += `<div style="flex: 1; color: ${statusColor};">${esc(row.status || 'unknown')}</div>`;
       html += `<div style="flex: 1.5;">${row.assigned_to ? esc(row.assigned_to) : '–'}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${fmt(row.assigned_at || row.created_at)}</div>`;
       html += '</div>';
