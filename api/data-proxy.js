@@ -353,7 +353,8 @@ export default async function handler(req, res) {
 
       return res.status(req.method === 'POST' ? 201 : 200).json({ ok: true });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      console.error('[data-proxy] Write error:', err.message);
+      return res.status(500).json({ error: 'Write operation failed' });
     }
   }
 
@@ -432,7 +433,8 @@ export default async function handler(req, res) {
     const data = JSON.parse(body);
     return res.status(200).json({ data: Array.isArray(data) ? data : [], count });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[data-proxy] Read error:', err.message);
+    return res.status(500).json({ error: 'Read operation failed' });
   }
 }
 

@@ -223,6 +223,7 @@ async function handleTreasury(req, res) {
 
     return res.status(500).json({ error: 'No data from any Treasury source' });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    console.error('[diagnostics] Treasury rate fetch error:', e.message);
+    return res.status(500).json({ error: 'Treasury rate fetch failed' });
   }
 }

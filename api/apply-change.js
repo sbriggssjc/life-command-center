@@ -150,7 +150,8 @@ export default withErrorHandler(async function handler(req, res) {
       target_source,
       mutation_mode: mutationMode
     }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
-    return res.status(502).json({ ok: false, errors: ['bridge_unavailable', `Fetch failed: ${err.message}`], pending_review });
+    console.error('[apply-change] Fetch failed:', err.message);
+    return res.status(502).json({ ok: false, errors: ['bridge_unavailable', 'Domain database request failed'], pending_review });
   }
 
   if (!mutationResponse.ok) {
@@ -167,9 +168,10 @@ export default withErrorHandler(async function handler(req, res) {
       target_source,
       mutation_mode: mutationMode
     }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
+    console.error(`[apply-change] ${mutationMode} failed (${mutationResponse.status}):`, errBody.substring(0, 500));
     return res.status(mutationResponse.status).json({
       ok: false,
-      errors: [`Supabase ${mutationMode.toUpperCase()} failed (${mutationResponse.status}): ${errBody.substring(0, 500)}`],
+      errors: [`Mutation failed (${mutationResponse.status})`],
       pending_review
     });
   }
@@ -211,7 +213,7 @@ export default withErrorHandler(async function handler(req, res) {
     // --- Resolve linked pending_updates if provided ---
     if (linked_pending_id) {
       opsQuery('PATCH',
-        `pending_updates?id=eq.${linked_pending_id}&workspace_id=eq.${workspaceId}`,
+        `pending_updates?id=eq.${encodeURIComponent(linked_pending_id)}&workspace_id=eq.${workspaceId}`,
         { status: 'applied', resolved_at: new Date().toISOString(), resolved_by: actor || user.email }
       ).catch(err => {
         console.error('[apply-change] Failed to resolve pending_update:', err);

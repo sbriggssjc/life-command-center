@@ -1203,7 +1203,8 @@ async function ingestWebexCalls(req, res, user) {
       callHistory.push(...(received.items || []));
     }
   } catch (e) {
-    return res.status(502).json({ error: 'Failed to fetch WebEx call history', detail: e.message });
+    console.error('[contacts] WebEx call history fetch failed:', e.message);
+    return res.status(502).json({ error: 'Failed to fetch WebEx call history' });
   }
 
   // Deduplicate by number+time (same call can appear in both placed/received for internal)
@@ -1884,7 +1885,8 @@ async function getTeamsMessages(req, res, id) {
 
     return res.status(200).json({ messages, chat_id: chatId, channel: 'teams' });
   } catch (e) {
-    return res.status(502).json({ error: 'Teams API error', detail: e.message });
+    console.error('[contacts] Teams API error:', e.message);
+    return res.status(502).json({ error: 'Teams API error' });
   }
 }
 
@@ -1973,7 +1975,8 @@ async function sendTeamsMessage(req, res, user, id) {
 
     return res.status(200).json({ sent: true, message_id: sentMsg.id, chat_id: chatId, channel: 'teams' });
   } catch (e) {
-    return res.status(502).json({ error: 'Teams send error', detail: e.message });
+    console.error('[contacts] Teams send error:', e.message);
+    return res.status(502).json({ error: 'Teams send error' });
   }
 }
 
@@ -2085,7 +2088,8 @@ async function getWebexMessages(req, res, id) {
 
     return res.status(200).json({ messages, room_id: targetRoomId, channel: 'webex' });
   } catch (e) {
-    return res.status(502).json({ error: 'WebEx API error', detail: e.message });
+    console.error('[contacts] WebEx API error:', e.message);
+    return res.status(502).json({ error: 'WebEx API error' });
   }
 }
 
@@ -2148,7 +2152,8 @@ async function sendWebexMessage(req, res, user, id) {
 
     return res.status(200).json({ sent: true, message_id: sentMsg.id, room_id: sentMsg.roomId, channel: 'webex' });
   } catch (e) {
-    return res.status(502).json({ error: 'WebEx send error', detail: e.message });
+    console.error('[contacts] WebEx send error:', e.message);
+    return res.status(502).json({ error: 'WebEx send error' });
   }
 }
 
@@ -2200,7 +2205,8 @@ async function getSmsMessages(req, res, id) {
 
     return res.status(200).json({ messages, channel: 'sms' });
   } catch (e) {
-    return res.status(502).json({ error: 'SMS API error', detail: e.message });
+    console.error('[contacts] SMS API error:', e.message);
+    return res.status(502).json({ error: 'SMS API error' });
   }
 }
 
@@ -2271,7 +2277,8 @@ async function sendSmsMessage(req, res, user, id) {
 
     return res.status(200).json({ sent: true, destination, channel: 'sms', detail: sentData });
   } catch (e) {
-    return res.status(502).json({ error: 'SMS send error', detail: e.message });
+    console.error('[contacts] SMS send error:', e.message);
+    return res.status(502).json({ error: 'SMS send error' });
   }
 }
 

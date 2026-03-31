@@ -306,7 +306,8 @@ async function ingestEmails(req, res, user, workspaceId) {
   } catch (e) {
     await completeSyncJob(job.id, 'failed', processed, failed, e.message);
     await updateConnectorStatus(connector.id, 'error', null, e.message);
-    return res.status(500).json({ error: 'Email ingestion failed', detail: e.message, sync_job_id: job.id });
+    console.error('[sync] Email ingestion failed:', e.message);
+    return res.status(500).json({ error: 'Email ingestion failed', sync_job_id: job.id });
   }
 }
 
@@ -379,7 +380,8 @@ async function ingestCalendar(req, res, user, workspaceId) {
   } catch (e) {
     await completeSyncJob(job.id, 'failed', processed, failed, e.message);
     await updateConnectorStatus(connector.id, 'error', null, e.message);
-    return res.status(500).json({ error: 'Calendar ingestion failed', detail: e.message, sync_job_id: job.id });
+    console.error('[sync] Calendar ingestion failed:', e.message);
+    return res.status(500).json({ error: 'Calendar ingestion failed', sync_job_id: job.id });
   }
 }
 
@@ -494,7 +496,8 @@ async function ingestSfActivities(req, res, user, workspaceId) {
   } catch (e) {
     await completeSyncJob(job.id, 'failed', processed, failed, e.message);
     await updateConnectorStatus(connector.id, 'error', null, e.message);
-    return res.status(500).json({ error: 'Salesforce ingestion failed', detail: e.message, sync_job_id: job.id });
+    console.error('[sync] Salesforce ingestion failed:', e.message);
+    return res.status(500).json({ error: 'Salesforce ingestion failed', sync_job_id: job.id });
   }
 }
 
@@ -1214,20 +1217,14 @@ function parseRcmEmail(rawBody, subject) {
     return null;
   }
 
-<<<<<<< HEAD
   // ── Inline format detection ──
   // RCM "Html_to_text" often collapses fields onto a single line:
   //   "Name:James DurandCompany:Mapleton InvestmentsFrom Phone:(310) 209-7243"
   // Detect and split this pattern before falling back to line-by-line extraction.
-=======
-  // -- Inline format detection --
-  // RCM "Html_to_text" often collapses fields onto a single line
->>>>>>> 8a40e83a818151ad732875b5e1e033cb98c86653
   let inlineName = null, inlineCompany = null, inlinePhone = null;
   const inlinePattern = /Name:\s*(.+?)(?:Company:|Firm:|Organization:)\s*(.+?)(?:From Phone:|Phone:|Tel:)\s*(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i;
   for (const line of lines) {
     const m = line.match(inlinePattern);
-<<<<<<< HEAD
     if (m) {
       inlineName = m[1].trim();
       inlineCompany = m[2].trim();
@@ -1237,23 +1234,15 @@ function parseRcmEmail(rawBody, subject) {
   }
 
   // Also try a two-field inline pattern (Name + Company, no phone on same line)
-=======
-    if (m) { inlineName = m[1].trim(); inlineCompany = m[2].trim(); inlinePhone = m[3].trim(); break; }
-  }
->>>>>>> 8a40e83a818151ad732875b5e1e033cb98c86653
   if (!inlineName) {
     const twoFieldPattern = /Name:\s*(.+?)(?:Company:|Firm:|Organization:)\s*(.+?)$/i;
     for (const line of lines) {
       const m = line.match(twoFieldPattern);
-<<<<<<< HEAD
       if (m) {
         inlineName = m[1].trim();
         inlineCompany = m[2].trim();
         break;
       }
-=======
-      if (m) { inlineName = m[1].trim(); inlineCompany = m[2].trim(); break; }
->>>>>>> 8a40e83a818151ad732875b5e1e033cb98c86653
     }
   }
 
@@ -1265,7 +1254,6 @@ function parseRcmEmail(rawBody, subject) {
   const emailMatch = rawBody.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
   const email = emailMatch ? emailMatch[0] : null;
 
-<<<<<<< HEAD
   // ── Phone extraction ──
   // Prefer the inline-parsed contact phone; fall back to scanning the body
   // but skip the RCM boilerplate footer phone (usually after "call (760) 602-5080")
@@ -1288,20 +1276,6 @@ function parseRcmEmail(rawBody, subject) {
   if (dealBodyMatch) {
     bodyDeal = dealBodyMatch[1].trim();
   }
-=======
-  let phone = inlinePhone || null;
-  if (!phone) {
-    const bodyWithoutBoilerplate = rawBody
-      .replace(/[-]{10,}[\s\S]*?[-]{10,}/g, '')
-      .replace(/call\s+\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/gi, '');
-    const phoneMatch = bodyWithoutBoilerplate.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-  phone = phoneMatch ? phoneMatch[0] : null;
-  }
-
-  let bodyDeal = null;
-  const dealBodyMatch = rawBody.match(/(?:viewed|downloaded|requested|opened)\s+(?:the\s+)?(?:Agreement|Offering Memorandum|OM|Flyer|Brochure|Package)\s+for\s+(.+?)(?:\\.|$)/im);
-  if (dealBodyMatch) { bodyDeal = dealBodyMatch[1].trim(); }
->>>>>>> 8a40e83a818151ad732875b5e1e033cb98c86653
 
   let firstName = null, lastName = null;
   if (name) {
@@ -1352,11 +1326,8 @@ async function handleRcmIngest(req, res) {
     return res.status(400).json({ error: 'source must be "rcm"' });
   }
 
-<<<<<<< HEAD
   // Power Automate sends `subject` (email subject line); API callers may send `deal_name`.
   // Use whichever is provided, preferring deal_name if both are present.
-=======
->>>>>>> 8a40e83a818151ad732875b5e1e033cb98c86653
   const parsed = parseRcmEmail(raw_body, deal_name || subject);
 
   const insertPayload = {
@@ -1549,7 +1520,8 @@ async function handleRcmIngest(req, res) {
       } : null
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[sync] RCM lead ingestion error:', err.message);
+    return res.status(500).json({ error: 'Lead ingestion failed' });
   }
 }
 
@@ -1595,7 +1567,9 @@ async function handleRcmBackfill(req, res) {
 
     const fetchRes = await fetch(fetchUrl.toString(), { headers });
     if (!fetchRes.ok) {
-      return res.status(fetchRes.status).json({ error: 'Failed to fetch RCM leads', detail: await fetchRes.text() });
+      const errText = await fetchRes.text();
+      console.error('[sync] RCM leads fetch failed:', fetchRes.status, errText.substring(0, 500));
+      return res.status(fetchRes.status).json({ error: 'Failed to fetch RCM leads' });
     }
 
     const leads = await fetchRes.json();
@@ -1747,7 +1721,8 @@ async function handleRcmBackfill(req, res) {
       errors: errors.length > 0 ? errors : undefined
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[sync] RCM backfill error:', err.message);
+    return res.status(500).json({ error: 'Backfill operation failed' });
   }
 }
 
@@ -2045,7 +2020,8 @@ async function handleLoopNetIngest(req, res) {
       } : null
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[sync] LoopNet lead ingestion error:', err.message);
+    return res.status(500).json({ error: 'Lead ingestion failed' });
   }
 }
 
