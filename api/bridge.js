@@ -457,7 +457,7 @@ async function fetchPortfolioStats() {
       })
         .then(r => r.ok ? r.json() : null)
         .then(rows => { if (Array.isArray(rows) && rows[0]) stats.gov_stats = rows[0]; })
-        .catch(() => {})
+        .catch(e => console.warn('[bridge] Gov stats fetch failed:', e.message))
     );
   }
 
@@ -468,7 +468,7 @@ async function fetchPortfolioStats() {
       })
         .then(r => r.ok ? r.json() : null)
         .then(rows => { if (Array.isArray(rows) && rows[0]) stats.dia_stats = rows[0]; })
-        .catch(() => {})
+        .catch(e => console.warn('[bridge] Dialysis stats fetch failed:', e.message))
     );
     // Also fetch clinic financial estimates summary
     fetches.push(
@@ -487,7 +487,7 @@ async function fetchPortfolioStats() {
           }
           return null;
         })
-        .catch(() => {})
+        .catch(e => console.warn('[bridge] Dialysis clinic count fetch failed:', e.message))
     );
   }
 

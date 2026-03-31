@@ -252,7 +252,7 @@ async function auditedGovWrite({
         detail: result.data
       },
       propagation_scope: propagationScope || null
-    }).catch(() => {});
+    }).catch(e => console.warn('[contacts] Audit log failed:', e.message));
 
     return result;
   }
@@ -262,7 +262,7 @@ async function auditedGovWrite({
     applied_mode: method === 'POST' ? 'contacts_insert' : 'contacts_patch',
     reconciliation_result: {},
     propagation_result: {}
-  }).catch(() => {});
+  }).catch(e => console.warn('[contacts] Audit log failed:', e.message));
 
   return result;
 }

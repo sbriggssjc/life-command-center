@@ -6533,6 +6533,10 @@ function bindLiveIngestWorkbench(domainKey) {
     state.citationRiskAcknowledged = !!e.target.checked;
     rerenderLiveIngestDomain(domainKey);
   });
+  document.querySelector(`[data-live-ingest-worsened-ack="${domainKey}"]`)?.addEventListener('change', (e) => {
+    state.worsenedRetryAcknowledged = !!e.target.checked;
+    rerenderLiveIngestDomain(domainKey);
+  });
   document.querySelector(`[data-live-ingest-apply="${domainKey}"]`)?.addEventListener('click', () => applyLiveIngestProposal(domainKey));
   document.querySelectorAll('[data-live-ingest-retry-ocr]').forEach((button) => {
     button.onclick = async (e) => {
@@ -6806,6 +6810,11 @@ async function captureLiveIngestScreen(domainKey) {
 }
 
 async function normalizeLiveIngestFile(file) {
+  // Reject files over 25MB to prevent browser freezing
+  const MAX_FILE_SIZE = 25 * 1024 * 1024;
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum is 25MB.`);
+  }
   const lowerName = String(file.name || '').toLowerCase();
   if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
     return await convertPdfToImageAttachments(file);

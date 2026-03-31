@@ -149,7 +149,7 @@ export default withErrorHandler(async function handler(req, res) {
       target_table,
       target_source,
       mutation_mode: mutationMode
-    }).catch(() => {});
+    }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
     return res.status(502).json({ ok: false, errors: ['bridge_unavailable', `Fetch failed: ${err.message}`], pending_review });
   }
 
@@ -166,7 +166,7 @@ export default withErrorHandler(async function handler(req, res) {
       target_table,
       target_source,
       mutation_mode: mutationMode
-    }).catch(() => {});
+    }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
     return res.status(mutationResponse.status).json({
       ok: false,
       errors: [`Supabase ${mutationMode.toUpperCase()} failed (${mutationResponse.status}): ${errBody.substring(0, 500)}`],
@@ -228,7 +228,7 @@ export default withErrorHandler(async function handler(req, res) {
     propagation_scope: propagation_scope || null,
     reconciliation_present: !!reconciliation,
     propagation_present: !!propagation
-  }).catch(() => {});
+  }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
 
   return res.status(200).json({
     ok: true,
