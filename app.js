@@ -4430,6 +4430,17 @@ function renderYieldSVG(container, data, range) {
 
 // Wire up chart range buttons
 document.addEventListener('DOMContentLoaded', () => {
+  // Hash-based deep linking for PWA shortcuts (e.g. #page=pageMyWork)
+  try {
+    const hash = location.hash;
+    if (hash && hash.startsWith('#page=')) {
+      const pageId = hash.slice(6);
+      if (/^[a-zA-Z]+$/.test(pageId) && document.getElementById(pageId)) {
+        setTimeout(function() { navTo(pageId); }, 0);
+      }
+    }
+  } catch (_) { /* ignore hash parse errors */ }
+
   document.getElementById('yieldChartControls')?.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-range]');
     if (btn) loadYieldChart(btn.dataset.range);

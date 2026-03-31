@@ -1,7 +1,8 @@
-const CACHE_NAME = 'lcc-v177';
+const CACHE_NAME = 'lcc-v178';
 const STATIC_ASSETS = [
   './',
   './index.html',
+  './offline.html',
   './app.js',
   './styles.css',
   './ops.js',
@@ -75,7 +76,14 @@ self.addEventListener('fetch', event => {
           }
           return response;
         })
-        .catch(() => caches.match(event.request))
+        .catch(() =>
+          caches.match(event.request).then(cached => {
+            if (cached) return cached;
+            // Navigation requests (HTML pages) get the offline fallback
+            if (event.request.mode === 'navigate') return caches.match('./offline.html');
+            return cached; // undefined — browser default error
+          })
+        )
     );
     return;
   }

@@ -28,6 +28,29 @@
       "label": "Life Command Center Dashboard"
     }
   ],
+  "shortcuts": [
+    {
+      "name": "My Work",
+      "short_name": "My Work",
+      "url": "./index.html#page=pageMyWork",
+      "description": "View your assigned tasks and action items",
+      "icons": [{"src": "icons/icon-192.png", "sizes": "192x192"}]
+    },
+    {
+      "name": "Team Queue",
+      "short_name": "Queue",
+      "url": "./index.html#page=pageTeamQueue",
+      "description": "Review and triage the team queue",
+      "icons": [{"src": "icons/icon-192.png", "sizes": "192x192"}]
+    },
+    {
+      "name": "Inbox",
+      "short_name": "Inbox",
+      "url": "./index.html#page=pageInbox",
+      "description": "Check email and messages",
+      "icons": [{"src": "icons/icon-192.png", "sizes": "192x192"}]
+    }
+  ],
   "categories": ["productivity", "utilities", "business"],
   "prefer_related_applications": false
 }
