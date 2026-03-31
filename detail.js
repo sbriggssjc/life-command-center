@@ -2990,8 +2990,8 @@ async function _udSaveOwnership(options = {}) {
           propagation_scope: 'ownership_helper_record'
         });
         if (res.ok) {
-          const created = Array.isArray(res.rows) ? res.rows[0] : null;
-          recordedOwnerId = created.recorded_owner_id;
+          const created = Array.isArray(res.rows) && res.rows.length > 0 ? res.rows[0] : null;
+          if (created) recordedOwnerId = created.recorded_owner_id;
         } else {
           console.error('Error creating recorded_owner:', res.errors || []);
         }
@@ -3027,8 +3027,8 @@ async function _udSaveOwnership(options = {}) {
           propagation_scope: 'ownership_helper_record'
         });
         if (res.ok) {
-          const created = Array.isArray(res.rows) ? res.rows[0] : null;
-          trueOwnerId = created.true_owner_id;
+          const created = Array.isArray(res.rows) && res.rows.length > 0 ? res.rows[0] : null;
+          if (created) trueOwnerId = created.true_owner_id;
         } else {
           console.error('Error creating true_owner:', res.errors || []);
         }
@@ -3064,8 +3064,8 @@ async function _udSaveOwnership(options = {}) {
           propagation_scope: 'ownership_contact_record'
         });
         if (res.ok) {
-          const created = Array.isArray(res.rows) ? res.rows[0] : null;
-          contactId = created.contact_id;
+          const created = Array.isArray(res.rows) && res.rows.length > 0 ? res.rows[0] : null;
+          if (created) contactId = created.contact_id;
         } else {
           console.error('Error creating contact:', res.errors || []);
         }

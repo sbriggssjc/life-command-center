@@ -4612,7 +4612,7 @@ function renderLeadPipeline(record) {
   html += '</div>';
   
   html += '<div class="detail-row" style="margin-top: 16px;">';
-  html += '<button class="act-btn primary" onclick="saveGovDetailLead(' + JSON.stringify(record.lead_id) + ')">Save Changes</button>';
+  html += `<button class="act-btn primary" onclick="saveGovDetailLead(decodeURIComponent('${encodeURIComponent(record.lead_id)}'))">Save Changes</button>`;
   html += '</div>';
   
   html += '</div>';
