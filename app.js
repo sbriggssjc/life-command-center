@@ -3347,8 +3347,8 @@ async function execProspectsSearch() {
         safeQuery(diaQuery, 'v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 20 }),
         safeQuery(diaQuery, 'v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 15 })
       ]);
-      diaClinics = (dc || []).map(r => ({ ...r, _title: norm(r.facility_name) || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + norm(r.operator_name) : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
-      diaNpi = (dn || []).map(r => ({ ...r, _title: norm(r.facility_name) || r.npi || '—', _badge: 'NPI Signal', _badgeBg: 'rgba(248,113,113,0.15)', _badgeColor: '#f87171', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.signal_type ? cleanLabel(r.signal_type) : '', r.npi ? 'NPI: ' + r.npi : ''].filter(Boolean) }));
+      diaClinics = (Array.isArray(dc) ? dc : dc?.data || []).map(r => ({ ...r, _title: norm(r.facility_name) || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + norm(r.operator_name) : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
+      diaNpi = (Array.isArray(dn) ? dn : dn?.data || []).map(r => ({ ...r, _title: norm(r.facility_name) || r.npi || '—', _badge: 'NPI Signal', _badgeBg: 'rgba(248,113,113,0.15)', _badgeColor: '#f87171', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.signal_type ? cleanLabel(r.signal_type) : '', r.npi ? 'NPI: ' + r.npi : ''].filter(Boolean) }));
     }
 
     if (govLeads.length) sections.push({ title: 'Government — Prospect Leads', items: govLeads });
@@ -5718,6 +5718,7 @@ function createLiveIngestDomainState() {
     preparedImageAttachments: [],
     lowConfidenceOcrAcknowledged: false,
     citationRiskAcknowledged: false,
+    worsenedRetryAcknowledged: false,
     provenanceTrustFilter: 'all',
     loadingSnapshots: false,
     extracting: false,

@@ -3671,7 +3671,8 @@ async function govPatch(table, filterStr, data) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
-  return resp.ok;
+  if (!resp.ok) throw new Error('PATCH ' + table + ' failed: HTTP ' + resp.status);
+  return true;
 }
 
 window.resolveGovPendingUpdate = async function(id, resolution) {
@@ -3687,6 +3688,7 @@ window.resolveGovPendingUpdate = async function(id, resolution) {
     renderGovTab();
   } catch(e) {
     console.error('resolveGovPendingUpdate error:', e);
+    if (typeof showToast === 'function') showToast('Failed to resolve update: ' + e.message, 'error');
   }
 };
 
