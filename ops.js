@@ -1239,23 +1239,32 @@ function closeAssignModal() {
   document.getElementById('assignModal')?.classList.remove('open');
 }
 
+let _submitAssigning = false;
 async function submitAssignModal() {
-  if (!opsAssignModalState) return;
+  if (!opsAssignModalState || _submitAssigning) return;
   const assigned_to = document.getElementById('assignUserSelect')?.value;
   if (!assigned_to) return;
-  showToast('Assigning...', 'info');
-  const res = await opsPost('/api/workflows?action=reassign', {
-    item_type: opsAssignModalState.itemType || 'action',
-    item_id: opsAssignModalState.itemId,
-    assigned_to
-  });
-  if (res.ok) {
-    closeAssignModal();
-    showToast('Assigned successfully', 'success');
-    const activePage = document.querySelector('.page.active');
-    if (activePage) handlePageLoad(activePage.id);
-  } else {
-    showToast(res.error || 'Assign failed', 'error');
+  _submitAssigning = true;
+  const btn = document.querySelector('#assignModal .modal-actions button.primary, #assignModal button[onclick*="submitAssignModal"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Assigning...'; }
+  try {
+    showToast('Assigning...', 'info');
+    const res = await opsPost('/api/workflows?action=reassign', {
+      item_type: opsAssignModalState.itemType || 'action',
+      item_id: opsAssignModalState.itemId,
+      assigned_to
+    });
+    if (res.ok) {
+      closeAssignModal();
+      showToast('Assigned successfully', 'success');
+      const activePage = document.querySelector('.page.active');
+      if (activePage) handlePageLoad(activePage.id);
+    } else {
+      showToast(res.error || 'Assign failed', 'error');
+    }
+  } finally {
+    _submitAssigning = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Assign'; }
   }
 }
 
@@ -1264,27 +1273,36 @@ function closeEscalateModal() {
   document.getElementById('escalateModal')?.classList.remove('open');
 }
 
+let _submitEscalating = false;
 async function submitEscalateModal() {
-  if (!opsEscalateModalState) return;
+  if (!opsEscalateModalState || _submitEscalating) return;
   const escalate_to = document.getElementById('escalateUserSelect')?.value;
   const reason = document.getElementById('escalateReason')?.value?.trim();
   if (!escalate_to || !reason) {
     showToast('Select a manager and provide a reason', 'error');
     return;
   }
-  showToast('Escalating...', 'info');
-  const res = await opsPost('/api/workflows?action=escalate', {
-    action_item_id: opsEscalateModalState.itemId,
-    escalate_to,
-    reason
-  });
-  if (res.ok) {
-    closeEscalateModal();
-    showToast('Escalated successfully', 'success');
-    const activePage = document.querySelector('.page.active');
-    if (activePage) handlePageLoad(activePage.id);
-  } else {
-    showToast(res.error || 'Escalation failed', 'error');
+  _submitEscalating = true;
+  const btn = document.querySelector('#escalateModal .modal-actions button.primary, #escalateModal button[onclick*="submitEscalateModal"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Escalating...'; }
+  try {
+    showToast('Escalating...', 'info');
+    const res = await opsPost('/api/workflows?action=escalate', {
+      action_item_id: opsEscalateModalState.itemId,
+      escalate_to,
+      reason
+    });
+    if (res.ok) {
+      closeEscalateModal();
+      showToast('Escalated successfully', 'success');
+      const activePage = document.querySelector('.page.active');
+      if (activePage) handlePageLoad(activePage.id);
+    } else {
+      showToast(res.error || 'Escalation failed', 'error');
+    }
+  } finally {
+    _submitEscalating = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Escalate'; }
   }
 }
 
@@ -1293,8 +1311,9 @@ function closeFollowupModal() {
   document.getElementById('followupModal')?.classList.remove('open');
 }
 
+let _submitFollowingUp = false;
 async function submitFollowupModal() {
-  if (!opsFollowupModalState) return;
+  if (!opsFollowupModalState || _submitFollowingUp) return;
   const followup_title = document.getElementById('followupTitleInput')?.value?.trim();
   const followup_description = document.getElementById('followupNotesInput')?.value?.trim() || null;
   const assigned_to = document.getElementById('followupUserSelect')?.value;
@@ -1303,20 +1322,28 @@ async function submitFollowupModal() {
     showToast('Follow-up title is required', 'error');
     return;
   }
-  const res = await opsPost('/api/workflows?action=research_followup', {
-    research_task_id: opsFollowupModalState.researchTaskId,
-    followup_title,
-    followup_description,
-    followup_type: 'follow_up',
-    assigned_to,
-    due_date
-  });
-  if (res.ok) {
-    closeFollowupModal();
-    showToast('Research completed + follow-up created', 'success');
-    refreshActiveOpsPage();
-  } else {
-    showToast(res.error || 'Failed', 'error');
+  _submitFollowingUp = true;
+  const btn = document.querySelector('#followupModal .modal-actions button.primary, #followupModal button[onclick*="submitFollowupModal"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+  try {
+    const res = await opsPost('/api/workflows?action=research_followup', {
+      research_task_id: opsFollowupModalState.researchTaskId,
+      followup_title,
+      followup_description,
+      followup_type: 'follow_up',
+      assigned_to,
+      due_date
+    });
+    if (res.ok) {
+      closeFollowupModal();
+      showToast('Research completed + follow-up created', 'success');
+      refreshActiveOpsPage();
+    } else {
+      showToast(res.error || 'Failed', 'error');
+    }
+  } finally {
+    _submitFollowingUp = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Create Follow-up'; }
   }
 }
 
@@ -1328,8 +1355,12 @@ async function createQualityFollowup(title) {
     visibility: 'shared',
     metadata: { source: 'data_quality' }
   });
-  if (res.ok) showToast('Follow-up created', 'success');
-  else showToast(res.error || 'Could not create follow-up', 'error');
+  if (res.ok) {
+    showToast('Follow-up created', 'success');
+    refreshActiveOpsPage();
+  } else {
+    showToast(res.error || 'Could not create follow-up', 'error');
+  }
 }
 
 // ============================================================================
@@ -1568,17 +1599,24 @@ async function retrySync(errorId) {
 // QUICK ACTIONS on queue items
 // ============================================================================
 
+let _quickTransitioning = false;
 async function quickTransition(itemId, newStatus, itemType) {
-  const statusLabels = { in_progress: 'Started', completed: 'Completed', waiting: 'Set to waiting', open: 'Reopened' };
-  const path = itemType === 'inbox' ? `/api/inbox?id=${itemId}` : `/api/actions?id=${itemId}`;
-  showToast(`Updating...`, 'info');
-  const res = await opsPatch(path, { status: newStatus });
-  if (res.ok) {
-    showToast(statusLabels[newStatus] || `Status → ${newStatus}`, 'success');
-    const activePage = document.querySelector('.page.active');
-    if (activePage) handlePageLoad(activePage.id);
-  } else {
-    showToast(res.error || 'Transition failed', 'error');
+  if (_quickTransitioning) return;
+  _quickTransitioning = true;
+  try {
+    const statusLabels = { in_progress: 'Started', completed: 'Completed', waiting: 'Set to waiting', open: 'Reopened' };
+    const path = itemType === 'inbox' ? `/api/inbox?id=${itemId}` : `/api/actions?id=${itemId}`;
+    showToast(`Updating...`, 'info');
+    const res = await opsPatch(path, { status: newStatus });
+    if (res.ok) {
+      showToast(statusLabels[newStatus] || `Status → ${newStatus}`, 'success');
+      const activePage = document.querySelector('.page.active');
+      if (activePage) handlePageLoad(activePage.id);
+    } else {
+      showToast(res.error || 'Transition failed', 'error');
+    }
+  } finally {
+    _quickTransitioning = false;
   }
 }
 
@@ -1676,7 +1714,7 @@ function queueItemHTML(item, context, opts = {}) {
 }
 
 function filterPill(value, label, currentVar, varName, refreshFn) {
-  const active = value === eval(varName) ? 'active' : '';
+  const active = value === currentVar ? 'active' : '';
   return `<button class="ops-filter ${active}" onclick="${varName}='${value}';${refreshFn}()">${label}</button>`;
 }
 

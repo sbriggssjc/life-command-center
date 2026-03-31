@@ -4893,6 +4893,7 @@ let messagesLoaded = false;
 async function loadMessages() {
   if (messagesLoaded) { renderMessages(); return; }
   const el = document.getElementById('msgList');
+  if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   try {
     // Use flagged emails as the primary message source
@@ -4924,6 +4925,7 @@ async function loadMessages() {
 
 function renderMessages() {
   const el = document.getElementById('msgList');
+  if (!el) return;
   const search = document.getElementById('msgSearchInput')?.value || '';
   const searchLower = search.toLowerCase();
 
