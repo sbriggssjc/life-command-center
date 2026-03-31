@@ -17,7 +17,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
@@ -129,11 +129,11 @@ async function promoteToShared(req, res, user, workspaceId) {
 
   // Transition inbox to promoted (triage first if new)
   if (inbox.status === 'new') {
-    await opsQuery('PATCH', `inbox_items?id=eq.${inbox_item_id}`, {
+    await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(inbox_item_id)}`, {
       status: 'promoted', triaged_at: new Date().toISOString(), updated_at: new Date().toISOString()
     });
   } else {
-    await opsQuery('PATCH', `inbox_items?id=eq.${inbox_item_id}`, {
+    await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(inbox_item_id)}`, {
       status: 'promoted', updated_at: new Date().toISOString()
     });
   }
@@ -222,7 +222,7 @@ async function sfTaskToAction(req, res, user, workspaceId) {
   }
 
   // Transition inbox
-  await opsQuery('PATCH', `inbox_items?id=eq.${inbox_item_id}`, {
+  await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(inbox_item_id)}`, {
     status: 'promoted', entity_id, updated_at: new Date().toISOString()
   });
 
@@ -308,7 +308,7 @@ async function reassignItem(req, res, user, workspaceId) {
 
   // Verify target user is a workspace member
   const targetMember = await opsQuery('GET',
-    `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${assigned_to}&select=user_id,role`
+    `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(assigned_to)}&select=user_id,role`
   );
   if (!targetMember.ok || !targetMember.data?.length) {
     return res.status(400).json({ error: 'Target user is not a workspace member' });
@@ -326,7 +326,7 @@ async function reassignItem(req, res, user, workspaceId) {
 
   const previousAssignee = existing.assigned_to;
 
-  await opsQuery('PATCH', `${table}?id=eq.${item_id}&workspace_id=eq.${workspaceId}`, {
+  await opsQuery('PATCH', `${table}?id=eq.${pgFilterVal(item_id)}&workspace_id=eq.${workspaceId}`, {
     assigned_to,
     updated_at: new Date().toISOString()
   });
@@ -374,7 +374,7 @@ async function escalateItem(req, res, user, workspaceId) {
   // Verify target is manager+
   const targetRole = requireRole({ memberships: [{ workspace_id: workspaceId }] }, 'viewer', workspaceId);
   const targetMember = await opsQuery('GET',
-    `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${escalate_to}&select=role`
+    `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(escalate_to)}&select=role`
   );
   if (!targetMember.ok || !targetMember.data?.length) {
     return res.status(400).json({ error: 'Escalation target is not a workspace member' });
@@ -391,7 +391,7 @@ async function escalateItem(req, res, user, workspaceId) {
   });
 
   // Reassign to escalation target
-  await opsQuery('PATCH', `action_items?id=eq.${action_item_id}`, {
+  await opsQuery('PATCH', `action_items?id=eq.${pgFilterVal(action_item_id)}`, {
     assigned_to: escalate_to,
     priority: action.priority === 'normal' ? 'high' : action.priority,
     updated_at: new Date().toISOString()
@@ -454,7 +454,7 @@ async function removeWatch(req, res, user, workspaceId) {
   if (!column) return res.status(400).json({ error: 'item_type must be: action, entity, or inbox' });
 
   await opsQuery('DELETE',
-    `watchers?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&${column}=eq.${item_id}`
+    `watchers?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&${column}=eq.${pgFilterVal(item_id)}`
   );
   return res.status(200).json({ watching: false, item_type, item_id });
 }
@@ -479,7 +479,7 @@ async function bulkAssign(req, res, user, workspaceId) {
       : null;
     if (!table) { results.push({ item_id, error: 'invalid type' }); continue; }
 
-    const r = await opsQuery('PATCH', `${table}?id=eq.${item_id}&workspace_id=eq.${workspaceId}`, {
+    const r = await opsQuery('PATCH', `${table}?id=eq.${pgFilterVal(item_id)}&workspace_id=eq.${workspaceId}`, {
       assigned_to, updated_at: new Date().toISOString()
     });
     results.push({ item_id, item_type, success: r.ok });
@@ -512,7 +512,7 @@ async function bulkTriage(req, res, user, workspaceId) {
     if (priority) updates.priority = priority;
     if (assigned_to) updates.assigned_to = assigned_to;
 
-    const r = await opsQuery('PATCH', `inbox_items?id=eq.${id}&workspace_id=eq.${workspaceId}`, updates);
+    const r = await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}`, updates);
     results.push({ id, success: r.ok });
   }
 
@@ -555,7 +555,7 @@ async function getOversight(req, res, user, workspaceId) {
 async function getUnassigned(req, res, user, workspaceId) {
   const { domain } = req.query;
   let path = `v_unassigned_work?workspace_id=eq.${workspaceId}&order=created_at.desc&limit=100`;
-  if (domain) path += `&domain=eq.${domain}`;
+  if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
 
   const result = await opsQuery('GET', path);
   return res.status(200).json({ items: result.data || [], count: result.count, view: 'unassigned' });
@@ -576,7 +576,7 @@ async function getWatchers(req, res, user, workspaceId) {
   if (!column) return res.status(400).json({ error: 'item_type must be: action, entity, or inbox' });
 
   const result = await opsQuery('GET',
-    `watchers?workspace_id=eq.${workspaceId}&${column}=eq.${item_id}&select=*,users(display_name,email,avatar_url)&order=created_at`
+    `watchers?workspace_id=eq.${workspaceId}&${column}=eq.${pgFilterVal(item_id)}&select=*,users(display_name,email,avatar_url)&order=created_at`
   );
   return res.status(200).json({ watchers: result.data || [] });
 }
@@ -586,7 +586,7 @@ async function getWatchers(req, res, user, workspaceId) {
 // ============================================================================
 
 async function fetchOne(table, id, workspaceId) {
-  const result = await opsQuery('GET', `${table}?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*&limit=1`);
+  const result = await opsQuery('GET', `${table}?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}&select=*&limit=1`);
   return result.ok && result.data?.length > 0 ? result.data[0] : null;
 }
 
@@ -595,7 +595,7 @@ function unwrap(result) {
 }
 
 async function fetchUserName(userId) {
-  const result = await opsQuery('GET', `users?id=eq.${userId}&select=display_name&limit=1`);
+  const result = await opsQuery('GET', `users?id=eq.${pgFilterVal(userId)}&select=display_name&limit=1`);
   return result.ok && result.data?.length > 0 ? result.data[0].display_name : 'Unknown';
 }
 

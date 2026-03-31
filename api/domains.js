@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -80,7 +80,7 @@ async function getDomain(req, res, workspaceId) {
   if (!id) return res.status(400).json({ error: 'id required' });
 
   const result = await opsQuery('GET',
-    `domains?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*,domain_data_sources(*),domain_entity_mappings(*),domain_queue_configs(*)`
+    `domains?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}&select=*,domain_data_sources(*),domain_entity_mappings(*),domain_queue_configs(*)`
   );
   if (!result.data?.length) return res.status(404).json({ error: 'Domain not found' });
   return res.status(200).json({ domain: result.data[0] });
@@ -100,7 +100,7 @@ async function registerDomain(req, res, user, workspaceId) {
   }
 
   // Check for duplicate
-  const existing = await opsQuery('GET', `domains?workspace_id=eq.${workspaceId}&slug=eq.${slug}&select=id`);
+  const existing = await opsQuery('GET', `domains?workspace_id=eq.${workspaceId}&slug=eq.${pgFilterVal(slug)}&select=id`);
   if (existing.data?.length) return res.status(409).json({ error: `Domain "${slug}" already exists` });
 
   const result = await opsQuery('POST', 'domains', {
@@ -211,7 +211,7 @@ async function validateDomain(req, res, workspaceId) {
 
   // Fetch domain and sources
   const domainRes = await opsQuery('GET',
-    `domains?id=eq.${domain_id}&workspace_id=eq.${workspaceId}&select=*,domain_data_sources(*)`
+    `domains?id=eq.${pgFilterVal(domain_id)}&workspace_id=eq.${workspaceId}&select=*,domain_data_sources(*)`
   );
   if (!domainRes.data?.length) return res.status(404).json({ error: 'Domain not found' });
 
@@ -231,8 +231,9 @@ async function validateDomain(req, res, workspaceId) {
         check.status = probe.ok || probe.status === 400 ? 'connected' : 'error';
         check.message = probe.ok ? 'Connected' : `HTTP ${probe.status}`;
       } catch (e) {
+        console.error('[domains] Validation probe failed:', e.message);
         check.status = 'error';
-        check.message = e.message;
+        check.message = 'Connection check failed';
       }
     } else if (src.source_type === 'manual') {
       check.status = 'connected';
@@ -271,7 +272,7 @@ async function toggleDomain(req, res, workspaceId) {
     return res.status(400).json({ error: 'domain_id and is_active (boolean) required' });
   }
 
-  await opsQuery('PATCH', `domains?id=eq.${domain_id}&workspace_id=eq.${workspaceId}`, {
+  await opsQuery('PATCH', `domains?id=eq.${pgFilterVal(domain_id)}&workspace_id=eq.${workspaceId}`, {
     is_active, updated_at: new Date().toISOString()
   });
 
@@ -288,7 +289,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
 
   // Fetch domain with mappings
   const domainRes = await opsQuery('GET',
-    `domains?id=eq.${domain_id}&workspace_id=eq.${workspaceId}&select=*,domain_data_sources(*),domain_entity_mappings(*)`
+    `domains?id=eq.${pgFilterVal(domain_id)}&workspace_id=eq.${workspaceId}&select=*,domain_data_sources(*),domain_entity_mappings(*)`
   );
   if (!domainRes.data?.length) return res.status(404).json({ error: 'Domain not found' });
 
@@ -336,7 +337,7 @@ async function syncDomainEntities(req, res, user, workspaceId) {
         // Check if entity already exists (by external identity)
         const externalId = mapped._external_id || record.id;
         const existingRes = await opsQuery('GET',
-          `external_identities?source_system=eq.${domain.slug}&external_id=eq.${externalId}&select=entity_id&limit=1`
+          `external_identities?source_system=eq.${pgFilterVal(domain.slug)}&external_id=eq.${pgFilterVal(externalId)}&select=entity_id&limit=1`
         );
 
         if (existingRes.data?.length) {
