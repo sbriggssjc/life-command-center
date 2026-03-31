@@ -496,7 +496,7 @@ function buildContactOverview() {
   h += '<div class="detail-actions">';
   h += `<button class="btn-submit" onclick="switchContactDetailTab('messages')">Send Message</button>`;
   const toggleClass = c.contact_class === 'business' ? 'personal' : 'business';
-  h += `<button class="btn-cancel" onclick="classifyContactAction('${c.unified_id}', '${toggleClass}')">Move to ${toggleClass}</button>`;
+  h += `<button class="btn-cancel" onclick="classifyContactAction(decodeURIComponent('${encodeURIComponent(c.unified_id)}'), '${toggleClass}')">Move to ${toggleClass}</button>`;
   h += '</div>';
 
   return h;

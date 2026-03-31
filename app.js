@@ -1953,7 +1953,7 @@ function renderUnifiedContacts() {
     // Actions
     html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center">';
     // Personal/Business toggle
-    html += '<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="ucToggleClass(\'' + c.unified_id + '\',\'' + (c.contact_class === 'business' ? 'personal' : 'business') + '\')" title="Reclassify">' + (c.contact_class === 'business' ? 'Move to Personal' : 'Move to Business') + '</button>';
+    html += '<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="ucToggleClass(decodeURIComponent(\'' + encodeURIComponent(c.unified_id) + '\'),\'' + (c.contact_class === 'business' ? 'personal' : 'business') + '\')" title="Reclassify">' + (c.contact_class === 'business' ? 'Move to Personal' : 'Move to Business') + '</button>';
     if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
     if (c.phone) {
       var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
@@ -1971,15 +1971,15 @@ function renderUnifiedContacts() {
     var hasSms = !!(c.phone || c.mobile_phone);
     if (hasTeams || hasWebex || hasSms) {
       html += '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px">';
-      html += '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="ucToggleMessages(\'' + c.unified_id + '\')">';
+      html += '<div style="display:flex;align-items:center;gap:6px;cursor:pointer" onclick="ucToggleMessages(decodeURIComponent(\'' + encodeURIComponent(c.unified_id) + '\'))">';
       html += '<span style="font-size:11px;color:var(--text2);font-weight:500">Messages</span>';
-      html += '<span id="ucMsgArrow_' + c.unified_id + '" style="font-size:9px;color:var(--text3);transition:transform .2s">&#x25B6;</span>';
+      html += '<span id="ucMsgArrow_' + esc(c.unified_id) + '" style="font-size:9px;color:var(--text3);transition:transform .2s">&#x25B6;</span>';
       // Channel tabs (shown as small badges)
       if (hasTeams) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#6264a7;color:#fff;opacity:0.7">Teams</span>';
       if (hasWebex) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#00b140;color:#fff;opacity:0.7">WebEx</span>';
       if (hasSms) html += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:#555;color:#fff;opacity:0.7">SMS</span>';
       html += '</div>';
-      html += '<div id="ucMsgPanel_' + c.unified_id + '" style="display:none;margin-top:6px" data-loaded="false" data-channel="" data-teams="' + (hasTeams?1:0) + '" data-webex="' + (hasWebex?1:0) + '" data-sms="' + (hasSms?1:0) + '" data-email="' + esc(c.email||'') + '" data-phone="' + esc(c.mobile_phone||c.phone||'') + '" data-name="' + esc(c.first_name||'') + '"></div>';
+      html += '<div id="ucMsgPanel_' + esc(c.unified_id) + '" style="display:none;margin-top:6px" data-loaded="false" data-channel="" data-teams="' + (hasTeams?1:0) + '" data-webex="' + (hasWebex?1:0) + '" data-sms="' + (hasSms?1:0) + '" data-email="' + esc(c.email||'') + '" data-phone="' + esc(c.mobile_phone||c.phone||'') + '" data-name="' + esc(c.first_name||'') + '"></div>';
       html += '</div>';
     }
 
@@ -2082,9 +2082,10 @@ async function ucLoadChannelMessages(unifiedId, channel) {
   var contactName = panel.dataset.name || '';
 
   var tabsHtml = '<div style="display:flex;gap:4px;margin-bottom:6px">';
-  if (hasTeams) tabsHtml += '<button class="act-btn' + (channel === 'teams' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'teams\')">Teams</button>';
-  if (hasWebex) tabsHtml += '<button class="act-btn' + (channel === 'webex' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'webex\')">WebEx</button>';
-  if (hasSms) tabsHtml += '<button class="act-btn' + (channel === 'sms' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(\'' + unifiedId + '\',\'sms\')">SMS</button>';
+  var encId = encodeURIComponent(unifiedId);
+  if (hasTeams) tabsHtml += '<button class="act-btn' + (channel === 'teams' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(decodeURIComponent(\'' + encId + '\'),\'teams\')">Teams</button>';
+  if (hasWebex) tabsHtml += '<button class="act-btn' + (channel === 'webex' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(decodeURIComponent(\'' + encId + '\'),\'webex\')">WebEx</button>';
+  if (hasSms) tabsHtml += '<button class="act-btn' + (channel === 'sms' ? ' primary' : '') + '" style="font-size:10px;padding:2px 8px" onclick="ucLoadChannelMessages(decodeURIComponent(\'' + encId + '\'),\'sms\')">SMS</button>';
   tabsHtml += '</div>';
 
   panel.innerHTML = tabsHtml + '<div style="text-align:center;padding:12px;color:var(--text3);font-size:11px"><span class="spinner" style="width:14px;height:14px"></span> Loading messages...</div>';
@@ -2094,7 +2095,7 @@ async function ucLoadChannelMessages(unifiedId, channel) {
     var headers = { 'Content-Type': 'application/json' };
     if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
     var action = channel === 'teams' ? 'messages_teams' : channel === 'webex' ? 'messages_webex' : 'messages_sms';
-    var r = await fetch('/api/contacts?action=' + action + '&id=' + unifiedId + '&limit=10', { headers });
+    var r = await fetch('/api/contacts?action=' + action + '&id=' + encodeURIComponent(unifiedId) + '&limit=10', { headers });
     var data = r.ok ? await r.json() : { messages: [], error: 'Failed to load' };
     var msgs = data.messages || [];
 
@@ -2102,7 +2103,7 @@ async function ucLoadChannelMessages(unifiedId, channel) {
 
     // Message list
     if (msgs.length === 0) {
-      msgsHtml += '<div style="text-align:center;padding:8px;color:var(--text3);font-size:11px">' + (data.note || data.error || 'No messages yet') + '</div>';
+      msgsHtml += '<div style="text-align:center;padding:8px;color:var(--text3);font-size:11px">' + esc(data.note || data.error || 'No messages yet') + '</div>';
     } else {
       msgsHtml += '<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;margin-bottom:6px;background:var(--bg2)">';
       // Reverse to show oldest first (API returns newest first)
@@ -2123,16 +2124,16 @@ async function ucLoadChannelMessages(unifiedId, channel) {
     var channelTemplates = (ucMsgTemplates || []).filter(function(t) { return t.channels.indexOf(channel) >= 0; });
     msgsHtml += '<div style="display:flex;gap:4px;align-items:flex-end">';
     if (channelTemplates.length > 0) {
-      msgsHtml += '<select style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);max-width:120px" onchange="ucApplyTemplate(\'' + unifiedId + '\',this.value,\'' + esc(contactName) + '\')">';
+      msgsHtml += '<select style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);max-width:120px" onchange="ucApplyTemplate(decodeURIComponent(\'' + encId + '\'),this.value,decodeURIComponent(\'' + encodeURIComponent(contactName) + '\'))">';
       msgsHtml += '<option value="">Template...</option>';
       channelTemplates.forEach(function(t) {
         msgsHtml += '<option value="' + esc(t.id) + '">' + esc(t.name) + '</option>';
       });
       msgsHtml += '</select>';
     }
-    msgsHtml += '<input id="ucMsgInput_' + unifiedId + '" type="text" placeholder="Type a message..." style="flex:1;font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" onkeydown="if(event.key===\'Enter\')ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">';
+    msgsHtml += '<input id="ucMsgInput_' + esc(unifiedId) + '" type="text" placeholder="Type a message..." style="flex:1;font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)" onkeydown="if(event.key===\'Enter\')ucSendMessage(decodeURIComponent(\'' + encId + '\'),\'' + channel + '\')">';
     var sendLabel = channel === 'teams' ? 'Send via Teams' : channel === 'webex' ? 'Send via WebEx' : 'Send SMS';
-    msgsHtml += '<button class="act-btn primary" style="font-size:10px;padding:4px 8px;white-space:nowrap" onclick="ucSendMessage(\'' + unifiedId + '\',\'' + channel + '\')">' + sendLabel + '</button>';
+    msgsHtml += '<button class="act-btn primary" style="font-size:10px;padding:4px 8px;white-space:nowrap" onclick="ucSendMessage(decodeURIComponent(\'' + encId + '\'),\'' + channel + '\')">' + sendLabel + '</button>';
     msgsHtml += '</div>';
 
     panel.innerHTML = msgsHtml;
@@ -2250,8 +2251,8 @@ async function loadMergeQueue() {
           html += '<div style="font-size:13px;font-weight:500">Score: ' + (item.match_score || 0).toFixed(2) + ' — ' + esc(item.match_reason || 'Unknown') + '</div>';
           html += '<div style="font-size:12px;color:var(--text2)">Contact A: ' + esc(item.contact_a) + ' · Contact B: ' + esc(item.contact_b) + '</div>';
           html += '<div style="display:flex;gap:6px;margin-top:8px">';
-          html += '<button class="act-btn primary" style="font-size:11px;padding:4px 10px" onclick="ucMerge(\'' + item.contact_a + '\',\'' + item.contact_b + '\',\'' + item.queue_id + '\')">Merge (keep A)</button>';
-          html += '<button class="act-btn" style="font-size:11px;padding:4px 10px" onclick="ucDismissMerge(\'' + item.queue_id + '\')">Dismiss</button>';
+          html += '<button class="act-btn primary" style="font-size:11px;padding:4px 10px" onclick="ucMerge(decodeURIComponent(\'' + encodeURIComponent(item.contact_a) + '\'),decodeURIComponent(\'' + encodeURIComponent(item.contact_b) + '\'),decodeURIComponent(\'' + encodeURIComponent(item.queue_id) + '\'))">Merge (keep A)</button>';
+          html += '<button class="act-btn" style="font-size:11px;padding:4px 10px" onclick="ucDismissMerge(decodeURIComponent(\'' + encodeURIComponent(item.queue_id) + '\'))">Dismiss</button>';
           html += '</div></div>';
         });
       }
