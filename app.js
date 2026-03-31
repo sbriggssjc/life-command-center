@@ -930,7 +930,7 @@ function renderBizContent() {
   if (Object.keys(subCats).length > 1) {
     html += '<div class="pills">';
     for (const [cat, ct] of Object.entries(subCats).sort((a, b) => b[1] - a[1])) {
-      html += `<span class="pill" onclick="toggleBizCatFilter(this,'${esc(cat)}')">${esc(cat)}<span class="pill-ct">${ct}</span></span>`;
+      html += `<span class="pill" onclick="toggleBizCatFilter(this,decodeURIComponent('${encodeURIComponent(cat)}'))">${esc(cat)}<span class="pill-ct">${ct}</span></span>`;
     }
     html += '</div>';
   }
@@ -2450,9 +2450,9 @@ function renderProspectCardsHTML(items, options = {}) {
           html += '</div>';
           // Task action buttons: complete, log & reschedule, dismiss
           html += '<div style="display:flex;gap:3px;flex-shrink:0">';
-          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="completeTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\')" title="Mark complete">&#x2713;</button>';
-          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="openLogAndReschedule(\'' + esc(c.sf_contact_id) + '\',\'' + esc(c.sf_company_id || '') + '\',\'' + esc(c.contact_name || c.company_name || '') + '\',\'' + esc(subj) + '\',\'' + esc(t.date || '') + '\')" title="Log touchpoint &amp; reschedule">&#x1F4C5;</button>';
-          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="dismissTask(\'' + esc(c.sf_contact_id) + '\',\'' + esc(subj) + '\')" title="Dismiss/archive">&#x2715;</button>';
+          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="completeTask(decodeURIComponent(\'' + encodeURIComponent(c.sf_contact_id || '') + '\'),decodeURIComponent(\'' + encodeURIComponent(subj) + '\'))" title="Mark complete">&#x2713;</button>';
+          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="openLogAndReschedule(decodeURIComponent(\'' + encodeURIComponent(c.sf_contact_id || '') + '\'),decodeURIComponent(\'' + encodeURIComponent(c.sf_company_id || '') + '\'),decodeURIComponent(\'' + encodeURIComponent(c.contact_name || c.company_name || '') + '\'),decodeURIComponent(\'' + encodeURIComponent(subj) + '\'),decodeURIComponent(\'' + encodeURIComponent(t.date || '') + '\'))" title="Log touchpoint &amp; reschedule">&#x1F4C5;</button>';
+          html += '<button class="act-btn" style="font-size:10px;padding:2px 5px" onclick="dismissTask(decodeURIComponent(\'' + encodeURIComponent(c.sf_contact_id || '') + '\'),decodeURIComponent(\'' + encodeURIComponent(subj) + '\'))" title="Dismiss/archive">&#x2715;</button>';
           html += '</div></div>';
         });
         if (c.open_tasks.length > 5) html += '<div style="padding:1px 0 1px 8px;color:var(--text3)">+ ' + (c.open_tasks.length - 5) + ' more...</div>';
@@ -2485,10 +2485,10 @@ function renderProspectCardsHTML(items, options = {}) {
       if (showEmailTemplates && c.email) {
         html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
         html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktEmail('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Initial Outreach</div>`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktFollowUp('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Follow-Up</div>`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMarketUpdate('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Market Update</div>`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMeetingReq('${esc(c.email)}','${esc(c.contact_name||'')}','${esc(group.displayName)}')">Meeting Request</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktEmail(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Initial Outreach</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktFollowUp(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Follow-Up</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMarketUpdate(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Market Update</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMeetingReq(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Meeting Request</div>`;
         html += '</div></div>';
       }
       if (c.phone) {
@@ -2499,10 +2499,10 @@ function renderProspectCardsHTML(items, options = {}) {
       html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
       // Lead management buttons
       if (c.pipeline_source !== 'sf_deal' && c.sf_match_status === 'unmatched') {
-        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:#fff" onclick="event.stopPropagation();mktMatchLead('${esc(c.item_id)}')">Match</button>`;
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:#fff" onclick="event.stopPropagation();mktMatchLead(decodeURIComponent('${encodeURIComponent(c.item_id)}'))">Match</button>`;
       }
       if (c.pipeline_source !== 'sf_deal') {
-        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();mktUpdateStatus('${esc(c.item_id)}','contacted')">&#x2713;</button>`;
+        html += `<button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();mktUpdateStatus(decodeURIComponent('${encodeURIComponent(c.item_id)}'),'contacted')">&#x2713;</button>`;
       }
       html += '</div></div></div>';
       // Expandable detail panel (hidden by default) — shows deals + call history
