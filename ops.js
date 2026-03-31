@@ -208,8 +208,8 @@ function researchAssistantPanelHTML(itemId) {
       : state.reply
         ? `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-             <button class="q-action" onclick="copyResearchAssistantReply('${itemId}')">Copy</button>
-             <button class="q-action primary" onclick="useResearchAssistantFollowup('${itemId}')">Use as Follow-up Draft</button>
+             <button class="q-action" onclick="copyResearchAssistantReply(decodeURIComponent('${encodeURIComponent(itemId)}'))">Copy</button>
+             <button class="q-action primary" onclick="useResearchAssistantFollowup(decodeURIComponent('${encodeURIComponent(itemId)}'))">Use as Follow-up Draft</button>
            </div>`
         : '<div class="assistant-status">No response yet.</div>';
 
@@ -686,11 +686,11 @@ function inboxItemHTML(item, idx) {
   // Normalized quick actions
   html += '<div class="q-actions">';
   if (item.status === 'new') {
-    html += `<button class="q-action" onclick="triageSingle('${item.id}')">Triage</button>`;
+    html += `<button class="q-action" onclick="triageSingle(decodeURIComponent('${encodeURIComponent(item.id)}'))">Triage</button>`;
   }
-  html += `<button class="q-action primary" onclick="promoteSingle('${item.id}')">Promote</button>`;
-  html += `<button class="q-action" onclick="quickReassign('${item.id}','inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
-  html += `<button class="q-action danger" onclick="dismissSingle('${item.id}')">Dismiss</button>`;
+  html += `<button class="q-action primary" onclick="promoteSingle(decodeURIComponent('${encodeURIComponent(item.id)}'))">Promote</button>`;
+  html += `<button class="q-action" onclick="quickReassign(decodeURIComponent('${encodeURIComponent(item.id)}'),'inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
+  html += `<button class="q-action danger" onclick="dismissSingle(decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -953,11 +953,11 @@ async function renderResearchPage(page = opsResearchPage) {
           ${freshnessHTML(item.updated_at || item.created_at)}
         </div>
         <div class="q-actions">
-          ${item.status !== 'completed' ? `<button class="q-action primary" onclick="completeResearch('${item.id}')">Complete</button>` : ''}
-          ${item.status !== 'completed' ? `<button class="q-action" onclick="createFollowup('${item.id}')">Follow-up</button>` : ''}
-          <button class="q-action" onclick="runResearchAssistant('${item.id}')">Assist</button>
-          <button class="q-action" onclick="exportResearchTaskBrief('${item.id}','chatgpt')">ChatGPT</button>
-          <button class="q-action" onclick="exportResearchTaskBrief('${item.id}','claude')">Claude</button>
+          ${item.status !== 'completed' ? `<button class="q-action primary" onclick="completeResearch(decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
+          ${item.status !== 'completed' ? `<button class="q-action" onclick="createFollowup(decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
+          <button class="q-action" onclick="runResearchAssistant(decodeURIComponent('${encodeURIComponent(item.id)}'))">Assist</button>
+          <button class="q-action" onclick="exportResearchTaskBrief(decodeURIComponent('${encodeURIComponent(item.id)}'),'chatgpt')">ChatGPT</button>
+          <button class="q-action" onclick="exportResearchTaskBrief(decodeURIComponent('${encodeURIComponent(item.id)}'),'claude')">Claude</button>
         </div>
         ${researchAssistantPanelHTML(item.id)}
       </div>`;
@@ -1707,21 +1707,21 @@ function queueItemHTML(item, context, opts = {}) {
 
   // Normalized quick actions — consistent across all contexts
   html += '<div class="q-actions">';
-  if (item.status === 'open') html += `<button class="q-action primary" onclick="quickTransition('${item.id}','in_progress','action')">Start</button>`;
-  if (item.status === 'in_progress') html += `<button class="q-action primary" onclick="quickTransition('${item.id}','completed','action')">Complete</button>`;
+  if (item.status === 'open') html += `<button class="q-action primary" onclick="quickTransition(decodeURIComponent('${encodeURIComponent(item.id)}'),'in_progress','action')">Start</button>`;
+  if (item.status === 'in_progress') html += `<button class="q-action primary" onclick="quickTransition(decodeURIComponent('${encodeURIComponent(item.id)}'),'completed','action')">Complete</button>`;
   if (item.status === 'open' || item.status === 'in_progress') {
-    html += `<button class="q-action" onclick="quickTransition('${item.id}','waiting','action')">Wait</button>`;
+    html += `<button class="q-action" onclick="quickTransition(decodeURIComponent('${encodeURIComponent(item.id)}'),'waiting','action')">Wait</button>`;
   }
-  if (item.status === 'waiting') html += `<button class="q-action" onclick="quickTransition('${item.id}','in_progress','action')">Resume</button>`;
+  if (item.status === 'waiting') html += `<button class="q-action" onclick="quickTransition(decodeURIComponent('${encodeURIComponent(item.id)}'),'in_progress','action')">Resume</button>`;
   // Reassign available on all contexts for items that support it
   if (!item.assigned_to || opts.showAssign || context === 'team_queue') {
-    html += `<button class="q-action" onclick="quickReassign('${item.id}','action',${jsStringArg(item.title || 'Untitled')})">Assign</button>`;
+    html += `<button class="q-action" onclick="quickReassign(decodeURIComponent('${encodeURIComponent(item.id)}'),'action',${jsStringArg(item.title || 'Untitled')})">Assign</button>`;
   } else if (context !== 'my_work') {
-    html += `<button class="q-action" onclick="quickReassign('${item.id}','action',${jsStringArg(item.title || 'Untitled')})">Reassign</button>`;
+    html += `<button class="q-action" onclick="quickReassign(decodeURIComponent('${encodeURIComponent(item.id)}'),'action',${jsStringArg(item.title || 'Untitled')})">Reassign</button>`;
   }
   // Escalate on all non-completed items (gated by flag)
   if (item.status !== 'completed' && item.status !== 'cancelled' && checkFlag('escalations_enabled')) {
-    html += `<button class="q-action" onclick="quickEscalate('${item.id}',${jsStringArg(item.title || 'Untitled')})">Escalate</button>`;
+    html += `<button class="q-action" onclick="quickEscalate(decodeURIComponent('${encodeURIComponent(item.id)}'),${jsStringArg(item.title || 'Untitled')})">Escalate</button>`;
   }
   html += '</div>';
 
