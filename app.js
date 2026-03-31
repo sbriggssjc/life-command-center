@@ -628,8 +628,6 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   } else if (currentBizTab === 'government') {
     if (!govConnected) showGovConnectionForm();
     else {
-      currentGovTab = 'overview';
-      currentGovGroup = 'overview';
       syncDomainTabGroup('government', currentGovTab);
       if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
         renderGovTab();
@@ -644,8 +642,6 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
       syncDomainTabGroup('dialysis', currentDiaTab);
       renderBizContent();
     } else {
-      currentDiaTab = 'overview';
-      currentDiaGroup = 'overview';
       syncDomainTabGroup('dialysis', currentDiaTab);
       if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
         renderDiaTab();
@@ -3305,7 +3301,10 @@ async function execProspectsSearch() {
   const el = document.getElementById('bizPageInner');
   if (el) el.innerHTML = renderProspects();
 
-  const like = '*' + term + '*';
+  // Sanitize for PostgREST ilike filter — strip syntax-breaking characters
+  const safeTerm = term.replace(/[*()',\\]/g, '');
+  if (!safeTerm) { prospectsSearching = false; if (el) el.innerHTML = renderProspects(); return; }
+  const like = '*' + safeTerm + '*';
   const sections = [];
 
   try {
@@ -7746,7 +7745,10 @@ async function searchLiveIngestRecords(domainKey) {
   state.error = '';
   rerenderLiveIngestDomain(domainKey);
 
-  const like = `*${term}*`;
+  // Sanitize for PostgREST ilike filter — strip syntax-breaking characters
+  const safeTerm = term.replace(/[*()',\\]/g, '');
+  if (!safeTerm) { state.lookupLoading = false; rerenderLiveIngestDomain(domainKey); return; }
+  const like = `*${safeTerm}*`;
   try {
     let results = [];
     if (domainKey === 'government') {

@@ -5883,7 +5883,10 @@ async function execGovSearch() {
   govSearching = true;
   renderGovTab();
 
-  const like = '*' + term + '*';
+  // Sanitize for PostgREST ilike filter — strip syntax-breaking characters
+  const safeTerm = term.replace(/[*()',\\]/g, '');
+  if (!safeTerm) { govSearching = false; renderGovTab(); return; }
+  const like = '*' + safeTerm + '*';
   try {
     const [ownership, leads, listings, contacts, properties] = await Promise.all([
       govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',new_owner.ilike.' + like + ',prior_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }).catch(e => { console.warn('[GovSearch] ownership query failed:', e.message); return { data: [] }; }),

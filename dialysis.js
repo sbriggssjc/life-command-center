@@ -4970,7 +4970,10 @@ async function execDiaSearch() {
   _diaSearchExpanded = {}; // Reset expansion state on new search
   renderDiaTab();
 
-  const like = '*' + term + '*';
+  // Sanitize for PostgREST ilike filter — strip syntax-breaking characters
+  const safeTerm = term.replace(/[*()',\\]/g, '');
+  if (!safeTerm) { diaSearching = false; renderDiaTab(); return; }
+  const like = '*' + safeTerm + '*';
   try {
     const [clinics, npiSignals, propQueue, outcomes] = await Promise.all([
       diaQuery('v_clinic_inventory_latest_diff', '*', { filter: 'or(facility_name=ilike.*' + like + '*,city=ilike.*' + like + '*,state=ilike.*' + like + '*,operator_name=ilike.*' + like + '*,address=ilike.*' + like + '*)', limit: 100 }).catch(e => { console.warn('[DiaSearch] clinic inventory query failed:', e.message); return []; }),
