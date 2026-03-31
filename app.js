@@ -1,4 +1,9 @@
 // ============================================================
+// SAFE DOM HELPERS
+// ============================================================
+function _setDisplay(id, val) { const el = document.getElementById(id); if (el) el.style.display = val; }
+
+// ============================================================
 // CONFIG & STATE
 // ============================================================
 const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
@@ -410,17 +415,17 @@ function navToFromMore(pageId) {
   // Close more drawer instantly (skip CSS transition to avoid visual overlap)
   const overlay = document.getElementById('moreDrawerOverlay');
   const drawer = document.getElementById('moreDrawer');
-  drawer.style.transition = 'none';
-  overlay.style.transition = 'none';
-  overlay.classList.remove('open');
-  drawer.classList.remove('open');
-  // Force reflow so the instant hide takes effect
-  void drawer.offsetHeight;
-  // Restore transitions for next open
-  requestAnimationFrame(function() {
-    drawer.style.transition = '';
-    overlay.style.transition = '';
-  });
+  if (drawer) {
+    drawer.style.transition = 'none';
+    drawer.classList.remove('open');
+    void drawer.offsetHeight;
+    requestAnimationFrame(function() { drawer.style.transition = ''; });
+  }
+  if (overlay) {
+    overlay.style.transition = 'none';
+    overlay.classList.remove('open');
+    requestAnimationFrame(function() { overlay.style.transition = ''; });
+  }
   // Deactivate all nav buttons
   document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
@@ -432,18 +437,18 @@ function navToFromMore(pageId) {
   const page = document.getElementById(pageId);
   if (page) page.classList.add('active');
   // Hide biz sub-tabs unless on biz page
-  document.getElementById('bizSubTabs').style.display = pageId === 'pageBiz' ? 'flex' : 'none';
-  document.getElementById('govTabGroups').style.display = 'none';
-  document.getElementById('diaTabGroups').style.display = 'none';
-  document.getElementById('govInnerTabs').style.display = 'none';
-  document.getElementById('diaInnerTabs').style.display = 'none';
+  _setDisplay('bizSubTabs', pageId === 'pageBiz' ? 'flex' : 'none');
+  _setDisplay('govTabGroups', 'none');
+  _setDisplay('diaTabGroups', 'none');
+  _setDisplay('govInnerTabs', 'none');
+  _setDisplay('diaInnerTabs', 'none');
   // Trigger page-specific loading
   handlePageLoad(pageId);
 }
 
 function toggleMoreDrawer() {
-  document.getElementById('moreDrawerOverlay').classList.toggle('open');
-  document.getElementById('moreDrawer').classList.toggle('open');
+  document.getElementById('moreDrawerOverlay')?.classList.toggle('open');
+  document.getElementById('moreDrawer')?.classList.toggle('open');
 }
 
 // Centralized page load handler — fires ops.js renderers for canonical model pages
@@ -592,16 +597,16 @@ document.querySelectorAll('.bnav[data-page]').forEach(btn => {
     const page = document.getElementById(btn.dataset.page);
     if (page) page.classList.add('active');
     // Hide all secondary tab bars unless on Biz page
-    document.getElementById('bizSubTabs').style.display = btn.dataset.page === 'pageBiz' ? 'flex' : 'none';
-    document.getElementById('govTabGroups').style.display = 'none';
-    document.getElementById('diaTabGroups').style.display = 'none';
-    document.getElementById('govInnerTabs').style.display = 'none';
-    document.getElementById('diaInnerTabs').style.display = 'none';
+    _setDisplay('bizSubTabs', btn.dataset.page === 'pageBiz' ? 'flex' : 'none');
+    _setDisplay('govTabGroups', 'none');
+    _setDisplay('diaTabGroups', 'none');
+    _setDisplay('govInnerTabs', 'none');
+    _setDisplay('diaInnerTabs', 'none');
     handlePageLoad(btn.dataset.page);
   });
 });
 
-document.getElementById('bizSubTabs').addEventListener('click', (e) => {
+document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   const tab = e.target.closest('.sub-tab');
   if (!tab) return;
   document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
@@ -610,16 +615,16 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   bizPage = 0;
   bizSearch = '';
   
-  document.getElementById('govTabGroups').style.display = currentBizTab === 'government' ? 'flex' : 'none';
-  document.getElementById('diaTabGroups').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
-  document.getElementById('govInnerTabs').style.display = currentBizTab === 'government' ? 'flex' : 'none';
-  document.getElementById('diaInnerTabs').style.display = currentBizTab === 'dialysis' ? 'flex' : 'none';
+  _setDisplay('govTabGroups', currentBizTab === 'government' ? 'flex' : 'none');
+  _setDisplay('diaTabGroups', currentBizTab === 'dialysis' ? 'flex' : 'none');
+  _setDisplay('govInnerTabs', currentBizTab === 'government' ? 'flex' : 'none');
+  _setDisplay('diaInnerTabs', currentBizTab === 'dialysis' ? 'flex' : 'none');
 
   if (currentBizTab === 'marketing') {
-    document.getElementById('govTabGroups').style.display = 'none';
-    document.getElementById('diaTabGroups').style.display = 'none';
-    document.getElementById('govInnerTabs').style.display = 'none';
-    document.getElementById('diaInnerTabs').style.display = 'none';
+    _setDisplay('govTabGroups', 'none');
+    _setDisplay('diaTabGroups', 'none');
+    _setDisplay('govInnerTabs', 'none');
+    _setDisplay('diaInnerTabs', 'none');
     loadMarketing();
   } else if (currentBizTab === 'prospects') {
     const el = document.getElementById('bizPageInner');
@@ -665,7 +670,7 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
   }
 });
 
-document.getElementById('govInnerTabs').addEventListener('click', (e) => {
+document.getElementById('govInnerTabs')?.addEventListener('click', (e) => {
   const tab = e.target.closest('.gov-inner-tab');
   if (!tab) return;
   currentGovTab = tab.dataset.govTab;
@@ -708,7 +713,7 @@ function switchBizTab(tabName) {
 }
 window.switchBizTab = switchBizTab;
 
-document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
+document.getElementById('diaInnerTabs')?.addEventListener('click', (e) => {
   const tab = e.target.closest('.gov-inner-tab');
   if (!tab) return;
   currentDiaTab = tab.dataset.diaTab;
@@ -730,7 +735,7 @@ document.getElementById('diaInnerTabs').addEventListener('click', (e) => {
   }
 });
 
-document.getElementById('govTabGroups').addEventListener('click', (e) => {
+document.getElementById('govTabGroups')?.addEventListener('click', (e) => {
   const btn = e.target.closest('.domain-tab-group');
   if (!btn) return;
   currentGovGroup = btn.dataset.group;
@@ -745,7 +750,7 @@ document.getElementById('govTabGroups').addEventListener('click', (e) => {
   }
 });
 
-document.getElementById('diaTabGroups').addEventListener('click', (e) => {
+document.getElementById('diaTabGroups')?.addEventListener('click', (e) => {
   const btn = e.target.closest('.domain-tab-group');
   if (!btn) return;
   currentDiaGroup = btn.dataset.group;
@@ -3628,20 +3633,25 @@ function renderActivityDetailBody(record) {
 // ============================================================
 function openLogCall(data) {
   logCallData = data;
-  document.getElementById('logCallDate').value = new Date().toISOString().split('T')[0];
-  document.getElementById('logCallNotes').value = '';
-  document.getElementById('logCallContext').textContent = `Logging activity for: ${data.name || 'Unknown'}`;
-  document.getElementById('logCallSubmit').disabled = false;
-  document.getElementById('logCallSubmit').textContent = 'Log Activity';
-  document.getElementById('logCallModal').classList.add('open');
+  const dateEl = document.getElementById('logCallDate');
+  const notesEl = document.getElementById('logCallNotes');
+  const ctxEl = document.getElementById('logCallContext');
+  const btnEl = document.getElementById('logCallSubmit');
+  const modalEl = document.getElementById('logCallModal');
+  if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+  if (notesEl) notesEl.value = '';
+  if (ctxEl) ctxEl.textContent = `Logging activity for: ${data.name || 'Unknown'}`;
+  if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Log Activity'; }
+  if (modalEl) modalEl.classList.add('open');
 }
 
 function closeLogCall() {
-  document.getElementById('logCallModal').classList.remove('open');
+  document.getElementById('logCallModal')?.classList.remove('open');
 }
 
 async function submitLogCall() {
   const btn = document.getElementById('logCallSubmit');
+  if (!btn) return;
   btn.disabled = true; btn.textContent = 'Logging...';
   const payload = {
     sf_contact_id: logCallData.sf_contact_id || undefined,
@@ -3683,24 +3693,30 @@ var _lrData = {};
 
 function openLogAndReschedule(sfContactId, sfCompanyId, contactName, taskSubject, currentDate) {
   _lrData = { sfContactId: sfContactId, sfCompanyId: sfCompanyId, contactName: contactName, taskSubject: taskSubject, currentDate: currentDate };
-  document.getElementById('lrContext').textContent = 'Contact: ' + (contactName || 'Unknown');
-  document.getElementById('lrTaskInfo').innerHTML = 'Task: <strong>' + (taskSubject || '—') + '</strong>' + (currentDate ? ' (current date: ' + currentDate + ')' : '');
-  document.getElementById('lrNotes').value = '';
+  const ctxEl = document.getElementById('lrContext');
+  const infoEl = document.getElementById('lrTaskInfo');
+  const notesEl = document.getElementById('lrNotes');
+  const dateEl = document.getElementById('lrNextDate');
+  const btnEl = document.getElementById('lrSubmit');
+  const modalEl = document.getElementById('logRescheduleModal');
+  if (ctxEl) ctxEl.textContent = 'Contact: ' + (contactName || 'Unknown');
+  if (infoEl) infoEl.innerHTML = 'Task: <strong>' + (taskSubject || '—') + '</strong>' + (currentDate ? ' (current date: ' + currentDate + ')' : '');
+  if (notesEl) notesEl.value = '';
   // Default next date: 2 weeks from today
   var next = new Date();
   next.setDate(next.getDate() + 14);
-  document.getElementById('lrNextDate').value = next.toISOString().split('T')[0];
-  document.getElementById('lrSubmit').disabled = false;
-  document.getElementById('lrSubmit').textContent = 'Log & Reschedule';
-  document.getElementById('logRescheduleModal').classList.add('open');
+  if (dateEl) dateEl.value = next.toISOString().split('T')[0];
+  if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Log & Reschedule'; }
+  if (modalEl) modalEl.classList.add('open');
 }
 
 function closeLogReschedule() {
-  document.getElementById('logRescheduleModal').classList.remove('open');
+  document.getElementById('logRescheduleModal')?.classList.remove('open');
 }
 
 async function submitLogReschedule() {
   var btn = document.getElementById('lrSubmit');
+  if (!btn) return;
   btn.disabled = true; btn.textContent = 'Logging...';
 
   var nextDate = document.getElementById('lrNextDate').value;
@@ -5017,7 +5033,7 @@ function renderMessages() {
 function filterMessages() { renderMessages(); }
 
 // Message tab click handler
-document.getElementById('msgTabs').addEventListener('click', (e) => {
+document.getElementById('msgTabs')?.addEventListener('click', (e) => {
   const tab = e.target.closest('.msg-tab');
   if (!tab) return;
   currentMsgTab = tab.dataset.msgTab;
