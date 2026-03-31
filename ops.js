@@ -315,7 +315,7 @@ async function renderMyWork(page) {
   ]);
 
   if (!qRes.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load your work queue.<br><small>${qRes.error}</small></div>`;
+    el.innerHTML = `<div class="ops-empty">Could not load your work queue.<br><small>${esc(qRes.error)}</small></div>`;
     perf.end();
     return;
   }
@@ -455,7 +455,7 @@ async function renderTeamQueue() {
   ]);
 
   if (!qRes.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load team queue.<br><small>${qRes.error}</small></div>`;
+    el.innerHTML = `<div class="ops-empty">Could not load team queue.<br><small>${esc(qRes.error)}</small></div>`;
     perf.end();
     return;
   }
@@ -554,7 +554,7 @@ async function renderInboxTriage() {
   const res = await opsApi(`/api/inbox?action=list&status=${opsInboxFilter === 'all' ? '' : opsInboxFilter}&limit=100`);
 
   if (!res.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load inbox.<br><small>${res.error}</small></div>`;
+    el.innerHTML = `<div class="ops-empty">Could not load inbox.<br><small>${esc(res.error)}</small></div>`;
     perf.end();
     return;
   }
@@ -776,7 +776,7 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
 
   const res = await opsApi(`/api/entities?page=${opsEntitiesPage}&per_page=25`);
   if (!res.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load entities.<br><small>${res.error}</small></div>`;
+    el.innerHTML = `<div class="ops-empty">Could not load entities.<br><small>${esc(res.error)}</small></div>`;
     perf.end();
     return;
   }
@@ -842,7 +842,7 @@ async function renderDataQualityPage() {
   ]);
 
   if (!summaryRes.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load data quality.<br><small>${summaryRes.error}</small></div>`;
+    el.innerHTML = `<div class="ops-empty">Could not load data quality.<br><small>${esc(summaryRes.error)}</small></div>`;
     perf.end();
     return;
   }
@@ -913,7 +913,7 @@ async function renderResearchPage(page = opsResearchPage) {
     : '';
   const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}`);
   if (!res.ok) {
-    el.innerHTML = `<div class="ops-empty">Could not load research tasks.<br><small>${res.error}</small></div>`;
+    el.innerHTML = `<div class="ops-empty">Could not load research tasks.<br><small>${esc(res.error)}</small></div>`;
     perf.end();
     return;
   }
@@ -1782,7 +1782,7 @@ async function renderPerfDashboard(container) {
   ]);
 
   if (!summaryRes.ok) {
-    el.innerHTML = `<div class="ops-empty">${summaryRes.data?.error || summaryRes.error || 'Could not load performance data'}</div>`;
+    el.innerHTML = `<div class="ops-empty">${esc(summaryRes.data?.error || summaryRes.error || 'Could not load performance data')}</div>`;
     return;
   }
 

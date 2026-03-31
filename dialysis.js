@@ -5121,15 +5121,19 @@ async function renderSaleDetailBody(record) {
   if (!body) return;
 
   let html = '';
-
-  if (window._saleCurrentTab === 'deal') {
-    html = renderSaleDealTab(record);
-  } else if (window._saleCurrentTab === 'property') {
-    html = renderSalePropertyTab(record);
-  } else if (window._saleCurrentTab === 'ownership') {
-    html = await renderSaleOwnershipTab(record);
-  } else if (window._saleCurrentTab === 'research') {
-    html = renderSaleResearchTab(record);
+  try {
+    if (window._saleCurrentTab === 'deal') {
+      html = renderSaleDealTab(record);
+    } else if (window._saleCurrentTab === 'property') {
+      html = renderSalePropertyTab(record);
+    } else if (window._saleCurrentTab === 'ownership') {
+      html = await renderSaleOwnershipTab(record);
+    } else if (window._saleCurrentTab === 'research') {
+      html = renderSaleResearchTab(record);
+    }
+  } catch (err) {
+    console.error('renderSaleDetailBody error:', err);
+    html = '<div style="padding:20px;color:var(--red);font-size:13px">Failed to load tab content.</div>';
   }
 
   body.innerHTML = html;

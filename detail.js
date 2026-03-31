@@ -1287,7 +1287,7 @@ function _udTabIntel() {
 
   // ── PRIOR SALE SECTION ──────────────────────────────────────────────────────
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-prior-sale\').style.display = this.parentElement.querySelector(\'.intel-prior-sale\').style.display === \'none\' ? \'block\' : \'none\'">Prior Sale</div>';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-prior-sale\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Prior Sale</div>';
   html += '<div class="intel-prior-sale" style="display:block">';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Sale Date</label>';
@@ -1310,7 +1310,7 @@ function _udTabIntel() {
 
   // ── LOAN / DEBT SECTION ─────────────────────────────────────────────────────
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-loan\').style.display = this.parentElement.querySelector(\'.intel-loan\').style.display === \'none\' ? \'block\' : \'none\'">Loan / Debt</div>';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-loan\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Loan / Debt</div>';
   html += '<div class="intel-loan" style="display:block">';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Lender</label>';
@@ -1353,7 +1353,7 @@ function _udTabIntel() {
 
   // ── CASH FLOW / VALUATION SECTION ───────────────────────────────────────────
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-cashflow\').style.display = this.parentElement.querySelector(\'.intel-cashflow\').style.display === \'none\' ? \'block\' : \'none\'">Cash Flow / Valuation</div>';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-cashflow\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Cash Flow / Valuation</div>';
   html += '<div class="intel-cashflow" style="display:block">';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Annual Rent / NOI ($)</label>';
@@ -1374,7 +1374,7 @@ function _udTabIntel() {
 
   // ── RESEARCH NOTES SECTION ──────────────────────────────────────────────────
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="this.parentElement.querySelector(\'.intel-notes\').style.display = this.parentElement.querySelector(\'.intel-notes\').style.display === \'none\' ? \'block\' : \'none\'">Research Notes</div>';
+  html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-notes\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Research Notes</div>';
   html += '<div class="intel-notes" style="display:block">';
   html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
