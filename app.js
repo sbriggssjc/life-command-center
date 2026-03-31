@@ -1774,7 +1774,7 @@ function renderMarketing() {
           var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
           html += '<div style="padding:6px 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
           html += '<div style="flex:1;min-width:0">';
-          var sfLnk = c.sf_contact_id ? '<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/' + esc(c.sf_contact_id) + '/view" target="_blank" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">' + esc(c.contact_name || '—') + '</a>' : esc(c.contact_name || '—');
+          var sfLnk = c.sf_contact_id ? '<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/' + esc(c.sf_contact_id) + '/view" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">' + esc(c.contact_name || '—') + '</a>' : esc(c.contact_name || '—');
           html += '<div style="font-size:13px;font-weight:500">' + sfLnk + '</div>';
           html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
           if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
@@ -2425,7 +2425,7 @@ function renderProspectCardsHTML(items, options = {}) {
       var domainBadge = '';
       if (c.task_domain === 'government') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--blue);color:#fff;font-weight:600;vertical-align:middle">GOV</span>';
       else if (c.task_domain === 'dialysis') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600;vertical-align:middle">DIA</span>';
-      var sfLink = c.sf_contact_id ? `<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/${esc(c.sf_contact_id)}/view" target="_blank" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">${esc(c.contact_name || '—')}</a>` : esc(c.contact_name || '—');
+      var sfLink = c.sf_contact_id ? `<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/${esc(c.sf_contact_id)}/view" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">${esc(c.contact_name || '—')}</a>` : esc(c.contact_name || '—');
       html += `<div style="font-size:14px;font-weight:500">${sfLink}${domainBadge} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
       html += `<div style="font-size:12px;color:var(--text2)">${esc(c.company_name || '')}`;
       if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;

@@ -459,7 +459,7 @@ function buildContactOverview() {
   if (c.phone) h += detailRow('Phone', `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`);
   if (c.mobile_phone) h += detailRow('Mobile', `<a href="tel:${esc(c.mobile_phone)}">${esc(c.mobile_phone)}</a>`);
   if (c.city || c.state) h += detailRow('Location', esc([c.city, c.state].filter(Boolean).join(', ')));
-  if (c.website) h += detailRow('Website', `<a href="${esc(c.website)}" target="_blank">${esc(c.website)}</a>`);
+  if (c.website) h += detailRow('Website', `<a href="${safeHref(c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`);
   h += '</div>';
 
   // Business info

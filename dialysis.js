@@ -2911,12 +2911,12 @@ function renderClinicLeadCard(rec) {
   // Quick actions
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
   const searchQ = `${rec.facility_name || ''} ${rec.address || ''} ${rec.city || ''} ${rec.state || ''} dialysis ownership`;
-  html += `<a href="https://www.google.com/search?q=${encodeURIComponent(searchQ)}" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>`;
+  html += `<a href="https://www.google.com/search?q=${encodeURIComponent(searchQ)}" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>`;
   if (rec.state) {
-    html += `<a href="https://www.google.com/search?q=${encodeURIComponent('Secretary of State business search ' + rec.state)}" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">SOS ${rec.state}</a>`;
+    html += `<a href="https://www.google.com/search?q=${encodeURIComponent('Secretary of State business search ' + rec.state)}" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">SOS ${rec.state}</a>`;
   }
   if (rec.city && rec.state) {
-    html += `<a href="https://www.google.com/search?q=${encodeURIComponent(rec.city + ' ' + rec.state + ' county property records')}" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">County Records</a>`;
+    html += `<a href="https://www.google.com/search?q=${encodeURIComponent(rec.city + ' ' + rec.state + ' county property records')}" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">County Records</a>`;
   }
   html += '</div>';
 
@@ -3547,9 +3547,9 @@ function renderDiaDetailOwnership(record) {
   // Quick actions
   html += '<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">';
   const searchQ = (r.recorded_owner_name || r.facility_name || '') + ' ' + (r.state || '');
-  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ + ' ownership') + '" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Google Owner</a>';
+  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ + ' ownership') + '" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Google Owner</a>';
   if (r.state) {
-    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent('Secretary of State business search ' + r.state) + '" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">SOS ' + esc(r.state) + '</a>';
+    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent('Secretary of State business search ' + r.state) + '" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">SOS ' + esc(r.state) + '</a>';
   }
   html += '</div>';
 

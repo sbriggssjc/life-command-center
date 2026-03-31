@@ -702,7 +702,7 @@ function countyBtns(city, state) {
 
 function searchBtn(label, query) {
   const encoded = encodeURIComponent(query);
-  return `<a href="https://www.google.com/search?q=${encoded}" target="_blank" class="btn-search">${label}</a>`;
+  return `<a href="https://www.google.com/search?q=${encoded}" target="_blank" rel="noopener" class="btn-search">${label}</a>`;
 }
 
 function sosBtns(propState, incorpState) {
@@ -716,7 +716,7 @@ function sosBtns(propState, incorpState) {
   states.forEach(state => {
     const url = SOS_URLS[state];
     if (url) {
-      html += `<a href="${url}" target="_blank" class="btn-sos">${state} SOS</a>`;
+      html += `<a href="${url}" target="_blank" rel="noopener" class="btn-sos">${esc(state)} SOS</a>`;
     }
   });
   
@@ -726,12 +726,16 @@ function sosBtns(propState, incorpState) {
 
 function linkBtn(label, url) {
   if (!url) return '';
-  return `<a href="${url}" target="_blank" class="btn-link">${label}</a>`;
+  const safe = safeHref(url);
+  if (safe === '#') return '';
+  return `<a href="${safe}" target="_blank" rel="noopener" class="btn-link">${label}</a>`;
 }
 
 function linkBtnGreen(label, url) {
   if (!url) return '';
-  return `<a href="${url}" target="_blank" class="btn-link-green">${label}</a>`;
+  const safe = safeHref(url);
+  if (safe === '#') return '';
+  return `<a href="${safe}" target="_blank" rel="noopener" class="btn-link-green">${label}</a>`;
 }
 
 // ============================================================================
