@@ -2,6 +2,8 @@
 // SAFE DOM HELPERS
 // ============================================================
 function _setDisplay(id, val) { const el = document.getElementById(id); if (el) el.style.display = val; }
+function _setHTML(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
+function _setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
 
 // ============================================================
 // CONFIG & STATE
@@ -471,14 +473,14 @@ function handlePageLoad(pageId) {
     case 'pageCal': renderCalendarFull(); break;
     case 'pageBiz':
       if (currentBizTab === 'government') {
-        document.getElementById('govTabGroups').style.display = 'flex';
-        document.getElementById('govInnerTabs').style.display = 'flex';
+        _setDisplay('govTabGroups', 'flex');
+        _setDisplay('govInnerTabs', 'flex');
         syncDomainTabGroup('government', currentGovTab);
         if (govConnected && !govDataLoaded) loadGovData();
         else renderBizContent();
       } else if (currentBizTab === 'dialysis') {
-        document.getElementById('diaTabGroups').style.display = 'flex';
-        document.getElementById('diaInnerTabs').style.display = 'flex';
+        _setDisplay('diaTabGroups', 'flex');
+        _setDisplay('diaInnerTabs', 'flex');
         syncDomainTabGroup('dialysis', currentDiaTab);
         if (diaConnected && !diaDataLoaded) loadDiaData();
         else renderBizContent();
@@ -3393,30 +3395,30 @@ function showDetail(record, source = 'activity') {
 
   // Render header
   const header = renderDetailHeader(record, source);
-  document.getElementById('detailHeader').innerHTML = header;
+  _setHTML('detailHeader', header);
 
   // Render tabs
   const tabs = renderDetailTabs(source);
-  document.getElementById('detailTabs').innerHTML = tabs;
+  _setHTML('detailTabs', tabs);
 
   // Render initial body
   const body = renderDetailBody(record, source, window._detailTab);
-  document.getElementById('detailBody').innerHTML = body;
+  _setHTML('detailBody', body);
 
-  panel.style.display = 'block';
-  overlay.classList.add('open');
+  if (panel) panel.style.display = 'block';
+  if (overlay) overlay.classList.add('open');
 }
 
 function closeDetail() {
   window._detailRecord = null;
   window._detailSource = null;
   window._detailTab = null;
-  
-  document.getElementById('detailPanel').style.display = 'none';
-  document.getElementById('detailOverlay').classList.remove('open');
-  document.getElementById('detailHeader').innerHTML = '';
-  document.getElementById('detailTabs').innerHTML = '';
-  document.getElementById('detailBody').innerHTML = '';
+
+  _setDisplay('detailPanel', 'none');
+  document.getElementById('detailOverlay')?.classList.remove('open');
+  _setHTML('detailHeader', '');
+  _setHTML('detailTabs', '');
+  _setHTML('detailBody', '');
 }
 
 function switchDetailTab(tabName) {
@@ -3865,9 +3867,9 @@ async function loadCanonicalData() {
 
   // Re-render Today page widgets with canonical data
   renderHomeStats();
-  document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
-  document.getElementById('recentEmails').innerHTML = renderRecentEmails();
-  document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
+  _setHTML('priorityTasks', renderPriorityTasks());
+  _setHTML('recentEmails', renderRecentEmails());
+  _setHTML('categoryMetrics', renderCategoryMetrics());
   renderTeamPulse();
 }
 
@@ -4060,8 +4062,8 @@ async function loadActivities() {
     console.log(`Activities: ${raw.length} raw → ${activities.length} unique`);
     updateBizBadges();
     renderHomeStats();
-    document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
-    document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
+    _setHTML('priorityTasks', renderPriorityTasks());
+    _setHTML('categoryMetrics', renderCategoryMetrics());
     // Refresh gov outreach section if it's visible (it renders a placeholder while activities load)
     const govOutEl = document.getElementById('govOutreachInner');
     if (govOutEl && typeof renderGovOutreachInner === 'function') govOutEl.innerHTML = renderGovOutreachInner();
@@ -4069,8 +4071,8 @@ async function loadActivities() {
     console.error('Activities load error:', e);
     activitiesLoaded = true;
     // Clear loading spinners even on error
-    document.getElementById('categoryMetrics').innerHTML = renderCategoryMetrics();
-    document.getElementById('priorityTasks').innerHTML = renderPriorityTasks();
+    _setHTML('categoryMetrics', renderCategoryMetrics());
+    _setHTML('priorityTasks', renderPriorityTasks());
   }
 }
 
@@ -4083,10 +4085,10 @@ async function loadEmails() {
     emails = data.emails || [];
     emailTotalCount = data.total || emails.length;
     renderHomeStats();
-    document.getElementById('recentEmails').innerHTML = renderRecentEmails();
+    _setHTML('recentEmails', renderRecentEmails());
   } catch (e) {
     console.error('Emails load error:', e);
-    document.getElementById('recentEmails').innerHTML = '<div class="widget-error"><div class="err-msg">Unable to load emails</div><button class="retry-btn" onclick="loadEmails()">Retry</button></div>';
+    _setHTML('recentEmails', '<div class="widget-error"><div class="err-msg">Unable to load emails</div><button class="retry-btn" onclick="loadEmails()">Retry</button></div>');
   }
 }
 
@@ -4113,8 +4115,9 @@ async function loadHealth() {
     if (!res.ok) throw new Error(res.status);
     const text = await res.text();
     const data = JSON.parse(text);
-    document.getElementById('statusDot').className = data.status === 'ok' ? 'dot' : 'dot offline';
-  } catch (_) { document.getElementById('statusDot').className = 'dot offline'; }
+    const dot = document.getElementById('statusDot');
+    if (dot) dot.className = data.status === 'ok' ? 'dot' : 'dot offline';
+  } catch (_) { const dot = document.getElementById('statusDot'); if (dot) dot.className = 'dot offline'; }
 }
 
 async function loadWeather() {
@@ -4144,12 +4147,12 @@ async function loadWeather() {
     const code = cur.weather_code || 0;
     const desc = weatherDesc(code);
     const emoji = weatherEmoji(code);
-    document.getElementById('wxTemp').textContent = `${temp}°F`;
-    document.getElementById('wxDetails').innerHTML = `${emoji} ${desc}<br>High ${hi}° / Low ${lo}° · Humidity ${hum}% · Wind ${wind} mph`;
+    _setText('wxTemp', `${temp}°F`);
+    _setHTML('wxDetails', `${emoji} ${desc}<br>High ${hi}° / Low ${lo}° · Humidity ${hum}% · Wind ${wind} mph`);
   } catch (e) {
     console.error('Weather load error:', e);
-    document.getElementById('wxTemp').textContent = '--°';
-    document.getElementById('wxDetails').innerHTML = '<div class="widget-error"><div class="err-msg">Weather unavailable</div><button class="retry-btn" onclick="loadWeather()">Retry</button></div>';
+    _setText('wxTemp', '--°');
+    _setHTML('wxDetails', '<div class="widget-error"><div class="err-msg">Weather unavailable</div><button class="retry-btn" onclick="loadWeather()">Retry</button></div>');
   }
 }
 
@@ -4186,20 +4189,22 @@ async function loadMarket() {
     const d = await res.json();
     if (d.error) throw new Error(d.error);
     if (d.ten_yr) {
-      document.getElementById('mktTreasury').textContent = d.ten_yr.toFixed(2) + '%';
+      _setText('mktTreasury', d.ten_yr.toFixed(2) + '%');
       if (d.prev_ten_yr) {
         const chg = d.ten_yr - d.prev_ten_yr;
         const chgEl = document.getElementById('mktTreasuryChg');
-        chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% (as of ' + d.date + ')';
-        chgEl.className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
+        if (chgEl) {
+          chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% (as of ' + d.date + ')';
+          chgEl.className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
+        }
       }
     } else {
       throw new Error('No yield data');
     }
   } catch (e) {
     console.error('Market load error:', e);
-    document.getElementById('mktTreasury').textContent = '--';
-    document.getElementById('mktTreasuryChg').innerHTML = '<div class="widget-error"><div class="err-msg">Market data unavailable</div><button class="retry-btn" onclick="loadMarket()">Retry</button></div>';
+    _setText('mktTreasury', '--');
+    _setHTML('mktTreasuryChg', '<div class="widget-error"><div class="err-msg">Market data unavailable</div><button class="retry-btn" onclick="loadMarket()">Retry</button></div>');
   }
   // Load chart after market data
   loadYieldChart('1D');
