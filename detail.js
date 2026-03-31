@@ -2007,6 +2007,9 @@ function _udSetFieldValue(id, value) {
 }
 
 async function _udAskAssistant(mode) {
+  // Guard against double-submit while request is in flight
+  if (_udAssistantState[mode]?.loading) return;
+
   const prompt = _udBuildAssistantPrompt(mode);
   if (!prompt) {
     showToast('No record loaded', 'error');
@@ -2685,8 +2688,10 @@ function _udPreviewTemplate() {
   const tmpl = _udTemplates[idx];
   const merged = _udMergeFields(tmpl);
 
-  document.getElementById('udTemplateSubject').textContent = merged.subject;
-  document.getElementById('udTemplateBody').innerHTML = merged.bodyHtml;
+  const subjectEl = document.getElementById('udTemplateSubject');
+  const bodyEl = document.getElementById('udTemplateBody');
+  if (subjectEl) subjectEl.textContent = merged.subject;
+  if (bodyEl) bodyEl.innerHTML = merged.bodyHtml;
   preview.style.display = 'block';
 }
 

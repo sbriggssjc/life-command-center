@@ -4396,46 +4396,58 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function renderHomeStats() {
+  const elAct = document.getElementById('statActivities');
+  const elEmails = document.getElementById('statEmails');
+  const elDue = document.getElementById('statDue');
+  const elEvents = document.getElementById('statEvents');
+
   // --- Activities stat ---
   // Prefer canonical work_counts when non-zero
-  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0)) {
-    document.getElementById('statActivities').textContent = (canonicalCounts.my_actions || 0).toLocaleString();
-  } else if (mktLoaded && mktData.length > 0) {
-    // CRM rollup fallback — use marketing pipeline data from Salesforce
-    const userName = LCC_USER.display_name || 'Scott Briggs';
-    const myTasks = mktData.filter(d => d.assigned_to === userName);
-    const allProspects = ((window._mktOpportunities?.government?.length || 0) + (window._mktOpportunities?.dialysis?.length || 0) + (window._mktOpportunities?.all_other?.length || 0))
-      + ((window._mktProspectContacts?.government?.length || 0) + (window._mktProspectContacts?.dialysis?.length || 0) + (window._mktProspectContacts?.all_other?.length || 0));
-    document.getElementById('statActivities').textContent = (myTasks.length + allProspects).toLocaleString();
-  } else if (activitiesLoaded && activities.length > 0) {
-    document.getElementById('statActivities').textContent = activities.length.toLocaleString();
+  if (elAct) {
+    if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0)) {
+      elAct.textContent = (canonicalCounts.my_actions || 0).toLocaleString();
+    } else if (mktLoaded && mktData.length > 0) {
+      const userName = LCC_USER.display_name || 'Scott Briggs';
+      const myTasks = mktData.filter(d => d.assigned_to === userName);
+      const allProspects = ((window._mktOpportunities?.government?.length || 0) + (window._mktOpportunities?.dialysis?.length || 0) + (window._mktOpportunities?.all_other?.length || 0))
+        + ((window._mktProspectContacts?.government?.length || 0) + (window._mktProspectContacts?.dialysis?.length || 0) + (window._mktProspectContacts?.all_other?.length || 0));
+      elAct.textContent = (myTasks.length + allProspects).toLocaleString();
+    } else if (activitiesLoaded && activities.length > 0) {
+      elAct.textContent = activities.length.toLocaleString();
+    }
   }
   // Don't write 0 — keep the "-" placeholder until real data arrives
 
   // --- Emails stat — always use edge function count when available ---
-  if (emailTotalCount > 0 || emails.length > 0) {
-    document.getElementById('statEmails').textContent = (emailTotalCount || emails.length).toLocaleString();
-  } else if (canonicalCounts && canonicalCounts.inbox_new > 0) {
-    document.getElementById('statEmails').textContent = canonicalCounts.inbox_new.toLocaleString();
+  if (elEmails) {
+    if (emailTotalCount > 0 || emails.length > 0) {
+      elEmails.textContent = (emailTotalCount || emails.length).toLocaleString();
+    } else if (canonicalCounts && canonicalCounts.inbox_new > 0) {
+      elEmails.textContent = canonicalCounts.inbox_new.toLocaleString();
+    }
   }
 
   // --- Due This Week stat ---
-  if (canonicalCounts && canonicalCounts.due_this_week > 0) {
-    document.getElementById('statDue').textContent = canonicalCounts.due_this_week.toLocaleString();
-  } else if (mktLoaded && mktData.length > 0) {
-    const now = Date.now(); const week = 7 * 86400000;
-    const due = mktData.filter(d => { if (!d.due_date) return false; var t = new Date(d.due_date).getTime(); return t >= now && t <= now + week; });
-    document.getElementById('statDue').textContent = due.length;
-  } else if (activitiesLoaded && activities.length > 0) {
-    const now = Date.now(); const week = 7 * 86400000;
-    const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
-    document.getElementById('statDue').textContent = due.length;
+  if (elDue) {
+    if (canonicalCounts && canonicalCounts.due_this_week > 0) {
+      elDue.textContent = canonicalCounts.due_this_week.toLocaleString();
+    } else if (mktLoaded && mktData.length > 0) {
+      const now = Date.now(); const week = 7 * 86400000;
+      const due = mktData.filter(d => { if (!d.due_date) return false; var t = new Date(d.due_date).getTime(); return t >= now && t <= now + week; });
+      elDue.textContent = due.length;
+    } else if (activitiesLoaded && activities.length > 0) {
+      const now = Date.now(); const week = 7 * 86400000;
+      const due = activities.filter(a => { if (!a.activity_date) return false; const d = new Date(a.activity_date).getTime(); return d >= now && d <= now + week; });
+      elDue.textContent = due.length;
+    }
   }
 
   // Calendar events always from edge function (individual calendar)
-  const today = tzDateStr(new Date());
-  const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
-  document.getElementById('statEvents').textContent = todayEvents.length;
+  if (elEvents) {
+    const today = tzDateStr(new Date());
+    const todayEvents = calEvents.filter(e => tzDateStr(e.start_time) === today && !isCanceled(e));
+    elEvents.textContent = todayEvents.length;
+  }
 }
 
 function isCanceled(ev) { return (ev.subject || '').startsWith('[CANCELED]') || (ev.subject || '').startsWith('Canceled:') || ev.is_cancelled; }
@@ -5031,10 +5043,10 @@ function loadSettings() {
   try {
     const saved = localStorage.getItem(LCC_SETTINGS_KEY);
     if (saved) appSettings = { ...appSettings, ...JSON.parse(saved) };
-  } catch (e) {}
+  } catch (e) { console.warn('[Settings] Load failed:', e.message); }
 }
 function saveSettings() {
-  try { localStorage.setItem(LCC_SETTINGS_KEY, JSON.stringify(appSettings)); } catch (e) {}
+  try { localStorage.setItem(LCC_SETTINGS_KEY, JSON.stringify(appSettings)); } catch (e) { console.warn('[Settings] Save failed:', e.message); }
 }
 loadSettings();
 
@@ -5494,8 +5506,10 @@ function updateGreeting() {
 // ============================================================
 // INIT
 // ============================================================
-document.getElementById('greeting').textContent = getGreeting();
-document.getElementById('greetingDate').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+const _greetEl = document.getElementById('greeting');
+const _greetDateEl = document.getElementById('greetingDate');
+if (_greetEl) _greetEl.textContent = getGreeting();
+if (_greetDateEl) _greetDateEl.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 
 // Load user context, then flags, then connect & load data
 loadUserContext().then(() => {

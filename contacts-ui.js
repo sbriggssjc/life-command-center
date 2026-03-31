@@ -199,7 +199,7 @@ function buildContactCard(c) {
   if (c.teams_user_id) badges += '<span class="uc-src-badge uc-src-teams" title="Teams">TM</span>';
   if (c.outlook_contact_id) badges += '<span class="uc-src-badge uc-src-outlook" title="Outlook">OL</span>';
 
-  return `<div class="uc-card" onclick="openContactDetail('${c.unified_id}')">
+  return `<div class="uc-card" onclick="openContactDetail('${esc(c.unified_id)}')">
     <div class="uc-card-left">
       <div class="uc-avatar ${heatClass}">${initials(c.first_name, c.last_name)}</div>
     </div>
@@ -324,10 +324,12 @@ function contactsPageNav(newOffset) {
   loadContactsList();
 }
 
+function _cuiSearchKeydown(e) { if (e.key === 'Enter') execContactsSearch(); }
 function bindContactsEvents() {
   const input = document.getElementById('ucSearchInput');
   if (input) {
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') execContactsSearch(); });
+    input.removeEventListener('keydown', _cuiSearchKeydown);
+    input.addEventListener('keydown', _cuiSearchKeydown);
   }
 }
 
@@ -691,6 +693,7 @@ async function saveContactEdit(e) {
   if (!c) return;
 
   const form = document.getElementById('ucEditForm');
+  if (!form) return;
   const body = {};
   const fields = ['first_name', 'last_name', 'email', 'phone', 'mobile_phone', 'title', 'company_name', 'city', 'state', 'website', 'industry'];
   fields.forEach(f => {
@@ -735,17 +738,17 @@ function buildMergeQueue() {
         <span class="uc-merge-method">${esc(m.match_method || 'unknown')}</span>
       </div>
       <div class="uc-merge-pair">
-        <div class="uc-merge-contact" onclick="openContactDetail('${m.contact_a_id}')">
+        <div class="uc-merge-contact" onclick="openContactDetail('${esc(m.contact_a_id)}')">
           ${esc(m.contact_a_name || m.contact_a_id)}
         </div>
         <span class="uc-merge-arrow">&harr;</span>
-        <div class="uc-merge-contact" onclick="openContactDetail('${m.contact_b_id}')">
+        <div class="uc-merge-contact" onclick="openContactDetail('${esc(m.contact_b_id)}')">
           ${esc(m.contact_b_name || m.contact_b_id)}
         </div>
       </div>
       <div class="uc-merge-actions">
-        <button class="btn-submit" onclick="executeMerge('${m.queue_id}', '${m.contact_a_id}', '${m.contact_b_id}')">Merge</button>
-        <button class="btn-cancel" onclick="dismissMergeAction('${m.queue_id}')">Dismiss</button>
+        <button class="btn-submit" onclick="executeMerge('${esc(m.queue_id)}', '${esc(m.contact_a_id)}', '${esc(m.contact_b_id)}')">Merge</button>
+        <button class="btn-cancel" onclick="dismissMergeAction('${esc(m.queue_id)}')">Dismiss</button>
       </div>
     </div>`;
   });
