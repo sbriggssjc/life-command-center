@@ -1073,7 +1073,7 @@ function renderOwnershipResearchCard(rec) {
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
       <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
     </div>`;
   }
@@ -1233,7 +1233,7 @@ function renderLeadResearchCard(rec) {
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
       <div class="context-sub">Firm: ${rec.firm_term_remaining || 'TBD'}</div>
     </div>`;
   }
@@ -1433,7 +1433,7 @@ function renderIntelResearchCard(rec) {
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} – ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} – ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
       <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
     </div>`;
   }
@@ -2207,7 +2207,7 @@ function researchNav(dir) {
   researchIdx += dir;
   
   if (researchIdx < 0) researchIdx = 0;
-  if (researchIdx >= researchQueue.length) researchIdx = researchQueue.length - 1;
+  if (researchIdx >= researchQueue.length) researchIdx = Math.max(0, researchQueue.length - 1);
   
   renderGovTab();
 }
@@ -3683,7 +3683,7 @@ window.resolveGovPendingUpdate = async function(id, resolution) {
       resolved_at: new Date().toISOString()
     });
     govPendingUpdates = govPendingUpdates.filter(r => r.id !== id);
-    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, (govPendingUpdates?.length || 1) - 1);
+    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, Math.max(0, govPendingUpdates.length - 1));
     renderGovTab();
   } catch(e) {
     console.error('resolveGovPendingUpdate error:', e);

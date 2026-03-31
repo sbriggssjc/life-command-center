@@ -1572,7 +1572,8 @@ function renderDiaUnmatchedClinics() {
         const item = diaUnmatchedQueue[diaUnmatchedIdx];
         if (!item) return;
 
-        const propertyId = document.getElementById('um-property-id')?.value ? parseInt(document.getElementById('um-property-id').value) : null;
+        const propIdEl = document.getElementById('um-property-id');
+        const propertyId = propIdEl?.value ? parseInt(propIdEl.value) : null;
 
         if (action === 'resolve' && !propertyId) {
           alert('Please select or enter a Property ID');
@@ -1686,7 +1687,7 @@ function renderDiaQuarantineReview() {
         // Placeholder for action handling
         if (action === 'dismiss') {
           diaQuarantineQueue = diaQuarantineQueue.filter((_, i) => i !== diaQuarantineIdx);
-          diaQuarantineIdx = Math.min(diaQuarantineIdx, (diaQuarantineQueue?.length || 1) - 1);
+          diaQuarantineIdx = Math.min(diaQuarantineIdx, Math.max(0, diaQuarantineQueue.length - 1));
           renderDiaTab();
         }
       });
@@ -1790,7 +1791,7 @@ function renderDiaClarificationQueue() {
         // Placeholder for action handling
         if (action === 'skip' || action === 'cannot-determine') {
           diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
-          diaClarificationIdx = Math.min(diaClarificationIdx, (diaClarificationQueue?.length || 1) - 1);
+          diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
           renderDiaTab();
         }
       });
@@ -1999,7 +2000,7 @@ async function resolveDiaUnmatched(updateId, action, propertyId) {
 
     if (ok) {
       diaUnmatchedQueue = diaUnmatchedQueue.filter(r => r.id !== updateId);
-      diaUnmatchedIdx = Math.min(diaUnmatchedIdx, (diaUnmatchedQueue?.length || 1) - 1);
+      diaUnmatchedIdx = Math.min(diaUnmatchedIdx, Math.max(0, diaUnmatchedQueue.length - 1));
       renderDiaTab();
     } else {
       console.error('Failed to resolve unmatched record:', updateId);
