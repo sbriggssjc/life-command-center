@@ -344,9 +344,12 @@ async function openContactDetail(id) {
   if (!panel || !overlay) return;
 
   // Show loading state
-  document.getElementById('detailHeader').innerHTML = '<div class="loading" style="padding:20px"><span class="spinner"></span></div>';
-  document.getElementById('detailTabs').innerHTML = '';
-  document.getElementById('detailBody').innerHTML = '';
+  const cHeaderEl = document.getElementById('detailHeader');
+  const cTabsEl = document.getElementById('detailTabs');
+  const cBodyEl = document.getElementById('detailBody');
+  if (cHeaderEl) cHeaderEl.innerHTML = '<div class="loading" style="padding:20px"><span class="spinner"></span></div>';
+  if (cTabsEl) cTabsEl.innerHTML = '';
+  if (cBodyEl) cBodyEl.innerHTML = '';
   panel.style.display = 'block';
   overlay.classList.add('open');
 
@@ -365,7 +368,7 @@ async function openContactDetail(id) {
 
     renderContactDetailFull();
   } catch (e) {
-    document.getElementById('detailHeader').innerHTML = `<div style="padding:20px;color:var(--red)">Error loading contact: ${esc(e.message)}</div>`;
+    if (cHeaderEl) cHeaderEl.innerHTML = `<div style="padding:20px;color:var(--red)">Error loading contact: ${esc(e.message)}</div>`;
   }
 }
 
@@ -387,7 +390,8 @@ function renderContactDetailFull() {
       </div>
     </div>
   </div>`;
-  document.getElementById('detailHeader').innerHTML =
+  const dHdrEl = document.getElementById('detailHeader');
+  if (dHdrEl) dHdrEl.innerHTML =
     `<button class="detail-close" onclick="closeDetail()">&times;</button>` + hdr;
 
   // Tabs
@@ -397,7 +401,8 @@ function renderContactDetailFull() {
     const active = _cui.detailTab === t.toLowerCase() ? ' active' : '';
     tabsHtml += `<button class="detail-tab${active}" onclick="switchContactDetailTab('${t.toLowerCase()}')">${t}</button>`;
   });
-  document.getElementById('detailTabs').innerHTML = tabsHtml;
+  const dTabsEl = document.getElementById('detailTabs');
+  if (dTabsEl) dTabsEl.innerHTML = tabsHtml;
 
   renderContactDetailBody();
 }

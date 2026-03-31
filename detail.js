@@ -31,6 +31,7 @@ async function openUnifiedDetail(db, ids, fallback) {
   _udCache = null;
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
 
   // Show panel immediately with loading state
   panel.style.display = 'block';
@@ -47,7 +48,11 @@ async function openUnifiedDetail(db, ids, fallback) {
     '(Loading...)';
   const loc = (fallback.city || '') + (fallback.city && fallback.state ? ', ' : '') + (fallback.state || '');
 
-  document.getElementById('detailHeader').innerHTML = `
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+
+  if (headerEl) headerEl.innerHTML = `
     <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
@@ -60,12 +65,12 @@ async function openUnifiedDetail(db, ids, fallback) {
 
   // Render tab bar
   const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'Intel', 'History'];
-  document.getElementById('detailTabs').innerHTML = tabs.map((t, i) =>
+  if (tabsEl) tabsEl.innerHTML = tabs.map((t, i) =>
     `<button class="detail-tab ${i === 0 ? 'active' : ''}" onclick="switchUnifiedTab('${t}')">${t}</button>`
   ).join('');
 
   // Show spinner in body
-  document.getElementById('detailBody').innerHTML =
+  if (bodyEl) bodyEl.innerHTML =
     '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading details...</p></div>';
 
   // Determine query function
@@ -105,7 +110,7 @@ async function openUnifiedDetail(db, ids, fallback) {
     // using the fields already present on the search card record
     _udCache = { db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true };
     _udRenderFallbackHeader(db, fallback);
-    document.getElementById('detailBody').innerHTML = _udRenderTab('Property');
+    if (bodyEl) bodyEl.innerHTML = _udRenderTab('Property');
     return;
   }
 
@@ -161,12 +166,12 @@ async function openUnifiedDetail(db, ids, fallback) {
       const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
         : '';
-      document.getElementById('detailHeader').innerHTML = `
+      if (headerEl) headerEl.innerHTML = `
         <div class="detail-header-info">
           <div style="flex:1">
             <div class="detail-title">${esc(realTitle)}</div>
-            <div class="detail-subtitle">${esc(loc2)}${property.county ? ' · ' + esc(property.county) + ' County' : ''}</div>
-            ${_udKeyFields(db, property, ownership)}
+            <div class="detail-subtitle">${esc(loc2)}${synthProperty.county ? ' · ' + esc(synthProperty.county) + ' County' : ''}</div>
+            ${_udKeyFields(db, synthProperty, ownership)}
           </div>
           ${dismissBtn}
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
@@ -177,11 +182,11 @@ async function openUnifiedDetail(db, ids, fallback) {
     // Render active tab (preserve on refresh) or default to Property
     const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
     const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Property';
-    document.getElementById('detailBody').innerHTML = _udRenderTab(activeTab);
+    if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
 
   } catch (err) {
     console.error('Unified detail load error:', err);
-    document.getElementById('detailBody').innerHTML =
+    if (bodyEl) bodyEl.innerHTML =
       `<div class="detail-empty">Error loading details: ${esc(err.message)}</div>`;
   }
 }
@@ -408,7 +413,8 @@ function switchUnifiedTab(tabName) {
   document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
-  document.getElementById('detailBody').innerHTML = _udRenderTab(tabName);
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
 }
 
 // ============================================================================
@@ -450,7 +456,9 @@ function _udSynthPropertyFromFallback(fb, db) {
 function _udRenderFallbackHeader(db, fb) {
   const title = fb.page_title || fb.tenant_operator || fb.tenant_agency || fb.agency || fb.facility_name || fb.address || '(Unknown)';
   const loc = (fb.city || '') + (fb.city && fb.state ? ', ' : '') + (fb.state || '');
-  document.getElementById('detailHeader').innerHTML = `
+  const el = document.getElementById('detailHeader');
+  if (!el) return;
+  el.innerHTML = `
     <div class="detail-header-info">
       <div style="flex:1">
         <div class="detail-title">${esc(title)}</div>
@@ -2594,7 +2602,8 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
 
     if (data.status === 'completed' || data.success) {
       showToast('Activity logged (SF generic + private notes saved)', 'success');
-      document.getElementById('udLogNotes').value = '';
+      const udNotesEl = document.getElementById('udLogNotes');
+      if (udNotesEl) udNotesEl.value = '';
       // 2. Log FULL details to outbound_activities in Supabase (private)
       try {
         await _udLogOutbound(sfContactId, sfCompanyId, actType, actDate, outcome, notes);

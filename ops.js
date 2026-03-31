@@ -987,13 +987,17 @@ async function createFollowup(id) {
     .filter(m => m.is_active !== false)
     .map(m => `<option value="${esc(m.user_id)}">${esc(m.display_name || m.email || m.user_id)}</option>`)
     .join('');
-  document.getElementById('followupTitleInput').value = '';
-  document.getElementById('followupDueInput').value = '';
+  const titleInput = document.getElementById('followupTitleInput');
+  const dueInput = document.getElementById('followupDueInput');
   const notesInput = document.getElementById('followupNotesInput');
+  const ctxEl = document.getElementById('followupContext');
+  const modalEl = document.getElementById('followupModal');
+  if (titleInput) titleInput.value = '';
+  if (dueInput) dueInput.value = '';
   if (notesInput) notesInput.value = '';
-  document.getElementById('followupContext').textContent = 'Create a follow-up action and complete this research task.';
+  if (ctxEl) ctxEl.textContent = 'Create a follow-up action and complete this research task.';
   opsFollowupModalState = { researchTaskId: id };
-  document.getElementById('followupModal').classList.add('open');
+  if (modalEl) modalEl.classList.add('open');
 }
 
 async function qualityMergeDuplicate(entityIdsJson, entityNamesJson) {
@@ -1236,7 +1240,8 @@ async function useResearchAssistantFollowup(id) {
       followupDraft ? `Follow-up draft:\n${followupDraft}` : ''
     ].filter(Boolean).join('\n\n');
   }
-  document.getElementById('followupContext').textContent = 'Assistant draft loaded. Review and create the follow-up action.';
+  const ctxEl = document.getElementById('followupContext');
+  if (ctxEl) ctxEl.textContent = 'Assistant draft loaded. Review and create the follow-up action.';
   showToast('Follow-up draft loaded', 'success');
 }
 
@@ -1638,9 +1643,11 @@ async function quickReassign(itemId, itemType, itemTitle = 'this item') {
     .filter(m => m.is_active !== false)
     .map(m => `<option value="${esc(m.user_id)}">${esc(m.display_name || m.email || m.user_id)} (${esc(m.role || 'member')})</option>`)
     .join('');
-  document.getElementById('assignContext').textContent = `Assign: ${itemTitle}`;
+  const assignCtx = document.getElementById('assignContext');
+  if (assignCtx) assignCtx.textContent = `Assign: ${itemTitle}`;
   opsAssignModalState = { itemId, itemType: itemType || 'action' };
-  document.getElementById('assignModal').classList.add('open');
+  const assignModal = document.getElementById('assignModal');
+  if (assignModal) assignModal.classList.add('open');
 }
 
 async function quickEscalate(itemId, itemTitle = 'this item') {
@@ -1655,10 +1662,13 @@ async function quickEscalate(itemId, itemTitle = 'this item') {
     .filter(m => ['owner', 'manager'].includes(m.role))
     .map(m => `<option value="${esc(m.user_id)}">${esc(m.display_name || m.email || m.user_id)} (${esc(m.role)})</option>`)
     .join('');
-  document.getElementById('escalateContext').textContent = `Escalate: ${itemTitle}`;
-  document.getElementById('escalateReason').value = '';
+  const escCtx = document.getElementById('escalateContext');
+  if (escCtx) escCtx.textContent = `Escalate: ${itemTitle}`;
+  const escReason = document.getElementById('escalateReason');
+  if (escReason) escReason.value = '';
   opsEscalateModalState = { itemId };
-  document.getElementById('escalateModal').classList.add('open');
+  const escModal = document.getElementById('escalateModal');
+  if (escModal) escModal.classList.add('open');
 }
 
 // ============================================================================

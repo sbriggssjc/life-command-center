@@ -3434,7 +3434,8 @@ function switchDetailTab(tabName) {
   
   // Render new body content
   const body = renderDetailBody(window._detailRecord, window._detailSource, tabName);
-  document.getElementById('detailBody').innerHTML = body;
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = body;
 }
 
 function renderDetailHeader(record, source) {
@@ -3655,12 +3656,15 @@ async function submitLogCall() {
   const btn = document.getElementById('logCallSubmit');
   if (!btn) return;
   btn.disabled = true; btn.textContent = 'Logging...';
+  const typeEl = document.getElementById('logCallType');
+  const dateEl = document.getElementById('logCallDate');
+  const notesEl = document.getElementById('logCallNotes');
   const payload = {
     sf_contact_id: logCallData.sf_contact_id || undefined,
     sf_company_id: logCallData.sf_company_id || undefined,
-    activity_type: document.getElementById('logCallType').value,
-    activity_date: document.getElementById('logCallDate').value,
-    notes: document.getElementById('logCallNotes').value || undefined,
+    activity_type: typeEl ? typeEl.value : 'Call',
+    activity_date: dateEl ? dateEl.value : new Date().toISOString().split('T')[0],
+    notes: notesEl ? (notesEl.value || undefined) : undefined,
     force: true,
   };
   if (!payload.sf_contact_id && !payload.sf_company_id) {
@@ -3721,9 +3725,12 @@ async function submitLogReschedule() {
   if (!btn) return;
   btn.disabled = true; btn.textContent = 'Logging...';
 
-  var nextDate = document.getElementById('lrNextDate').value;
-  var notes = document.getElementById('lrNotes').value || '';
-  var actType = document.getElementById('lrType').value;
+  var nextDateEl = document.getElementById('lrNextDate');
+  var notesEl = document.getElementById('lrNotes');
+  var actTypeEl = document.getElementById('lrType');
+  var nextDate = nextDateEl ? nextDateEl.value : '';
+  var notes = notesEl ? (notesEl.value || '') : '';
+  var actType = actTypeEl ? actTypeEl.value : 'Call';
 
   if (!nextDate) {
     showToast('Please pick a next touchpoint date.', 'error');
@@ -4256,6 +4263,7 @@ function filterByRange(data, range) {
 async function loadYieldChart(range) {
   currentYieldRange = range;
   const container = document.getElementById('yieldChartContainer');
+  if (!container) return;
   container.innerHTML = '<div class="chart-loading"><span class="spinner"></span></div>';
 
   // Update active button
@@ -4263,16 +4271,21 @@ async function loadYieldChart(range) {
     b.classList.toggle('active', b.dataset.range === range);
   });
 
-  const numYears = yearsForRange(range);
-  const allData = await fetchYieldHistory(numYears);
-  const data = filterByRange(allData, range);
+  try {
+    const numYears = yearsForRange(range);
+    const allData = await fetchYieldHistory(numYears);
+    const data = filterByRange(allData, range);
 
-  if (data.length < 2) {
-    container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Not enough data for this range</div>';
-    return;
+    if (data.length < 2) {
+      container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Not enough data for this range</div>';
+      return;
+    }
+
+    renderYieldSVG(container, data, range);
+  } catch (e) {
+    console.warn('loadYieldChart error:', e);
+    container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Unable to load chart</div>';
   }
-
-  renderYieldSVG(container, data, range);
 }
 
 function renderYieldSVG(container, data, range) {
