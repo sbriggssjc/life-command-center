@@ -1546,7 +1546,7 @@ async function loadMarketing() {
           if (LCC_USER.workspace_id) ucHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
           const ucR = await fetch('/api/contacts?action=data_quality', { headers: ucHeaders });
           if (ucR.ok) ucDataQuality = await ucR.json();
-        } catch { /* ignore — unified contacts may not be set up yet */ }
+        } catch (e) { console.warn('[Marketing] Data quality check failed:', e.message); }
       }
 
       // Badge: actionable CRM tasks due (calls due today + overdue follow-ups)
@@ -1835,7 +1835,7 @@ async function loadUnifiedContacts(search) {
       if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
       const r2 = await fetch('/api/contacts?action=data_quality', { headers });
       if (r2.ok) ucDataQuality = await r2.json();
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[Contacts] Data quality stats failed:', e.message); }
   }
 }
 

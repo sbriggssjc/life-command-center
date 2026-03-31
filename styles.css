@@ -304,11 +304,13 @@ body.compact .greeting { font-size: 18px; }
 }
 
 /* Toast */
-.toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 24px; font-size: 14px; z-index: 400; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--s1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 24px; font-size: 14px; z-index: 400; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); max-width: calc(100vw - 32px); word-wrap: break-word; text-align: center; }
 .toast.show { display: block; animation: fadeUp 0.3s ease-out; }
 @keyframes fadeUp { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 .toast.success { border-color: var(--green); }
 .toast.error { border-color: var(--red); }
+.toast.warning { border-color: var(--yellow); }
+.toast.info { border-color: var(--accent); }
 
 /* Pill filters */
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
