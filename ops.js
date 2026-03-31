@@ -1826,11 +1826,11 @@ async function renderPerfDashboard(container) {
         : c.compliance_status === 'failing' ? 'var(--red)' : 'var(--text3)';
       const statusLabel = c.compliance_status === 'no_data' ? '--' : c.compliance_status;
       html += `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(c.description || '')}">${esc(c.endpoint_pattern)}</td>
-        <td style="padding:6px;text-align:right">${c.request_count}</td>
+        <td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(c.description || '')}">${esc(c.endpoint_pattern || '')}</td>
+        <td style="padding:6px;text-align:right">${c.request_count != null ? c.request_count : '--'}</td>
         <td style="padding:6px;text-align:right">${c.actual_p50_ms != null ? Math.round(c.actual_p50_ms) + 'ms' : '--'}</td>
         <td style="padding:6px;text-align:right">${c.actual_p95_ms != null ? Math.round(c.actual_p95_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right">${c.target_p95_ms}ms</td>
+        <td style="padding:6px;text-align:right">${c.target_p95_ms != null ? c.target_p95_ms + 'ms' : '--'}</td>
         <td style="padding:6px;text-align:center;color:${statusColor};font-weight:600">${statusLabel}</td>
       </tr>`;
     });
@@ -1852,12 +1852,12 @@ async function renderPerfDashboard(container) {
     data.endpoints.forEach(ep => {
       const slowColor = ep.slow_pct > 10 ? 'color:var(--red)' : ep.slow_pct > 5 ? 'color:var(--yellow)' : '';
       html += `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:6px;max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(ep.endpoint)}</td>
-        <td style="padding:6px;text-align:right">${ep.request_count}</td>
-        <td style="padding:6px;text-align:right">${ep.avg_ms}ms</td>
+        <td style="padding:6px;max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(ep.endpoint || '')}</td>
+        <td style="padding:6px;text-align:right">${ep.request_count != null ? ep.request_count : '--'}</td>
+        <td style="padding:6px;text-align:right">${ep.avg_ms != null ? Math.round(ep.avg_ms) + 'ms' : '--'}</td>
         <td style="padding:6px;text-align:right">${ep.p95_ms != null ? Math.round(ep.p95_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right">${ep.max_ms}ms</td>
-        <td style="padding:6px;text-align:right;${slowColor}">${ep.slow_pct}%</td>
+        <td style="padding:6px;text-align:right">${ep.max_ms != null ? Math.round(ep.max_ms) + 'ms' : '--'}</td>
+        <td style="padding:6px;text-align:right;${slowColor}">${ep.slow_pct != null ? ep.slow_pct + '%' : '--'}</td>
       </tr>`;
     });
     html += '</tbody></table></div>';
@@ -1871,12 +1871,12 @@ async function renderPerfDashboard(container) {
         <div class="q-item-header">
           <span class="q-item-title">${esc(sr.endpoint)}</span>
           <div class="q-item-badges">
-            <span class="q-badge pri-high">${sr.duration_ms}ms</span>
-            <span class="q-badge type">${sr.metric_type}</span>
+            <span class="q-badge pri-high">${sr.duration_ms != null ? sr.duration_ms : '?'}ms</span>
+            <span class="q-badge type">${esc(sr.metric_type || '')}</span>
           </div>
         </div>
         <div class="q-item-meta">
-          <span>Threshold: ${sr.threshold_ms}ms</span>
+          <span>Threshold: ${sr.threshold_ms != null ? sr.threshold_ms : '?'}ms</span>
           ${freshnessHTML(sr.recorded_at)}
         </div>
       </div>`;

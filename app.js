@@ -7674,6 +7674,8 @@ async function rerunLiveIngestProposalFromPreparedInputs(domainKey) {
   rerenderLiveIngestDomain(domainKey);
   try {
     await hydrateLiveIngestSnapshots(domainKey, proposal.operations || []);
+  } catch (snapshotErr) {
+    console.error('hydrateLiveIngestSnapshots error:', snapshotErr);
   } finally {
     state.loadingSnapshots = false;
   }
