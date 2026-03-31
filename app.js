@@ -4098,10 +4098,12 @@ async function loadCalendar() {
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
     calEvents = data.events || [];
     renderHomeStats();
-    document.getElementById('todaySchedule').innerHTML = renderTodaySchedule();
+    const schedEl = document.getElementById('todaySchedule');
+    if (schedEl) schedEl.innerHTML = renderTodaySchedule();
   } catch (e) {
     console.error('Calendar load error:', e);
-    document.getElementById('todaySchedule').innerHTML = '<div class="widget-error"><div class="err-msg">Unable to load schedule</div><button class="retry-btn" onclick="loadCalendar()">Retry</button></div>';
+    const schedEl = document.getElementById('todaySchedule');
+    if (schedEl) schedEl.innerHTML = '<div class="widget-error"><div class="err-msg">Unable to load schedule</div><button class="retry-btn" onclick="loadCalendar()">Retry</button></div>';
   }
 }
 
@@ -4752,7 +4754,9 @@ function renderTeamPulse() {
 // CALENDAR PAGE
 // ============================================================
 function renderCalendarFull() {
-  if (calEvents.length === 0) { document.getElementById('calendarFull').innerHTML = '<div style="color:var(--text2)">No events loaded.</div>'; return; }
+  const calEl = document.getElementById('calendarFull');
+  if (!calEl) return;
+  if (calEvents.length === 0) { calEl.innerHTML = '<div style="color:var(--text2)">No events loaded.</div>'; return; }
   const byDay = {};
   for (const ev of calEvents) {
     const d = new Date(stripTZ(ev.start_time)).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -4772,7 +4776,7 @@ function renderCalendarFull() {
     }
     html += '</div>';
   }
-  document.getElementById('calendarFull').innerHTML = html;
+  calEl.innerHTML = html;
 }
 
 // ============================================================
@@ -4843,7 +4847,8 @@ function renderPersonalCalendar() {
       const t0 = ev.is_all_day ? 'All Day' : new Date(ev.start_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
       const t1 = ev.is_all_day ? '' : ' - ' + new Date(ev.end_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
       const loc = ev.location ? ` · ${esc(ev.location)}` : '';
-      html += `<div style="padding:8px 16px;border-bottom:1px solid var(--s2);cursor:pointer" onclick="${ev.web_link ? `window.open('${ev.web_link}','_blank')` : ''}">
+      const safeLink = ev.web_link ? 'window.open(\'' + esc(ev.web_link).replace(/'/g, '\\&#39;') + '\',\'_blank\')' : '';
+      html += `<div style="padding:8px 16px;border-bottom:1px solid var(--s2);cursor:pointer" onclick="${safeLink}">
         <div style="font-size:14px;color:var(--text1)">${esc(ev.subject || '(No title)')}</div>
         <div style="font-size:12px;color:var(--text3);margin-top:2px">${t0}${t1}${loc}</div>
       </div>`;
@@ -5219,20 +5224,21 @@ let copilotHistory = [];
 
 function toggleCopilot() {
   copilotOpen = !copilotOpen;
-  document.getElementById('copilotPanel').classList.toggle('open', copilotOpen);
-  document.getElementById('copilotFab').classList.toggle('hidden', copilotOpen);
+  document.getElementById('copilotPanel')?.classList.toggle('open', copilotOpen);
+  document.getElementById('copilotFab')?.classList.toggle('hidden', copilotOpen);
   if (copilotOpen) {
-    setTimeout(() => document.getElementById('copilotInput').focus(), 300);
+    setTimeout(() => document.getElementById('copilotInput')?.focus(), 300);
   }
 }
 
 function sendCopilotSuggestion(text) {
-  document.getElementById('copilotInput').value = text;
-  sendCopilotMessage();
+  const input = document.getElementById('copilotInput');
+  if (input) { input.value = text; sendCopilotMessage(); }
 }
 
 async function sendCopilotMessage() {
   const input = document.getElementById('copilotInput');
+  if (!input) return;
   const sendBtn = document.getElementById('copilotSend');
   const msg = input.value.trim();
   if (!msg) return;
@@ -5285,6 +5291,7 @@ async function sendCopilotMessage() {
 
 function appendCopilotMsg(text, cls, id) {
   const container = document.getElementById('copilotMessages');
+  if (!container) return;
   const div = document.createElement('div');
   div.className = 'copilot-msg ' + cls;
   if (id) div.id = id;
@@ -5294,8 +5301,9 @@ function appendCopilotMsg(text, cls, id) {
 }
 
 function formatCopilotText(text) {
-  // Basic markdown-like formatting
-  return text
+  // Escape HTML first to prevent XSS, then apply markdown-like formatting
+  const safe = esc(text);
+  return safe
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br>')
     .replace(/`(.+?)`/g, '<code style="background:var(--s2);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
