@@ -130,7 +130,7 @@ async function loadGovOverviewStats() {
     const rows = res.data || [];
     if (rows.length > 0) {
       govOverviewStats = rows[0];
-      console.log('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
+      console.debug('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
       // If we're on the overview tab, render immediately
       if (typeof currentGovTab !== 'undefined' && currentGovTab === 'overview') {
         renderGovTab();
@@ -318,7 +318,7 @@ async function loadGovData() {
     govConnected = true;
     govDataLoaded = true;
     _govDataLoading = false;
-    console.log('GOV DATA LOADED:', {
+    console.debug('GOV DATA LOADED:', {
       properties: govData.properties,
       salesComps: govData.salesComps,
       leads: govData.leads.length,

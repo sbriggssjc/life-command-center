@@ -97,7 +97,7 @@ async function opsApi(path, opts = {}) {
     // If v2 returned 404, fall back to v1
     if (v2Path && res.status === 404) {
       useV2 = false;
-      console.log('[ops] queue-v2 not available, falling back to v1');
+      console.debug('[ops] queue-v2 not available, falling back to v1');
       perf.end();
       return opsApi(path, opts);
     }
@@ -2163,7 +2163,7 @@ async function updateHomeStats() {
       }
     }
   } catch (e) {
-    console.log('Home stats update failed:', e);
+    console.warn('Home stats update failed:', e);
   }
   // Always re-apply edge-function stats so they get the last word
   if (typeof renderHomeStats === 'function') renderHomeStats();

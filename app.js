@@ -782,7 +782,7 @@ async function autoConnectCredentials() {
     const res = await fetch('/api/config');
     if (!res.ok) { console.warn('Config endpoint returned', res.status); return; }
     const cfg = await res.json();
-    console.log('Auto-connect config:', cfg);
+    console.debug('Auto-connect config:', cfg);
     // Keys stay server-side in proxy endpoints — we just track connection status
     if (cfg.gov && cfg.gov.connected) {
       govConnected = true;
@@ -790,9 +790,9 @@ async function autoConnectCredentials() {
     if (cfg.dia && cfg.dia.connected) {
       diaConnected = true;
     }
-    console.log('Auto-connect result:', { govConnected, diaConnected });
+    console.debug('Auto-connect result:', { govConnected, diaConnected });
   } catch(e) {
-    console.log('Auto-connect: config endpoint unavailable', e);
+    console.debug('Auto-connect: config endpoint unavailable', e);
   }
 }
 
@@ -869,7 +869,7 @@ function updateBizBadges() {
 }
 
 function renderBizContent() {
-  console.log('renderBizContent:', { currentBizTab, currentDiaTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded });
+  console.debug('renderBizContent:', { currentBizTab, currentDiaTab, govConnected, govDataLoaded, diaConnected, diaDataLoaded });
   // If marketing tab, just return — loadMarketing() is already called by setBizTab
   if (currentBizTab === 'marketing') {
     return;
@@ -895,16 +895,16 @@ function renderBizContent() {
   }
   // If government tab, route to gov.js
   if (currentBizTab === 'government') {
-    if (!govConnected) { console.log('→ showGovConnectionForm'); showGovConnectionForm(); return; }
-    if (!govDataLoaded) { console.log('→ loadGovData from renderBiz'); loadGovData(); return; }
-    console.log('→ renderGovTab'); renderGovTab();
+    if (!govConnected) { console.debug('→ showGovConnectionForm'); showGovConnectionForm(); return; }
+    if (!govDataLoaded) { console.debug('→ loadGovData from renderBiz'); loadGovData(); return; }
+    console.debug('→ renderGovTab'); renderGovTab();
     return;
   }
   // If dialysis tab with a data inner tab, route to dialysis.js
   if (currentBizTab === 'dialysis' && currentDiaTab !== 'activity') {
-    if (!diaConnected) { console.log('→ showDiaConnectionForm'); showDiaConnectionForm(); return; }
-    if (!diaDataLoaded) { console.log('→ loadDiaData from renderBiz'); loadDiaData(); return; }
-    console.log('→ renderDiaTab'); renderDiaTab();
+    if (!diaConnected) { console.debug('→ showDiaConnectionForm'); showDiaConnectionForm(); return; }
+    if (!diaDataLoaded) { console.debug('→ loadDiaData from renderBiz'); loadDiaData(); return; }
+    console.debug('→ renderDiaTab'); renderDiaTab();
     return;
   }
   // Ensure bizContent container exists (may have been replaced by Marketing/Prospects)
@@ -1109,12 +1109,12 @@ async function loadMarketing() {
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(d) {
         if (d.ok && (d.reparsed > 0 || d.sf_activities_created > 0)) {
-          console.log('[RCM Backfill] reparsed=' + d.reparsed + ' sfCreated=' + d.sf_activities_created + ' matched=' + d.sf_matched);
+          console.debug('[RCM Backfill] reparsed=' + d.reparsed + ' sfCreated=' + d.sf_activities_created + ' matched=' + d.sf_matched);
           // Silently reload marketing data to pick up newly parsed leads
           mktLoaded = false;
           loadMarketing();
         } else {
-          console.log('[RCM Backfill] Nothing to backfill', d);
+          console.debug('[RCM Backfill] Nothing to backfill', d);
         }
       })
       .catch(function(e) { console.warn('[RCM Backfill] Skipped:', e.message); });
@@ -1205,7 +1205,7 @@ async function loadMarketing() {
             var batch = await fetchRollupWithRetry(url.toString(), 2);
             if (!batch || batch.length === 0) break;
             allRows = allRows.concat(batch);
-            console.log('[Marketing] Loaded page ' + (page + 1) + ': ' + batch.length + ' rows (total: ' + allRows.length + ')');
+            console.debug('[Marketing] Loaded page ' + (page + 1) + ': ' + batch.length + ' rows (total: ' + allRows.length + ')');
             var statusEl = document.getElementById('mktLoadStatus');
             if (statusEl) statusEl.textContent = 'Loading contacts... ' + allRows.length.toLocaleString() + ' rows';
             if (batch.length < BATCH_SIZE) break; // last page
@@ -1224,7 +1224,7 @@ async function loadMarketing() {
         // Data Loader bulk records from May 2020 (10k+ rows, all same owner_id).
         // Real open tasks come from v_crm_client_rollup (salesforce_activities).
         sfDealTasks = [];
-        console.log('[Marketing] Total contacts loaded: ' + clientRollupRaw.length);
+        console.debug('[Marketing] Total contacts loaded: ' + clientRollupRaw.length);
         // Enrich contacts with open_tasks JSON via paginated fetch
         // No owner filter needed — we only merge into contacts already in the owner-filtered clientRollupRaw
         if (clientRollupRaw && clientRollupRaw.length > 0) {
@@ -1242,7 +1242,7 @@ async function loadMarketing() {
               clientRollupRaw.forEach(function(c) {
                 if (taskMap[c.sf_contact_id]) c.open_tasks = taskMap[c.sf_contact_id];
               });
-              console.log('[Marketing] Enriched ' + tasksData.length + ' contacts with open_tasks');
+              console.debug('[Marketing] Enriched ' + tasksData.length + ' contacts with open_tasks');
             }
           } catch(e) {
             console.warn('[Marketing] open_tasks enrichment failed, tasks will load on-demand:', e.message);
@@ -1259,7 +1259,7 @@ async function loadMarketing() {
           const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: OPP_PAGE, offset: oppOffset });
           if (!batch || batch.length === 0) break;
           opportunitiesRaw = opportunitiesRaw.concat(batch);
-          console.log('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
+          console.debug('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
           var statusEl = document.getElementById('mktLoadStatus');
           if (statusEl) statusEl.textContent = 'Loading opportunities... ' + opportunitiesRaw.length.toLocaleString() + ' rows';
           if (batch.length < OPP_PAGE) break;
@@ -1303,7 +1303,7 @@ async function loadMarketing() {
                 all_other: retryOpps.filter(d => d.domain === 'all_other')
               };
               _mktOpportunitiesLoaded = true;
-              console.log('[Marketing] Deferred opportunity load succeeded:', retryOpps.length, 'records');
+              console.debug('[Marketing] Deferred opportunity load succeeded:', retryOpps.length, 'records');
             }
           } catch (e2) { console.warn('Deferred opportunity retry also failed:', e2.message); }
         }, 10000);
@@ -1539,7 +1539,7 @@ async function loadMarketing() {
             }));
           }
         });
-        console.log('[Marketing] Merged ' + sfTasksMerged.length + ' deal-linked contacts from v_sf_tasks_contact_rollup');
+        console.debug('[Marketing] Merged ' + sfTasksMerged.length + ' deal-linked contacts from v_sf_tasks_contact_rollup');
       }
 
       // Marketing tab only renders CRM tasks + leads + deal-linked tasks (NOT opportunities)
@@ -2959,7 +2959,7 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
     })
   }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
     if (data.status === 'completed' || data.success) {
-      console.log('[SF Sync] ' + actionLabel + ' logged for ' + sfContactId + ': ' + subject);
+      console.debug('[SF Sync] ' + actionLabel + ' logged for ' + sfContactId + ': ' + subject);
     } else if (data.warning) {
       console.warn('[SF Sync] Warning: ' + (data.message || 'Recent activity detected'));
     } else {
@@ -2980,9 +2980,9 @@ function _closeOriginalSfTask(sfContactId, subject) {
     if (data.success) {
       var action = data.pa_response && data.pa_response.action;
       if (action === 'completed') {
-        console.log('[SF Complete] Original task closed for ' + sfContactId + ': ' + subject);
+        console.debug('[SF Complete] Original task closed for ' + sfContactId + ': ' + subject);
       } else {
-        console.log('[SF Complete] Original task not found (already closed?) for ' + sfContactId);
+        console.debug('[SF Complete] Original task not found (already closed?) for ' + sfContactId);
       }
     } else {
       console.error('[SF Complete] Error: ' + (data.error || 'Unknown'));
@@ -3002,9 +3002,9 @@ function _updateSfTaskDate(sfContactId, subject, newDate) {
     if (data.success) {
       var action = data.pa_response && data.pa_response.action;
       if (action === 'rescheduled') {
-        console.log('[SF Reschedule] Task date updated to ' + newDate + ' for ' + sfContactId + ': ' + subject);
+        console.debug('[SF Reschedule] Task date updated to ' + newDate + ' for ' + sfContactId + ': ' + subject);
       } else {
-        console.log('[SF Reschedule] Original task not found for ' + sfContactId + ' (may need manual update in SF)');
+        console.debug('[SF Reschedule] Original task not found for ' + sfContactId + ' (may need manual update in SF)');
       }
     } else {
       console.error('[SF Reschedule] Error: ' + (data.error || 'Unknown'));
@@ -4077,7 +4077,7 @@ async function loadActivities() {
       return true;
     });
     activitiesLoaded = true;
-    console.log(`Activities: ${raw.length} raw → ${activities.length} unique`);
+    console.debug(`Activities: ${raw.length} raw → ${activities.length} unique`);
     updateBizBadges();
     renderHomeStats();
     _setHTML('priorityTasks', renderPriorityTasks());
@@ -5589,7 +5589,7 @@ function startAutoRefresh() {
   if (!appSettings.autoRefresh) return;
   const interval = Math.max(1, appSettings.refreshInterval || 5) * 60 * 1000;
   autoRefreshTimer = setInterval(() => {
-    console.log('Auto-refresh triggered');
+    console.debug('Auto-refresh triggered');
     loadActivities();
     loadEmails();
     loadCalendar();

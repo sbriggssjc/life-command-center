@@ -200,7 +200,7 @@ async function loadDiaData() {
     
     diaDataLoaded = true;
     _diaDataLoading = false;
-    console.log('DIA DATA LOADED:', {
+    console.debug('DIA DATA LOADED:', {
       freshness: diaData.freshness,
       invSummaryKeys: Object.keys(diaData.inventorySummary),
       inventoryChanges: diaData.inventoryChanges.length,
@@ -1683,7 +1683,7 @@ function renderDiaQuarantineReview() {
         const item = diaQuarantineQueue[diaQuarantineIdx];
         if (!item) return;
 
-        console.log('Quarantine action:', action, item);
+        console.debug('Quarantine action:', action, item);
         // Placeholder for action handling
         if (action === 'dismiss') {
           diaQuarantineQueue = diaQuarantineQueue.filter((_, i) => i !== diaQuarantineIdx);
@@ -1787,7 +1787,7 @@ function renderDiaClarificationQueue() {
         const response = document.getElementById('cl-response')?.value || '';
         const notes = action === 'submit' ? response : '';
 
-        console.log('Clarification action:', action, item);
+        console.debug('Clarification action:', action, item);
         // Placeholder for action handling
         if (action === 'skip' || action === 'cannot-determine') {
           diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
@@ -1979,7 +1979,7 @@ async function resolveDiaUnmatched(updateId, action, propertyId) {
   const notes = document.getElementById('um-notes')?.value || '';
   const status = action === 'dismiss' ? 'dismissed' : action === 'resolve' ? 'resolved' : 'needs_match';
 
-  console.log('Resolving unmatched:', { updateId, action, propertyId, status, notes });
+  console.debug('Resolving unmatched:', { updateId, action, propertyId, status, notes });
 
   try {
     const updateData = {

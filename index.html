@@ -20,9 +20,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <title>Life Command Center</title>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -497,6 +497,27 @@
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<script>
+/* Global error handler — surfaces uncaught errors and unhandled rejections */
+(function() {
+  var errCount = 0, MAX_ERRORS = 20;
+  function report(type, msg, source, line, col) {
+    if (errCount >= MAX_ERRORS) return;
+    errCount++;
+    console.error('[LCC ' + type + '] ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : ''));
+    /* Show brief toast for user-facing awareness (if toast helper exists) */
+    if (typeof showToast === 'function' && errCount <= 3) {
+      showToast('Something went wrong — try refreshing', 4000);
+    }
+  }
+  window.onerror = function(msg, source, line, col) { report('error', msg, source, line, col); };
+  window.addEventListener('unhandledrejection', function(ev) {
+    var reason = ev.reason;
+    var msg = reason && reason.message ? reason.message : String(reason);
+    report('promise', msg, '', 0, 0);
+  });
+})();
+</script>
 <script src="app.js"></script>
 <script src="gov.js"></script>
 <script src="dialysis.js"></script>
