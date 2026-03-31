@@ -4305,7 +4305,8 @@ function renderYieldSVG(container, data, range) {
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
 
-  const vals = data.map(d => d.ten_yr);
+  const vals = data.map(d => d.ten_yr).filter(v => typeof v === 'number' && !isNaN(v));
+  if (vals.length < 2) { container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Insufficient numeric data</div>'; return; }
   const minY = Math.floor((Math.min(...vals) - 0.05) * 20) / 20;
   const maxY = Math.ceil((Math.max(...vals) + 0.05) * 20) / 20;
   const rangeY = maxY - minY || 0.1;
@@ -4379,6 +4380,7 @@ function renderYieldSVG(container, data, range) {
   const crossH = container.querySelector('#yieldCrossH');
   const dot = container.querySelector('#yieldDot');
   const svgEl = container.querySelector('svg');
+  if (!hoverZone || !crossH || !dot || !svgEl) return;
   const svgRect = () => svgEl.getBoundingClientRect();
 
   function handleMove(e) {
@@ -6593,6 +6595,7 @@ function bindLiveIngestWorkbench(domainKey) {
     state.preparedImageAttachments = [];
     state.lowConfidenceOcrAcknowledged = false;
     state.citationRiskAcknowledged = false;
+    state.worsenedRetryAcknowledged = false;
     state.error = '';
     rerenderLiveIngestDomain(domainKey);
   });

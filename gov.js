@@ -638,8 +638,8 @@ async function loadCountyAuthorities(states) {
 }
 
 function findCountyAuth(city, state) {
-  if (!countyCache[state]) return null;
-  
+  if (!city || !countyCache[state]) return null;
+
   const cityLower = city.toLowerCase();
   const counties = countyCache[state];
   

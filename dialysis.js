@@ -764,10 +764,10 @@ function renderFinancialMetricsInner() {
  * Render movers charts (legacy — kept for backward compat but overview uses inline bars now)
  */
 function renderDiaMoversChart() {
-  const upLabels = diaData.moversUp.map(r => norm(r.facility_name || '').substring(0, 20));
-  const upValues = diaData.moversUp.map(r => r.delta_patients);
-  const downLabels = diaData.moversDown.map(r => norm(r.facility_name || '').substring(0, 20));
-  const downValues = diaData.moversDown.map(r => Math.abs(r.delta_patients));
+  const upLabels = (diaData.moversUp || []).map(r => norm(r.facility_name || '').substring(0, 20));
+  const upValues = (diaData.moversUp || []).map(r => r.delta_patients);
+  const downLabels = (diaData.moversDown || []).map(r => norm(r.facility_name || '').substring(0, 20));
+  const downValues = (diaData.moversDown || []).map(r => Math.abs(r.delta_patients));
   if (upLabels.length > 0 && typeof renderBarChart === 'function') {
     renderBarChart('diaMoversUpChart', upLabels, [{ label: 'Patients Added', data: upValues }], false);
   }
