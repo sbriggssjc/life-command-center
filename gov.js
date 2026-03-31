@@ -750,7 +750,7 @@ async function searchEntities(query, dropId, inputId, onSelect) {
 
   // Search local contacts
   for (const contact of govData.contacts) {
-    if (contact.name.toLowerCase().includes(q_lower)) {
+    if (contact.name && contact.name.toLowerCase().includes(q_lower)) {
       results.push({
         type: 'contact',
         label: contact.name,
@@ -3728,7 +3728,7 @@ function renderGovPendingUpdates() {
   html += `<button class="filter-btn ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">All (${totalPending})</button>`;
   reasons.forEach(reason => {
     const count = reasonGroups[reason].length;
-    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter('${reason}')">${reason} (${count})</button>`;
+    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter(decodeURIComponent('${encodeURIComponent(reason)}'))">${esc(reason)} (${count})</button>`;
   });
   html += '</div>';
 

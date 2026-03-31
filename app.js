@@ -2110,7 +2110,7 @@ async function ucLoadChannelMessages(unifiedId, channel) {
       msgs.reverse().forEach(function(m) {
         var isMe = m.is_from_me || m.direction === 'outbound';
         var time = m.created_at ? new Date(m.created_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
-        var content = m.content_type === 'html' ? m.content.replace(/<[^>]+>/g, '') : (m.content || '');
+        var content = m.content_type === 'html' ? (m.content || '').replace(/<[^>]+>/g, '') : (m.content || '');
         if (content.length > 200) content = content.substring(0, 200) + '...';
         msgsHtml += '<div style="margin-bottom:4px;text-align:' + (isMe ? 'right' : 'left') + '">';
         msgsHtml += '<div style="display:inline-block;max-width:80%;padding:4px 8px;border-radius:8px;font-size:11px;background:' + (isMe ? 'var(--accent)' : 'var(--bg3)') + ';color:' + (isMe ? '#fff' : 'var(--text)') + '">' + esc(content) + '</div>';
@@ -2121,7 +2121,7 @@ async function ucLoadChannelMessages(unifiedId, channel) {
     }
 
     // Compose area with template selector
-    var channelTemplates = (ucMsgTemplates || []).filter(function(t) { return t.channels.indexOf(channel) >= 0; });
+    var channelTemplates = (ucMsgTemplates || []).filter(function(t) { return t && t.channels && t.channels.indexOf(channel) >= 0; });
     msgsHtml += '<div style="display:flex;gap:4px;align-items:flex-end">';
     if (channelTemplates.length > 0) {
       msgsHtml += '<select style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);max-width:120px" onchange="ucApplyTemplate(decodeURIComponent(\'' + encId + '\'),this.value,decodeURIComponent(\'' + encodeURIComponent(contactName) + '\'))">';
@@ -4066,7 +4066,7 @@ async function loadActivities() {
     if (!res.ok) { console.warn('Activities API returned', res.status); return; }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Activities API returned non-JSON'); return; }
-    const raw = data.activities || [];
+    const raw = (data && data.activities) || [];
     // Deduplicate — API returns ~2x duplicates
     const seen = new Set();
     activities = raw.filter(a => {
@@ -4099,8 +4099,8 @@ async function loadEmails() {
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Emails API returned non-JSON'); return; }
-    emails = data.emails || [];
-    emailTotalCount = data.total || emails.length;
+    emails = (data && data.emails) || [];
+    emailTotalCount = (data && data.total) || emails.length;
     renderHomeStats();
     _setHTML('recentEmails', renderRecentEmails());
   } catch (e) {
@@ -4115,7 +4115,7 @@ async function loadCalendar() {
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
-    calEvents = data.events || [];
+    calEvents = (data && data.events) || [];
     renderHomeStats();
     const schedEl = document.getElementById('todaySchedule');
     if (schedEl) schedEl.innerHTML = renderTodaySchedule();
