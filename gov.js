@@ -740,7 +740,8 @@ function linkBtnGreen(label, url) {
 
 async function searchEntities(query, dropId, inputId, onSelect) {
   if (!query || query.length < 2) {
-    q(`#${dropId}`).style.display = 'none';
+    const dropEl = q(`#${dropId}`);
+    if (dropEl) dropEl.style.display = 'none';
     return;
   }
 
@@ -884,8 +885,10 @@ function setupAutocomplete(inputId, onSelect) {
 }
 
 function selectAC(inputId, value, dropId, resultIdx) {
-  q(`#${inputId}`).value = value;
-  q(`#${dropId}`).style.display = 'none';
+  const inputEl = q(`#${inputId}`);
+  const dropEl = q(`#${dropId}`);
+  if (inputEl) inputEl.value = value;
+  if (dropEl) dropEl.style.display = 'none';
 
   // Auto-fill related fields from canonical entity data
   const results = window._acResults && window._acResults[dropId];
@@ -2599,7 +2602,7 @@ async function govEvidenceApi(endpoint, options = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload = await response.json().catch(e => { console.warn('[govEvidenceApi] JSON parse failed:', e.message); return {}; });
   if (!response.ok) {
     const detail = payload?.detail?.detail || payload?.detail?.error || payload?.error || 'Request failed';
     throw new Error(detail);

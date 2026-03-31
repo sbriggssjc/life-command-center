@@ -3348,6 +3348,7 @@ async function execProspectsSearch() {
   } catch (err) {
     console.error('Prospects search error:', err);
     prospectsResults = [];
+    showToast('Search failed: ' + (err.message || 'Unknown error'), 'error');
   }
 
   prospectsSearching = false;

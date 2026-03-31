@@ -1517,6 +1517,7 @@ function renderDiaUnmatchedClinics() {
         clearTimeout(searchTimeout);
         const query = e.target.value.trim();
         const resultsDiv = document.getElementById('um-search-results');
+        if (!resultsDiv) return;
 
         if (query.length < 2) {
           resultsDiv.innerHTML = '';
@@ -1540,12 +1541,14 @@ function renderDiaUnmatchedClinics() {
               document.querySelectorAll('.um-search-result').forEach(el => {
                 el.addEventListener('click', e => {
                   const propId = parseInt(e.currentTarget.dataset.propId);
-                  document.getElementById('um-property-id').value = propId;
+                  const propIdEl = document.getElementById('um-property-id');
+                  if (propIdEl) propIdEl.value = propId;
 
                   // Display selected property
                   const prop = props.find(p => p.id === propId);
                   if (prop) {
-                    document.getElementById('um-selected-property').innerHTML =
+                    const selectedEl = document.getElementById('um-selected-property');
+                    if (selectedEl) selectedEl.innerHTML =
                       `<div style="padding: 12px; background: rgba(52, 211, 153, 0.1); border-radius: 6px; border-left: 3px solid var(--accent);"><strong>Selected:</strong> ${esc(prop.address || '')} (ID: ${prop.id})</div>`;
                   }
                   resultsDiv.innerHTML = '';
