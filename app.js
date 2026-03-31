@@ -2416,10 +2416,10 @@ function renderProspectCardsHTML(items, options = {}) {
 
     // Contact rows
     contacts.forEach(c => {
-      const cId = esc(c.sf_contact_id || c.item_id || '');
+      const cId = c.sf_contact_id || c.item_id || '';
       const logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
       // Clickable contact row — expands to show deals + history
-      html += `<div style="cursor:pointer;padding:8px 0;border-top:1px solid var(--border)" onclick="toggleContactDetail('${cId}')">`;
+      html += `<div style="cursor:pointer;padding:8px 0;border-top:1px solid var(--border)" onclick="toggleContactDetail(decodeURIComponent('${encodeURIComponent(cId)}'))">`;
       html += `<div style="display:flex;align-items:center;justify-content:space-between">`;
       html += `<div style="flex:1;min-width:0">`;
       var domainBadge = '';

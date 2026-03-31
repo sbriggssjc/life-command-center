@@ -1578,7 +1578,7 @@ async function renderSyncHealthPage() {
         </div>
         <div class="q-item-meta"><span style="color:var(--red)">${esc(err.error_message || '')}</span></div>
         <div class="q-actions">
-          <button class="q-action" onclick="retrySync('${err.id}')">Retry</button>
+          <button class="q-action" onclick="retrySync(decodeURIComponent('${encodeURIComponent(err.id)}'))">Retry</button>
         </div>
       </div>`;
     });
