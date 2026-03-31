@@ -1105,7 +1105,7 @@ async function loadMarketing() {
   if (!window._rcmBackfillFired && currentBizTab === 'marketing') {
     window._rcmBackfillFired = true;
     fetch('/api/rcm-backfill', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
-      .then(function(r) { return r.json(); })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(d) {
         if (d.ok && (d.reparsed > 0 || d.sf_activities_created > 0)) {
           console.log('[RCM Backfill] reparsed=' + d.reparsed + ' sfCreated=' + d.sf_activities_created + ' matched=' + d.sf_matched);
@@ -2956,7 +2956,7 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
       command: 'log_to_sf',
       payload
     })
-  }).then(function(r) { return r.json(); }).then(function(data) {
+  }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
     if (data.status === 'completed' || data.success) {
       console.log('[SF Sync] ' + actionLabel + ' logged for ' + sfContactId + ': ' + subject);
     } else if (data.warning) {
@@ -2975,7 +2975,7 @@ function _closeOriginalSfTask(sfContactId, subject) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sf_contact_id: sfContactId, subject: subject })
-  }).then(function(r) { return r.json(); }).then(function(data) {
+  }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
     if (data.success) {
       var action = data.pa_response && data.pa_response.action;
       if (action === 'completed') {
@@ -2997,7 +2997,7 @@ function _updateSfTaskDate(sfContactId, subject, newDate) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sf_contact_id: sfContactId, subject: subject, action: 'reschedule', new_date: newDate })
-  }).then(function(r) { return r.json(); }).then(function(data) {
+  }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
     if (data.success) {
       var action = data.pa_response && data.pa_response.action;
       if (action === 'rescheduled') {
