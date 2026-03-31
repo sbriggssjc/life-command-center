@@ -199,7 +199,7 @@ function buildContactCard(c) {
   if (c.teams_user_id) badges += '<span class="uc-src-badge uc-src-teams" title="Teams">TM</span>';
   if (c.outlook_contact_id) badges += '<span class="uc-src-badge uc-src-outlook" title="Outlook">OL</span>';
 
-  return `<div class="uc-card" onclick="openContactDetail('${esc(c.unified_id)}')">
+  return `<div class="uc-card" onclick="openContactDetail(decodeURIComponent('${encodeURIComponent(c.unified_id)}'))">
     <div class="uc-card-left">
       <div class="uc-avatar ${heatClass}">${initials(c.first_name, c.last_name)}</div>
     </div>
@@ -743,17 +743,17 @@ function buildMergeQueue() {
         <span class="uc-merge-method">${esc(m.match_method || 'unknown')}</span>
       </div>
       <div class="uc-merge-pair">
-        <div class="uc-merge-contact" onclick="openContactDetail('${esc(m.contact_a_id)}')">
+        <div class="uc-merge-contact" onclick="openContactDetail(decodeURIComponent('${encodeURIComponent(m.contact_a_id)}'))">
           ${esc(m.contact_a_name || m.contact_a_id)}
         </div>
         <span class="uc-merge-arrow">&harr;</span>
-        <div class="uc-merge-contact" onclick="openContactDetail('${esc(m.contact_b_id)}')">
+        <div class="uc-merge-contact" onclick="openContactDetail(decodeURIComponent('${encodeURIComponent(m.contact_b_id)}'))">
           ${esc(m.contact_b_name || m.contact_b_id)}
         </div>
       </div>
       <div class="uc-merge-actions">
-        <button class="btn-submit" onclick="executeMerge('${esc(m.queue_id)}', '${esc(m.contact_a_id)}', '${esc(m.contact_b_id)}')">Merge</button>
-        <button class="btn-cancel" onclick="dismissMergeAction('${esc(m.queue_id)}')">Dismiss</button>
+        <button class="btn-submit" onclick="executeMerge(decodeURIComponent('${encodeURIComponent(m.queue_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_a_id)}'),decodeURIComponent('${encodeURIComponent(m.contact_b_id)}'))">Merge</button>
+        <button class="btn-cancel" onclick="dismissMergeAction(decodeURIComponent('${encodeURIComponent(m.queue_id)}'))">Dismiss</button>
       </div>
     </div>`;
   });

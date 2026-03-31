@@ -794,7 +794,7 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
   html += '<div class="ops-filters">';
   html += `<button class="ops-filter ${opsEntityFilter === 'all' ? 'active' : ''}" onclick="opsEntityFilter='all';opsEntitiesPage=1;renderEntitiesPage()">All (${opsEntitiesData.length})</button>`;
   Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([type, ct]) => {
-    html += `<button class="ops-filter ${opsEntityFilter === type ? 'active' : ''}" onclick="opsEntityFilter='${esc(type)}';opsEntitiesPage=1;renderEntitiesPage()">${esc(type)} (${ct})</button>`;
+    html += `<button class="ops-filter ${opsEntityFilter === type ? 'active' : ''}" onclick="opsEntityFilter=decodeURIComponent('${encodeURIComponent(type)}');opsEntitiesPage=1;renderEntitiesPage()">${esc(type)} (${ct})</button>`;
   });
   html += '</div>';
 
@@ -809,7 +809,7 @@ async function renderEntitiesPage(page = opsEntitiesPage) {
     );
   } else {
     filtered.forEach(entity => {
-      html += `<div class="entity-card" onclick="viewEntity('${esc(entity.id)}')">
+      html += `<div class="entity-card" onclick="viewEntity(decodeURIComponent('${encodeURIComponent(entity.id)}'))">
         <div class="entity-card-header">
           <span class="entity-card-name">${esc(entity.name)}</span>
           <span class="entity-card-type">${esc(entity.entity_type || 'unknown')}</span>
@@ -1523,7 +1523,7 @@ async function renderSyncHealthPage() {
           </div>
         </div>
         <div class="sync-card-actions">
-          <button class="q-action" onclick="triggerSync('${esc(conn.connector_type)}')">Sync Now</button>
+          <button class="q-action" onclick="triggerSync(decodeURIComponent('${encodeURIComponent(conn.connector_type)}'))">Sync Now</button>
         </div>
       </div>`;
     });
@@ -1691,7 +1691,7 @@ function queueItemHTML(item, context, opts = {}) {
   html += '</div></div>';
 
   html += '<div class="q-item-meta">';
-  if (item.entity_name) html += `<span class="q-entity" onclick="viewEntity('${item.entity_id}')">${esc(item.entity_name)}</span>`;
+  if (item.entity_name) html += `<span class="q-entity" onclick="viewEntity(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">${esc(item.entity_name)}</span>`;
   if (item.assignee_name || item.owner_name) {
     const name = item.assignee_name || item.owner_name;
     html += `<span class="q-assignee">${esc(name)}</span>`;
