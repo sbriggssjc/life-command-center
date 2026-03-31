@@ -2774,7 +2774,7 @@ function _udSendTemplate() {
   const toEmail = own.contact_email || '';
 
   const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(merged.subject)}&body=${encodeURIComponent(merged.bodyText)}`;
-  window.open(mailto, '_blank');
+  window.open(mailto, '_blank', 'noopener');
 }
 
 async function _udCopyTemplate() {

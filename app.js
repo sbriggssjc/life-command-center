@@ -4879,7 +4879,7 @@ function renderPersonalCalendar() {
       const t0 = ev.is_all_day ? 'All Day' : new Date(ev.start_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
       const t1 = ev.is_all_day ? '' : ' - ' + new Date(ev.end_time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
       const loc = ev.location ? ` · ${esc(ev.location)}` : '';
-      const linkAttr = ev.web_link ? ` data-href="${encodeURIComponent(ev.web_link)}" onclick="window.open(decodeURIComponent(this.dataset.href),'_blank')"` : '';
+      const linkAttr = ev.web_link ? ` data-href="${encodeURIComponent(ev.web_link)}" onclick="var _u=decodeURIComponent(this.dataset.href);if(_u.match(/^https?:\\/\\//i))window.open(_u,'_blank','noopener')"` : '';
       html += `<div style="padding:8px 16px;border-bottom:1px solid var(--s2);cursor:pointer"${linkAttr}>
         <div style="font-size:14px;color:var(--text1)">${esc(ev.subject || '(No title)')}</div>
         <div style="font-size:12px;color:var(--text3);margin-top:2px">${t0}${t1}${loc}</div>
