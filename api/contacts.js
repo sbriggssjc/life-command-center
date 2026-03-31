@@ -23,6 +23,9 @@ import { opsQuery, isOpsConfigured, withErrorHandler } from './_shared/ops-db.js
 const GOV_URL = process.env.GOV_SUPABASE_URL;
 const GOV_KEY = process.env.GOV_SUPABASE_KEY;
 
+/** Encode a user-supplied value for safe use in PostgREST filter strings */
+function pgVal(v) { return encodeURIComponent(String(v)); }
+
 // Personal email domains — contacts from these default to 'personal'
 const PERSONAL_DOMAINS = new Set([
   'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
@@ -389,19 +392,20 @@ async function listContacts(req, res) {
 
   const limit = Math.min(Math.max(parseInt(limitParam) || 50, 1), 500);
   const offset = Math.max(parseInt(offsetParam) || 0, 0);
-  const orderBy = order || 'updated_at.desc';
+  const rawOrder = order || 'updated_at.desc';
+  const orderBy = /^[a-zA-Z0-9_.,]+$/.test(rawOrder) ? rawOrder : 'updated_at.desc';
 
-  let path = `unified_contacts?contact_class=eq.${contact_class}&limit=${limit}&offset=${offset}&order=${orderBy}`;
+  let path = `unified_contacts?contact_class=eq.${pgVal(contact_class)}&limit=${limit}&offset=${offset}&order=${orderBy}`;
 
   // Filter by minimum engagement score if specified
   if (min_engagement) {
-    const minScore = parseInt(min_engagement);
+    const minScore = parseInt(min_engagement, 10);
     if (minScore > 0) path += `&engagement_score=gte.${minScore}`;
   }
 
   if (search) {
     // Search across name, email, company using OR filter
-    const q = search.replace(/'/g, "''");
+    const q = pgVal(search);
     path += `&or=(full_name.ilike.*${q}*,email.ilike.*${q}*,company_name.ilike.*${q}*,phone.ilike.*${q}*)`;
   }
 
@@ -423,7 +427,7 @@ async function listContacts(req, res) {
 async function getContact(req, res, id) {
   if (!id) return res.status(400).json({ error: 'id is required' });
 
-  const result = await govQuery('GET', `unified_contacts?unified_id=eq.${id}&limit=1`);
+  const result = await govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(id)}&limit=1`);
   if (!result.ok || !result.data?.length) return res.status(404).json({ error: 'Contact not found' });
 
   const contact = result.data[0];
@@ -464,7 +468,7 @@ async function getHistory(req, res, id) {
   if (!id) return res.status(400).json({ error: 'id is required' });
 
   const result = await govQuery('GET',
-    `contact_change_log?unified_id=eq.${id}&order=changed_at.desc&limit=100`
+    `contact_change_log?unified_id=eq.${pgVal(id)}&order=changed_at.desc&limit=100`
   );
 
   return res.status(200).json({ history: result.data || [] });
@@ -542,7 +546,7 @@ async function ingestContact(req, res, user) {
   // Tier 2: SF contact ID match
   if (!existingId && sf_contact_id) {
     const sfMatch = await govQuery('GET',
-      `unified_contacts?sf_contact_id=eq.${sf_contact_id}&limit=1`
+      `unified_contacts?sf_contact_id=eq.${pgVal(sf_contact_id)}&limit=1`
     );
     if (sfMatch.ok && sfMatch.data?.length > 0) {
       existingId = sfMatch.data[0].unified_id;
@@ -554,7 +558,7 @@ async function ingestContact(req, res, user) {
   // Tier 3: Outlook contact ID match
   if (!existingId && outlook_contact_id) {
     const outlookMatch = await govQuery('GET',
-      `unified_contacts?outlook_contact_id=eq.${outlook_contact_id}&limit=1`
+      `unified_contacts?outlook_contact_id=eq.${pgVal(outlook_contact_id)}&limit=1`
     );
     if (outlookMatch.ok && outlookMatch.data?.length > 0) {
       existingId = outlookMatch.data[0].unified_id;
@@ -566,7 +570,7 @@ async function ingestContact(req, res, user) {
   // Tier 3b: WebEx person ID match
   if (!existingId && webex_person_id) {
     const webexMatch = await govQuery('GET',
-      `unified_contacts?webex_person_id=eq.${webex_person_id}&limit=1`
+      `unified_contacts?webex_person_id=eq.${pgVal(webex_person_id)}&limit=1`
     );
     if (webexMatch.ok && webexMatch.data?.length > 0) {
       existingId = webexMatch.data[0].unified_id;
@@ -578,7 +582,7 @@ async function ingestContact(req, res, user) {
   // Tier 3c: Teams user ID match
   if (!existingId && teams_user_id) {
     const teamsMatch = await govQuery('GET',
-      `unified_contacts?teams_user_id=eq.${teams_user_id}&limit=1`
+      `unified_contacts?teams_user_id=eq.${pgVal(teams_user_id)}&limit=1`
     );
     if (teamsMatch.ok && teamsMatch.data?.length > 0) {
       existingId = teamsMatch.data[0].unified_id;
@@ -590,7 +594,7 @@ async function ingestContact(req, res, user) {
   // Tier 3d: iCloud contact ID match
   if (!existingId && icloud_contact_id) {
     const icloudMatch = await govQuery('GET',
-      `unified_contacts?icloud_contact_id=eq.${icloud_contact_id}&limit=1`
+      `unified_contacts?icloud_contact_id=eq.${pgVal(icloud_contact_id)}&limit=1`
     );
     if (icloudMatch.ok && icloudMatch.data?.length > 0) {
       existingId = icloudMatch.data[0].unified_id;
@@ -616,7 +620,7 @@ async function ingestContact(req, res, user) {
 
   if (existingId) {
     // --- MERGE: Update existing contact ---
-    const existing = (await govQuery('GET', `unified_contacts?unified_id=eq.${existingId}&limit=1`)).data?.[0];
+    const existing = (await govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(existingId)}&limit=1`)).data?.[0];
     if (!existing) return res.status(500).json({ error: 'Failed to fetch existing contact for merge' });
 
     const updates = {};
@@ -699,7 +703,7 @@ async function ingestContact(req, res, user) {
       await auditedPatchGov({
         user,
         table: 'unified_contacts',
-        filter: `unified_id=eq.${existingId}`,
+        filter: `unified_id=eq.${pgVal(existingId)}`,
         recordIdentifier: existingId,
         idColumn: 'unified_id',
         changedFields: updates,
@@ -833,7 +837,7 @@ async function classifyContact(req, res, user, id) {
   }
 
   // Get current class
-  const existing = await govQuery('GET', `unified_contacts?unified_id=eq.${id}&select=contact_class&limit=1`);
+  const existing = await govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(id)}&select=contact_class&limit=1`);
   if (!existing.ok || !existing.data?.length) return res.status(404).json({ error: 'Contact not found' });
 
   const oldClass = existing.data[0].contact_class;
@@ -844,7 +848,7 @@ async function classifyContact(req, res, user, id) {
   const classifyResult = await auditedPatchGov({
     user,
     table: 'unified_contacts',
-    filter: `unified_id=eq.${id}`,
+    filter: `unified_id=eq.${pgVal(id)}`,
     recordIdentifier: id,
     idColumn: 'unified_id',
     changedFields: { contact_class },
@@ -902,7 +906,7 @@ async function updateContact(req, res, user, id) {
   }
 
   // Get existing for change tracking
-  const existing = await govQuery('GET', `unified_contacts?unified_id=eq.${id}&limit=1`);
+  const existing = await govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(id)}&limit=1`);
   if (!existing.ok || !existing.data?.length) return res.status(404).json({ error: 'Contact not found' });
 
   const fieldsChanged = {};
@@ -923,7 +927,7 @@ async function updateContact(req, res, user, id) {
   const updateResult = await auditedPatchGov({
     user,
     table: 'unified_contacts',
-    filter: `unified_id=eq.${id}`,
+    filter: `unified_id=eq.${pgVal(id)}`,
     recordIdentifier: id,
     idColumn: 'unified_id',
     changedFields: updates,
@@ -966,8 +970,8 @@ async function mergeContacts(req, res, user) {
 
   // Fetch both
   const [keepResult, mergeResult] = await Promise.all([
-    govQuery('GET', `unified_contacts?unified_id=eq.${keep_id}&limit=1`),
-    govQuery('GET', `unified_contacts?unified_id=eq.${merge_id}&limit=1`)
+    govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(keep_id)}&limit=1`),
+    govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(merge_id)}&limit=1`)
   ]);
 
   if (!keepResult.data?.length) return res.status(404).json({ error: 'keep_id contact not found' });
@@ -1016,7 +1020,7 @@ async function mergeContacts(req, res, user) {
     const mergePatchResult = await auditedPatchGov({
       user,
       table: 'unified_contacts',
-      filter: `unified_id=eq.${keep_id}`,
+      filter: `unified_id=eq.${pgVal(keep_id)}`,
       recordIdentifier: keep_id,
       idColumn: 'unified_id',
       changedFields: updates,
@@ -1046,14 +1050,14 @@ async function mergeContacts(req, res, user) {
   if (!ensureGovWriteOk(mergeLogResult, res, 'Failed to log contact merge')) return;
 
   // Delete the merged contact
-  await govQuery('DELETE', `unified_contacts?unified_id=eq.${merge_id}`);
+  await govQuery('DELETE', `unified_contacts?unified_id=eq.${pgVal(merge_id)}`);
 
   // Update merge queue if queue_id provided
   if (queue_id) {
     const mergeQueueResult = await auditedPatchGov({
       user,
       table: 'contact_merge_queue',
-      filter: `queue_id=eq.${queue_id}`,
+      filter: `queue_id=eq.${pgVal(queue_id)}`,
       recordIdentifier: queue_id,
       idColumn: 'queue_id',
       changedFields: {
@@ -1086,7 +1090,7 @@ async function dismissMerge(req, res, user) {
   const dismissResult = await auditedPatchGov({
     user,
     table: 'contact_merge_queue',
-    filter: `queue_id=eq.${queue_id}`,
+    filter: `queue_id=eq.${pgVal(queue_id)}`,
     recordIdentifier: queue_id,
     idColumn: 'queue_id',
     changedFields: {
@@ -1265,7 +1269,7 @@ async function ingestWebexCalls(req, res, user) {
 
       if (existingId) {
         // Update engagement signals on existing contact
-        const existing = (await govQuery('GET', `unified_contacts?unified_id=eq.${existingId}&select=last_call_date,total_calls,last_email_date,last_meeting_date,total_emails_sent,engagement_score&limit=1`)).data?.[0];
+        const existing = (await govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(existingId)}&select=last_call_date,total_calls,last_email_date,last_meeting_date,total_emails_sent,engagement_score&limit=1`)).data?.[0];
         if (existing) {
           const callTimestamp = new Date(callDate).toISOString();
           const newTotalCalls = (existing.total_calls || 0) + 1;
@@ -1280,7 +1284,7 @@ async function ingestWebexCalls(req, res, user) {
           await auditedPatchGov({
             user,
             table: 'unified_contacts',
-            filter: `unified_id=eq.${existingId}`,
+            filter: `unified_id=eq.${pgVal(existingId)}`,
             recordIdentifier: existingId,
             idColumn: 'unified_id',
             changedFields: {
@@ -1446,7 +1450,7 @@ async function ingestCalendarContacts(req, res, user, workspaceId) {
           await auditedPatchGov({
             user,
             table: 'unified_contacts',
-            filter: `unified_id=eq.${contact.unified_id}`,
+            filter: `unified_id=eq.${pgVal(contact.unified_id)}`,
             recordIdentifier: contact.unified_id,
             idColumn: 'unified_id',
             changedFields: {
@@ -2277,7 +2281,7 @@ async function sendSmsMessage(req, res, user, id) {
 
 async function getContactForMessaging(id) {
   const result = await govQuery('GET',
-    `unified_contacts?unified_id=eq.${id}&select=unified_id,email,phone,mobile_phone,first_name,last_name,full_name,company_name,webex_person_id,teams_user_id,outlook_contact_id,last_email_date,total_emails_sent,engagement_score,last_call_date,last_meeting_date,total_calls&limit=1`
+    `unified_contacts?unified_id=eq.${pgVal(id)}&select=unified_id,email,phone,mobile_phone,first_name,last_name,full_name,company_name,webex_person_id,teams_user_id,outlook_contact_id,last_email_date,total_emails_sent,engagement_score,last_call_date,last_meeting_date,total_calls&limit=1`
   );
   return result.ok && result.data?.length > 0 ? result.data[0] : null;
 }
@@ -2298,7 +2302,7 @@ async function updateEngagementOnMessage(unifiedId, _source, _user) {
     workspaceId: _user?.memberships?.[0]?.workspace_id,
     user: _user,
     table: 'unified_contacts',
-    filter: `unified_id=eq.${unifiedId}`,
+    filter: `unified_id=eq.${pgVal(unifiedId)}`,
     recordIdentifier: unifiedId,
     idColumn: 'unified_id',
     changedFields: {

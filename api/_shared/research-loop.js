@@ -1,4 +1,4 @@
-import { opsQuery } from './ops-db.js';
+import { opsQuery, pgFilterVal } from './ops-db.js';
 import { canTransitionResearch } from './lifecycle.js';
 import { ensureEntityLink } from './entity-link.js';
 
@@ -8,7 +8,7 @@ function unwrap(result) {
 
 async function fetchResearchTaskById(researchTaskId, workspaceId) {
   const result = await opsQuery('GET',
-    `research_tasks?id=eq.${researchTaskId}&workspace_id=eq.${workspaceId}&select=*&limit=1`
+    `research_tasks?id=eq.${pgFilterVal(researchTaskId)}&workspace_id=eq.${workspaceId}&select=*&limit=1`
   );
   return result.ok && result.data?.length ? result.data[0] : null;
 }
@@ -32,8 +32,8 @@ async function resolveResearchTask({
   }
 
   if (sourceRecordId && researchType && domain) {
-    let path = `research_tasks?workspace_id=eq.${workspaceId}&research_type=eq.${researchType}&domain=eq.${domain}&source_record_id=eq.${sourceRecordId}&select=*&order=created_at.desc&limit=1`;
-    if (sourceTable) path += `&source_table=eq.${sourceTable}`;
+    let path = `research_tasks?workspace_id=eq.${workspaceId}&research_type=eq.${pgFilterVal(researchType)}&domain=eq.${pgFilterVal(domain)}&source_record_id=eq.${pgFilterVal(sourceRecordId)}&select=*&order=created_at.desc&limit=1`;
+    if (sourceTable) path += `&source_table=eq.${pgFilterVal(sourceTable)}`;
     const existing = await opsQuery('GET', path);
     if (existing.ok && existing.data?.length) {
       return { task: existing.data[0], created: false };

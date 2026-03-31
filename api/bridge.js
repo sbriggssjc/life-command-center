@@ -11,7 +11,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
@@ -419,7 +419,7 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
 
   // Update sync timestamp on external identity
   await opsQuery('PATCH',
-    `external_identities?entity_id=eq.${entityId}&source_system=eq.${source_system}`,
+    `external_identities?entity_id=eq.${entityId}&source_system=eq.${pgFilterVal(source_system)}`,
     { last_synced_at: new Date().toISOString() }
   );
 

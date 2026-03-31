@@ -1,4 +1,4 @@
-import { opsQuery } from './ops-db.js';
+import { opsQuery, pgFilterVal } from './ops-db.js';
 
 export function normalizeCanonicalName(name) {
   return String(name || '')
@@ -81,12 +81,12 @@ export async function ensureEntityLink({
   if (!resolvedEntity && externalId && sourceSystem) {
     const clauses = [
       `workspace_id=eq.${workspaceId}`,
-      `source_system=eq.${sourceSystem}`,
-      `external_id=eq.${externalId}`,
+      `source_system=eq.${pgFilterVal(sourceSystem)}`,
+      `external_id=eq.${pgFilterVal(externalId)}`,
       'select=entity_id,source_type,external_url,metadata',
       'limit=1'
     ];
-    if (sourceType) clauses.splice(2, 0, `source_type=eq.${sourceType}`);
+    if (sourceType) clauses.splice(2, 0, `source_type=eq.${pgFilterVal(sourceType)}`);
     const lookup = await opsQuery('GET', `external_identities?${clauses.join('&')}`);
     if (lookup.ok && lookup.data?.length) {
       resolvedEntity = await fetchEntityById(lookup.data[0].entity_id, workspaceId);
@@ -102,7 +102,7 @@ export async function ensureEntityLink({
 
   if (!resolvedEntity && canonicalName) {
     let path = `entities?workspace_id=eq.${workspaceId}&canonical_name=eq.${encodeURIComponent(canonicalName)}&select=*&limit=5`;
-    if (domain) path += `&domain=eq.${domain}`;
+    if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
     const match = await opsQuery('GET', path);
     if (match.ok && match.data?.length) {
       resolvedEntity = match.data.find(e => e.entity_type === entityType) || match.data[0];

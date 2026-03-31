@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 
 // Default flag values — safe defaults for gradual rollout
@@ -63,7 +63,7 @@ async function handleWorkspaces(req, res) {
       const membership = user.memberships.find(m => m.workspace_id === id);
       if (!membership) return res.status(403).json({ error: 'Not a member of this workspace' });
 
-      const result = await opsQuery('GET', `workspaces?id=eq.${id}&select=*`);
+      const result = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(id)}&select=*`);
       if (!result.ok) return res.status(result.status).json({ error: 'Failed to fetch workspace' });
 
       const workspace = Array.isArray(result.data) ? result.data[0] : result.data;
@@ -122,7 +122,7 @@ async function handleWorkspaces(req, res) {
     }
     updates.updated_at = new Date().toISOString();
 
-    const result = await opsQuery('PATCH', `workspaces?id=eq.${id}`, updates);
+    const result = await opsQuery('PATCH', `workspaces?id=eq.${pgFilterVal(id)}`, updates);
     if (!result.ok) return res.status(result.status).json({ error: 'Failed to update workspace' });
 
     return res.status(200).json({ workspace: Array.isArray(result.data) ? result.data[0] : result.data });
@@ -159,7 +159,7 @@ async function handleMembers(req, res) {
 
     if (user_id) {
       const result = await opsQuery('GET',
-        `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${user_id}&select=*,users(*)`
+        `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(user_id)}&select=*,users(*)`
       );
       if (!result.ok || !result.data?.length) return res.status(404).json({ error: 'Member not found' });
       const m = result.data[0];
@@ -199,7 +199,7 @@ async function handleMembers(req, res) {
     }
 
     let targetUser;
-    const existingResult = await opsQuery('GET', `users?email=eq.${email}&select=*&limit=1`);
+    const existingResult = await opsQuery('GET', `users?email=eq.${pgFilterVal(email)}&select=*&limit=1`);
     if (existingResult.ok && existingResult.data?.length > 0) {
       targetUser = existingResult.data[0];
     } else {
@@ -243,7 +243,7 @@ async function handleMembers(req, res) {
     }
 
     const result = await opsQuery('PATCH',
-      `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${user_id}`, { role }
+      `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(user_id)}`, { role }
     );
     if (!result.ok) return res.status(result.status).json({ error: 'Failed to update role' });
 
@@ -259,7 +259,7 @@ async function handleMembers(req, res) {
     if (user_id === user.id) return res.status(400).json({ error: 'Cannot remove yourself from workspace' });
 
     await opsQuery('DELETE',
-      `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${user_id}`
+      `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(user_id)}`
     );
 
     return res.status(200).json({ user_id, removed: true });

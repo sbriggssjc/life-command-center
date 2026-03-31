@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import {
   canTransitionAction, actionTransitionEffects, buildTransitionActivity,
   ACTION_TYPES, PRIORITIES, ACTIVITY_CATEGORIES, VISIBILITY_SCOPES, isValidEnum
@@ -23,13 +23,13 @@ async function handleActivities(req, res, user, workspaceId) {
 
     let path = `activity_events?workspace_id=eq.${workspaceId}&select=*,users!activity_events_actor_id_fkey(display_name,avatar_url)`;
 
-    if (entity_id) path += `&entity_id=eq.${entity_id}`;
-    if (action_item_id) path += `&action_item_id=eq.${action_item_id}`;
-    if (inbox_item_id) path += `&inbox_item_id=eq.${inbox_item_id}`;
-    if (actor_id) path += `&actor_id=eq.${actor_id}`;
-    if (category && isValidEnum(category, ACTIVITY_CATEGORIES)) path += `&category=eq.${category}`;
-    if (domain) path += `&domain=eq.${domain}`;
-    if (since) path += `&occurred_at=gte.${since}`;
+    if (entity_id) path += `&entity_id=eq.${pgFilterVal(entity_id)}`;
+    if (action_item_id) path += `&action_item_id=eq.${pgFilterVal(action_item_id)}`;
+    if (inbox_item_id) path += `&inbox_item_id=eq.${pgFilterVal(inbox_item_id)}`;
+    if (actor_id) path += `&actor_id=eq.${pgFilterVal(actor_id)}`;
+    if (category && isValidEnum(category, ACTIVITY_CATEGORIES)) path += `&category=eq.${pgFilterVal(category)}`;
+    if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+    if (since) path += `&occurred_at=gte.${pgFilterVal(since)}`;
 
     path += paginationParams({ ...req.query, order: req.query.order || 'occurred_at.desc' });
 
@@ -108,7 +108,7 @@ export default withErrorHandler(async function handler(req, res) {
     // Single action with activity timeline
     if (id) {
       const result = await opsQuery('GET',
-        `action_items?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*,entities(id,name,entity_type),inbox_items(id,title,source_type)`
+        `action_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}&select=*,entities(id,name,entity_type),inbox_items(id,title,source_type)`
       );
       if (!result.ok || !result.data?.length) {
         return res.status(404).json({ error: 'Action item not found' });
@@ -116,7 +116,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       // Fetch related activity events
       const activities = await opsQuery('GET',
-        `activity_events?action_item_id=eq.${id}&workspace_id=eq.${workspaceId}&select=*&order=occurred_at.desc&limit=50`
+        `activity_events?action_item_id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}&select=*&order=occurred_at.desc&limit=50`
       );
 
       return res.status(200).json({
@@ -128,14 +128,14 @@ export default withErrorHandler(async function handler(req, res) {
     // List with filters
     let path = `action_items?workspace_id=eq.${workspaceId}&select=id,title,status,priority,action_type,due_date,owner_id,assigned_to,visibility,entity_id,domain,source_type,created_at,updated_at,completed_at`;
 
-    if (status) path += `&status=eq.${status}`;
-    if (action_type) path += `&action_type=eq.${action_type}`;
-    if (assigned_to) path += `&assigned_to=eq.${assigned_to}`;
-    if (owner_id) path += `&owner_id=eq.${owner_id}`;
-    if (priority) path += `&priority=eq.${priority}`;
-    if (domain) path += `&domain=eq.${domain}`;
-    if (entity_id) path += `&entity_id=eq.${entity_id}`;
-    if (due_before) path += `&due_date=lte.${due_before}`;
+    if (status) path += `&status=eq.${pgFilterVal(status)}`;
+    if (action_type) path += `&action_type=eq.${pgFilterVal(action_type)}`;
+    if (assigned_to) path += `&assigned_to=eq.${pgFilterVal(assigned_to)}`;
+    if (owner_id) path += `&owner_id=eq.${pgFilterVal(owner_id)}`;
+    if (priority) path += `&priority=eq.${pgFilterVal(priority)}`;
+    if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+    if (entity_id) path += `&entity_id=eq.${pgFilterVal(entity_id)}`;
+    if (due_before) path += `&due_date=lte.${pgFilterVal(due_before)}`;
 
     path += paginationParams({ ...req.query, order: req.query.order || 'due_date.asc.nullslast,priority.asc,created_at.desc' });
 
@@ -205,7 +205,7 @@ export default withErrorHandler(async function handler(req, res) {
 
     // Fetch existing
     const existing = await opsQuery('GET',
-      `action_items?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*`
+      `action_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}&select=*`
     );
     if (!existing.ok || !existing.data?.length) {
       return res.status(404).json({ error: 'Action item not found' });
@@ -274,7 +274,7 @@ export default withErrorHandler(async function handler(req, res) {
     if (metadata !== undefined) updates.metadata = metadata;
 
     const result = await opsQuery('PATCH',
-      `action_items?id=eq.${id}&workspace_id=eq.${workspaceId}`,
+      `action_items?id=eq.${pgFilterVal(id)}&workspace_id=eq.${workspaceId}`,
       updates
     );
     if (!result.ok) return res.status(result.status).json({ error: 'Failed to update action' });
