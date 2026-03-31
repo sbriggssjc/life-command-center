@@ -84,9 +84,14 @@ export async function logPerfMetric(workspaceId, userId, metricType, endpoint, d
 export function paginationParams(query) {
   const limit = Math.min(Math.max(parseInt(query.limit) || 50, 1), 500);
   const offset = Math.max(parseInt(query.offset) || 0, 0);
-  const order = query.order || 'created_at.desc';
+  const rawOrder = query.order || 'created_at.desc';
+  // Sanitize order: allow only alphanumeric, dots, commas, underscores (PostgREST order syntax)
+  const order = /^[a-zA-Z0-9_.,]+$/.test(rawOrder) ? rawOrder : 'created_at.desc';
   return `&limit=${limit}&offset=${offset}&order=${order}`;
 }
+
+/** Encode a user-supplied value for safe use in PostgREST filter strings */
+export function pgFilterVal(v) { return encodeURIComponent(String(v)); }
 
 /**
  * Require ops DB or send 503.

@@ -18,7 +18,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import {
   canTransitionInbox, inboxTransitionEffects, buildTransitionActivity,
@@ -62,7 +62,7 @@ export default withErrorHandler(async function handler(req, res) {
   switch (view) {
     case 'my_work': {
       let path = `v_my_work?workspace_id=eq.${workspaceId}&or=(user_id.eq.${user.id},assigned_to.eq.${user.id})`;
-      if (domain) path += `&domain=eq.${domain}`;
+      if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'sort_date.asc.nullslast' });
 
       const result = await opsQuery('GET', path);
@@ -71,9 +71,9 @@ export default withErrorHandler(async function handler(req, res) {
 
     case 'team': {
       let path = `v_team_queue?workspace_id=eq.${workspaceId}`;
-      if (domain) path += `&domain=eq.${domain}`;
-      if (req.query.assigned_to) path += `&assigned_to=eq.${req.query.assigned_to}`;
-      if (req.query.status) path += `&status=eq.${req.query.status}`;
+      if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+      if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
+      if (req.query.status) path += `&status=eq.${pgFilterVal(req.query.status)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'due_date.asc.nullslast,created_at.desc' });
 
       const result = await opsQuery('GET', path);
@@ -82,9 +82,9 @@ export default withErrorHandler(async function handler(req, res) {
 
     case 'inbox': {
       let path = `v_inbox_triage?workspace_id=eq.${workspaceId}`;
-      if (domain) path += `&domain=eq.${domain}`;
-      if (req.query.source_type) path += `&source_type=eq.${req.query.source_type}`;
-      if (req.query.assigned_to) path += `&assigned_to=eq.${req.query.assigned_to}`;
+      if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+      if (req.query.source_type) path += `&source_type=eq.${pgFilterVal(req.query.source_type)}`;
+      if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'received_at.desc' });
 
       const result = await opsQuery('GET', path);
@@ -93,8 +93,8 @@ export default withErrorHandler(async function handler(req, res) {
 
     case 'sync_exceptions': {
       let path = `v_sync_exceptions?workspace_id=eq.${workspaceId}`;
-      if (req.query.connector_type) path += `&connector_type=eq.${req.query.connector_type}`;
-      if (req.query.is_retryable) path += `&is_retryable=eq.${req.query.is_retryable}`;
+      if (req.query.connector_type) path += `&connector_type=eq.${pgFilterVal(req.query.connector_type)}`;
+      if (req.query.is_retryable) path += `&is_retryable=eq.${pgFilterVal(req.query.is_retryable)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'created_at.desc' });
 
       const result = await opsQuery('GET', path);
@@ -103,16 +103,16 @@ export default withErrorHandler(async function handler(req, res) {
 
     case 'research': {
       let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),users!research_tasks_assigned_to_fkey(display_name),users!research_tasks_created_by_fkey(display_name)`;
-      if (domain) path += `&domain=eq.${domain}`;
-      if (req.query.assigned_to) path += `&assigned_to=eq.${req.query.assigned_to}`;
-      if (req.query.research_type) path += `&research_type=eq.${req.query.research_type}`;
+      if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+      if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
+      if (req.query.research_type) path += `&research_type=eq.${pgFilterVal(req.query.research_type)}`;
       if (req.query.status === 'active') path += `&status=in.(queued,in_progress)`;
-      else if (req.query.status) path += `&status=eq.${req.query.status}`;
+      else if (req.query.status) path += `&status=eq.${pgFilterVal(req.query.status)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'priority.asc,created_at.asc' });
 
       const result = await opsQuery('GET', path);
       if (!result.ok) {
-        return res.status(result.status || 500).json({ error: 'Failed to fetch research tasks', detail: result.data });
+        return res.status(result.status || 500).json({ error: 'Failed to fetch research tasks' });
       }
       const rows = Array.isArray(result.data) ? result.data : [];
       const items = rows.map(r => ({
@@ -128,7 +128,7 @@ export default withErrorHandler(async function handler(req, res) {
         return res.status(400).json({ error: 'entity_id is required for entity_timeline view' });
       }
 
-      let path = `v_entity_timeline?entity_id=eq.${entity_id}&workspace_id=eq.${workspaceId}`;
+      let path = `v_entity_timeline?entity_id=eq.${pgFilterVal(entity_id)}&workspace_id=eq.${workspaceId}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'occurred_at.desc' });
 
       const result = await opsQuery('GET', path);
@@ -245,11 +245,11 @@ async function v2GetMyWork(req, user, workspaceId) {
     if (status === 'overdue') {
       path += `&status=in.(open,in_progress)&due_date=lt.${new Date().toISOString().split('T')[0]}`;
     } else {
-      path += `&status=eq.${status}`;
+      path += `&status=eq.${pgFilterVal(status)}`;
     }
   }
-  if (domain) path += `&domain=eq.${domain}`;
-  if (priority) path += `&priority=eq.${priority}`;
+  if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+  if (priority) path += `&priority=eq.${pgFilterVal(priority)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path);
@@ -264,10 +264,10 @@ async function v2GetTeamQueue(req, user, workspaceId) {
   const order = v2SortParam(req.query, 'due_date.asc.nullslast,created_at.desc');
 
   let path = `v_team_queue?workspace_id=eq.${workspaceId}`;
-  if (status) path += `&status=eq.${status}`;
-  if (domain) path += `&domain=eq.${domain}`;
+  if (status) path += `&status=eq.${pgFilterVal(status)}`;
+  if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
   if (assignee === 'none') path += `&assigned_to=is.null`;
-  else if (assignee) path += `&assigned_to=eq.${assignee}`;
+  else if (assignee) path += `&assigned_to=eq.${pgFilterVal(assignee)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path);
@@ -282,9 +282,9 @@ async function v2GetInbox(req, user, workspaceId) {
   const order = v2SortParam(req.query, 'received_at.desc');
 
   let path = `v_inbox_triage?workspace_id=eq.${workspaceId}`;
-  if (status) path += `&status=eq.${status}`;
-  if (source_type) path += `&source_type=eq.${source_type}`;
-  if (domain) path += `&domain=eq.${domain}`;
+  if (status) path += `&status=eq.${pgFilterVal(status)}`;
+  if (source_type) path += `&source_type=eq.${pgFilterVal(source_type)}`;
+  if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path);
@@ -301,10 +301,10 @@ async function v2GetResearch(req, user, workspaceId) {
   let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),users!research_tasks_assigned_to_fkey(display_name),users!research_tasks_created_by_fkey(display_name)`;
   if (status) {
     if (status === 'active') path += `&status=in.(queued,in_progress)`;
-    else path += `&status=eq.${status}`;
+    else path += `&status=eq.${pgFilterVal(status)}`;
   }
-  if (domain) path += `&domain=eq.${domain}`;
-  if (research_type) path += `&research_type=eq.${research_type}`;
+  if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+  if (research_type) path += `&research_type=eq.${pgFilterVal(research_type)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path);

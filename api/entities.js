@@ -215,7 +215,9 @@ export default withErrorHandler(async function handler(req, res) {
     if (domain && isValidEnum(domain, DOMAINS)) {
       path += `&domain=eq.${domain}`;
     }
-    path += `&limit=${perPage}&offset=${offset}&order=${req.query.order || 'created_at.desc'}`;
+    const rawOrder = req.query.order || 'created_at.desc';
+    const safeOrder = /^[a-zA-Z0-9_.,]+$/.test(rawOrder) ? rawOrder : 'created_at.desc';
+    path += `&limit=${perPage}&offset=${offset}&order=${safeOrder}`;
 
     const result = await opsQuery('GET', path);
     return res.status(200).json({
