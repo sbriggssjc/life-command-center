@@ -368,6 +368,7 @@ function tzHour(d) { return new Date(stripTZ(d)).getHours(); }
 function tzMin(d) { return new Date(stripTZ(d)).getMinutes(); }
 function tzHourMin(d) { return tzHour(d)*60+tzMin(d); }
 function tzDateStr(d) { return new Date(stripTZ(d)).toLocaleDateString('en-US'); }
+function localToday() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }); }
 function formatTime(d) {
   if (!d) return ''; const date = new Date(stripTZ(d)); if (isNaN(date)) return '';
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
@@ -1086,7 +1087,7 @@ let prospectPage = { government: 0, dialysis: 0, all_other: 0 };
 let prospectOwner = { government: 'mine', dialysis: 'mine', all_other: 'mine' };
 let prospectFilter = { government: 'all', dialysis: 'all', all_other: 'all' };
 let prospectSearch = { government: '', dialysis: '', all_other: '' };
-let prospectSearchTimeout;
+let prospectSearchTimeout = {};
 const PROSPECT_PAGE = 20;
 
 let _mktLoading = false;
@@ -1557,7 +1558,7 @@ async function loadMarketing() {
       }
 
       // Badge: actionable CRM tasks due (calls due today + overdue follow-ups)
-      const today = new Date().toISOString().split('T')[0];
+      const today = localToday();
       const actionableCount = mktData.filter(d => d.pipeline_source === 'sf_deal' && d.due_date && d.due_date <= today).length;
       const badge = document.getElementById('bizBadgeMkt');
       if (badge) badge.textContent = actionableCount || mktData.length;
@@ -1599,7 +1600,7 @@ function renderMarketing() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
   const userName = LCC_USER.display_name || 'Scott Briggs';
 
   // Owner filter
@@ -2343,7 +2344,7 @@ async function ucDismissMerge(queueId) {
  */
 function renderProspectCardsHTML(items, options = {}) {
   const { showDomainDropdown = false, showReassign = true, showEmailTemplates = true, showCallHistory = true, page = 0, pageSize = 20, pagerFn, renderFn, domain } = options;
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
 
   // Collect owners for reassign dropdown
   const ownerSet = new Set();
@@ -2528,7 +2529,7 @@ function renderDomainProspects(domain, containerId) {
   const el = containerId ? document.getElementById(containerId) : document.getElementById('bizPageInner');
   if (!el) return '';
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
   const userName = LCC_USER.display_name || 'Scott Briggs';
   const prospects = window._mktOpportunities[domain] || [];
   const prospectContacts = window._mktProspectContacts[domain] || [];
@@ -2607,7 +2608,7 @@ function renderDomainProspects(domain, containerId) {
   html += '</div>';
 
   // Search
-  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search prospects..." value="${esc(prospectSearch[domain] || '')}" oninput="clearTimeout(prospectSearchTimeout);prospectSearchTimeout=setTimeout(()=>{prospectSearch['${domain}']=this.value;prospectPage['${domain}']=0;${renderCall}},250)"></div>`;
+  html += `<div class="search-bar"><input class="search-input" type="text" placeholder="Search prospects..." value="${esc(prospectSearch[domain] || '')}" oninput="clearTimeout(prospectSearchTimeout['${domain}']);prospectSearchTimeout['${domain}']=setTimeout(()=>{prospectSearch['${domain}']=this.value;prospectPage['${domain}']=0;${renderCall}},250)"></div>`;
 
   // Cards
   html += renderProspectCardsHTML(filtered, {
@@ -2926,7 +2927,7 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
     if (sfCompanyId) break;
   }
 
-  var today = new Date().toISOString().split('T')[0];
+  var today = localToday();
   var actionLabel = action === 'complete' ? 'Completed' : action === 'dismiss' ? 'Dismissed' : 'Updated';
   // Map action to appropriate SF activity_type
   var activityType = action === 'complete' ? 'Call' : 'Follow-up';
@@ -4581,7 +4582,7 @@ function renderPriorityTasks() {
 
   // CRM rollup fallback — show overdue/due-today tasks from marketing pipeline
   if (mktLoaded && mktData.length > 0) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = localToday();
     const userName = LCC_USER.display_name || 'Scott Briggs';
     // Show overdue first, then due today, then upcoming — across all sources
     const allTasks = mktData.filter(d => d.assigned_to === userName);

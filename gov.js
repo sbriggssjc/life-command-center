@@ -5868,7 +5868,7 @@ function renderGovSearch() {
   setTimeout(() => {
     const input = document.getElementById('govSearchInput');
     if (input) {
-      input.addEventListener('keydown', e => { if (e.key === 'Enter') execGovSearch(); });
+      input.onkeydown = e => { if (e.key === 'Enter') execGovSearch(); };
       input.focus();
     }
   }, 0);
