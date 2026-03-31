@@ -2642,7 +2642,8 @@ function debounceMktSearch(val) {
 
 // ── Email template menus ──
 function toggleEmailMenu(btn) {
-  const menu = btn.parentElement.querySelector('.email-tpl-menu');
+  const menu = btn?.parentElement?.querySelector('.email-tpl-menu');
+  if (!menu) return;
   const wasOpen = menu.style.display !== 'none';
   closeEmailMenus();
   if (!wasOpen) menu.style.display = 'block';
@@ -2653,7 +2654,7 @@ function closeEmailMenus() {
 document.addEventListener('click', closeEmailMenus);
 
 function openMktFollowUp(email, name, deal) {
-  const first = name.split(' ')[0] || 'there';
+  const first = (name || '').split(' ')[0] || 'there';
   _composeOutlook(email,
     'Following Up \u2014 ' + deal,
     'Hi ' + first + ',\n\n' +
@@ -2665,7 +2666,7 @@ function openMktFollowUp(email, name, deal) {
 }
 
 function openMktMarketUpdate(email, name, deal) {
-  const first = name.split(' ')[0] || 'there';
+  const first = (name || '').split(' ')[0] || 'there';
   _composeOutlook(email,
     'Net Lease Market Update \u2014 ' + deal,
     'Hi ' + first + ',\n\n' +
@@ -2684,7 +2685,7 @@ function openMktMarketUpdate(email, name, deal) {
 }
 
 function openMktMeetingReq(email, name, deal) {
-  const first = name.split(' ')[0] || 'there';
+  const first = (name || '').split(' ')[0] || 'there';
   _composeOutlook(email,
     'Meeting Request \u2014 ' + deal,
     'Hi ' + first + ',\n\n' +
@@ -3229,7 +3230,7 @@ function _sig() {
 }
 
 function openMktEmail(email, contactName, dealName) {
-  const first = contactName.split(' ')[0] || 'there';
+  const first = (contactName || '').split(' ')[0] || 'there';
   const user = LCC_USER.display_name || 'Scott Briggs';
   _composeOutlook(email,
     'Northmarq Investment Sales \u2014 ' + dealName,
@@ -4265,7 +4266,7 @@ function filterByRange(data, range) {
     default: return data.slice(-10);
   }
   const cutStr = cutoff.toISOString().split('T')[0];
-  return data.filter(d => d.date >= cutStr);
+  return data.filter(d => d.date && d.date >= cutStr);
 }
 
 async function loadYieldChart(range) {
