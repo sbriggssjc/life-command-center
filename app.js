@@ -506,7 +506,7 @@ function showToast(msg, type = '') {
 }
 
 function getGreeting() {
-  const h = parseInt(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Chicago' }));
+  const h = parseInt(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Chicago' }), 10);
   const name = LCC_USER.first_name || LCC_USER.display_name?.split(' ')[0] || 'there';
   if (h < 12) return `Good morning, ${name}`;
   if (h < 17) return `Good afternoon, ${name}`;

@@ -651,7 +651,7 @@ function renderNorthmarqInner() {
   h += infoCard({ title: 'NM TTM Sales', value: fmtN(nmComps.length), sub: '$' + fmtN(Math.round(nmVolume / 1000000)) + 'M volume', color: 'green', tab: 'sales' });
   h += infoCard({ title: 'Market Share (Txns)', value: marketShareTxn, sub: fmtN(nmComps.length) + ' of ' + fmtN(ttmComps.length) + ' TTM deals', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'NM Avg Cap Rate', value: nmAvgCap, sub: 'vs ' + mktAvgCap + ' market avg', color: 'cyan', tab: 'sales' });
-  h += infoCard({ title: 'Seller Value Add', value: capAdvStr, sub: capAdv && parseInt(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
+  h += infoCard({ title: 'Seller Value Add', value: capAdvStr, sub: capAdv && parseInt(capAdv, 10) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv, 10) > 0 ? 'green' : 'yellow', tab: 'sales' });
   h += '</div>';
   return h;
 }
@@ -664,7 +664,7 @@ function renderOnMarketInner() {
   // Check multiple possible field names for price, cap rate, and days on market
   const getPrice = r => parseFloat(r.ask_price || r.asking_price || r.listing_price || r.price || 0);
   const getCap = r => parseFloat(r.ask_cap || r.asking_cap_rate || r.cap_rate || 0);
-  const getDom = r => parseInt(r.dom || r.days_on_market || 0);
+  const getDom = r => parseInt(r.dom || r.days_on_market || 0, 10);
   const withPrice = listings.filter(r => getPrice(r) > 0);
   const validCaps = listings.filter(r => { const v = getCap(r); return v > 0.01 && v < 0.25; }).map(r => getCap(r)).sort((a,b) => a-b);
   const avgAskCap = validCaps.length > 0 ? (validCaps.reduce((s,v)=>s+v,0)/validCaps.length*100).toFixed(2) + '%' : '—';
@@ -1504,7 +1504,7 @@ function renderDiaUnmatchedClinics() {
     // List item selection
     document.querySelectorAll('[data-um-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        diaUnmatchedIdx = parseInt(e.currentTarget.dataset.umIdx);
+        diaUnmatchedIdx = parseInt(e.currentTarget.dataset.umIdx, 10);
         renderDiaTab();
       });
     });
@@ -1542,7 +1542,7 @@ function renderDiaUnmatchedClinics() {
 
               document.querySelectorAll('.um-search-result').forEach(el => {
                 el.addEventListener('click', e => {
-                  const propId = parseInt(e.currentTarget.dataset.propId);
+                  const propId = parseInt(e.currentTarget.dataset.propId, 10);
                   const propIdEl = document.getElementById('um-property-id');
                   if (propIdEl) propIdEl.value = propId;
 
@@ -1573,7 +1573,7 @@ function renderDiaUnmatchedClinics() {
         if (!item) return;
 
         const propIdEl = document.getElementById('um-property-id');
-        const propertyId = propIdEl?.value ? parseInt(propIdEl.value) : null;
+        const propertyId = propIdEl?.value ? parseInt(propIdEl.value, 10) : null;
 
         if (action === 'resolve' && !propertyId) {
           alert('Please select or enter a Property ID');
@@ -1672,7 +1672,7 @@ function renderDiaQuarantineReview() {
   setTimeout(() => {
     document.querySelectorAll('[data-q-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        diaQuarantineIdx = parseInt(e.currentTarget.dataset.qIdx);
+        diaQuarantineIdx = parseInt(e.currentTarget.dataset.qIdx, 10);
         renderDiaTab();
       });
     });
@@ -1773,7 +1773,7 @@ function renderDiaClarificationQueue() {
   setTimeout(() => {
     document.querySelectorAll('[data-cl-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        diaClarificationIdx = parseInt(e.currentTarget.dataset.clIdx);
+        diaClarificationIdx = parseInt(e.currentTarget.dataset.clIdx, 10);
         renderDiaTab();
       });
     });
@@ -2182,7 +2182,7 @@ function renderDiaPropertyResearch() {
     
     document.querySelectorAll('[data-prop-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        const idx = parseInt(e.currentTarget.dataset.propIdx);
+        const idx = parseInt(e.currentTarget.dataset.propIdx, 10);
         const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
         const item = filtered[idx];
         if (item) showDetail(item, 'dia-clinic');
@@ -2455,7 +2455,7 @@ function renderDiaLeaseResearch() {
     
     document.querySelectorAll('[data-lease-idx]').forEach(row => {
       row.addEventListener('click', e => {
-        const idx = parseInt(e.currentTarget.dataset.leaseIdx);
+        const idx = parseInt(e.currentTarget.dataset.leaseIdx, 10);
         const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
         const item = filtered[idx];
         if (item) showDetail(item, 'dia-clinic');
@@ -2809,7 +2809,7 @@ function renderDiaClinicLeads() {
     // Row clicks — open unified detail sidebar
     document.querySelectorAll('.cl-row').forEach(el => {
       el.addEventListener('click', () => {
-        const idx = parseInt(el.dataset.clIdx);
+        const idx = parseInt(el.dataset.clIdx, 10);
         if (page[idx]) showDetail(page[idx], 'dia-clinic');
       });
     });
@@ -5470,7 +5470,7 @@ async function saveSaleProperty() {
   const tenant = q('#dia-prop-tenant')?.value?.trim() || null;
   const rba = parseFloat(q('#dia-prop-rba')?.value) || null;
   const land = parseFloat(q('#dia-prop-land')?.value) || null;
-  const year = parseInt(q('#dia-prop-year')?.value) || null;
+  const year = parseInt(q('#dia-prop-year')?.value, 10) || null;
 
   const data = {
     address: address || null,

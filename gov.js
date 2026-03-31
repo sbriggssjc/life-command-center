@@ -3488,7 +3488,7 @@ function renderGovNorthmarqMetrics() {
   h += card({ title: 'NM TTM Sales', value: fmtN(nmSales.length), sub: '$' + fmtN(Math.round(nmVolume / 1e6)) + 'M volume', color: 'green', tab: 'sales' });
   h += card({ title: 'Market Share', value: marketShareTxn, sub: fmtN(nmSales.length) + ' of ' + fmtN(ttmSales.length) + ' TTM deals', color: 'blue', tab: 'sales' });
   h += card({ title: 'NM Avg Cap Rate', value: nmAvgCap, sub: 'vs ' + mktAvgCap + ' market avg', color: 'cyan', tab: 'sales' });
-  h += card({ title: 'Seller Value Add', value: capAdv ? capAdv + ' bps tighter' : '—', sub: capAdv && parseInt(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
+  h += card({ title: 'Seller Value Add', value: capAdv ? capAdv + ' bps tighter' : '—', sub: capAdv && parseInt(capAdv, 10) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv, 10) > 0 ? 'green' : 'yellow', tab: 'sales' });
   h += '</div>';
   return h;
 }
@@ -4990,7 +4990,7 @@ async function renderGovSales() {
         buyer: r.buyer,
         procuring_broker: r.purchasing_broker,
         bid_ask_spread: r.bid_ask_spread != null ? parseFloat(r.bid_ask_spread) : null,
-        dom: r.days_on_market != null ? parseInt(r.days_on_market) : null
+        dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null
       };
     } else {
       return {
@@ -5015,7 +5015,7 @@ async function renderGovSales() {
         ask_cap: r.asking_cap_rate ? parseFloat(r.asking_cap_rate) : null,
         seller: r.seller,
         listing_broker: r.listing_broker,
-        dom: r.days_on_market != null ? parseInt(r.days_on_market) : null
+        dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null
       };
     }
   });

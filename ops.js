@@ -770,7 +770,7 @@ async function dismissSingle(id) {
 async function renderEntitiesPage(page = opsEntitiesPage) {
   const el = document.getElementById('entitiesContent');
   if (!el) return;
-  opsEntitiesPage = Math.max(parseInt(page) || 1, 1);
+  opsEntitiesPage = Math.max(parseInt(page, 10) || 1, 1);
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:entities');
 
@@ -904,7 +904,7 @@ function viewEntity(entityId) {
 async function renderResearchPage(page = opsResearchPage) {
   const el = document.getElementById('researchContent');
   if (!el) return;
-  opsResearchPage = Math.max(parseInt(page) || 1, 1);
+  opsResearchPage = Math.max(parseInt(page, 10) || 1, 1);
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:research');
 

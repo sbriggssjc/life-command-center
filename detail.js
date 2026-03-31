@@ -357,7 +357,7 @@ async function _udSubmitDismiss() {
     // 2. Update property record via mutation service if we have a property_id and any property data
     if (propertyId && (rba || occupancy || trueOwner)) {
       const propPayload = {};
-      if (rba) propPayload.building_sf = parseInt(rba);
+      if (rba) propPayload.building_sf = parseInt(rba, 10);
       if (occupancy === 'multi') propPayload.is_single_tenant = false;
       if (occupancy === 'single') propPayload.is_single_tenant = true;
       if (trueOwner) propPayload.tenant = trueOwner; // tenant field used for owner display
@@ -3225,7 +3225,7 @@ async function _intelSaveLoan(options = {}) {
       loan_type: loanType || null,
       origination_date: origDate || null,
       maturity_date: matDate || null,
-      loan_term: amortization ? parseInt(amortization) : null,
+      loan_term: amortization ? parseInt(amortization, 10) : null,
       recourse: recourse || null,
       loan_to_value: ltv ? parseFloat(ltv) : null
     };
