@@ -666,9 +666,9 @@ async function renderInboxTriage() {
 
 function inboxItemHTML(item, idx) {
   const overdue = item.status === 'new' && item.created_at && (Date.now() - new Date(item.created_at).getTime()) > 86400000 * 2;
-  let html = `<div class="q-item ${overdue ? 'overdue' : ''}" data-inbox-id="${item.id}">`;
+  let html = `<div class="q-item ${overdue ? 'overdue' : ''}" data-inbox-id="${esc(item.id)}">`;
   html += '<div class="q-item-header">';
-  html += `<input type="checkbox" style="margin-right:6px;accent-color:var(--accent)" onchange="toggleInboxItem('${item.id}', this.checked)">`;
+  html += `<input type="checkbox" style="margin-right:6px;accent-color:var(--accent)" onchange="toggleInboxItem(decodeURIComponent('${encodeURIComponent(item.id)}'), this.checked)">`;
   html += `<span class="q-item-title">${esc(item.title || item.subject || 'Untitled')}</span>`;
   html += '<div class="q-item-badges">';
   html += statusBadge(item.status);

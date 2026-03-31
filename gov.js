@@ -3807,9 +3807,9 @@ function renderGovPendingUpdates() {
     html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
 
     html += '<div class="action-row">';
-    html += `<button class="btn-action primary" onclick="window.resolveGovPendingUpdate('${selected.id}', 'approved')">✓ Approve</button>`;
-    html += `<button class="btn-action danger" onclick="window.resolveGovPendingUpdate('${selected.id}', 'rejected')">✗ Reject</button>`;
-    html += `<button class="btn-action" style="background: #fb923c;" onclick="window.resolveGovPendingUpdate('${selected.id}', 'expired')">⏱ Expire</button>`;
+    html += `<button class="btn-action primary" onclick="window.resolveGovPendingUpdate(decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve</button>`;
+    html += `<button class="btn-action danger" onclick="window.resolveGovPendingUpdate(decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject</button>`;
+    html += `<button class="btn-action" style="background: #fb923c;" onclick="window.resolveGovPendingUpdate(decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
     html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
     html += '</div>';
     html += '</div>';

@@ -2397,14 +2397,14 @@ function renderProspectCardsHTML(items, options = {}) {
     html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
     if (showDomainDropdown) {
       const curDomain = first.domain || 'all_other';
-      html += `<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px" title="Reclassify domain" onchange="mktReclassifyDeal('${esc(first.item_id)}',this.value)">`;
+      html += `<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px" title="Reclassify domain" onchange="mktReclassifyDeal(decodeURIComponent('${encodeURIComponent(first.item_id)}'),this.value)">`;
       html += `<option value="government" ${curDomain==='government'?'selected':''}>Government</option>`;
       html += `<option value="dialysis" ${curDomain==='dialysis'?'selected':''}>Dialysis</option>`;
       html += `<option value="all_other" ${curDomain==='all_other'?'selected':''}>All Other</option>`;
       html += '</select>';
     }
     if (showReassign) {
-      html += '<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px" title="Reassign deal" onchange="mktReassignDeal(\'' + esc(first.item_id) + '\',this.value,\'' + esc(first.sf_contact_id || '') + '\')">';
+      html += '<select style="background:var(--card);color:var(--text2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px" title="Reassign deal" onchange="mktReassignDeal(decodeURIComponent(\'' + encodeURIComponent(first.item_id) + '\'),this.value,decodeURIComponent(\'' + encodeURIComponent(first.sf_contact_id || '') + '\'))">';
       html += `<option value="">Assign to...</option>`;
       owners.forEach(o => { html += `<option value="${esc(o)}" ${first.assigned_to===o?'selected':''}>${esc(o)}</option>`; });
       html += '</select>';
@@ -3682,6 +3682,7 @@ async function submitLogCall() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: 'log_to_sf', payload }),
     });
+    if (!res.ok) { showToast('Server error (' + res.status + ')', 'error'); btn.disabled = false; btn.textContent = 'Log Activity'; return; }
     const data = await res.json();
     if (data.status === 'completed' || data.success) {
       showToast('Activity logged to Salesforce!', 'success');
@@ -3759,6 +3760,7 @@ async function submitLogReschedule() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: 'log_to_sf', payload: logPayload })
     });
+    if (!logRes.ok) { showToast('Server error (' + logRes.status + ')', 'error'); btn.disabled = false; btn.textContent = 'Log & Reschedule'; return; }
     var logData = await logRes.json();
 
     if (logData.warning) {
@@ -3932,6 +3934,7 @@ async function applyManualChange(payload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
+    if (!res.ok) return { ok: false, errors: ['http_' + res.status] };
     const data = await res.json();
     return data;
   } catch (err) {
@@ -4831,6 +4834,7 @@ let personalTodoLists = ['Personal', 'Family', 'Kids', 'Health', 'Finance', 'Hou
 async function loadPersonalCalendar() {
   try {
     const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=personal`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     personalCalEvents = data.events || [];
     renderPersonalCalendar();
