@@ -2201,10 +2201,11 @@ async function _udAction(action) {
     try {
       const headers = { 'Content-Type': 'application/json' };
       if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
-      await fetch('/api/actions', {
+      const res = await fetch('/api/actions', {
         method: 'POST', headers,
         body: JSON.stringify({ action_type: 'log_activity', title: 'Touchpoint: ' + title, domain: db === 'gov' ? 'government' : 'dialysis', notes, entity_id: id })
       });
+      if (!res.ok) throw new Error('Server returned ' + res.status);
       alert('Touchpoint logged!');
     } catch (e) { alert('Error: ' + e.message); }
     return;
@@ -2216,10 +2217,11 @@ async function _udAction(action) {
     try {
       const headers = { 'Content-Type': 'application/json' };
       if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
-      await fetch('/api/actions', {
+      const res = await fetch('/api/actions', {
         method: 'POST', headers,
         body: JSON.stringify({ action_type: 'create_task', title: taskTitle, domain: db === 'gov' ? 'government' : 'dialysis', entity_id: id, status: 'open' })
       });
+      if (!res.ok) throw new Error('Server returned ' + res.status);
       alert('Task created!');
     } catch (e) { alert('Error: ' + e.message); }
     return;
@@ -2598,6 +2600,7 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: 'log_to_sf', payload })
     });
+    if (!res.ok) throw new Error('Server returned ' + res.status);
     const data = await res.json();
 
     if (data.status === 'completed' || data.success) {
@@ -2712,13 +2715,14 @@ function _udMergeFields(tmpl) {
   const prop = _udCache?.property || {};
   const own = _udCache?.ownership || {};
 
-  const contactName = own.contact_1_name || own.contact_name || own.true_owner || own.recorded_owner || 'there';
-  const propertyName = prop.page_title || prop.address || 'the property';
-  const cityState = (prop.city || '') + (prop.state ? ', ' + prop.state : '');
-  const annualRent = prop.annual_rent ? fmt(prop.annual_rent) : '';
-  const askingPrice = prop.asking_price ? fmt(prop.asking_price) : '';
-  const capRate = prop.cap_rate ? Number(prop.cap_rate).toFixed(2) + '%' : '';
-  const agency = prop.agency_full || prop.agency_short || '';
+  // Escape field values before merging into HTML templates to prevent XSS
+  const contactName = esc(own.contact_1_name || own.contact_name || own.true_owner || own.recorded_owner || 'there');
+  const propertyName = esc(prop.page_title || prop.address || 'the property');
+  const cityState = esc((prop.city || '') + (prop.state ? ', ' + prop.state : ''));
+  const annualRent = prop.annual_rent ? esc(fmt(prop.annual_rent)) : '';
+  const askingPrice = prop.asking_price ? esc(fmt(prop.asking_price)) : '';
+  const capRate = prop.cap_rate ? esc(Number(prop.cap_rate).toFixed(2) + '%') : '';
+  const agency = esc(prop.agency_full || prop.agency_short || '');
   const leaseTerm = '';
 
   const merge = (str) => {
