@@ -1203,7 +1203,7 @@ async function _loadActivityFeed(own) {
 
     if (db === 'dia') {
       // Direct query — Dia DB has the SF tables
-      const sfId = own?.salesforce_id;
+      const sfId = own?.sf_contact_id || own?.salesforce_id;
       const toId = own?.true_owner_id;
       const cId = own?.contact_id;
 

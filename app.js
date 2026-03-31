@@ -2196,13 +2196,12 @@ async function runCalendarContactSync() {
     const r = await fetch('/api/contacts?action=ingest_calendar_contacts', {
       method: 'POST', headers, body: JSON.stringify({ days_back: 90 })
     });
-    const data = await r.json();
-    if (r.ok) {
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Calendar sync failed: ' + (err.error || 'HTTP ' + r.status)); }
+    else {
+      const data = await r.json();
       alert('Calendar sync complete: ' + (data.created || 0) + ' new, ' + (data.matched || 0) + ' updated, ' + (data.skipped || 0) + ' skipped');
       ucDataQuality = null;
       loadAndRenderUC();
-    } else {
-      alert('Calendar sync failed: ' + (data.error || 'Unknown error'));
     }
   } catch (e) { alert('Calendar sync error: ' + e.message); }
   if (btn) { btn.disabled = false; btn.textContent = 'Sync Calendar Contacts'; }
@@ -2217,13 +2216,12 @@ async function runDuplicateDetection() {
     const r = await fetch('/api/contacts?action=detect_duplicates', {
       method: 'POST', headers, body: JSON.stringify({ batch_size: 200 })
     });
-    const data = await r.json();
-    if (r.ok) {
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Duplicate detection failed: ' + (err.error || 'HTTP ' + r.status)); }
+    else {
+      const data = await r.json();
       alert('Duplicate scan complete: ' + (data.duplicates_found || 0) + ' new duplicates found, ' + (data.contacts_scanned || 0) + ' contacts scanned');
       ucDataQuality = null;
       loadAndRenderUC();
-    } else {
-      alert('Duplicate detection failed: ' + (data.error || 'Unknown error'));
     }
   } catch (e) { alert('Duplicate detection error: ' + e.message); }
   if (btn) { btn.disabled = false; btn.textContent = 'Run Duplicate Detection'; }
@@ -2318,24 +2316,27 @@ async function ucMerge(keepId, mergeId, queueId) {
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
-    await fetch('/api/contacts?action=merge', {
+    const r = await fetch('/api/contacts?action=merge', {
       method: 'POST', headers,
       body: JSON.stringify({ keep_id: keepId, merge_id: mergeId, queue_id: queueId })
     });
+    if (!r.ok) { showToast('Merge failed (HTTP ' + r.status + ')', 'error'); return; }
+    showToast('Contacts merged', 'success');
     loadMergeQueue();
-  } catch (e) { console.error('Merge error:', e.message); }
+  } catch (e) { showToast('Merge error: ' + e.message, 'error'); }
 }
 
 async function ucDismissMerge(queueId) {
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
-    await fetch('/api/contacts?action=dismiss_merge', {
+    const r = await fetch('/api/contacts?action=dismiss_merge', {
       method: 'POST', headers,
       body: JSON.stringify({ queue_id: queueId })
     });
+    if (!r.ok) { showToast('Dismiss failed (HTTP ' + r.status + ')', 'error'); return; }
     loadMergeQueue();
-  } catch (e) { console.error('Dismiss merge error:', e.message); }
+  } catch (e) { showToast('Dismiss error: ' + e.message, 'error'); }
 }
 
 // ============================================================
