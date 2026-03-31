@@ -6863,7 +6863,7 @@ async function captureLiveIngestScreen(domainKey) {
   let stream = null;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-    const track = stream.getVideoTracks()[0];
+    if (!stream.getVideoTracks().length) throw new Error('No video track available');
     const video = document.createElement('video');
     video.srcObject = stream;
     video.muted = true;

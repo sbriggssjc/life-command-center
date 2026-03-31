@@ -3777,7 +3777,7 @@ function renderGovPendingUpdates() {
     html += '<div>';
     html += '<div class="task-header">';
     html += `<div>${esc(selected.field_name)} Update</div>`;
-    html += `<span class="task-badge needs-input">${selected.reason || 'pending'}</span>`;
+    html += `<span class="task-badge needs-input">${esc(selected.reason || 'pending')}</span>`;
     html += '</div>';
 
     html += '<div class="context-block">';
@@ -4659,6 +4659,7 @@ function renderLeadContacts(record) {
 }
 
 function renderLeadActivity(record) {
+  if (!record) return '<div class="detail-empty">No activity recorded</div>';
   // Filter gsaEvents by lease_number
   const events = govData.gsaEvents && govData.gsaEvents.filter(
     e => e.lease_number === record.lease_number
