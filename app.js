@@ -1774,15 +1774,15 @@ function renderMarketing() {
           var logData = safeJSON({sf_contact_id:c.sf_contact_id||'',sf_company_id:c.sf_company_id||'',name:c.contact_name||c.company_name||''});
           html += '<div style="padding:6px 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">';
           html += '<div style="flex:1;min-width:0">';
-          var sfLnk = c.sf_contact_id ? '<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/' + esc(c.sf_contact_id) + '/view" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">' + esc(c.contact_name || '—') + '</a>' : esc(c.contact_name || '—');
+          var sfLnk = c.sf_contact_id ? '<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/' + encodeURIComponent(c.sf_contact_id) + '/view" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">' + esc(c.contact_name || '—') + '</a>' : esc(c.contact_name || '—');
           html += '<div style="font-size:13px;font-weight:500">' + sfLnk + '</div>';
           html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
-          if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
+          if (c.email) html += ' · <a href="mailto:' + encodeURIComponent(c.email) + '">' + esc(c.email) + '</a>';
           html += '</div>';
           if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + '</div>';
           html += '</div>';
           html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
-          if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+          if (c.email) html += '<a href="mailto:' + encodeURIComponent(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
           if (c.phone) {
             var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
             html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px" title="Call via WebEx">&#x1F4DE;</a>';
@@ -1923,7 +1923,7 @@ function renderUnifiedContacts() {
     if (c.title) html += ' <span style="font-size:11px;color:var(--text3)">' + esc(c.title) + '</span>';
     html += '</div>';
     html += '<div style="font-size:12px;color:var(--text2)">' + esc(c.company_name || '');
-    if (c.email) html += ' · <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a>';
+    if (c.email) html += ' · <a href="mailto:' + encodeURIComponent(c.email) + '">' + esc(c.email) + '</a>';
     html += '</div>';
     if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + (c.mobile_phone && c.mobile_phone !== c.phone ? ' · Mobile: ' + esc(c.mobile_phone) : '') + '</div>';
     if (c.city || c.state) html += '<div style="font-size:11px;color:var(--text3)">' + esc([c.city, c.state].filter(Boolean).join(', ')) + '</div>';
@@ -1955,7 +1955,7 @@ function renderUnifiedContacts() {
     html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center">';
     // Personal/Business toggle
     html += '<button class="act-btn" style="font-size:10px;padding:3px 6px" onclick="ucToggleClass(decodeURIComponent(\'' + encodeURIComponent(c.unified_id) + '\'),\'' + (c.contact_class === 'business' ? 'personal' : 'business') + '\')" title="Reclassify">' + (c.contact_class === 'business' ? 'Move to Personal' : 'Move to Business') + '</button>';
-    if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+    if (c.email) html += '<a href="mailto:' + encodeURIComponent(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
     if (c.phone) {
       var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
       html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px" title="Call via WebEx">&#x1F4DE;</a>';
@@ -2294,7 +2294,7 @@ async function loadHotLeads() {
           if (stats.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + stats.join(' · ') + '</div>';
           html += '</div>';
           html += '<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
-          if (c.email) html += '<a href="mailto:' + esc(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
+          if (c.email) html += '<a href="mailto:' + encodeURIComponent(c.email) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x2709;</a>';
           if (c.phone) {
             var cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
             html += '<a href="webexteams://call?uri=' + encodeURIComponent(cleanPhone) + '" class="act-btn" style="font-size:11px;padding:4px 8px">&#x1F4DE;</a>';
@@ -2425,10 +2425,10 @@ function renderProspectCardsHTML(items, options = {}) {
       var domainBadge = '';
       if (c.task_domain === 'government') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--blue);color:#fff;font-weight:600;vertical-align:middle">GOV</span>';
       else if (c.task_domain === 'dialysis') domainBadge = ' <span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600;vertical-align:middle">DIA</span>';
-      var sfLink = c.sf_contact_id ? `<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/${esc(c.sf_contact_id)}/view" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">${esc(c.contact_name || '—')}</a>` : esc(c.contact_name || '—');
+      var sfLink = c.sf_contact_id ? `<a href="https://northmarqcapital.lightning.force.com/lightning/r/Contact/${encodeURIComponent(c.sf_contact_id)}/view" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Salesforce" style="color:var(--text);text-decoration:none;border-bottom:1px dashed var(--text3)">${esc(c.contact_name || '—')}</a>` : esc(c.contact_name || '—');
       html += `<div style="font-size:14px;font-weight:500">${sfLink}${domainBadge} <span style="font-size:11px;color:var(--text3);margin-left:4px">&#9660;</span></div>`;
       html += `<div style="font-size:12px;color:var(--text2)">${esc(c.company_name || '')}`;
-      if (c.email) html += ` · <a href="mailto:${esc(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
+      if (c.email) html += ` · <a href="mailto:${encodeURIComponent(c.email)}" onclick="event.stopPropagation()">${esc(c.email)}</a>`;
       html += `</div>`;
       if (c.phone) html += `<div style="font-size:12px;color:var(--text3)">${esc(c.phone)}</div>`;
       // Client rollup: open tasks with deal titles
@@ -2495,7 +2495,7 @@ function renderProspectCardsHTML(items, options = {}) {
       if (c.phone) {
         const cleanPhone = (c.phone || '').replace(/[^+0-9]/g, '');
         html += `<a href="webexteams://call?uri=${encodeURIComponent(cleanPhone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()" title="Call via WebEx">&#x1F4DE; WebEx</a>`;
-        html += `<a href="tel:${esc(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()" title="Direct dial">&#x260E;</a>`;
+        html += `<a href="tel:${encodeURIComponent(c.phone)}" class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation()" title="Direct dial">&#x260E;</a>`;
       }
       html += `<button class="act-btn primary" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();openLogCall(${logData})">Log</button>`;
       // Lead management buttons
@@ -3500,8 +3500,8 @@ function renderDetailHeader(record, source) {
     keyFields = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
     if (contactType) keyFields += `<div><span style="color:var(--text3)">Type:</span> <span style="color:var(--text)">${esc(contactType)}</span></div>`;
     if (volume) keyFields += `<div><span style="color:var(--text3)">Volume:</span> <span style="color:var(--accent);font-weight:600">${fmt(volume)}</span></div>`;
-    if (phone) keyFields += `<div><span style="color:var(--text3)">Phone:</span> <a href="tel:${esc(phone)}" style="color:var(--accent)">${esc(phone)}</a></div>`;
-    if (email) keyFields += `<div><span style="color:var(--text3)">Email:</span> <a href="mailto:${esc(email)}" style="color:var(--accent)">${esc(email)}</a></div>`;
+    if (phone) keyFields += `<div><span style="color:var(--text3)">Phone:</span> <a href="tel:${encodeURIComponent(phone)}" style="color:var(--accent)">${esc(phone)}</a></div>`;
+    if (email) keyFields += `<div><span style="color:var(--text3)">Email:</span> <a href="mailto:${encodeURIComponent(email)}" style="color:var(--accent)">${esc(email)}</a></div>`;
     keyFields += '</div>';
   } else if (source === 'dia-clinic') {
     const ccn = record.ccn || '';
@@ -3595,15 +3595,15 @@ function renderGovContactDetailBody(record) {
   for (const [label, val] of fields) {
     if (!val) continue;
     let display = esc(val);
-    if (label === 'Phone') display = `<a href="tel:${esc(val)}" style="color:var(--accent)">${esc(val)}</a>`;
-    if (label === 'Email') display = `<a href="mailto:${esc(val)}" style="color:var(--accent)">${esc(val)}</a>`;
+    if (label === 'Phone') display = `<a href="tel:${encodeURIComponent(val)}" style="color:var(--accent)">${esc(val)}</a>`;
+    if (label === 'Email') display = `<a href="mailto:${encodeURIComponent(val)}" style="color:var(--accent)">${esc(val)}</a>`;
     html += `<div style="color:var(--text3);font-weight:500">${label}</div><div style="color:var(--text)">${display}</div>`;
   }
   html += '</div>';
   // Action buttons
   html += '<div style="display:flex;gap:8px;margin-top:20px">';
-  if (record.phone) html += `<a href="tel:${esc(record.phone)}" class="act-btn primary" style="text-decoration:none;font-size:13px;padding:8px 16px">&#x260E; Call</a>`;
-  if (record.email) html += `<a href="mailto:${esc(record.email)}" class="act-btn" style="text-decoration:none;font-size:13px;padding:8px 16px">&#x2709; Email</a>`;
+  if (record.phone) html += `<a href="tel:${encodeURIComponent(record.phone)}" class="act-btn primary" style="text-decoration:none;font-size:13px;padding:8px 16px">&#x260E; Call</a>`;
+  if (record.email) html += `<a href="mailto:${encodeURIComponent(record.email)}" class="act-btn" style="text-decoration:none;font-size:13px;padding:8px 16px">&#x2709; Email</a>`;
   html += '</div>';
   html += '</div>';
   return html;
@@ -3618,8 +3618,8 @@ function renderActivityDetailBody(record) {
   const locVal = record.company_city_state || (record.company_address && record.company_address !== '0' ? record.company_address : '');
   if(locVal) html += `<div class="detail-row"><span class="detail-lbl">Location:</span> <span class="detail-val">${esc(locVal)}</span></div>`;
   if(record.contact_name) html += `<div class="detail-row"><span class="detail-lbl">Contact:</span> <span class="detail-val">${esc(record.contact_name)}</span></div>`;
-  if(record.email) html += `<div class="detail-row"><span class="detail-lbl">Email:</span> <span class="detail-val"><a href="mailto:${esc(record.email)}">${esc(record.email)}</a></span></div>`;
-  if(record.phone) html += `<div class="detail-row"><span class="detail-lbl">Phone:</span> <span class="detail-val"><a href="tel:${esc(record.phone)}">${esc(record.phone)}</a></span></div>`;
+  if(record.email) html += `<div class="detail-row"><span class="detail-lbl">Email:</span> <span class="detail-val"><a href="mailto:${encodeURIComponent(record.email)}">${esc(record.email)}</a></span></div>`;
+  if(record.phone) html += `<div class="detail-row"><span class="detail-lbl">Phone:</span> <span class="detail-val"><a href="tel:${encodeURIComponent(record.phone)}">${esc(record.phone)}</a></span></div>`;
   if(record.activity_date) html += `<div class="detail-row"><span class="detail-lbl">Date:</span> <span class="detail-val">${esc(record.activity_date)}</span></div>`;
   if(record.status) html += `<div class="detail-row"><span class="detail-lbl">Status:</span> <span class="detail-val">${esc(record.status)}</span></div>`;
   if(record.nm_type || record.task_subtype) html += `<div class="detail-row"><span class="detail-lbl">Type:</span> <span class="detail-val">${esc(record.nm_type || record.task_subtype)}</span></div>`;
@@ -3631,8 +3631,8 @@ function renderActivityDetailBody(record) {
   html += '<div class="detail-actions">';
   html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${safeJSON({sf_contact_id:record.sf_contact_id||'',sf_company_id:record.sf_company_id||'',name:record.contact_name||record.company_name||''})})">&#x260E; Log Call</button>`;
   if(record.sf_link) html += `<a href="${safeHref(record.sf_link)}" target="_blank" rel="noopener" class="act-btn">&#x2197; Salesforce</a>`;
-  if(record.phone) html += `<a href="tel:${esc(record.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
-  if(record.email) html += `<a href="mailto:${esc(record.email)}" class="act-btn">&#x2709; Email</a>`;
+  if(record.phone) html += `<a href="tel:${encodeURIComponent(record.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
+  if(record.email) html += `<a href="mailto:${encodeURIComponent(record.email)}" class="act-btn">&#x2709; Email</a>`;
   html += '</div>';
   
   html += '</div>';

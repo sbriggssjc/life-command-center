@@ -1524,7 +1524,7 @@ const _SF_BASE = 'https://northmarqcapital.lightning.force.com/lightning/r';
 /** Build a styled quick-link button */
 function _qlBtn(label, url, icon, color) {
   if (!url) return '';
-  return `<a href="${esc(url)}" target="_blank" rel="noopener" class="ql-btn" style="--ql-color:${color}" title="${esc(label)}">
+  return `<a href="${esc(url).replace(/"/g, '&quot;')}" target="_blank" rel="noopener" class="ql-btn" style="--ql-color:${color}" title="${esc(label)}">
     <span class="ql-icon">${icon}</span>
     <span class="ql-label">${esc(label)}</span>
   </a>`;

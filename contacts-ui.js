@@ -454,10 +454,10 @@ function buildContactOverview() {
   // Contact info
   h += '<div class="detail-section">';
   h += '<div class="detail-section-title">Contact Info</div>';
-  if (c.email) h += detailRow('Email', `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`);
+  if (c.email) h += detailRow('Email', `<a href="mailto:${encodeURIComponent(c.email)}">${esc(c.email)}</a>`);
   if (c.email_secondary) h += detailRow('Email 2', esc(c.email_secondary));
-  if (c.phone) h += detailRow('Phone', `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`);
-  if (c.mobile_phone) h += detailRow('Mobile', `<a href="tel:${esc(c.mobile_phone)}">${esc(c.mobile_phone)}</a>`);
+  if (c.phone) h += detailRow('Phone', `<a href="tel:${encodeURIComponent(c.phone)}">${esc(c.phone)}</a>`);
+  if (c.mobile_phone) h += detailRow('Mobile', `<a href="tel:${encodeURIComponent(c.mobile_phone)}">${esc(c.mobile_phone)}</a>`);
   if (c.city || c.state) h += detailRow('Location', esc([c.city, c.state].filter(Boolean).join(', ')));
   if (c.website) h += detailRow('Website', `<a href="${safeHref(c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`);
   h += '</div>';
