@@ -287,6 +287,9 @@ function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.
 // Safe JSON for embedding in HTML onclick attributes — escapes <, >, &, ', "
 function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;').replace(/"/g,'&quot;'); }
 
+// Safe URL for href attributes — blocks javascript: and data: schemes
+function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
+
 // Display normalization — title case, clean formatting for consistent display
 function norm(s) {
   if (!s) return '';
@@ -938,7 +941,7 @@ function renderBizContent() {
     html += '<div style="text-align:center;padding:32px;color:var(--text2)">No activities match your filters.</div>';
   } else {
     for (const a of pageItems) {
-      const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
+      const sfBtn = a.sf_link ? `<a href="${safeHref(a.sf_link)}" target="_blank" rel="noopener" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
       html += `<div class="act-item" onclick='showDetail(${safeJSON(a)})'>
         <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
         <div class="act-meta">
@@ -991,7 +994,7 @@ function renderBizSubset(subset) {
   const totalPages = Math.ceil(_bizSubsetData.length / PAGE_SIZE);
   let html = `<div style="margin-bottom:12px;font-size:14px;color:var(--text2)">${_bizSubsetData.length} results · <a href="#" onclick="event.preventDefault();renderBizContent()">Clear filter</a></div>`;
   for (const a of pageItems) {
-    const sfBtn = a.sf_link ? `<a href="${a.sf_link}" target="_blank" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
+    const sfBtn = a.sf_link ? `<a href="${safeHref(a.sf_link)}" target="_blank" rel="noopener" class="act-btn" onclick="event.stopPropagation()">&#x2197; Salesforce</a>` : '';
     html += `<div class="act-item" onclick='showDetail(${safeJSON(a)})'>
       <div class="act-top"><div class="act-subject">${esc(a.subject || '(No subject)')}</div><div class="act-date">${formatDate(a.activity_date)}</div></div>
       <div class="act-meta"><span class="act-company">${esc(a.company_name || '')}${a.company_city_state ? ' · ' + esc(a.company_city_state) : ''}</span><span class="act-cat ${catClass(a.computed_category)}">${esc(a.computed_category)}</span></div>
@@ -3273,10 +3276,10 @@ function renderProspects() {
         if (section.items.length === 0) return;
         html += '<div class="search-results-section"><h4>' + esc(section.title) + ' (' + section.items.length + ')</h4>';
         section.items.forEach(r => {
-          const clickAttr = r._source ? ' onclick=\'showDetail(' + safeJSON(r) + ', "' + r._source + '")\'' : '';
+          const clickAttr = r._source ? ' onclick=\'showDetail(' + safeJSON(r) + ', &quot;' + esc(r._source) + '&quot;)\'' : '';
           html += '<div class="search-card"' + clickAttr + '>';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(r._title || '—') + '</span>';
-          html += '<span class="search-card-badge" style="background: ' + r._badgeBg + '; color: ' + r._badgeColor + ';">' + esc(r._badge) + '</span></div>';
+          html += '<span class="search-card-badge" style="background: ' + esc(r._badgeBg || '') + '; color: ' + esc(r._badgeColor || '') + ';">' + esc(r._badge) + '</span></div>';
           html += '<div class="search-card-meta">';
           (r._meta || []).forEach(m => { html += '<span>' + esc(m) + '</span>'; });
           html += '</div></div>';
@@ -3623,7 +3626,7 @@ function renderActivityDetailBody(record) {
   
   html += '<div class="detail-actions">';
   html += `<button class="act-btn primary" onclick="closeDetail();openLogCall(${safeJSON({sf_contact_id:record.sf_contact_id||'',sf_company_id:record.sf_company_id||'',name:record.contact_name||record.company_name||''})})">&#x260E; Log Call</button>`;
-  if(record.sf_link) html += `<a href="${record.sf_link}" target="_blank" class="act-btn">&#x2197; Salesforce</a>`;
+  if(record.sf_link) html += `<a href="${safeHref(record.sf_link)}" target="_blank" rel="noopener" class="act-btn">&#x2197; Salesforce</a>`;
   if(record.phone) html += `<a href="tel:${esc(record.phone)}" class="act-btn">&#x1F4DE; Call</a>`;
   if(record.email) html += `<a href="mailto:${esc(record.email)}" class="act-btn">&#x2709; Email</a>`;
   html += '</div>';
@@ -4702,7 +4705,7 @@ function renderRecentEmails() {
       <div class="email-subj">${esc(e.subject || '(No subject)')}</div>
       <div class="email-from"><span>${esc(e.sender_name || e.sender_email || '')}</span><span>${formatDate(e.received_date)}</span></div>
       ${preview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(preview)}</div>` : ''}
-      ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
+      ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
     </div>`;
   }
   return html;
@@ -5047,7 +5050,7 @@ function renderMessages() {
       </div>
       <div class="msg-subject">${esc(m.subject)}</div>
       ${m.preview ? `<div class="msg-preview">${esc(m.preview)}</div>` : ''}
-      ${m.link ? `<a href="${esc(m.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
+      ${m.link ? `<a href="${safeHref(m.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
     </div>`;
   }
   if (items.length > 50) html += `<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 50 of ${items.length} messages</div>`;

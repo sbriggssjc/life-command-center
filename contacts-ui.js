@@ -826,8 +826,8 @@ function buildDataQuality() {
 
 function dqCard(label, value, colorVar) {
   return `<div class="uc-dq-card">
-    <div class="uc-dq-val" style="color:var(${colorVar})">${(value || 0).toLocaleString()}</div>
-    <div class="uc-dq-lbl">${label}</div>
+    <div class="uc-dq-val" style="color:var(${esc(colorVar)})">${(value || 0).toLocaleString()}</div>
+    <div class="uc-dq-lbl">${esc(label)}</div>
   </div>`;
 }
 
