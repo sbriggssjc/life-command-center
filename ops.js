@@ -1671,6 +1671,13 @@ async function quickTransition(itemId, newStatus, itemType) {
   if (_quickTransitioning) return;
   _quickTransitioning = true;
   try {
+    if (newStatus === 'completed') {
+      const ok = await lccConfirm('Mark this item as completed? This cannot be undone.', 'Complete');
+      if (!ok) {
+        _quickTransitioning = false;
+        return;
+      }
+    }
     const statusLabels = { in_progress: 'Started', completed: 'Completed', waiting: 'Set to waiting', open: 'Reopened' };
     const path = itemType === 'inbox' ? `/api/inbox?id=${itemId}` : `/api/actions?id=${itemId}`;
     showToast(`Updating...`, 'info');

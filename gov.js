@@ -1742,6 +1742,10 @@ async function saveOwnership(rec) {
   const trueOwner = q('#res-own-true-owner')?.value || null;
   const researchNotes = q('#res-own-notes')?.value || null;
 
+  // Validate that at least one field is populated
+  const _anyOwnField = [saleDate, salePrice, capRate, buyer, seller, recordedOwner, trueOwner, researchNotes].some(v => v !== null && v !== undefined && String(v).trim() !== '');
+  if (!_anyOwnField) { showToast('Please fill in at least one field before saving', 'info'); return; }
+
   // Use Gov write service for ownership updates
   const propertyId = rec.matched_property_id || rec.property_id;
   let writeResult = null;
@@ -2247,14 +2251,14 @@ async function patchRecord(table, idCol, idVal, data) {
 
     if (!result.ok) {
       console.error(`patchRecord error: ${(result.errors || []).join(', ')}`);
-      showToast('Error saving data', 'error');
+      showToast('Error saving ' + table + ': ' + (result.errors ? result.errors.join(', ') : 'unknown error'), 'error');
       return false;
     }
 
     return true;
   } catch (err) {
     console.error('patchRecord error:', err);
-    showToast('Error saving', 'error');
+    showToast('Error saving ' + table + ': ' + (err.message || 'unknown error'), 'error');
     return false;
   }
 }
