@@ -1218,7 +1218,7 @@ function _udTabOwnership() {
   html += '<div id="udTemplateBody" style="font-size:12px;padding:12px;background:var(--s2);border-radius:8px;color:var(--text2);max-height:200px;overflow-y:auto;line-height:1.5"></div>';
   html += '<div style="display:flex;gap:8px;margin-top:12px">';
   html += '<button class="act-btn primary" onclick="_udSendTemplate()">&#x2709; Open in Email Client</button>';
-  html += '<button class="act-btn" onclick="_udActionBtnGuard(this, _udCopyTemplate)">&#x1F4CB; Copy to Clipboard</button>';
+  html += '<button class="act-btn" onclick="_udCopyTemplate()">&#x1F4CB; Copy to Clipboard</button>';
   html += '</div>';
   html += '</div>';
   html += '</div></div>';
@@ -1583,7 +1583,7 @@ function _udAssistantSection(mode, title, subtitle) {
   } else if (state.reply) {
     body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-        <button class="q-action" onclick="_udActionBtnGuard(this, _udCopyAssistantReply, '${mode}')">Copy</button>
+        <button class="q-action" onclick="_udCopyAssistantReply('${mode}')">Copy</button>
         ${mode === 'ownership' ? `<button class="q-action" onclick="_udApplyAssistantFields('${mode}')">Apply Extracted Facts to Fields</button>` : ''}
         ${mode === 'ownership' ? `<button class="q-action primary" onclick="_udSaveReviewedOwnership()">Save Reviewed Ownership</button>` : ''}
         <button class="q-action primary" onclick="_udApplyAssistantReply('${mode}')">${mode === 'ownership' ? 'Apply to Ownership Notes' : 'Apply to Research Notes'}</button>
@@ -1595,7 +1595,7 @@ function _udAssistantSection(mode, title, subtitle) {
     <div style="font-size:12px;color:var(--text3);margin-bottom:10px">${esc(subtitle)}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
       <button class="q-action primary" onclick="_udAskAssistant('${mode}')">Assist</button>
-      <button class="q-action" onclick="_udActionBtnGuard(this, ${mode === 'ownership' ? 'openResearchInChatGPT' : 'openResearchInClaude'})">${mode === 'ownership' ? 'Export to ChatGPT' : 'Export to Claude'}</button>
+      <button class="q-action" onclick="${mode === 'ownership' ? 'openResearchInChatGPT()' : 'openResearchInClaude()'}">${mode === 'ownership' ? 'Export to ChatGPT' : 'Export to Claude'}</button>
     </div>
     <div id="udAssistantPanel_${mode}" class="assistant-panel">${body}</div>
   </div>`;
@@ -2461,12 +2461,12 @@ async function exportResearchToAssistant(provider) {
   showToast(`Research brief copied. Paste it into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'success');
 }
 
-async function openResearchInChatGPT() {
-  await exportResearchToAssistant('chatgpt');
+function openResearchInChatGPT() {
+  exportResearchToAssistant('chatgpt');
 }
 
-async function openResearchInClaude() {
-  await exportResearchToAssistant('claude');
+function openResearchInClaude() {
+  exportResearchToAssistant('claude');
 }
 
 /** System links — Salesforce records + email for the Ownership tab */

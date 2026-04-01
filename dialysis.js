@@ -4043,31 +4043,26 @@ function renderDiaDetailActivity(record) {
 /**
  * Save research status from detail panel
  */
-async function saveDiaDetailResearch() {
+function saveDiaDetailResearch() {
   const status = document.getElementById('diaDetailStatus')?.value;
   const notes = document.getElementById('diaDetailNotes')?.value;
-
+  
   if (!status) {
     showToast('Please select a status', 'warning');
     return;
   }
-
+  
   // Get clinic ID from the current detail panel context
+  // This assumes the showDetail function sets a global context or we extract from form
   const clinicIdEl = document.querySelector('[data-clinic-id]');
   const clinicId = clinicIdEl ? clinicIdEl.getAttribute('data-clinic-id') : null;
-
+  
   if (!clinicId) {
     showToast('Clinic ID not found', 'error');
     return;
   }
-
-  const btn = document.querySelector('[onclick*="saveDiaDetailResearch"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; btn.style.opacity = '0.6'; }
-  try {
-    await saveDiaOutcome('property_review', clinicId, status, null, notes);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = ''; }
-  }
+  
+  saveDiaOutcome('property_review', clinicId, status, null, notes);
 }
 
 // ============================================================================
@@ -5250,9 +5245,6 @@ async function execDiaSearch() {
   const term = input.value.trim();
   if (!term) return;
 
-  const searchBtn = document.querySelector('[onclick*="execDiaSearch"]');
-  if (searchBtn) { searchBtn.disabled = true; searchBtn.textContent = 'Searching\u2026'; searchBtn.style.opacity = '0.6'; }
-
   diaSearchTerm = term;
   diaSearching = true;
   _diaSearchExpanded = {}; // Reset expansion state on new search
@@ -5279,11 +5271,9 @@ async function execDiaSearch() {
   } catch (err) {
     console.error('Dia search error:', err);
     diaSearchResults = { clinics: [], npiSignals: [], propQueue: [], outcomes: [] };
-    showToast('Search failed: ' + err.message, 'error');
   }
 
   diaSearching = false;
-  if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = 'Search'; searchBtn.style.opacity = ''; }
   renderDiaTab();
 }
 
@@ -5933,9 +5923,6 @@ async function saveDiaOwnershipResolution() {
   const propertyId = record.property_id;
   if (!propertyId) { showToast('No property ID — cannot save ownership', 'error'); return; }
 
-  const _saveBtn = document.querySelector('[onclick*="saveDiaOwnershipResolution"]');
-  if (_saveBtn) { _saveBtn.disabled = true; _saveBtn.textContent = 'Saving\u2026'; _saveBtn.style.opacity = '0.6'; }
-
   const recordedOwner = q('#dia-own-recorded')?.value?.trim() || null;
   const trueOwner     = q('#dia-own-true')?.value?.trim() || null;
   const ownerType     = q('#dia-own-type')?.value || null;
@@ -5980,19 +5967,12 @@ async function saveDiaOwnershipResolution() {
       });
       if (!result.ok) {
         console.error('Ownership resolution save error:', result.errors || []);
-        showToast('Ownership outcome log failed — resolution may be incomplete', 'error');
-        if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = 'Save Ownership'; _saveBtn.style.opacity = ''; }
-        return;
       }
     } catch (e) {
       console.error('Ownership resolution POST error:', e);
-      showToast('Save error: ' + e.message, 'error');
-      if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = 'Save Ownership'; _saveBtn.style.opacity = ''; }
-      return;
     }
   }
 
-  if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = 'Save Ownership'; _saveBtn.style.opacity = ''; }
   showToast('Ownership resolution saved!', 'success');
   canonicalBridge('save_ownership', {
     domain: 'dialysis',
