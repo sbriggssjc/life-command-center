@@ -1635,12 +1635,11 @@ async function researchSave() {
   
   researchCompleted++;
   researchIdx++;
-
+  
   if (researchIdx >= researchQueue.length) {
     renderGovTab();
-    showToast('Research queue complete! All items reviewed.', 'success');
+    showToast('Research complete!', 'success');
   } else {
-    showToast('Saved — advancing to next item (' + researchIdx + '/' + researchQueue.length + ')', 'success');
     renderGovTab();
   }
 }
@@ -2210,8 +2209,6 @@ async function researchMark(mark) {
     }
   }
 
-  const markLabel = mark === 'spe_rename' ? 'SPE Rename' : mark === 'na' ? 'N/A' : mark;
-  showToast('Marked as ' + markLabel, 'info');
   researchIdx++;
   renderGovTab();
 }
@@ -3744,25 +3741,19 @@ async function govPatch(table, filterStr, data) {
 }
 
 window.resolveGovPendingUpdate = async function(id, resolution) {
-  if (resolution === 'rejected' && !confirm('Reject this pending update? The proposed change will be discarded.')) return;
-  if (resolution === 'expired' && !confirm('Expire this update? It will no longer be actionable.')) return;
-
   const notes = document.getElementById('pu-notes')?.value || '';
   try {
     await govPatch('pending_updates', 'id=eq.' + id, {
       status: resolution,
       resolved_by: 'dashboard',
-      resolved_at: new Date().toISOString(),
-      resolution_notes: notes || null
+      resolved_at: new Date().toISOString()
     });
     govPendingUpdates = govPendingUpdates.filter(r => r.id !== id);
     govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, Math.max(0, govPendingUpdates.length - 1));
-    const label = resolution === 'approved' ? 'Approved' : resolution === 'rejected' ? 'Rejected' : 'Expired';
-    showToast('Update ' + label.toLowerCase(), 'success');
     renderGovTab();
   } catch(e) {
     console.error('resolveGovPendingUpdate error:', e);
-    showToast('Failed to resolve update: ' + e.message, 'error');
+    if (typeof showToast === 'function') showToast('Failed to resolve update: ' + e.message, 'error');
   }
 };
 
@@ -3982,10 +3973,9 @@ window.searchFinancialProperty = async function() {
     const data = result.data || [];
     if (data && data.length > 0) {
       govFinOverrideRec = data[0];
-      showToast('Property found: ' + (data[0].address || data[0].lease_number || 'ID ' + data[0].id), 'success');
       renderGovTab();
     } else {
-      showToast('No property found matching that search', 'error');
+      alert('Property not found');
     }
   } catch(e) {
     console.error('searchFinancialProperty error:', e);
@@ -4005,11 +3995,9 @@ window.applyFinancialOverride = async function() {
   });
 
   if (Object.keys(updates).length === 0) {
-    showToast('Please enter at least one override value', 'error');
+    alert('Please enter at least one override value');
     return;
   }
-
-  if (!confirm('Apply financial override to ' + (govFinOverrideRec.address || 'this property') + '? This will overwrite existing values.')) return;
 
   try {
     await govPatch('properties', 'id=eq.' + govFinOverrideRec.id, {
@@ -4018,12 +4006,12 @@ window.applyFinancialOverride = async function() {
       authority_rank: 100
     });
 
-    showToast('Financial override applied successfully', 'success');
+    alert('Financial override applied successfully');
     govFinOverrideRec = null;
     renderGovTab();
   } catch(e) {
     console.error('applyFinancialOverride error:', e);
-    showToast('Error applying override: ' + e.message, 'error');
+    alert('Error applying override: ' + e.message);
   }
 };
 
@@ -4139,78 +4127,28 @@ function renderGovPipelineControl() {
 // PIPELINE OPS SECTION - MONITOR DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════════
 
-async function loadGovMonitorData() {
-  if (govMonitorLoading) return;
-  govMonitorLoading = true;
-  try {
-    // Load lead gaps from prospect_leads
-    const leads = govData.leads || [];
-    const noMatch = leads.filter(l => !l.matched_property_id).length;
-    const noContact = leads.filter(l => !l.contact_email && !l.contact_phone).length;
-    const noResearch = leads.filter(l => !l.research_status || l.research_status === 'pending').length;
-
-    // Load data freshness from ingestion metadata if available
-    let freshness = [];
-    try {
-      const fResult = await govQuery('ingestion_log', 'source,max_ingested_at', { order: 'max_ingested_at.desc', limit: 10 });
-      freshness = (fResult.data || []).map(row => {
-        const daysOld = row.max_ingested_at ? Math.floor((Date.now() - new Date(row.max_ingested_at).getTime()) / 86400000) : null;
-        return { source: row.source, daysOld: daysOld };
-      });
-    } catch(e) {
-      // Fallback: use known data sources with property timestamps
-      const props = govData.properties || [];
-      const latestProp = props.length > 0 && props[0].updated_at ? Math.floor((Date.now() - new Date(props[0].updated_at).getTime()) / 86400000) : null;
-      freshness = [
-        { source: 'Properties DB', daysOld: latestProp }
-      ];
-    }
-
-    // Research completion stats
-    const ownership = govData.ownership || [];
-    const completed = ownership.filter(o => o.research_status === 'completed').length;
-    const total = ownership.length;
-
-    govMonitorData = { noMatch, noContact, noResearch, freshness, researchCompleted: completed, researchTotal: total };
-  } catch(e) {
-    console.error('loadGovMonitorData error:', e);
-    govMonitorData = { noMatch: 0, noContact: 0, noResearch: 0, freshness: [], researchCompleted: 0, researchTotal: 0 };
-  }
-  govMonitorLoading = false;
-  renderGovTab();
-}
-
 function renderGovMonitorDashboard() {
-  if (!govMonitorData && !govMonitorLoading) {
-    loadGovMonitorData();
-    return '<div class="gov-loading"><div class="spinner"></div> Loading monitor data...</div>';
-  }
-  if (govMonitorLoading) {
-    return '<div class="gov-loading"><div class="spinner"></div> Loading monitor data...</div>';
-  }
-
-  const d = govMonitorData;
   let html = '<div class="pipeline-ops-panel">';
 
   html += `<div class="pipeline-header">
     <div class="header-title">Monitor Dashboard</div>
     <div class="header-subtitle">Data health, freshness, and quality metrics</div>
-    <button class="btn-action default" onclick="govMonitorData=null;loadGovMonitorData();" style="margin-left:auto;padding:4px 10px;font-size:11px;">Refresh</button>
   </div>`;
 
-  // Panel 1: Lead Gap Report (live data)
+  // Panel 1: Lead Gap Report
   html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
   html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Lead Gap Report</h3>';
   html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Counts of leads with missing critical data</div>';
 
+  // Placeholder bars (would load from prospect_leads with aggregation)
   html += '<div style="display: grid; gap: 12px;">';
   const gapMetrics = [
-    {label: 'No Property Match', value: d.noMatch},
-    {label: 'No Contact Info', value: d.noContact},
-    {label: 'No Research', value: d.noResearch}
+    {label: 'No Property Match', value: 245},
+    {label: 'No Contact Info', value: 89},
+    {label: 'No Research', value: 156}
   ];
 
-  const maxVal = Math.max(...gapMetrics.map(m => m.value), 1);
+  const maxVal = Math.max(...gapMetrics.map(m => m.value));
   gapMetrics.forEach(metric => {
     const pct = (metric.value / maxVal) * 100;
     html += `<div>
@@ -4226,43 +4164,60 @@ function renderGovMonitorDashboard() {
   html += '</div>';
   html += '</div>';
 
-  // Panel 2: Data Freshness (live data)
+  // Panel 2: Data Freshness
   html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
   html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Data Freshness by Source</h3>';
-  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Days since last data update</div>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Days since last successful ingestion</div>';
+
+  const freshnessData = [
+    {source: 'GSA Lease DB', daysOld: 2, status: 'green'},
+    {source: 'FRPP Feed', daysOld: 5, status: 'green'},
+    {source: 'CoStar Data', daysOld: 22, status: 'yellow'},
+    {source: 'County Records', daysOld: 45, status: 'red'}
+  ];
 
   html += '<div style="display: grid; gap: 8px;">';
-  if (d.freshness.length === 0) {
-    html += '<div style="padding: 12px; text-align: center; color: var(--text3); font-size: 12px;">No ingestion log data available</div>';
-  } else {
-    d.freshness.forEach(item => {
-      const statusColor = item.daysOld === null ? '#6b7280' : item.daysOld < 7 ? '#10b981' : item.daysOld < 30 ? '#f59e0b' : '#ef4444';
-      const daysLabel = item.daysOld !== null ? item.daysOld + ' days old' : 'Unknown';
-      html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--s2); border-radius: 4px; border: 1px solid var(--border);">
-        <span style="font-size: 12px; font-weight: 500;">${esc(item.source)}</span>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 12px; color: var(--text3);">${daysLabel}</span>
-          <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
-        </div>
-      </div>`;
-    });
-  }
+  freshnessData.forEach(item => {
+    const statusColor = item.status === 'green' ? '#10b981' : item.status === 'yellow' ? '#f59e0b' : '#ef4444';
+    html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--s2); border-radius: 4px; border: 1px solid var(--border);">
+      <span style="font-size: 12px; font-weight: 500;">${esc(item.source)}</span>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 12px; color: var(--text3);">${item.daysOld} days old</span>
+        <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
+      </div>
+    </div>`;
+  });
   html += '</div>';
   html += '</div>';
 
-  // Panel 3: Research Progress (live data)
+  // Panel 3: Score Distribution
   html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
-  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Research Progress</h3>';
-  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Ownership changes with completed research</div>';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Investment Score Distribution</h3>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Properties by investment grade</div>';
 
-  const resPct = d.researchTotal > 0 ? Math.round((d.researchCompleted / d.researchTotal) * 100) : 0;
-  html += `<div style="margin-bottom: 8px; display: flex; justify-content: space-between;">
-    <span style="font-size: 12px; font-weight: 500;">${d.researchCompleted} of ${d.researchTotal} completed</span>
-    <span style="font-size: 12px; color: var(--text3);">${resPct}%</span>
-  </div>`;
-  html += `<div style="height: 24px; background: var(--s3); border-radius: 3px; overflow: hidden;">
-    <div style="height: 100%; width: ${resPct}%; background: linear-gradient(90deg, #10b981, #34d399); border-radius: 3px; transition: width 0.3s;"></div>
-  </div>`;
+  const scoreData = [
+    {grade: 'A', count: 145, color: '#10b981'},
+    {grade: 'B', count: 423, color: '#3b82f6'},
+    {grade: 'C', count: 687, color: '#f59e0b'},
+    {grade: 'D', count: 234, color: '#f97316'},
+    {grade: 'F', count: 89, color: '#ef4444'}
+  ];
+
+  const maxCount = Math.max(...scoreData.map(d => d.count));
+  html += '<div style="display: grid; gap: 12px;">';
+  scoreData.forEach(item => {
+    const pct = (item.count / maxCount) * 100;
+    html += `<div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 12px; font-weight: 600; width: 20px;">Grade ${esc(String(item.grade))}</span>
+        <span style="font-size: 12px; color: var(--text3);">${item.count} properties</span>
+      </div>
+      <div style="height: 24px; background: var(--s3); border-radius: 3px; overflow: hidden;">
+        <div style="height: 100%; width: ${pct}%; background: ${item.color}; border-radius: 3px;"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
   html += '</div>';
 
   html += '</div>';

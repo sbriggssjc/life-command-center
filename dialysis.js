@@ -1576,12 +1576,8 @@ function renderDiaUnmatchedClinics() {
         const propertyId = propIdEl?.value ? parseInt(propIdEl.value, 10) : null;
 
         if (action === 'resolve' && !propertyId) {
-          showToast('Please select or enter a Property ID', 'error');
+          alert('Please select or enter a Property ID');
           return;
-        }
-
-        if (action === 'dismiss') {
-          if (!confirm('Dismiss this unmatched record? It cannot be undone from this view.')) return;
         }
 
         resolveDiaUnmatched(item.id, action, propertyId);
@@ -1660,8 +1656,8 @@ function renderDiaQuarantineReview() {
 
     // Action buttons
     html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
-    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px;" disabled title="Coming soon — re-ingest after manual fix">Fix & Re-ingest</button>`;
-    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px;" disabled title="Coming soon — merge with existing record">Merge</button>`;
+    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px;">Fix & Re-ingest</button>`;
+    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px;">Merge</button>`;
     html += `<button class="btn-action danger" data-q-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
     html += '</div>';
 
@@ -1688,11 +1684,10 @@ function renderDiaQuarantineReview() {
         if (!item) return;
 
         console.debug('Quarantine action:', action, item);
+        // Placeholder for action handling
         if (action === 'dismiss') {
-          if (!confirm('Dismiss this quarantined record? It will be removed from the queue.')) return;
           diaQuarantineQueue = diaQuarantineQueue.filter((_, i) => i !== diaQuarantineIdx);
           diaQuarantineIdx = Math.min(diaQuarantineIdx, Math.max(0, diaQuarantineQueue.length - 1));
-          showToast('Quarantine record dismissed', 'success');
           renderDiaTab();
         }
       });
@@ -1784,43 +1779,19 @@ function renderDiaClarificationQueue() {
     });
 
     document.querySelectorAll('[data-cl-action]').forEach(btn => {
-      btn.addEventListener('click', async e => {
+      btn.addEventListener('click', e => {
         const action = e.target.dataset.clAction;
         const item = diaClarificationQueue[diaClarificationIdx];
         if (!item) return;
 
         const response = document.getElementById('cl-response')?.value || '';
+        const notes = action === 'submit' ? response : '';
 
         console.debug('Clarification action:', action, item);
-        if (action === 'submit') {
-          if (!response.trim()) {
-            showToast('Please enter your response before submitting', 'error');
-            return;
-          }
-          // Write clarification response to the source record
-          try {
-            if (item.table_name && item.record_id) {
-              await diaPatchRecord(item.table_name, item.id_column || 'id', item.record_id, {
-                [item.field_name || 'clarification_response']: response.trim(),
-                clarification_status: 'resolved'
-              });
-            }
-            showToast('Clarification submitted!', 'success');
-          } catch(err) {
-            console.error('Clarification submit error:', err);
-            showToast('Saved locally — will sync when connection is restored', 'info');
-          }
+        // Placeholder for action handling
+        if (action === 'skip' || action === 'cannot-determine') {
           diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
           diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
-          renderDiaTab();
-        } else if (action === 'cannot-determine') {
-          if (!confirm('Mark this as "Cannot Determine"? The item will be removed from your queue.')) return;
-          diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
-          diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
-          showToast('Marked as cannot determine', 'info');
-          renderDiaTab();
-        } else if (action === 'skip') {
-          diaClarificationIdx = Math.min(diaClarificationIdx + 1, Math.max(0, diaClarificationQueue.length - 1));
           renderDiaTab();
         }
       });
@@ -1970,10 +1941,10 @@ function renderDiaRunHealth() {
 
       // Expandable error detail
       if (run.error_summary || run.error_log) {
-        html += `<div id="rh-detail-${idx}" style="display: none; padding: 12px; background: var(--s3); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text2); max-height: 150px; overflow-y: auto;">`;
+        html += `<div id="rh-detail-${idx}" style="display: none; padding: 12px; background: var(--s3); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text2); max-height: 150px; overflow-y: auto;"`;
         if (run.error_summary) html += `<div><strong>Error:</strong> ${esc(run.error_summary)}</div>`;
         if (run.error_log) html += `<div style="margin-top: 8px; font-family: monospace; white-space: pre-wrap; word-break: break-word;">${esc(run.error_log.substring(0, 300))}</div>`;
-        html += `</div>`;
+        html += `></div>`;
       }
     });
   }
@@ -2030,16 +2001,12 @@ async function resolveDiaUnmatched(updateId, action, propertyId) {
     if (ok) {
       diaUnmatchedQueue = diaUnmatchedQueue.filter(r => r.id !== updateId);
       diaUnmatchedIdx = Math.min(diaUnmatchedIdx, Math.max(0, diaUnmatchedQueue.length - 1));
-      const actionLabel = action === 'dismiss' ? 'Dismissed' : action === 'resolve' ? 'Linked to property' : action === 'create' ? 'New property created' : 'Skipped';
-      showToast(actionLabel, 'success');
       renderDiaTab();
     } else {
       console.error('Failed to resolve unmatched record:', updateId);
-      showToast('Failed to resolve record — please try again', 'error');
     }
   } catch(e) {
     console.error('Error resolving unmatched:', e);
-    showToast('Error: ' + e.message, 'error');
   }
 }
 
