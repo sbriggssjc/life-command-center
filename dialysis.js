@@ -1387,7 +1387,6 @@ async function loadDiaStalenessData() {
   } catch(e) {
     console.error('loadDiaStalenessData error:', e);
     diaStalenessData = [];
-    showToast('Staleness data load failed: ' + e.message, 'error');
   }
   diaStalenessLoading = false;
   renderDiaTab();
@@ -2502,7 +2501,6 @@ function renderDiaPropertyCard(item) {
         const currentIdx = diaPropertyFilter.selectedIdx || 0;
         if (currentIdx + 1 < filtered.length) {
           diaPropertyFilter.selectedIdx = currentIdx + 1;
-          showToast('Skipped \u2014 ' + (currentIdx + 2) + ' / ' + filtered.length, 'info');
         } else {
           diaPropertyFilter.selectedIdx = undefined;
           showToast('End of queue reached', 'info');
@@ -2844,7 +2842,6 @@ function renderDiaLeaseCard(item) {
         const currentIdx = diaLeaseFilter.selectedIdx || 0;
         if (currentIdx + 1 < filtered.length) {
           diaLeaseFilter.selectedIdx = currentIdx + 1;
-          showToast('Skipped \u2014 ' + (currentIdx + 2) + ' / ' + filtered.length, 'info');
         } else {
           diaLeaseFilter.selectedIdx = undefined;
           showToast('End of queue reached', 'info');
@@ -3270,7 +3267,6 @@ function renderClinicLeadCard(rec) {
       if (skipBtn) {
         skipBtn.addEventListener('click', () => {
           diaClinicLeadFilter.selectedIdx = undefined;
-          showToast('Skipped \u2014 returned to list', 'info');
           renderDiaTab();
         });
       }
