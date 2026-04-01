@@ -520,8 +520,8 @@
     errCount++;
     console.error('[LCC ' + type + '] ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : ''));
     /* Show brief toast for user-facing awareness (if toast helper exists) */
-    if (typeof showToast === 'function' && errCount <= 3) {
-      showToast('Something went wrong — try refreshing', 4000);
+    if (typeof showToast === 'function' && errCount <= 7) {
+      showToast('Something went wrong — try refreshing', 'error');
     }
   }
   window.onerror = function(msg, source, line, col) { report('error', msg, source, line, col); };

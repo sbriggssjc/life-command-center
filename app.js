@@ -1227,27 +1227,30 @@ async function bulkArchiveStaleDeals() {
   const today = localToday();
   const sixMonthsAgo = new Date(new Date(today + 'T00:00:00').getTime() - 180 * 24 * 60 * 60 * 1000)
     .toISOString().split('T')[0];
-  
-  const staleDeals = mktData.filter(d => 
+
+  const staleDeals = mktData.filter(d =>
     d.due_date && d.due_date < sixMonthsAgo && !isArchivedDeal(d.deal_name || d.item_id)
   );
-  
+
   if (staleDeals.length === 0) {
     showToast('No deals older than 6 months to archive.', 'info');
     return;
   }
-  
+
   const message = `Archive ${staleDeals.length} deal${staleDeals.length !== 1 ? 's' : ''} older than 6 months? They will be hidden from the list but can be revealed with "Show Archived".`;
   if (!(await lccConfirm(message, 'Archive'))) return;
+
+  const btn = document.querySelector('[onclick*="bulkArchiveStaleDeals"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Archiving\u2026'; btn.style.opacity = '0.6'; }
 
   const dealIds = new Set();
   staleDeals.forEach(d => {
     const dealId = d.deal_name || d.item_id;
     if (dealId) dealIds.add(dealId);
   });
-  
+
   dealIds.forEach(dealId => archiveDeal(dealId));
-  
+
   showToast(`Archived ${dealIds.size} deal${dealIds.size !== 1 ? 's' : ''}.`, 'success');
   mktPage = 0;
   renderMarketing();

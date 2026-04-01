@@ -4091,6 +4091,8 @@ function renderGovFinancialOverrides() {
 window.searchFinancialProperty = async function() {
   const searchTerm = document.getElementById('fo-property-search')?.value || '';
   if (!searchTerm) return;
+  const btn = document.querySelector('[onclick*="searchFinancialProperty"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching\u2026'; btn.style.opacity = '0.6'; }
   try {
     const filterStr = `or(address.ilike.*${searchTerm}*,lease_number.ilike.*${searchTerm}*)`;
     const result = await govQuery('properties', 'id,address,city,state,lease_number', {
@@ -4107,6 +4109,9 @@ window.searchFinancialProperty = async function() {
     }
   } catch(e) {
     console.error('searchFinancialProperty error:', e);
+    showToast('Search failed: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Search'; btn.style.opacity = ''; }
   }
 };
 
