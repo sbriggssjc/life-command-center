@@ -1809,7 +1809,8 @@ async function saveOwnership(rec) {
   if (salePrice || capRate) {
     try { await saveLoanFields(rec); } catch (err) { console.error('Loan fields save error:', err); _partialWarnings.push('loan fields'); }
   }
-  if (_partialWarnings.length) showToast('Saved with warnings — failed to update: ' + _partialWarnings.join(', '), 'error');
+  if (_partialWarnings.length) { showToast('Saved with warnings — failed to update: ' + _partialWarnings.join(', '), 'error'); return true; }
+  return true;
 }
 
 async function saveLead(rec) {
@@ -1995,6 +1996,8 @@ async function saveLead(rec) {
       }
     });
   }
+  if (_leadPartialWarnings.length) { showToast('Saved with warnings — failed to update: ' + _leadPartialWarnings.join(', '), 'error'); return true; }
+  return true;
 }
 
 async function saveIntel(rec) {
@@ -4184,7 +4187,10 @@ function renderGovPipelineControl() {
     <div class="header-subtitle">${govPipelineError ? '⚠ Load error — showing cached data' : 'Monitor and manage data ingestion runs'}</div>
   </div>`;
   if (govPipelineError) {
-    html += `<div style="padding:10px 14px;margin-bottom:12px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:6px;font-size:12px;color:var(--text2);">${esc(govPipelineError)}</div>`;
+    html += `<div style="padding:10px 14px;margin-bottom:12px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:6px;font-size:12px;color:var(--text2);display:flex;align-items:center;gap:10px;">
+      <span style="flex:1">${esc(govPipelineError)}</span>
+      <button onclick="govPipelineError=null;govPipelineRuns=null;loadGovPipelineRuns().then(renderGovTab)" style="padding:4px 12px;border:1px solid rgba(248,113,113,0.4);border-radius:6px;background:transparent;color:var(--text);font-size:11px;cursor:pointer;white-space:nowrap">Retry</button>
+    </div>`;
   }
 
   const runs = govPipelineRuns || [];

@@ -5911,10 +5911,27 @@ document.addEventListener('visibilitychange', () => {
 });
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(function(err) {
+  navigator.serviceWorker.register('sw.js').then(function(reg) {
+    // ── SW update notification ──
+    reg.addEventListener('updatefound', function() {
+      var newWorker = reg.installing;
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', function() {
+        if (newWorker.state === 'activated' && navigator.serviceWorker.controller) {
+          showToast('Update available — tap to refresh', 'info');
+          var t = document.getElementById('toast');
+          if (t) { t.style.cursor = 'pointer'; t.onclick = function() { window.location.reload(); }; }
+        }
+      });
+    });
+  }).catch(function(err) {
     console.warn('[SW] Registration failed:', err.message);
   });
 }
+
+// ── Online / Offline detection ──
+window.addEventListener('offline', function() { showToast('You are offline — changes may not save', 'error'); });
+window.addEventListener('online', function() { showToast('Back online', 'success'); });
 
 // ============================================================
 // PWA INSTALL PROMPT
