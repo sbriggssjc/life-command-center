@@ -1176,9 +1176,8 @@ function renderOwnershipResearchCard(rec) {
   }
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
-  } else {
-    html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
   }
+  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
   html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
   html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
@@ -1579,9 +1578,8 @@ function renderIntelResearchCard(rec) {
   }
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
-  } else {
-    html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
   }
+  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
   html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
@@ -1602,6 +1600,14 @@ function renderResearchInner() {
     <div class="progress-bar" style="width: ${progress}%"></div>
     <div class="progress-text">${researchIdx + 1} / ${researchQueue.length}</div>
   </div>`;
+
+  // Keyboard shortcut hints
+  html += '<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:8px;font-size:10px;color:var(--text3)">';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">N</kbd> Next</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">B</kbd> Back</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">S</kbd> Save</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">K</kbd> Skip</span>';
+  html += '</div>';
 
   // Render card
   if (researchMode === 'ownership') {
@@ -2209,10 +2215,13 @@ async function researchMark(mark) {
 
 function researchNav(dir) {
   researchIdx += dir;
-  
+
   if (researchIdx < 0) researchIdx = 0;
-  if (researchIdx >= researchQueue.length) researchIdx = Math.max(0, researchQueue.length - 1);
-  
+  if (researchIdx >= researchQueue.length) {
+    researchIdx = Math.max(0, researchQueue.length - 1);
+    showToast('End of queue reached', 'info');
+  }
+
   renderGovTab();
 }
 
@@ -2238,6 +2247,34 @@ function setResearchFilter(filter) {
     renderGovTab();
   });
 }
+
+// Keyboard shortcuts for research workflow
+(function() {
+  document.addEventListener('keydown', function(e) {
+    // Only active when research workbench is visible and no input/textarea is focused
+    if (!document.querySelector('.research-card')) return;
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+    if (e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      if (govResearchStep < 4) {
+        govStepNav(govResearchStep + 1);
+      } else {
+        researchSave();
+      }
+    } else if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      if (govResearchStep > 0) govStepNav(govResearchStep - 1);
+    } else if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      researchSave();
+    } else if (e.key === 'k' || e.key === 'K') {
+      e.preventDefault();
+      researchNav(1);
+    }
+  });
+})();
 
 function getGovEvidenceActor() {
   if (typeof LCC_USER !== 'undefined') {

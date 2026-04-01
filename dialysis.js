@@ -2085,6 +2085,30 @@ function renderDiaResearch() {
   return html;
 }
 
+// Keyboard shortcuts for dialysis research workflow
+(function() {
+  document.addEventListener('keydown', function(e) {
+    // Only active when a dialysis research card is visible and no input/textarea is focused
+    if (!document.querySelector('.research-card') && !document.querySelector('[data-confirm-prop]') && !document.querySelector('[data-verify-lease]') && !document.getElementById('clSaveBtn')) return;
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    // Only when dialysis tab is active
+    if (!document.querySelector('[data-mode="property"]')) return;
+
+    if (e.key === 'k' || e.key === 'K') {
+      e.preventDefault();
+      // Click the visible skip button
+      var skipBtn = document.querySelector('[data-skip-prop]') || document.querySelector('[data-skip-lease]') || document.getElementById('clSkipBtn');
+      if (skipBtn) skipBtn.click();
+    } else if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      // Click the visible save/confirm button
+      var saveBtn = document.querySelector('[data-confirm-prop]') || document.querySelector('[data-verify-lease]') || document.getElementById('clSaveBtn');
+      if (saveBtn) saveBtn.click();
+    }
+  });
+})();
+
 /**
  * Render property review queue section
  */
@@ -2349,7 +2373,14 @@ function renderDiaPropertyCard(item) {
 
     if (skipBtn) {
       skipBtn.addEventListener('click', () => {
-        diaPropertyFilter.selectedIdx = undefined;
+        const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
+        const currentIdx = diaPropertyFilter.selectedIdx || 0;
+        if (currentIdx + 1 < filtered.length) {
+          diaPropertyFilter.selectedIdx = currentIdx + 1;
+        } else {
+          diaPropertyFilter.selectedIdx = undefined;
+          showToast('End of queue reached', 'info');
+        }
         renderDiaTab();
       });
     }
@@ -2641,7 +2672,14 @@ function renderDiaLeaseCard(item) {
 
     if (skipBtn) {
       skipBtn.addEventListener('click', () => {
-        diaLeaseFilter.selectedIdx = undefined;
+        const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
+        const currentIdx = diaLeaseFilter.selectedIdx || 0;
+        if (currentIdx + 1 < filtered.length) {
+          diaLeaseFilter.selectedIdx = currentIdx + 1;
+        } else {
+          diaLeaseFilter.selectedIdx = undefined;
+          showToast('End of queue reached', 'info');
+        }
         renderDiaTab();
       });
     }
@@ -3238,7 +3276,7 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
 /**
  * Save research outcome
  */
-async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
+async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source, term, rent, rentSF) {
   try {
     const payload = {
       queue_type: queueType,
@@ -3246,7 +3284,11 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
       status: status,
       notes: notes,
       selected_property_id: propId || null,
-      assigned_at: new Date().toISOString()
+      assigned_at: new Date().toISOString(),
+      verification_source: source || null,
+      lease_term: term || null,
+      annual_rent: rent ? parseFloat(rent) : null,
+      rent_per_sf: rentSF ? parseFloat(rentSF) : null
     };
 
     const result = await applyChangeWithFallback({
@@ -3271,14 +3313,30 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes) {
       source_system: 'dia_supabase',
       external_id: String(clinicId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
-      metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes }
+      metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes, source: source, lease_term: term, annual_rent: rent, rent_per_sf: rentSF }
     });
 
-    // Clear selection and reload data
+    // Auto-advance to next item or mark queue as complete
     if (queueType === 'property_review') {
-      diaPropertyFilter.selectedIdx = undefined;
+      const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
+      const currentIdx = diaPropertyFilter.selectedIdx || 0;
+      if (currentIdx + 1 < filtered.length) {
+        diaPropertyFilter.selectedIdx = currentIdx + 1;
+        showToast('Outcome saved — advancing to next item', 'success');
+      } else {
+        diaPropertyFilter.selectedIdx = undefined;
+        showToast('Outcome saved — queue complete!', 'success');
+      }
     } else {
-      diaLeaseFilter.selectedIdx = undefined;
+      const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
+      const currentIdx = diaLeaseFilter.selectedIdx || 0;
+      if (currentIdx + 1 < filtered.length) {
+        diaLeaseFilter.selectedIdx = currentIdx + 1;
+        showToast('Outcome saved — advancing to next item', 'success');
+      } else {
+        diaLeaseFilter.selectedIdx = undefined;
+        showToast('Outcome saved — queue complete!', 'success');
+      }
     }
 
     // Reload data and re-render to advance to next record
@@ -3315,17 +3373,19 @@ function renderDiaActivity() {
     html += '<div style="flex: 1;">Status</div>';
     html += '<div style="flex: 1.5;">Assigned To</div>';
     html += '<div style="flex: 1;">Date</div>';
+    html += '<div style="flex: 0.5;">Action</div>';
     html += '</div>';
     
     outcomes.slice(0, 100).forEach(row => {
       const statusColor = row.status === 'verified_lease' || row.status === 'approved_link' ? '#34d399' : 'var(--text2)';
-      
+
       html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
       html += `<div style="flex: 1;">${esc(row.queue_type || 'unknown')}</div>`;
       html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 1; color: ${statusColor};">${esc(row.status || 'unknown')}</div>`;
       html += `<div style="flex: 1.5;">${row.assigned_to ? esc(row.assigned_to) : '–'}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${fmt(row.assigned_at || row.created_at)}</div>`;
+      html += `<div style="flex: 0.5; text-align: right;"><button class="act-btn" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();reopenDiaOutcome('${esc(row.queue_type || '')}','${esc(String(row.clinic_id || ''))}')">Reopen</button></div>`;
       html += '</div>';
     });
   }
@@ -3334,6 +3394,32 @@ function renderDiaActivity() {
   html += '</div>';
   
   return html;
+}
+
+async function reopenDiaOutcome(queueType, clinicId) {
+  if (!confirm('Reopen this item? It will be returned to the research queue.')) return;
+  try {
+    const result = await applyChangeWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'research_queue_outcomes',
+      idColumn: 'clinic_id',
+      idValue: clinicId,
+      matchFilters: [{ column: 'queue_type', value: queueType }],
+      data: { status: 'reopened', reopened_at: new Date().toISOString() },
+      source_surface: 'dialysis_activity_reopen',
+      propagation_scope: 'research_queue_outcome'
+    });
+    if (result.ok) {
+      showToast('Item reopened', 'success');
+      await loadDiaData();
+      renderDiaTab();
+    } else {
+      showToast('Reopen failed', 'error');
+    }
+  } catch (err) {
+    console.error('Reopen error:', err);
+    showToast('Error: ' + err.message, 'error');
+  }
 }
 
 // ============================================================================
