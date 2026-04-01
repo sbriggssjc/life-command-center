@@ -2089,7 +2089,7 @@ function renderDiaResearch() {
 (function() {
   document.addEventListener('keydown', function(e) {
     // Only active when a dialysis research card is visible and no input/textarea is focused
-    if (!document.querySelector('.research-card') && !document.querySelector('[data-confirm-prop]') && !document.querySelector('[data-verify-lease]') && !document.getElementById('clSaveBtn')) return;
+    if (!document.querySelector('.research-card') && !document.querySelector('[data-confirm-prop]') && !document.querySelector('[data-verify-lease]') && !document.getElementById('clSaveBtn') && !document.getElementById('clNextBtn')) return;
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
     // Only when dialysis tab is active
@@ -2144,18 +2144,40 @@ function renderDiaPropertyResearch() {
     html += `<button class="pill" data-filter-type="${type}">${type}</button>`;
   });
   html += '</div>';
-  
+
+  // Hide reviewed toggle
+  const propReviewedCount = diaData.researchOutcomes.filter(o => o.queue_type === 'property_review').length;
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">';
+  html += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2)">';
+  html += '<input type="checkbox" id="propHideReviewed" ' + (diaPropertyFilter.hideReviewed ? 'checked' : '') + ' style="accent-color:var(--accent)" />';
+  html += 'Hide reviewed (' + propReviewedCount + ')</label>';
+  html += '</div>';
+
   // Queue table
   html += '<div class="table-wrapper" style="margin-bottom: 20px;">';
   html += '<div class="data-table">';
-  
+
   let filtered = diaData.propertyReviewQueue;
+  if (diaPropertyFilter.hideReviewed) {
+    const reviewedClinicIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'property_review').map(o => o.clinic_id));
+    filtered = filtered.filter(r => !reviewedClinicIds.has(r.clinic_id));
+  }
   if (diaPropertyFilter.review_type) {
     filtered = filtered.filter(r => r.review_type === diaPropertyFilter.review_type);
   }
   
   if (filtered.length === 0) {
-    html += '<div class="table-empty">No items in queue</div>';
+    const totalPropItems = diaData.propertyReviewQueue.length;
+    const reviewedPropItems = diaData.researchOutcomes.filter(o => o.queue_type === 'property_review').length;
+    html += '<div class="table-empty">';
+    if (diaPropertyFilter.review_type) {
+      html += 'No items match the "' + esc(diaPropertyFilter.review_type) + '" filter. <button class="btn-link" onclick="diaPropertyFilter.review_type=null;renderDiaTab()">Show all</button>';
+    } else if (totalPropItems === 0) {
+      html += 'Property review queue is empty. New items will appear when the data pipeline detects properties needing verification.';
+    } else {
+      html += 'All ' + totalPropItems + ' items have been reviewed (' + reviewedPropItems + ' outcomes recorded). <button class="btn-link" onclick="diaPropertyFilter.review_type=null;renderDiaTab()">Refresh</button>';
+    }
+    html += '</div>';
   } else {
     html += '<div class="table-row" style="font-weight: 600; border-bottom: 1px solid var(--border);">';
     html += '<div style="flex: 0.5;">ID</div>';
@@ -2165,7 +2187,7 @@ function renderDiaPropertyResearch() {
     html += '<div style="flex: 0.7; text-align: right;">Patients</div>';
     html += '<div style="flex: 1;">Review Type</div>';
     html += '</div>';
-    
+
     filtered.slice(0, 50).forEach((row, idx) => {
       const isSelected = diaPropertyFilter.selectedIdx === idx;
       const isResolved = diaData.researchOutcomes.some(o => o.clinic_id === row.clinic_id && o.queue_type === 'property_review');
@@ -2212,6 +2234,14 @@ function renderDiaPropertyResearch() {
         if (item) showDetail(item, 'dia-clinic');
       });
     });
+
+    const propHideEl = document.getElementById('propHideReviewed');
+    if (propHideEl) {
+      propHideEl.addEventListener('change', () => {
+        diaPropertyFilter.hideReviewed = propHideEl.checked;
+        renderDiaTab();
+      });
+    }
   }, 0);
   
   return html;
@@ -2422,18 +2452,40 @@ function renderDiaLeaseResearch() {
     html += `<button class="pill" data-filter-priority="${priority}">${priority}</button>`;
   });
   html += '</div>';
-  
+
+  // Hide reviewed toggle
+  const leaseReviewedCount = diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').length;
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">';
+  html += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text2)">';
+  html += '<input type="checkbox" id="leaseHideReviewed" ' + (diaLeaseFilter.hideReviewed ? 'checked' : '') + ' style="accent-color:var(--accent)" />';
+  html += 'Hide reviewed (' + leaseReviewedCount + ')</label>';
+  html += '</div>';
+
   // Queue table
   html += '<div class="table-wrapper" style="margin-bottom: 20px;">';
   html += '<div class="data-table">';
-  
+
   let filtered = diaData.leaseBackfillRows;
+  if (diaLeaseFilter.hideReviewed) {
+    const reviewedLeaseIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').map(o => o.clinic_id));
+    filtered = filtered.filter(r => !reviewedLeaseIds.has(r.clinic_id));
+  }
   if (diaLeaseFilter.priority) {
     filtered = filtered.filter(r => r.lease_backfill_priority === diaLeaseFilter.priority);
   }
-  
+
   if (filtered.length === 0) {
-    html += '<div class="table-empty">No items in queue</div>';
+    const totalLeaseItems = diaData.leaseBackfillRows.length;
+    const verifiedLeaseItems = diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill' && o.status === 'verified_lease').length;
+    html += '<div class="table-empty">';
+    if (diaLeaseFilter.priority) {
+      html += 'No items match the "' + esc(diaLeaseFilter.priority) + '" priority filter. <button class="btn-link" onclick="diaLeaseFilter.priority=null;renderDiaTab()">Show all</button>';
+    } else if (totalLeaseItems === 0) {
+      html += 'Lease backfill queue is empty. New items will appear when clinics are identified that need lease data.';
+    } else {
+      html += 'All ' + totalLeaseItems + ' items have been processed (' + verifiedLeaseItems + ' leases verified). <button class="btn-link" onclick="diaLeaseFilter.priority=null;renderDiaTab()">Refresh</button>';
+    }
+    html += '</div>';
   } else {
     html += '<div class="table-row" style="font-weight: 600; border-bottom: 1px solid var(--border);">';
     html += '<div style="flex: 0.5;">ID</div>';
@@ -2443,13 +2495,13 @@ function renderDiaLeaseResearch() {
     html += '<div style="flex: 1;">Watch Level</div>';
     html += '<div style="flex: 1;">Priority</div>';
     html += '</div>';
-    
+
     filtered.slice(0, 50).forEach((row, idx) => {
       const watchColor = row.closure_watch_level === 'high' ? '#f87171' : 'var(--text2)';
       const isSelected = diaLeaseFilter.selectedIdx === idx;
       const isResolved = diaData.researchOutcomes.some(o => o.clinic_id === row.clinic_id && o.queue_type === 'lease_backfill');
       const rowStyle = isSelected ? 'background: rgba(52, 211, 153, 0.1); border-left: 3px solid var(--accent);' : isResolved ? 'background: rgba(52, 211, 153, 0.05); opacity: 0.7;' : '';
-      
+
       html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-lease-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
@@ -2492,6 +2544,14 @@ function renderDiaLeaseResearch() {
         if (item) showDetail(item, 'dia-clinic');
       });
     });
+
+    const leaseHideEl = document.getElementById('leaseHideReviewed');
+    if (leaseHideEl) {
+      leaseHideEl.addEventListener('change', () => {
+        diaLeaseFilter.hideReviewed = leaseHideEl.checked;
+        renderDiaTab();
+      });
+    }
   }, 0);
   
   return html;
@@ -2739,6 +2799,15 @@ function renderDiaClinicLeads() {
   html += _clCard('High Priority', fmtN(tiers.high), 'red');
   html += _clCard('Ownership Gap', fmtN(cats.ownership_gap), 'orange');
   html += _clCard('Seller Signals', fmtN(cats.seller_signal), 'purple');
+  html += '</div>';
+
+  // Progress bar
+  const clTotal = queue.length;
+  const clResolved = queue.filter(r => resolvedIds.has(r.medicare_id)).length;
+  const clPct = clTotal > 0 ? Math.round((clResolved / clTotal) * 100) : 0;
+  html += '<div class="research-progress" style="margin-bottom:16px;">';
+  html += `<div class="progress-text">${clResolved} of ${clTotal} reviewed (${clPct}%)</div>`;
+  html += `<div class="progress-bar"><div style="width: ${clPct}%; background: #34d399;"></div></div>`;
   html += '</div>';
 
   // === Filters ===
