@@ -20,6 +20,8 @@ let govEvidenceState = {
   queueLoaded: false,
   queueError: '',
   healthLoading: false,
+  brokerFeedback: null,
+  brokerFeedbackLoading: false,
   health: null,
   conflicts: [],
   detectedSource: null
@@ -43,6 +45,16 @@ const STATE_FULL = {
 };
 
 // ============================================================================
+// HELPER FUNCTIONS FOR SAFE NUMERIC PARSING
+// ============================================================================
+
+// Parse float from string or element value, handling zero correctly
+function _pf(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseFloat(v) : null; }
+
+// Parse int from string or element value, handling zero correctly
+function _pi(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseInt(v, 10) : null; }
+
+// ============================================================================
 // CORE API FUNCTION
 // ============================================================================
 
@@ -56,8 +68,11 @@ async function govQuery(table, select, params = {}) {
   if (params.limit !== undefined) url.searchParams.set('limit', params.limit);
   if (params.offset !== undefined) url.searchParams.set('offset', params.offset);
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -68,8 +83,41 @@ async function govQuery(table, select, params = {}) {
     const result = await response.json();
     return { data: result.data || [], count: result.count || 0 };
   } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') { console.warn('govQuery ' + table + ' timed out (30s)'); return { data: [], count: 0 }; }
     console.error('govQuery error:', err);
     return { data: [], count: 0 };
+  }
+}
+
+// Gov write service — routes through /api/data-proxy?_route=gov-write
+// Endpoints: 'ownership', 'lead-research', 'financial', 'resolve-pending'
+async function govWriteService(endpoint, data) {
+  const url = new URL('/api/data-proxy', window.location.origin);
+  url.searchParams.set('_route', 'gov-write');
+  url.searchParams.set('endpoint', endpoint);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const resp = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) {
+      const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errBody.error || errBody.detail || 'Gov write service returned ' + resp.status);
+    }
+
+    return await resp.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('Request timed out (30s) — please retry');
+    throw err;
   }
 }
 
@@ -128,7 +176,7 @@ async function loadGovOverviewStats() {
     const rows = res.data || [];
     if (rows.length > 0) {
       govOverviewStats = rows[0];
-      console.log('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
+      console.debug('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
       // If we're on the overview tab, render immediately
       if (typeof currentGovTab !== 'undefined' && currentGovTab === 'overview') {
         renderGovTab();
@@ -140,7 +188,11 @@ async function loadGovOverviewStats() {
   govOverviewStatsLoading = false;
 }
 
+let _govDataLoading = false;
 async function loadGovData() {
+  if (_govDataLoading) return;  // Prevent concurrent loads
+  _govDataLoading = true;
+
   // Kick off fast overview stats immediately (non-blocking)
   // This renders the overview in ~100ms while the full data load takes 20s
   if (!govOverviewStats && !govOverviewStatsLoading) {
@@ -165,6 +217,7 @@ async function loadGovData() {
   govData.frppRecords = [];
   govData.countyAuth = [];
   govData.loans = [];
+  govData.researchOutcomes = [];
   
   showToast('Loading government data...', 'info');
   
@@ -211,6 +264,15 @@ async function loadGovData() {
       }
     );
     govData.gsaEvents = gsaEventsRes.data || [];
+
+    const researchOutcomesRes = await govQuery('research_queue_outcomes',
+      'queue_type, status, notes, assigned_at, created_at, assigned_to, selected_property_id, clinic_id',
+      {
+        order: 'assigned_at.desc',
+        limit: 500
+      }
+    );
+    govData.researchOutcomes = researchOutcomesRes.data || [];
     
     // Load GSA snapshots
     const gsaSnapshotsRes = await govQuery('gsa_snapshots',
@@ -301,7 +363,8 @@ async function loadGovData() {
     
     govConnected = true;
     govDataLoaded = true;
-    console.log('GOV DATA LOADED:', {
+    _govDataLoading = false;
+    console.debug('GOV DATA LOADED:', {
       properties: govData.properties,
       salesComps: govData.salesComps,
       leads: govData.leads.length,
@@ -313,15 +376,17 @@ async function loadGovData() {
       county: govData.countyAuth.length
     });
     showToast(`Gov: ${govData.leads.length} leads, ${govData.ownership.length} ownership, ${govData.listings.length} listings loaded`, 'success');
-    renderGovTab();
+    // Only render if user is still viewing the government tab
+    if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government') renderGovTab();
 
   } catch (err) {
     console.error('Error loading government data:', err);
     govConnected = false;
+    _govDataLoading = false;
     showToast('Error loading data', 'error');
     const inner = document.getElementById('bizPageInner');
     if (inner) {
-      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadGovData()" style="margin-top:12px">Retry</button></div>';
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="this.disabled=true;this.textContent=\'Loading\u2026\';loadGovData()" style="margin-top:12px">Retry</button></div>';
     }
   }
 }
@@ -613,14 +678,14 @@ async function loadCountyAuthorities(states) {
     
     countyCache[state] = {};
     res.data.forEach(c => {
-      countyCache[state][c.county_name.toLowerCase()] = c;
+      if (c.county_name) countyCache[state][c.county_name.toLowerCase()] = c;
     });
   }
 }
 
 function findCountyAuth(city, state) {
-  if (!countyCache[state]) return null;
-  
+  if (!city || !countyCache[state]) return null;
+
   const cityLower = city.toLowerCase();
   const counties = countyCache[state];
   
@@ -683,7 +748,7 @@ function countyBtns(city, state) {
 
 function searchBtn(label, query) {
   const encoded = encodeURIComponent(query);
-  return `<a href="https://www.google.com/search?q=${encoded}" target="_blank" class="btn-search">${label}</a>`;
+  return `<a href="https://www.google.com/search?q=${encoded}" target="_blank" rel="noopener" class="btn-search">${label}</a>`;
 }
 
 function sosBtns(propState, incorpState) {
@@ -697,7 +762,7 @@ function sosBtns(propState, incorpState) {
   states.forEach(state => {
     const url = SOS_URLS[state];
     if (url) {
-      html += `<a href="${url}" target="_blank" class="btn-sos">${state} SOS</a>`;
+      html += `<a href="${url}" target="_blank" rel="noopener" class="btn-sos">${esc(state)} SOS</a>`;
     }
   });
   
@@ -707,12 +772,16 @@ function sosBtns(propState, incorpState) {
 
 function linkBtn(label, url) {
   if (!url) return '';
-  return `<a href="${url}" target="_blank" class="btn-link">${label}</a>`;
+  const safe = safeHref(url);
+  if (safe === '#') return '';
+  return `<a href="${safe}" target="_blank" rel="noopener" class="btn-link">${label}</a>`;
 }
 
 function linkBtnGreen(label, url) {
   if (!url) return '';
-  return `<a href="${url}" target="_blank" class="btn-link-green">${label}</a>`;
+  const safe = safeHref(url);
+  if (safe === '#') return '';
+  return `<a href="${safe}" target="_blank" rel="noopener" class="btn-link-green">${label}</a>`;
 }
 
 // ============================================================================
@@ -721,7 +790,8 @@ function linkBtnGreen(label, url) {
 
 async function searchEntities(query, dropId, inputId, onSelect) {
   if (!query || query.length < 2) {
-    q(`#${dropId}`).style.display = 'none';
+    const dropEl = q(`#${dropId}`);
+    if (dropEl) dropEl.style.display = 'none';
     return;
   }
 
@@ -730,7 +800,7 @@ async function searchEntities(query, dropId, inputId, onSelect) {
 
   // Search local contacts
   for (const contact of govData.contacts) {
-    if (contact.name.toLowerCase().includes(q_lower)) {
+    if (contact.name && contact.name.toLowerCase().includes(q_lower)) {
       results.push({
         type: 'contact',
         label: contact.name,
@@ -777,7 +847,9 @@ async function searchEntities(query, dropId, inputId, onSelect) {
     try {
       const headers = { 'Content-Type': 'application/json' };
       if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
-      const res = await fetch(`/api/entities?action=search&q=${encodeURIComponent(query)}&limit=15`, { headers });
+      const _ec = new AbortController(); const _et = setTimeout(() => _ec.abort(), 15000);
+      const res = await fetch(`/api/entities?action=search&q=${encodeURIComponent(query)}&limit=15`, { headers, signal: _ec.signal });
+      clearTimeout(_et);
       if (res.ok) {
         const data = await res.json();
         for (const ent of (data.entities || [])) {
@@ -865,21 +937,26 @@ function setupAutocomplete(inputId, onSelect) {
 }
 
 function selectAC(inputId, value, dropId, resultIdx) {
-  q(`#${inputId}`).value = value;
-  q(`#${dropId}`).style.display = 'none';
+  const inputEl = q(`#${inputId}`);
+  const dropEl = q(`#${dropId}`);
+  if (inputEl) inputEl.value = value;
+  if (dropEl) dropEl.style.display = 'none';
 
   // Auto-fill related fields from canonical entity data
   const results = window._acResults && window._acResults[dropId];
   if (results && resultIdx != null && results[resultIdx] && results[resultIdx].type === 'canonical') {
     const d = results[resultIdx].data;
+    // Determine the prefix based on research mode
+    const prefix = researchMode === 'ownership' ? 'res-own-' : 'res-lead-';
+    
     // Fill email if available and field exists
-    const emailEl = q('#res-principal-email');
+    const emailEl = q(`#${prefix}principal-email`);
     if (emailEl && d.email && !emailEl.value) emailEl.value = d.email;
     // Fill phone
-    const phoneEl = q('#res-phone');
+    const phoneEl = q(`#${prefix}phone`);
     if (phoneEl && d.phone && !phoneEl.value) phoneEl.value = d.phone;
     // Fill state of incorporation from entity state
-    const incEl = q('#res-incorporation');
+    const incEl = q(`#${prefix}incorporation`);
     if (incEl && d.state && !incEl.value) incEl.value = d.state;
 
     // Show SF link badge if SF IDs exist
@@ -890,11 +967,21 @@ function selectAC(inputId, value, dropId, resultIdx) {
   }
 }
 
+
 function attachAutocomplete() {
-  setupAutocomplete('res-recorded-owner', null);
-  setupAutocomplete('res-true-owner', null);
-  setupAutocomplete('res-principal-names', null);
-  setupAutocomplete('res-lender', null);
+  // Attach autocomplete based on current research mode
+  if (researchMode === 'ownership') {
+    setupAutocomplete('res-own-recorded-owner', null);
+    setupAutocomplete('res-own-true-owner', null);
+    setupAutocomplete('res-own-principal-names', null);
+    setupAutocomplete('res-own-lender', null);
+  } else if (researchMode === 'leads') {
+    setupAutocomplete('res-lead-recorded-owner', null);
+    setupAutocomplete('res-lead-true-owner', null);
+    setupAutocomplete('res-lead-principal-names', null);
+    setupAutocomplete('res-lead-lender', null);
+  }
+  // Intel mode doesn't use these autocomplete fields
 }
 
 // ============================================================================
@@ -932,7 +1019,13 @@ async function loadResearchQueue() {
     }
   }
 
-  for (const rec of filtered.slice(0, 50)) {
+  if (filtered.length === 0) {
+    showToast('No pending ' + researchMode + ' records found', 'info');
+    return;
+  }
+
+  const maxToLoad = 50;
+  for (const rec of filtered.slice(0, maxToLoad)) {
     // Enrich with GSA snapshots
     const snapshot = govData.gsaSnapshots.find(s => s.lease_number === rec.lease_number);
     if (snapshot) {
@@ -954,33 +1047,72 @@ async function loadResearchQueue() {
 
     // Enrich with loan data for intel mode
     if (researchMode === 'intel') {
-      const loan = govData.loans.find(l => l.property_id === rec.property_id);
+      const loan = (govData.loans || []).find(l => l.property_id === rec.property_id);
       if (loan) rec._loan = loan;
     }
 
     researchQueue.push(rec);
   }
+
+  if (filtered.length > maxToLoad) {
+    showToast('Loaded ' + maxToLoad + ' of ' + filtered.length + ' pending records', 'info');
+  }
 }
 
+// ──────────────────────────────────────────────────────────────
+// RESEARCH CARD STEP NAVIGATION
+// ──────────────────────────────────────────────────────────────
+let govResearchStep = 0;
+window.govStepNav = function(idx) {
+  govResearchStep = idx;
+  renderGovTab();
+};
+
+// ──────────────────────────────────────────────────────────────
+// PIPELINE OPS STATE VARIABLES
+// ──────────────────────────────────────────────────────────────
+let govResearchSection = 'research'; // 'research' | 'pipeline_ops'
+let govPendingUpdates = null;
+let govPendingUpdatesLoading = false;
+let govPendingUpdatesIdx = 0;
+let govPendingFilter = 'all'; // reason filter
+let govFinOverrideRec = null;
+let govPipelineRuns = null;
+let govPipelineLoading = false;
+let govMonitorData = null;
+let govMonitorLoading = false;
+
 function renderOwnershipResearchCard(rec) {
+  // Track record changes to reset step
+  if (window._govLastRecId !== (rec.property_id)) {
+    govResearchStep = 0;
+    window._govLastRecId = rec.property_id;
+  }
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
-  const loan = govData.loans.find(l => l.property_id === rec.property_id) || {};
-  
+  const loan = (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
+
   let html = '<div class="research-card">';
-  
-  // Context panel
+
+  // ────────────────────────────────────────────────────────────
+  // CONTEXT PANEL (LEFT)
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
+
+  // Task header
+  html += '<div class="task-header">';
+  html += '<div>Ownership Change Research</div>';
+  let badge = 'ready';
+  if (!rec.sale_price) badge = 'urgent';
+  else if (!rec.recorded_owner_name || !rec.true_owner_name || !rec.rba) badge = 'needs-input';
+  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += '</div>';
+
   html += `<div class="context-block">
     <div class="context-label">Property</div>
     <div class="context-value">${esc(rec.address || '')}</div>
     <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')}</div>
-  </div>`;
-  
-  html += `<div class="context-block">
-    <div class="context-label">Lease / Annual Rent</div>
-    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
-    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
   </div>`;
 
   html += `<div class="context-block">
@@ -988,16 +1120,22 @@ function renderOwnershipResearchCard(rec) {
     <div class="context-value">${esc(rec.prior_owner || '')}</div>
     <div class="context-sub">→ ${esc(rec.new_owner || '')}</div>
   </div>`;
-  
+
   html += `<div class="context-block">
     <div class="context-label">Transfer Date</div>
     <div class="context-value">${rec.transfer_date ? rec.transfer_date.substring(0, 10) : 'Unknown'}</div>
   </div>`;
-  
+
+  html += `<div class="context-block">
+    <div class="context-label">Lease / Annual Rent</div>
+    <div class="context-value"><code>${esc(rec.lease_number || '')}</code></div>
+    <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
+  </div>`;
+
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
       <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
     </div>`;
   }
@@ -1009,183 +1147,142 @@ function renderOwnershipResearchCard(rec) {
       <div class="context-sub">${fmtN(frpp.square_feet || 0)} SF</div>
     </div>`;
   }
-  
+
   html += '</div>';
-  
-  // Research form
+
+  // ────────────────────────────────────────────────────────────
+  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
-  
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Sale Date</label>';
-  html += `<input type="date" id="res-sale-date" value="${rec.sale_date ? rec.sale_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Sale Price</label>';
-  html += `<input type="number" id="res-sale-price" value="${rec.sale_price || ''}" placeholder="e.g. 5000000">`;
-  html += '</div>';
+
+  // Completeness bar
+  const allFields = [rec.sale_price, rec.recorded_owner_name, rec.true_owner_name, rec.rba, loan.index_name];
+  const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1, 2, 3].includes(i) })));
+  html += renderCompletenessBar(completeness);
+
+  // Step navigation
+  const steps = [
+    {label: 'Sale Details', complete: !!rec.sale_price},
+    {label: 'Entity', complete: !!rec.recorded_owner_name},
+    {label: 'True Owner', complete: !!rec.true_owner_name},
+    {label: 'Property', complete: !!rec.rba},
+    {label: 'Financing', complete: !!loan.index_name}
+  ];
+  html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
+
+  // ──── STEP 0: SALE DETAILS ────
+  html += `<div class="form-step${govResearchStep === 0 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">1</span> Sale Details</div>';
+  html += guidedField('res-own-sale-date', 'Sale Date', rec.sale_date ? rec.sale_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-own-sale-price', 'Sale Price', rec.sale_price || '', {type:'number', required:true, placeholder:'e.g. 5000000'});
+  html += guidedField('res-own-cap-rate', 'Cap Rate (%)', rec.cap_rate || '', {type:'number', step:'0.1', placeholder:'e.g. 4.5'});
+  html += guidedField('res-own-price-source', 'Price Source', '', {placeholder:'CoStar, CBRE, etc.'});
+  html += guidedField('res-own-buyer', 'Buyer', rec.new_owner || '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-own-seller', 'Seller', rec.prior_owner || '', {placeholder:'Selling entity'});
   html += '</div>';
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate (%)</label>';
-  html += `<input type="number" id="res-cap-rate" value="${rec.cap_rate || ''}" placeholder="e.g. 4.5" step="0.1">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-price-source" value="" placeholder="CoStar, CBRE, etc.">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Buyer</label>';
-  html += `<input type="text" id="res-buyer" value="${esc(rec.new_owner || '')}" placeholder="Purchasing entity">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Seller</label>';
-  html += `<input type="text" id="res-seller" value="${esc(rec.prior_owner || '')}" placeholder="Selling entity">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-divider">Entity Details</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Recorded Owner Name</label>';
-  html += `<input type="text" id="res-recorded-owner" value="${esc(rec.recorded_owner_name || '')}" placeholder="From deed">`;
-  html += '<div id="res-recorded-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-incorporation" value="${esc(rec.state_of_incorporation || '')}" placeholder="e.g. DE">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Phone</label>';
-  html += `<input type="text" id="res-phone" value="${esc(rec.recorded_owner_phone || '')}" placeholder="(555) 123-4567">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address</label>';
-  html += `<input type="text" id="res-mailing" value="${esc(rec.mailing_address || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">True Owner / Parents</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>True Owner / Parent Company</label>';
-  html += `<input type="text" id="res-true-owner" value="${esc(rec.true_owner_name || '')}" placeholder="">`;
-  html += '<div id="res-true-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-principal-names" value="${esc(rec.principal_names || '')}" placeholder="CEO, Owner, etc.">`;
-  html += '<div id="res-principal-names-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-principal-email" value="" placeholder="contact@example.com">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Phone 2</label>';
-  html += `<input type="text" id="res-phone-2" value="${esc(rec.phone_2 || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address 2</label>';
-  html += `<input type="text" id="res-mailing-2" value="${esc(rec.mailing_address_2 || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">Property Details</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>RBA (Rentable Building Area)</label>';
-  html += `<input type="number" id="res-rba" value="${rec.rba || ''}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Land Acres</label>';
-  html += `<input type="number" id="res-land-acres" value="${rec.land_acres || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Year Built</label>';
-  html += `<input type="number" id="res-year-built" value="${rec.year_built || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Year Renovated</label>';
-  html += `<input type="number" id="res-year-renovated" value="${rec.year_renovated || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">Loan / Financing</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Lender Name</label>';
-  html += `<input type="text" id="res-lender" value="${esc(loan.index_name || '')}" placeholder="">`;
-  html += '<div id="res-lender-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Loan Amount</label>';
-  html += `<input type="number" id="res-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Loan Type</label>';
-  html += `<input type="text" id="res-loan-type" value="${esc(loan.loan_type || '')}" placeholder="Refinance, Construction, etc.">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Loan Status</label>';
-  html += `<input type="text" id="res-loan-status" value="${esc(loan.status || '')}" placeholder="">`;
-  html += '</div>';
-  
-  html += '<div class="form-group">';
-  html += '<label>Research Notes</label>';
-  html += `<textarea id="res-notes" placeholder="Key findings..." rows="4">${esc(rec.research_notes || '')}</textarea>`;
-  html += '</div>';
-  
-  html += '<div class="form-divider">Quick Actions</div>';
-  
+  // ──── STEP 1: ENTITY DETAILS ────
+  html += `<div class="form-step${govResearchStep === 1 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">2</span> Entity</div>';
+  html += guidedField('res-own-recorded-owner', 'Recorded Owner Name', rec.recorded_owner_name || '', {required:true, placeholder:'From deed'});
+  html += guidedField('res-own-incorporation', 'State of Incorporation', rec.state_of_incorporation || '', {placeholder:'e.g. DE'});
+  html += guidedField('res-own-phone', 'Phone', rec.recorded_owner_phone || '', {placeholder:'(555) 123-4567'});
+  html += guidedField('res-own-mailing', 'Mailing Address', rec.mailing_address || '', {});
   html += '<div class="quick-actions">';
-  html += searchBtn('Google Search', `${rec.address} ${rec.city} ${rec.state} sale`);
+  html += searchBtn('Google Search', `${rec.recorded_owner_name || rec.address}`);
   html += sosBtns(rec.state, rec.state_of_incorporation);
-  html += countyBtns(rec.city, rec.state);
   html += '</div>';
-  
   html += '</div>';
-  
-  html += '<div class="research-actions">';
-  html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
+
+  // ──── STEP 2: TRUE OWNER / PARENTS ────
+  html += `<div class="form-step${govResearchStep === 2 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">3</span> True Owner</div>';
+  html += guidedField('res-own-true-owner', 'True Owner / Parent Company', rec.true_owner_name || '', {required:true});
+  html += guidedField('res-own-principal-names', 'Principal Names', rec.principal_names || '', {placeholder:'CEO, Owner, etc.'});
+  html += guidedField('res-own-principal-email', 'Contact Email', '', {type:'email', placeholder:'contact@example.com'});
+  html += guidedField('res-own-phone-2', 'Phone 2', rec.phone_2 || '', {});
+  html += guidedField('res-own-mailing-2', 'Mailing Address 2', rec.mailing_address_2 || '', {});
   html += '</div>';
-  
+
+  // ──── STEP 3: PROPERTY DETAILS ────
+  html += `<div class="form-step${govResearchStep === 3 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">4</span> Property</div>';
+  html += guidedField('res-own-rba', 'RBA (Rentable Building Area)', rec.rba || '', {type:'number', required:true});
+  html += guidedField('res-own-land-acres', 'Land Acres', rec.land_acres || '', {type:'number', step:'0.01'});
+  html += guidedField('res-own-year-built', 'Year Built', rec.year_built || '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-own-year-renovated', 'Year Renovated', rec.year_renovated || '', {type:'number', placeholder:'YYYY'});
   html += '</div>';
-  
+
+  // ──── STEP 4: FINANCING ────
+  html += `<div class="form-step${govResearchStep === 4 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">5</span> Financing</div>';
+  html += guidedField('res-own-lender', 'Lender Name', loan.index_name || '', {source: loan.index_name ? 'loan records' : null});
+  html += guidedField('res-own-loan-amount', 'Loan Amount', loan.loan_amount || '', {type:'number', source: loan.loan_amount ? 'loan records' : null});
+  html += guidedField('res-own-loan-type', 'Loan Type', loan.loan_type || '', {placeholder:'Refinance, Construction, etc.'});
+  html += guidedField('res-own-loan-status', 'Loan Status', loan.status || '', {});
+  html += guidedField('res-own-notes', 'Research Notes', rec.research_notes || '', {type:'textarea', rows:4, placeholder:'Key findings...'});
+  html += '</div>';
+
+  html += '</div>';
+
+  // ────────────────────────────────────────────────────────────
+  // ACTION ROW
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row">';
+  if (govResearchStep > 0) {
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
+  }
+  if (govResearchStep < 4) {
+    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+  }
+  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += '</div>';
+
+  html += '</div>';
+
   return html;
 }
 
 function renderLeadResearchCard(rec) {
+  // Track record changes to reset step
+  if (window._govLastRecId !== (rec.lead_id || rec.id)) {
+    govResearchStep = 0;
+    window._govLastRecId = rec.lead_id || rec.id;
+  }
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
-  const loan = govData.loans.find(l => l.property_id === rec.matched_property_id) || {};
+  const loan = (govData.loans || []).find(l => l.property_id === rec.matched_property_id) || {};
 
   let html = '<div class="research-card">';
 
-  // Context panel
+  // ────────────────────────────────────────────────────────────
+  // CONTEXT PANEL (LEFT)
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
+
+  // Task header
+  html += '<div class="task-header">';
+  html += '<div>Lead Research</div>';
+  let badge = 'ready';
+  if (rec.lead_temperature === 'hot') badge = 'urgent';
+  else if (!rec.recorded_owner || !rec.true_owner) badge = 'needs-input';
+  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += '</div>';
+
   html += `<div class="context-block">
     <div class="context-label">Property</div>
     <div class="context-value">${esc(rec.address || '')}</div>
     <div class="context-sub">${esc(rec.city || '')}, ${esc(rec.state || '')}</div>
+  </div>`;
+
+  html += `<div class="context-block">
+    <div class="context-label">Lessor / Owner</div>
+    <div class="context-value">${esc(rec.lessor_name || '')}</div>
+    <div class="context-sub">Lead Temp: ${rec.lead_temperature || 'cool'}</div>
   </div>`;
 
   html += `<div class="context-block">
@@ -1194,22 +1291,10 @@ function renderLeadResearchCard(rec) {
     <div class="context-sub">${rec.location_code ? 'Loc: ' + esc(rec.location_code) + ' · ' : ''}${fmt(rec.annual_rent || 0)}/yr</div>
   </div>`;
 
-  html += `<div class="context-block">
-    <div class="context-label">Lessor / Owner</div>
-    <div class="context-value">${esc(rec.lessor_name || '')}</div>
-    <div class="context-sub">True Owner: ${esc(rec.true_owner || '')}</div>
-  </div>`;
-
-  html += `<div class="context-block">
-    <div class="context-label">Lead Temperature</div>
-    <div class="context-value">${rec.lead_temperature || 'cool'}</div>
-    <div class="context-sub">Score: ${rec.priority_score || 0}</div>
-  </div>`;
-
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} - ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
       <div class="context-sub">Firm: ${rec.firm_term_remaining || 'TBD'}</div>
     </div>`;
   }
@@ -1232,317 +1317,127 @@ function renderLeadResearchCard(rec) {
 
   html += '</div>';
 
-  // Research form
+  // ────────────────────────────────────────────────────────────
+  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
-  // ── PRIOR SALE / TRANSACTION ──
-  html += '<div class="form-divider">Prior Sale / Transaction</div>';
+  // Completeness bar
+  const allFields = [rec.square_feet, rec.recorded_owner, rec.true_owner, loan.index_name, rec.annual_rent];
+  const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [1, 2].includes(i) })));
+  html += renderCompletenessBar(completeness);
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Sale Date</label>';
-  html += `<input type="date" id="res-sale-date" value="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Sale Price ($)</label>';
-  html += `<input type="number" id="res-sale-price" value="" placeholder="e.g. 5000000">`;
-  html += '</div>';
-  html += '</div>';
+  // Step navigation
+  const steps = [
+    {label: 'Transaction', complete: false},
+    {label: 'Ownership', complete: !!(rec.recorded_owner || rec.true_owner)},
+    {label: 'Property', complete: !!rec.square_feet},
+    {label: 'Financing', complete: !!loan.index_name},
+    {label: 'Valuation', complete: !!rec.annual_rent}
+  ];
+  html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate at Sale (%)</label>';
-  html += `<input type="number" id="res-cap-rate" value="" placeholder="e.g. 6.25" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-price-source" value="" placeholder="CoStar, County Records, etc.">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Buyer</label>';
-  html += `<input type="text" id="res-buyer" value="" placeholder="Purchasing entity">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Seller</label>';
-  html += `<input type="text" id="res-seller" value="${esc(rec.lessor_name || '')}" placeholder="Selling entity">`;
-  html += '</div>';
+  // ──── STEP 0: TRANSACTION ────
+  html += `<div class="form-step${govResearchStep === 0 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">1</span> Transaction</div>';
+  html += guidedField('res-lead-sale-date', 'Sale Date', '', {type:'date'});
+  html += guidedField('res-lead-sale-price', 'Sale Price', '', {type:'number', placeholder:'e.g. 5000000'});
+  html += guidedField('res-lead-cap-rate', 'Cap Rate (%)', '', {type:'number', step:'0.01', placeholder:'e.g. 6.25'});
+  html += guidedField('res-lead-price-source', 'Price Source', '', {placeholder:'CoStar, County Records, etc.'});
+  html += guidedField('res-lead-buyer', 'Buyer', '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-lead-seller', 'Seller', rec.lessor_name || '', {placeholder:'Selling entity'});
   html += '</div>';
 
-  // ── OWNERSHIP RESEARCH ──
-  html += '<div class="form-divider">Ownership Research</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Recorded Owner</label>';
-  html += `<input type="text" id="res-recorded-owner" value="${esc(rec.recorded_owner || '')}" placeholder="From deed / public records">`;
-  html += '<div id="res-recorded-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>True Owner / Parent</label>';
-  html += `<input type="text" id="res-true-owner" value="${esc(rec.true_owner || '')}" placeholder="Beneficial owner">`;
-  html += '<div id="res-true-owner-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-incorporation" value="${esc(rec.state_of_incorporation || '')}" placeholder="e.g. DE">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Owner Type</label>';
-  html += `<select id="res-owner-type">
-    <option value="">—</option>
-    <option value="Private">Private</option>
-    <option value="Institutional">Institutional</option>
-    <option value="REIT">REIT</option>
-    <option value="Government">Government</option>
-    <option value="Non-Profit">Non-Profit</option>
-    <option value="SPE / LLC">SPE / LLC</option>
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-principal-names" value="${esc(rec.principal_names || '')}" placeholder="CEO, Managing Member, etc.">`;
-  html += '<div id="res-principal-names-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-principal-email" value="" placeholder="contact@example.com">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Phone</label>';
-  html += `<input type="text" id="res-phone" value="${esc(rec.phone_2 || '')}" placeholder="(555) 123-4567">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address</label>';
-  html += `<input type="text" id="res-mailing" value="" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address 2</label>';
-  html += `<input type="text" id="res-mailing-2" value="" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── PROPERTY DETAILS ──
-  html += '<div class="form-divider">Property Details</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>RBA (Rentable Building Area)</label>';
-  html += `<input type="number" id="res-rba" value="${rec.square_feet || ''}" placeholder="SF">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Land Size (Acres)</label>';
-  html += `<input type="number" id="res-land-acres" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Year Built</label>';
-  html += `<input type="number" id="res-year-built" value="" placeholder="YYYY">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Year Renovated</label>';
-  html += `<input type="number" id="res-year-renovated" value="" placeholder="YYYY">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Building Class</label>';
-  html += `<select id="res-building-class">
-    <option value="">—</option>
-    <option value="A">Class A</option>
-    <option value="B">Class B</option>
-    <option value="C">Class C</option>
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Stories / Floors</label>';
-  html += `<input type="number" id="res-stories" value="" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Parking Spaces</label>';
-  html += `<input type="number" id="res-parking" value="" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Zoning</label>';
-  html += `<input type="text" id="res-zoning" value="" placeholder="e.g. C-2, Industrial">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Property Condition</label>';
-  html += `<select id="res-condition">
-    <option value="">—</option>
-    <option value="Excellent">Excellent</option>
-    <option value="Good">Good</option>
-    <option value="Average">Average</option>
-    <option value="Fair">Fair</option>
-    <option value="Poor">Poor</option>
-  </select>`;
-  html += '</div>';
-
-  // ── LOAN / DEBT ──
-  html += '<div class="form-divider">Loan / Debt</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Lender</label>';
-  html += `<input type="text" id="res-lender" value="${esc(loan.index_name || '')}" placeholder="Bank or fund name">`;
-  html += '<div id="res-lender-drop" class="ac-dropdown"></div>';
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Amount ($)</label>';
-  html += `<input type="number" id="res-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Interest Rate (%)</label>';
-  html += `<input type="number" id="res-interest-rate" value="${loan.interest_rate_percent || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Type</label>';
-  html += `<select id="res-loan-type">
-    <option value="">—</option>
-    ${['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Construction', 'SBA', 'Other'].map(t =>
-      `<option value="${t}" ${(loan.loan_type || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Origination Date</label>';
-  html += `<input type="date" id="res-loan-orig" value="${loan.origination_date ? loan.origination_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Maturity Date</label>';
-  html += `<input type="date" id="res-loan-maturity" value="${loan.maturity_date ? loan.maturity_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>LTV (%)</label>';
-  html += `<input type="number" id="res-ltv" value="${loan.loan_to_value || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Recourse</label>';
-  html += `<select id="res-recourse">
-    <option value="">—</option>
-    ${['Recourse', 'Non-Recourse', 'Partial'].map(t =>
-      `<option value="${t}" ${(loan.recourse || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── CASH FLOW / VALUATION ──
-  html += '<div class="form-divider">Cash Flow / Valuation</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Annual Rent / NOI ($)</label>';
-  html += `<input type="number" id="res-annual-rent" value="${rec.annual_rent || ''}" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Rent Per SF ($/SF)</label>';
-  html += `<input type="number" id="res-rent-psf" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Expense Type</label>';
-  html += `<select id="res-expense-type">
-    <option value="">—</option>
-    ${['NNN', 'Modified Gross', 'Full Service Gross', 'Industrial Gross', 'Ground Lease'].map(t =>
-      `<option value="${t}">${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Estimated Property Value ($)</label>';
-  html += `<input type="number" id="res-est-value" value="${rec.estimated_value || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Current Cap Rate (%)</label>';
-  html += `<input type="number" id="res-current-cap" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-
-  // ── PIPELINE STATUS ──
-  html += '<div class="form-divider">Pipeline Status</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Quick Status</label>';
-  html += `<select id="res-quick-status">
-    <option value="">Select status...</option>
-    <option value="new_lead">New Lead</option>
-    <option value="researching">Researching</option>
-    <option value="contacted">Contacted</option>
-    <option value="meeting_set">Meeting Set</option>
-    <option value="proposal_sent">Proposal Sent</option>
-    <option value="not_for_sale">Not For Sale</option>
-    <option value="dead">Dead</option>
-  </select>`;
-  html += '</div>';
-
-  // ── RESEARCH NOTES ──
-  html += '<div class="form-divider">Research Notes</div>';
-
-  html += '<div class="form-group">';
-  html += `<textarea id="res-notes" placeholder="Key findings, data sources, observations..." rows="4">${esc(rec.research_notes || '')}</textarea>`;
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Research Source</label>';
-  html += `<input type="text" id="res-source" value="" placeholder="CoStar, County, Call, Loopnet">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Research Date</label>';
-  html += `<input type="date" id="res-date" value="${new Date().toISOString().substring(0, 10)}">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── QUICK ACTIONS ──
-  html += '<div class="form-divider">Quick Actions</div>';
-
+  // ──── STEP 1: OWNERSHIP ────
+  html += `<div class="form-step${govResearchStep === 1 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">2</span> Ownership</div>';
+  html += guidedField('res-lead-recorded-owner', 'Recorded Owner', rec.recorded_owner || '', {placeholder:'From deed / public records'});
+  html += guidedField('res-lead-true-owner', 'True Owner / Parent', rec.true_owner || '', {placeholder:'Beneficial owner'});
+  html += guidedField('res-lead-incorporation', 'State of Incorporation', rec.state_of_incorporation || '', {placeholder:'e.g. DE'});
+  html += guidedField('res-lead-owner-type', 'Owner Type', '', {
+    options: [{value:'Private', label:'Private'}, {value:'Institutional', label:'Institutional'}, {value:'REIT', label:'REIT'}, {value:'Government', label:'Government'}, {value:'Non-Profit', label:'Non-Profit'}, {value:'SPE / LLC', label:'SPE / LLC'}]
+  });
+  html += guidedField('res-lead-principal-names', 'Principal Names', rec.principal_names || '', {placeholder:'CEO, Managing Member, etc.'});
+  html += guidedField('res-lead-principal-email', 'Contact Email', '', {type:'email', placeholder:'contact@example.com'});
+  html += guidedField('res-lead-phone', 'Phone', rec.phone_2 || '', {placeholder:'(555) 123-4567'});
+  html += guidedField('res-lead-mailing', 'Mailing Address', '', {});
+  html += guidedField('res-lead-mailing-2', 'Mailing Address 2', '', {});
   html += '<div class="quick-actions">';
-  html += searchBtn('Google Search', `${rec.lessor_name} ${rec.address} ${rec.city}`);
-  html += searchBtn('Property Search', `${rec.address} ${rec.city} ${rec.state} sale owner`);
+  html += searchBtn('Google Search', `${rec.lessor_name} ${rec.address}`);
   html += sosBtns(rec.state, rec.state_of_incorporation);
   html += countyBtns(rec.city, rec.state);
   html += '</div>';
+  html += '</div>';
+
+  // ──── STEP 2: PROPERTY ────
+  html += `<div class="form-step${govResearchStep === 2 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">3</span> Property</div>';
+  html += guidedField('res-lead-rba', 'RBA (Rentable Building Area)', rec.square_feet || '', {type:'number', placeholder:'SF'});
+  html += guidedField('res-lead-land-acres', 'Land Size (Acres)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-year-built', 'Year Built', '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-lead-year-renovated', 'Year Renovated', '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-lead-building-class', 'Building Class', '', {
+    options: [{value:'A', label:'Class A'}, {value:'B', label:'Class B'}, {value:'C', label:'Class C'}]
+  });
+  html += guidedField('res-lead-stories', 'Stories / Floors', '', {type:'number'});
+  html += guidedField('res-lead-parking', 'Parking Spaces', '', {type:'number'});
+  html += guidedField('res-lead-zoning', 'Zoning', '', {placeholder:'e.g. C-2, Industrial'});
+  html += guidedField('res-lead-condition', 'Property Condition', '', {
+    options: [{value:'Excellent', label:'Excellent'}, {value:'Good', label:'Good'}, {value:'Average', label:'Average'}, {value:'Fair', label:'Fair'}, {value:'Poor', label:'Poor'}]
+  });
+  html += '</div>';
+
+  // ──── STEP 3: FINANCING ────
+  html += `<div class="form-step${govResearchStep === 3 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">4</span> Financing</div>';
+  html += guidedField('res-lead-lender', 'Lender', loan.index_name || '', {placeholder:'Bank or fund name', source: loan.index_name ? 'loan records' : null});
+  html += guidedField('res-lead-loan-amount', 'Loan Amount', loan.loan_amount || '', {type:'number', source: loan.loan_amount ? 'loan records' : null});
+  html += guidedField('res-lead-interest-rate', 'Interest Rate (%)', loan.interest_rate_percent || '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-loan-type', 'Loan Type', '', {
+    options: [{value:'Fixed', label:'Fixed'}, {value:'Variable', label:'Variable'}, {value:'Bridge', label:'Bridge'}, {value:'CMBS', label:'CMBS'}, {value:'Agency', label:'Agency'}, {value:'Construction', label:'Construction'}, {value:'SBA', label:'SBA'}, {value:'Other', label:'Other'}]
+  });
+  html += guidedField('res-lead-loan-orig', 'Origination Date', loan.origination_date ? loan.origination_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-lead-loan-maturity', 'Maturity Date', loan.maturity_date ? loan.maturity_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-lead-ltv', 'LTV (%)', loan.loan_to_value || '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-recourse', 'Recourse', '', {
+    options: [{value:'Recourse', label:'Recourse'}, {value:'Non-Recourse', label:'Non-Recourse'}, {value:'Partial', label:'Partial'}]
+  });
+  html += '</div>';
+
+  // ──── STEP 4: VALUATION & NOTES ────
+  html += `<div class="form-step${govResearchStep === 4 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">5</span> Valuation & Notes</div>';
+  html += guidedField('res-lead-annual-rent', 'Annual Rent / NOI', rec.annual_rent || '', {type:'number'});
+  html += guidedField('res-lead-rent-psf', 'Rent Per SF ($/SF)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-expense-type', 'Expense Type', '', {
+    options: [{value:'NNN', label:'NNN'}, {value:'Modified Gross', label:'Modified Gross'}, {value:'Full Service Gross', label:'Full Service Gross'}, {value:'Industrial Gross', label:'Industrial Gross'}, {value:'Ground Lease', label:'Ground Lease'}]
+  });
+  html += guidedField('res-lead-est-value', 'Estimated Property Value', rec.estimated_value || '', {type:'number'});
+  html += guidedField('res-lead-current-cap', 'Current Cap Rate (%)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-lead-quick-status', 'Quick Status', '', {
+    options: [{value:'new_lead', label:'New Lead'}, {value:'researching', label:'Researching'}, {value:'contacted', label:'Contacted'}, {value:'meeting_set', label:'Meeting Set'}, {value:'proposal_sent', label:'Proposal Sent'}, {value:'not_for_sale', label:'Not For Sale'}, {value:'dead', label:'Dead'}]
+  });
+  html += guidedField('res-lead-notes', 'Research Notes', rec.research_notes || '', {type:'textarea', rows:4, placeholder:'Key findings, data sources, observations...'});
+  html += guidedField('res-lead-source', 'Research Source', '', {placeholder:'CoStar, County, Call, Loopnet'});
+  html += guidedField('res-lead-date', 'Research Date', new Date().toISOString().substring(0, 10), {type:'date'});
+  html += '</div>';
 
   html += '</div>';
 
-  html += '<div class="research-actions">';
-  html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
+  // ────────────────────────────────────────────────────────────
+  // ACTION ROW
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row">';
+  if (govResearchStep > 0) {
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
+  }
+  if (govResearchStep < 4) {
+    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+  } else {
+    html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+  }
+  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -1551,14 +1446,31 @@ function renderLeadResearchCard(rec) {
 }
 
 function renderIntelResearchCard(rec) {
+  // Track record changes to reset step
+  if (window._govLastRecId !== (rec.property_id)) {
+    govResearchStep = 0;
+    window._govLastRecId = rec.property_id;
+  }
+
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
-  const loan = rec._loan || govData.loans.find(l => l.property_id === rec.property_id) || {};
+  const loan = rec._loan || (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
   let html = '<div class="research-card">';
 
-  // ── CONTEXT PANEL ──
+  // ────────────────────────────────────────────────────────────
+  // CONTEXT PANEL (LEFT)
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-context">';
+
+  // Task header
+  html += '<div class="task-header">';
+  html += '<div>Intel Research</div>';
+  let badge = 'ready';
+  if (!rec.rba || !rec.recorded_owner) badge = 'needs-input';
+  html += `<span class="task-badge ${badge}">${badge === 'urgent' ? 'Urgent' : badge === 'needs-input' ? 'Needs Input' : 'Ready'}</span>`;
+  html += '</div>';
+
   html += `<div class="context-block">
     <div class="context-label">Property</div>
     <div class="context-value">${esc(rec.address || '')}</div>
@@ -1582,7 +1494,7 @@ function renderIntelResearchCard(rec) {
   if (snapshot.lease_effective) {
     html += `<div class="context-block">
       <div class="context-label">GSA Lease Term</div>
-      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} – ${snapshot.lease_expiration.substring(0, 10)}</div>
+      <div class="context-value">${snapshot.lease_effective.substring(0, 10)} – ${(snapshot.lease_expiration || '').substring(0, 10)}</div>
       <div class="context-sub">${fmtN(snapshot.lease_rsf || 0)} SF @ ${fmt(snapshot.annual_rent || 0)}/yr</div>
     </div>`;
   }
@@ -1612,291 +1524,132 @@ function renderIntelResearchCard(rec) {
 
   html += '</div>';
 
-  // ── RESEARCH FORM ──
+  // ────────────────────────────────────────────────────────────
+  // FORM PANEL (RIGHT) - 5-STEP GUIDED WORKFLOW
+  // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
-  // ── PRIOR SALE / TRANSACTION ──
-  html += '<div class="form-divider">Prior Sale / Transaction</div>';
+  // Completeness bar — representative fields from each step
+  const allFields = [
+    { value: rec.rba, required: true },                       // Property
+    { value: rec.recorded_owner || rec.lessor_name, required: true }, // Ownership
+    { value: loan.index_name, required: false },              // Financing
+    { value: rec.last_known_rent || rec.gross_rent, required: false }, // Valuation
+    { value: rec.year_built, required: false },               // Property
+    { value: rec.true_owner, required: false },               // Ownership
+    { value: loan.loan_amount, required: false },             // Financing
+    { value: rec.current_value_estimate, required: false }    // Valuation
+  ];
+  const completeness = computeCompleteness(allFields);
+  html += renderCompletenessBar(completeness);
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Sale Date</label>';
-  html += `<input type="date" id="res-intel-sale-date" value="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Sale Price ($)</label>';
-  html += `<input type="number" id="res-intel-sale-price" value="" placeholder="e.g. 5000000">`;
-  html += '</div>';
-  html += '</div>';
+  // Step navigation
+  const steps = [
+    {label: 'Transaction', complete: false},
+    {label: 'Property', complete: !!rec.rba},
+    {label: 'Ownership', complete: !!(rec.recorded_owner || rec.lessor_name)},
+    {label: 'Financing', complete: !!loan.index_name},
+    {label: 'Valuation', complete: !!(rec.last_known_rent || rec.gross_rent)}
+  ];
+  html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Cap Rate at Sale (%)</label>';
-  html += `<input type="number" id="res-intel-cap-rate" value="" placeholder="e.g. 6.25" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Price Source</label>';
-  html += `<input type="text" id="res-intel-price-source" value="" placeholder="CoStar, County Records, etc.">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Buyer</label>';
-  html += `<input type="text" id="res-intel-buyer" value="" placeholder="Purchasing entity">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Seller</label>';
-  html += `<input type="text" id="res-intel-seller" value="" placeholder="Selling entity">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── PROPERTY PHYSICAL DETAILS ──
-  html += '<div class="form-divider">Property Details</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>RBA (Rentable Building Area)</label>';
-  html += `<input type="number" id="res-intel-rba" value="${rec.rba || ''}" placeholder="SF">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Land Size (Acres)</label>';
-  html += `<input type="number" id="res-intel-land-acres" value="${rec.land_acres || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
+  // ──── STEP 0: TRANSACTION ────
+  html += `<div class="form-step${govResearchStep === 0 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">1</span> Transaction</div>';
+  html += guidedField('res-intel-sale-date', 'Sale Date', '', {type:'date'});
+  html += guidedField('res-intel-sale-price', 'Sale Price', '', {type:'number', placeholder:'e.g. 5000000'});
+  html += guidedField('res-intel-cap-rate', 'Cap Rate (%)', '', {type:'number', step:'0.01', placeholder:'e.g. 6.25'});
+  html += guidedField('res-intel-price-source', 'Price Source', '', {placeholder:'CoStar, County Records, etc.'});
+  html += guidedField('res-intel-buyer', 'Buyer', '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-intel-seller', 'Seller', '', {placeholder:'Selling entity'});
   html += '</div>';
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Year Built</label>';
-  html += `<input type="number" id="res-intel-year-built" value="${rec.year_built || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Year Renovated</label>';
-  html += `<input type="number" id="res-intel-year-renovated" value="${rec.year_renovated || ''}" placeholder="YYYY">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Building Class</label>';
-  html += `<select id="res-intel-building-class">
-    <option value="">—</option>
-    <option value="A">Class A</option>
-    <option value="B">Class B</option>
-    <option value="C">Class C</option>
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Stories / Floors</label>';
-  html += `<input type="number" id="res-intel-stories" value="${rec.stories || ''}" placeholder="">`;
-  html += '</div>';
+  // ──── STEP 1: PROPERTY ────
+  html += `<div class="form-step${govResearchStep === 1 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">2</span> Property</div>';
+  html += guidedField('res-intel-rba', 'RBA (Rentable Building Area)', rec.rba || '', {type:'number', placeholder:'SF'});
+  html += guidedField('res-intel-land-acres', 'Land Size (Acres)', rec.land_acres || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-year-built', 'Year Built', rec.year_built || '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-intel-year-renovated', 'Year Renovated', rec.year_renovated || '', {type:'number', placeholder:'YYYY'});
+  html += guidedField('res-intel-building-class', 'Building Class', '', {
+    options: [{value:'A', label:'Class A'}, {value:'B', label:'Class B'}, {value:'C', label:'Class C'}]
+  });
+  html += guidedField('res-intel-stories', 'Stories / Floors', rec.stories || '', {type:'number'});
+  html += guidedField('res-intel-parking', 'Parking Spaces', rec.parking_spaces || '', {type:'number'});
+  html += guidedField('res-intel-zoning', 'Zoning', rec.zoning || '', {placeholder:'e.g. C-2, Industrial'});
+  html += guidedField('res-intel-condition', 'Property Condition', '', {
+    options: [{value:'Excellent', label:'Excellent'}, {value:'Good', label:'Good'}, {value:'Average', label:'Average'}, {value:'Fair', label:'Fair'}, {value:'Poor', label:'Poor'}]
+  });
   html += '</div>';
 
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Parking Spaces</label>';
-  html += `<input type="number" id="res-intel-parking" value="${rec.parking_spaces || ''}" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Zoning</label>';
-  html += `<input type="text" id="res-intel-zoning" value="${esc(rec.zoning || '')}" placeholder="e.g. C-2, Industrial">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Property Condition</label>';
-  html += `<select id="res-intel-condition">
-    <option value="">—</option>
-    <option value="Excellent">Excellent</option>
-    <option value="Good">Good</option>
-    <option value="Average">Average</option>
-    <option value="Fair">Fair</option>
-    <option value="Poor">Poor</option>
-  </select>`;
-  html += '</div>';
-
-  // ── OWNERSHIP / ENTITY ──
-  html += '<div class="form-divider">Ownership / Entity</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Recorded Owner</label>';
-  html += `<input type="text" id="res-intel-recorded-owner" value="${esc(rec.recorded_owner || rec.lessor_name || '')}" placeholder="From deed / public records">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>True Owner / Parent</label>';
-  html += `<input type="text" id="res-intel-true-owner" value="${esc(rec.true_owner || '')}" placeholder="Beneficial owner">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>State of Incorporation</label>';
-  html += `<input type="text" id="res-intel-incorp-state" value="" placeholder="e.g. DE">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Owner Type</label>';
-  html += `<select id="res-intel-owner-type">
-    <option value="">—</option>
-    <option value="Private">Private</option>
-    <option value="Institutional">Institutional</option>
-    <option value="REIT">REIT</option>
-    <option value="Government">Government</option>
-    <option value="Non-Profit">Non-Profit</option>
-    <option value="SPE / LLC">SPE / LLC</option>
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Principal Names</label>';
-  html += `<input type="text" id="res-intel-principals" value="" placeholder="CEO, Managing Member, etc.">`;
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Contact Email</label>';
-  html += `<input type="email" id="res-intel-email" value="" placeholder="contact@example.com">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Contact Phone</label>';
-  html += `<input type="text" id="res-intel-phone" value="" placeholder="(555) 123-4567">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Mailing Address</label>';
-  html += `<input type="text" id="res-intel-mailing" value="" placeholder="">`;
-  html += '</div>';
-
-  // ── LOAN / DEBT ──
-  html += '<div class="form-divider">Loan / Debt</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Lender</label>';
-  html += `<input type="text" id="res-intel-lender" value="${esc(loan.index_name || '')}" placeholder="Bank or fund name">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Amount ($)</label>';
-  html += `<input type="number" id="res-intel-loan-amount" value="${loan.loan_amount || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Interest Rate (%)</label>';
-  html += `<input type="number" id="res-intel-interest-rate" value="${loan.interest_rate_percent || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Loan Type</label>';
-  html += `<select id="res-intel-loan-type">
-    <option value="">—</option>
-    ${['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Construction', 'SBA', 'Other'].map(t =>
-      `<option value="${t}" ${(loan.loan_type || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Origination Date</label>';
-  html += `<input type="date" id="res-intel-loan-orig" value="${loan.origination_date ? loan.origination_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Maturity Date</label>';
-  html += `<input type="date" id="res-intel-loan-maturity" value="${loan.maturity_date ? loan.maturity_date.substring(0, 10) : ''}">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>LTV (%)</label>';
-  html += `<input type="number" id="res-intel-ltv" value="${loan.loan_to_value || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Recourse</label>';
-  html += `<select id="res-intel-recourse">
-    <option value="">—</option>
-    ${['Recourse', 'Non-Recourse', 'Partial'].map(t =>
-      `<option value="${t}" ${(loan.recourse || '') === t ? 'selected' : ''}>${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── CASH FLOW / VALUATION ──
-  html += '<div class="form-divider">Cash Flow / Valuation</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Annual Rent / NOI ($)</label>';
-  html += `<input type="number" id="res-intel-annual-rent" value="${rec.last_known_rent || rec.gross_rent || ''}" placeholder="">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Rent Per SF ($/SF)</label>';
-  html += `<input type="number" id="res-intel-rent-psf" value="${rec.gross_rent_psf || ''}" placeholder="" step="0.01">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Expense Type</label>';
-  html += `<select id="res-intel-expense-type">
-    <option value="">—</option>
-    ${['NNN', 'Modified Gross', 'Full Service Gross', 'Industrial Gross', 'Ground Lease'].map(t =>
-      `<option value="${t}">${t}</option>`
-    ).join('')}
-  </select>`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Estimated Property Value ($)</label>';
-  html += `<input type="number" id="res-intel-est-value" value="${rec.current_value_estimate || ''}" placeholder="">`;
-  html += '</div>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Current Cap Rate (%)</label>';
-  html += `<input type="number" id="res-intel-current-cap" value="" placeholder="" step="0.01">`;
-  html += '</div>';
-
-  // ── RESEARCH NOTES ──
-  html += '<div class="form-divider">Research Notes</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>Notes</label>';
-  html += `<textarea id="res-intel-notes" placeholder="Key findings, observations, data sources..." rows="4"></textarea>`;
-  html += '</div>';
-
-  html += '<div class="form-row">';
-  html += '<div class="form-group">';
-  html += '<label>Research Source</label>';
-  html += `<input type="text" id="res-intel-source" value="" placeholder="CoStar, County, Call, etc.">`;
-  html += '</div>';
-  html += '<div class="form-group">';
-  html += '<label>Research Date</label>';
-  html += `<input type="date" id="res-intel-date" value="${new Date().toISOString().substring(0, 10)}">`;
-  html += '</div>';
-  html += '</div>';
-
-  // ── QUICK ACTIONS ──
-  html += '<div class="form-divider">Quick Actions</div>';
-
+  // ──── STEP 2: OWNERSHIP ────
+  html += `<div class="form-step${govResearchStep === 2 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">3</span> Ownership</div>';
+  html += guidedField('res-intel-recorded-owner', 'Recorded Owner', rec.recorded_owner || rec.lessor_name || '', {placeholder:'From deed / public records'});
+  html += guidedField('res-intel-true-owner', 'True Owner / Parent', rec.true_owner || '', {placeholder:'Beneficial owner'});
+  html += guidedField('res-intel-incorp-state', 'State of Incorporation', '', {placeholder:'e.g. DE'});
+  html += guidedField('res-intel-owner-type', 'Owner Type', '', {
+    options: [{value:'Private', label:'Private'}, {value:'Institutional', label:'Institutional'}, {value:'REIT', label:'REIT'}, {value:'Government', label:'Government'}, {value:'Non-Profit', label:'Non-Profit'}, {value:'SPE / LLC', label:'SPE / LLC'}]
+  });
+  html += guidedField('res-intel-principals', 'Principal Names', '', {placeholder:'CEO, Managing Member, etc.'});
+  html += guidedField('res-intel-email', 'Contact Email', '', {type:'email', placeholder:'contact@example.com'});
+  html += guidedField('res-intel-phone', 'Contact Phone', '', {placeholder:'(555) 123-4567'});
+  html += guidedField('res-intel-mailing', 'Mailing Address', '', {});
   html += '<div class="quick-actions">';
-  html += searchBtn('Google Search', `${rec.address} ${rec.city} ${rec.state} owner`);
-  html += searchBtn('CoStar Search', `${rec.address} ${rec.city} ${rec.state}`);
+  html += searchBtn('Google Search', `${rec.address} ${rec.city} ${rec.state}`);
   html += sosBtns(rec.state, null);
   html += countyBtns(rec.city, rec.state);
   html += '</div>';
+  html += '</div>';
+
+  // ──── STEP 3: FINANCING ────
+  html += `<div class="form-step${govResearchStep === 3 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">4</span> Financing</div>';
+  html += guidedField('res-intel-lender', 'Lender', loan.index_name || '', {placeholder:'Bank or fund name', source: loan.index_name ? 'loan records' : null});
+  html += guidedField('res-intel-loan-amount', 'Loan Amount', loan.loan_amount || '', {type:'number', source: loan.loan_amount ? 'loan records' : null});
+  html += guidedField('res-intel-interest-rate', 'Interest Rate (%)', loan.interest_rate_percent || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-loan-type', 'Loan Type', '', {
+    options: [{value:'Fixed', label:'Fixed'}, {value:'Variable', label:'Variable'}, {value:'Bridge', label:'Bridge'}, {value:'CMBS', label:'CMBS'}, {value:'Agency', label:'Agency'}, {value:'Construction', label:'Construction'}, {value:'SBA', label:'SBA'}, {value:'Other', label:'Other'}]
+  });
+  html += guidedField('res-intel-loan-orig', 'Origination Date', loan.origination_date ? loan.origination_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-intel-loan-maturity', 'Maturity Date', loan.maturity_date ? loan.maturity_date.substring(0, 10) : '', {type:'date'});
+  html += guidedField('res-intel-ltv', 'LTV (%)', loan.loan_to_value || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-recourse', 'Recourse', '', {
+    options: [{value:'Recourse', label:'Recourse'}, {value:'Non-Recourse', label:'Non-Recourse'}, {value:'Partial', label:'Partial'}]
+  });
+  html += '</div>';
+
+  // ──── STEP 4: VALUATION & NOTES ────
+  html += `<div class="form-step${govResearchStep === 4 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">5</span> Valuation & Notes</div>';
+  html += guidedField('res-intel-annual-rent', 'Annual Rent / NOI', rec.last_known_rent || rec.gross_rent || '', {type:'number'});
+  html += guidedField('res-intel-rent-psf', 'Rent Per SF ($/SF)', rec.gross_rent_psf || '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-expense-type', 'Expense Type', '', {
+    options: [{value:'NNN', label:'NNN'}, {value:'Modified Gross', label:'Modified Gross'}, {value:'Full Service Gross', label:'Full Service Gross'}, {value:'Industrial Gross', label:'Industrial Gross'}, {value:'Ground Lease', label:'Ground Lease'}]
+  });
+  html += guidedField('res-intel-est-value', 'Estimated Property Value', rec.current_value_estimate || '', {type:'number'});
+  html += guidedField('res-intel-current-cap', 'Current Cap Rate (%)', '', {type:'number', step:'0.01'});
+  html += guidedField('res-intel-notes', 'Research Notes', '', {type:'textarea', rows:4, placeholder:'Key findings, observations, data sources...'});
+  html += guidedField('res-intel-source', 'Research Source', '', {placeholder:'CoStar, County, Call, etc.'});
+  html += guidedField('res-intel-date', 'Research Date', new Date().toISOString().substring(0, 10), {type:'date'});
+  html += '</div>';
 
   html += '</div>';
 
-  html += '<div class="research-actions">';
-  html += `<button class="btn-primary" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(-1)">Back</button>`;
-  html += `<button class="btn-secondary" onclick="researchNav(1)">Skip</button>`;
-  html += `<button class="btn-secondary" onclick="researchMark('na')">N/A</button>`;
+  // ────────────────────────────────────────────────────────────
+  // ACTION ROW
+  // ────────────────────────────────────────────────────────────
+  html += '<div class="action-row">';
+  if (govResearchStep > 0) {
+    html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
+  }
+  if (govResearchStep < 4) {
+    html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
+  }
+  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -1916,6 +1669,14 @@ function renderResearchInner() {
     <div class="progress-text">${researchIdx + 1} / ${researchQueue.length}</div>
   </div>`;
 
+  // Keyboard shortcut hints
+  html += '<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:8px;font-size:10px;color:var(--text3)">';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">N</kbd> Next</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">B</kbd> Back</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">S</kbd> Save</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">K</kbd> Skip</span>';
+  html += '</div>';
+
   // Render card
   if (researchMode === 'ownership') {
     html += renderOwnershipResearchCard(rec);
@@ -1928,39 +1689,58 @@ function renderResearchInner() {
   return html;
 }
 
+let _researchSaving = false;
 async function researchSave() {
+  if (_researchSaving) { showToast('Save already in progress', 'info'); return; }
   const rec = researchQueue[researchIdx];
-  if (!rec) return;
-  
-  if (researchMode === 'ownership') {
-    await saveOwnership(rec);
-  } else if (researchMode === 'intel') {
-    await saveIntel(rec);
-  } else {
-    await saveLead(rec);
+  if (!rec) { showToast('No record to save', 'error'); return; }
+  _researchSaving = true;
+
+  const saveBtn = q('[data-save-research]') || q('.research-card button.save-btn') || q('.research-card button[onclick*="researchSave"]');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.dataset.origText = saveBtn.textContent; saveBtn.textContent = 'Saving\u2026'; }
+
+  let success = true;
+  try {
+    if (researchMode === 'ownership') {
+      success = (await saveOwnership(rec)) !== false;
+    } else if (researchMode === 'intel') {
+      success = (await saveIntel(rec)) !== false;
+    } else {
+      success = (await saveLead(rec)) !== false;
+    }
+  } catch (err) {
+    console.error('researchSave error:', err);
+    showToast('Save failed: ' + err.message + ' \u2014 please retry or skip', 'error');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; }
+    _researchSaving = false;
+    return;
   }
-  
+
+  if (!success) { if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; } _researchSaving = false; return; }
+
   researchCompleted++;
   researchIdx++;
-  
+  _researchSaving = false;
+
   if (researchIdx >= researchQueue.length) {
     renderGovTab();
-    showToast('Research complete!', 'success');
+    showToast('Research queue complete! All items reviewed.', 'success');
   } else {
+    showToast('Saved \u2014 advancing to next item (' + researchIdx + '/' + researchQueue.length + ')', 'success');
     renderGovTab();
   }
 }
 
 async function saveOwnership(rec) {
-  const saleDate = q('#res-sale-date')?.value || null;
-  const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
-  const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
-  const buyer = q('#res-buyer')?.value || null;
-  const seller = q('#res-seller')?.value || null;
+  const saleDate = q('#res-own-sale-date')?.value || null;
+  const salePrice = _pf(q('#res-own-sale-price'));
+  const capRate = _pf(q('#res-own-cap-rate'));
+  const buyer = q('#res-own-buyer')?.value || null;
+  const seller = q('#res-own-seller')?.value || null;
 
-  const recordedOwner = q('#res-recorded-owner')?.value || null;
-  const trueOwner = q('#res-true-owner')?.value || null;
-  const researchNotes = q('#res-notes')?.value || null;
+  const recordedOwner = q('#res-own-recorded-owner')?.value || null;
+  const trueOwner = q('#res-own-true-owner')?.value || null;
+  const researchNotes = q('#res-own-notes')?.value || null;
 
   // Use Gov write service for ownership updates
   const propertyId = rec.matched_property_id || rec.property_id;
@@ -1981,27 +1761,34 @@ async function saveOwnership(rec) {
 
   // ownership_history is not a write-service-protected table — patch directly for
   // sale price, cap rate, and other research fields that live on the history row
-  await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, {
-    sale_date: saleDate,
-    sale_price: salePrice,
-    cap_rate: capRate,
-    buyer: buyer,
-    seller: seller,
-    recorded_owner_name: recordedOwner,
-    state_of_incorporation: q('#res-incorporation')?.value || null,
-    recorded_owner_phone: q('#res-phone')?.value || null,
-    recorded_owner_address: q('#res-mailing')?.value || null,
-    true_owner_name: trueOwner,
-    principal_names: q('#res-principal-names')?.value || null,
-    phone_2: q('#res-phone-2')?.value || null,
-    mailing_address_2: q('#res-mailing-2')?.value || null,
-    rba: parseFloat(q('#res-rba')?.value) || null,
-    land_acres: parseFloat(q('#res-land-acres')?.value) || null,
-    year_built: parseInt(q('#res-year-built')?.value) || null,
-    year_renovated: parseInt(q('#res-year-renovated')?.value) || null,
-    research_notes: researchNotes,
-    research_status: 'completed'
-  });
+  let _partialWarnings = [];
+  try {
+    await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, {
+      sale_date: saleDate,
+      sale_price: salePrice,
+      cap_rate: capRate,
+      buyer: buyer,
+      seller: seller,
+      recorded_owner_name: recordedOwner,
+      state_of_incorporation: q('#res-own-incorporation')?.value || null,
+      recorded_owner_phone: q('#res-own-phone')?.value || null,
+      recorded_owner_address: q('#res-own-mailing')?.value || null,
+      true_owner_name: trueOwner,
+      principal_names: q('#res-own-principal-names')?.value || null,
+      phone_2: q('#res-own-phone-2')?.value || null,
+      mailing_address_2: q('#res-own-mailing-2')?.value || null,
+      rba: _pf(q('#res-own-rba')),
+      land_acres: _pf(q('#res-own-land-acres')),
+      year_built: _pi(q('#res-own-year-built')),
+      year_renovated: _pi(q('#res-own-year-renovated')),
+      research_notes: researchNotes,
+      research_status: 'completed',
+      evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
+    });
+  } catch (err) {
+    console.error('Ownership history patch error:', err);
+    _partialWarnings.push('ownership history');
+  }
 
   // Bridge to canonical model with gov change metadata
   canonicalBridge('save_ownership', {
@@ -2035,30 +1822,38 @@ async function saveOwnership(rec) {
   }
 
   if (salePrice || capRate) {
-    await saveLoanFields(rec);
+    try { await saveLoanFields(rec); } catch (err) { console.error('Loan fields save error:', err); _partialWarnings.push('loan fields'); }
   }
+  if (_partialWarnings.length) { showToast('Saved with warnings — failed to update: ' + _partialWarnings.join(', '), 'error'); return true; }
+  return true;
 }
 
 async function saveLead(rec) {
-  const saleDate = q('#res-sale-date')?.value || null;
-  const salePrice = parseFloat(q('#res-sale-price')?.value) || null;
-  const capRate = parseFloat(q('#res-cap-rate')?.value) || null;
-  const buyer = q('#res-buyer')?.value || null;
-  const seller = q('#res-seller')?.value || null;
-  const quickStatus = q('#res-quick-status')?.value || null;
+  const saleDate = q('#res-lead-sale-date')?.value || null;
+  const salePrice = _pf(q('#res-lead-sale-price'));
+  const capRate = _pf(q('#res-lead-cap-rate'));
+  const buyer = q('#res-lead-buyer')?.value || null;
+  const seller = q('#res-lead-seller')?.value || null;
+  const quickStatus = q('#res-lead-quick-status')?.value || null;
 
   const leadData = {
     lead_id: rec.lead_id,
     lease_number: rec.lease_number || null,
-    recorded_owner: q('#res-recorded-owner')?.value || null,
-    true_owner: q('#res-true-owner')?.value || null,
-    owner_type: q('#res-owner-type')?.value || null,
-    contact_email: q('#res-principal-email')?.value || null,
-    contact_phone: q('#res-phone')?.value || null,
-    contact_mailing: q('#res-mailing')?.value || null,
-    research_notes: q('#res-notes')?.value || null,
+    recorded_owner: q('#res-lead-recorded-owner')?.value || null,
+    true_owner: q('#res-lead-true-owner')?.value || null,
+    owner_type: q('#res-lead-owner-type')?.value || null,
+    contact_email: q('#res-lead-principal-email')?.value || null,
+    contact_phone: q('#res-lead-phone')?.value || null,
+    contact_mailing: q('#res-lead-mailing')?.value || null,
+    research_notes: q('#res-lead-notes')?.value || null,
     research_status: 'completed'
   };
+
+  const _anyLeadField = [saleDate, salePrice, capRate, buyer, seller,
+    leadData.recorded_owner, leadData.true_owner, leadData.owner_type,
+    leadData.contact_email, leadData.contact_phone, leadData.contact_mailing,
+    leadData.research_notes].some(v => v !== null && v !== undefined && String(v).trim() !== '');
+  if (!_anyLeadField) { showToast('Please fill in at least one field before saving', 'info'); return; }
 
   if (quickStatus) {
     leadData.pipeline_status = quickStatus;
@@ -2074,6 +1869,7 @@ async function saveLead(rec) {
   }
 
   // ── Prior Sale → sales_transactions ──
+  let _leadPartialWarnings = [];
   const propertyId = rec.matched_property_id || rec.property_id;
   if ((saleDate || salePrice || buyer || seller) && propertyId) {
     try {
@@ -2095,23 +1891,24 @@ async function saveLead(rec) {
       });
     } catch (err) {
       console.error('Error saving sale transaction from lead:', err);
+      _leadPartialWarnings.push('sale transaction');
     }
   }
 
   // ── Property Details → properties table ──
   if (propertyId) {
     const propPatch = {};
-    const rba = parseFloat(q('#res-rba')?.value) || null;
-    const landAcres = parseFloat(q('#res-land-acres')?.value) || null;
-    const yearBuilt = parseInt(q('#res-year-built')?.value) || null;
-    const yearRenovated = parseInt(q('#res-year-renovated')?.value) || null;
-    const buildingClass = q('#res-building-class')?.value || null;
-    const stories = parseInt(q('#res-stories')?.value) || null;
-    const parking = parseInt(q('#res-parking')?.value) || null;
-    const zoning = q('#res-zoning')?.value || null;
-    const condition = q('#res-condition')?.value || null;
-    const annualRent = parseFloat(q('#res-annual-rent')?.value) || null;
-    const estValue = parseFloat(q('#res-est-value')?.value) || null;
+    const rba = _pf(q('#res-lead-rba'));
+    const landAcres = _pf(q('#res-lead-land-acres'));
+    const yearBuilt = _pi(q('#res-lead-year-built'));
+    const yearRenovated = _pi(q('#res-lead-year-renovated'));
+    const buildingClass = q('#res-lead-building-class')?.value || null;
+    const stories = _pi(q('#res-lead-stories'));
+    const parking = _pi(q('#res-lead-parking'));
+    const zoning = q('#res-lead-zoning')?.value || null;
+    const condition = q('#res-lead-condition')?.value || null;
+    const annualRent = _pf(q('#res-lead-annual-rent'));
+    const estValue = _pf(q('#res-lead-est-value'));
 
     if (rba) propPatch.rba = rba;
     if (landAcres) propPatch.land_acres = landAcres;
@@ -2126,19 +1923,20 @@ async function saveLead(rec) {
     if (estValue) propPatch.current_value_estimate = estValue;
 
     if (Object.keys(propPatch).length > 0) {
-      await patchRecord('properties', 'property_id', propertyId, propPatch);
+      try { await patchRecord('properties', 'property_id', propertyId, propPatch); }
+      catch (err) { console.error('Property patch error:', err); _leadPartialWarnings.push('property details'); }
     }
   }
 
   // ── Loan / Debt ──
-  const lender = q('#res-lender')?.value || null;
-  const loanAmount = parseFloat(q('#res-loan-amount')?.value) || null;
-  const interestRate = parseFloat(q('#res-interest-rate')?.value) || null;
-  const loanType = q('#res-loan-type')?.value || null;
-  const loanOrig = q('#res-loan-orig')?.value || null;
-  const loanMaturity = q('#res-loan-maturity')?.value || null;
-  const ltv = parseFloat(q('#res-ltv')?.value) || null;
-  const recourse = q('#res-recourse')?.value || null;
+  const lender = q('#res-lead-lender')?.value || null;
+  const loanAmount = _pf(q('#res-lead-loan-amount'));
+  const interestRate = _pf(q('#res-lead-interest-rate'));
+  const loanType = q('#res-lead-loan-type')?.value || null;
+  const loanOrig = q('#res-lead-loan-orig')?.value || null;
+  const loanMaturity = q('#res-lead-loan-maturity')?.value || null;
+  const ltv = _pf(q('#res-lead-ltv'));
+  const recourse = q('#res-lead-recourse')?.value || null;
 
   if ((lender || loanAmount) && propertyId) {
     const loanData = {
@@ -2153,7 +1951,7 @@ async function saveLead(rec) {
       recourse: recourse
     };
 
-    const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+    const existingLoan = (govData.loans || []).find(l => l.property_id === propertyId);
     if (existingLoan) {
       await patchRecord('loans', 'property_id', propertyId, loanData);
     } else {
@@ -2169,19 +1967,23 @@ async function saveLead(rec) {
         });
       } catch (err) {
         console.error('Error saving loan from lead:', err);
+        _leadPartialWarnings.push('loan');
       }
     }
   }
 
+  if (_leadPartialWarnings.length) showToast('Saved with warnings — failed to update: ' + _leadPartialWarnings.join(', '), 'error');
+
   // Bridge to canonical model with gov change metadata
   canonicalBridge('complete_research', {
     domain: 'government',
-    research_type: 'ownership',
+    research_type: 'lead',
     external_id: String(rec.property_id || rec.lead_id),
     source_system: 'gov_supabase',
     source_type: 'lead',
     outcome: quickStatus === 'not_applicable' ? 'not_applicable' : 'completed',
     notes: leadData.research_notes,
+    evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null,
     gov_change_event_id: writeResult?.change_event_id || null,
     gov_correlation_id: writeResult?.correlation_id || null,
     source_record_id: rec.lead_id,
@@ -2215,19 +2017,21 @@ async function saveLead(rec) {
       }
     });
   }
+  if (_leadPartialWarnings.length) { showToast('Saved with warnings — failed to update: ' + _leadPartialWarnings.join(', '), 'error'); return true; }
+  return true;
 }
 
 async function saveIntel(rec) {
   const propertyId = rec.property_id;
   if (!propertyId) {
     showToast('No property ID — cannot save intel', 'error');
-    return;
+    return false;
   }
 
   // ── Prior Sale → sales_transactions table ──
   const saleDate = q('#res-intel-sale-date')?.value || null;
-  const salePrice = parseFloat(q('#res-intel-sale-price')?.value) || null;
-  const capRate = parseFloat(q('#res-intel-cap-rate')?.value) || null;
+  const salePrice = _pf(q('#res-intel-sale-price'));
+  const capRate = _pf(q('#res-intel-cap-rate'));
   const buyer = q('#res-intel-buyer')?.value || null;
   const seller = q('#res-intel-seller')?.value || null;
 
@@ -2257,17 +2061,17 @@ async function saveIntel(rec) {
 
   // ── Property Details → properties table ──
   const propertyPatch = {};
-  const rba = parseFloat(q('#res-intel-rba')?.value) || null;
-  const landAcres = parseFloat(q('#res-intel-land-acres')?.value) || null;
-  const yearBuilt = parseInt(q('#res-intel-year-built')?.value) || null;
-  const yearRenovated = parseInt(q('#res-intel-year-renovated')?.value) || null;
+  const rba = _pf(q('#res-intel-rba'));
+  const landAcres = _pf(q('#res-intel-land-acres'));
+  const yearBuilt = _pi(q('#res-intel-year-built'));
+  const yearRenovated = _pi(q('#res-intel-year-renovated'));
   const buildingClass = q('#res-intel-building-class')?.value || null;
-  const stories = parseInt(q('#res-intel-stories')?.value) || null;
-  const parking = parseInt(q('#res-intel-parking')?.value) || null;
+  const stories = _pi(q('#res-intel-stories'));
+  const parking = _pi(q('#res-intel-parking'));
   const zoning = q('#res-intel-zoning')?.value || null;
   const condition = q('#res-intel-condition')?.value || null;
-  const annualRent = parseFloat(q('#res-intel-annual-rent')?.value) || null;
-  const estValue = parseFloat(q('#res-intel-est-value')?.value) || null;
+  const annualRent = _pf(q('#res-intel-annual-rent'));
+  const estValue = _pf(q('#res-intel-est-value'));
   const recordedOwner = q('#res-intel-recorded-owner')?.value || null;
   const trueOwner = q('#res-intel-true-owner')?.value || null;
 
@@ -2285,7 +2089,11 @@ async function saveIntel(rec) {
   propertyPatch.intel_status = 'completed';
 
   if (Object.keys(propertyPatch).length > 1) {
-    await patchRecord('properties', 'property_id', propertyId, propertyPatch);
+    const ok = await patchRecord('properties', 'property_id', propertyId, propertyPatch);
+    if (!ok) {
+      showToast('Failed to save property details — please retry', 'error');
+      return false;
+    }
   }
 
   // ── Ownership → write service ──
@@ -2304,12 +2112,12 @@ async function saveIntel(rec) {
 
   // ── Loan → loans table ──
   const lender = q('#res-intel-lender')?.value || null;
-  const loanAmount = parseFloat(q('#res-intel-loan-amount')?.value) || null;
-  const interestRate = parseFloat(q('#res-intel-interest-rate')?.value) || null;
+  const loanAmount = _pf(q('#res-intel-loan-amount'));
+  const interestRate = _pf(q('#res-intel-interest-rate'));
   const loanType = q('#res-intel-loan-type')?.value || null;
   const loanOrig = q('#res-intel-loan-orig')?.value || null;
   const loanMaturity = q('#res-intel-loan-maturity')?.value || null;
-  const ltv = parseFloat(q('#res-intel-ltv')?.value) || null;
+  const ltv = _pf(q('#res-intel-ltv'));
   const recourse = q('#res-intel-recourse')?.value || null;
 
   if (lender || loanAmount) {
@@ -2325,7 +2133,7 @@ async function saveIntel(rec) {
       recourse: recourse
     };
 
-    const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+    const existingLoan = (govData.loans || []).find(l => l.property_id === propertyId);
     if (existingLoan) {
       await patchRecord('loans', 'property_id', propertyId, loanData);
     } else {
@@ -2384,6 +2192,7 @@ async function saveIntel(rec) {
     source_type: 'asset',
     outcome: 'completed',
     notes: notes,
+    evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null,
     source_record_id: propertyId,
     source_table: 'properties',
     title: rec.address || rec.property_name || `Property ${propertyId}`,
@@ -2410,6 +2219,8 @@ async function saveIntel(rec) {
       }
     });
   }
+
+  return true;
 }
 
 async function patchRecord(table, idCol, idVal, data) {
@@ -2450,7 +2261,7 @@ async function saveLoanFields(rec) {
   if (!propertyId) return;
   
   // Find existing loan
-  const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+  const existingLoan = (govData.loans || []).find(l => l.property_id === propertyId);
   
   const loanData = {
     property_id: propertyId,
@@ -2487,23 +2298,26 @@ async function researchMark(mark) {
   const rec = researchQueue[researchIdx];
   if (!rec) return;
 
+  // Disable all mark buttons during async operation
+  const markBtns = document.querySelectorAll('.research-card .action-row button[onclick*="researchMark"]');
+  markBtns.forEach(b => { b.disabled = true; });
+
   let status = 'marked';
   if (mark === 'spe_rename') status = 'spe_rename';
   if (mark === 'na') status = 'not_applicable';
 
+  const _reEnableMarks = () => markBtns.forEach(b => { b.disabled = false; });
+
   if (researchMode === 'ownership') {
-    // ownership_history is not write-service-protected — patch directly
     const ok = await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, { research_status: status });
-    if (!ok) return;
+    if (!ok) { _reEnableMarks(); return; }
   } else if (researchMode === 'intel') {
-    // Intel marks go to properties table
     const propertyId = rec.property_id;
     if (propertyId) {
       const ok = await patchRecord('properties', 'property_id', propertyId, { intel_status: status });
-      if (!ok) return;
+      if (!ok) { _reEnableMarks(); return; }
     }
   } else {
-    // prospect_leads must use Gov write service
     try {
       await govWriteService('lead-research', {
         lead_id: rec.lead_id,
@@ -2512,29 +2326,48 @@ async function researchMark(mark) {
     } catch (err) {
       console.error('Error marking lead via write service:', err);
       showToast('Error saving: ' + err.message, 'error');
+      _reEnableMarks();
       return;
     }
   }
 
+  const markLabel = mark === 'spe_rename' ? 'SPE Rename' : mark === 'na' ? 'N/A' : mark;
+  showToast('Marked as ' + markLabel, 'success');
   researchIdx++;
   renderGovTab();
 }
 
-function researchNav(dir) {
+function researchNav(dir, isSkip) {
+  if (_researchSaving) { showToast('Save in progress \u2014 please wait', 'info'); return; }
+  const prevIdx = researchIdx;
   researchIdx += dir;
-  
-  if (researchIdx < 0) researchIdx = 0;
-  if (researchIdx >= researchQueue.length) researchIdx = researchQueue.length - 1;
-  
+
+  if (researchIdx < 0) {
+    researchIdx = 0;
+    if (prevIdx === 0) showToast('Already at start of queue', 'info');
+  } else if (researchIdx >= researchQueue.length) {
+    researchIdx = Math.max(0, researchQueue.length - 1);
+    showToast('End of queue reached', 'info');
+  } else if (isSkip) {
+    showToast('Skipped — ' + (researchIdx + 1) + ' / ' + researchQueue.length, 'info');
+  }
+
   renderGovTab();
 }
 
 function setResearchMode(mode) {
   researchMode = mode;
   researchIdx = 0;
-  loadResearchQueue().then(() => {
+
+  // For pipeline ops modes, don't load research queue
+  if (['pending_updates', 'financial_overrides', 'pipeline_control', 'monitor'].includes(mode)) {
     renderGovTab();
-  });
+  } else {
+    // For research modes, load the queue
+    loadResearchQueue().then(() => {
+      renderGovTab();
+    });
+  }
 }
 
 function setResearchFilter(filter) {
@@ -2544,6 +2377,34 @@ function setResearchFilter(filter) {
     renderGovTab();
   });
 }
+
+// Keyboard shortcuts for research workflow
+(function() {
+  document.addEventListener('keydown', function(e) {
+    // Only active when research workbench is visible and no input/textarea is focused
+    if (!document.querySelector('.research-card')) return;
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+
+    if (e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      if (govResearchStep < 4) {
+        govStepNav(govResearchStep + 1);
+      } else {
+        researchSave();
+      }
+    } else if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      if (govResearchStep > 0) govStepNav(govResearchStep - 1);
+    } else if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      if (!_researchSaving) researchSave();
+    } else if (e.key === 'k' || e.key === 'K') {
+      e.preventDefault();
+      if (!_researchSaving) researchNav(1, true);
+    }
+  });
+})();
 
 function getGovEvidenceActor() {
   if (typeof LCC_USER !== 'undefined') {
@@ -2595,6 +2456,8 @@ function syncGovEvidenceContext() {
     queueLoaded: false,
     queueError: '',
     healthLoading: false,
+    brokerFeedback: null,
+    brokerFeedbackLoading: false,
     health: null,
     conflicts: [],
     detectedSource: null
@@ -2787,13 +2650,18 @@ function renderGovEvidenceWorkbench() {
               <div>
                 <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em">${esc(row.observation_type || 'observation')}</div>
                 <div style="font-size:13px;color:var(--text);margin-top:4px">${esc(row.summary || row.observation_value || 'Pending evidence row')}</div>
+                ${Array.isArray(row.review_cues) && row.review_cues.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${row.review_cues.map((cue) => `<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text2)">${esc(cue)}</span>`).join('')}</div>` : ''}
+                ${row.promotion_guard?.message ? `<div class="live-ingest-callout warn" style="margin-top:8px">${esc(row.promotion_guard.message)}</div>` : ''}
+                ${row.promotion_guard?.current_contact_display ? `<div style="font-size:11px;color:var(--text2);margin-top:6px">Current matched contact: ${esc(row.promotion_guard.current_contact_display)}</div>` : ''}
+                ${row.promotion_guard?.candidate_contact_display ? `<div style="font-size:11px;color:var(--text2);margin-top:4px">Evidence broker: ${esc(row.promotion_guard.candidate_contact_display)}</div>` : ''}
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                 <button class="btn-secondary" type="button" data-gov-evidence-note="${idx}">Note</button>
                 <button class="btn-secondary" type="button" data-gov-evidence-review="${idx}">Review</button>
                 <button class="btn-secondary" type="button" data-gov-evidence-dismiss="${idx}">Dismiss</button>
-                <button class="btn-primary" type="button" data-gov-evidence-promote="${idx}">Promote</button>
+                <button class="btn-primary" type="button" data-gov-evidence-promote="${idx}">${row.promotion_guard?.message ? 'Confirm Promote' : 'Promote'}</button>
               </div>
+              ${Array.isArray(row.dismiss_reason_options) && row.dismiss_reason_options.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;justify-content:flex-end">${row.dismiss_reason_options.map((reason) => `<button class="btn-secondary" type="button" data-gov-evidence-dismiss-reason="${idx}::${esc(reason)}">Dismiss: ${esc(reason)}</button>`).join('')}</div>` : ''}
             </div>
           </div>`).join('')}</div>`
       : '<div class="live-ingest-empty" style="margin-top:8px">No pending observation rows for this record.</div>';
@@ -2836,6 +2704,7 @@ function renderGovEvidenceWorkbench() {
         ${govEvidenceState.detectedSource ? `<div class="live-ingest-stamp" style="margin-top:6px">Detected source: ${esc(govEvidenceState.detectedSource.platform || 'unknown')} (${esc(String(govEvidenceState.detectedSource.confidence ?? ''))})</div>` : ''}
         ${govEvidenceState.health ? `<div class="live-ingest-callout ${govEvidenceState.health.status === 'ok' ? '' : 'warn'}" style="margin-top:10px">${esc(buildGovEvidenceHealthSummary(govEvidenceState.health))}</div>` : ''}
         <div style="margin-top:10px">
+        ${govEvidenceState.brokerFeedback ? `<div class="live-ingest-callout" style="margin-top:10px"><strong>Broker Review Feedback</strong><div style="font-size:12px;color:var(--text2);margin-top:6px">${esc(buildGovBrokerFeedbackSummary(govEvidenceState.brokerFeedback))}</div></div>` : ''}
           <div class="live-ingest-results-title">Pending Observation Queue</div>
           ${queueHtml}
         </div>
@@ -2904,7 +2773,7 @@ async function govEvidenceApi(endpoint, options = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload = await response.json().catch(e => { console.warn('[govEvidenceApi] JSON parse failed:', e.message); return {}; });
   if (!response.ok) {
     const detail = payload?.detail?.detail || payload?.detail?.error || payload?.error || 'Request failed';
     throw new Error(detail);
@@ -2930,8 +2799,23 @@ async function ensureGovEvidenceArtifactSaved() {
       actor: getGovEvidenceActor()
     }
   });
-  govEvidenceState.artifactId = result?.artifact?.artifact_id || result?.artifact?.id || null;
-  return govEvidenceState.artifactId;
+  govEvidenceState.artifactId = result?.id || null;
+  return result?.id;
+}
+
+function buildGovBrokerFeedbackSummary(summary) {
+  if (!summary || typeof summary !== 'object') return 'No broker feedback yet.';
+  const statusCounts = summary.status_counts || {};
+  const dismissCounts = summary.dismiss_reason_counts || {};
+  const parts = [];
+  if (typeof summary.total_rows === 'number') parts.push(`Rows ${summary.total_rows}`);
+  if (statusCounts.promoted) parts.push(`Promoted ${statusCounts.promoted}`);
+  if (statusCounts.dismissed) parts.push(`Dismissed ${statusCounts.dismissed}`);
+  const topDismiss = Object.entries(dismissCounts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (topDismiss.length) {
+    parts.push(`Top dismiss reasons: ${topDismiss.map(([reason, count]) => `${reason} (${count})`).join(', ')}`);
+  }
+  return parts.join(' | ') || 'No broker feedback yet.';
 }
 
 async function loadGovEvidenceObservations(force = false) {
@@ -2939,25 +2823,38 @@ async function loadGovEvidenceObservations(force = false) {
   if (!rec) return;
   if (govEvidenceState.queueLoaded && !force) return;
   govEvidenceState.queueLoading = true;
+  govEvidenceState.brokerFeedbackLoading = true;
   govEvidenceState.queueError = '';
   rerenderGovEvidenceOnly();
   try {
     const binding = getGovEvidenceBinding(rec);
-    const result = await govEvidenceApi('research-observations', {
-      query: {
-        status: 'pending_review',
-        lead_id: binding.lead_id,
-        property_id: binding.property_id,
-        ownership_id: binding.ownership_id
-      }
-    });
+    const [result, feedbackResult] = await Promise.all([
+      govEvidenceApi('research-observations', {
+        query: {
+          status: 'pending_review',
+          lead_id: binding.lead_id,
+          property_id: binding.property_id,
+          ownership_id: binding.ownership_id
+        }
+      }),
+      govEvidenceApi('broker-feedback', {
+        query: {
+          lead_id: binding.lead_id,
+          property_id: binding.property_id,
+          ownership_id: binding.ownership_id
+        }
+      })
+    ]);
     const observations = Array.isArray(result?.observations) ? result.observations : (Array.isArray(result?.items) ? result.items : []);
     govEvidenceState.queue = observations;
+    govEvidenceState.brokerFeedback = feedbackResult?.summary || null;
     govEvidenceState.queueLoaded = true;
   } catch (err) {
     govEvidenceState.queueError = err.message || 'Could not load evidence queue';
+    showToast('Evidence queue load failed: ' + govEvidenceState.queueError, 'error');
   } finally {
     govEvidenceState.queueLoading = false;
+    govEvidenceState.brokerFeedbackLoading = false;
     rerenderGovEvidenceOnly();
   }
 }
@@ -2966,8 +2863,7 @@ function rerenderGovEvidenceOnly() {
   renderGovTab();
 }
 
-async function extractGovEvidenceScreenshot() {
-  const rec = syncGovEvidenceContext();
+async function govEvidenceExtractScreenshot(rec) {
   const attachment = getGovEvidenceSourceAttachment();
   if (!rec || !attachment?.data_url) return;
   govEvidenceState.loading = true;
@@ -3011,12 +2907,11 @@ async function applyGovEvidenceSafeBundle() {
     ['apply-loan', 'loan']
   ];
   try {
-    const artifactId = await ensureGovEvidenceArtifactSaved();
     for (const [endpoint, label] of endpoints) {
       try {
         await govEvidenceApi(endpoint, {
           method: 'POST',
-          query: { artifact_id: artifactId, actor: getGovEvidenceActor() },
+          query: { artifact_id: govEvidenceState.artifactId, actor: getGovEvidenceActor() },
           body: { actor: getGovEvidenceActor() }
         });
         applied.push(label);
@@ -3047,25 +2942,26 @@ async function promoteGovEvidenceRows() {
       body: { actor: getGovEvidenceActor() }
     });
     const count = result?.promoted_count || 0;
-    appendGovEvidenceNote(`Promoted ${count} screenshot observation row${count === 1 ? '' : 's'} into the review queue.`);
+    appendGovEvidenceNote(`Promoted ${count} evidence row${count === 1 ? '' : 's'} into the review queue.`);
     showToast(`Promoted ${count} evidence row${count === 1 ? '' : 's'}`, 'success');
     govEvidenceState.queueLoaded = false;
     await loadGovEvidenceObservations(true);
   } catch (err) {
+    showToast(`Promote rows failed: ${err.message}`, 'error');
+  } finally {
     govEvidenceState.loading = false;
     rerenderGovEvidenceOnly();
-    showToast(`Promote rows failed: ${err.message}`, 'error');
   }
 }
 
-async function reviewGovEvidenceObservation(idx, action) {
+async function reviewGovEvidenceObservation(idx, action, resolutionNote = null) {
   const row = govEvidenceState.queue[idx];
   if (!row) return;
   try {
     await govEvidenceApi('review-observation', {
       method: 'POST',
       query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
-      body: { action, actor: getGovEvidenceActor(), resolution_note: `LCC ${action}` }
+      body: { action, actor: getGovEvidenceActor(), resolution_note: resolutionNote || `LCC ${action}` }
     });
     showToast(`Observation ${action}`, 'success');
     await loadGovEvidenceObservations(true);
@@ -3077,11 +2973,15 @@ async function reviewGovEvidenceObservation(idx, action) {
 async function promoteGovEvidenceObservation(idx) {
   const row = govEvidenceState.queue[idx];
   if (!row) return;
+  if (row.promotion_guard?.message) {
+    const confirmed = await lccConfirm(row.promotion_guard.message + '\n\nContinue with promotion?', 'Promote');
+    if (!confirmed) return;
+  }
   try {
     await govEvidenceApi('promote-observation', {
       method: 'POST',
       query: { observation_id: row.observation_id, actor: getGovEvidenceActor() },
-      body: { actor: getGovEvidenceActor(), resolution_note: 'Promoted from LCC evidence queue' }
+      body: { actor: getGovEvidenceActor(), resolution_note: row.promotion_guard?.message || 'Promoted from LCC evidence queue' }
     });
     appendGovEvidenceNote(`Promoted evidence row: ${row.summary || row.observation_value || row.observation_type || 'observation'}`);
     showToast('Observation promoted', 'success');
@@ -3093,7 +2993,7 @@ async function promoteGovEvidenceObservation(idx) {
 
 function bindGovEvidenceWorkbench() {
   syncGovEvidenceContext();
-  document.querySelector('[data-gov-evidence-extract]')?.addEventListener('click', () => extractGovEvidenceScreenshot());
+  document.querySelector('[data-gov-evidence-extract]')?.addEventListener('click', () => govEvidenceExtractScreenshot(researchQueue[researchIdx]));
   document.querySelector('[data-gov-evidence-clear]')?.addEventListener('click', () => {
     govEvidenceState.review = null;
     govEvidenceState.artifactId = null;
@@ -3167,7 +3067,21 @@ function bindGovEvidenceWorkbench() {
     button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceReview), 'reviewed');
   });
   document.querySelectorAll('[data-gov-evidence-dismiss]').forEach((button) => {
-    button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
+    button.onclick = async () => {
+      if (!(await lccConfirm('Dismiss this evidence observation?', 'Dismiss'))) return;
+      reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
+    };
+  });
+  document.querySelectorAll('[data-gov-evidence-dismiss-reason]').forEach((button) => {
+    button.onclick = async () => {
+      const raw = button.dataset.govEvidenceDismissReason || '';
+      const splitAt = raw.indexOf('::');
+      if (splitAt <= 0) return;
+      const idx = Number(raw.slice(0, splitAt));
+      const reason = raw.slice(splitAt + 2);
+      if (!(await lccConfirm('Dismiss this observation with reason: "' + reason + '"?', 'Dismiss'))) return;
+      reviewGovEvidenceObservation(idx, 'dismissed', `Broker dismiss reason: ${reason}`);
+    };
   });
   document.querySelectorAll('[data-gov-evidence-promote]').forEach((button) => {
     button.onclick = () => promoteGovEvidenceObservation(Number(button.dataset.govEvidencePromote));
@@ -3177,10 +3091,39 @@ function bindGovEvidenceWorkbench() {
   }
 }
 
+
 // ============================================================================
 // TAB RENDERERS
 // ============================================================================
 
+// ── Shared Gov-overview helpers (used by renderGovOutreachInner & renderGovOverview) ──
+const _colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
+function govCard(opts) {
+  const c = _colors[opts.color] || _colors.blue;
+  const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
+  return `<div class="gov-info-card"${clickAttr}>
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
+    <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
+    ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
+  </div>`;
+}
+function govSectionHeader(title, icon, tab) {
+  const viewLink = tab ? `<span onclick="goToGovTab('${tab}')" style="cursor:pointer;font-size:11px;color:var(--accent);font-weight:500">View Details →</span>` : '';
+  return `<div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+    <div style="font-size:13px;font-weight:700;color:var(--text1)">${icon} ${title}</div>${viewLink}</div>`;
+}
+function inlineBar(items, maxVal) {
+  let out = '';
+  items.forEach(item => {
+    const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
+    out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div title="${esc(item.label)}" style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
+      <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
+      <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
+    </div>`;
+  });
+  return out;
+}
 
 function renderGovOutreachInner() {
   const now = new Date();
@@ -3291,34 +3234,7 @@ function renderGovOverview() {
     }
   </style>`;
 
-  // ── Helpers ──
-  const _colors = { blue: '#60a5fa', green: '#34d399', cyan: '#22d3ee', purple: '#a78bfa', yellow: '#fbbf24', orange: '#fb923c', red: '#f87171' };
-  function govCard(opts) {
-    const c = _colors[opts.color] || _colors.blue;
-    const clickAttr = opts.tab ? ` onclick="goToGovTab('${opts.tab}')"` : '';
-    return `<div class="gov-info-card"${clickAttr}>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${opts.title}</div>
-      <div style="font-size:24px;font-weight:800;color:${c};margin-bottom:4px">${opts.value}</div>
-      ${opts.sub ? `<div style="font-size:11px;color:var(--text2)">${opts.sub}</div>` : ''}
-    </div>`;
-  }
-  function govSectionHeader(title, icon, tab) {
-    const viewLink = tab ? `<span onclick="goToGovTab('${tab}')" style="cursor:pointer;font-size:11px;color:var(--accent);font-weight:500">View Details →</span>` : '';
-    return `<div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)">
-      <div style="font-size:13px;font-weight:700;color:var(--text1)">${icon} ${title}</div>${viewLink}</div>`;
-  }
-  function inlineBar(items, maxVal) {
-    let out = '';
-    items.forEach(item => {
-      const barW = maxVal > 0 ? Math.round((item.value / maxVal) * 100) : 0;
-      out += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <div title="${esc(item.label)}" style="width:${item.labelWidth || 100}px;font-size:11px;color:var(--text2);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</div>
-        <div style="flex:1;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:${item.barColor || '#60a5fa'};border-radius:4px"></div></div>
-        <div style="width:${item.valueWidth || 50}px;font-size:10px;color:var(--text2);text-align:right">${item.display}</div>
-      </div>`;
-    });
-    return out;
-  }
+  // ── Helpers (now at module scope — see above renderGovOutreachInner) ──
 
   // ──────────────────────────────────────
   // DATA COMPUTATIONS (portfolio, mv, useMV declared above)
@@ -3342,40 +3258,55 @@ function renderGovOverview() {
   const withRentPSF = useMV ? [] : portfolio.filter(p => p.gross_rent_psf > 0);
   const avgRentPSF = useMV ? (mv.avg_rent_psf ? Number(mv.avg_rent_psf).toFixed(2) : '—') : (withRentPSF.length > 0 ? (withRentPSF.reduce((s,p) => s + p.gross_rent_psf, 0) / withRentPSF.length).toFixed(2) : '—');
   const totalNOI = useMV ? (mv.total_noi || 0) : portfolio.reduce((s, p) => s + (p.noi || 0), 0);
-  const distinctAgencies = useMV ? (mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
+  const distinctAgencies = useMV ? (mv.agencies_tracked || mv.distinct_agencies || mv.agency_count || 0) : new Set(portfolio.map(p => p.agency).filter(Boolean)).size;
   const totalPropCount = useMV ? (mv.total_properties || mv.property_count || 0) : propCount;
   const totalSFCount = useMV ? (mv.properties_with_sf || withSF.length) : withSF.length;
   const totalRentPSFCount = useMV ? (mv.properties_with_rent_psf || withRentPSF.length) : withRentPSF.length;
 
   // Lease expiration analysis
   const withTerm = useMV ? [] : portfolio.filter(p => p.firm_term_remaining !== null && p.firm_term_remaining !== undefined);
-  const expiring1yr = useMV ? (mv.expiring_1yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 1).length;
-  const expiring2yr = useMV ? (mv.expiring_2yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 2).length;
-  const expiring5yr = useMV ? (mv.expiring_2_5yr || 0) : withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
-  const longTerm = useMV ? (mv.long_term_5plus || 0) : withTerm.filter(p => p.firm_term_remaining > 5).length;
+  const expiring1yr = useMV ? (mv.expiring_lt_1yr || mv.expiring_1yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 1).length;
+  const expiring2yr = useMV ? (mv.expiring_lt_2yr || mv.expiring_2yr || 0) : withTerm.filter(p => p.firm_term_remaining <= 2).length;
+  const expiring5yr = useMV ? (mv.term_2_5yr || mv.expiring_2_5yr || 0) : withTerm.filter(p => p.firm_term_remaining > 2 && p.firm_term_remaining <= 5).length;
+  const longTerm = useMV ? (mv.term_5plus || mv.long_term_5plus || 0) : withTerm.filter(p => p.firm_term_remaining > 5).length;
   const avgFirmTerm = useMV ? (mv.avg_firm_term ? Number(mv.avg_firm_term).toFixed(1) : '—') : (withTerm.length > 0 ? (withTerm.reduce((s,p) => s + p.firm_term_remaining, 0) / withTerm.length).toFixed(1) : '—');
   const withTermCount = useMV ? (mv.properties_with_term || withTerm.length) : withTerm.length;
 
   // Agency breakdown (top 10 by count) — only available with full data
   const agencyMap = {};
+  let unknownAgencyStats = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
   if (!useMV) {
     portfolio.forEach(p => {
       const a = p.agency || 'Unknown';
-      if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
-      agencyMap[a].count++;
-      agencyMap[a].rent += (p.gross_rent || 0);
-      agencyMap[a].sf += (p.sf_leased || 0);
-      if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
+      if (a === 'Unknown') {
+        // Separate tracking for Unknown agencies (Issue #5)
+        unknownAgencyStats.count++;
+        unknownAgencyStats.rent += (p.gross_rent || 0);
+        unknownAgencyStats.sf += (p.sf_leased || 0);
+        if (p.firm_term_remaining !== null) { unknownAgencyStats.termSum += p.firm_term_remaining; unknownAgencyStats.termCount++; }
+      } else {
+        if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
+        agencyMap[a].count++;
+        agencyMap[a].rent += (p.gross_rent || 0);
+        agencyMap[a].sf += (p.sf_leased || 0);
+        if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
+      }
     });
   }
   // Try to use MV agency breakdown if available (JSON columns)
   let topAgencies, topAgenciesByRent;
-  if (useMV && mv.top_agencies_json) {
+  if (useMV && (mv.top_agencies_by_count || mv.top_agencies_json)) {
     try {
-      const parsed = typeof mv.top_agencies_json === 'string' ? JSON.parse(mv.top_agencies_json) : mv.top_agencies_json;
-      topAgencies = (parsed || []).map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
+      const raw = mv.top_agencies_by_count || mv.top_agencies_json;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      topAgencies = (parsed || []).filter(a => (a.agency || a.name) !== 'Unknown').map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
       topAgenciesByRent = [...topAgencies].sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
       topAgencies = topAgencies.slice(0, 12);
+      // Capture Unknown stats from parsed data if available
+      const unknownInParsed = (parsed || []).find(a => (a.agency || a.name) === 'Unknown');
+      if (unknownInParsed) {
+        unknownAgencyStats = { count: unknownInParsed.count || 0, rent: unknownInParsed.rent || 0, sf: unknownInParsed.sf || 0, termSum: unknownInParsed.term_sum || 0, termCount: unknownInParsed.term_count || 0 };
+      }
     } catch { topAgencies = []; topAgenciesByRent = []; }
   } else {
     topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
@@ -3394,10 +3325,11 @@ function renderGovOverview() {
     });
   }
   let topStates;
-  if (useMV && mv.top_states_json) {
+  if (useMV && (mv.top_states_by_count || mv.top_states_json)) {
     try {
-      const parsed = typeof mv.top_states_json === 'string' ? JSON.parse(mv.top_states_json) : mv.top_states_json;
-      topStates = (parsed || []).map(s => [s.state, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
+      const raw = mv.top_states_by_count || mv.top_states_json;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      topStates = (parsed || []).map(s => [s.state || s.name, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
     } catch { topStates = []; }
   } else {
     topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
@@ -3419,9 +3351,11 @@ function renderGovOverview() {
   if (totalNOI > 0) {
     html += '<div class="gov-grid gov-grid-3" style="margin-top:10px">';
     html += govCard({ title: 'Total NOI', value: '$' + fmtN(Math.round(totalNOI / 1e6)) + 'M', sub: 'net operating income', color: 'green', tab: 'search' });
-    const avgNOI = withSF.length > 0 ? totalNOI / withSF.length : 0;
+    const noiDenom = useMV ? (mv.properties_with_sf || totalPropCount) : withSF.length;
+    const avgNOI = noiDenom > 0 ? totalNOI / noiDenom : 0;
     html += govCard({ title: 'Avg NOI / Property', value: avgNOI > 0 ? '$' + fmtN(Math.round(avgNOI / 1000)) + 'K' : '—', sub: 'across portfolio', color: 'blue', tab: 'search' });
-    html += govCard({ title: 'Contacts', value: fmtN(contacts.length), sub: 'owners & principals', color: 'purple', tab: 'search' });
+    const contactCount = useMV ? (mv.total_contacts || contacts.length) : contacts.length;
+    html += govCard({ title: 'Contacts', value: fmtN(contactCount), sub: 'owners & principals', color: 'purple', tab: 'search' });
     html += '</div>';
   }
 
@@ -3467,7 +3401,7 @@ function renderGovOverview() {
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
     html += '<div class="gov-info-card" onclick="goToGovTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Property Count</div>';
-    const maxAgCount = topAgencies[0][1].count;
+    const maxAgCount = topAgencies[0] && topAgencies[0][1] ? topAgencies[0][1].count : 1;
     html += inlineBar(topAgencies.map(([name, d]) => ({
       label: name, value: d.count, display: fmtN(d.count), barColor: '#60a5fa', labelWidth: 140, valueWidth: 40
     })), maxAgCount);
@@ -3476,7 +3410,7 @@ function renderGovOverview() {
     // Top agencies by rent
     html += '<div class="gov-info-card" onclick="goToGovTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Annual Rent</div>';
-    const maxAgRent = topAgenciesByRent[0][1].rent;
+    const maxAgRent = topAgenciesByRent[0] && topAgenciesByRent[0][1] ? topAgenciesByRent[0][1].rent : 1;
     html += inlineBar(topAgenciesByRent.map(([name, d]) => ({
       label: name, value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#34d399', labelWidth: 140, valueWidth: 56
     })), maxAgRent);
@@ -3498,6 +3432,16 @@ function renderGovOverview() {
       labelWidth: 140, valueWidth: 50
     })), maxTerm);
     html += '</div>';
+
+    // Footnote for Unknown agency dominance (Issue #5)
+    if (unknownAgencyStats.count > 0) {
+      const unknownPct = portfolio.length > 0 ? ((unknownAgencyStats.count / portfolio.length) * 100).toFixed(1) : '0';
+      const unknownRentM = Math.round(unknownAgencyStats.rent / 1e6);
+      html += '<div class="gov-info-card" style="padding:12px 16px;margin-top:10px;background:rgba(100,100,100,0.1);border-left:3px solid rgba(100,100,100,0.3)">';
+      html += '<div style="font-size:10px;color:var(--text3);line-height:1.4">';
+      html += `<strong>${fmtN(unknownAgencyStats.count)} properties</strong> (${unknownPct}%) are tagged as "Unknown" agency, representing <strong>$${fmtN(unknownRentM)}M</strong> in annual rent. These may be inferrable from lease data or require enrichment.`;
+      html += '</div></div>';
+    }
   }
 
   // ═══════════════════════════════════════════════
@@ -3510,7 +3454,7 @@ function renderGovOverview() {
     // By count
     html += '<div class="gov-info-card" style="padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Property Count</div>';
-    const maxStCount = topStates[0][1].count;
+    const maxStCount = topStates[0] && topStates[0][1] ? topStates[0][1].count : 1;
     html += inlineBar(topStates.map(([st, d]) => ({
       label: STATE_FULL[st] || st, value: d.count, display: fmtN(d.count), barColor: '#a78bfa', labelWidth: 110, valueWidth: 40
     })), maxStCount);
@@ -3520,7 +3464,7 @@ function renderGovOverview() {
     const topStatesByRent = Object.entries(stateMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
     html += '<div class="gov-info-card" style="padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Annual Rent</div>';
-    const maxStRent = topStatesByRent[0][1].rent;
+    const maxStRent = topStatesByRent.length > 0 && topStatesByRent[0][1] ? topStatesByRent[0][1].rent : 1;
     html += inlineBar(topStatesByRent.map(([st, d]) => ({
       label: STATE_FULL[st] || st, value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#22d3ee', labelWidth: 110, valueWidth: 56
     })), maxStRent);
@@ -3740,7 +3684,7 @@ function renderGovNorthmarqMetrics() {
   h += card({ title: 'NM TTM Sales', value: fmtN(nmSales.length), sub: '$' + fmtN(Math.round(nmVolume / 1e6)) + 'M volume', color: 'green', tab: 'sales' });
   h += card({ title: 'Market Share', value: marketShareTxn, sub: fmtN(nmSales.length) + ' of ' + fmtN(ttmSales.length) + ' TTM deals', color: 'blue', tab: 'sales' });
   h += card({ title: 'NM Avg Cap Rate', value: nmAvgCap, sub: 'vs ' + mktAvgCap + ' market avg', color: 'cyan', tab: 'sales' });
-  h += card({ title: 'Seller Value Add', value: capAdv ? capAdv + ' bps tighter' : '—', sub: capAdv && parseInt(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
+  h += card({ title: 'Seller Value Add', value: capAdv ? capAdv + ' bps tighter' : '—', sub: capAdv && parseInt(capAdv, 10) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv, 10) > 0 ? 'green' : 'yellow', tab: 'sales' });
   h += '</div>';
   return h;
 }
@@ -3880,61 +3824,703 @@ function renderGovListings() {
   return html;
 }
 
-function renderGovResearch() {
-  // Load queue if empty
-  if (researchQueue.length === 0) {
-    loadResearchQueue();
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - PENDING UPDATES
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.setGovResearchSection = function(section) {
+  govResearchSection = section;
+  if (section === 'pipeline_ops' && !['pending_updates','financial_overrides','pipeline_control','monitor'].includes(researchMode)) {
+    researchMode = 'pending_updates';
+  } else if (section === 'research' && !['ownership','leads','intel'].includes(researchMode)) {
+    researchMode = 'leads';
+  }
+  renderGovTab();
+};
+
+window.setGovPendingFilter = function(reason) {
+  govPendingFilter = reason;
+  govPendingUpdatesIdx = 0;
+  renderGovTab();
+};
+
+let govPendingUpdatesRefreshedAt = null;
+window.loadGovPendingUpdates = async function() {
+  if (govPendingUpdatesLoading) return;
+  govPendingUpdatesLoading = true;
+  try {
+    const result = await govQuery('pending_updates', '*', {
+      filter: 'status=eq.pending',
+      order: 'priority_score.desc'
+    });
+    govPendingUpdates = result.data || [];
+    govPendingUpdatesRefreshedAt = new Date();
+  } catch(e) {
+    console.error('loadGovPendingUpdates exception:', e);
+    govPendingUpdates = [];
+  }
+  govPendingUpdatesLoading = false;
+  renderGovTab();
+};
+
+// Helper for PATCH operations via /api/gov-query proxy
+async function govPatch(table, filterStr, data) {
+  const url = new URL('/api/gov-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('filter', filterStr);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const resp = await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) throw new Error('PATCH ' + table + ' failed: HTTP ' + resp.status);
+    return true;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('PATCH ' + table + ' timed out (15s) — please retry');
+    throw err;
+  }
+}
+
+window.resolveGovPendingUpdate = async function(id, resolution) {
+  if (resolution === 'rejected' && !(await lccConfirm('Reject this pending update? The proposed change will be discarded.', 'Reject'))) return;
+  if (resolution === 'expired' && !(await lccConfirm('Expire this update? It will no longer be actionable.', 'Expire'))) return;
+
+  const notes = document.getElementById('pu-notes')?.value || '';
+  try {
+    await govPatch('pending_updates', 'id=eq.' + id, {
+      status: resolution,
+      resolved_by: 'dashboard',
+      resolved_at: new Date().toISOString(),
+      resolution_notes: notes || null
+    });
+    govPendingUpdates = govPendingUpdates.filter(r => r.id !== id);
+    govPendingUpdatesIdx = Math.min(govPendingUpdatesIdx, Math.max(0, govPendingUpdates.length - 1));
+    const label = resolution === 'approved' ? 'Approved' : resolution === 'rejected' ? 'Rejected' : 'Expired';
+    showToast('Update ' + label.toLowerCase(), 'success');
+    renderGovTab();
+  } catch(e) {
+    console.error('resolveGovPendingUpdate error:', e);
+    showToast('Failed to resolve update: ' + e.message, 'error');
+  }
+};
+
+function renderGovPendingUpdates() {
+  if (!govPendingUpdates && !govPendingUpdatesLoading) {
+    window.loadGovPendingUpdates();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading pending updates...</div>';
   }
 
-  let html = '<div class="research-workbench">';
-  html += renderLiveIngestWorkbench('government');
-  html += renderGovEvidenceWorkbench();
+  let html = '<div class="pipeline-ops-panel">';
 
-  // Mode toggle — always visible so user can switch modes
-  html += `<div class="research-mode-toggle">
-    <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
-    <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
-    <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+  // Summary header
+  const totalPending = govPendingUpdates?.length || 0;
+  html += `<div class="pipeline-header">
+    <div class="header-title">Pending Updates</div>
+    <div class="header-subtitle">${totalPending} updates awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}</div>
   </div>`;
 
-  // Filter toggle — pending vs all
-  const portfolio = govData.portfolioProperties || [];
-  let totalRecords, pendingCount;
-  if (researchMode === 'ownership') {
-    totalRecords = govData.ownership.length;
-    pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
-  } else if (researchMode === 'intel') {
-    totalRecords = portfolio.length;
-    pendingCount = portfolio.filter(p =>
-      !p.intel_status || p.intel_status === 'pending' ||
-      (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
-    ).length;
-  } else {
-    totalRecords = govData.leads.length;
-    pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
-  }
-
-  html += `<div class="research-mode-toggle" style="margin-top:4px">
-    <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
-    <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
-  </div>`;
-
-  if (researchQueue.length === 0) {
-    html += `<div class="research-empty">
-      <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
-      <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
-      <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
-      ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
-      <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
-    </div>`;
+  if (!govPendingUpdates || govPendingUpdates.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-title">All caught up!</div><div class="empty-desc">No pending updates to review</div></div>';
     html += '</div>';
-    setTimeout(() => bindLiveIngestWorkbench('government'), 0);
-    setTimeout(() => bindGovEvidenceWorkbench(), 0);
     return html;
   }
 
-  // Render the research card (progress + card)
-  html += renderResearchInner();
+  // Reason breakdown
+  const reasonGroups = {};
+  govPendingUpdates.forEach(update => {
+    const reason = update.reason || 'other';
+    if (!reasonGroups[reason]) reasonGroups[reason] = [];
+    reasonGroups[reason].push(update);
+  });
+
+  const reasons = Object.keys(reasonGroups).sort();
+
+  // Filter bar
+  html += '<div class="filter-bar" style="margin-bottom: 12px;">';
+  html += `<button class="filter-btn ${govPendingFilter === 'all' ? 'active' : ''}" onclick="window.setGovPendingFilter('all')">All (${totalPending})</button>`;
+  reasons.forEach(reason => {
+    const count = reasonGroups[reason].length;
+    html += `<button class="filter-btn ${govPendingFilter === reason ? 'active' : ''}" onclick="window.setGovPendingFilter(decodeURIComponent('${encodeURIComponent(reason)}'))">${esc(reason)} (${count})</button>`;
+  });
+  html += '</div>';
+
+  // Get filtered items
+  let filteredItems = govPendingFilter === 'all' ? govPendingUpdates : reasonGroups[govPendingFilter] || [];
+
+  // Two-column layout: list on left, detail on right
+  html += '<div style="display: grid; grid-template-columns: 300px 1fr; gap: 16px;">';
+
+  // LEFT COLUMN: Scrollable list
+  html += '<div style="border-right: 1px solid var(--border); padding-right: 12px; max-height: 600px; overflow-y: auto;">';
+  filteredItems.forEach((item, idx) => {
+    const isActive = idx === govPendingUpdatesIdx;
+    const reasonBadge = item.reason || 'other';
+    html += `<div class="list-item ${isActive ? 'active' : ''}" onclick="govPendingUpdatesIdx = ${idx}; renderGovTab();" style="cursor: pointer; padding: 12px; border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 4px; margin-bottom: 8px; background: ${isActive ? 'rgba(108,140,255,0.1)' : 'var(--s1)'};">
+      <div style="font-weight: 600; font-size: 13px; color: var(--text);">${esc(item.field_name)}</div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 2px;">${esc(item.table_name)}</div>
+      <div style="font-size: 11px; color: var(--text3); margin-top: 4px;"><span class="badge" style="background: rgba(239,68,68,0.15); color: #f87171; padding: 2px 6px; border-radius: 3px;">${esc(reasonBadge)}</span></div>
+    </div>`;
+  });
+  html += '</div>';
+
+  // RIGHT COLUMN: Detail card
+  if (filteredItems.length > 0) {
+    const selected = filteredItems[govPendingUpdatesIdx] || filteredItems[0];
+    const oldVal = selected.old_value !== null ? String(selected.old_value) : '(empty)';
+    const newVal = selected.new_value !== null ? String(selected.new_value) : '(empty)';
+    const sourceCtx = selected.source_context || {};
+
+    // Confidence color coding
+    const conf = selected.confidence || 0;
+    let confColor = '#ef4444';
+    let confLabel = 'Low';
+    if (conf > 0.8) {
+      confColor = '#22c55e';
+      confLabel = 'High';
+    } else if (conf > 0.5) {
+      confColor = '#f59e0b';
+      confLabel = 'Medium';
+    }
+
+    html += '<div>';
+    html += '<div class="task-header">';
+    html += `<div>${esc(selected.field_name)} Update</div>`;
+    html += `<span class="task-badge needs-input">${esc(selected.reason || 'pending')}</span>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Table</div>';
+    html += `<div class="context-value"><code>${esc(selected.table_name)}</code></div>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Current Value</div>';
+    html += `<div style="background: var(--s2); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto; color: var(--text);">${esc(oldVal)}</div>`;
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Proposed Value</div>';
+    html += `<div style="background: var(--s3); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 100px; overflow-y: auto;">${esc(newVal)}</div>`;
+    html += '</div>';
+
+    if (sourceCtx && Object.keys(sourceCtx).length > 0) {
+      html += '<div class="context-block">';
+      html += '<div class="context-label">Source Context</div>';
+      html += `<div style="font-size: 12px; color: var(--text3);"><pre style="margin: 0; overflow-x: auto;">${esc(JSON.stringify(sourceCtx, null, 2))}</pre></div>`;
+      html += '</div>';
+    }
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Confidence Score</div>';
+    html += `<div style="display: flex; align-items: center; gap: 8px;">
+      <div style="width: 24px; height: 24px; border-radius: 50%; background: ${confColor}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">${Math.round(conf * 100)}%</div>
+      <span style="font-size: 12px; color: var(--text3);">${confLabel} confidence</span>
+    </div>`;
+    html += '</div>';
+
+    html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
+
+    html += '<div class="action-row">';
+    html += `<button class="btn-action primary" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve</button>`;
+    html += `<button class="btn-action danger" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject</button>`;
+    html += `<button class="btn-action" style="background: #fb923c;" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
+    html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
+    html += '</div>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - FINANCIAL OVERRIDES
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderGovFinancialOverrides() {
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Financial Overrides</div>
+    <div class="header-subtitle">Manually override property financial metrics</div>
+  </div>`;
+
+  html += `<div style="padding: 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--s1);">`;
+  html += guidedField('fo-property-search', 'Search Property', '', {placeholder: 'Address, ID, or lease number...'});
+  html += `<button class="btn-primary" style="margin-top: 8px;" onclick="window.searchFinancialProperty()">Search</button>`;
+  html += '</div>';
+
+  if (govFinOverrideRec) {
+    const prop = govFinOverrideRec;
+    html += '<div style="margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; padding: 16px;">';
+
+    // Property header
+    html += '<div class="task-header">';
+    html += `<div>${esc(prop.address || 'Property')}</div>`;
+    html += '<span class="task-badge ready">Selected</span>';
+    html += '</div>';
+
+    html += '<div class="context-block">';
+    html += '<div class="context-label">Location</div>';
+    html += `<div class="context-value">${esc(prop.city || '')}, ${esc(prop.state || '')}</div>`;
+    html += '</div>';
+
+    // Financial fields
+    const financials = [
+      {field: 'gross_rent', label: 'Gross Rent', type: 'number', source: 'feed'},
+      {field: 'noi', label: 'NOI', type: 'number', source: 'manual'},
+      {field: 'expense_ratio', label: 'Expense Ratio (%)', type: 'number', step: '0.1', source: 'estimated'},
+      {field: 'cap_rate', label: 'Cap Rate (%)', type: 'number', step: '0.1', source: 'manual'}
+    ];
+
+    financials.forEach(fin => {
+      const val = prop[fin.field] || '';
+      html += '<div class="context-block">';
+      html += `<div class="context-label">${fin.label}</div>`;
+      html += `<div style="display: flex; gap: 8px; align-items: center;">
+        <div style="flex: 1; padding: 6px; background: var(--s2); border-radius: 4px; font-family: monospace; color: var(--text);">${esc(val || '(not set)')}</div>
+        <span style="font-size: 11px; color: var(--text3);">Source: ${esc(fin.source)}</span>
+      </div>`;
+      html += '</div>';
+    });
+
+    html += '<div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">';
+    html += '<div style="font-weight: 600; margin-bottom: 12px;">Override Values</div>';
+    financials.forEach(fin => {
+      html += guidedField(`override-${fin.field}`, `Override ${fin.label}`, '', {type: fin.type, step: fin.step, placeholder: `Enter ${fin.label.toLowerCase()}...`});
+    });
+
+    html += guidedField('override-source-notes', 'Approval Notes', '', {type: 'textarea', rows: 3, placeholder: 'Reason for override, source of data...'});
+
+    html += '<div class="action-row">';
+    html += `<button class="btn-action primary" onclick="window.applyFinancialOverride()">Apply Override</button>`;
+    html += `<button class="btn-action" onclick="govFinOverrideRec = null; renderGovTab();">Cancel</button>`;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">Search a property</div><div class="empty-desc">Enter address or ID above to find and override financial data</div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+window.searchFinancialProperty = async function() {
+  const searchTerm = document.getElementById('fo-property-search')?.value || '';
+  if (!searchTerm) return;
+  const btn = document.querySelector('[onclick*="searchFinancialProperty"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching\u2026'; btn.style.opacity = '0.6'; }
+  try {
+    const filterStr = `or(address.ilike.*${searchTerm}*,lease_number.ilike.*${searchTerm}*)`;
+    const result = await govQuery('properties', 'id,address,city,state,lease_number', {
+      filter: filterStr,
+      limit: 1
+    });
+    const data = result.data || [];
+    if (data && data.length > 0) {
+      govFinOverrideRec = data[0];
+      showToast('Property found: ' + (data[0].address || data[0].lease_number || 'ID ' + data[0].id), 'success');
+      renderGovTab();
+    } else {
+      showToast('No property found matching that search', 'error');
+    }
+  } catch(e) {
+    console.error('searchFinancialProperty error:', e);
+    showToast('Search failed: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Search'; btn.style.opacity = ''; }
+  }
+};
+
+window.applyFinancialOverride = async function() {
+  if (!govFinOverrideRec) return;
+  const notes = document.getElementById('override-source-notes')?.value || '';
+  const updates = {};
+
+  ['gross_rent', 'noi', 'expense_ratio', 'cap_rate'].forEach(field => {
+    const val = document.getElementById(`override-${field}`)?.value;
+    if (val !== undefined && val !== '') {
+      updates[field] = parseFloat(val);
+    }
+  });
+
+  if (Object.keys(updates).length === 0) {
+    showToast('Please enter at least one override value', 'error');
+    return;
+  }
+
+  if (!(await lccConfirm('Apply financial override to ' + (govFinOverrideRec.address || 'this property') + '? This will overwrite existing values.', 'Apply Override'))) return;
+
+  const applyBtn = document.querySelector('[onclick*="applyFinancialOverride"]');
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying...'; }
+
+  try {
+    await govPatch('properties', 'id=eq.' + govFinOverrideRec.id, {
+      ...updates,
+      override_notes: notes,
+      authority_rank: 100
+    });
+
+    showToast('Financial override applied successfully', 'success');
+    govFinOverrideRec = null;
+    renderGovTab();
+  } catch(e) {
+    console.error('applyFinancialOverride error:', e);
+    showToast('Error applying override: ' + e.message, 'error');
+  } finally {
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Override'; applyBtn.style.opacity = ''; }
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - PIPELINE CONTROL
+// ══════════════════════════════════════════════════════════════════════════════
+
+let govPipelineError = null;
+window.loadGovPipelineRuns = async function() {
+  if (govPipelineLoading) return;
+  govPipelineLoading = true;
+  govPipelineError = null;
+  try {
+    const result = await govQuery('ingestion_tracker', '*', {
+      order: 'started_at.desc',
+      limit: 50
+    });
+    govPipelineRuns = result.data || [];
+  } catch(e) {
+    console.error('loadGovPipelineRuns error:', e);
+    govPipelineError = e.message || 'Failed to load pipeline runs';
+    govPipelineRuns = [];
+    showToast('Pipeline load error: ' + govPipelineError, 'error');
+  }
+  govPipelineLoading = false;
+  renderGovTab();
+};
+
+function renderGovPipelineControl() {
+  if (!govPipelineRuns && !govPipelineLoading) {
+    window.loadGovPipelineRuns();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading pipeline runs...</div>';
+  }
+
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Pipeline Control</div>
+    <div class="header-subtitle">${govPipelineError ? '⚠ Load error — showing cached data' : 'Monitor and manage data ingestion runs'}</div>
+  </div>`;
+  if (govPipelineError) {
+    html += `<div style="padding:10px 14px;margin-bottom:12px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:6px;font-size:12px;color:var(--text2);display:flex;align-items:center;gap:10px;">
+      <span style="flex:1">${esc(govPipelineError)}</span>
+      <button onclick="govPipelineError=null;govPipelineRuns=null;loadGovPipelineRuns().then(renderGovTab)" style="padding:4px 12px;border:1px solid rgba(248,113,113,0.4);border-radius:6px;background:transparent;color:var(--text);font-size:11px;cursor:pointer;white-space:nowrap">Retry</button>
+    </div>`;
+  }
+
+  const runs = govPipelineRuns || [];
+
+  if (runs.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">No runs recorded</div><div class="empty-desc">Pipeline run history will appear here</div></div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Summary metrics
+  const lastRun = runs[0];
+  const completedRuns = runs.filter(r => r.run_status === 'completed').length;
+  const successRate = runs.length > 0 ? Math.round((completedRuns / runs.length) * 100) : 0;
+  const failedRuns = runs.filter(r => r.run_status === 'failed').length;
+
+  html += '<div class="gov-metrics">';
+  html += metricHTML('Last Run', lastRun.finished_at ? new Date(lastRun.finished_at).toLocaleDateString() : 'Pending', 'most recent', 'blue');
+  html += metricHTML('Success Rate', successRate + '%', 'completed successfully', 'green');
+  html += metricHTML('Active Errors', fmtN(failedRuns), 'failed runs', failedRuns > 0 ? 'red' : 'green');
+  html += '</div>';
+
+  html += '<div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px; color: #fbbf24;">';
+  html += '📌 Pipeline runs are triggered via CLI. Contact your administrator to schedule automated runs.';
+  html += '</div>';
+
+  // Runs table
+  html += '<div class="table-section">';
+  html += '<h3 style="margin-bottom: 12px;">Recent Runs</h3>';
+  html += '<div style="overflow-x: auto;">';
+  html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+  html += '<thead><tr style="background: var(--s2); border-bottom: 2px solid var(--border);">';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Source</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Task</th>';
+  html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Status</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Started</th>';
+  html += '<th style="padding: 8px; text-align: left; font-weight: 600;">Duration</th>';
+  html += '<th style="padding: 8px; text-align: center; font-weight: 600;">Rows</th>';
+  html += '</tr></thead>';
+  html += '<tbody>';
+
+  runs.slice(0, 20).forEach(run => {
+    const statusColor = run.run_status === 'completed' ? '#10b981' : run.run_status === 'failed' ? '#ef4444' : '#f59e0b';
+    const statusText = run.run_status === 'completed' ? '✓ Completed' : run.run_status === 'failed' ? '✗ Failed' : '⟳ Running';
+    const startDate = run.started_at ? new Date(run.started_at).toLocaleString() : '—';
+    const duration = run.finished_at && run.started_at ? Math.round((new Date(run.finished_at) - new Date(run.started_at)) / 1000) + 's' : '—';
+    const rowStr = run.rows_inserted || 0;
+
+    html += `<tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding: 8px;">${esc(run.source || '—')}</td>
+      <td style="padding: 8px;">${esc(run.task_name || '—')}</td>
+      <td style="padding: 8px; text-align: center;"><span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;">${statusText}</span></td>
+      <td style="padding: 8px; font-size: 12px; color: var(--text3);">${startDate}</td>
+      <td style="padding: 8px; font-size: 12px; color: var(--text3);">${duration}</td>
+      <td style="padding: 8px; text-align: center; font-size: 12px;">${rowStr}</td>
+    </tr>`;
+
+    if (run.error_summary && run.run_status === 'failed') {
+      html += `<tr style="background: rgba(239,68,68,0.1); border-bottom: 1px solid var(--border);">
+        <td colspan="6" style="padding: 8px; font-size: 12px; color: var(--text3);">
+          <strong style="color: #ef4444;">Error:</strong> ${esc(run.error_summary)}
+        </td>
+      </tr>`;
+    }
+  });
+
+  html += '</tbody>';
+  html += '</table>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINE OPS SECTION - MONITOR DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadGovMonitorData() {
+  if (govMonitorLoading) return;
+  govMonitorLoading = true;
+  try {
+    // Load lead gaps from prospect_leads
+    const leads = govData.leads || [];
+    const noMatch = leads.filter(l => !l.matched_property_id).length;
+    const noContact = leads.filter(l => !l.contact_email && !l.contact_phone).length;
+    const noResearch = leads.filter(l => !l.research_status || l.research_status === 'pending').length;
+
+    // Load data freshness from ingestion metadata if available
+    let freshness = [];
+    try {
+      const fResult = await govQuery('ingestion_log', 'source,max_ingested_at', { order: 'max_ingested_at.desc', limit: 10 });
+      freshness = (fResult.data || []).map(row => {
+        const daysOld = row.max_ingested_at ? Math.floor((Date.now() - new Date(row.max_ingested_at).getTime()) / 86400000) : null;
+        return { source: row.source, daysOld: daysOld };
+      });
+    } catch(e) {
+      // Fallback: use known data sources with property timestamps
+      const props = govData.properties || [];
+      const latestProp = props.length > 0 && props[0].updated_at ? Math.floor((Date.now() - new Date(props[0].updated_at).getTime()) / 86400000) : null;
+      freshness = [
+        { source: 'Properties DB', daysOld: latestProp }
+      ];
+    }
+
+    // Research completion stats
+    const ownership = govData.ownership || [];
+    const completed = ownership.filter(o => o.research_status === 'completed').length;
+    const total = ownership.length;
+
+    govMonitorData = { noMatch, noContact, noResearch, freshness, researchCompleted: completed, researchTotal: total };
+  } catch(e) {
+    console.error('loadGovMonitorData error:', e);
+    govMonitorData = { noMatch: 0, noContact: 0, noResearch: 0, freshness: [], researchCompleted: 0, researchTotal: 0 };
+  }
+  govMonitorLoading = false;
+  renderGovTab();
+}
+
+function renderGovMonitorDashboard() {
+  if (!govMonitorData && !govMonitorLoading) {
+    loadGovMonitorData();
+    return '<div class="gov-loading"><div class="spinner"></div> Loading monitor data...</div>';
+  }
+  if (govMonitorLoading) {
+    return '<div class="gov-loading"><div class="spinner"></div> Loading monitor data...</div>';
+  }
+
+  const d = govMonitorData;
+  let html = '<div class="pipeline-ops-panel">';
+
+  html += `<div class="pipeline-header">
+    <div class="header-title">Monitor Dashboard</div>
+    <div class="header-subtitle">Data health, freshness, and quality metrics</div>
+    <button class="btn-action default" onclick="if(!govMonitorLoading){var _b=this;_b.disabled=true;_b.textContent='Refreshing\u2026';_b.style.opacity='0.6';govMonitorData=null;loadGovMonitorData().then(function(){_b.disabled=false;_b.textContent='Refresh';_b.style.opacity='';}).catch(function(){_b.disabled=false;_b.textContent='Refresh';_b.style.opacity='';});}" style="margin-left:auto;padding:4px 10px;font-size:11px;">${govMonitorLoading ? 'Refreshing\u2026' : 'Refresh'}</button>
+  </div>`;
+
+  // Panel 1: Lead Gap Report (live data)
+  html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Lead Gap Report</h3>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Counts of leads with missing critical data</div>';
+
+  html += '<div style="display: grid; gap: 12px;">';
+  const gapMetrics = [
+    {label: 'No Property Match', value: d.noMatch},
+    {label: 'No Contact Info', value: d.noContact},
+    {label: 'No Research', value: d.noResearch}
+  ];
+
+  const maxVal = Math.max(...gapMetrics.map(m => m.value), 1);
+  gapMetrics.forEach(metric => {
+    const pct = (metric.value / maxVal) * 100;
+    html += `<div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 12px; font-weight: 500;">${metric.label}</span>
+        <span style="font-size: 12px; color: var(--text3);">${metric.value}</span>
+      </div>
+      <div style="height: 20px; background: var(--s3); border-radius: 3px; overflow: hidden;">
+        <div style="height: 100%; width: ${pct}%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 3px;"></div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Panel 2: Data Freshness (live data)
+  html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Data Freshness by Source</h3>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Days since last data update</div>';
+
+  html += '<div style="display: grid; gap: 8px;">';
+  if (d.freshness.length === 0) {
+    html += '<div style="padding: 12px; text-align: center; color: var(--text3); font-size: 12px;">No ingestion log data available</div>';
+  } else {
+    d.freshness.forEach(item => {
+      const statusColor = item.daysOld === null ? '#6b7280' : item.daysOld < 7 ? '#10b981' : item.daysOld < 30 ? '#f59e0b' : '#ef4444';
+      const daysLabel = item.daysOld !== null ? item.daysOld + ' days old' : 'Unknown';
+      html += `<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--s2); border-radius: 4px; border: 1px solid var(--border);">
+        <span style="font-size: 12px; font-weight: 500;">${esc(item.source)}</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 12px; color: var(--text3);">${daysLabel}</span>
+          <div style="width: 12px; height: 12px; border-radius: 50%; background: ${statusColor};"></div>
+        </div>
+      </div>`;
+    });
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Panel 3: Research Progress (live data)
+  html += '<div style="margin-bottom: 20px; border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--s1);">';
+  html += '<h3 style="margin-bottom: 12px; font-size: 14px; font-weight: 600;">Research Progress</h3>';
+  html += '<div style="font-size: 13px; color: var(--text3); margin-bottom: 12px;">Ownership changes with completed research</div>';
+
+  const resPct = d.researchTotal > 0 ? Math.round((d.researchCompleted / d.researchTotal) * 100) : 0;
+  html += `<div style="margin-bottom: 8px; display: flex; justify-content: space-between;">
+    <span style="font-size: 12px; font-weight: 500;">${d.researchCompleted} of ${d.researchTotal} completed</span>
+    <span style="font-size: 12px; color: var(--text3);">${resPct}%</span>
+  </div>`;
+  html += `<div style="height: 24px; background: var(--s3); border-radius: 3px; overflow: hidden;">
+    <div style="height: 100%; width: ${resPct}%; background: linear-gradient(90deg, #10b981, #34d399); border-radius: 3px; transition: width 0.3s;"></div>
+  </div>`;
+  html += '</div>';
+
+  html += '</div>';
+
+  return html;
+}
+
+function renderGovResearch() {
+  let html = '<div class="research-workbench">';
+
+  // Section toggle: Research vs Pipeline Ops
+  html += `<div class="research-mode-toggle" style="border-bottom: 2px solid var(--border); margin-bottom: 8px;">
+    <button class="mode-btn ${govResearchSection === 'research' ? 'active' : ''}" onclick="window.setGovResearchSection('research')" style="border-right: 1px solid var(--border);">── Research ──</button>
+    <button class="mode-btn ${govResearchSection === 'pipeline_ops' ? 'active' : ''}" onclick="window.setGovResearchSection('pipeline_ops')" style="border-left: 1px solid var(--border);">── Pipeline Ops ──</button>
+  </div>`;
+
+  // Render based on section
+  if (govResearchSection === 'research') {
+    // Mode toggle — always visible so user can switch modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
+      <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
+      <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+    </div>`;
+
+    // Original research workflows (Live Intake + Evidence Workbench)
+    html += renderLiveIngestWorkbench('government');
+    html += renderGovEvidenceWorkbench();
+
+    // Filter toggle — pending vs all
+    const portfolio = govData.portfolioProperties || [];
+    let totalRecords, pendingCount;
+    if (researchMode === 'ownership') {
+      totalRecords = govData.ownership.length;
+      pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
+    } else if (researchMode === 'intel') {
+      totalRecords = portfolio.length;
+      pendingCount = portfolio.filter(p =>
+        !p.intel_status || p.intel_status === 'pending' ||
+        (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
+      ).length;
+    } else {
+      totalRecords = govData.leads.length;
+      pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
+    }
+
+    html += `<div class="research-mode-toggle" style="margin-top:4px">
+      <button class="mode-btn ${researchFilter === 'pending' ? 'active' : ''}" onclick="setResearchFilter('pending')">Pending (${pendingCount})</button>
+      <button class="mode-btn ${researchFilter === 'all' ? 'active' : ''}" onclick="setResearchFilter('all')">All (${totalRecords})</button>
+    </div>`;
+
+    // Load queue if empty
+    if (researchQueue.length === 0) {
+      loadResearchQueue();
+    }
+
+    if (researchQueue.length === 0) {
+      html += `<div class="research-empty">
+        <div class="empty-icon">${researchFilter === 'pending' ? '✓' : '∅'}</div>
+        <div class="empty-title">${researchFilter === 'pending' ? 'No pending ' + researchMode + ' items' : 'No ' + researchMode + ' records loaded'}</div>
+        <div class="empty-desc">${totalRecords} total records · ${pendingCount} pending</div>
+        ${researchFilter === 'pending' && totalRecords > 0 ? `<button class="btn-primary" onclick="setResearchFilter('all')">Show All ${totalRecords} Records</button>` : ''}
+        <button class="btn-secondary" style="margin-top:8px" onclick="researchQueue=[];loadResearchQueue();renderGovTab()">Refresh Queue</button>
+      </div>`;
+      html += '</div>';
+      setTimeout(() => bindLiveIngestWorkbench('government'), 0);
+      setTimeout(() => bindGovEvidenceWorkbench(), 0);
+      return html;
+    }
+
+    // Render the research card (progress + card)
+    html += renderResearchInner();
+
+  } else if (govResearchSection === 'pipeline_ops') {
+    // Pipeline ops modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'pending_updates' ? 'active' : ''}" onclick="setResearchMode('pending_updates')">Pending Updates (${govPendingUpdates?.length || 0})</button>
+      <button class="mode-btn ${researchMode === 'financial_overrides' ? 'active' : ''}" onclick="setResearchMode('financial_overrides')">Financial Overrides</button>
+      <button class="mode-btn ${researchMode === 'pipeline_control' ? 'active' : ''}" onclick="setResearchMode('pipeline_control')">Pipeline Control</button>
+      <button class="mode-btn ${researchMode === 'monitor' ? 'active' : ''}" onclick="setResearchMode('monitor')">Monitor</button>
+    </div>`;
+
+    // Route to correct pipeline ops component
+    if (researchMode === 'pending_updates') {
+      html += renderGovPendingUpdates();
+    } else if (researchMode === 'financial_overrides') {
+      html += renderGovFinancialOverrides();
+    } else if (researchMode === 'pipeline_control') {
+      html += renderGovPipelineControl();
+    } else if (researchMode === 'monitor') {
+      html += renderGovMonitorDashboard();
+    }
+  }
+
   html += '</div>';
   setTimeout(() => bindLiveIngestWorkbench('government'), 0);
   setTimeout(() => bindGovEvidenceWorkbench(), 0);
@@ -4164,6 +4750,7 @@ function renderOwnershipActivity(record) {
   });
   
   html += '</div>';
+  html += renderGovLiveIngestOutcomeTimeline(record);
   html += '</div>';
   
   return html;
@@ -4295,11 +4882,11 @@ function renderLeadPipeline(record) {
   
   html += '<div class="detail-row">';
   html += '<label class="detail-lbl">Research Notes</label>';
-  html += '<textarea id="govDetailNotes" class="detail-val" style="min-height: 100px; font-family: monospace; font-size: 12px; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">' + esc(record.research_notes || '') + '</textarea>';
+  html += '<textarea id="govDetailNotes" class="detail-val" style="min-height: 100px; font-family: monospace; font-size: 12px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--s2); color: var(--text);">' + esc(record.research_notes || '') + '</textarea>';
   html += '</div>';
   
   html += '<div class="detail-row" style="margin-top: 16px;">';
-  html += '<button class="act-btn primary" onclick="saveGovDetailLead(' + JSON.stringify(record.lead_id) + ')">Save Changes</button>';
+  html += `<button class="act-btn primary" onclick="saveGovDetailLead(decodeURIComponent('${encodeURIComponent(record.lead_id)}'))">Save Changes</button>`;
   html += '</div>';
   
   html += '</div>';
@@ -4342,6 +4929,7 @@ function renderLeadContacts(record) {
 }
 
 function renderLeadActivity(record) {
+  if (!record) return '<div class="detail-empty">No activity recorded</div>';
   // Filter gsaEvents by lease_number
   const events = govData.gsaEvents && govData.gsaEvents.filter(
     e => e.lease_number === record.lease_number
@@ -4374,8 +4962,46 @@ function renderLeadActivity(record) {
   });
   
   html += '</div>';
+  html += renderGovLiveIngestOutcomeTimeline(record);
   html += '</div>';
   
+  return html;
+}
+
+function renderGovLiveIngestOutcomeTimeline(record) {
+  const propertyId = record?.property_id || record?.matched_property_id || null;
+  if (!propertyId) return '';
+  const outcomes = (govData.researchOutcomes || []).filter((row) =>
+    row
+    && row.queue_type === 'live_ingest'
+    && String(row.selected_property_id || '') === String(propertyId)
+  );
+  if (!outcomes.length) return '';
+  let html = '<div class="detail-section" style="margin-top:12px">';
+  html += '<div class="detail-section-title">Live Ingest Outcomes</div>';
+  html += '<div class="detail-timeline">';
+  outcomes.slice().reverse().slice(0, 12).forEach((outcome) => {
+    const meta = window.parseLiveIngestOutcomeNotes ? window.parseLiveIngestOutcomeNotes(outcome.notes) : null;
+    html += '<div class="detail-timeline-item">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:8px">';
+    html += '<div style="font-weight:600;">' + esc(outcome.queue_type || 'live_ingest') + '</div>';
+    html += '<div style="color:var(--text2);font-size:12px;">' + fmt(outcome.assigned_at || outcome.created_at) + '</div>';
+    html += '</div>';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<div style="color:var(--text2);">' + esc(outcome.status || 'unknown') + '</div>';
+    if (outcome.assigned_to) {
+      html += '<div style="color:var(--text2);font-size:12px;">by ' + esc(outcome.assigned_to) + '</div>';
+    }
+    html += '</div>';
+    if (meta && window.renderLiveIngestOutcomeProvenance) {
+      html += window.renderLiveIngestOutcomeProvenance(meta, { limit: 4 });
+    } else if (outcome.notes) {
+      html += '<div style="margin-top:8px;color:var(--text2);font-size:12px;white-space:pre-wrap">' + esc(outcome.notes) + '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
   return html;
 }
 
@@ -4469,7 +5095,7 @@ function renderListingMarket(record) {
   
   html += '<div style="overflow-x: auto;">';
   html += '<table style="width: 100%; font-size: 12px; border-collapse: collapse;">';
-  html += '<thead><tr style="border-bottom: 2px solid #ccc;">';
+  html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
   html += '<th style="text-align: left; padding: 8px;">Address</th>';
   html += '<th style="text-align: right; padding: 8px;">Sale Price</th>';
   html += '<th style="text-align: right; padding: 8px;">Cap Rate</th>';
@@ -4483,7 +5109,7 @@ function renderListingMarket(record) {
     const capRate = comp.cap_rate ? pct(comp.cap_rate / 100) : '—';
     const sqft = comp.square_feet ? fmtN(comp.square_feet) : '—';
     
-    html += `<tr class="clickable-row" style="border-bottom: 1px solid #eee;cursor:pointer" onclick='showDetail(${safeJSON(comp)}, "gov-ownership")'>`;
+    html += `<tr class="clickable-row" style="border-bottom: 1px solid var(--border);cursor:pointer" onclick='showDetail(${safeJSON(comp)}, "gov-ownership")'>`;
     html += `<td style="padding: 8px;">${esc(comp.address || '—')}</td>`;
     html += `<td style="text-align: right; padding: 8px; font-weight: 600;">${price}</td>`;
     html += `<td style="text-align: right; padding: 8px;">${capRate}</td>`;
@@ -4529,6 +5155,9 @@ function saveGovDetailLead(leadId) {
     return;
   }
 
+  const _saveBtn = document.querySelector('[onclick*="saveGovDetailLead"]');
+  if (_saveBtn) { _saveBtn.disabled = true; _saveBtn.dataset.origText = _saveBtn.textContent; _saveBtn.textContent = 'Saving…'; _saveBtn.style.opacity = '0.6'; }
+
   // Use Gov write service instead of direct prospect_leads PATCH
   govWriteService('lead-research', {
     lead_id: leadId,
@@ -4555,6 +5184,9 @@ function saveGovDetailLead(leadId) {
     .catch(err => {
       console.error('Error saving lead:', err);
       showToast('Error updating lead: ' + err.message, 'error');
+    })
+    .finally(() => {
+      if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = _saveBtn.dataset.origText || 'Save'; _saveBtn.style.opacity = ''; }
     });
 }
 
@@ -4597,8 +5229,15 @@ async function renderGovSales() {
     govSalesLoading = true;
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading available listings...</p></div>';
     try {
-      const res = await govQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000 });
-      govAvailListings = res.data || [];
+      let all = [], offset = 0;
+      while (true) {
+        const res = await govQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000, offset });
+        const rows = res.data || [];
+        all = all.concat(rows);
+        if (rows.length < 1000) break;
+        offset += 1000;
+      }
+      govAvailListings = all;
     } catch (e) { console.error('Gov available load error:', e); govAvailListings = []; }
     govSalesLoading = false;
   }
@@ -4634,7 +5273,7 @@ async function renderGovSales() {
         buyer: r.buyer,
         procuring_broker: r.purchasing_broker,
         bid_ask_spread: r.bid_ask_spread != null ? parseFloat(r.bid_ask_spread) : null,
-        dom: r.days_on_market != null ? parseInt(r.days_on_market) : null
+        dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null
       };
     } else {
       return {
@@ -4659,7 +5298,7 @@ async function renderGovSales() {
         ask_cap: r.asking_cap_rate ? parseFloat(r.asking_cap_rate) : null,
         seller: r.seller,
         listing_broker: r.listing_broker,
-        dom: r.days_on_market != null ? parseInt(r.days_on_market) : null
+        dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null
       };
     }
   });
@@ -4981,7 +5620,7 @@ function buildGovLeasesHTML() {
   for (const b of buckets) {
     const pct = ((b.count / maxBucket) * 100).toFixed(0);
     html += `<div style="display:flex;align-items:center;gap:8px">
-      <div style="width:90px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">${b.label}</div>
+      <div style="width:90px;font-size:12px;color:var(--text2);text-align:right;flex-shrink:0">${esc(b.label)}</div>
       <div style="flex:1;background:var(--s2);border-radius:4px;height:22px;overflow:hidden">
         <div style="width:${pct}%;background:${b.color};height:100%;border-radius:4px;min-width:${b.count > 0 ? '2px' : '0'}"></div>
       </div>
@@ -5063,13 +5702,22 @@ function buildGovLeasesHTML() {
   html += '<div class="widget">';
   html += '<div class="widget-title">Lease Exposure by Agency</div>';
   const agencyMap = {};
+  let unknownAgencyStatsLeases = { count: 0, rent: 0, termSum: 0, expiring: 0 };
   for (const p of withTerm) {
     const a = p.agency || p.agency_full_name || 'Unknown';
-    if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, termSum: 0, expiring: 0 };
-    agencyMap[a].count++;
-    agencyMap[a].rent += (p.gross_rent || 0);
-    agencyMap[a].termSum += (p.firm_term_remaining || 0);
-    if (p.firm_term_remaining <= 2) agencyMap[a].expiring++;
+    if (a === 'Unknown') {
+      // Separate tracking for Unknown agencies (Issue #5)
+      unknownAgencyStatsLeases.count++;
+      unknownAgencyStatsLeases.rent += (p.gross_rent || 0);
+      unknownAgencyStatsLeases.termSum += (p.firm_term_remaining || 0);
+      if (p.firm_term_remaining <= 2) unknownAgencyStatsLeases.expiring++;
+    } else {
+      if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, termSum: 0, expiring: 0 };
+      agencyMap[a].count++;
+      agencyMap[a].rent += (p.gross_rent || 0);
+      agencyMap[a].termSum += (p.firm_term_remaining || 0);
+      if (p.firm_term_remaining <= 2) agencyMap[a].expiring++;
+    }
   }
   const topAgencies = Object.entries(agencyMap).sort((a, b) => b[1].count - a[1].count).slice(0, 15);
   if (topAgencies.length > 0) {
@@ -5519,7 +6167,7 @@ function renderGovSearch() {
   setTimeout(() => {
     const input = document.getElementById('govSearchInput');
     if (input) {
-      input.addEventListener('keydown', e => { if (e.key === 'Enter') execGovSearch(); });
+      input.onkeydown = e => { if (e.key === 'Enter') execGovSearch(); };
       input.focus();
     }
   }, 0);
@@ -5537,14 +6185,17 @@ async function execGovSearch() {
   govSearching = true;
   renderGovTab();
 
-  const like = '*' + term + '*';
+  // Sanitize for PostgREST ilike filter — strip syntax-breaking characters
+  const safeTerm = term.replace(/[*()',\\]/g, '');
+  if (!safeTerm) { govSearching = false; renderGovTab(); return; }
+  const like = '*' + safeTerm + '*';
   try {
     const [ownership, leads, listings, contacts, properties] = await Promise.all([
-      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',new_owner.ilike.' + like + ',prior_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }),
-      govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ',contact_name.ilike.' + like + ')', limit: 25 }),
-      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ')', limit: 25 }),
-      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',contact_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }),
-      govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency.ilike.' + like + ')', limit: 25 })
+      govQuery('ownership_history', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',new_owner.ilike.' + like + ',prior_owner.ilike.' + like + ',recorded_owner_name.ilike.' + like + ')', limit: 25 }).catch(e => { console.warn('[GovSearch] ownership query failed:', e.message); return { data: [] }; }),
+      govQuery('prospect_leads', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ',lessor_name.ilike.' + like + ',recorded_owner.ilike.' + like + ',contact_name.ilike.' + like + ')', limit: 25 }).catch(e => { console.warn('[GovSearch] leads query failed:', e.message); return { data: [] }; }),
+      govQuery('available_listings', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',tenant_agency.ilike.' + like + ')', limit: 25 }).catch(e => { console.warn('[GovSearch] listings query failed:', e.message); return { data: [] }; }),
+      govQuery('contacts', '*', { filter: 'or=(name.ilike.' + like + ',contact_type.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like + ')', limit: 25 }).catch(e => { console.warn('[GovSearch] contacts query failed:', e.message); return { data: [] }; }),
+      govQuery('properties', '*', { filter: 'or=(address.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',agency.ilike.' + like + ')', limit: 25 }).catch(e => { console.warn('[GovSearch] properties query failed:', e.message); return { data: [] }; })
     ]);
 
     govSearchResults = {
@@ -5554,58 +6205,11 @@ async function execGovSearch() {
       contacts: contacts.data || [],
       properties: properties.data || []
     };
+    govSearching = false;
+    renderGovTab();
   } catch (err) {
-    console.error('Gov search error:', err);
-    govSearchResults = { ownership: [], leads: [], listings: [], contacts: [], properties: [] };
-  }
-
-  govSearching = false;
-  renderGovTab();
-}
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
-
-// Helper to programmatically navigate to gov sub-tabs
-function goToGovTab(tabName) {
-  currentGovTab = tabName;
-  if (typeof window.syncDomainTabGroup === 'function') {
-    window.syncDomainTabGroup('government', tabName);
-  } else {
-    document.querySelectorAll('#govInnerTabs .gov-inner-tab').forEach(t => t.classList.remove('active'));
-    const btn = document.querySelector('[data-gov-tab="' + tabName + '"]');
-    if (btn) btn.classList.add('active');
-  }
-  if (typeof govDataLoaded !== 'undefined' && govDataLoaded) {
+    showToast('Search failed: ' + err.message, 'error');
+    govSearching = false;
     renderGovTab();
   }
 }
-
-window.goToGovTab = goToGovTab;
-window.renderGovDetailBody = renderGovDetailBody;
-window.saveGovDetailLead = saveGovDetailLead;
-window.renderGovSearch = renderGovSearch;
-window.execGovSearch = execGovSearch;
-window.renderGovSales = renderGovSales;
-window.renderGovLeases = renderGovLeases;
-window.renderGovLoans = renderGovLoans;
-window.renderGovPlayers = renderGovPlayers;
-window.renderPlayersTable = renderPlayersTable;
-window.renderGovOverview = renderGovOverview;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

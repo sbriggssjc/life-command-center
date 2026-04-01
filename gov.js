@@ -45,6 +45,16 @@ const STATE_FULL = {
 };
 
 // ============================================================================
+// HELPER FUNCTIONS FOR SAFE NUMERIC PARSING
+// ============================================================================
+
+// Parse float from string or element value, handling zero correctly
+function _pf(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseFloat(v) : null; }
+
+// Parse int from string or element value, handling zero correctly
+function _pi(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseInt(v, 10) : null; }
+
+// ============================================================================
 // CORE API FUNCTION
 // ============================================================================
 
@@ -1723,8 +1733,8 @@ async function researchSave() {
 
 async function saveOwnership(rec) {
   const saleDate = q('#res-own-sale-date')?.value || null;
-  const salePrice = parseFloat(q('#res-own-sale-price')?.value) || null;
-  const capRate = parseFloat(q('#res-own-cap-rate')?.value) || null;
+  const salePrice = _pf(q('#res-own-sale-price'));
+  const capRate = _pf(q('#res-own-cap-rate'));
   const buyer = q('#res-own-buyer')?.value || null;
   const seller = q('#res-own-seller')?.value || null;
 
@@ -1767,10 +1777,10 @@ async function saveOwnership(rec) {
       principal_names: q('#res-own-principal-names')?.value || null,
       phone_2: q('#res-own-phone-2')?.value || null,
       mailing_address_2: q('#res-own-mailing-2')?.value || null,
-      rba: parseFloat(q('#res-own-rba')?.value) || null,
-      land_acres: parseFloat(q('#res-own-land-acres')?.value) || null,
-      year_built: parseInt(q('#res-own-year-built')?.value) || null,
-      year_renovated: parseInt(q('#res-own-year-renovated')?.value) || null,
+      rba: _pf(q('#res-own-rba')),
+      land_acres: _pf(q('#res-own-land-acres')),
+      year_built: _pi(q('#res-own-year-built')),
+      year_renovated: _pi(q('#res-own-year-renovated')),
       research_notes: researchNotes,
       research_status: 'completed',
       evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
@@ -1820,8 +1830,8 @@ async function saveOwnership(rec) {
 
 async function saveLead(rec) {
   const saleDate = q('#res-lead-sale-date')?.value || null;
-  const salePrice = parseFloat(q('#res-lead-sale-price')?.value) || null;
-  const capRate = parseFloat(q('#res-lead-cap-rate')?.value) || null;
+  const salePrice = _pf(q('#res-lead-sale-price'));
+  const capRate = _pf(q('#res-lead-cap-rate'));
   const buyer = q('#res-lead-buyer')?.value || null;
   const seller = q('#res-lead-seller')?.value || null;
   const quickStatus = q('#res-lead-quick-status')?.value || null;
@@ -1888,17 +1898,17 @@ async function saveLead(rec) {
   // ── Property Details → properties table ──
   if (propertyId) {
     const propPatch = {};
-    const rba = parseFloat(q('#res-lead-rba')?.value) || null;
-    const landAcres = parseFloat(q('#res-lead-land-acres')?.value) || null;
-    const yearBuilt = parseInt(q('#res-lead-year-built')?.value) || null;
-    const yearRenovated = parseInt(q('#res-lead-year-renovated')?.value) || null;
+    const rba = _pf(q('#res-lead-rba'));
+    const landAcres = _pf(q('#res-lead-land-acres'));
+    const yearBuilt = _pi(q('#res-lead-year-built'));
+    const yearRenovated = _pi(q('#res-lead-year-renovated'));
     const buildingClass = q('#res-lead-building-class')?.value || null;
-    const stories = parseInt(q('#res-lead-stories')?.value) || null;
-    const parking = parseInt(q('#res-lead-parking')?.value) || null;
+    const stories = _pi(q('#res-lead-stories'));
+    const parking = _pi(q('#res-lead-parking'));
     const zoning = q('#res-lead-zoning')?.value || null;
     const condition = q('#res-lead-condition')?.value || null;
-    const annualRent = parseFloat(q('#res-lead-annual-rent')?.value) || null;
-    const estValue = parseFloat(q('#res-lead-est-value')?.value) || null;
+    const annualRent = _pf(q('#res-lead-annual-rent'));
+    const estValue = _pf(q('#res-lead-est-value'));
 
     if (rba) propPatch.rba = rba;
     if (landAcres) propPatch.land_acres = landAcres;
@@ -1920,12 +1930,12 @@ async function saveLead(rec) {
 
   // ── Loan / Debt ──
   const lender = q('#res-lead-lender')?.value || null;
-  const loanAmount = parseFloat(q('#res-lead-loan-amount')?.value) || null;
-  const interestRate = parseFloat(q('#res-lead-interest-rate')?.value) || null;
+  const loanAmount = _pf(q('#res-lead-loan-amount'));
+  const interestRate = _pf(q('#res-lead-interest-rate'));
   const loanType = q('#res-lead-loan-type')?.value || null;
   const loanOrig = q('#res-lead-loan-orig')?.value || null;
   const loanMaturity = q('#res-lead-loan-maturity')?.value || null;
-  const ltv = parseFloat(q('#res-lead-ltv')?.value) || null;
+  const ltv = _pf(q('#res-lead-ltv'));
   const recourse = q('#res-lead-recourse')?.value || null;
 
   if ((lender || loanAmount) && propertyId) {
@@ -2018,10 +2028,12 @@ async function saveIntel(rec) {
     return false;
   }
 
+  const _intelPartialWarns = [];
+
   // ── Prior Sale → sales_transactions table ──
   const saleDate = q('#res-intel-sale-date')?.value || null;
-  const salePrice = parseFloat(q('#res-intel-sale-price')?.value) || null;
-  const capRate = parseFloat(q('#res-intel-cap-rate')?.value) || null;
+  const salePrice = _pf(q('#res-intel-sale-price'));
+  const capRate = _pf(q('#res-intel-cap-rate'));
   const buyer = q('#res-intel-buyer')?.value || null;
   const seller = q('#res-intel-seller')?.value || null;
 
@@ -2046,22 +2058,23 @@ async function saveIntel(rec) {
       });
     } catch (err) {
       console.error('Error saving sale transaction:', err);
+      _intelPartialWarns.push('sale transaction');
     }
   }
 
   // ── Property Details → properties table ──
   const propertyPatch = {};
-  const rba = parseFloat(q('#res-intel-rba')?.value) || null;
-  const landAcres = parseFloat(q('#res-intel-land-acres')?.value) || null;
-  const yearBuilt = parseInt(q('#res-intel-year-built')?.value) || null;
-  const yearRenovated = parseInt(q('#res-intel-year-renovated')?.value) || null;
+  const rba = _pf(q('#res-intel-rba'));
+  const landAcres = _pf(q('#res-intel-land-acres'));
+  const yearBuilt = _pi(q('#res-intel-year-built'));
+  const yearRenovated = _pi(q('#res-intel-year-renovated'));
   const buildingClass = q('#res-intel-building-class')?.value || null;
-  const stories = parseInt(q('#res-intel-stories')?.value) || null;
-  const parking = parseInt(q('#res-intel-parking')?.value) || null;
+  const stories = _pi(q('#res-intel-stories'));
+  const parking = _pi(q('#res-intel-parking'));
   const zoning = q('#res-intel-zoning')?.value || null;
   const condition = q('#res-intel-condition')?.value || null;
-  const annualRent = parseFloat(q('#res-intel-annual-rent')?.value) || null;
-  const estValue = parseFloat(q('#res-intel-est-value')?.value) || null;
+  const annualRent = _pf(q('#res-intel-annual-rent'));
+  const estValue = _pf(q('#res-intel-est-value'));
   const recordedOwner = q('#res-intel-recorded-owner')?.value || null;
   const trueOwner = q('#res-intel-true-owner')?.value || null;
 
@@ -2097,17 +2110,18 @@ async function saveIntel(rec) {
       });
     } catch (err) {
       console.error('Gov ownership write error (intel):', err);
+      _intelPartialWarns.push('ownership');
     }
   }
 
   // ── Loan → loans table ──
   const lender = q('#res-intel-lender')?.value || null;
-  const loanAmount = parseFloat(q('#res-intel-loan-amount')?.value) || null;
-  const interestRate = parseFloat(q('#res-intel-interest-rate')?.value) || null;
+  const loanAmount = _pf(q('#res-intel-loan-amount'));
+  const interestRate = _pf(q('#res-intel-interest-rate'));
   const loanType = q('#res-intel-loan-type')?.value || null;
   const loanOrig = q('#res-intel-loan-orig')?.value || null;
   const loanMaturity = q('#res-intel-loan-maturity')?.value || null;
-  const ltv = parseFloat(q('#res-intel-ltv')?.value) || null;
+  const ltv = _pf(q('#res-intel-ltv'));
   const recourse = q('#res-intel-recourse')?.value || null;
 
   if (lender || loanAmount) {
@@ -2139,6 +2153,7 @@ async function saveIntel(rec) {
         });
       } catch (err) {
         console.error('Error saving loan (intel):', err);
+        _intelPartialWarns.push('loan');
       }
     }
   }
@@ -2170,6 +2185,7 @@ async function saveIntel(rec) {
       }
     } catch (err) {
       console.error('Error saving intel research notes:', err);
+      _intelPartialWarns.push('research notes');
     }
   }
 
@@ -2210,6 +2226,10 @@ async function saveIntel(rec) {
     });
   }
 
+  if (_intelPartialWarns.length) {
+    showToast('Saved with warnings — failed: ' + _intelPartialWarns.join(', '), 'warning');
+  }
+
   return true;
 }
 
@@ -2241,7 +2261,7 @@ async function patchRecord(table, idCol, idVal, data) {
 
 async function saveLoanFields(rec) {
   const lenderName = q('#res-lender')?.value || null;
-  const loanAmount = parseFloat(q('#res-loan-amount')?.value) || null;
+  const loanAmount = _pf(q('#res-loan-amount'));
   const loanType = q('#res-loan-type')?.value || null;
   const loanStatus = q('#res-loan-status')?.value || null;
   
@@ -2290,13 +2310,20 @@ async function researchMark(mark) {
 
   // Disable all mark buttons during async operation
   const markBtns = document.querySelectorAll('.research-card .action-row button[onclick*="researchMark"]');
-  markBtns.forEach(b => { b.disabled = true; });
+  markBtns.forEach(b => {
+    b.disabled = true;
+    b.dataset.origText = b.textContent;
+    b.textContent = 'Marking…';
+  });
 
   let status = 'marked';
   if (mark === 'spe_rename') status = 'spe_rename';
   if (mark === 'na') status = 'not_applicable';
 
-  const _reEnableMarks = () => markBtns.forEach(b => { b.disabled = false; });
+  const _reEnableMarks = () => markBtns.forEach(b => {
+    b.disabled = false;
+    b.textContent = b.dataset.origText || b.textContent;
+  });
 
   if (researchMode === 'ownership') {
     const ok = await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, { research_status: status });
@@ -2391,7 +2418,21 @@ function setResearchFilter(filter) {
       if (!_researchSaving) researchSave();
     } else if (e.key === 'k' || e.key === 'K') {
       e.preventDefault();
-      if (!_researchSaving) researchNav(1, true);
+      if (!_researchSaving) {
+        const _skipCard = document.querySelector('.research-card');
+        if (_skipCard) {
+          const _skipInputs = _skipCard.querySelectorAll('input[type="text"], input[type="number"], input[type="date"], textarea, select');
+          const _hasDirty = Array.from(_skipInputs).some(inp => {
+            if (inp.tagName === 'SELECT') return inp.selectedIndex > 0;
+            return inp.value && inp.value.trim() !== '' && inp.value !== inp.defaultValue;
+          });
+          if (_hasDirty) {
+            lccConfirm('You have unsaved changes. Skip anyway?', 'Skip').then(ok => { if (ok) researchNav(1, true); });
+            return;
+          }
+        }
+        researchNav(1, true);
+      }
     }
   });
 })();
