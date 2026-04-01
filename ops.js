@@ -1030,7 +1030,7 @@ async function qualityMergeDuplicate(entityIdsJson, entityNamesJson) {
   const targetId = entityIds[0];
   const sourceId = entityIds[1];
   const label = `${entityNames[1] || sourceId} -> ${entityNames[0] || targetId}`;
-  if (!confirm(`Merge duplicate pair ${label}?`)) return;
+  if (!(await lccConfirm('Merge duplicate pair ' + label + '?', 'Merge'))) return;
   const res = await opsPost('/api/entities?action=merge', { target_id: targetId, source_id: sourceId });
   if (!res.ok) {
     showToast('Merge failed: ' + (res.error || 'unknown error'), 'error');
@@ -1045,7 +1045,7 @@ async function qualityAddAlias(entityId, suggestedAlias) {
     showToast('No entity selected', 'error');
     return;
   }
-  const alias = prompt('Alias name', suggestedAlias || '');
+  const alias = await lccPrompt('Alias name', suggestedAlias || '');
   if (!alias) return;
   const res = await opsPost('/api/entities?action=add_alias', {
     entity_id: entityId,
@@ -1065,13 +1065,13 @@ async function qualityLinkIdentity(entityId, entityName) {
     showToast('No entity selected', 'error');
     return;
   }
-  const sourceSystem = prompt(`Source system for ${entityName || 'entity'}`, 'gov_supabase');
+  const sourceSystem = await lccPrompt('Source system for ' + (entityName || 'entity'), 'gov_supabase');
   if (!sourceSystem) return;
-  const sourceType = prompt('Source type', 'asset');
+  const sourceType = await lccPrompt('Source type', 'asset');
   if (!sourceType) return;
-  const externalId = prompt('External ID');
+  const externalId = await lccPrompt('External ID');
   if (!externalId) return;
-  const externalUrl = prompt('External URL (optional)', '') || null;
+  const externalUrl = (await lccPrompt('External URL (optional)', '')) || null;
   const res = await opsPost('/api/entities?action=link', {
     entity_id: entityId,
     source_system: sourceSystem,
@@ -1089,11 +1089,11 @@ async function qualityLinkIdentity(entityId, entityName) {
 }
 
 async function qualitySetPrecedence(defaultField, defaultSource, defaultPrecedence) {
-  const fieldName = prompt('Field name ("*" for default)', defaultField || '*');
+  const fieldName = await lccPrompt('Field name ("*" for default)', defaultField || '*');
   if (!fieldName) return;
-  const sourceSystem = prompt('Source system', defaultSource || 'manual');
+  const sourceSystem = await lccPrompt('Source system', defaultSource || 'manual');
   if (!sourceSystem) return;
-  const precedence = prompt('Precedence (0-100)', String(defaultPrecedence != null ? defaultPrecedence : 80));
+  const precedence = await lccPrompt('Precedence (0-100)', String(defaultPrecedence != null ? defaultPrecedence : 80));
   if (precedence === null) return;
   const parsed = Number(precedence);
   if (Number.isNaN(parsed)) {

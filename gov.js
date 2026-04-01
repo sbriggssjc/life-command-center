@@ -2927,7 +2927,7 @@ async function promoteGovEvidenceObservation(idx) {
   const row = govEvidenceState.queue[idx];
   if (!row) return;
   if (row.promotion_guard?.message) {
-    const confirmed = window.confirm(`${row.promotion_guard.message}\n\nContinue with promotion?`);
+    const confirmed = await lccConfirm(row.promotion_guard.message + '\n\nContinue with promotion?', 'Promote');
     if (!confirmed) return;
   }
   try {
@@ -3837,8 +3837,8 @@ async function govPatch(table, filterStr, data) {
 }
 
 window.resolveGovPendingUpdate = async function(id, resolution) {
-  if (resolution === 'rejected' && !confirm('Reject this pending update? The proposed change will be discarded.')) return;
-  if (resolution === 'expired' && !confirm('Expire this update? It will no longer be actionable.')) return;
+  if (resolution === 'rejected' && !(await lccConfirm('Reject this pending update? The proposed change will be discarded.', 'Reject'))) return;
+  if (resolution === 'expired' && !(await lccConfirm('Expire this update? It will no longer be actionable.', 'Expire'))) return;
 
   const notes = document.getElementById('pu-notes')?.value || '';
   try {
@@ -4102,7 +4102,7 @@ window.applyFinancialOverride = async function() {
     return;
   }
 
-  if (!confirm('Apply financial override to ' + (govFinOverrideRec.address || 'this property') + '? This will overwrite existing values.')) return;
+  if (!(await lccConfirm('Apply financial override to ' + (govFinOverrideRec.address || 'this property') + '? This will overwrite existing values.', 'Apply Override'))) return;
 
   const applyBtn = document.querySelector('[onclick*="applyFinancialOverride"]');
   if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying...'; }

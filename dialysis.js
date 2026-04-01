@@ -1587,11 +1587,11 @@ function renderDiaUnmatchedClinics() {
         }
 
         if (action === 'resolve') {
-          if (!confirm('Link this clinic to Property ID ' + propertyId + '? This cannot be undone.')) return;
+          if (!(await lccConfirm('Link this clinic to Property ID ' + propertyId + '? This cannot be undone.', 'Link'))) return;
         }
 
         if (action === 'dismiss') {
-          if (!confirm('Dismiss this unmatched record? It cannot be undone from this view.')) return;
+          if (!(await lccConfirm('Dismiss this unmatched record? It cannot be undone from this view.', 'Dismiss'))) return;
         }
 
         const allBtns = document.querySelectorAll('[data-um-action]');
@@ -1702,7 +1702,7 @@ function renderDiaQuarantineReview() {
 
         console.debug('Quarantine action:', action, item);
         if (action === 'dismiss') {
-          if (!confirm('Dismiss this quarantined record? It will be removed from the queue.')) return;
+          if (!(await lccConfirm('Dismiss this quarantined record? It will be removed from the queue.', 'Dismiss'))) return;
           e.target.disabled = true;
           e.target.textContent = 'Dismissing...';
           try {
@@ -1848,7 +1848,7 @@ function renderDiaClarificationQueue() {
           diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
           renderDiaTab();
         } else if (action === 'cannot-determine') {
-          if (!confirm('Mark this as "Cannot Determine"? The item will be removed from your queue.')) return;
+          if (!(await lccConfirm('Mark this as "Cannot Determine"? The item will be removed from your queue.', 'Cannot Determine'))) return;
           diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
           diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
           showToast('Marked as cannot determine', 'info');
@@ -3569,7 +3569,7 @@ function renderDiaActivity() {
 }
 
 async function reopenDiaOutcome(queueType, clinicId) {
-  if (!confirm('Reopen this item? It will be returned to the research queue.')) return;
+  if (!(await lccConfirm('Reopen this item? It will be returned to the research queue.', 'Reopen'))) return;
   try {
     const result = await applyChangeWithFallback({
       proxyBase: '/api/dia-query',

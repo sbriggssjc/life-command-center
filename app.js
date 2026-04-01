@@ -534,6 +534,60 @@ function _drainToast() {
   setTimeout(() => { t.className = 'toast'; setTimeout(_drainToast, 350); }, 3000);
 }
 
+// ── Custom Modal (async replacements for confirm/prompt) ──────────────
+let _modalResolve = null;
+function _showModal(msg, inputMode, defaultVal, okLabel) {
+  return new Promise(resolve => {
+    _modalResolve = resolve;
+    const overlay = document.getElementById('lcc-modal-overlay');
+    const msgEl = document.getElementById('lcc-modal-msg');
+    const inputWrap = document.getElementById('lcc-modal-input-wrap');
+    const inputEl = document.getElementById('lcc-modal-input');
+    const okBtn = document.getElementById('lcc-modal-ok');
+    if (!overlay) { resolve(inputMode ? null : false); return; }
+    msgEl.textContent = msg;
+    okBtn.textContent = okLabel || 'Confirm';
+    if (inputMode) {
+      inputWrap.style.display = 'block';
+      inputEl.value = defaultVal || '';
+      setTimeout(() => { inputEl.focus(); inputEl.select(); }, 50);
+    } else {
+      inputWrap.style.display = 'none';
+    }
+    overlay.style.display = 'flex';
+  });
+}
+function _closeModal(val) {
+  const overlay = document.getElementById('lcc-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+  if (_modalResolve) { _modalResolve(val); _modalResolve = null; }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('lcc-modal-ok')?.addEventListener('click', () => {
+    const inputWrap = document.getElementById('lcc-modal-input-wrap');
+    if (inputWrap && inputWrap.style.display !== 'none') {
+      _closeModal(document.getElementById('lcc-modal-input')?.value ?? '');
+    } else {
+      _closeModal(true);
+    }
+  });
+  document.getElementById('lcc-modal-cancel')?.addEventListener('click', () => {
+    const inputWrap = document.getElementById('lcc-modal-input-wrap');
+    _closeModal(inputWrap && inputWrap.style.display !== 'none' ? null : false);
+  });
+  document.getElementById('lcc-modal-overlay')?.addEventListener('click', e => {
+    if (e.target.id === 'lcc-modal-overlay') {
+      const inputWrap = document.getElementById('lcc-modal-input-wrap');
+      _closeModal(inputWrap && inputWrap.style.display !== 'none' ? null : false);
+    }
+  });
+  document.getElementById('lcc-modal-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lcc-modal-ok')?.click(); }
+  });
+});
+function lccConfirm(msg, okLabel) { return _showModal(msg, false, null, okLabel); }
+function lccPrompt(msg, defaultVal) { return _showModal(msg, true, defaultVal, 'OK'); }
+
 function getGreeting() {
   const h = parseInt(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Chicago' }), 10);
   const name = LCC_USER.first_name || LCC_USER.display_name?.split(' ')[0] || 'there';
@@ -1114,7 +1168,7 @@ function isArchivedDeal(dealId) {
   return !!archived[dealId];
 }
 
-function bulkArchiveStaleDeals() {
+async function bulkArchiveStaleDeals() {
   const today = localToday();
   const sixMonthsAgo = new Date(new Date(today + 'T00:00:00').getTime() - 180 * 24 * 60 * 60 * 1000)
     .toISOString().split('T')[0];
@@ -1129,8 +1183,8 @@ function bulkArchiveStaleDeals() {
   }
   
   const message = `Archive ${staleDeals.length} deal${staleDeals.length !== 1 ? 's' : ''} older than 6 months? They will be hidden from the list but can be revealed with "Show Archived".`;
-  if (!confirm(message)) return;
-  
+  if (!(await lccConfirm(message, 'Archive'))) return;
+
   const dealIds = new Set();
   staleDeals.forEach(d => {
     const dealId = d.deal_name || d.item_id;
@@ -3211,7 +3265,7 @@ async function rescheduleTask(sfContactId, subject, newDate) {
 }
 
 async function dismissTask(sfContactId, subject) {
-  if (!confirm('Dismiss "' + subject + '"? This will mark it as Abandoned.')) return;
+  if (!(await lccConfirm('Dismiss "' + subject + '"? This will mark it as Abandoned.', 'Dismiss'))) return;
   showToast('Dismissing task...', 'success');
   try {
     const result = await applyChangeWithFallback({
@@ -5412,8 +5466,8 @@ function applySettings() {
   // Apply compact mode
   document.body.classList.toggle('compact', appSettings.compactView);
 }
-function clearCacheAndReload() {
-  if (confirm('Clear all cached data and reload the app?')) {
+async function clearCacheAndReload() {
+  if (await lccConfirm('Clear all cached data and reload the app?', 'Clear & Reload')) {
     localStorage.clear();
     if ('caches' in window) caches.keys().then(names => names.forEach(n => caches.delete(n)));
     location.reload();
