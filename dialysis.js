@@ -3364,7 +3364,13 @@ function _clInput(label, id, value, type) {
 /**
  * Save clinic lead research — writes to research_queue_outcomes + updates properties if data entered
  */
+let _diaClinicSaving = false;
 async function saveClinicLeadResearch(rec) {
+  if (_diaClinicSaving) { showToast('Save in progress', 'info'); return; }
+  _diaClinicSaving = true;
+  try { await _saveClinicLeadResearchInner(rec); } finally { _diaClinicSaving = false; }
+}
+async function _saveClinicLeadResearchInner(rec) {
   const data = {
     recorded_owner: document.getElementById('cl-recorded-owner')?.value || null,
     true_owner: document.getElementById('cl-true-owner')?.value || null,
@@ -5730,6 +5736,10 @@ async function saveSaleTransaction() {
   const record = window._saleRecord;
   if (!record || !record.sale_id) return;
 
+  // Quick check: at least one field should have data
+  const _anyField = ['#dia-buyer-name','#dia-seller-name','#dia-sold-price','#dia-cap-rate','#dia-sale-date','#dia-notes'].some(s => { const v = q(s)?.value?.trim(); return v && v !== ''; });
+  if (!_anyField) { showToast('No changes to save', 'info'); return; }
+
   const buyer = q('#dia-buyer-name')?.value?.trim() || null;
   const buyerType = q('#dia-buyer-type')?.value?.trim() || null;
   const seller = q('#dia-seller-name')?.value?.trim() || null;
@@ -5779,6 +5789,9 @@ async function saveSaleTransaction() {
 async function saveSaleProperty() {
   const record = window._saleRecord;
   if (!record || !record.property_id) return;
+
+  const _anyField = ['#dia-prop-address','#dia-prop-city','#dia-prop-state','#dia-prop-tenant','#dia-prop-rba','#dia-prop-land','#dia-prop-year'].some(s => { const v = q(s)?.value?.trim(); return v && v !== ''; });
+  if (!_anyField) { showToast('No changes to save', 'info'); return; }
 
   const address = q('#dia-prop-address')?.value?.trim() || null;
   const city = q('#dia-prop-city')?.value?.trim() || null;
