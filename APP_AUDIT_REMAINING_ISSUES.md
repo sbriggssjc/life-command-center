@@ -1,23 +1,18 @@
 # LCC App Audit — Remaining Issues (March 2026)
 
-Issues identified during a full app audit that require backend/data fixes beyond what the frontend can address.
+Issues identified during a full app audit. Status updated March 31, 2026.
 
 ---
 
-## Issue 1: Government Pipeline — PostgREST 1,000-Row Cap
+## Issue 1: Government Pipeline — PostgREST 1,000-Row Cap — RESOLVED
 
-**What was fixed (frontend):** Added "+" suffix to counts and "showing first 1,000" note when the data hits the cap. Deduplicated pipeline rows by `lead_id`.
+**Status:** Fixed in commit `e15eaff` (March 31, 2026)
 
-**What still needs fixing:** The `prospect_leads` query in `gov.js` line 134 is `limit: 1000`. The actual pipeline likely has more than 1,000 leads. Options:
-- Use a server-side `COUNT(*)` query via an RPC function or a view with counts
-- Implement paginated loading (like `ownership_history` already does)
-- Increase the limit if PostgREST allows (needs Supabase config)
-
-**Project:** Government Supabase (`scknotsqkcheojiaewwh`)
+**What was fixed:** `prospect_leads` already used `govQueryAll()` with auto-pagination. Fixed `available_listings` query in gov.js which had a hardcoded `limit: 1000` — now uses offset pagination loop matching the sales_comps pattern.
 
 ---
 
-## Issue 2: Government Leases — Missing Address/City Data
+## Issue 2: Government Leases — Missing Address/City Data — OPEN
 
 **Problem:** Many rows in the Leases "Expiring Soon" table show dashes for address and city. The properties table may have this data but it's not being joined, or these records genuinely lack addresses.
 
@@ -28,7 +23,7 @@ Issues identified during a full app audit that require backend/data fixes beyond
 
 ---
 
-## Issue 3: Government Players — Entity Deduplication (Data Level)
+## Issue 3: Government Players — Entity Deduplication (Data Level) — OPEN
 
 **What was fixed (frontend):** Added `normalizeEntity()` function that strips LLC/LP/Inc suffixes and merges known entity families (Boyd Watterson variants, Easterly variants, Tanenbaum/Gardner-Tannenbaum, NGP, RMR).
 
@@ -39,43 +34,38 @@ Issues identified during a full app audit that require backend/data fixes beyond
 
 ---
 
-## Issue 4: Operator Name Casing Inconsistency (Dialysis)
+## Issue 4: Operator Name Casing Inconsistency (Dialysis) — RESOLVED (frontend)
 
-**Problem:** Cross-project "Prospects" search for "DaVita" shows some clinics with "Op: Davita" (lowercase v) and others with "Op: DaVita" (proper case). The `operator_name` field in `v_clinic_inventory_latest_diff` derives from `owner_name` which has inconsistent casing.
+**Status:** Fixed in commit `e15eaff` (March 31, 2026)
 
-**Required Fix:**
-1. Add a CASE expression or lookup table in the view to normalize operator names to proper case
-2. Or fix the underlying `medicare_clinics.owner_name` values to use consistent casing
-3. Known canonical names: "DaVita", "Fresenius Medical Care", "US Renal Care", "Dialysis Clinic Inc"
+**What was fixed:** Added `normalizeOperatorName()` in app.js that maps variant operator names to canonical forms: "DaVita", "Fresenius Medical Care", "US Renal Care", "Dialysis Clinic Inc", "American Renal Associates". Applied in 5 display locations (search results, detail headers, detail panels, CMS data, property link queue).
 
-**Project:** Dialysis Supabase (`zqzrriwuavgrquhisnoa`)
+**Still recommended:** Fix the underlying `medicare_clinics.owner_name` values in Dialysis Supabase for consistency at the data level.
 
 ---
 
-## Issue 5: Government Overview — "Unknown" Agency Dominance
+## Issue 5: Government Overview — "Unknown" Agency Dominance — RESOLVED
 
-**Problem:** 6,879 properties (42%) and $3.4B in rent are tagged as "Unknown" agency. This dilutes the agency breakdown charts.
+**Status:** Fixed in commit `e15eaff` (March 31, 2026)
 
-**Required Fix:**
-1. Investigate why so many properties have NULL or empty `agency` values
-2. Many of these may be inferrable from the `tenant_agency` or `gsa_lease` data
-3. Consider filtering "Unknown" out of the top charts and showing it as a separate note
-4. Or create an enrichment script that maps properties to agencies based on lease data
+**What was fixed:** "Unknown" agencies are now filtered out of the top 12 count and top 10 rent agency breakdown charts in gov.js. A footnote card is displayed below the charts showing the count, percentage, and rent amount attributed to Unknown agencies. Same filtering applied to the Lease Exposure by Agency table.
+
+**Still recommended:** Investigate why 42% of properties have NULL/empty agency values and enrich from `tenant_agency` or `gsa_lease` data.
 
 ---
 
-## Issue 6: Marketing — 98.5% Deals Overdue
+## Issue 6: Marketing — 98.5% Deals Overdue — RESOLVED
 
-**Problem:** 955 of 970 marketing deals are marked overdue. This likely means the due dates were set during a bulk import and never updated.
+**Status:** Fixed in commit `e15eaff` (March 31, 2026)
 
-**Suggested Fix:**
-1. Add a "Bulk Snooze" or "Archive Stale" feature to the Marketing section
-2. Or add a Salesforce sync that updates deal stages/dates
-3. Consider adding a "last contacted" date that auto-updates when the Log button is used
+**What was fixed:** Added three features to the Marketing tab in app.js:
+1. "Archive Stale (6mo+)" button that bulk-archives deals overdue by 180+ days to localStorage
+2. Visual "Stale — Xmo overdue" badges on deals overdue by 180+ days (dimmed opacity)
+3. "Show Archived" toggle to reveal/hide archived deals
 
 ---
 
-## Issue 7: Today Page — 1,050 Flagged Emails
+## Issue 7: Today Page — 1,050 Flagged Emails — OPEN
 
 **Problem:** The flagged email count shows 1,050, which seems very high. This may be pulling all emails rather than just flagged ones.
 
@@ -85,48 +75,73 @@ Issues identified during a full app audit that require backend/data fixes beyond
 
 ---
 
-## Issue 8: Government Agency Label Truncation
+## Issue 8: Government Agency Label Truncation — RESOLVED (already existed)
 
-**Problem:** Bar chart labels like "POTOMAC SERVICE...", "METROPOLITAN SE..." are truncated in the Agency Breakdown charts.
+**Status:** Verified March 31, 2026 — tooltips already implemented.
 
-**Suggested Fix (Frontend):**
-1. Add tooltips on hover showing the full agency name
-2. Or increase the label width allocation in the bar chart CSS
+The `inlineBar()` function in gov.js already includes `title="${esc(item.label)}"` attributes on bar chart labels, providing full agency names on hover.
 
 ---
 
-## Issue 9: Activity renderBizSubset — No Pagination
+## Issue 9: Activity renderBizSubset — No Pagination — RESOLVED (already existed)
 
-**What was fixed (frontend):** Scoped the pill active-toggle to only the parent `.pills` container (was incorrectly resetting all pills on the page).
+**Status:** Verified March 31, 2026 — pagination already implemented.
 
-**What still needs fixing:** When clicking a category pill to filter activities, `renderBizSubset()` only shows the first `PAGE_SIZE` items with no pagination. Unlike the main `renderBizContent()` which has a pager, filtered results are silently truncated. This needs a pagination mechanism similar to what `renderBizContent` uses, or at minimum a "showing X of Y" indicator.
-
-**File:** `index.html`, lines ~1453-1470
+The `renderBizSubset()` function in app.js already includes: pagination state tracking (`_bizSubsetPage`), proper page calculation using `PAGE_SIZE`, a "showing X of Y" indicator, and Prev/Next pagination controls.
 
 ---
 
-## Issue 10: Prospects Search — Contact Card Click Does Nothing
+## Issue 10: Prospects Search — Contact Card Click Does Nothing — RESOLVED (already existed)
 
-**Problem:** Government Contact results (`_source: ''`) have an empty `_source`, so `showDetail()` is never called — clicking these cards does nothing.
+**Status:** Verified March 31, 2026 — handler already implemented.
 
-**Suggested Fix:**
-1. Set `_source: 'gov-contact'` and add a handler in `showDetail()` for this source
-2. Or at minimum show a detail overlay with the contact's info (name, entity, phone, email, role)
-
-**File:** `index.html`, line ~1908
+Government Contact results already have `_source: 'gov-contact'` set properly, with a full detail handler in `showDetail()`, tab configuration, and `renderGovContactDetailBody()` renderer.
 
 ---
 
-## Issue 11: Prospects Search — `or=` Filter May Not Work With All Column Names
+## Issue 11: Prospects Search — `or=` Filter May Not Work With All Column Names — RESOLVED (already mitigated)
 
-**Problem:** The Prospects search builds `or=(address.ilike.*term*,city.ilike.*term*,...)` filters using column names that may have changed or may not exist in the target table. If any column in the `or=` clause doesn't exist, PostgREST returns a 400 error silently.
+**Status:** Verified March 31, 2026 — safeQuery wrapper already exists.
 
-**Suggested Fix:**
-1. Wrap each prospect query in a try/catch that falls back gracefully if a column doesn't exist
-2. Verify all column names match the actual table schemas for both databases
-3. The `contacts` table query references `name` and `entity_type` — confirm these exist (contacts table may have `contact_name` not `name`)
+The `execProspectsSearch()` function includes a `safeQuery()` async helper that wraps all database queries in try/catch, returning `{ data: [] }` on failure. All 6 query types (gov leads, ownership, contacts, listings, dia clinics, NPI) use this wrapper.
 
-**File:** `index.html`, lines ~1901-1920
+---
+
+## Additional Fixes (March 31, 2026)
+
+### My Work / Metrics Zeros vs Dashboard Mismatch — RESOLVED
+
+**Problem:** Dashboard My Work widget showed items (e.g., "Noah Dalay") but the My Work page and Metrics showed 0 across the board.
+
+**What was fixed (ops.js):** `renderMyWork()` now checks `canonicalMyWork` first (matching the Dashboard's data source) before falling back to the queue API. `renderMetricsPage()` now falls back to `canonicalCounts` when the queue API returns empty.
+
+### Government Tab Stale DOM on First Switch — RESOLVED
+
+**Problem:** Switching from Dialysis to Government briefly showed Dialysis content before Government data loaded.
+
+**What was fixed (app.js):** Added immediate clearing of the `bizPageInner` content container at the start of the sub-tab click handler. Shows a loading spinner while the new content loads.
+
+### Supabase RLS on research_queue_outcomes — RESOLVED
+
+**Problem:** Console error: `HTTP 403 {"error":"Read access denied for table: research_queue_outcomes"}`
+
+**What was fixed:** Created the `research_queue_outcomes` table in Government Supabase with proper RLS policies for anon read, insert, and update access. Added performance indexes.
+
+### Available Listings 1000-Row Cap — RESOLVED
+
+**Problem:** `available_listings` query in gov.js used hardcoded `limit: 1000` without pagination.
+
+**What was fixed (gov.js):** Updated to use offset pagination loop (same pattern as sales_comps), fetching all results beyond the 1000-row PostgREST cap.
+
+---
+
+## Remaining Open Issues
+
+- **Issue 2:** Government Leases — Missing Address/City Data (data enrichment needed)
+- **Issue 3:** Government Players — Entity Deduplication (data-level fix needed)
+- **Issue 7:** Today Page — 1,050 Flagged Emails (Power Automate filter verification needed)
+- **Issue 4 (data level):** Operator name normalization in Dialysis Supabase `medicare_clinics.owner_name`
+- **Issue 5 (data level):** Investigate 42% "Unknown" agency properties for enrichment opportunity
 
 ---
 
