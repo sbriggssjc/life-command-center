@@ -5777,31 +5777,26 @@ async function saveSaleTransaction() {
     notes: notes || null
   };
 
-  try {
-    const success = await diaPatchRecord('sales_transactions', 'sale_id', record.sale_id, data);
-    if (success) {
-      showToast('Transaction saved successfully', 'success');
-      // Update in-memory record
-      Object.assign(record, data);
-      // Update in array
-      if (window.diaSalesComps) {
-        const idx = window.diaSalesComps.findIndex(r => r.sale_id === record.sale_id);
-        if (idx >= 0) {
-          Object.assign(window.diaSalesComps[idx], data);
-        }
+  const success = await diaPatchRecord('sales_transactions', 'sale_id', record.sale_id, data);
+  if (success) {
+    showToast('Transaction saved successfully', 'success');
+    // Update in-memory record
+    Object.assign(record, data);
+    // Update in array
+    if (window.diaSalesComps) {
+      const idx = window.diaSalesComps.findIndex(r => r.sale_id === record.sale_id);
+      if (idx >= 0) {
+        Object.assign(window.diaSalesComps[idx], data);
       }
-      canonicalBridge('log_activity', {
-        title: 'Sale transaction saved',
-        domain: 'dialysis',
-        source_system: 'dia_supabase',
-        external_id: String(record.sale_id),
-        user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
-        metadata: { sale_id: record.sale_id, buyer: buyer, seller: seller, sold_price: price, sale_date: saleDate }
-      });
     }
-  } catch (err) {
-    console.error('Sale transaction save error:', err);
-    showToast('Error saving transaction: ' + (err.message || 'unknown error'), 'error');
+    canonicalBridge('log_activity', {
+      title: 'Sale transaction saved',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(record.sale_id),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      metadata: { sale_id: record.sale_id, buyer: buyer, seller: seller, sold_price: price, sale_date: saleDate }
+    });
   }
 }
 
@@ -5830,30 +5825,25 @@ async function saveSaleProperty() {
     year_built: year
   };
 
-  try {
-    const success = await diaPatchRecord('properties', 'property_id', record.property_id, data);
-    if (success) {
-      showToast('Property saved successfully', 'success');
-      Object.assign(record, data);
-      if (window.diaSalesComps) {
-        const idx = window.diaSalesComps.findIndex(r => r.property_id === record.property_id);
-        if (idx >= 0) {
-          Object.assign(window.diaSalesComps[idx], data);
-        }
+  const success = await diaPatchRecord('properties', 'property_id', record.property_id, data);
+  if (success) {
+    showToast('Property saved successfully', 'success');
+    Object.assign(record, data);
+    if (window.diaSalesComps) {
+      const idx = window.diaSalesComps.findIndex(r => r.property_id === record.property_id);
+      if (idx >= 0) {
+        Object.assign(window.diaSalesComps[idx], data);
       }
-      canonicalBridge('log_activity', {
-        title: 'Sale property updated',
-        domain: 'dialysis',
-        source_system: 'dia_supabase',
-        external_id: String(record.property_id),
-        user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
-        property_name: address || null,
-        metadata: { property_id: record.property_id, address: address, city: city, state: state, tenant: tenant }
-      });
     }
-  } catch (err) {
-    console.error('Sale property save error:', err);
-    showToast('Error saving property: ' + (err.message || 'unknown error'), 'error');
+    canonicalBridge('log_activity', {
+      title: 'Sale property updated',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(record.property_id),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      property_name: address || null,
+      metadata: { property_id: record.property_id, address: address, city: city, state: state, tenant: tenant }
+    });
   }
 }
 
@@ -5922,9 +5912,8 @@ async function saveSaleResearch() {
     });
 
     if (!result.ok) {
-      const errorMsg = result.errors && result.errors.length > 0 ? result.errors[0] : 'unknown error';
       console.error('Research save error:', result.errors || []);
-      showToast('Error saving research: ' + errorMsg, 'error');
+      showToast('Error saving research', 'error');
       return;
     }
 
@@ -5951,7 +5940,7 @@ async function saveSaleResearch() {
     });
   } catch (err) {
     console.error('saveSaleResearch error:', err);
-    showToast('Error saving research: ' + (err.message || 'unknown error'), 'error');
+    showToast('Error saving research', 'error');
   }
 }
 
