@@ -1265,7 +1265,7 @@ let _submitAssigning = false;
 async function submitAssignModal() {
   if (!opsAssignModalState || _submitAssigning) return;
   const assigned_to = document.getElementById('assignUserSelect')?.value;
-  if (!assigned_to) return;
+  if (!assigned_to) { showToast('Please select a user to assign to', 'error'); return; }
   _submitAssigning = true;
   const btn = document.querySelector('#assignModal .modal-actions button.primary, #assignModal button[onclick*="submitAssignModal"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Assigning...'; }
@@ -1348,6 +1348,7 @@ async function submitFollowupModal() {
   const btn = document.querySelector('#followupModal .modal-actions button.primary, #followupModal button[onclick*="submitFollowupModal"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
   try {
+    showToast('Creating follow-up...', 'info');
     const res = await opsPost('/api/workflows?action=research_followup', {
       research_task_id: opsFollowupModalState.researchTaskId,
       followup_title,
