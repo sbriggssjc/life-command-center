@@ -3215,6 +3215,7 @@ function _syncTaskToSalesforce(sfContactId, subject, action) {
     }
   }).catch(function(e) {
     console.error('[SF Sync] Network error:', e.message);
+    showToast('SF activity sync failed', 'error');
   });
 }
 
@@ -4081,9 +4082,9 @@ function triggerCanonicalSync() {
       });
       if (!isStale) return;
 
-      fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(e => console.warn('[BackgroundSync] Email ingest failed:', e.message));
-      fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(e => console.warn('[BackgroundSync] Calendar ingest failed:', e.message));
-      fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(e => console.warn('[BackgroundSync] SF activities ingest failed:', e.message));
+      fetch('/api/sync?action=ingest_emails', { method: 'POST', headers }).catch(e => { console.warn('[BackgroundSync] Email ingest failed:', e.message); showToast('Email sync failed', 'error'); });
+      fetch('/api/sync?action=ingest_calendar', { method: 'POST', headers }).catch(e => { console.warn('[BackgroundSync] Calendar ingest failed:', e.message); showToast('Calendar sync failed', 'error'); });
+      fetch('/api/sync?action=ingest_sf_activities', { method: 'POST', headers }).catch(e => { console.warn('[BackgroundSync] SF activities ingest failed:', e.message); showToast('SF sync failed', 'error'); });
     })
     .catch(e => console.warn('[BackgroundSync] Health check failed:', e.message));
 }
@@ -6921,9 +6922,12 @@ function bindLiveIngestWorkbench(domainKey) {
   document.querySelectorAll('[data-live-ingest-retry-ocr]').forEach((button) => {
     button.onclick = async (e) => {
       e.preventDefault();
+      if (button.disabled) return;
       const idx = parseInt(button.dataset.liveIngestRetryOcr, 10);
       if (Number.isNaN(idx)) return;
-      await retryLiveIngestOcrSource(domainKey, idx);
+      const orig = button.textContent;
+      button.disabled = true; button.textContent = 'Retrying\u2026'; button.style.opacity = '0.6';
+      try { await retryLiveIngestOcrSource(domainKey, idx); } catch (err) { showToast('OCR retry failed: ' + err.message, 'error'); } finally { button.disabled = false; button.textContent = orig; button.style.opacity = ''; }
     };
   });
   document.querySelectorAll(`[data-live-ingest-op^="${domainKey}:"]`).forEach((checkbox) => {
@@ -6984,11 +6988,13 @@ function bindLiveIngestWorkbench(domainKey) {
     button.onclick = async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (button.disabled) return;
       const [, idxText] = button.dataset.liveIngestRefreshOp.split(':');
       const idx = parseInt(idxText, 10);
       if (Number.isNaN(idx) || !state.proposal?.operations?.[idx]) return;
       const op = state.proposal.operations[idx];
       op._snapshotError = '';
+      button.disabled = true; button.style.opacity = '0.6';
       state.loadingSnapshots = true;
       rerenderLiveIngestDomain(domainKey);
       try {
@@ -6996,7 +7002,9 @@ function bindLiveIngestWorkbench(domainKey) {
         op._currentFields = fields;
       } catch (err) {
         op._snapshotError = err.message || 'Unable to refresh current values';
+        showToast('Snapshot refresh failed', 'error');
       } finally {
+        button.disabled = false; button.style.opacity = '';
         state.loadingSnapshots = false;
         rerenderLiveIngestDomain(domainKey);
       }
