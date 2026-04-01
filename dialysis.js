@@ -1567,7 +1567,7 @@ function renderDiaUnmatchedClinics() {
 
     // Action buttons
     document.querySelectorAll('[data-um-action]').forEach(btn => {
-      btn.addEventListener('click', e => {
+      btn.addEventListener('click', async e => {
         const action = e.target.dataset.umAction;
         const item = diaUnmatchedQueue[diaUnmatchedIdx];
         if (!item) return;
@@ -1580,11 +1580,18 @@ function renderDiaUnmatchedClinics() {
           return;
         }
 
+        if (action === 'resolve') {
+          if (!confirm('Link this clinic to Property ID ' + propertyId + '? This cannot be undone.')) return;
+        }
+
         if (action === 'dismiss') {
           if (!confirm('Dismiss this unmatched record? It cannot be undone from this view.')) return;
         }
 
-        resolveDiaUnmatched(item.id, action, propertyId);
+        const allBtns = document.querySelectorAll('[data-um-action]');
+        allBtns.forEach(b => { b.disabled = true; });
+        e.target.textContent = 'Processing...';
+        await resolveDiaUnmatched(item.id, action, propertyId);
       });
     });
   }, 0);
@@ -1682,7 +1689,7 @@ function renderDiaQuarantineReview() {
     });
 
     document.querySelectorAll('[data-q-action]').forEach(btn => {
-      btn.addEventListener('click', e => {
+      btn.addEventListener('click', async e => {
         const action = e.target.dataset.qAction;
         const item = diaQuarantineQueue[diaQuarantineIdx];
         if (!item) return;
@@ -1690,6 +1697,21 @@ function renderDiaQuarantineReview() {
         console.debug('Quarantine action:', action, item);
         if (action === 'dismiss') {
           if (!confirm('Dismiss this quarantined record? It will be removed from the queue.')) return;
+          e.target.disabled = true;
+          e.target.textContent = 'Dismissing...';
+          try {
+            await diaPatchRecord('medicare_ingest_quarantine', 'id', item.id, {
+              status: 'dismissed',
+              resolved_at: new Date().toISOString(),
+              resolved_by: 'dashboard'
+            });
+          } catch (err) {
+            console.error('Quarantine dismiss error:', err);
+            showToast('Dismiss failed: ' + err.message, 'error');
+            e.target.disabled = false;
+            e.target.textContent = 'Dismiss';
+            return;
+          }
           diaQuarantineQueue = diaQuarantineQueue.filter((_, i) => i !== diaQuarantineIdx);
           diaQuarantineIdx = Math.min(diaQuarantineIdx, Math.max(0, diaQuarantineQueue.length - 1));
           showToast('Quarantine record dismissed', 'success');
@@ -1797,6 +1819,9 @@ function renderDiaClarificationQueue() {
             showToast('Please enter your response before submitting', 'error');
             return;
           }
+          const allClBtns = document.querySelectorAll('[data-cl-action]');
+          allClBtns.forEach(b => { b.disabled = true; });
+          e.target.textContent = 'Submitting...';
           // Write clarification response to the source record
           try {
             if (item.table_name && item.record_id) {
@@ -1808,7 +1833,10 @@ function renderDiaClarificationQueue() {
             showToast('Clarification submitted!', 'success');
           } catch(err) {
             console.error('Clarification submit error:', err);
-            showToast('Saved locally — will sync when connection is restored', 'info');
+            showToast('Submit failed: ' + err.message + ' — please retry', 'error');
+            allClBtns.forEach(b => { b.disabled = false; });
+            e.target.textContent = 'Submit Data';
+            return;
           }
           diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
           diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
@@ -2124,7 +2152,7 @@ function renderDiaResearch() {
     // Only active when a dialysis research card is visible and no input/textarea is focused
     if (!document.querySelector('.research-card') && !document.querySelector('[data-confirm-prop]') && !document.querySelector('[data-verify-lease]') && !document.getElementById('clSaveBtn') && !document.getElementById('clNextBtn')) return;
     var tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
     // Only when dialysis tab is active
     if (!document.querySelector('[data-mode="property"]')) return;
 

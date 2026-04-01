@@ -1502,9 +1502,18 @@ function renderIntelResearchCard(rec) {
   // ────────────────────────────────────────────────────────────
   html += '<div class="research-form">';
 
-  // Completeness bar
-  const allFields = [rec.rba, rec.recorded_owner, loan.index_name, rec.annual_rent];
-  const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1].includes(i) })));
+  // Completeness bar — representative fields from each step
+  const allFields = [
+    { value: rec.rba, required: true },                       // Property
+    { value: rec.recorded_owner || rec.lessor_name, required: true }, // Ownership
+    { value: loan.index_name, required: false },              // Financing
+    { value: rec.last_known_rent || rec.gross_rent, required: false }, // Valuation
+    { value: rec.year_built, required: false },               // Property
+    { value: rec.true_owner, required: false },               // Ownership
+    { value: loan.loan_amount, required: false },             // Financing
+    { value: rec.current_value_estimate, required: false }    // Valuation
+  ];
+  const completeness = computeCompleteness(allFields);
   html += renderCompletenessBar(completeness);
 
   // Step navigation
@@ -1657,6 +1666,9 @@ async function researchSave() {
   const rec = researchQueue[researchIdx];
   if (!rec) { showToast('No record to save', 'error'); return; }
 
+  const saveBtn = q('[data-save-research]') || q('.research-card button.save-btn') || q('.research-card button[onclick*="researchSave"]');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.dataset.origText = saveBtn.textContent; saveBtn.textContent = 'Saving...'; }
+
   let success = true;
   try {
     if (researchMode === 'ownership') {
@@ -1669,10 +1681,11 @@ async function researchSave() {
   } catch (err) {
     console.error('researchSave error:', err);
     showToast('Save failed: ' + err.message + ' — please retry or skip', 'error');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; }
     return;
   }
 
-  if (!success) return; // save function already showed error toast
+  if (!success) { if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; } return; }
 
   researchCompleted++;
   researchIdx++;
@@ -2307,7 +2320,7 @@ function setResearchFilter(filter) {
     // Only active when research workbench is visible and no input/textarea is focused
     if (!document.querySelector('.research-card')) return;
     var tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
     if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
@@ -2915,7 +2928,7 @@ async function promoteGovEvidenceObservation(idx) {
 
 function bindGovEvidenceWorkbench() {
   syncGovEvidenceContext();
-  document.querySelector('[data-gov-evidence-extract]')?.addEventListener('click', () => extractGovEvidenceScreenshot());
+  document.querySelector('[data-gov-evidence-extract]')?.addEventListener('click', () => govEvidenceExtractScreenshot(researchQueue[researchIdx]));
   document.querySelector('[data-gov-evidence-clear]')?.addEventListener('click', () => {
     govEvidenceState.review = null;
     govEvidenceState.artifactId = null;
