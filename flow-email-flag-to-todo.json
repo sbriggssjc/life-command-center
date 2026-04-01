@@ -1,0 +1,172 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "When_an_email_is_flagged_(V3)": {
+        "type": "ApiConnectionNotification",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "fetch": {
+            "pathTemplate": {
+              "template": "/v3/Mail/OnFlaggedEmail"
+            },
+            "method": "get",
+            "queries": {
+              "folderPath": "Inbox",
+              "importance": "Any",
+              "fetchOnlyWithAttachment": false
+            }
+          },
+          "subscribe": {
+            "body": {
+              "NotificationUrl": "@{listCallbackUrl()}"
+            },
+            "pathTemplate": {
+              "template": "/v3/Mail/OnFlaggedEmailPokeSubscription"
+            },
+            "method": "post",
+            "queries": {
+              "folderPath": "Inbox",
+              "importance": "Any",
+              "fetchOnlyWithAttachment": false
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Initialize_TargetList": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "TargetList",
+              "type": "string",
+              "value": "Work"
+            }
+          ]
+        },
+        "runAfter": {}
+      },
+      "Categorize_By_Sender": {
+        "type": "Switch",
+        "expression": "@toLower(triggerOutputs()?['body/from'])",
+        "cases": {
+          "Wife_Personal": {
+            "case": "REPLACE_WITH_WIFE_EMAIL",
+            "actions": {
+              "Set_Family": {
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "TargetList",
+                  "value": "Family"
+                }
+              }
+            }
+          },
+          "Kids_School": {
+            "case": "REPLACE_WITH_SCHOOL_EMAIL",
+            "actions": {
+              "Set_Kids": {
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "TargetList",
+                  "value": "Kids"
+                }
+              }
+            }
+          },
+          "Health_Doctor": {
+            "case": "REPLACE_WITH_DOCTOR_EMAIL",
+            "actions": {
+              "Set_Health": {
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "TargetList",
+                  "value": "Health"
+                }
+              }
+            }
+          },
+          "Finance": {
+            "case": "REPLACE_WITH_BANK_EMAIL",
+            "actions": {
+              "Set_Finance": {
+                "type": "SetVariable",
+                "inputs": {
+                  "name": "TargetList",
+                  "value": "Finance"
+                }
+              }
+            }
+          }
+        },
+        "default": {
+          "actions": {
+            "Keep_Work_Default": {
+              "type": "Compose",
+              "inputs": "Default: Work list"
+            }
+          }
+        },
+        "runAfter": {
+          "Initialize_TargetList": ["Succeeded"]
+        }
+      },
+      "Create_To_Do_Task": {
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['todo']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/v1.0/me/todo/lists/@{variables('TargetList')}/tasks",
+          "body": {
+            "title": "@{triggerOutputs()?['body/subject']}",
+            "importance": "high",
+            "body": {
+              "content": "📧 From: @{triggerOutputs()?['body/from']}\n📅 Received: @{triggerOutputs()?['body/receivedDateTime']}\n\n@{substring(triggerOutputs()?['body/bodyPreview'], 0, min(length(triggerOutputs()?['body/bodyPreview']), 500))}\n\n---\n[EmailID:@{triggerOutputs()?['body/id']}]\n[EmailLink:https://outlook.office.com/mail/inbox/id/@{triggerOutputs()?['body/conversationId']}]",
+              "contentType": "text"
+            }
+          }
+        },
+        "runAfter": {
+          "Categorize_By_Sender": ["Succeeded"]
+        }
+      }
+    }
+  },
+  "connectionReferences": {
+    "office365": {
+      "api": {
+        "id": "/providers/Microsoft.PowerApps/apis/shared_office365"
+      },
+      "connection": {
+        "id": "CONFIGURE_AT_IMPORT"
+      },
+      "connectionName": "shared-office365"
+    },
+    "todo": {
+      "api": {
+        "id": "/providers/Microsoft.PowerApps/apis/shared_todo"
+      },
+      "connection": {
+        "id": "CONFIGURE_AT_IMPORT"
+      },
+      "connectionName": "shared-todo"
+    }
+  }
+}

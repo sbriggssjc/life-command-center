@@ -2480,12 +2480,9 @@ function renderDiaPropertyCard(item) {
         }
 
         confirmBtn.disabled = true;
-        confirmBtn.textContent = 'Saving\u2026';
-        confirmBtn.style.opacity = '0.6';
-        try {
-          const ok = await saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes, source);
-          if (!ok) { confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm Link'; confirmBtn.style.opacity = ''; }
-        } catch (e) { console.error('confirm link error:', e); showToast('Save failed: ' + e.message, 'error'); confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm Link'; confirmBtn.style.opacity = ''; }
+        confirmBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes, source);
+        if (!ok) { confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm Link'; }
       });
     }
 
@@ -2493,12 +2490,9 @@ function renderDiaPropertyCard(item) {
       rejectBtn.addEventListener('click', async () => {
         const notes = q('#propNotes')?.value;
         rejectBtn.disabled = true;
-        rejectBtn.textContent = 'Saving\u2026';
-        rejectBtn.style.opacity = '0.6';
-        try {
-          const ok = await saveDiaOutcome('property_review', item.clinic_id, 'rejected_candidate', '', notes);
-          if (!ok) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject'; rejectBtn.style.opacity = ''; }
-        } catch (e) { console.error('reject error:', e); showToast('Reject failed: ' + e.message, 'error'); rejectBtn.disabled = false; rejectBtn.textContent = 'Reject'; rejectBtn.style.opacity = ''; }
+        rejectBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('property_review', item.clinic_id, 'rejected_candidate', '', notes);
+        if (!ok) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject'; }
       });
     }
 
@@ -2828,12 +2822,9 @@ function renderDiaLeaseCard(item) {
         }
 
         verifyBtn.disabled = true;
-        verifyBtn.textContent = 'Saving\u2026';
-        verifyBtn.style.opacity = '0.6';
-        try {
-          const ok = await saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes, source, term, rent, rentSF);
-          if (!ok) { verifyBtn.disabled = false; verifyBtn.textContent = 'Verify Lease'; verifyBtn.style.opacity = ''; }
-        } catch (e) { console.error('verify lease error:', e); showToast('Save failed: ' + e.message, 'error'); verifyBtn.disabled = false; verifyBtn.textContent = 'Verify Lease'; verifyBtn.style.opacity = ''; }
+        verifyBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes, source, term, rent, rentSF);
+        if (!ok) { verifyBtn.disabled = false; verifyBtn.textContent = 'Verify Lease'; }
       });
     }
 
@@ -2841,12 +2832,9 @@ function renderDiaLeaseCard(item) {
       notownedBtn.addEventListener('click', async () => {
         const notes = q('#leaseNotes')?.value;
         notownedBtn.disabled = true;
-        notownedBtn.textContent = 'Saving\u2026';
-        notownedBtn.style.opacity = '0.6';
-        try {
-          const ok = await saveDiaOutcome('lease_backfill', item.clinic_id, 'not_owned', '', notes);
-          if (!ok) { notownedBtn.disabled = false; notownedBtn.textContent = 'Not Owned'; notownedBtn.style.opacity = ''; }
-        } catch (e) { console.error('not owned error:', e); showToast('Save failed: ' + e.message, 'error'); notownedBtn.disabled = false; notownedBtn.textContent = 'Not Owned'; notownedBtn.style.opacity = ''; }
+        notownedBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('lease_backfill', item.clinic_id, 'not_owned', '', notes);
+        if (!ok) { notownedBtn.disabled = false; notownedBtn.textContent = 'Not Owned'; }
       });
     }
 
@@ -3300,17 +3288,18 @@ function renderClinicLeadCard(rec) {
       if (saveBtn) {
         saveBtn.addEventListener('click', async () => {
           saveBtn.disabled = true;
-          saveBtn.textContent = 'Saving\u2026';
-          saveBtn.style.opacity = '0.6';
-          try { await saveClinicLeadResearch(rec); } catch (e) { console.error('saveClinicLeadResearch error:', e); showToast('Save failed: ' + e.message, 'error'); } finally { saveBtn.disabled = false; saveBtn.textContent = 'Save & Next'; saveBtn.style.opacity = ''; }
+          saveBtn.textContent = 'Saving...';
+          await saveClinicLeadResearch(rec);
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save & Next';
         });
       }
 
       if (naBtn) {
         naBtn.addEventListener('click', async () => {
           naBtn.disabled = true;
-          naBtn.style.opacity = '0.6';
-          try { await markClinicLead(rec, 'not_applicable'); } catch (e) { console.error('markClinicLead error:', e); showToast('Mark failed: ' + e.message, 'error'); } finally { naBtn.disabled = false; naBtn.style.opacity = ''; }
+          await markClinicLead(rec, 'not_applicable');
+          naBtn.disabled = false;
         });
       }
     }
@@ -5554,7 +5543,7 @@ function renderSaleDealTab(record) {
 
   // Save button
   html += '<div style="position: sticky; bottom: 0; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--s1);">';
-  html += '<button onclick="_udBtnGuard(this, saveSaleTransaction)" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Save Transaction</button>';
+  html += '<button onclick="saveSaleTransaction()" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Save Transaction</button>';
   html += '</div>';
 
   html += '</div>';
@@ -5611,7 +5600,7 @@ function renderSalePropertyTab(record) {
 
   // Save button
   html += '<div style="position: sticky; bottom: 0; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--s1);">';
-  html += '<button onclick="_udBtnGuard(this, saveSaleProperty)" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Save Property</button>';
+  html += '<button onclick="saveSaleProperty()" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Save Property</button>';
   html += '</div>';
 
   return html;
@@ -5660,7 +5649,7 @@ async function renderSaleOwnershipTab(record) {
         html += '<textarea id="dia-owner-notes-' + idx + '" placeholder="Notes..." style="' + inpStyle + 'min-height:60px;resize:vertical;">' + esc(owner.notes || '') + '</textarea>';
         html += '</div>';
         
-        html += '<button onclick="_udBtnGuard(this, saveSaleOwner, ' + owner.ownership_id + ', ' + idx + ')" style="width: 100%; padding: 8px; margin-top: 8px; background: var(--accent); color: white; border: none; border-radius: 4px; font-weight: 600; font-size: 12px; cursor: pointer;">Save Owner Record</button>';
+        html += '<button onclick="saveSaleOwner(' + owner.ownership_id + ', ' + idx + ')" style="width: 100%; padding: 8px; margin-top: 8px; background: var(--accent); color: white; border: none; border-radius: 4px; font-weight: 600; font-size: 12px; cursor: pointer;">Save Owner Record</button>';
         html += '</div>';
       });
     }
@@ -5699,7 +5688,7 @@ function renderSaleResearchTab(record) {
 
   // Save button
   html += '<div style="position: sticky; bottom: 0; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--s1);">';
-  html += '<button onclick="_udBtnGuard(this, saveSaleResearch)" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Resolve Research</button>';
+  html += '<button onclick="saveSaleResearch()" style="width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Resolve Research</button>';
   html += '</div>';
 
   return html;
