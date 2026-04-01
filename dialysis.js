@@ -814,7 +814,6 @@ function renderDiaChanges() {
         diaCmsData = all;
       } catch (e) {
         console.error('CMS data load error:', e);
-        showToast('CMS data load failed', 'error');
         diaCmsData = [];
       }
       diaCmsLoading = false;
@@ -1327,7 +1326,6 @@ async function loadDiaUnmatchedQueue() {
     diaUnmatchedQueue = data || [];
   } catch(e) {
     console.error('loadDiaUnmatchedQueue error:', e);
-    showToast('Unmatched queue load failed', 'error');
     diaUnmatchedQueue = [];
   }
   diaUnmatchedLoading = false;
@@ -1348,7 +1346,6 @@ async function loadDiaQuarantineQueue() {
     diaQuarantineQueue = data || [];
   } catch(e) {
     console.error('loadDiaQuarantineQueue error:', e);
-    showToast('Quarantine queue load failed', 'error');
     diaQuarantineQueue = [];
   }
   diaQuarantineLoading = false;
@@ -1370,7 +1367,6 @@ async function loadDiaClarificationQueue() {
     diaClarificationQueue = data || [];
   } catch(e) {
     console.error('loadDiaClarificationQueue error:', e);
-    showToast('Clarification queue load failed', 'error');
     diaClarificationQueue = [];
   }
   diaClarificationLoading = false;
@@ -1411,7 +1407,6 @@ async function loadDiaRunHealthData() {
     diaRunHealthData = data || [];
   } catch(e) {
     console.error('loadDiaRunHealthData error:', e);
-    showToast('Run health data load failed', 'error');
     diaRunHealthData = [];
   }
   diaRunHealthLoading = false;
@@ -1577,7 +1572,6 @@ function renderDiaUnmatchedClinics() {
             }
           } catch(err) {
             console.error('Property search error:', err);
-            showToast('Property search failed', 'error');
             resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--red);">Search error</div>';
           }
         }, 300);
@@ -2895,7 +2889,6 @@ function renderDiaClinicLeads() {
         diaClinicLeadQueue = all;
       } catch (e) {
         console.error('Clinic leads queue load error:', e);
-        showToast('Clinic leads load failed', 'error');
         diaClinicLeadQueue = null; // keep null so next visit retries
       }
       diaClinicLeadLoading = false;
@@ -4115,7 +4108,7 @@ async function renderDiaSales() {
         pg++;
       }
       diaSalesComps = all;
-    } catch (e) { console.error('Sales comps load error:', e); showToast('Sales comps load failed', 'error'); diaSalesComps = []; }
+    } catch (e) { console.error('Sales comps load error:', e); diaSalesComps = []; }
     diaSalesLoading = false;
   }
   if (diaSalesView === 'available' && diaAvailListings === null && !diaSalesLoading) {
@@ -4133,7 +4126,7 @@ async function renderDiaSales() {
         pg++;
       }
       diaAvailListings = all;
-    } catch (e) { console.error('Available listings load error:', e); showToast('Listings load failed', 'error'); diaAvailListings = []; }
+    } catch (e) { console.error('Available listings load error:', e); diaAvailListings = []; }
     diaSalesLoading = false;
   }
 

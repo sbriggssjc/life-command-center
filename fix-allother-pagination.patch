@@ -1,0 +1,63 @@
+diff --git a/app.js b/app.js
+index cb280e3..f44a234 100644
+--- a/app.js
++++ b/app.js
+@@ -575,9 +575,13 @@ document.getElementById('bizSubTabs').addEventListener('click', (e) => {
+       }
+     }
+   } else if (currentBizTab === 'other') {
+-    // All Other tab — show domain prospects if loaded, else activity stream
++    // All Other tab — show domain prospects if loaded, else trigger load first
+     if (_mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
+       renderDomainProspects('all_other');
++    } else if (!_mktOpportunitiesLoaded && typeof loadMarketing === 'function') {
++      const el = document.getElementById('bizPageInner');
++      if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
++      loadMarketing().then(() => renderDomainProspects('all_other'));
+     } else {
+       renderBizContent();
+     }
+@@ -724,10 +728,17 @@ function renderBizContent() {
+     setTimeout(() => { if (typeof initProspectsSearch === 'function') initProspectsSearch(); }, 0);
+     return;
+   }
+-  // If "other" tab and prospects loaded, show domain prospects
+-  if (currentBizTab === 'other' && _mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
+-    renderDomainProspects('all_other');
+-    return;
++  // If "other" tab — show domain prospects if loaded, trigger load if not
++  if (currentBizTab === 'other') {
++    if (_mktOpportunitiesLoaded && ((window._mktOpportunities.all_other.length > 0) || (window._mktProspectContacts.all_other.length > 0))) {
++      renderDomainProspects('all_other');
++      return;
++    } else if (!_mktOpportunitiesLoaded) {
++      const innerEl = document.getElementById('bizPageInner');
++      if (innerEl) innerEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
++      loadMarketing().then(() => renderDomainProspects('all_other'));
++      return;
++    }
+   }
+   // If government tab, route to gov.js
+   if (currentBizTab === 'government') {
+@@ -1075,8 +1086,8 @@ async function loadMarketing() {
+       let opportunitiesRaw = [];
+       try {
+         let oppOffset = 0;
+-        const OPP_PAGE = 2000;
+-        for (let pg = 0; pg < 10; pg++) { // safety cap: 10 pages = 20,000 rows max
++        const OPP_PAGE = 1000; // Must match PostgREST max-rows (1000)
++        for (let pg = 0; pg < 15; pg++) { // safety cap: 15 pages = 15,000 rows max
+           const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: OPP_PAGE, offset: oppOffset });
+           if (!batch || batch.length === 0) break;
+           opportunitiesRaw = opportunitiesRaw.concat(batch);
+@@ -1092,8 +1103,8 @@ async function loadMarketing() {
+         setTimeout(async () => {
+           try {
+             let retry = [], retryOffset = 0;
+-            const RETRY_PAGE = 2000;
+-            for (let pg = 0; pg < 10; pg++) {
++            const RETRY_PAGE = 1000; // Must match PostgREST max-rows (1000)
++            for (let pg = 0; pg < 15; pg++) {
+               const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: RETRY_PAGE, offset: retryOffset });
+               if (!batch || batch.length === 0) break;
+               retry = retry.concat(batch);
