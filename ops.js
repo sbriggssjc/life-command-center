@@ -9,6 +9,14 @@
 // Uses queue-v2 endpoints (paginated) when available, falls back to queue v1
 // ============================================================================
 
+// --- Async button guard (prevents double-clicks, shows Working… state) ---
+async function _opsBtnGuard(btn, fn, ...args) {
+  if (!btn || btn.disabled) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Working\u2026'; btn.style.opacity = '0.6';
+  try { await fn(...args); } catch (e) { console.error('_opsBtnGuard error:', e); showToast(e.message || 'Action failed', 'error'); } finally { btn.disabled = false; btn.textContent = orig; btn.style.opacity = ''; }
+}
+
 // --- Performance instrumentation ---
 const opsPerfLog = [];
 
@@ -704,11 +712,11 @@ function inboxItemHTML(item, idx) {
   // Normalized quick actions
   html += '<div class="q-actions">';
   if (item.status === 'new') {
-    html += `<button class="q-action" onclick="triageSingle(decodeURIComponent('${encodeURIComponent(item.id)}'))">Triage</button>`;
+    html += `<button class="q-action" onclick="_opsBtnGuard(this, triageSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Triage</button>`;
   }
-  html += `<button class="q-action primary" onclick="promoteSingle(decodeURIComponent('${encodeURIComponent(item.id)}'))">Promote</button>`;
+  html += `<button class="q-action primary" onclick="_opsBtnGuard(this, promoteSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Promote</button>`;
   html += `<button class="q-action" onclick="quickReassign(decodeURIComponent('${encodeURIComponent(item.id)}'),'inbox',${jsStringArg(item.title || item.subject || 'Untitled')})">Assign</button>`;
-  html += `<button class="q-action danger" onclick="dismissSingle(decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>`;
+  html += `<button class="q-action danger" onclick="_opsBtnGuard(this, dismissSingle, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -988,11 +996,11 @@ async function renderResearchPage(page = opsResearchPage) {
           ${freshnessHTML(item.updated_at || item.created_at)}
         </div>
         <div class="q-actions">
-          ${item.status !== 'completed' ? `<button class="q-action primary" onclick="completeResearch(decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
-          ${item.status !== 'completed' ? `<button class="q-action" onclick="createFollowup(decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
-          <button class="q-action" onclick="runResearchAssistant(decodeURIComponent('${encodeURIComponent(item.id)}'))">Assist</button>
-          <button class="q-action" onclick="exportResearchTaskBrief(decodeURIComponent('${encodeURIComponent(item.id)}'),'chatgpt')">ChatGPT</button>
-          <button class="q-action" onclick="exportResearchTaskBrief(decodeURIComponent('${encodeURIComponent(item.id)}'),'claude')">Claude</button>
+          ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
+          ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
+          <button class="q-action" onclick="_opsBtnGuard(this, runResearchAssistant, decodeURIComponent('${encodeURIComponent(item.id)}'))">Assist</button>
+          <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'chatgpt')">ChatGPT</button>
+          <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'claude')">Claude</button>
         </div>
         ${researchAssistantPanelHTML(item.id)}
       </div>`;
@@ -1163,16 +1171,22 @@ async function exportResearchTaskBrief(id, provider) {
   }
 
   const brief = buildResearchTaskBrief(item);
+  let copied = false;
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(brief);
+      copied = true;
     }
   } catch (e) {
     console.warn('Research brief clipboard warning:', e);
   }
 
   window.open(provider === 'claude' ? 'https://claude.ai/chats' : 'https://chatgpt.com/', '_blank', 'noopener');
-  showToast(`Research brief copied. Paste it into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'success');
+  if (copied) {
+    showToast(`Research brief copied. Paste it into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'success');
+  } else {
+    showToast(`Clipboard unavailable — manually copy the brief into ${provider === 'claude' ? 'Claude' : 'ChatGPT'}.`, 'warning');
+  }
 }
 
 function buildResearchAssistantPrompt(item) {
@@ -1565,7 +1579,7 @@ async function renderSyncHealthPage() {
           </div>
         </div>
         <div class="sync-card-actions">
-          <button class="q-action" onclick="triggerSync(decodeURIComponent('${encodeURIComponent(conn.connector_type)}'))">Sync Now</button>
+          <button class="q-action" onclick="_opsBtnGuard(this, triggerSync, decodeURIComponent('${encodeURIComponent(conn.connector_type)}'))">Sync Now</button>
         </div>
       </div>`;
     });
@@ -1620,7 +1634,7 @@ async function renderSyncHealthPage() {
         </div>
         <div class="q-item-meta"><span style="color:var(--red)">${esc(err.error_message || '')}</span></div>
         <div class="q-actions">
-          <button class="q-action" onclick="retrySync(decodeURIComponent('${encodeURIComponent(err.id)}'))">Retry</button>
+          <button class="q-action" onclick="_opsBtnGuard(this, retrySync, decodeURIComponent('${encodeURIComponent(err.id)}'))">Retry</button>
         </div>
       </div>`;
     });
