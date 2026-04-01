@@ -536,24 +536,9 @@ function _drainToast() {
 
 // ── Custom Modal (async replacements for confirm/prompt) ──────────────
 let _modalResolve = null;
-let _modalPrevFocus = null;
-let _modalIsPrompt = false;
-
-function _isModalOpen() {
-  const overlay = document.getElementById('lcc-modal-overlay');
-  return overlay && overlay.style.display !== 'none';
-}
-
 function _showModal(msg, inputMode, defaultVal, okLabel) {
-  // Race guard: if a modal is already open, resolve the old one with cancel before opening new
-  if (_isModalOpen() && _modalResolve) {
-    _modalResolve(_modalIsPrompt ? null : false);
-    _modalResolve = null;
-  }
   return new Promise(resolve => {
     _modalResolve = resolve;
-    _modalIsPrompt = !!inputMode;
-    _modalPrevFocus = document.activeElement;
     const overlay = document.getElementById('lcc-modal-overlay');
     const msgEl = document.getElementById('lcc-modal-msg');
     const inputWrap = document.getElementById('lcc-modal-input-wrap');
@@ -565,81 +550,41 @@ function _showModal(msg, inputMode, defaultVal, okLabel) {
     if (inputMode) {
       inputWrap.style.display = 'block';
       inputEl.value = defaultVal || '';
+      setTimeout(() => { inputEl.focus(); inputEl.select(); }, 50);
     } else {
       inputWrap.style.display = 'none';
     }
     overlay.style.display = 'flex';
-    // Focus: input for prompts, OK button for confirms
-    setTimeout(() => {
-      if (inputMode) { inputEl.focus(); inputEl.select(); }
-      else { okBtn.focus(); }
-    }, 50);
   });
 }
-
 function _closeModal(val) {
   const overlay = document.getElementById('lcc-modal-overlay');
   if (overlay) overlay.style.display = 'none';
   if (_modalResolve) { _modalResolve(val); _modalResolve = null; }
-  // Restore focus to previous element
-  if (_modalPrevFocus && typeof _modalPrevFocus.focus === 'function') {
-    try { _modalPrevFocus.focus(); } catch (_) {}
-    _modalPrevFocus = null;
-  }
 }
-
-function _modalCancel() {
-  _closeModal(_modalIsPrompt ? null : false);
-}
-
 document.addEventListener('DOMContentLoaded', () => {
-  const okBtn = document.getElementById('lcc-modal-ok');
-  const cancelBtn = document.getElementById('lcc-modal-cancel');
-  const inputEl = document.getElementById('lcc-modal-input');
-  const overlay = document.getElementById('lcc-modal-overlay');
-
-  okBtn?.addEventListener('click', () => {
-    if (_modalIsPrompt) {
+  document.getElementById('lcc-modal-ok')?.addEventListener('click', () => {
+    const inputWrap = document.getElementById('lcc-modal-input-wrap');
+    if (inputWrap && inputWrap.style.display !== 'none') {
       _closeModal(document.getElementById('lcc-modal-input')?.value ?? '');
     } else {
       _closeModal(true);
     }
   });
-  cancelBtn?.addEventListener('click', _modalCancel);
-  overlay?.addEventListener('click', e => {
-    if (e.target.id === 'lcc-modal-overlay') _modalCancel();
+  document.getElementById('lcc-modal-cancel')?.addEventListener('click', () => {
+    const inputWrap = document.getElementById('lcc-modal-input-wrap');
+    _closeModal(inputWrap && inputWrap.style.display !== 'none' ? null : false);
   });
-
-  // Keyboard: Enter to submit, Escape to cancel, Tab focus trap
-  const modalEl = document.getElementById('lcc-modal');
-  modalEl?.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      _modalCancel();
-      return;
+  document.getElementById('lcc-modal-overlay')?.addEventListener('click', e => {
+    if (e.target.id === 'lcc-modal-overlay') {
+      const inputWrap = document.getElementById('lcc-modal-input-wrap');
+      _closeModal(inputWrap && inputWrap.style.display !== 'none' ? null : false);
     }
-    if (e.key === 'Enter' && e.target.id !== 'lcc-modal-cancel') {
-      e.preventDefault();
-      okBtn?.click();
-      return;
-    }
-    // Focus trap: Tab wraps between Cancel and OK (and input if visible)
-    if (e.key === 'Tab') {
-      const focusable = (_modalIsPrompt ? [document.getElementById('lcc-modal-input')].filter(Boolean) : [])
-        .concat(Array.from(modalEl.querySelectorAll('button'))).filter(el => !el.disabled);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault(); last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault(); first.focus();
-      }
-    }
+  });
+  document.getElementById('lcc-modal-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lcc-modal-ok')?.click(); }
   });
 });
-
 function lccConfirm(msg, okLabel) { return _showModal(msg, false, null, okLabel); }
 function lccPrompt(msg, defaultVal) { return _showModal(msg, true, defaultVal, 'OK'); }
 
@@ -5093,8 +5038,6 @@ function renderCalendarFull() {
 // ============================================================
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    // Custom modal handles its own Escape via stopPropagation — safety net
-    if (_isModalOpen()) return;
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) {
       e.target.blur();
