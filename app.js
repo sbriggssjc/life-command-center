@@ -518,20 +518,11 @@ function handlePageLoad(pageId) {
   }
 }
 
-const _toastQueue = [];
-let _toastActive = false;
 function showToast(msg, type = '') {
-  _toastQueue.push({ msg, type });
-  if (!_toastActive) _drainToast();
-}
-function _drainToast() {
-  if (_toastQueue.length === 0) { _toastActive = false; return; }
-  _toastActive = true;
-  const { msg, type } = _toastQueue.shift();
   const t = document.getElementById('toast');
-  if (!t) { _toastActive = false; return; }
+  if (!t) return;
   t.textContent = msg; t.className = 'toast show ' + type;
-  setTimeout(() => { t.className = 'toast'; setTimeout(_drainToast, 350); }, 3000);
+  setTimeout(() => t.className = 'toast', 3000);
 }
 
 function getGreeting() {
