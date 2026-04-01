@@ -1280,7 +1280,7 @@ function guidedField(id, label, value, opts = {}) {
   const st = fieldState(value, opts.source, opts.verified);
   const ind = fieldInd(st, opts.source);
   const sourceHint = opts.source ? `<span class="field-source">via ${opts.source}</span>` : '';
-  const reqMark = opts.required ? ' <span style="color:#f87171">*</span>' : '';
+  const reqMark = opts.required && st === 'missing' ? ' <span style="color:#f87171">*</span>' : '';
 
   let html = '<div class="form-group">';
   html += `<label>${esc(label)}${reqMark}${ind}${sourceHint}</label>`;
@@ -1860,13 +1860,7 @@ function renderDiaClarificationQueue() {
           showToast('Marked as cannot determine', 'info');
           renderDiaTab();
         } else if (action === 'skip') {
-          const prevIdx = diaClarificationIdx;
           diaClarificationIdx = Math.min(diaClarificationIdx + 1, Math.max(0, diaClarificationQueue.length - 1));
-          if (diaClarificationIdx === prevIdx && diaClarificationQueue.length > 0) {
-            showToast('End of clarification queue reached', 'info');
-          } else {
-            showToast('Skipped — ' + (diaClarificationIdx + 1) + ' / ' + diaClarificationQueue.length, 'info');
-          }
           renderDiaTab();
         }
       });

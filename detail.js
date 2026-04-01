@@ -324,7 +324,7 @@ function _udDismissLead() {
 
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
         <button onclick="var _df=document.getElementById('ud-dismiss-form');if(_df)_df.remove()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);font-size:12px;cursor:pointer;font-family:Outfit,sans-serif">Cancel</button>
-        <button onclick="_udBtnGuard(this, _udSubmitDismiss)" style="padding:6px 14px;border:none;border-radius:6px;background:var(--red,#ef4444);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif">Dismiss Lead</button>
+        <button onclick="_udSubmitDismiss()" style="padding:6px 14px;border:none;border-radius:6px;background:var(--red,#ef4444);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif">Dismiss Lead</button>
       </div>
     </div>`;
 
@@ -339,8 +339,6 @@ async function _udSubmitDismiss() {
   const clinicId = _udCache.fallback?.clinic_id || _udCache.fallback?.medicare_id;
   const propertyId = _udCache.ids?.property_id;
   if (!clinicId) { showToast('No clinic ID — cannot dismiss', 'error'); return; }
-
-  if (!(await lccConfirm('Dismiss this lead as not viable? This will remove it from the clinic leads queue.'))) return;
 
   const reason = document.getElementById('ud-dismiss-reason')?.value || 'other';
   const notes = document.getElementById('ud-dismiss-notes')?.value?.trim() || '';
@@ -1699,10 +1697,8 @@ function _udResearchIntakeSection() {
       ${intake.imageDataUrl ? `<div class="intake-preview"><img src="${esc(intake.imageDataUrl)}" alt="Research intake screenshot preview"></div>` : ''}
       <textarea id="intelIntakeText" rows="8" placeholder="Paste copied text, OCR output, broker notes, call notes, listing text, or extracted document text. You can also paste a screenshot directly into this box." oninput="_intelUpdateIntakeText(this.value)" onpaste="_intelHandleIntakePaste(event)" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box">${esc(intake.text || '')}</textarea>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-        <button class="q-action primary" onclick="_intelAnalyzeIntake()"${intake.loading ? ' disabled style="opacity:0.6"' : ''}>
-          ${intake.loading ? '<span class="spinner" style="width:12px;height:12px;margin-right:4px"></span>Analyzing\u2026' : 'Analyze Intake'}
-        </button>
-        <button class="q-action" onclick="_intelClearIntake()"${intake.loading ? ' disabled' : ''}>Clear</button>
+        <button class="q-action primary" onclick="_intelAnalyzeIntake()">Analyze Intake</button>
+        <button class="q-action" onclick="_intelClearIntake()">Clear</button>
       </div>
     </div>
     ${_intelRenderIntakeAnalysis()}
@@ -2916,8 +2912,6 @@ async function _loadTouchpoints(own) {
  */
 function refreshDetailPanel() {
   if (!_udCache) return;
-  // Clear dirty flag on refresh (data is being reloaded — edits are either saved or intentionally discarded)
-  _udFormDirty = false;
   const db = _udCache.db;
   const ids = _udCache.ids;
   const fallback = _udCache.fallback || _udCache;
@@ -3009,7 +3003,6 @@ async function _udSaveOwnership(options = {}) {
     }
 
     // ── Dialysis domain: keep existing direct-write flow ──
-    let _ownPartialWarns = [];
     // 1. Upsert recorded_owners table
     if (recordedOwner) {
       const recordedOwnerPayload = {
@@ -3028,7 +3021,7 @@ async function _udSaveOwnership(options = {}) {
           data: recordedOwnerPayload,
           source_surface: 'clinic_workspace'
         });
-        if (!patchResult.ok) { console.error('Error patching recorded_owner:', (patchResult.errors || []).join(', ')); _ownPartialWarns.push('recorded owner'); }
+        if (!patchResult.ok) console.error('Error patching recorded_owner:', (patchResult.errors || []).join(', '));
       } else {
         const res = await applyInsertWithFallback({
           proxyBase,
@@ -3041,7 +3034,7 @@ async function _udSaveOwnership(options = {}) {
           const created = Array.isArray(res.rows) && res.rows.length > 0 ? res.rows[0] : null;
           if (created) recordedOwnerId = created.recorded_owner_id;
         } else {
-          console.error('Error creating recorded_owner:', res.errors || []); _ownPartialWarns.push('recorded owner');
+          console.error('Error creating recorded_owner:', res.errors || []);
         }
       }
     }
@@ -3065,7 +3058,7 @@ async function _udSaveOwnership(options = {}) {
           data: trueOwnerPayload,
           source_surface: 'clinic_workspace'
         });
-        if (!patchResult.ok) { console.error('Error patching true_owner:', (patchResult.errors || []).join(', ')); _ownPartialWarns.push('true owner'); }
+        if (!patchResult.ok) console.error('Error patching true_owner:', (patchResult.errors || []).join(', '));
       } else {
         const res = await applyInsertWithFallback({
           proxyBase,
@@ -3078,7 +3071,7 @@ async function _udSaveOwnership(options = {}) {
           const created = Array.isArray(res.rows) && res.rows.length > 0 ? res.rows[0] : null;
           if (created) trueOwnerId = created.true_owner_id;
         } else {
-          console.error('Error creating true_owner:', res.errors || []); _ownPartialWarns.push('true owner');
+          console.error('Error creating true_owner:', res.errors || []);
         }
       }
     }
@@ -3102,7 +3095,7 @@ async function _udSaveOwnership(options = {}) {
           data: contactPayload,
           source_surface: 'clinic_workspace'
         });
-        if (!patchResult.ok) { console.error('Error patching contact:', (patchResult.errors || []).join(', ')); _ownPartialWarns.push('contact'); }
+        if (!patchResult.ok) console.error('Error patching contact:', (patchResult.errors || []).join(', '));
       } else {
         const res = await applyInsertWithFallback({
           proxyBase,
@@ -3115,7 +3108,7 @@ async function _udSaveOwnership(options = {}) {
           const created = Array.isArray(res.rows) && res.rows.length > 0 ? res.rows[0] : null;
           if (created) contactId = created.contact_id;
         } else {
-          console.error('Error creating contact:', res.errors || []); _ownPartialWarns.push('contact');
+          console.error('Error creating contact:', res.errors || []);
         }
       }
     }
@@ -3135,7 +3128,7 @@ async function _udSaveOwnership(options = {}) {
         source_surface: 'clinic_workspace',
         notes: 'Ownership resolution — linking owner IDs'
       });
-      if (!propResult.ok) { console.error('Error patching property owner links:', (propResult.errors || []).join(', ')); _ownPartialWarns.push('property links'); }
+      if (!propResult.ok) console.error('Error patching property owner links:', (propResult.errors || []).join(', '));
     }
 
     // 5. Save to research_queue_outcomes as a log entry
@@ -3167,14 +3160,10 @@ async function _udSaveOwnership(options = {}) {
         source_surface: db === 'gov' ? 'gov_ownership_detail' : 'dialysis_ownership_detail',
         propagation_scope: 'research_queue_outcome'
       });
-      if (!res.ok) { console.error('Error creating research_queue_outcome:', res.errors || []); _ownPartialWarns.push('outcome log'); }
+      if (!res.ok) console.error('Error creating research_queue_outcome:', res.errors || []);
     }
 
-    if (_ownPartialWarns.length) {
-      if (!silent) showToast('Saved with warnings — failed: ' + _ownPartialWarns.join(', '), 'error');
-    } else {
-      if (!silent) showToast('Ownership resolution saved!', 'success');
-    }
+    if (!silent) showToast('Ownership resolution saved!', 'success');
     canonicalBridge('save_ownership', {
       domain: 'dialysis',
       external_id: String(propertyId),
