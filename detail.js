@@ -129,7 +129,7 @@ async function openUnifiedDetail(db, ids, fallback) {
       if (mcArr.length && mcArr[0].medicare_id && !fallback.clinic_id) {
         fallback.clinic_id = mcArr[0].medicare_id;
       }
-    } catch (e) { console.warn('clinic→property lookup failed', e); showToast('Clinic→property lookup failed', 'error'); }
+    } catch (e) { console.warn('clinic→property lookup failed', e); }
   }
 
   // Build filter — prefer property_id, fall back to lease_number
@@ -1197,7 +1197,7 @@ function _udTabOwnership() {
   html += '<textarea id="udLogNotes" placeholder="Call notes, key takeaways, next steps..." style="min-height:80px"></textarea>';
 
   html += '<div style="display:flex;gap:8px;margin-top:12px">';
-  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udSubmitLogCall(decodeURIComponent('${encodeURIComponent(sfCid)}'),decodeURIComponent('${encodeURIComponent(sfCoId)}'))">&#x260E; Log Activity</button>`;
+  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udBtnGuard(this, _udSubmitLogCall, decodeURIComponent('${encodeURIComponent(sfCid)}'),decodeURIComponent('${encodeURIComponent(sfCoId)}'))">&#x260E; Log Activity</button>`;
   if (own?.contact_phone) html += `<a href="tel:${encodeURIComponent(own.contact_phone)}" class="act-btn">&#x1F4DE; Call</a>`;
   if (own?.contact_email) html += `<a href="mailto:${encodeURIComponent(own.contact_email)}" class="act-btn">&#x2709; Quick Email</a>`;
   html += '</div>';
@@ -1223,15 +1223,10 @@ function _udTabOwnership() {
   html += '</div>';
   html += '</div></div>';
 
-  // Async loads after DOM renders (fire together, surface any failures)
-  Promise.allSettled([
-    _loadEmailTemplates(own),
-    _loadTouchpoints(own),
-    _loadActivityFeed(own)
-  ]).then(results => {
-    const failed = results.filter(r => r.status === 'rejected').map(r => r.reason?.message || 'unknown');
-    if (failed.length) showToast('Some tabs failed to load: ' + failed.join(', '), 'error');
-  });
+  // Async loads after DOM renders
+  _loadEmailTemplates(own);
+  _loadTouchpoints(own);
+  _loadActivityFeed(own);
 
   return html;
 }
@@ -1317,6 +1312,7 @@ async function _loadActivityFeed(own) {
 
   } catch (err) {
     console.error('Activity feed error:', err);
+    showToast('Activity feed load failed', 'error');
     feedEl.innerHTML = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div><div class="detail-empty">Error loading activity feed</div></div>';
   }
 }
@@ -1776,7 +1772,6 @@ async function _intelHandleIntakeFile(input) {
     } catch (e) {
       _udIntakeState.imageDataUrl = '';
       _udIntakeState.error = `Could not read ${file.name}: ${e.message}`;
-      showToast('File read failed: ' + e.message, 'error');
     }
     refreshDetailPanel();
     return;
@@ -1796,7 +1791,6 @@ async function _intelHandleIntakeFile(input) {
   } catch (e) {
     _udIntakeState.notice = '';
     _udIntakeState.error = `Could not read ${file.name}: ${e.message}`;
-    showToast('File read failed: ' + e.message, 'error');
   }
 
   refreshDetailPanel();
@@ -1821,7 +1815,6 @@ async function _intelHandleIntakePaste(event) {
   } catch (e) {
     _udIntakeState.imageDataUrl = '';
     _udIntakeState.error = `Could not read pasted screenshot: ${e.message}`;
-    showToast('Paste failed: ' + e.message, 'error');
   }
 
   refreshDetailPanel();
@@ -2739,6 +2732,7 @@ async function _loadEmailTemplates(own) {
     sel.innerHTML = opts;
   } catch (e) {
     console.error('Template load error:', e);
+    showToast('Email templates load failed', 'error');
     sel.innerHTML = '<option value="">Error loading templates</option>';
   }
 }
@@ -2914,6 +2908,7 @@ async function _loadTouchpoints(own) {
     el.innerHTML = html;
   } catch (e) {
     console.error('Touchpoints load error:', e);
+    showToast('Touchpoints load failed', 'error');
     el.innerHTML = '';
   }
 }

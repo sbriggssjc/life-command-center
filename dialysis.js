@@ -1608,9 +1608,17 @@ function renderDiaUnmatchedClinics() {
         }
 
         const allBtns = document.querySelectorAll('[data-um-action]');
-        allBtns.forEach(b => { b.disabled = true; });
-        e.target.textContent = 'Processing...';
-        await resolveDiaUnmatched(item.id, action, propertyId);
+        const origText = e.target.textContent;
+        allBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
+        e.target.textContent = 'Processing\u2026';
+        try {
+          await resolveDiaUnmatched(item.id, action, propertyId);
+        } catch (err) {
+          console.error('resolveDiaUnmatched error:', err);
+          showToast('Action failed: ' + err.message, 'error');
+          allBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+          e.target.textContent = origText;
+        }
       });
     });
   }, 0);
@@ -1861,10 +1869,15 @@ function renderDiaClarificationQueue() {
           diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
           renderDiaTab();
         } else if (action === 'cannot-determine') {
-          if (!(await lccConfirm('Mark this as "Cannot Determine"? The item will be removed from your queue.', 'Cannot Determine'))) return;
+          if (!(await lccConfirm('Mark as "Cannot Determine"? The item will be removed from your queue.', 'Cannot Determine'))) return;
+          const clItem = diaClarificationQueue[diaClarificationIdx];
+          if (clItem && clItem.id) {
+            const ok = await diaPatchRecord('pending_updates', 'id', clItem.id, { status: 'cannot_determine' });
+            if (!ok) { showToast('Failed to persist — please retry', 'error'); return; }
+          }
           diaClarificationQueue = diaClarificationQueue.filter((_, i) => i !== diaClarificationIdx);
           diaClarificationIdx = Math.min(diaClarificationIdx, Math.max(0, diaClarificationQueue.length - 1));
-          showToast('Marked as cannot determine', 'info');
+          showToast('Marked as cannot determine', 'success');
           renderDiaTab();
         } else if (action === 'skip') {
           const prevIdx = diaClarificationIdx;
@@ -3315,6 +3328,7 @@ function renderClinicLeadCard(rec) {
 
       if (naBtn) {
         naBtn.addEventListener('click', async () => {
+          if (!(await lccConfirm('Mark this clinic lead as N/A? It will be removed from your research queue.', 'Mark N/A'))) return;
           naBtn.disabled = true;
           naBtn.style.opacity = '0.6';
           try { await markClinicLead(rec, 'not_applicable'); } catch (e) { console.error('markClinicLead error:', e); showToast('Mark failed: ' + e.message, 'error'); } finally { naBtn.disabled = false; naBtn.style.opacity = ''; }

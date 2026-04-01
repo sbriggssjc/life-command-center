@@ -2006,7 +2006,6 @@ async function saveIntel(rec) {
     showToast('No property ID — cannot save intel', 'error');
     return false;
   }
-  const _intelPartialWarns = [];
 
   // ── Prior Sale → sales_transactions table ──
   const saleDate = q('#res-intel-sale-date')?.value || null;
@@ -2036,7 +2035,6 @@ async function saveIntel(rec) {
       });
     } catch (err) {
       console.error('Error saving sale transaction:', err);
-      _intelPartialWarns.push('sale transaction');
     }
   }
 
@@ -2088,7 +2086,6 @@ async function saveIntel(rec) {
       });
     } catch (err) {
       console.error('Gov ownership write error (intel):', err);
-      _intelPartialWarns.push('ownership');
     }
   }
 
@@ -2131,7 +2128,6 @@ async function saveIntel(rec) {
         });
       } catch (err) {
         console.error('Error saving loan (intel):', err);
-        _intelPartialWarns.push('loan');
       }
     }
   }
@@ -2160,11 +2156,9 @@ async function saveIntel(rec) {
       });
       if (!result.ok) {
         console.error('Error saving intel research notes:', result.errors || []);
-        _intelPartialWarns.push('research notes');
       }
     } catch (err) {
       console.error('Error saving intel research notes:', err);
-      _intelPartialWarns.push('research notes');
     }
   }
 
@@ -2205,9 +2199,6 @@ async function saveIntel(rec) {
     });
   }
 
-  if (_intelPartialWarns.length) {
-    showToast('Saved with warnings \u2014 failed: ' + _intelPartialWarns.join(', '), 'error');
-  }
   return true;
 }
 
@@ -3054,15 +3045,19 @@ function bindGovEvidenceWorkbench() {
     button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceReview), 'reviewed');
   });
   document.querySelectorAll('[data-gov-evidence-dismiss]').forEach((button) => {
-    button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
+    button.onclick = async () => {
+      if (!(await lccConfirm('Dismiss this evidence observation?', 'Dismiss'))) return;
+      reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
+    };
   });
   document.querySelectorAll('[data-gov-evidence-dismiss-reason]').forEach((button) => {
-    button.onclick = () => {
+    button.onclick = async () => {
       const raw = button.dataset.govEvidenceDismissReason || '';
       const splitAt = raw.indexOf('::');
       if (splitAt <= 0) return;
       const idx = Number(raw.slice(0, splitAt));
       const reason = raw.slice(splitAt + 2);
+      if (!(await lccConfirm('Dismiss this observation with reason: "' + reason + '"?', 'Dismiss'))) return;
       reviewGovEvidenceObservation(idx, 'dismissed', `Broker dismiss reason: ${reason}`);
     };
   });
@@ -3840,7 +3835,6 @@ window.loadGovPendingUpdates = async function() {
     govPendingUpdatesRefreshedAt = new Date();
   } catch(e) {
     console.error('loadGovPendingUpdates exception:', e);
-    showToast('Pending updates load failed', 'error');
     govPendingUpdates = [];
   }
   govPendingUpdatesLoading = false;
@@ -4160,7 +4154,8 @@ window.applyFinancialOverride = async function() {
   } catch(e) {
     console.error('applyFinancialOverride error:', e);
     showToast('Error applying override: ' + e.message, 'error');
-    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Override'; }
+  } finally {
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Override'; applyBtn.style.opacity = ''; }
   }
 };
 
@@ -4321,7 +4316,6 @@ async function loadGovMonitorData() {
     govMonitorData = { noMatch, noContact, noResearch, freshness, researchCompleted: completed, researchTotal: total };
   } catch(e) {
     console.error('loadGovMonitorData error:', e);
-    showToast('Monitor data load failed', 'error');
     govMonitorData = { noMatch: 0, noContact: 0, noResearch: 0, freshness: [], researchCompleted: 0, researchTotal: 0 };
   }
   govMonitorLoading = false;
@@ -4343,7 +4337,7 @@ function renderGovMonitorDashboard() {
   html += `<div class="pipeline-header">
     <div class="header-title">Monitor Dashboard</div>
     <div class="header-subtitle">Data health, freshness, and quality metrics</div>
-    <button class="btn-action default" onclick="if(!govMonitorLoading){this.disabled=true;this.textContent='Refreshing...';govMonitorData=null;loadGovMonitorData();}" style="margin-left:auto;padding:4px 10px;font-size:11px;">${govMonitorLoading ? 'Refreshing...' : 'Refresh'}</button>
+    <button class="btn-action default" onclick="if(!govMonitorLoading){var _b=this;_b.disabled=true;_b.textContent='Refreshing\u2026';_b.style.opacity='0.6';govMonitorData=null;loadGovMonitorData().then(function(){_b.disabled=false;_b.textContent='Refresh';_b.style.opacity='';}).catch(function(){_b.disabled=false;_b.textContent='Refresh';_b.style.opacity='';});}" style="margin-left:auto;padding:4px 10px;font-size:11px;">${govMonitorLoading ? 'Refreshing\u2026' : 'Refresh'}</button>
   </div>`;
 
   // Panel 1: Lead Gap Report (live data)
