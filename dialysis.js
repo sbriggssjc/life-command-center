@@ -118,17 +118,6 @@ async function diaQueryAll(table, select, params = {}) {
 }
 
 // ============================================================================
-// HELPER FUNCTION: parseFloat without falsy coercion bug
-// ============================================================================
-/**
- * Safely parse float from element or string value, returning null for empty/zero values
- * Fixes the bug where parseFloat(val) || null converts valid 0 to null
- * @param {HTMLElement|string|any} el - Element with .value, string, or value to parse
- * @returns {number|null} - Parsed float or null if empty/NaN
- */
-function _pf(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseFloat(v) : null; }
-
-// ============================================================================
 // DATA LOADING
 // ============================================================================
 
@@ -5757,7 +5746,7 @@ async function saveSaleTransaction() {
   const buyer = q('#dia-buyer-name')?.value?.trim() || null;
   const buyerType = q('#dia-buyer-type')?.value?.trim() || null;
   const seller = q('#dia-seller-name')?.value?.trim() || null;
-  const price = _pf(q('#dia-sold-price'));
+  const price = parseFloat(q('#dia-sold-price')?.value) || null;
   const capRateVal = parseFloat(q('#dia-cap-rate')?.value);
   const capRate = capRateVal ? capRateVal / 100 : null;
   const saleDate = q('#dia-sale-date')?.value || null;
@@ -5811,8 +5800,8 @@ async function saveSaleProperty() {
   const city = q('#dia-prop-city')?.value?.trim() || null;
   const state = q('#dia-prop-state')?.value?.trim() || null;
   const tenant = q('#dia-prop-tenant')?.value?.trim() || null;
-  const rba = _pf(q('#dia-prop-rba'));
-  const land = _pf(q('#dia-prop-land'));
+  const rba = parseFloat(q('#dia-prop-rba')?.value) || null;
+  const land = parseFloat(q('#dia-prop-land')?.value) || null;
   const year = parseInt(q('#dia-prop-year')?.value, 10) || null;
 
   const data = {
