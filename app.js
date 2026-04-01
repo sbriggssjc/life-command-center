@@ -1115,7 +1115,7 @@ function bulkArchiveStaleDeals() {
   );
   
   if (staleDeals.length === 0) {
-    alert('No deals older than 6 months to archive.');
+    showToast('No deals older than 6 months to archive.', 'info');
     return;
   }
   
@@ -1130,7 +1130,7 @@ function bulkArchiveStaleDeals() {
   
   dealIds.forEach(dealId => archiveDeal(dealId));
   
-  alert(`Archived ${dealIds.size} deal${dealIds.size !== 1 ? 's' : ''}.`);
+  showToast(`Archived ${dealIds.size} deal${dealIds.size !== 1 ? 's' : ''}.`, 'success');
   mktPage = 0;
   renderMarketing();
 }
@@ -2302,11 +2302,11 @@ async function ucSendMessage(unifiedId, channel) {
       ucLoadChannelMessages(unifiedId, channel);
     } else {
       var err = await r.json().catch(function() { return {}; });
-      alert('Send failed: ' + (err.error || 'Unknown error'));
+      showToast('Send failed: ' + (err.error || 'Unknown error'), 'error');
       input.value = message;
     }
   } catch (e) {
-    alert('Send error: ' + e.message);
+    showToast('Send error: ' + e.message, 'error');
     input.value = message;
   }
   input.disabled = false;
@@ -2321,14 +2321,14 @@ async function runCalendarContactSync() {
     const r = await fetch('/api/contacts?action=ingest_calendar_contacts', {
       method: 'POST', headers, body: JSON.stringify({ days_back: 90 })
     });
-    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Calendar sync failed: ' + (err.error || 'HTTP ' + r.status)); }
+    if (!r.ok) { const err = await r.json().catch(() => ({})); showToast('Calendar sync failed: ' + (err.error || 'HTTP ' + r.status), 'error'); }
     else {
       const data = await r.json();
-      alert('Calendar sync complete: ' + (data.created || 0) + ' new, ' + (data.matched || 0) + ' updated, ' + (data.skipped || 0) + ' skipped');
+      showToast('Calendar sync: ' + (data.created || 0) + ' new, ' + (data.matched || 0) + ' updated, ' + (data.skipped || 0) + ' skipped', 'success');
       ucDataQuality = null;
       loadAndRenderUC();
     }
-  } catch (e) { alert('Calendar sync error: ' + e.message); }
+  } catch (e) { showToast('Calendar sync error: ' + e.message, 'error'); }
   if (btn) { btn.disabled = false; btn.textContent = 'Sync Calendar Contacts'; }
 }
 
@@ -2341,14 +2341,14 @@ async function runDuplicateDetection() {
     const r = await fetch('/api/contacts?action=detect_duplicates', {
       method: 'POST', headers, body: JSON.stringify({ batch_size: 200 })
     });
-    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('Duplicate detection failed: ' + (err.error || 'HTTP ' + r.status)); }
+    if (!r.ok) { const err = await r.json().catch(() => ({})); showToast('Duplicate detection failed: ' + (err.error || 'HTTP ' + r.status), 'error'); }
     else {
       const data = await r.json();
-      alert('Duplicate scan complete: ' + (data.duplicates_found || 0) + ' new duplicates found, ' + (data.contacts_scanned || 0) + ' contacts scanned');
+      showToast('Duplicate scan: ' + (data.duplicates_found || 0) + ' found, ' + (data.contacts_scanned || 0) + ' scanned', 'success');
       ucDataQuality = null;
       loadAndRenderUC();
     }
-  } catch (e) { alert('Duplicate detection error: ' + e.message); }
+  } catch (e) { showToast('Duplicate detection error: ' + e.message, 'error'); }
   if (btn) { btn.disabled = false; btn.textContent = 'Run Duplicate Detection'; }
 }
 
@@ -4028,7 +4028,10 @@ function canonicalBridge(action, payload) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
-  }).then(r => r.ok ? r.json() : null).catch(() => null);
+  }).then(r => {
+    if (!r.ok) { console.warn('canonicalBridge(' + action + ') HTTP ' + r.status); return null; }
+    return r.json();
+  }).catch(err => { console.warn('canonicalBridge(' + action + ') error:', err.message); return null; });
 }
 
 // ============================================================

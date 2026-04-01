@@ -992,7 +992,13 @@ async function loadResearchQueue() {
     }
   }
 
-  for (const rec of filtered.slice(0, 50)) {
+  if (filtered.length === 0) {
+    showToast('No pending ' + researchMode + ' records found', 'info');
+    return;
+  }
+
+  const maxToLoad = 50;
+  for (const rec of filtered.slice(0, maxToLoad)) {
     // Enrich with GSA snapshots
     const snapshot = govData.gsaSnapshots.find(s => s.lease_number === rec.lease_number);
     if (snapshot) {
@@ -1014,11 +1020,15 @@ async function loadResearchQueue() {
 
     // Enrich with loan data for intel mode
     if (researchMode === 'intel') {
-      const loan = govData.loans.find(l => l.property_id === rec.property_id);
+      const loan = (govData.loans || []).find(l => l.property_id === rec.property_id);
       if (loan) rec._loan = loan;
     }
 
     researchQueue.push(rec);
+  }
+
+  if (filtered.length > maxToLoad) {
+    showToast('Loaded ' + maxToLoad + ' of ' + filtered.length + ' pending records', 'info');
   }
 }
 
@@ -1054,7 +1064,7 @@ function renderOwnershipResearchCard(rec) {
 
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
-  const loan = govData.loans.find(l => l.property_id === rec.property_id) || {};
+  const loan = (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
   let html = '<div class="research-card">';
 
@@ -1218,7 +1228,7 @@ function renderLeadResearchCard(rec) {
 
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
-  const loan = govData.loans.find(l => l.property_id === rec.matched_property_id) || {};
+  const loan = (govData.loans || []).find(l => l.property_id === rec.matched_property_id) || {};
 
   let html = '<div class="research-card">';
 
@@ -1417,7 +1427,7 @@ function renderIntelResearchCard(rec) {
 
   const snapshot = rec.gsa_snapshot || {};
   const frpp = rec.frpp || {};
-  const loan = rec._loan || govData.loans.find(l => l.property_id === rec.property_id) || {};
+  const loan = rec._loan || (govData.loans || []).find(l => l.property_id === rec.property_id) || {};
 
   let html = '<div class="research-card">';
 
@@ -1602,6 +1612,7 @@ function renderIntelResearchCard(rec) {
   }
   html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
   html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
@@ -1644,16 +1655,25 @@ function renderResearchInner() {
 
 async function researchSave() {
   const rec = researchQueue[researchIdx];
-  if (!rec) return;
-  
-  if (researchMode === 'ownership') {
-    await saveOwnership(rec);
-  } else if (researchMode === 'intel') {
-    await saveIntel(rec);
-  } else {
-    await saveLead(rec);
+  if (!rec) { showToast('No record to save', 'error'); return; }
+
+  let success = true;
+  try {
+    if (researchMode === 'ownership') {
+      success = (await saveOwnership(rec)) !== false;
+    } else if (researchMode === 'intel') {
+      success = (await saveIntel(rec)) !== false;
+    } else {
+      success = (await saveLead(rec)) !== false;
+    }
+  } catch (err) {
+    console.error('researchSave error:', err);
+    showToast('Save failed: ' + err.message + ' — please retry or skip', 'error');
+    return;
   }
-  
+
+  if (!success) return; // save function already showed error toast
+
   researchCompleted++;
   researchIdx++;
 
@@ -1869,7 +1889,7 @@ async function saveLead(rec) {
       recourse: recourse
     };
 
-    const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+    const existingLoan = (govData.loans || []).find(l => l.property_id === propertyId);
     if (existingLoan) {
       await patchRecord('loans', 'property_id', propertyId, loanData);
     } else {
@@ -1938,7 +1958,7 @@ async function saveIntel(rec) {
   const propertyId = rec.property_id;
   if (!propertyId) {
     showToast('No property ID — cannot save intel', 'error');
-    return;
+    return false;
   }
 
   // ── Prior Sale → sales_transactions table ──
@@ -2002,7 +2022,11 @@ async function saveIntel(rec) {
   propertyPatch.intel_status = 'completed';
 
   if (Object.keys(propertyPatch).length > 1) {
-    await patchRecord('properties', 'property_id', propertyId, propertyPatch);
+    const ok = await patchRecord('properties', 'property_id', propertyId, propertyPatch);
+    if (!ok) {
+      showToast('Failed to save property details — please retry', 'error');
+      return false;
+    }
   }
 
   // ── Ownership → write service ──
@@ -2042,7 +2066,7 @@ async function saveIntel(rec) {
       recourse: recourse
     };
 
-    const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+    const existingLoan = (govData.loans || []).find(l => l.property_id === propertyId);
     if (existingLoan) {
       await patchRecord('loans', 'property_id', propertyId, loanData);
     } else {
@@ -2101,6 +2125,7 @@ async function saveIntel(rec) {
     source_type: 'asset',
     outcome: 'completed',
     notes: notes,
+    evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null,
     source_record_id: propertyId,
     source_table: 'properties',
     title: rec.address || rec.property_name || `Property ${propertyId}`,
@@ -2127,6 +2152,8 @@ async function saveIntel(rec) {
       }
     });
   }
+
+  return true;
 }
 
 async function patchRecord(table, idCol, idVal, data) {
@@ -2167,7 +2194,7 @@ async function saveLoanFields(rec) {
   if (!propertyId) return;
   
   // Find existing loan
-  const existingLoan = govData.loans.find(l => l.property_id === propertyId);
+  const existingLoan = (govData.loans || []).find(l => l.property_id === propertyId);
   
   const loanData = {
     property_id: propertyId,
