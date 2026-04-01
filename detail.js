@@ -3332,6 +3332,9 @@ async function _intelSaveCashFlow(options = {}) {
   const estValue = document.getElementById('intelEstValue')?.value || null;
   const currentCapRate = document.getElementById('intelCurrentCapRate')?.value || null;
 
+  const _anyCfField = [annualRent, rentPerSF, expenseType, estValue, currentCapRate].some(v => v !== null && v !== undefined && String(v).trim() !== '');
+  if (!_anyCfField) { showToast('Please fill in at least one cash flow field', 'info'); return; }
+
   try {
     const payload = {
       last_known_rent: annualRent ? parseFloat(annualRent) : null,
