@@ -1312,7 +1312,6 @@ async function _loadActivityFeed(own) {
 
   } catch (err) {
     console.error('Activity feed error:', err);
-    showToast('Activity feed load failed', 'error');
     feedEl.innerHTML = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div><div class="detail-empty">Error loading activity feed</div></div>';
   }
 }
@@ -1585,9 +1584,9 @@ function _udAssistantSection(mode, title, subtitle) {
     body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="q-action" onclick="_udActionBtnGuard(this, _udCopyAssistantReply, '${mode}')">Copy</button>
-        ${mode === 'ownership' ? `<button class="q-action" onclick="_udApplyAssistantFields('${mode}')">Apply Extracted Facts to Fields</button>` : ''}
-        ${mode === 'ownership' ? `<button class="q-action primary" onclick="_udSaveReviewedOwnership()">Save Reviewed Ownership</button>` : ''}
-        <button class="q-action primary" onclick="_udApplyAssistantReply('${mode}')">${mode === 'ownership' ? 'Apply to Ownership Notes' : 'Apply to Research Notes'}</button>
+        ${mode === 'ownership' ? `<button class="q-action" onclick="_udActionBtnGuard(this, _udApplyAssistantFields, '${mode}')">Apply Extracted Facts to Fields</button>` : ''}
+        ${mode === 'ownership' ? `<button class="q-action primary" onclick="_udBtnGuard(this, _udSaveReviewedOwnership)">Save Reviewed Ownership</button>` : ''}
+        <button class="q-action primary" onclick="_udActionBtnGuard(this, _udApplyAssistantReply, '${mode}')">${mode === 'ownership' ? 'Apply to Ownership Notes' : 'Apply to Research Notes'}</button>
       </div>`;
   }
 
@@ -1595,7 +1594,7 @@ function _udAssistantSection(mode, title, subtitle) {
     <div class="detail-section-title">${esc(title)}</div>
     <div style="font-size:12px;color:var(--text3);margin-bottom:10px">${esc(subtitle)}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-      <button class="q-action primary" onclick="_udAskAssistant('${mode}')">Assist</button>
+      <button class="q-action primary" onclick="_udActionBtnGuard(this, _udAskAssistant, '${mode}')">Assist</button>
       <button class="q-action" onclick="_udActionBtnGuard(this, ${mode === 'ownership' ? 'openResearchInChatGPT' : 'openResearchInClaude'})">${mode === 'ownership' ? 'Export to ChatGPT' : 'Export to Claude'}</button>
     </div>
     <div id="udAssistantPanel_${mode}" class="assistant-panel">${body}</div>
@@ -2732,7 +2731,6 @@ async function _loadEmailTemplates(own) {
     sel.innerHTML = opts;
   } catch (e) {
     console.error('Template load error:', e);
-    showToast('Email templates load failed', 'error');
     sel.innerHTML = '<option value="">Error loading templates</option>';
   }
 }
@@ -2908,7 +2906,6 @@ async function _loadTouchpoints(own) {
     el.innerHTML = html;
   } catch (e) {
     console.error('Touchpoints load error:', e);
-    showToast('Touchpoints load failed', 'error');
     el.innerHTML = '';
   }
 }
@@ -3490,3 +3487,7 @@ window._udCopyAssistantReply = _udCopyAssistantReply;
 window._udApplyAssistantFields = _udApplyAssistantFields;
 window._udApplyAssistantReply = _udApplyAssistantReply;
 window._udSaveReviewedOwnership = _udSaveReviewedOwnership;
+
+// ============================================================================
+// UNIFIED PROPERTY DETAIL PAGE
+// Shared across Gov and Dialysis — fetches from normalized S
