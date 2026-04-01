@@ -1197,7 +1197,7 @@ function _udTabOwnership() {
   html += '<textarea id="udLogNotes" placeholder="Call notes, key takeaways, next steps..." style="min-height:80px"></textarea>';
 
   html += '<div style="display:flex;gap:8px;margin-top:12px">';
-  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udBtnGuard(this, _udSubmitLogCall, decodeURIComponent('${encodeURIComponent(sfCid)}'),decodeURIComponent('${encodeURIComponent(sfCoId)}'))">&#x260E; Log Activity</button>`;
+  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udSubmitLogCall(decodeURIComponent('${encodeURIComponent(sfCid)}'),decodeURIComponent('${encodeURIComponent(sfCoId)}'))">&#x260E; Log Activity</button>`;
   if (own?.contact_phone) html += `<a href="tel:${encodeURIComponent(own.contact_phone)}" class="act-btn">&#x1F4DE; Call</a>`;
   if (own?.contact_email) html += `<a href="mailto:${encodeURIComponent(own.contact_email)}" class="act-btn">&#x2709; Quick Email</a>`;
   html += '</div>';
@@ -3487,7 +3487,3 @@ window._udCopyAssistantReply = _udCopyAssistantReply;
 window._udApplyAssistantFields = _udApplyAssistantFields;
 window._udApplyAssistantReply = _udApplyAssistantReply;
 window._udSaveReviewedOwnership = _udSaveReviewedOwnership;
-
-// ============================================================================
-// UNIFIED PROPERTY DETAIL PAGE
-// Shared across Gov and Dialysis — fetches from normalized S
