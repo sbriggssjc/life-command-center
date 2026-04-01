@@ -75,27 +75,6 @@ async function govQuery(table, select, params = {}) {
   }
 }
 
-// Gov write service — routes through /api/data-proxy?_route=gov-write
-// Endpoints: 'ownership', 'lead-research', 'financial', 'resolve-pending'
-async function govWriteService(endpoint, data) {
-  const url = new URL('/api/data-proxy', window.location.origin);
-  url.searchParams.set('_route', 'gov-write');
-  url.searchParams.set('endpoint', endpoint);
-
-  const resp = await fetch(url.toString(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  });
-
-  if (!resp.ok) {
-    const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(errBody.error || errBody.detail || 'Gov write service returned ' + resp.status);
-  }
-
-  return await resp.json();
-}
-
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
 async function govQueryAll(table, select, params = {}) {
   let all = [], offset = 0;
@@ -1715,8 +1694,7 @@ async function saveOwnership(rec) {
     year_built: parseInt(q('#res-own-year-built')?.value) || null,
     year_renovated: parseInt(q('#res-own-year-renovated')?.value) || null,
     research_notes: researchNotes,
-    research_status: 'completed',
-    evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
+    research_status: 'completed'
   });
 
   // Bridge to canonical model with gov change metadata
@@ -1892,13 +1870,12 @@ async function saveLead(rec) {
   // Bridge to canonical model with gov change metadata
   canonicalBridge('complete_research', {
     domain: 'government',
-    research_type: 'lead',
+    research_type: 'ownership',
     external_id: String(rec.property_id || rec.lead_id),
     source_system: 'gov_supabase',
     source_type: 'lead',
     outcome: quickStatus === 'not_applicable' ? 'not_applicable' : 'completed',
     notes: leadData.research_notes,
-    evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null,
     gov_change_event_id: writeResult?.change_event_id || null,
     gov_correlation_id: writeResult?.correlation_id || null,
     source_record_id: rec.lead_id,
