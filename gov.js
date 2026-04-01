@@ -2006,6 +2006,7 @@ async function saveIntel(rec) {
     showToast('No property ID — cannot save intel', 'error');
     return false;
   }
+  const _intelPartialWarns = [];
 
   // ── Prior Sale → sales_transactions table ──
   const saleDate = q('#res-intel-sale-date')?.value || null;
@@ -2035,6 +2036,7 @@ async function saveIntel(rec) {
       });
     } catch (err) {
       console.error('Error saving sale transaction:', err);
+      _intelPartialWarns.push('sale transaction');
     }
   }
 
@@ -2086,6 +2088,7 @@ async function saveIntel(rec) {
       });
     } catch (err) {
       console.error('Gov ownership write error (intel):', err);
+      _intelPartialWarns.push('ownership');
     }
   }
 
@@ -2128,6 +2131,7 @@ async function saveIntel(rec) {
         });
       } catch (err) {
         console.error('Error saving loan (intel):', err);
+        _intelPartialWarns.push('loan');
       }
     }
   }
@@ -2156,9 +2160,11 @@ async function saveIntel(rec) {
       });
       if (!result.ok) {
         console.error('Error saving intel research notes:', result.errors || []);
+        _intelPartialWarns.push('research notes');
       }
     } catch (err) {
       console.error('Error saving intel research notes:', err);
+      _intelPartialWarns.push('research notes');
     }
   }
 
@@ -2199,6 +2205,9 @@ async function saveIntel(rec) {
     });
   }
 
+  if (_intelPartialWarns.length) {
+    showToast('Saved with warnings \u2014 failed: ' + _intelPartialWarns.join(', '), 'error');
+  }
   return true;
 }
 
@@ -3831,6 +3840,7 @@ window.loadGovPendingUpdates = async function() {
     govPendingUpdatesRefreshedAt = new Date();
   } catch(e) {
     console.error('loadGovPendingUpdates exception:', e);
+    showToast('Pending updates load failed', 'error');
     govPendingUpdates = [];
   }
   govPendingUpdatesLoading = false;
@@ -4311,6 +4321,7 @@ async function loadGovMonitorData() {
     govMonitorData = { noMatch, noContact, noResearch, freshness, researchCompleted: completed, researchTotal: total };
   } catch(e) {
     console.error('loadGovMonitorData error:', e);
+    showToast('Monitor data load failed', 'error');
     govMonitorData = { noMatch: 0, noContact: 0, noResearch: 0, freshness: [], researchCompleted: 0, researchTotal: 0 };
   }
   govMonitorLoading = false;
