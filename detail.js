@@ -2196,7 +2196,7 @@ async function _udAction(action) {
   }
 
   if (action === 'log_touchpoint') {
-    const notes = prompt('Touchpoint notes:');
+    const notes = await lccPrompt('Touchpoint notes:');
     if (!notes) return;
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -2212,7 +2212,7 @@ async function _udAction(action) {
   }
 
   if (action === 'create_task') {
-    const taskTitle = prompt('Task description:', 'Follow up on ' + title);
+    const taskTitle = await lccPrompt('Task description:', 'Follow up on ' + title);
     if (!taskTitle) return;
     try {
       const headers = { 'Content-Type': 'application/json' };
