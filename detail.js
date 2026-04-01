@@ -388,7 +388,7 @@ async function _udSubmitDismiss() {
           source_surface: 'detail_clinic_dismiss',
           propagation_scope: 'ownership_helper_record'
         });
-      } catch (e) { console.warn('Owner record save warning:', e); showToast('Warning: owner record not saved — ' + (e.message || 'unknown error'), 'warning'); }
+      } catch (e) { console.warn('Owner record save warning:', e); }
     }
 
     // Refresh local outcomes cache

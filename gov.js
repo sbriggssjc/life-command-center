@@ -837,9 +837,7 @@ async function searchEntities(query, dropId, inputId, onSelect) {
     try {
       const headers = { 'Content-Type': 'application/json' };
       if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
-      const _ec = new AbortController(); const _et = setTimeout(() => _ec.abort(), 15000);
-      const res = await fetch(`/api/entities?action=search&q=${encodeURIComponent(query)}&limit=15`, { headers, signal: _ec.signal });
-      clearTimeout(_et);
+      const res = await fetch(`/api/entities?action=search&q=${encodeURIComponent(query)}&limit=15`, { headers });
       if (res.ok) {
         const data = await res.json();
         for (const ent of (data.entities || [])) {
@@ -3793,7 +3791,6 @@ window.setGovPendingFilter = function(reason) {
   renderGovTab();
 };
 
-let govPendingUpdatesRefreshedAt = null;
 window.loadGovPendingUpdates = async function() {
   if (govPendingUpdatesLoading) return;
   govPendingUpdatesLoading = true;
@@ -3803,7 +3800,6 @@ window.loadGovPendingUpdates = async function() {
       order: 'priority_score.desc'
     });
     govPendingUpdates = result.data || [];
-    govPendingUpdatesRefreshedAt = new Date();
   } catch(e) {
     console.error('loadGovPendingUpdates exception:', e);
     govPendingUpdates = [];
@@ -3817,23 +3813,13 @@ async function govPatch(table, filterStr, data) {
   const url = new URL('/api/gov-query', window.location.origin);
   url.searchParams.set('table', table);
   url.searchParams.set('filter', filterStr);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const resp = await fetch(url.toString(), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    if (!resp.ok) throw new Error('PATCH ' + table + ' failed: HTTP ' + resp.status);
-    return true;
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === 'AbortError') throw new Error('PATCH ' + table + ' timed out (15s) — please retry');
-    throw err;
-  }
+  const resp = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!resp.ok) throw new Error('PATCH ' + table + ' failed: HTTP ' + resp.status);
+  return true;
 }
 
 window.resolveGovPendingUpdate = async function(id, resolution) {
@@ -3871,7 +3857,7 @@ function renderGovPendingUpdates() {
   const totalPending = govPendingUpdates?.length || 0;
   html += `<div class="pipeline-header">
     <div class="header-title">Pending Updates</div>
-    <div class="header-subtitle">${totalPending} updates awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}</div>
+    <div class="header-subtitle">${totalPending} updates awaiting review</div>
   </div>`;
 
   if (!govPendingUpdates || govPendingUpdates.length === 0) {

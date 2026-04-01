@@ -90,14 +90,9 @@ async function opsApi(path, opts = {}) {
   const extraParams = path.includes('&') ? '&' + path.split('&').slice(1).join('&') : '';
   const finalPath = v2Path ? v2Path + extraParams : path;
 
-  const _ac = new AbortController();
-  const _at = setTimeout(() => _ac.abort(), 30000);
   try {
     const perf = opsPerf(`api:${finalPath.split('?')[1]?.substring(0, 40) || finalPath}`);
-    const mergedOpts = { headers, ...opts };
-    if (!mergedOpts.signal) mergedOpts.signal = _ac.signal;
-    const res = await fetch(finalPath, mergedOpts);
-    clearTimeout(_at);
+    const res = await fetch(finalPath, { headers, ...opts });
 
     // If v2 returned 404, fall back to v1
     if (v2Path && res.status === 404) {
@@ -125,8 +120,6 @@ async function opsApi(path, opts = {}) {
 
     return { ok: true, data };
   } catch (e) {
-    clearTimeout(_at);
-    if (e.name === 'AbortError') return { ok: false, error: 'Request timed out (30s)' };
     return { ok: false, error: e.message };
   }
 }
