@@ -3102,14 +3102,23 @@ function renderGovOverview() {
 
   // Agency breakdown (top 10 by count) — only available with full data
   const agencyMap = {};
+  let unknownAgencyStats = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
   if (!useMV) {
     portfolio.forEach(p => {
       const a = p.agency || 'Unknown';
-      if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
-      agencyMap[a].count++;
-      agencyMap[a].rent += (p.gross_rent || 0);
-      agencyMap[a].sf += (p.sf_leased || 0);
-      if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
+      if (a === 'Unknown') {
+        // Separate tracking for Unknown agencies (Issue #5)
+        unknownAgencyStats.count++;
+        unknownAgencyStats.rent += (p.gross_rent || 0);
+        unknownAgencyStats.sf += (p.sf_leased || 0);
+        if (p.firm_term_remaining !== null) { unknownAgencyStats.termSum += p.firm_term_remaining; unknownAgencyStats.termCount++; }
+      } else {
+        if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, sf: 0, termSum: 0, termCount: 0 };
+        agencyMap[a].count++;
+        agencyMap[a].rent += (p.gross_rent || 0);
+        agencyMap[a].sf += (p.sf_leased || 0);
+        if (p.firm_term_remaining !== null) { agencyMap[a].termSum += p.firm_term_remaining; agencyMap[a].termCount++; }
+      }
     });
   }
   // Try to use MV agency breakdown if available (JSON columns)
@@ -3118,9 +3127,14 @@ function renderGovOverview() {
     try {
       const raw = mv.top_agencies_by_count || mv.top_agencies_json;
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      topAgencies = (parsed || []).map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
+      topAgencies = (parsed || []).filter(a => (a.agency || a.name) !== 'Unknown').map(a => [a.agency || a.name, { count: a.count || 0, rent: a.rent || 0, sf: a.sf || 0, termSum: a.term_sum || 0, termCount: a.term_count || 0 }]);
       topAgenciesByRent = [...topAgencies].sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
       topAgencies = topAgencies.slice(0, 12);
+      // Capture Unknown stats from parsed data if available
+      const unknownInParsed = (parsed || []).find(a => (a.agency || a.name) === 'Unknown');
+      if (unknownInParsed) {
+        unknownAgencyStats = { count: unknownInParsed.count || 0, rent: unknownInParsed.rent || 0, sf: unknownInParsed.sf || 0, termSum: unknownInParsed.term_sum || 0, termCount: unknownInParsed.term_count || 0 };
+      }
     } catch { topAgencies = []; topAgenciesByRent = []; }
   } else {
     topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
@@ -3246,6 +3260,16 @@ function renderGovOverview() {
       labelWidth: 140, valueWidth: 50
     })), maxTerm);
     html += '</div>';
+
+    // Footnote for Unknown agency dominance (Issue #5)
+    if (unknownAgencyStats.count > 0) {
+      const unknownPct = portfolio.length > 0 ? ((unknownAgencyStats.count / portfolio.length) * 100).toFixed(1) : '0';
+      const unknownRentM = Math.round(unknownAgencyStats.rent / 1e6);
+      html += '<div class="gov-info-card" style="padding:12px 16px;margin-top:10px;background:rgba(100,100,100,0.1);border-left:3px solid rgba(100,100,100,0.3)">';
+      html += '<div style="font-size:10px;color:var(--text3);line-height:1.4">';
+      html += `<strong>${fmtN(unknownAgencyStats.count)} properties</strong> (${unknownPct}%) are tagged as "Unknown" agency, representing <strong>$${fmtN(unknownRentM)}M</strong> in annual rent. These may be inferrable from lease data or require enrichment.`;
+      html += '</div></div>';
+    }
   }
 
   // ═══════════════════════════════════════════════
@@ -4953,8 +4977,15 @@ async function renderGovSales() {
     govSalesLoading = true;
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading available listings...</p></div>';
     try {
-      const res = await govQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000 });
-      govAvailListings = res.data || [];
+      let all = [], offset = 0;
+      while (true) {
+        const res = await govQuery('v_available_listings', '*', { order: 'listing_date.desc.nullslast', limit: 1000, offset });
+        const rows = res.data || [];
+        all = all.concat(rows);
+        if (rows.length < 1000) break;
+        offset += 1000;
+      }
+      govAvailListings = all;
     } catch (e) { console.error('Gov available load error:', e); govAvailListings = []; }
     govSalesLoading = false;
   }
@@ -5419,13 +5450,22 @@ function buildGovLeasesHTML() {
   html += '<div class="widget">';
   html += '<div class="widget-title">Lease Exposure by Agency</div>';
   const agencyMap = {};
+  let unknownAgencyStatsLeases = { count: 0, rent: 0, termSum: 0, expiring: 0 };
   for (const p of withTerm) {
     const a = p.agency || p.agency_full_name || 'Unknown';
-    if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, termSum: 0, expiring: 0 };
-    agencyMap[a].count++;
-    agencyMap[a].rent += (p.gross_rent || 0);
-    agencyMap[a].termSum += (p.firm_term_remaining || 0);
-    if (p.firm_term_remaining <= 2) agencyMap[a].expiring++;
+    if (a === 'Unknown') {
+      // Separate tracking for Unknown agencies (Issue #5)
+      unknownAgencyStatsLeases.count++;
+      unknownAgencyStatsLeases.rent += (p.gross_rent || 0);
+      unknownAgencyStatsLeases.termSum += (p.firm_term_remaining || 0);
+      if (p.firm_term_remaining <= 2) unknownAgencyStatsLeases.expiring++;
+    } else {
+      if (!agencyMap[a]) agencyMap[a] = { count: 0, rent: 0, termSum: 0, expiring: 0 };
+      agencyMap[a].count++;
+      agencyMap[a].rent += (p.gross_rent || 0);
+      agencyMap[a].termSum += (p.firm_term_remaining || 0);
+      if (p.firm_term_remaining <= 2) agencyMap[a].expiring++;
+    }
   }
   const topAgencies = Object.entries(agencyMap).sort((a, b) => b[1].count - a[1].count).slice(0, 15);
   if (topAgencies.length > 0) {

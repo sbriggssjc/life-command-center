@@ -300,6 +300,26 @@ function norm(s) {
   return s.toLowerCase().replace(/(?:^|\s|[-\/\(])\S/g, c => c.toUpperCase());
 }
 
+// Operator name normalization — maps variant names to canonical names (Issue #4)
+function normalizeOperatorName(name) {
+  if (!name) return '';
+  const canonical = {
+    'davita': 'DaVita',
+    'fresenius': 'Fresenius Medical Care',
+    'fmc': 'Fresenius Medical Care',
+    'fresenius medical care': 'Fresenius Medical Care',
+    'us renal': 'US Renal Care',
+    'us renal care': 'US Renal Care',
+    'dialysis clinic': 'Dialysis Clinic Inc',
+    'dialysis clinic inc': 'Dialysis Clinic Inc',
+    'dci': 'Dialysis Clinic Inc',
+    'american renal': 'American Renal Associates',
+    'american renal associates': 'American Renal Associates'
+  };
+  const normalized = String(name).trim().toLowerCase();
+  return canonical[normalized] || name;
+}
+
 // Clean up raw DB labels for display
 const labelMap = {
   'gsa_new_award': 'GSA New Award', 'email_om': 'Email – Offering Memo',
@@ -621,7 +641,11 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   currentBizTab = tab.dataset.biz;
   bizPage = 0;
   bizSearch = '';
-  
+
+  // Immediately clear the content area to prevent stale DOM from previous tab
+  const innerEl = document.getElementById('bizPageInner');
+  if (innerEl) innerEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading...</p></div>';
+
   _setDisplay('govTabGroups', currentBizTab === 'government' ? 'flex' : 'none');
   _setDisplay('diaTabGroups', currentBizTab === 'dialysis' ? 'flex' : 'none');
   _setDisplay('govInnerTabs', currentBizTab === 'government' ? 'flex' : 'none');
@@ -1025,6 +1049,7 @@ let mktOwner = 'mine';    // 'mine' | 'all' | specific name
 let mktDomain = 'all';    // 'all' | 'government' | 'dialysis' | 'all_other'
 let mktSearch = '';
 let mktPage = 0;
+let mktShowArchived = false;   // Show archived/snoozed deals
 let mktCallHistoryCache = {};  // sf_contact_id → [{date, notes, type}]
 let mktExpandedDeal = null;    // deal name currently expanded to show call history
 
@@ -1039,6 +1064,93 @@ function classifyTaskDomain(subject, notes) {
   // Dialysis patterns
   if (/(dialysis|DaVita|Fresenius|\bFMC\b|kidney|renal|nephrology|Innovative Renal|\bDCI\b|Satellite Dial|U\.?S\.?\s*Renal|American Renal|Greenfield Renal)/i.test(text)) return 'dialysis';
   return 'all_other';
+}
+
+// ============================================================
+// MARKETING — Archive/Snooze Management
+// ============================================================
+
+function getArchivedDeals() {
+  try {
+    const archived = localStorage.getItem('mkt-archived-deals');
+    return archived ? JSON.parse(archived) : {};
+  } catch (e) {
+    console.warn('[Marketing] Failed to get archived deals:', e.message);
+    return {};
+  }
+}
+
+function archiveDeal(dealId) {
+  try {
+    const archived = getArchivedDeals();
+    archived[dealId] = Date.now();
+    localStorage.setItem('mkt-archived-deals', JSON.stringify(archived));
+  } catch (e) {
+    console.warn('[Marketing] Failed to archive deal:', e.message);
+  }
+}
+
+function unarchiveDeal(dealId) {
+  try {
+    const archived = getArchivedDeals();
+    delete archived[dealId];
+    localStorage.setItem('mkt-archived-deals', JSON.stringify(archived));
+  } catch (e) {
+    console.warn('[Marketing] Failed to unarchive deal:', e.message);
+  }
+}
+
+function isArchivedDeal(dealId) {
+  const archived = getArchivedDeals();
+  return !!archived[dealId];
+}
+
+function bulkArchiveStaleDeals() {
+  const today = localToday();
+  const sixMonthsAgo = new Date(new Date(today + 'T00:00:00').getTime() - 180 * 24 * 60 * 60 * 1000)
+    .toISOString().split('T')[0];
+  
+  const staleDeals = mktData.filter(d => 
+    d.due_date && d.due_date < sixMonthsAgo && !isArchivedDeal(d.deal_name || d.item_id)
+  );
+  
+  if (staleDeals.length === 0) {
+    alert('No deals older than 6 months to archive.');
+    return;
+  }
+  
+  const message = `Archive ${staleDeals.length} deal${staleDeals.length !== 1 ? 's' : ''} older than 6 months? They will be hidden from the list but can be revealed with "Show Archived".`;
+  if (!confirm(message)) return;
+  
+  const dealIds = new Set();
+  staleDeals.forEach(d => {
+    const dealId = d.deal_name || d.item_id;
+    if (dealId) dealIds.add(dealId);
+  });
+  
+  dealIds.forEach(dealId => archiveDeal(dealId));
+  
+  alert(`Archived ${dealIds.size} deal${dealIds.size !== 1 ? 's' : ''}.`);
+  mktPage = 0;
+  renderMarketing();
+}
+
+function getDaysOverdue(dueDate) {
+  if (!dueDate) return 0;
+  const due = new Date(dueDate + 'T00:00:00');
+  const today = new Date(localToday() + 'T00:00:00');
+  const diffMs = today.getTime() - due.getTime();
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
+function formatDaysOverdue(days) {
+  if (days < 30) return days + 'd overdue';
+  if (days < 365) {
+    const months = Math.floor(days / 30);
+    return months + 'mo overdue';
+  }
+  const years = Math.floor(days / 365);
+  return years + 'y overdue';
 }
 
 // Classify a contact by looking at all their tasks + company name
@@ -1607,8 +1719,10 @@ function renderMarketing() {
   const today = localToday();
   const userName = LCC_USER.display_name || 'Scott Briggs';
 
+  // Filter out archived deals unless showing archived
+  let filtered = mktData.filter(d => mktShowArchived || !isArchivedDeal(d.deal_name || d.item_id));
+
   // Owner filter
-  let filtered = mktData;
   if (mktOwner === 'mine') {
     filtered = filtered.filter(d => d.assigned_to === userName);
   } else if (mktOwner !== 'all') {
@@ -1688,6 +1802,16 @@ function renderMarketing() {
   html += `<option value="all" ${mktOwner==='all'?'selected':''}>All Team</option>`;
   owners.forEach(o => { html += `<option value="${esc(o)}" ${mktOwner===o?'selected':''}>${esc(o)}</option>`; });
   html += '</select>';
+  html += '</div>';
+
+  
+  // Archive Stale button + Show Archived toggle
+  const archivedCount = Object.keys(getArchivedDeals()).length;
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
+  html += '<button class="btn btn-sm" style="font-size:11px;padding:4px 10px;cursor:pointer;background:var(--red);color:#fff" onclick="bulkArchiveStaleDeals()">Archive Stale (6mo+)</button>';
+  if (archivedCount > 0) {
+    html += '<span class="pill" style="cursor:pointer" onclick="mktShowArchived=!mktShowArchived;mktPage=0;renderMarketing()" title="Toggle archived deals">' + (mktShowArchived ? '✓ Show Archived' : 'Show Archived') + ' <span class="pill-ct">' + archivedCount + '</span></span>';
+  }
   html += '</div>';
 
   // Metrics row — CRM focused
@@ -2379,16 +2503,19 @@ function renderProspectCardsHTML(items, options = {}) {
   Object.values(groups).forEach(group => {
     const first = group.first;
     const contacts = group.items;
-    const isOverdue = first.due_date && first.due_date < today;
+    const daysOverdue = getDaysOverdue(first.due_date);
+    const isOverdue = daysOverdue > 0;
+    const isStale = daysOverdue > 180;
+    const isArchivedDealCheck = isArchivedDeal(first.deal_name || first.item_id);
     const isStarred = first.deal_name && first.deal_name.startsWith('****');
     const isLead = first.pipeline_source !== 'sf_deal';
 
     const priorityBadge = first.deal_priority ? `<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:${first.deal_priority <= 3 ? 'var(--red)' : first.deal_priority <= 4 ? 'var(--yellow)' : 'var(--text3)'};color:#fff;font-size:11px;font-weight:700;margin-right:6px">${first.deal_priority}</span>` : '';
-    const dueBadge = isOverdue ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;margin-left:6px">OVERDUE</span>' : '';
+    const dueBadge = isOverdue ? (isStale ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--orange);color:#fff;margin-left:6px">Stale — ' + formatDaysOverdue(daysOverdue) + '</span>' : '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--red);color:#fff;margin-left:6px">OVERDUE</span>') : ''
     const sourceBadge = isLead ? `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--purple);color:#fff;margin-left:6px">${esc(first.pipeline_source.toUpperCase())}</span>` : '';
     const matchBadge = isLead && first.sf_match_status === 'unmatched' ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--orange);color:#fff;margin-left:6px">UNMATCHED</span>' : '';
 
-    html += `<div class="widget" style="padding:14px${isLead ? ';border-left:3px solid var(--purple)' : ''}">`;
+    html += `<div class="widget" style="padding:14px${isLead ? ';border-left:3px solid var(--purple)' : ''}${isStale ? ';opacity:0.65;background:rgba(255,255,255,0.03)' : ''}">`;
     // Deal header
     html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">`;
     html += `<div style="flex:1;min-width:0">`;
@@ -3348,7 +3475,7 @@ async function execProspectsSearch() {
         safeQuery(diaQuery, 'v_clinic_inventory_latest_diff', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',state.ilike.' + like + ',operator_name.ilike.' + like + ',address.ilike.' + like + ')', limit: 20 }),
         safeQuery(diaQuery, 'v_npi_inventory_signals', '*', { filter: 'or=(facility_name.ilike.' + like + ',city.ilike.' + like + ',npi.ilike.' + like + ')', limit: 15 })
       ]);
-      diaClinics = (Array.isArray(dc) ? dc : dc?.data || []).map(r => ({ ...r, _title: norm(r.facility_name) || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + norm(r.operator_name) : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
+      diaClinics = (Array.isArray(dc) ? dc : dc?.data || []).map(r => ({ ...r, _title: norm(r.facility_name) || '—', _badge: 'Dia Clinic', _badgeBg: 'rgba(167,139,250,0.15)', _badgeColor: '#a78bfa', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.ccn ? 'CCN: ' + r.ccn : '', r.operator_name ? 'Op: ' + normalizeOperatorName(r.operator_name) : '', r.latest_total_patients ? 'Patients: ' + r.latest_total_patients : ''].filter(Boolean) }));
       diaNpi = (Array.isArray(dn) ? dn : dn?.data || []).map(r => ({ ...r, _title: norm(r.facility_name) || r.npi || '—', _badge: 'NPI Signal', _badgeBg: 'rgba(248,113,113,0.15)', _badgeColor: '#f87171', _source: 'dia-clinic', _meta: [r.city && r.state ? norm(r.city) + ', ' + r.state : '', r.signal_type ? cleanLabel(r.signal_type) : '', r.npi ? 'NPI: ' + r.npi : ''].filter(Boolean) }));
     }
 
@@ -3473,7 +3600,7 @@ function renderDetailHeader(record, source) {
     badge = 'CONTACT';
   } else if(source === 'dia-clinic') {
     title = esc(record.facility_name || '(No name)');
-    subtitle = `${esc(record.city || '')}${record.city && record.state ? ', ' : ''}${esc(record.state || '')} · ${esc(record.operator_name || 'Clinic')}`;
+    subtitle = `${esc(record.city || '')}${record.city && record.state ? ', ' : ''}${esc(record.state || '')} · ${esc(normalizeOperatorName(record.operator_name) || 'Clinic')}`;
     badge = 'DIA';
   }
   
@@ -3507,7 +3634,7 @@ function renderDetailHeader(record, source) {
     const ccn = record.ccn || '';
     const npi = record.npi || '';
     const loc = (record.city || '') + (record.city && record.state ? ', ' : '') + (record.state || '');
-    const op = record.operator_name || '';
+    const op = normalizeOperatorName(record.operator_name || '');
     const patients = record.latest_total_patients;
     keyFields = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12px;">';
     if (loc.trim()) keyFields += `<div><span style="color:var(--text3)">Location:</span> <span style="color:var(--text)">${esc(loc)}</span></div>`;
@@ -7903,7 +8030,7 @@ async function searchLiveIngestRecords(domainKey) {
         ...(clinics || []).map((row) => ({
           source_table: 'v_cms_data',
           label: row.facility_name || `Clinic ${row.clinic_id}`,
-          subtitle: [row.city, row.state, row.operator_name, row.clinic_id ? `clinic ${row.clinic_id}` : row.ccn ? `ccn ${row.ccn}` : ''].filter(Boolean).join(' | '),
+          subtitle: [row.city, row.state, normalizeOperatorName(row.operator_name), row.clinic_id ? `clinic ${row.clinic_id}` : row.ccn ? `ccn ${row.ccn}` : ''].filter(Boolean).join(' | '),
           current_record: {
             clinic_id: row.clinic_id || null,
             medicare_id: row.ccn || null,
@@ -7929,7 +8056,7 @@ async function searchLiveIngestRecords(domainKey) {
         ...(queue || []).map((row) => ({
           source_table: 'v_clinic_property_link_review_queue',
           label: row.facility_name || `Clinic ${row.clinic_id}`,
-          subtitle: [row.state, row.operator_name, row.review_type, row.clinic_id ? `clinic ${row.clinic_id}` : ''].filter(Boolean).join(' | '),
+          subtitle: [row.state, normalizeOperatorName(row.operator_name), row.review_type, row.clinic_id ? `clinic ${row.clinic_id}` : ''].filter(Boolean).join(' | '),
           current_record: {
             clinic_id: row.clinic_id || null,
             property_id: row.property_id || null,

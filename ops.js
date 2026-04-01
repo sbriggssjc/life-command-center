@@ -308,6 +308,17 @@ async function renderMyWork(page) {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:my_work');
 
+  // SYNC FIX: Use canonicalMyWork if available (same source as Dashboard widget)
+  // This ensures consistency between Dashboard and My Work page
+  if (typeof canonicalMyWork !== 'undefined' && canonicalMyWork && canonicalMyWork.items && canonicalMyWork.items.length > 0) {
+    opsMyWorkData = canonicalMyWork.items || [];
+    const cRes = await opsApi('/api/connectors?action=list');
+    const connectors = cRes.ok ? (cRes.data?.connectors || cRes.data || []) : [];
+    renderMyWorkList(el, connectors);
+    perf.end();
+    return;
+  }
+
   const pageParam = page ? `&page=${page}&per_page=25` : '&limit=100';
   const [qRes, cRes] = await Promise.all([
     opsApi(`/api/queue?view=my_work${pageParam}`),
@@ -1393,9 +1404,15 @@ async function renderMetricsPage() {
   html += workspaceContextHTML();
   html += '<div class="ops-header"><h2>Metrics</h2></div>';
 
-  // Work counts
-  if (countsRes.ok) {
-    const c = countsRes.data || {};
+  // Work counts - SYNC FIX: Use canonicalCounts as fallback when available
+  // This ensures consistency between Dashboard stats and Metrics page
+  let countsData = countsRes.ok ? (countsRes.data || {}) : {};
+  if (!countsRes.ok && typeof canonicalCounts !== 'undefined' && canonicalCounts) {
+    countsData = canonicalCounts;
+  }
+
+  if (countsRes.ok || (typeof canonicalCounts !== 'undefined' && canonicalCounts)) {
+    const c = countsData;
     html += '<div class="metrics-grid">';
     html += metricCardHTML('My Actions', c.my_actions || c.my_open || 0, 'assigned to me');
     html += metricCardHTML('Team Actions', c.team_actions || c.team_open || 0, 'shared queue');
