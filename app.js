@@ -4033,14 +4033,18 @@ async function loadCanonicalData() {
 // ============================================================
 function canonicalBridge(action, payload) {
   if (!LCC_USER._loaded) return Promise.resolve(null);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   return fetch(`/api/bridge?action=${encodeURIComponent(action)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: controller.signal
   }).then(r => {
+    clearTimeout(timeout);
     if (!r.ok) { console.warn('canonicalBridge(' + action + ') HTTP ' + r.status); return null; }
     return r.json();
-  }).catch(err => { console.warn('canonicalBridge(' + action + ') error:', err.message); return null; });
+  }).catch(err => { clearTimeout(timeout); console.warn('canonicalBridge(' + action + ') ' + (err.name === 'AbortError' ? 'timed out (10s)' : 'error: ' + err.message)); return null; });
 }
 
 // ============================================================
@@ -4070,17 +4074,22 @@ function canonicalBridge(action, payload) {
  * @returns {Promise<{ok: boolean, applied_mode: string, errors?: string[]}>}
  */
 async function applyManualChange(payload) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch('/api/apply-change', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: controller.signal
     });
+    clearTimeout(timeout);
     if (!res.ok) return { ok: false, errors: ['http_' + res.status] };
     const data = await res.json();
     return data;
   } catch (err) {
-    // Network error — bridge unavailable
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') return { ok: false, errors: ['timeout', 'Request timed out (15s)'] };
     return { ok: false, errors: ['bridge_unavailable', err.message] };
   }
 }
@@ -4133,17 +4142,22 @@ async function applyChangeWithFallback(opts) {
       (Array.isArray(opts.matchFilters) ? opts.matchFilters : []).forEach(function(filter, idx) {
         url.searchParams.set(`filter${idx + 2}`, `${filter.column}=eq.${filter.value}`);
       });
+      const fc = new AbortController();
+      const ft = setTimeout(() => fc.abort(), 15000);
       const res = await fetch(url.toString(), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(opts.data)
+        body: JSON.stringify(opts.data),
+        signal: fc.signal
       });
+      clearTimeout(ft);
       if (!res.ok) {
         const errText = await res.text();
         return { ok: false, applied_mode: 'fallback_failed', errors: [`Direct PATCH failed (${res.status}): ${errText}`] };
       }
       return { ok: true, applied_mode: 'direct_fallback' };
     } catch (err) {
+      if (err.name === 'AbortError') return { ok: false, applied_mode: 'fallback_failed', errors: ['Fallback PATCH timed out (15s)'] };
       return { ok: false, applied_mode: 'fallback_failed', errors: [err.message] };
     }
   }
@@ -4177,11 +4191,15 @@ async function applyInsertWithFallback(opts) {
     try {
       const url = new URL(opts.proxyBase, window.location.origin);
       url.searchParams.set('table', opts.table);
+      const fc = new AbortController();
+      const ft = setTimeout(() => fc.abort(), 15000);
       const res = await fetch(url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(opts.data)
+        body: JSON.stringify(opts.data),
+        signal: fc.signal
       });
+      clearTimeout(ft);
       if (!res.ok) {
         const errText = await res.text();
         return { ok: false, applied_mode: 'fallback_failed', errors: [`Direct POST failed (${res.status}): ${errText}`] };
@@ -4192,6 +4210,7 @@ async function applyInsertWithFallback(opts) {
       } catch (_) { /* ignore */ }
       return { ok: true, applied_mode: 'direct_fallback_insert', rows: Array.isArray(rows) ? rows : [] };
     } catch (err) {
+      if (err.name === 'AbortError') return { ok: false, applied_mode: 'fallback_failed', errors: ['Fallback POST timed out (15s)'] };
       return { ok: false, applied_mode: 'fallback_failed', errors: [err.message] };
     }
   }
@@ -4965,6 +4984,11 @@ function renderCalendarFull() {
 // ============================================================
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) {
+      e.target.blur();
+      return;
+    }
     closeDetail();
     closeLogCall();
     if (typeof closeLogReschedule === 'function') closeLogReschedule();

@@ -58,8 +58,11 @@ async function govQuery(table, select, params = {}) {
   if (params.limit !== undefined) url.searchParams.set('limit', params.limit);
   if (params.offset !== undefined) url.searchParams.set('offset', params.offset);
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -70,6 +73,8 @@ async function govQuery(table, select, params = {}) {
     const result = await response.json();
     return { data: result.data || [], count: result.count || 0 };
   } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') { console.warn('govQuery ' + table + ' timed out (30s)'); return { data: [], count: 0 }; }
     console.error('govQuery error:', err);
     return { data: [], count: 0 };
   }
@@ -82,18 +87,28 @@ async function govWriteService(endpoint, data) {
   url.searchParams.set('_route', 'gov-write');
   url.searchParams.set('endpoint', endpoint);
 
-  const resp = await fetch(url.toString(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const resp = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
 
-  if (!resp.ok) {
-    const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(errBody.error || errBody.detail || 'Gov write service returned ' + resp.status);
+    if (!resp.ok) {
+      const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errBody.error || errBody.detail || 'Gov write service returned ' + resp.status);
+    }
+
+    return await resp.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('Request timed out (30s) — please retry');
+    throw err;
   }
-
-  return await resp.json();
 }
 
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
@@ -2787,6 +2802,7 @@ async function loadGovEvidenceObservations(force = false) {
     govEvidenceState.queueLoaded = true;
   } catch (err) {
     govEvidenceState.queueError = err.message || 'Could not load evidence queue';
+    showToast('Evidence queue load failed: ' + govEvidenceState.queueError, 'error');
   } finally {
     govEvidenceState.queueLoading = false;
     govEvidenceState.brokerFeedbackLoading = false;
@@ -4074,6 +4090,9 @@ window.applyFinancialOverride = async function() {
 
   if (!confirm('Apply financial override to ' + (govFinOverrideRec.address || 'this property') + '? This will overwrite existing values.')) return;
 
+  const applyBtn = document.querySelector('[onclick*="applyFinancialOverride"]');
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying...'; }
+
   try {
     await govPatch('properties', 'id=eq.' + govFinOverrideRec.id, {
       ...updates,
@@ -4087,6 +4106,7 @@ window.applyFinancialOverride = async function() {
   } catch(e) {
     console.error('applyFinancialOverride error:', e);
     showToast('Error applying override: ' + e.message, 'error');
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Override'; }
   }
 };
 
@@ -4094,9 +4114,11 @@ window.applyFinancialOverride = async function() {
 // PIPELINE OPS SECTION - PIPELINE CONTROL
 // ══════════════════════════════════════════════════════════════════════════════
 
+let govPipelineError = null;
 window.loadGovPipelineRuns = async function() {
   if (govPipelineLoading) return;
   govPipelineLoading = true;
+  govPipelineError = null;
   try {
     const result = await govQuery('ingestion_tracker', '*', {
       order: 'started_at.desc',
@@ -4105,7 +4127,9 @@ window.loadGovPipelineRuns = async function() {
     govPipelineRuns = result.data || [];
   } catch(e) {
     console.error('loadGovPipelineRuns error:', e);
+    govPipelineError = e.message || 'Failed to load pipeline runs';
     govPipelineRuns = [];
+    showToast('Pipeline load error: ' + govPipelineError, 'error');
   }
   govPipelineLoading = false;
   renderGovTab();
@@ -4121,8 +4145,11 @@ function renderGovPipelineControl() {
 
   html += `<div class="pipeline-header">
     <div class="header-title">Pipeline Control</div>
-    <div class="header-subtitle">Monitor and manage data ingestion runs</div>
+    <div class="header-subtitle">${govPipelineError ? '⚠ Load error — showing cached data' : 'Monitor and manage data ingestion runs'}</div>
   </div>`;
+  if (govPipelineError) {
+    html += `<div style="padding:10px 14px;margin-bottom:12px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:6px;font-size:12px;color:var(--text2);">${esc(govPipelineError)}</div>`;
+  }
 
   const runs = govPipelineRuns || [];
 
