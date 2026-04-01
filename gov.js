@@ -1839,12 +1839,6 @@ async function saveLead(rec) {
     research_status: 'completed'
   };
 
-  const _anyLeadField = [saleDate, salePrice, capRate, buyer, seller,
-    leadData.recorded_owner, leadData.true_owner, leadData.owner_type,
-    leadData.contact_email, leadData.contact_phone, leadData.contact_mailing,
-    leadData.research_notes].some(v => v !== null && v !== undefined && String(v).trim() !== '');
-  if (!_anyLeadField) { showToast('Please fill in at least one field before saving', 'info'); return; }
-
   if (quickStatus) {
     leadData.pipeline_status = quickStatus;
   }
@@ -5145,9 +5139,6 @@ function saveGovDetailLead(leadId) {
     return;
   }
 
-  const _saveBtn = document.querySelector('[onclick*="saveGovDetailLead"]');
-  if (_saveBtn) { _saveBtn.disabled = true; _saveBtn.dataset.origText = _saveBtn.textContent; _saveBtn.textContent = 'Saving…'; _saveBtn.style.opacity = '0.6'; }
-
   // Use Gov write service instead of direct prospect_leads PATCH
   govWriteService('lead-research', {
     lead_id: leadId,
@@ -5174,9 +5165,6 @@ function saveGovDetailLead(leadId) {
     .catch(err => {
       console.error('Error saving lead:', err);
       showToast('Error updating lead: ' + err.message, 'error');
-    })
-    .finally(() => {
-      if (_saveBtn) { _saveBtn.disabled = false; _saveBtn.textContent = _saveBtn.dataset.origText || 'Save'; _saveBtn.style.opacity = ''; }
     });
 }
 

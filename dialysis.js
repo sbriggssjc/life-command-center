@@ -3385,9 +3385,6 @@ async function _saveClinicLeadResearchInner(rec) {
     notes: document.getElementById('cl-notes')?.value || null
   };
 
-  const _anyClField = Object.values(data).some(v => v !== null && v !== undefined && String(v).trim() !== '');
-  if (!_anyClField) { showToast('Please fill in at least one field before saving', 'info'); return; }
-
   // 1. Save research outcome
   const outcomeOk = await saveClinicLeadOutcome(rec.medicare_id, 'completed', data.notes, rec.property_id);
   if (!outcomeOk) return;
@@ -5846,8 +5843,6 @@ async function saveSaleOwner(ownershipId, idx) {
     ownership_source: ownerSource || null,
     notes: notes || null
   };
-
-  if (!ownerType && !ownerSource && !notes) { showToast('No changes to save', 'info'); return; }
 
   const success = await diaPatchRecord('ownership_history', 'ownership_id', ownershipId, data);
   if (success) {

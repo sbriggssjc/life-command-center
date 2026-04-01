@@ -2955,9 +2955,6 @@ async function _udSaveOwnership(options = {}) {
   const incState = document.getElementById('udOwnState')?.value?.trim() || null;
   const notes = document.getElementById('udOwnNotes')?.value?.trim() || null;
 
-  const _anyOwnField = [recordedOwner, trueOwner, ownerType, contactName, contactPhone, contactEmail, incState, notes].some(v => v !== null && v !== undefined && String(v).trim() !== '');
-  if (!_anyOwnField) { showToast('Please fill in at least one ownership field', 'info'); return; }
-
   const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
   let recordedOwnerId = _udCache.ids?.recorded_owner_id || null;
   let trueOwnerId = _udCache.ids?.true_owner_id || null;
@@ -3216,9 +3213,6 @@ async function _intelSavePriorSale(options = {}) {
   const buyer = document.getElementById('intelBuyer')?.value?.trim() || null;
   const seller = document.getElementById('intelSeller')?.value?.trim() || null;
 
-  const _anySaleField = [saleDate, salePrice, capRate, buyer, seller].some(v => v !== null && v !== undefined && String(v).trim() !== '');
-  if (!_anySaleField) { showToast('Please fill in at least one sale field', 'info'); return; }
-
   try {
     const payload = {
       property_id: propertyId,
@@ -3273,9 +3267,6 @@ async function _intelSaveLoan(options = {}) {
   const amortization = document.getElementById('intelAmortization')?.value || null;
   const recourse = document.getElementById('intelRecourse')?.value || null;
   const ltv = document.getElementById('intelLTV')?.value || null;
-
-  const _anyLoanField = [lender, loanAmount, interestRate, loanType, origDate, matDate, amortization, recourse, ltv].some(v => v !== null && v !== undefined && String(v).trim() !== '');
-  if (!_anyLoanField) { showToast('Please fill in at least one loan field', 'info'); return; }
 
   try {
     const payload = {
