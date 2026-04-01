@@ -231,7 +231,7 @@ async function loadDiaData() {
     // Show error in the UI instead of just console
     const inner = document.getElementById('bizPageInner');
     if (inner) {
-      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load dialysis data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="this.disabled=true;this.textContent=\'Loading\u2026\';loadDiaData()" style="margin-top:12px">Retry</button></div>';
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load dialysis data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadDiaData()" style="margin-top:12px">Retry</button></div>';
     }
   }
 }
@@ -3848,7 +3848,7 @@ function renderDiaDetailOwnership(record) {
   html += '<div class="detail-row" style="flex-direction:column;align-items:stretch"><label style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:2px">Notes</label><textarea id="dia-own-notes" rows="2" placeholder="Research notes..." style="font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit"></textarea></div>';
   html += '</div>';
 
-  html += '<button onclick="_udBtnGuard(this, saveDiaOwnershipResolution)" style="margin-top:12px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership</button>';
+  html += '<button onclick="saveDiaOwnershipResolution()" style="margin-top:12px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership</button>';
 
   // Quick actions
   html += '<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">';
@@ -4007,7 +4007,7 @@ function renderDiaDetailResearch(record) {
   html += '</div>';
   
   html += '<div style="display: flex; gap: 8px;">';
-  html += '<button class="btn-primary" onclick="_udBtnGuard(this, saveDiaDetailResearch)">Save</button>';
+  html += '<button class="btn-primary" onclick="saveDiaDetailResearch()">Save</button>';
   html += '</div>';
   html += '</div>';
   

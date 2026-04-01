@@ -376,7 +376,7 @@ async function loadGovData() {
     showToast('Error loading data', 'error');
     const inner = document.getElementById('bizPageInner');
     if (inner) {
-      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="this.disabled=true;this.textContent=\'Loading\u2026\';loadGovData()" style="margin-top:12px">Retry</button></div>';
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="loadGovData()" style="margin-top:12px">Retry</button></div>';
     }
   }
 }
@@ -1225,10 +1225,10 @@ function renderOwnershipResearchCard(rec) {
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -1424,10 +1424,10 @@ function renderLeadResearchCard(rec) {
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   } else {
-    html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+    html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
   }
   html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -1636,10 +1636,10 @@ function renderIntelResearchCard(rec) {
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
-  html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
+  html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
+  html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
   html += '</div>';
@@ -4005,9 +4005,9 @@ function renderGovPendingUpdates() {
     html += guidedField('pu-notes', 'Resolution Notes', selected.resolution_notes || '', {type: 'textarea', rows: 3, placeholder: 'Notes on this review...'});
 
     html += '<div class="action-row">';
-    html += `<button class="btn-action primary" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve</button>`;
-    html += `<button class="btn-action danger" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject</button>`;
-    html += `<button class="btn-action" style="background: #fb923c;" onclick="_udBtnGuard(this, window.resolveGovPendingUpdate, decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
+    html += `<button class="btn-action primary" onclick="window.resolveGovPendingUpdate(decodeURIComponent('${encodeURIComponent(selected.id)}'), 'approved')">✓ Approve</button>`;
+    html += `<button class="btn-action danger" onclick="window.resolveGovPendingUpdate(decodeURIComponent('${encodeURIComponent(selected.id)}'), 'rejected')">✗ Reject</button>`;
+    html += `<button class="btn-action" style="background: #fb923c;" onclick="window.resolveGovPendingUpdate(decodeURIComponent('${encodeURIComponent(selected.id)}'), 'expired')">⏱ Expire</button>`;
     html += `<button class="btn-action" onclick="govPendingUpdatesIdx = (govPendingUpdatesIdx + 1) % filteredItems.length; renderGovTab();">→ Skip</button>`;
     html += '</div>';
     html += '</div>';
