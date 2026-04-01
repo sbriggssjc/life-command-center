@@ -223,8 +223,8 @@ function researchAssistantPanelHTML(itemId) {
       : state.reply
         ? `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(state.reply) : esc(state.reply)}</div>
            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-             <button class="q-action" onclick="copyResearchAssistantReply(decodeURIComponent('${encodeURIComponent(itemId)}'))">Copy</button>
-             <button class="q-action primary" onclick="useResearchAssistantFollowup(decodeURIComponent('${encodeURIComponent(itemId)}'))">Use as Follow-up Draft</button>
+             <button class="q-action" onclick="_opsBtnGuard(this, copyResearchAssistantReply, decodeURIComponent('${encodeURIComponent(itemId)}'))">Copy</button>
+             <button class="q-action primary" onclick="_opsBtnGuard(this, useResearchAssistantFollowup, decodeURIComponent('${encodeURIComponent(itemId)}'))">Use as Follow-up Draft</button>
            </div>`
         : '<div class="assistant-status">No response yet.</div>';
 
