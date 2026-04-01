@@ -2166,9 +2166,15 @@ function renderDiaPropertyResearch() {
   html += metricHTML('Large Clinics', fmtN(largeClinic), '200+ patients', '');
   html += metricHTML('States', fmtN(new Set(diaData.propertyReviewQueue.map(r => r.state)).size), 'represented', '');
   html += metricHTML('Avg Patients', fmtN(Math.round(diaData.propertyReviewQueue.reduce((s, r) => s + (r.total_patients || 0), 0) / Math.max(pending, 1))), 'per clinic', '');
-  
+
   html += '</div>';
-  
+
+  // Keyboard shortcuts hint
+  html += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px;font-size:11px;color:var(--text3);align-items:center;">';
+  html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">S</kbd> Save</span>';
+  html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">K</kbd> Skip</span>';
+  html += '</div>';
+
   // Filter
   html += '<div class="pills" style="margin: 20px 0;">';
   html += '<button class="pill active" data-filter-type="all">All</button>';
@@ -2481,9 +2487,15 @@ function renderDiaLeaseResearch() {
   html += metricHTML('High Risk', fmtN(highRisk), 'closure watch', '');
   html += metricHTML('Large Clinics', fmtN(largeClinic), '100+ patients', '');
   html += metricHTML('Avg Patients', fmtN(Math.round(diaData.leaseBackfillRows.reduce((s, r) => s + (r.total_patients || 0), 0) / Math.max(pending, 1))), 'per clinic', '');
-  
+
   html += '</div>';
-  
+
+  // Keyboard shortcuts hint
+  html += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px;font-size:11px;color:var(--text3);align-items:center;">';
+  html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">S</kbd> Save</span>';
+  html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">K</kbd> Skip</span>';
+  html += '</div>';
+
   // Filter
   html += '<div class="pills" style="margin: 20px 0;">';
   html += '<button class="pill active" data-filter-priority="all">All</button>';
@@ -2853,6 +2865,12 @@ function renderDiaClinicLeads() {
   html += '<div class="research-progress" style="margin-bottom:16px;">';
   html += `<div class="progress-text">${clResolved} of ${clTotal} reviewed (${clPct}%)</div>`;
   html += `<div class="progress-bar"><div style="width: ${clPct}%; background: #34d399;"></div></div>`;
+  html += '</div>';
+
+  // Keyboard hint bar
+  html += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px;font-size:11px;color:var(--text3);align-items:center;">';
+  html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">S</kbd> Save</span>';
+  html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">K</kbd> Skip</span>';
   html += '</div>';
 
   // === Filters ===
