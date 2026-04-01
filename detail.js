@@ -2175,23 +2175,23 @@ async function _udAction(action) {
         method: 'POST', headers,
         body: JSON.stringify({ property_id: id, pipeline_status: 'prospect', address: p.address || fb.address, source_app: 'lcc' })
       });
-      if (res.ok) { alert('Added to pipeline!'); return; }
+      if (res.ok) { showToast('Added to pipeline!', 'success'); return; }
       const err = await res.json().catch(() => ({}));
-      alert('Could not add: ' + (err.error || res.status));
-    } catch (e) { alert('Error: ' + e.message); }
+      showToast('Could not add: ' + (err.error || res.status), 'error');
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
     return;
   }
 
   if (action === 'mark_lead' && db === 'dia') {
     try {
       const qFn = typeof diaQuery === 'function' ? diaQuery : null;
-      if (!qFn) { alert('Dialysis query not available'); return; }
+      if (!qFn) { showToast('Dialysis query not available', 'error'); return; }
       await qFn('research_queue_outcomes', null, {
         method: 'POST',
         body: { clinic_id: fb.clinic_id || fb.medicare_id, queue_type: 'lead', status: 'prospect', source_bucket: 'manual', notes: 'Marked as lead from detail panel' }
       });
-      alert('Marked as lead!');
-    } catch (e) { alert('Error: ' + e.message); }
+      showToast('Marked as lead!', 'success');
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
     return;
   }
 
@@ -2206,8 +2206,8 @@ async function _udAction(action) {
         body: JSON.stringify({ action_type: 'log_activity', title: 'Touchpoint: ' + title, domain: db === 'gov' ? 'government' : 'dialysis', notes, entity_id: id })
       });
       if (!res.ok) throw new Error('Server returned ' + res.status);
-      alert('Touchpoint logged!');
-    } catch (e) { alert('Error: ' + e.message); }
+      showToast('Touchpoint logged!', 'success');
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
     return;
   }
 
@@ -2222,8 +2222,8 @@ async function _udAction(action) {
         body: JSON.stringify({ action_type: 'create_task', title: taskTitle, domain: db === 'gov' ? 'government' : 'dialysis', entity_id: id, status: 'open' })
       });
       if (!res.ok) throw new Error('Server returned ' + res.status);
-      alert('Task created!');
-    } catch (e) { alert('Error: ' + e.message); }
+      showToast('Task created!', 'success');
+    } catch (e) { showToast('Error: ' + e.message, 'error'); }
     return;
   }
 }
