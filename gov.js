@@ -3266,7 +3266,7 @@ function renderGovOverview() {
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
     html += '<div class="gov-info-card" onclick="goToGovTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Property Count</div>';
-    const maxAgCount = topAgencies[0][1].count;
+    const maxAgCount = topAgencies[0] && topAgencies[0][1] ? topAgencies[0][1].count : 1;
     html += inlineBar(topAgencies.map(([name, d]) => ({
       label: name, value: d.count, display: fmtN(d.count), barColor: '#60a5fa', labelWidth: 140, valueWidth: 40
     })), maxAgCount);
@@ -3275,7 +3275,7 @@ function renderGovOverview() {
     // Top agencies by rent
     html += '<div class="gov-info-card" onclick="goToGovTab(\'search\')" style="cursor:pointer;padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top Agencies by Annual Rent</div>';
-    const maxAgRent = topAgenciesByRent[0][1].rent;
+    const maxAgRent = topAgenciesByRent[0] && topAgenciesByRent[0][1] ? topAgenciesByRent[0][1].rent : 1;
     html += inlineBar(topAgenciesByRent.map(([name, d]) => ({
       label: name, value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#34d399', labelWidth: 140, valueWidth: 56
     })), maxAgRent);
@@ -3319,7 +3319,7 @@ function renderGovOverview() {
     // By count
     html += '<div class="gov-info-card" style="padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Property Count</div>';
-    const maxStCount = topStates[0][1].count;
+    const maxStCount = topStates[0] && topStates[0][1] ? topStates[0][1].count : 1;
     html += inlineBar(topStates.map(([st, d]) => ({
       label: STATE_FULL[st] || st, value: d.count, display: fmtN(d.count), barColor: '#a78bfa', labelWidth: 110, valueWidth: 40
     })), maxStCount);
@@ -3329,7 +3329,7 @@ function renderGovOverview() {
     const topStatesByRent = Object.entries(stateMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
     html += '<div class="gov-info-card" style="padding:14px 16px">';
     html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States by Annual Rent</div>';
-    const maxStRent = topStatesByRent[0][1].rent;
+    const maxStRent = topStatesByRent.length > 0 && topStatesByRent[0][1] ? topStatesByRent[0][1].rent : 1;
     html += inlineBar(topStatesByRent.map(([st, d]) => ({
       label: STATE_FULL[st] || st, value: d.rent, display: '$' + fmtN(Math.round(d.rent / 1e6)) + 'M', barColor: '#22d3ee', labelWidth: 110, valueWidth: 56
     })), maxStRent);
