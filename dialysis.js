@@ -76,8 +76,11 @@ async function diaQuery(table, select, params = {}) {
   if (limit !== undefined) url.searchParams.set('limit', limit);
   if (offset !== undefined) url.searchParams.set('offset', offset);
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -88,6 +91,8 @@ async function diaQuery(table, select, params = {}) {
     const result = await response.json();
     return result.data || [];
   } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') { console.warn('diaQuery ' + table + ' timed out (30s)'); return []; }
     console.error('diaQuery error:', err);
     return [];
   }
@@ -1487,7 +1492,7 @@ function renderDiaUnmatchedClinics() {
     // Action buttons
     html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
     html += `<button class="btn-action primary" data-um-action="resolve" style="flex: 1; min-width: 120px;">Link to Property</button>`;
-    html += `<button class="btn-action warn" data-um-action="create" style="flex: 1; min-width: 120px;">Create New</button>`;
+    html += `<button class="btn-action warn" data-um-action="create" style="flex: 1; min-width: 120px; opacity: 0.5; cursor: not-allowed;" disabled title="Coming soon — create new property record">Create New</button>`;
     html += `<button class="btn-action default" data-um-action="skip" style="flex: 1; min-width: 120px;">Skip</button>`;
     html += `<button class="btn-action danger" data-um-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
     html += '</div>';
@@ -1528,6 +1533,7 @@ function renderDiaUnmatchedClinics() {
           try {
             const safeQ = query.replace(/[*()',\\]/g, '');
             if (!safeQ) { resultsDiv.innerHTML = ''; return; }
+            resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--text2);">Searching...</div>';
             const props = await diaQuery('properties', 'id, address, city, state, property_name', {
               filter: `or(address=ilike.*${safeQ}*,property_name=ilike.*${safeQ}*)`,
               limit: 10
@@ -1667,8 +1673,8 @@ function renderDiaQuarantineReview() {
 
     // Action buttons
     html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
-    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px;" disabled title="Coming soon — re-ingest after manual fix">Fix & Re-ingest</button>`;
-    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px;" disabled title="Coming soon — merge with existing record">Merge</button>`;
+    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px; opacity: 0.5; cursor: not-allowed;" disabled title="Coming soon — re-ingest after manual fix">Fix & Re-ingest</button>`;
+    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px; opacity: 0.5; cursor: not-allowed;" disabled title="Coming soon — merge with existing record">Merge</button>`;
     html += `<button class="btn-action danger" data-q-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
     html += '</div>';
 
@@ -1924,9 +1930,12 @@ function renderDiaStalenessMonitor() {
 
   // Attach handlers
   setTimeout(() => {
-    document.getElementById('dia-refresh-staleness')?.addEventListener('click', () => {
+    document.getElementById('dia-refresh-staleness')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Refreshing...';
       diaStalenessData = null;
-      loadDiaStalenessData();
+      await loadDiaStalenessData();
+      // renderDiaTab rebuilds the button fresh
     });
   }, 0);
 
