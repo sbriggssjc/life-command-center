@@ -1679,12 +1679,15 @@ function renderResearchInner() {
   return html;
 }
 
+let _researchSaving = false;
 async function researchSave() {
+  if (_researchSaving) { showToast('Save already in progress', 'info'); return; }
   const rec = researchQueue[researchIdx];
   if (!rec) { showToast('No record to save', 'error'); return; }
+  _researchSaving = true;
 
   const saveBtn = q('[data-save-research]') || q('.research-card button.save-btn') || q('.research-card button[onclick*="researchSave"]');
-  if (saveBtn) { saveBtn.disabled = true; saveBtn.dataset.origText = saveBtn.textContent; saveBtn.textContent = 'Saving...'; }
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.dataset.origText = saveBtn.textContent; saveBtn.textContent = 'Saving\u2026'; }
 
   let success = true;
   try {
@@ -1697,21 +1700,23 @@ async function researchSave() {
     }
   } catch (err) {
     console.error('researchSave error:', err);
-    showToast('Save failed: ' + err.message + ' — please retry or skip', 'error');
+    showToast('Save failed: ' + err.message + ' \u2014 please retry or skip', 'error');
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; }
+    _researchSaving = false;
     return;
   }
 
-  if (!success) { if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; } return; }
+  if (!success) { if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; } _researchSaving = false; return; }
 
   researchCompleted++;
   researchIdx++;
+  _researchSaving = false;
 
   if (researchIdx >= researchQueue.length) {
     renderGovTab();
     showToast('Research queue complete! All items reviewed.', 'success');
   } else {
-    showToast('Saved — advancing to next item (' + researchIdx + '/' + researchQueue.length + ')', 'success');
+    showToast('Saved \u2014 advancing to next item (' + researchIdx + '/' + researchQueue.length + ')', 'success');
     renderGovTab();
   }
 }
@@ -2317,6 +2322,7 @@ async function researchMark(mark) {
 }
 
 function researchNav(dir, isSkip) {
+  if (_researchSaving) { showToast('Save in progress \u2014 please wait', 'info'); return; }
   const prevIdx = researchIdx;
   researchIdx += dir;
 
@@ -2376,10 +2382,10 @@ function setResearchFilter(filter) {
       if (govResearchStep > 0) govStepNav(govResearchStep - 1);
     } else if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
-      researchSave();
+      if (!_researchSaving) researchSave();
     } else if (e.key === 'k' || e.key === 'K') {
       e.preventDefault();
-      researchNav(1, true);
+      if (!_researchSaving) researchNav(1, true);
     }
   });
 })();
