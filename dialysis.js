@@ -102,7 +102,13 @@ async function diaQuery(table, select, params = {}) {
 async function diaQueryAll(table, select, params = {}) {
   let all = [], offset = 0;
   const pageSize = 1000;
+  const maxTime = 120000; // 2-minute total timeout
+  const start = Date.now();
   while (true) {
+    if (Date.now() - start > maxTime) {
+      console.warn('diaQueryAll(' + table + ') total timeout after ' + Math.round((Date.now() - start) / 1000) + 's — returning ' + all.length + ' rows');
+      break;
+    }
     const rows = await diaQuery(table, select, { ...params, limit: pageSize, offset });
     all = all.concat(rows);
     if (rows.length < pageSize) break;

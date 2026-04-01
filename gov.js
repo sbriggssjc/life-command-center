@@ -2261,23 +2261,26 @@ async function researchMark(mark) {
   const rec = researchQueue[researchIdx];
   if (!rec) return;
 
+  // Disable all mark buttons during async operation
+  const markBtns = document.querySelectorAll('.research-card .action-row button[onclick*="researchMark"]');
+  markBtns.forEach(b => { b.disabled = true; });
+
   let status = 'marked';
   if (mark === 'spe_rename') status = 'spe_rename';
   if (mark === 'na') status = 'not_applicable';
 
+  const _reEnableMarks = () => markBtns.forEach(b => { b.disabled = false; });
+
   if (researchMode === 'ownership') {
-    // ownership_history is not write-service-protected — patch directly
     const ok = await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, { research_status: status });
-    if (!ok) return;
+    if (!ok) { _reEnableMarks(); return; }
   } else if (researchMode === 'intel') {
-    // Intel marks go to properties table
     const propertyId = rec.property_id;
     if (propertyId) {
       const ok = await patchRecord('properties', 'property_id', propertyId, { intel_status: status });
-      if (!ok) return;
+      if (!ok) { _reEnableMarks(); return; }
     }
   } else {
-    // prospect_leads must use Gov write service
     try {
       await govWriteService('lead-research', {
         lead_id: rec.lead_id,
@@ -2286,6 +2289,7 @@ async function researchMark(mark) {
     } catch (err) {
       console.error('Error marking lead via write service:', err);
       showToast('Error saving: ' + err.message, 'error');
+      _reEnableMarks();
       return;
     }
   }
@@ -4299,7 +4303,7 @@ function renderGovMonitorDashboard() {
   html += `<div class="pipeline-header">
     <div class="header-title">Monitor Dashboard</div>
     <div class="header-subtitle">Data health, freshness, and quality metrics</div>
-    <button class="btn-action default" onclick="govMonitorData=null;loadGovMonitorData();" style="margin-left:auto;padding:4px 10px;font-size:11px;">Refresh</button>
+    <button class="btn-action default" onclick="if(!govMonitorLoading){this.disabled=true;this.textContent='Refreshing...';govMonitorData=null;loadGovMonitorData();}" style="margin-left:auto;padding:4px 10px;font-size:11px;">${govMonitorLoading ? 'Refreshing...' : 'Refresh'}</button>
   </div>`;
 
   // Panel 1: Lead Gap Report (live data)
