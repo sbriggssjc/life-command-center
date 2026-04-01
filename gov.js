@@ -1226,7 +1226,7 @@ function renderOwnershipResearchCard(rec) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
   html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
   html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
   html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
@@ -1426,7 +1426,7 @@ function renderLeadResearchCard(rec) {
   } else {
     html += `<button class="btn-action primary" onclick="researchSave()">Save & Next</button>`;
   }
-  html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
   html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
 
@@ -1637,7 +1637,7 @@ function renderIntelResearchCard(rec) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
   html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="researchSave()">Save & Next</button>`;
-  html += `<button class="btn-action" onclick="researchNav(1)">Skip</button>`;
+  html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
   html += `<button class="btn-action" onclick="researchMark('spe_rename')">SPE Rename</button>`;
   html += `<button class="btn-action" onclick="researchMark('na')">N/A</button>`;
   html += '</div>';
@@ -1746,28 +1746,34 @@ async function saveOwnership(rec) {
 
   // ownership_history is not a write-service-protected table — patch directly for
   // sale price, cap rate, and other research fields that live on the history row
-  await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, {
-    sale_date: saleDate,
-    sale_price: salePrice,
-    cap_rate: capRate,
-    buyer: buyer,
-    seller: seller,
-    recorded_owner_name: recordedOwner,
-    state_of_incorporation: q('#res-own-incorporation')?.value || null,
-    recorded_owner_phone: q('#res-own-phone')?.value || null,
-    recorded_owner_address: q('#res-own-mailing')?.value || null,
-    true_owner_name: trueOwner,
-    principal_names: q('#res-own-principal-names')?.value || null,
-    phone_2: q('#res-own-phone-2')?.value || null,
-    mailing_address_2: q('#res-own-mailing-2')?.value || null,
-    rba: parseFloat(q('#res-own-rba')?.value) || null,
-    land_acres: parseFloat(q('#res-own-land-acres')?.value) || null,
-    year_built: parseInt(q('#res-own-year-built')?.value) || null,
-    year_renovated: parseInt(q('#res-own-year-renovated')?.value) || null,
-    research_notes: researchNotes,
-    research_status: 'completed',
-    evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
-  });
+  let _partialWarnings = [];
+  try {
+    await patchRecord('ownership_history', 'ownership_id', rec.ownership_id, {
+      sale_date: saleDate,
+      sale_price: salePrice,
+      cap_rate: capRate,
+      buyer: buyer,
+      seller: seller,
+      recorded_owner_name: recordedOwner,
+      state_of_incorporation: q('#res-own-incorporation')?.value || null,
+      recorded_owner_phone: q('#res-own-phone')?.value || null,
+      recorded_owner_address: q('#res-own-mailing')?.value || null,
+      true_owner_name: trueOwner,
+      principal_names: q('#res-own-principal-names')?.value || null,
+      phone_2: q('#res-own-phone-2')?.value || null,
+      mailing_address_2: q('#res-own-mailing-2')?.value || null,
+      rba: parseFloat(q('#res-own-rba')?.value) || null,
+      land_acres: parseFloat(q('#res-own-land-acres')?.value) || null,
+      year_built: parseInt(q('#res-own-year-built')?.value) || null,
+      year_renovated: parseInt(q('#res-own-year-renovated')?.value) || null,
+      research_notes: researchNotes,
+      research_status: 'completed',
+      evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
+    });
+  } catch (err) {
+    console.error('Ownership history patch error:', err);
+    _partialWarnings.push('ownership history');
+  }
 
   // Bridge to canonical model with gov change metadata
   canonicalBridge('save_ownership', {
@@ -1801,8 +1807,9 @@ async function saveOwnership(rec) {
   }
 
   if (salePrice || capRate) {
-    await saveLoanFields(rec);
+    try { await saveLoanFields(rec); } catch (err) { console.error('Loan fields save error:', err); _partialWarnings.push('loan fields'); }
   }
+  if (_partialWarnings.length) showToast('Saved with warnings — failed to update: ' + _partialWarnings.join(', '), 'error');
 }
 
 async function saveLead(rec) {
@@ -1840,6 +1847,7 @@ async function saveLead(rec) {
   }
 
   // ── Prior Sale → sales_transactions ──
+  let _leadPartialWarnings = [];
   const propertyId = rec.matched_property_id || rec.property_id;
   if ((saleDate || salePrice || buyer || seller) && propertyId) {
     try {
@@ -1861,6 +1869,7 @@ async function saveLead(rec) {
       });
     } catch (err) {
       console.error('Error saving sale transaction from lead:', err);
+      _leadPartialWarnings.push('sale transaction');
     }
   }
 
@@ -1892,7 +1901,8 @@ async function saveLead(rec) {
     if (estValue) propPatch.current_value_estimate = estValue;
 
     if (Object.keys(propPatch).length > 0) {
-      await patchRecord('properties', 'property_id', propertyId, propPatch);
+      try { await patchRecord('properties', 'property_id', propertyId, propPatch); }
+      catch (err) { console.error('Property patch error:', err); _leadPartialWarnings.push('property details'); }
     }
   }
 
@@ -1935,9 +1945,12 @@ async function saveLead(rec) {
         });
       } catch (err) {
         console.error('Error saving loan from lead:', err);
+        _leadPartialWarnings.push('loan');
       }
     }
   }
+
+  if (_leadPartialWarnings.length) showToast('Saved with warnings — failed to update: ' + _leadPartialWarnings.join(', '), 'error');
 
   // Bridge to canonical model with gov change metadata
   canonicalBridge('complete_research', {
@@ -2295,18 +2308,23 @@ async function researchMark(mark) {
   }
 
   const markLabel = mark === 'spe_rename' ? 'SPE Rename' : mark === 'na' ? 'N/A' : mark;
-  showToast('Marked as ' + markLabel, 'info');
+  showToast('Marked as ' + markLabel, 'success');
   researchIdx++;
   renderGovTab();
 }
 
-function researchNav(dir) {
+function researchNav(dir, isSkip) {
+  const prevIdx = researchIdx;
   researchIdx += dir;
 
-  if (researchIdx < 0) researchIdx = 0;
-  if (researchIdx >= researchQueue.length) {
+  if (researchIdx < 0) {
+    researchIdx = 0;
+    if (prevIdx === 0) showToast('Already at start of queue', 'info');
+  } else if (researchIdx >= researchQueue.length) {
     researchIdx = Math.max(0, researchQueue.length - 1);
     showToast('End of queue reached', 'info');
+  } else if (isSkip) {
+    showToast('Skipped — ' + (researchIdx + 1) + ' / ' + researchQueue.length, 'info');
   }
 
   renderGovTab();
@@ -2358,7 +2376,7 @@ function setResearchFilter(filter) {
       researchSave();
     } else if (e.key === 'k' || e.key === 'K') {
       e.preventDefault();
-      researchNav(1);
+      researchNav(1, true);
     }
   });
 })();
