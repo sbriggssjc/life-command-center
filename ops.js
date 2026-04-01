@@ -734,48 +734,31 @@ function updateTriageCount() {
   if (el) el.textContent = `${opsInboxSelected.size} selected`;
 }
 
-async function bulkTriageInbox(status, btn) {
+async function bulkTriageInbox(status) {
   if (!opsInboxSelected.size) { showToast('Select items first', 'error'); return; }
   const ids = Array.from(opsInboxSelected);
   const statusLabel = status === 'dismissed' ? 'Dismissing' : 'Triaging';
-  // Disable all bulk action buttons during operation
-  const bulkBtns = document.querySelectorAll('[onclick*="bulkTriageInbox"], [onclick*="bulkPromoteInbox"]');
-  bulkBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
   showToast(`${statusLabel} ${ids.length} items...`, 'info');
-  try {
-    const res = await opsPost('/api/workflows?action=bulk_triage', { item_ids: ids, status });
-    if (res.ok) {
-      showToast(`${ids.length} item${ids.length > 1 ? 's' : ''} ${status}`, 'success');
-      renderInboxTriage();
-    } else {
-      showToast(res.error || 'Bulk triage failed', 'error');
-    }
-  } catch (e) {
-    showToast('Bulk triage error: ' + e.message, 'error');
-  } finally {
-    bulkBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+  const res = await opsPost('/api/workflows?action=bulk_triage', { item_ids: ids, status });
+  if (res.ok) {
+    showToast(`${ids.length} item${ids.length > 1 ? 's' : ''} ${status}`, 'success');
+    renderInboxTriage();
+  } else {
+    showToast(res.error || 'Bulk triage failed', 'error');
   }
 }
 
 async function bulkPromoteInbox() {
   if (!opsInboxSelected.size) { showToast('Select items first', 'error'); return; }
-  const bulkBtns = document.querySelectorAll('[onclick*="bulkTriageInbox"], [onclick*="bulkPromoteInbox"]');
-  bulkBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
   showToast(`Promoting ${opsInboxSelected.size} items...`, 'info');
   let promoted = 0, failed = 0;
-  try {
-    for (const id of opsInboxSelected) {
-      const res = await opsPost('/api/workflows?action=promote_to_shared', { inbox_item_id: id });
-      if (res.ok) promoted++; else failed++;
-    }
-    if (failed) showToast(`${promoted} promoted, ${failed} failed`, promoted ? 'success' : 'error');
-    else showToast(`${promoted} item${promoted > 1 ? 's' : ''} promoted to shared actions`, 'success');
-    renderInboxTriage();
-  } catch (e) {
-    showToast('Promote error: ' + e.message, 'error');
-  } finally {
-    bulkBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+  for (const id of opsInboxSelected) {
+    const res = await opsPost('/api/workflows?action=promote_to_shared', { inbox_item_id: id });
+    if (res.ok) promoted++; else failed++;
   }
+  if (failed) showToast(`${promoted} promoted, ${failed} failed`, promoted ? 'success' : 'error');
+  else showToast(`${promoted} item${promoted > 1 ? 's' : ''} promoted to shared actions`, 'success');
+  renderInboxTriage();
 }
 
 async function triageSingle(id) {

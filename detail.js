@@ -6,38 +6,6 @@
 
 // Cache for the current detail data (avoids re-fetch on tab switch)
 let _udCache = null;
-let _udFormDirty = false; // track unsaved form edits for beforeunload guard
-
-/**
- * Generic async button guard — disables button during operation, shows "Saving…",
- * re-enables on completion or error. Prevents double-clicks on any async save.
- * Usage: onclick="_udBtnGuard(this, _intelSavePriorSale)"
- */
-async function _udBtnGuard(btn, fn, ...args) {
-  if (!btn || btn.disabled) return;
-  const orig = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Saving\u2026'; btn.style.opacity = '0.6';
-  try { await fn(...args); _udFormDirty = false; } finally { btn.disabled = false; btn.textContent = orig; btn.style.opacity = ''; }
-}
-
-/**
- * Action button guard — same pattern but shows "Working…" instead of "Saving…"
- */
-async function _udActionBtnGuard(btn, fn, ...args) {
-  if (!btn || btn.disabled) return;
-  const orig = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Working\u2026'; btn.style.opacity = '0.6';
-  try { await fn(...args); } finally { btn.disabled = false; btn.textContent = orig; btn.style.opacity = ''; }
-}
-
-// ── beforeunload guard: warn if user navigates away with unsaved edits ──
-window.addEventListener('beforeunload', function (e) {
-  if (_udFormDirty) { e.preventDefault(); e.returnValue = ''; }
-});
-// Mark form dirty on input within the detail panel
-document.addEventListener('input', function (e) {
-  if (e.target.closest('#detailBody')) _udFormDirty = true;
-});
 let _udAssistantState = {
   ownership: { loading: false, reply: '', error: '' },
   intel: { loading: false, reply: '', error: '' },
@@ -169,8 +137,7 @@ async function openUnifiedDetail(db, ids, fallback) {
       promises.push(Promise.resolve(db === 'gov' ? { data: [], count: 0 } : []));
     }
 
-    const settled = await Promise.allSettled(promises);
-    let _partialFail = false;
+    const results = await Promise.all(promises);
 
     // Normalize results — govQuery returns {data,count}, diaQuery returns array
     const extract = (r) => {
@@ -178,20 +145,12 @@ async function openUnifiedDetail(db, ids, fallback) {
       if (r && r.data) return r.data;
       return [];
     };
-    const safeExtract = (idx) => {
-      if (settled[idx].status === 'fulfilled') return extract(settled[idx].value);
-      console.warn('Detail load partial failure [' + idx + ']:', settled[idx].reason);
-      _partialFail = true;
-      return [];
-    };
 
-    const property = safeExtract(0)[0] || null;
-    const leases = safeExtract(1) || [];
-    const ownership = safeExtract(2)[0] || null;
-    const chain = safeExtract(3) || [];
-    const rankings = safeExtract(4)[0] || null;
-
-    if (_partialFail) showToast('Some detail sections failed to load — showing available data', 'error');
+    const property = extract(results[0])[0] || null;
+    const leases = extract(results[1]) || [];
+    const ownership = extract(results[2])[0] || null;
+    const chain = extract(results[3]) || [];
+    const rankings = extract(results[4])[0] || null;
 
     // If all views returned empty, use the fallback record's fields as a synthetic property
     const allEmpty = !property && leases.length === 0 && !ownership && chain.length === 0;
@@ -1095,7 +1054,7 @@ function _udTabOwnership() {
   html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Notes</label>';
   html += '<textarea id="udOwnNotes" rows="2" placeholder="Research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea></div>';
 
-  html += `<button onclick="_udBtnGuard(this, _udSaveOwnership)" style="margin-top:10px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership Resolution</button>`;
+  html += `<button onclick="_udSaveOwnership()" style="margin-top:10px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer">Save Ownership Resolution</button>`;
   html += '</div>';
 
   // ── OWNERSHIP HISTORY (CHAIN) ──────────────────────────────────────
@@ -1346,7 +1305,7 @@ function _udTabIntel() {
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Seller</label>';
   html += '<input id="intelSeller" type="text" placeholder="Entity name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
-  html += '<button onclick="_udBtnGuard(this, _intelSavePriorSale)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Prior Sale</button>';
+  html += '<button onclick="_intelSavePriorSale()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Prior Sale</button>';
   html += '</div></div>';
 
   // ── LOAN / DEBT SECTION ─────────────────────────────────────────────────────
@@ -1389,7 +1348,7 @@ function _udTabIntel() {
   html += '</div>';
   html += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">LTV (%)</label>';
   html += '<input id="intelLTV" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<button onclick="_udBtnGuard(this, _intelSaveLoan)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Loan Info</button>';
+  html += '<button onclick="_intelSaveLoan()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Loan Info</button>';
   html += '</div></div>';
 
   // ── CASH FLOW / VALUATION SECTION ───────────────────────────────────────────
@@ -1410,7 +1369,7 @@ function _udTabIntel() {
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Current Cap Rate (%)</label>';
   html += '<input id="intelCurrentCapRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
-  html += '<button onclick="_udBtnGuard(this, _intelSaveCashFlow)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Cash Flow</button>';
+  html += '<button onclick="_intelSaveCashFlow()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Cash Flow</button>';
   html += '</div></div>';
 
   // ── RESEARCH NOTES SECTION ──────────────────────────────────────────────────
@@ -1424,7 +1383,7 @@ function _udTabIntel() {
   html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Date Found</label>';
   html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
   html += '</div>';
-  html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
+  html += '<button onclick="_intelSaveNotes()" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
   html += '</div></div>';
 
   return html;
@@ -1715,10 +1674,10 @@ function _intelRenderIntakeAnalysis() {
   } else if (intake.analysis) {
     body = `<div class="assistant-copy">${typeof formatCopilotText === 'function' ? formatCopilotText(intake.analysis) : esc(intake.analysis)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-        <button class="q-action" onclick="_udActionBtnGuard(this, _intelCopyIntakeAnalysis)">Copy</button>
-        <button class="q-action" onclick="_udActionBtnGuard(this, _intelApplyIntakeFields)">Apply Extracted Facts</button>
-        <button class="q-action primary" onclick="_udBtnGuard(this, _intelSaveReviewed)">Save Reviewed Intel</button>
-        <button class="q-action primary" onclick="_udActionBtnGuard(this, _intelApplyIntakeAnalysis)">Apply to Notes</button>
+        <button class="q-action" onclick="_intelCopyIntakeAnalysis()">Copy</button>
+        <button class="q-action" onclick="_intelApplyIntakeFields()">Apply Extracted Facts to Fields</button>
+        <button class="q-action primary" onclick="_intelSaveReviewed()">Save Reviewed Intel</button>
+        <button class="q-action primary" onclick="_intelApplyIntakeAnalysis()">Apply to Research Notes</button>
       </div>`;
   }
   return `<div id="intelIntakeAnalysisPanel" class="assistant-panel" style="margin-top:12px">${body}</div>`;
@@ -2186,14 +2145,14 @@ function _udActionButtons() {
   html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">';
 
   if (db === 'gov') {
-    html += `<button class="q-action primary" onclick="_udActionBtnGuard(this, _udAction, 'add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Add to Pipeline</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
+    html += `<button class="q-action primary" onclick="_udAction('add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Add to Pipeline</button>`;
+    html += `<button class="q-action" onclick="_udAction('log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
+    html += `<button class="q-action" onclick="_udAction('create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
   } else if (db === 'dia') {
-    html += `<button class="q-action primary" onclick="_udActionBtnGuard(this, _udAction, 'mark_lead')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Mark as Lead</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Add to Pipeline</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
+    html += `<button class="q-action primary" onclick="_udAction('mark_lead')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Mark as Lead</button>`;
+    html += `<button class="q-action" onclick="_udAction('add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Add to Pipeline</button>`;
+    html += `<button class="q-action" onclick="_udAction('log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
+    html += `<button class="q-action" onclick="_udAction('create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
   }
 
   html += '</div></div>';
@@ -3447,8 +3406,6 @@ async function _udSaveReviewedOwnership() {
 }
 
 // Expose to global scope
-window._udBtnGuard = _udBtnGuard;
-window._udActionBtnGuard = _udActionBtnGuard;
 window.openUnifiedDetail = openUnifiedDetail;
 window.switchUnifiedTab = switchUnifiedTab;
 window.showUnifiedDetail = showUnifiedDetail;
