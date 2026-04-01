@@ -2407,7 +2407,7 @@ function renderDiaPropertyCard(item) {
     const skipBtn = document.querySelector(`[data-skip-prop="${item.clinic_id}"]`);
 
     if (confirmBtn) {
-      confirmBtn.addEventListener('click', () => {
+      confirmBtn.addEventListener('click', async () => {
         const outcome = q('#propOutcome')?.value;
         const propId = q('#propPropertyId')?.value;
         const source = q('#propSource')?.value;
@@ -2423,14 +2423,20 @@ function renderDiaPropertyCard(item) {
           return;
         }
 
-        saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes, source);
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('property_review', item.clinic_id, outcome, propId, notes, source);
+        if (!ok) { confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm Link'; }
       });
     }
 
     if (rejectBtn) {
-      rejectBtn.addEventListener('click', () => {
+      rejectBtn.addEventListener('click', async () => {
         const notes = q('#propNotes')?.value;
-        saveDiaOutcome('property_review', item.clinic_id, 'rejected_candidate', '', notes);
+        rejectBtn.disabled = true;
+        rejectBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('property_review', item.clinic_id, 'rejected_candidate', '', notes);
+        if (!ok) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject'; }
       });
     }
 
@@ -2733,7 +2739,7 @@ function renderDiaLeaseCard(item) {
     const skipBtn = document.querySelector(`[data-skip-lease="${item.clinic_id}"]`);
 
     if (verifyBtn) {
-      verifyBtn.addEventListener('click', () => {
+      verifyBtn.addEventListener('click', async () => {
         const outcome = q('#leaseOutcome')?.value;
         const propId = q('#leasePropertyId')?.value;
         const term = q('#leaseTerm')?.value;
@@ -2752,14 +2758,20 @@ function renderDiaLeaseCard(item) {
           return;
         }
 
-        saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes, source, term, rent, rentSF);
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('lease_backfill', item.clinic_id, outcome, propId, notes, source, term, rent, rentSF);
+        if (!ok) { verifyBtn.disabled = false; verifyBtn.textContent = 'Verify Lease'; }
       });
     }
 
     if (notownedBtn) {
-      notownedBtn.addEventListener('click', () => {
+      notownedBtn.addEventListener('click', async () => {
         const notes = q('#leaseNotes')?.value;
-        saveDiaOutcome('lease_backfill', item.clinic_id, 'not_owned', '', notes);
+        notownedBtn.disabled = true;
+        notownedBtn.textContent = 'Saving...';
+        const ok = await saveDiaOutcome('lease_backfill', item.clinic_id, 'not_owned', '', notes);
+        if (!ok) { notownedBtn.disabled = false; notownedBtn.textContent = 'Not Owned'; }
       });
     }
 
@@ -3307,7 +3319,8 @@ async function saveClinicLeadResearch(rec) {
  * Mark a clinic lead as N/A or other quick-status
  */
 async function markClinicLead(rec, status) {
-  await saveClinicLeadOutcome(rec.medicare_id, status, null, rec.property_id);
+  const ok = await saveClinicLeadOutcome(rec.medicare_id, status, null, rec.property_id);
+  if (!ok) return; // saveClinicLeadOutcome already showed error toast
 
   // Bridge to canonical model
   canonicalBridge(status === 'not_applicable' ? 'dismiss_lead' : 'complete_research', {
@@ -3444,9 +3457,11 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source
     // Reload data and re-render to advance to next record
     await loadDiaData();
     renderDiaTab();
+    return true;
   } catch (err) {
     console.error('saveDiaOutcome error:', err);
     showToast('Failed to save outcome: ' + err.message, 'error');
+    return false;
   }
 }
 
