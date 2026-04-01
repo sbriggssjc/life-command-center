@@ -3045,19 +3045,15 @@ function bindGovEvidenceWorkbench() {
     button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceReview), 'reviewed');
   });
   document.querySelectorAll('[data-gov-evidence-dismiss]').forEach((button) => {
-    button.onclick = async () => {
-      if (!(await lccConfirm('Dismiss this evidence observation?', 'Dismiss'))) return;
-      reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
-    };
+    button.onclick = () => reviewGovEvidenceObservation(Number(button.dataset.govEvidenceDismiss), 'dismissed');
   });
   document.querySelectorAll('[data-gov-evidence-dismiss-reason]').forEach((button) => {
-    button.onclick = async () => {
+    button.onclick = () => {
       const raw = button.dataset.govEvidenceDismissReason || '';
       const splitAt = raw.indexOf('::');
       if (splitAt <= 0) return;
       const idx = Number(raw.slice(0, splitAt));
       const reason = raw.slice(splitAt + 2);
-      if (!(await lccConfirm('Dismiss this observation with reason: "' + reason + '"?', 'Dismiss'))) return;
       reviewGovEvidenceObservation(idx, 'dismissed', `Broker dismiss reason: ${reason}`);
     };
   });
@@ -4154,8 +4150,7 @@ window.applyFinancialOverride = async function() {
   } catch(e) {
     console.error('applyFinancialOverride error:', e);
     showToast('Error applying override: ' + e.message, 'error');
-  } finally {
-    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Override'; applyBtn.style.opacity = ''; }
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply Override'; }
   }
 };
 
@@ -4337,7 +4332,7 @@ function renderGovMonitorDashboard() {
   html += `<div class="pipeline-header">
     <div class="header-title">Monitor Dashboard</div>
     <div class="header-subtitle">Data health, freshness, and quality metrics</div>
-    <button class="btn-action default" onclick="if(!govMonitorLoading){var _b=this;_b.disabled=true;_b.textContent='Refreshing\u2026';_b.style.opacity='0.6';govMonitorData=null;loadGovMonitorData().then(function(){_b.disabled=false;_b.textContent='Refresh';_b.style.opacity='';}).catch(function(){_b.disabled=false;_b.textContent='Refresh';_b.style.opacity='';});}" style="margin-left:auto;padding:4px 10px;font-size:11px;">${govMonitorLoading ? 'Refreshing\u2026' : 'Refresh'}</button>
+    <button class="btn-action default" onclick="if(!govMonitorLoading){this.disabled=true;this.textContent='Refreshing...';govMonitorData=null;loadGovMonitorData();}" style="margin-left:auto;padding:4px 10px;font-size:11px;">${govMonitorLoading ? 'Refreshing...' : 'Refresh'}</button>
   </div>`;
 
   // Panel 1: Lead Gap Report (live data)
