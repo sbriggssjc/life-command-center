@@ -22,6 +22,12 @@
 - 2026-04-02: Began extracting action-level details from `api/sync.js` and `api/workflows.js`.
 - 2026-04-02: Completed endpoint/workflow inventory across `api/*` and `_shared/*`; mapped frontend invocation paths from `app.js`, `ops.js`, `gov.js`, `detail.js`, and `contacts-ui.js`.
 - 2026-04-02: Authored final deliverable `copilot_capability_map_lcc.md` with required 12 sections and concrete action catalog.
+- 2026-04-02: Imported cross-repo synthesis reference doc into LCC: `copilot_authoritative_architecture_plan.md`.
+- 2026-04-02: Created architecture blueprint and companion placeholders under `docs/architecture/`:
+  - `copilot_operating_system_blueprint.md`
+  - `copilot_action_registry.md`
+  - `copilot_wave1_build_plan.md`
+  - `copilot_agent_catalog.md`
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.
