@@ -32,10 +32,18 @@ function truncate(text, maxLen = 220) {
 }
 
 function correlationToIsoFloor(correlationId) {
-  // ingest_emails uses: email-<timestamp>
-  const m = String(correlationId || '').match(/^email-(\d{10,})/);
-  if (!m) return null;
-  const ts = Number(m[1]);
+  // Known correlation formats include:
+  // - email-<timestamp>
+  // - outlook-msg-<hash>-<timestamp>
+  const raw = String(correlationId || '');
+  let ts = null;
+  const emailMatch = raw.match(/^email-(\d{10,})/);
+  if (emailMatch) {
+    ts = Number(emailMatch[1]);
+  } else {
+    const tailMatch = raw.match(/-(\d{10,})$/);
+    if (tailMatch) ts = Number(tailMatch[1]);
+  }
   if (!Number.isFinite(ts)) return null;
   // Include a small backoff window to avoid edge clock skew.
   return new Date(Math.max(0, ts - 5 * 60 * 1000)).toISOString();
@@ -103,4 +111,3 @@ export default withErrorHandler(async function handler(req, res) {
     items
   });
 });
-

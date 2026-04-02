@@ -34,6 +34,13 @@
   - Added Power Automate definition templates:
     - `flow-outlook-intake-to-teams.json`
     - `flow-outlook-intake-button-to-teams.json`
+- 2026-04-02: Hardened Outlook event semantics for deterministic single-message intake:
+  - Added `POST /api/intake-outlook-message` (`api/intake-outlook-message.js`)
+  - Updated intake summary correlation parsing for new deterministic IDs
+  - Updated workflow doc with current-vs-hardened guidance
+  - Added Adaptive Card template and hardened flow template:
+    - `docs/architecture/teams_outlook_intake_adaptive_card.json`
+    - `flow-outlook-intake-to-teams-hardened.json`
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.

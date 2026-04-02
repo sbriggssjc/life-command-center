@@ -1,137 +1,127 @@
-# Outlook -> Intake -> Team Visibility (Wave 1 Production Workflow)
+# Outlook -> Intake -> Teams (Wave 1) — Current vs Hardened
 
 ## Objective
-Implement Microsoft orchestration for the existing `ingest_outlook_flagged_emails` action without changing backend ingestion logic.
+Harden the Outlook-triggered intake workflow so one Outlook event maps deterministically to one intake orchestration event, without changing core domain ingestion logic.
+
+## Intake Semantics Review
+
+### Current implementation (`POST /api/sync?action=ingest_emails`)
+- Endpoint: `api/sync.js` -> `ingestEmails()`
+- Behavior: batch fetch from edge sync endpoint (`/sync/flagged-emails?limit=500`)
+- Implication: one Power Automate trigger can ingest multiple flagged emails, not only the triggering message
+- Use case fit: good for periodic/bulk sync, less deterministic for per-message event workflows
+
+### Hardened implementation (`POST /api/intake-outlook-message`)
+- Endpoint: `api/intake-outlook-message.js`
+- Behavior: accepts one Outlook message payload and upserts exactly one inbox item
+- Correlation: deterministic `correlation_id` derived from workspace + message id + received time
+- Use case fit: deterministic event-level Outlook -> Intake -> Teams orchestration
 
 ## Endpoints Used
+
+### Existing (unchanged)
 1. `POST /api/sync?action=ingest_emails`
-- Purpose: Trigger existing Outlook flagged-email ingestion.
-- Owner: LCC (`api/sync.js`, `ingestEmails`).
+- Batch sync ingest for flagged Outlook emails.
 
 2. `GET /api/intake-summary?correlation_id=<id>&limit=<n>`
-- Purpose: Return Teams-ready intake summary rows for the same ingestion run.
-- Owner: LCC (`api/intake-summary.js`).
+- Teams-friendly summary formatter for recently ingested intake records.
 
-## Power Automate Flow Spec
+### New thin orchestration endpoint
+3. `POST /api/intake-outlook-message`
+- Single-message event ingest
+- No ingestion pipeline redesign
+- No database schema changes
 
-### Flow A: Outlook Flag -> LCC Intake -> Teams Notification
+## Power Automate Flow Specs
 
+## Flow A (Current)
 Trigger:
-- `When an email is flagged (V3)` (Outlook)
-- Optional alternate trigger route is Flow B (button/manual) below.
+- `When an email is flagged (V3)`
 
-Actions:
-1. **Compose_EmailSummary**
-- Build a short summary from `bodyPreview`.
-- Example expression:
-`substring(triggerOutputs()?['body/bodyPreview'], 0, min(length(triggerOutputs()?['body/bodyPreview']), 220))`
+Steps:
+1. `POST /api/sync?action=ingest_emails`
+2. `GET /api/intake-summary?correlation_id=<from previous>&limit=1`
+3. Post Teams notification
 
-2. **HTTP_IngestEmails**
-- Method: `POST`
-- URI: `https://<LCC_HOST>/api/sync?action=ingest_emails`
-- Headers:
-  - `Content-Type: application/json`
-  - `x-lcc-key: <LCC_API_KEY>`
-  - `x-lcc-workspace: <WORKSPACE_ID>`
-- Body: `{}`
+Status:
+- Works today
+- Batch semantics (not strict 1:1 message mapping)
 
-Expected response payload:
-- `sync_job_id`
-- `correlation_id`
-- `status`
-- `processed`
-- `failed`
+## Flow B (Recommended Hardened Production)
+Trigger:
+- `When an email is flagged (V3)`
 
-3. **Condition_IngestSucceeded**
-- True when HTTP status is 200 and response `status` is `completed` or `partial`.
+Steps:
+1. `POST /api/intake-outlook-message`
+- Body includes specific triggering message fields:
+  - `message_id`
+  - `subject`
+  - `from`
+  - `body_preview`
+  - `received_date_time`
+  - `web_link`
+  - `has_attachments`
+  - `attachments[]` (optional)
 
-4. **HTTP_GetIntakeSummary** (on success branch)
-- Method: `GET`
-- URI: `https://<LCC_HOST>/api/intake-summary?correlation_id=@{body('HTTP_IngestEmails')?['correlation_id']}&limit=1`
-- Headers:
-  - `x-lcc-key: <LCC_API_KEY>`
-  - `x-lcc-workspace: <WORKSPACE_ID>`
+2. `GET /api/intake-summary?correlation_id=<from step 1>&limit=1`
 
-5. **Post_message_in_a_chat_or_channel (Teams connector)**
-- Channel: configured operations/intake channel.
-- Message body uses template below.
+3. Post Teams notification (Adaptive Card recommended)
 
-6. **Optional failure branch**
-- Post error summary to Teams (failed count, correlation id, sync job id).
+Status:
+- Deterministic single-event semantics
+- Reuses existing inbox model and summary formatting
+- Leaves core domain ingestion logic untouched
 
-### Flow B: Manual/Button Trigger -> LCC Intake -> Teams Notification
-
-Trigger options:
-- `Manually trigger a flow`
-- Optional custom button in Teams/Power Apps.
-
-Actions:
-- Reuse same steps as Flow A from `HTTP_IngestEmails` onward.
-- This gives "OR button" execution without touching ingestion internals.
-
-## Teams Message Template
-
-Use either markdown text or adaptive card. Below is markdown template.
+## Teams Notification — Markdown (simple)
 
 ```text
 📥 **New Intake Item Captured**
 
 **Sender:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['sender'], triggerOutputs()?['body/from'])}
 **Subject:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['subject'], triggerOutputs()?['body/subject'])}
-**Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], outputs('Compose_EmailSummary'))}
+**Summary:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['summary'], triggerOutputs()?['body/bodyPreview'])}
 
 🔗 **LCC Item:** @{coalesce(first(body('HTTP_GetIntakeSummary')?['items'])?['lcc_item_url'], 'https://<LCC_HOST>/?page=pageInbox')}
 
 **Suggested actions:** Triage | Assign | Promote
-
-_Run:_ @{body('HTTP_IngestEmails')?['correlation_id']}  
-_Processed:_ @{body('HTTP_IngestEmails')?['processed']}  
-_Failed:_ @{body('HTTP_IngestEmails')?['failed']}
 ```
 
-## Environment / Configuration Required
+## Teams Notification — Adaptive Card (recommended)
 
-### LCC / API
-- `LCC_API_KEY` (required in request headers for secure API access)
-- `x-lcc-workspace` value (workspace UUID used by flow)
-- `LCC_APP_URL` (recommended; used by `/api/intake-summary` to generate stable LCC links)
+Use file: `docs/architecture/teams_outlook_intake_adaptive_card.json`
 
-### Power Automate connections
-- Outlook connector (`office365`)
-- Teams connector (`teams`)
-- HTTP action enabled in tenant/environment
+Actions included:
+- `View in LCC`
+- `Triage`
+- `Assign`
+- `Promote`
 
-### Teams target configuration
-- Team and Channel ID for posting notifications
-- Service account / connection identity with permission to post
+All actions are `Action.OpenUrl` links back to LCC inbox context.
 
-## Setup Instructions
+## Environment / Setup Requirements
 
-1. **Create or reuse environment variables/secrets**
-- Confirm `LCC_API_KEY` is set in LCC runtime.
-- Set `LCC_APP_URL` to production URL (for example: `https://life-command-center-nine.vercel.app`).
+### LCC runtime
+- `LCC_API_KEY` (required for authenticated API calls from flow)
+- `LCC_APP_URL` (recommended for stable links generated by summary endpoint)
 
-2. **Import flow template**
-- Import `flow-outlook-intake-to-teams.json`.
-- Bind Outlook + Teams connections.
+### Flow headers
+- `x-lcc-key: <LCC_API_KEY>`
+- `x-lcc-workspace: <WORKSPACE_ID>`
 
-3. **Configure HTTP action values**
-- Replace `<LCC_HOST>`, `<LCC_API_KEY>`, `<WORKSPACE_ID>` placeholders.
+### Power Automate connectors
+- Outlook (`office365`)
+- Teams (`teams`)
+- HTTP action capability enabled
 
-4. **Configure Teams destination**
-- Select Team + Channel for intake notifications.
+## Setup Notes
+1. Keep current flow for bulk fallback if desired.
+2. For production deterministic event semantics, switch the trigger path to `POST /api/intake-outlook-message`.
+3. Keep Teams summary retrieval via `/api/intake-summary` so the message is consistently formatted.
+4. Import hardened flow JSON template:
+   - `flow-outlook-intake-to-teams-hardened.json`
+5. Configure Team/Channel IDs and LCC environment placeholders.
 
-5. **Test with flagged email**
-- Flag a real email in Outlook.
-- Verify ingest API returns success.
-- Verify Teams message includes sender/subject/summary/link.
-- Verify link opens LCC intake context.
-
-6. **Enable manual fallback flow (optional but recommended)**
-- Import/configure `flow-outlook-intake-button-to-teams.json`.
-- Use for operator-controlled re-runs.
-
-## Notes
-- No ingestion pipeline logic was modified.
-- No new database objects were added.
-- No UI features were added.
+## Non-Goals (explicit)
+- No ingestion pipeline redesign
+- No database schema changes
+- No new UI features
