@@ -41,6 +41,10 @@
   - Added Adaptive Card template and hardened flow template:
     - `docs/architecture/teams_outlook_intake_adaptive_card.json`
     - `flow-outlook-intake-to-teams-hardened.json`
+- 2026-04-02: Completed Vercel env secret usage audit and auth recommendation:
+  - Added `docs/architecture/vercel_secret_usage_audit.md`
+  - Audited usage/fallback/failure modes for WebEx, OPS, GOV, and DIA env vars
+  - Documented existing inbound auth pattern (`LCC_API_KEY` + `X-LCC-Key`) and Power Automate recommendation
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.
