@@ -28,6 +28,12 @@
   - `copilot_action_registry.md`
   - `copilot_wave1_build_plan.md`
   - `copilot_agent_catalog.md`
+- 2026-04-02: Implemented Wave 1 Outlook -> Intake -> Team Visibility orchestration assets:
+  - Added read-only Teams formatting endpoint: `api/intake-summary.js`
+  - Added flow documentation: `docs/architecture/outlook_intake_team_visibility_workflow.md`
+  - Added Power Automate definition templates:
+    - `flow-outlook-intake-to-teams.json`
+    - `flow-outlook-intake-button-to-teams.json`
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.
