@@ -2646,8 +2646,9 @@ function renderDiaPropertyResearch() {
     document.querySelectorAll('[data-prop-idx]').forEach(row => {
       row.addEventListener('click', e => {
         const idx = parseInt(e.currentTarget.dataset.propIdx, 10);
-        diaPropertyFilter.selectedIdx = idx;
-        renderDiaTab();
+        const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
+        const item = filtered[idx];
+        if (item) showDetail(item, 'dia-clinic');
       });
     });
 
@@ -2667,68 +2668,58 @@ function renderDiaPropertyResearch() {
  * Render property review card
  */
 function renderDiaPropertyCard(item) {
-  let html = '<div class="research-card" style="display: grid; grid-template-columns: 1fr 400px; gap: 20px; margin-top: 20px;">';
+  let html = '<div class="research-card" style="display: grid; grid-template-columns: 1fr 460px; gap: 20px; margin-top: 20px;">';
 
-  // Context panel (left) — EXPLAIN the issue and show what needs resolving
+  // Context panel (left)
   html += '<div class="research-context">';
 
-  // Task header with human-readable explanation
-  const reviewType = item.review_type || '';
-  const taskExplanations = {
-    'multiple_property_candidates': 'This clinic matches multiple properties in our database. Select the correct property or create a new one.',
-    'no_property_link': 'This clinic has no linked property record. Search for a matching property or create a new one.',
-    'address_mismatch': 'The clinic address doesn\'t match the linked property. Verify the correct address and update.',
-    'stale_match': 'This property link hasn\'t been verified recently. Confirm the link is still correct.',
-    'ownership_conflict': 'Ownership data conflicts between sources. Review and confirm the correct owner.',
-    'data_quality': 'Data quality flags detected. Review the fields below and correct any errors.'
-  };
-  const explanation = taskExplanations[reviewType] || ('Review needed: ' + (item.review_reason || reviewType).replace(/_/g, ' '));
+  // Task header
+  const isMismatch = (item.review_reason || '').toLowerCase().includes('mismatch') || (item.review_reason || '').toLowerCase().includes('conflict');
+  const badgeClass = isMismatch ? 'urgent' : !item.outcome ? 'needs-input' : 'ready';
+  const badgeText = isMismatch ? 'Urgent' : !item.outcome ? 'Needs Input' : 'Ready';
 
-  html += '<div style="padding:14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;">';
-  html += '<div style="font-weight:700;font-size:14px;margin-bottom:6px;color:var(--text)">What To Do</div>';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.5;">' + esc(explanation) + '</div>';
+  html += '<div class="task-header">';
+  html += '<div>';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700">Property Link Verification</h4>';
+  html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(item.review_type || '')} — ${esc(item.review_reason || '')}</div>`;
+  html += '</div>';
+  html += `<span class="task-badge ${badgeClass}">${badgeText}</span>`;
   html += '</div>';
 
-  // Clinic context — what we know
-  html += '<div style="background:var(--s2);border-radius:8px;padding:14px;margin-bottom:12px;">';
-  html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:10px;">Clinic Record</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">';
-  html += '<div><span style="color:var(--text3)">Facility:</span> <strong>' + esc(item.facility_name || '—') + '</strong></div>';
-  html += '<div><span style="color:var(--text3)">Clinic ID:</span> ' + esc(String(item.clinic_id || '—')) + '</div>';
-  html += '<div><span style="color:var(--text3)">Operator:</span> ' + (item.operator_name ? entityLink(item.operator_name, 'operator', null) : '—') + '</div>';
-  html += '<div><span style="color:var(--text3)">Patients:</span> ' + fmtN(item.total_patients || 0) + '</div>';
-  if (item.address) html += '<div><span style="color:var(--text3)">Address:</span> ' + esc(item.address) + '</div>';
-  if (item.city || item.state) html += '<div><span style="color:var(--text3)">Location:</span> ' + esc((item.city || '') + (item.city && item.state ? ', ' : '') + (item.state || '')) + '</div>';
-  html += '</div></div>';
+  // Context blocks
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Facility</div>`;
+  html += `<div class="context-value">${esc(item.facility_name || '')}</div>`;
+  html += `</div>`;
 
-  // If property_id exists, show linked property
-  if (item.property_id) {
-    html += '<div style="background:rgba(52,211,153,0.08);border-radius:8px;padding:14px;margin-bottom:12px;border-left:3px solid var(--accent);">';
-    html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);margin-bottom:6px;">Currently Linked Property</div>';
-    html += '<div style="font-size:12px;">Property #' + item.property_id;
-    if (item.property_name) html += ' — ' + esc(item.property_name);
-    if (item.property_address) html += '<br>' + esc(item.property_address);
-    html += '</div>';
-    html += '<button class="btn-action default" style="margin-top:8px;font-size:11px;padding:4px 10px;" onclick=\'showDetail(' + safeJSON(item) + ',"dia-clinic")\'>Open in Detail Panel</button>';
-    html += '</div>';
-  }
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Operator / Clinic ID</div>`;
+  html += `<div class="context-value">${item.operator_name ? entityLink(item.operator_name, 'operator', null) : ''} / ${esc(String(item.clinic_id || ''))}</div>`;
+  html += `</div>`;
 
-  // Review type detail + candidates
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Location</div>`;
+  html += `<div class="context-value">${esc(item.state || '')}</div>`;
+  html += `</div>`;
+
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Patients</div>`;
+  html += `<div class="context-value">${fmtN(item.total_patients || 0)}</div>`;
+  html += `</div>`;
+
   if (item.candidate_types) {
-    html += '<div style="background:rgba(251,191,36,0.06);border-radius:8px;padding:14px;margin-bottom:12px;border-left:3px solid #fbbf24;">';
-    html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#fbbf24;margin-bottom:6px;">Property Candidates</div>';
-    html += '<div style="font-size:12px;color:var(--text);">' + esc(item.candidate_types) + '</div>';
-    if (item.candidate_count) html += '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + item.candidate_count + ' potential matches found</div>';
-    html += '</div>';
+    html += `<div class="context-block">`;
+    html += `<div class="context-label">Candidate Types</div>`;
+    html += `<div class="context-value">${esc(item.candidate_types)}</div>`;
+    html += `</div>`;
   }
 
-  // Quick research links
-  const searchQ = (item.facility_name || '') + ' ' + (item.address || '') + ' ' + (item.city || '') + ' ' + (item.state || '');
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
-  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>';
-  const mapQ = encodeURIComponent((item.address || '') + ' ' + (item.city || '') + ' ' + (item.state || ''));
-  html += '<a href="https://www.google.com/maps/search/' + mapQ + '" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Maps</a>';
-  html += '</div>';
+  if (item.review_reason) {
+    html += `<div class="context-block">`;
+    html += `<div class="context-label">Review Reason</div>`;
+    html += `<div class="context-value">${esc(item.review_reason)}</div>`;
+    html += `</div>`;
+  }
 
   html += '</div>';
 
@@ -2989,8 +2980,9 @@ function renderDiaLeaseResearch() {
     document.querySelectorAll('[data-lease-idx]').forEach(row => {
       row.addEventListener('click', e => {
         const idx = parseInt(e.currentTarget.dataset.leaseIdx, 10);
-        diaLeaseFilter.selectedIdx = idx;
-        renderDiaTab();
+        const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
+        const item = filtered[idx];
+        if (item) showDetail(item, 'dia-clinic');
       });
     });
 
@@ -3010,66 +3002,52 @@ function renderDiaLeaseResearch() {
  * Render lease backfill card
  */
 function renderDiaLeaseCard(item) {
-  let html = '<div class="research-card" style="display: grid; grid-template-columns: 1fr 400px; gap: 20px; margin-top: 20px;">';
+  let html = '<div class="research-card" style="display: grid; grid-template-columns: 1fr 460px; gap: 20px; margin-top: 20px;">';
 
-  // Context panel (left) — explain what's needed and show current data
+  // Context panel (left)
   html += '<div class="research-context">';
 
-  // Human-readable task explanation
-  const backfillExplanations = {
-    'no_lease_data': 'This clinic has no lease information on file. Research and enter the lease terms.',
-    'expired_lease': 'The lease on file has expired. Verify if the lease was renewed and update the terms.',
-    'missing_rent': 'Lease exists but annual rent is missing. Find and enter the rent amount.',
-    'missing_term': 'Lease exists but the term/expiration is missing. Find and enter the lease term.',
-    'stale_data': 'Lease data hasn\'t been updated in over 12 months. Verify current terms.',
-  };
-  const explanation = backfillExplanations[item.backfill_reason] || ('Lease data needed: ' + (item.backfill_reason || 'missing information').replace(/_/g, ' '));
+  // Task header
+  const isUrgent = item.closure_watch_level === 'high';
+  const badgeClass = isUrgent ? 'urgent' : 'needs-input';
+  const badgeText = isUrgent ? 'Urgent' : 'Needs Input';
 
-  html += '<div style="padding:14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;">';
-  html += '<div style="font-weight:700;font-size:14px;margin-bottom:6px;color:var(--text)">What To Do</div>';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.5;">' + esc(explanation) + '</div>';
+  html += '<div class="task-header">';
+  html += '<div>';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700">Lease Data Backfill</h4>';
+  html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">Closure Watch: ${esc(item.closure_watch_level || 'none')} — ${esc(item.backfill_reason || '')}</div>`;
+  html += '</div>';
+  html += `<span class="task-badge ${badgeClass}">${badgeText}</span>`;
   html += '</div>';
 
-  // Clinic context
-  html += '<div style="background:var(--s2);border-radius:8px;padding:14px;margin-bottom:12px;">';
-  html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:10px;">Clinic Info</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">';
-  html += '<div><span style="color:var(--text3)">Facility:</span> <strong>' + esc(item.facility_name || '—') + '</strong></div>';
-  html += '<div><span style="color:var(--text3)">Clinic ID:</span> ' + esc(String(item.clinic_id || '—')) + '</div>';
-  html += '<div><span style="color:var(--text3)">Operator:</span> ' + (item.operator_name ? entityLink(item.operator_name, 'operator', null) : '—') + '</div>';
-  html += '<div><span style="color:var(--text3)">Patients:</span> ' + fmtN(item.total_patients || 0) + '</div>';
-  if (item.address) html += '<div><span style="color:var(--text3)">Address:</span> ' + esc(item.address) + '</div>';
-  if (item.city || item.state) html += '<div><span style="color:var(--text3)">Location:</span> ' + esc((item.city || '') + (item.city && item.state ? ', ' : '') + (item.state || '')) + '</div>';
-  html += '</div></div>';
+  // Context blocks
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Facility</div>`;
+  html += `<div class="context-value">${esc(item.facility_name || '')}</div>`;
+  html += `</div>`;
 
-  // Current lease data on file — show what exists vs. what's missing
-  html += '<div style="background:var(--s2);border-radius:8px;padding:14px;margin-bottom:12px;">';
-  html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:10px;">Lease Data On File</div>';
-  const leaseFields = [
-    { label: 'Property ID', value: item.property_id, key: 'property_id' },
-    { label: 'Lease Term', value: item.lease_term, key: 'lease_term' },
-    { label: 'Annual Rent', value: item.annual_rent ? '$' + fmtN(Math.round(item.annual_rent)) : null, key: 'annual_rent' },
-    { label: 'Rent/SF', value: item.rent_per_sf ? '$' + Number(item.rent_per_sf).toFixed(2) : null, key: 'rent_per_sf' },
-    { label: 'Expiration', value: item.lease_expiration, key: 'lease_expiration' },
-    { label: 'Watch Level', value: item.closure_watch_level, key: 'closure_watch_level' },
-  ];
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px;">';
-  leaseFields.forEach(f => {
-    const hasVal = f.value != null && String(f.value).trim() !== '';
-    const icon = hasVal ? '<span style="color:var(--success)">✓</span>' : '<span style="color:#f87171">○</span>';
-    html += '<div>' + icon + ' <span style="color:var(--text3)">' + f.label + ':</span> ' + (hasVal ? '<strong>' + esc(String(f.value)) + '</strong>' : '<span style="color:#f87171">Missing</span>') + '</div>';
-  });
-  html += '</div></div>';
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Operator / Clinic ID</div>`;
+  html += `<div class="context-value">${item.operator_name ? entityLink(item.operator_name, 'operator', null) : ''} / ${esc(String(item.clinic_id || ''))}</div>`;
+  html += `</div>`;
 
-  // Quick research links
-  const searchQ = (item.facility_name || '') + ' ' + (item.address || '') + ' ' + (item.city || '') + ' ' + (item.state || '') + ' lease';
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
-  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>';
-  if (item.city && item.state) {
-    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(item.city + ' ' + item.state + ' county property records') + '" target="_blank" rel="noopener" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">County Records</a>';
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Patients</div>`;
+  html += `<div class="context-value">${fmtN(item.total_patients || 0)}</div>`;
+  html += `</div>`;
+
+  html += `<div class="context-block">`;
+  html += `<div class="context-label">Closure Watch Level</div>`;
+  const watchColor = item.closure_watch_level === 'high' ? '#f87171' : 'var(--text2)';
+  html += `<div class="context-value" style="color: ${watchColor};">${esc(item.closure_watch_level || 'none')}</div>`;
+  html += `</div>`;
+
+  if (item.backfill_reason) {
+    html += `<div class="context-block">`;
+    html += `<div class="context-label">Backfill Reason</div>`;
+    html += `<div class="context-value">${esc(item.backfill_reason)}</div>`;
+    html += `</div>`;
   }
-  html += '<button class="btn-action default" style="font-size:11px;padding:4px 10px;" onclick=\'showDetail(' + safeJSON(item) + ',"dia-clinic")\'>Open Detail Panel</button>';
-  html += '</div>';
 
   html += '</div>';
 
@@ -3396,12 +3374,11 @@ function renderDiaClinicLeads() {
 
   // Attach handlers
   setTimeout(() => {
-    // Row clicks — show inline research card below table
+    // Row clicks — open unified detail sidebar
     document.querySelectorAll('.cl-row').forEach(el => {
       el.addEventListener('click', () => {
         const idx = parseInt(el.dataset.clIdx, 10);
-        diaClinicLeadFilter.selectedIdx = idx;
-        renderDiaTab();
+        if (page[idx]) showDetail(page[idx], 'dia-clinic');
       });
     });
     // Category filter
@@ -3471,66 +3448,6 @@ function renderClinicLeadCard(rec) {
   html += `<span style="display:inline-block;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;background:${tierColor}20;color:${tierColor}">${rec.priority_score} pts</span>`;
   html += `<div style="font-size:10px;color:var(--text3);margin-top:2px">${(rec.research_category || '').replace('_', ' ').toUpperCase()}</div>`;
   html += `</div></div>`;
-
-  // Category-specific "What To Do" explanation
-  const categoryExplanations = {
-    'ownership_gap': {
-      title: 'Ownership Gap — Identify Who Owns This Property',
-      body: 'This clinic has missing or incomplete ownership data. Research the property owner, verify the operating entity, and fill in the ownership fields below. Check county records, Secretary of State filings, and Google to find the recorded owner and principals.',
-      color: '#fbbf24',
-      fields: [
-        { label: 'Recorded Owner', value: rec.recorded_owner },
-        { label: 'True Owner', value: rec.true_owner },
-        { label: 'State of Incorporation', value: rec.state_of_incorporation },
-        { label: 'Principal Names', value: rec.principal_names },
-        { label: 'Ownership Tenure', value: rec.ownership_tenure_yrs ? rec.ownership_tenure_yrs + ' yrs' : null },
-      ]
-    },
-    'seller_signal': {
-      title: 'Seller Signal — Evaluate Disposition Likelihood',
-      body: 'This clinic shows signals that the owner may be willing to sell (loan maturity, aging ownership, distress indicators). Review the signal details below, verify accuracy, and determine if outreach is warranted.',
-      color: '#f87171',
-      fields: [
-        { label: 'Loan Maturity', value: rec.months_to_maturity != null ? rec.months_to_maturity + ' months' : null },
-        { label: 'Loan Amount', value: rec.loan_amount ? '$' + fmtN(Math.round(rec.loan_amount)) : null },
-        { label: 'Lender', value: rec.lender_name },
-        { label: 'Ownership Tenure', value: rec.ownership_tenure_yrs ? rec.ownership_tenure_yrs + ' yrs' : null },
-        { label: 'Recorded Owner', value: rec.recorded_owner },
-        { label: 'Est. Revenue', value: rec.estimated_annual_revenue ? '$' + fmtN(Math.round(rec.estimated_annual_revenue)) : null },
-      ]
-    },
-    'unlinked': {
-      title: 'Unlinked Clinic — Match to a Property Record',
-      body: 'This clinic exists in CMS data but is not linked to a property in the database. Search for an existing property match or create a new property record, then link it.',
-      color: '#60a5fa',
-      fields: [
-        { label: 'Address', value: rec.address },
-        { label: 'City/State', value: (rec.city || '') + (rec.city && rec.state ? ', ' : '') + (rec.state || '') || null },
-        { label: 'Building SF', value: rec.building_size ? fmtN(Math.round(rec.building_size)) + ' SF' : null },
-        { label: 'Year Built', value: rec.year_built },
-      ]
-    }
-  };
-  const catInfo = categoryExplanations[rec.research_category] || {
-    title: 'Research Needed',
-    body: 'Review this clinic record and fill in any missing information.',
-    color: '#94a3b8',
-    fields: []
-  };
-
-  html += `<div style="padding:14px;background:${catInfo.color}14;border-radius:8px;border-left:3px solid ${catInfo.color};margin-bottom:16px;">`;
-  html += `<div style="font-weight:700;font-size:14px;margin-bottom:6px;color:var(--text)">${esc(catInfo.title)}</div>`;
-  html += `<div style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:10px;">${esc(catInfo.body)}</div>`;
-  if (catInfo.fields.length) {
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px;">';
-    catInfo.fields.forEach(f => {
-      const hasVal = f.value != null && String(f.value).trim() !== '';
-      const icon = hasVal ? '<span style="color:var(--success)">✓</span>' : '<span style="color:#f87171">○</span>';
-      html += '<div>' + icon + ' <span style="color:var(--text3)">' + esc(f.label) + ':</span> ' + (hasVal ? '<strong>' + esc(String(f.value)) + '</strong>' : '<span style="color:#f87171">Missing</span>') + '</div>';
-    });
-    html += '</div>';
-  }
-  html += '</div>';
 
   // Context grid
   html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;font-size:12px">';
