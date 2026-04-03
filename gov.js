@@ -228,12 +228,13 @@ async function loadGovData() {
   _govDataLoading = true;
 
   // Kick off fast overview stats immediately (non-blocking)
+  // This renders the overview in ~100ms while the full data load takes 20s
   if (!govOverviewStats && !govOverviewStatsLoading) {
     loadGovOverviewStats();
   }
 
   // Show loading indicator (only if overview stats haven't rendered yet)
-  var inner = document.getElementById('bizPageInner');
+  const inner = document.getElementById('bizPageInner');
   if (inner && !govOverviewStats) {
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading government data...</p></div>';
   }
@@ -251,73 +252,47 @@ async function loadGovData() {
   govData.countyAuth = [];
   govData.loans = [];
   govData.researchOutcomes = [];
-
+  
   showToast('Loading government data...', 'info');
   var _govLoadStart = Date.now();
 
   try {
-    // ── PHASE 1: Critical data for overview + research ────────────────
-    // Loads leads, portfolio properties, property count, listings first
-    // so the dashboard renders quickly (~3-5s) before heavier tables arrive
-    var [leadsRes, portfolioPropsRes, propsCountRes, listingsRes] = await Promise.all([
+    // BATCH 1: Load all independent queries in parallel
+    // Page size 5000 (MAX_LIMIT) + count=false on inner pages minimises round-trips
+    const [
+      ownershipRes,
+      leadsRes,
+      listingsRes,
+      contactsRes,
+      gsaEventsRes,
+      researchOutcomesRes,
+      gsaSnapshotsRes,
+      frppRes,
+      loansRes,
+      propsCountRes,
+      countyAuthRes,
+      portfolioPropsRes,
+      salesCompsRes
+    ] = await Promise.all([
+      // Paginated queries using govQueryAll
+      govQueryAll('ownership_history',
+        'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
+        { order: 'estimated_value.desc' }
+      ),
       govQueryAll('prospect_leads',
         'lead_id, lease_number, location_code, address, city, state, lessor_name, annual_rent, estimated_value, square_feet, year_built, agency_full_name, tenant_agency, lease_effective, lease_expiration, firm_term_remaining, priority_score, lead_temperature, lead_source, pipeline_status, research_status, contact_name, contact_phone, contact_email, contact_company, contact_title, recorded_owner, true_owner, owner_type, research_notes, matched_property_id, matched_contact_id, sf_lead_id, sf_contact_id, sf_opportunity_id, sf_sync_status, state_of_incorporation, phone_2, mailing_address, mailing_address_2, principal_names, rba, land_acres, year_renovated',
         { order: 'priority_score.desc' }
       ),
-      _loadPaginatedQuery('properties',
-        'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type'
-      ),
-      govQuery('properties', 'property_id', { limit: 0 }),
       govQueryAll('available_listings',
         'listing_id, address, city, state, asking_price, asking_cap_rate, listing_source, listing_status, url_status, days_on_market, tenant_agency',
         { order: 'asking_price.desc' }
-      )
-    ]);
-
-    govData.leads = leadsRes.data || [];
-    govData.portfolioProperties = portfolioPropsRes || [];
-    govData.properties = [{ count: propsCountRes.count || 0 }];
-    govData.listings = listingsRes.data || [];
-
-    // Mark connected so dashboard renders immediately with Phase 1 data
-    govConnected = true;
-    govDataLoaded = true;
-    _govDataLoading = false;
-
-    var _p1Sec = ((Date.now() - _govLoadStart) / 1000).toFixed(1);
-    showToast('Gov: ' + govData.leads.length + ' leads, ' + govData.portfolioProperties.length + ' properties (' + _p1Sec + 's)', 'success');
-    if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government') renderGovTab();
-
-    // ── PHASE 2: Background load — remaining tables ───────────────────
-    _loadGovPhase2(_govLoadStart);
-
-  } catch (err) {
-    console.error('Error loading government data:', err);
-    govConnected = false;
-    _govDataLoading = false;
-    showToast('Error loading data', 'error');
-    inner = document.getElementById('bizPageInner');
-    if (inner) {
-      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="this.disabled=true;this.textContent=\'Loading\u2026\';loadGovData()" style="margin-top:12px">Retry</button></div>';
-    }
-  }
-}
-
-// Phase 2: Background load of secondary gov tables
-// Runs non-blocking after Phase 1 renders the dashboard
-async function _loadGovPhase2(startTime) {
-  try {
-    var [ownershipRes, contactsRes, gsaEventsRes, researchOutcomesRes,
-         gsaSnapshotsRes, frppRes, loansRes, countyAuthRes, salesCompsRes
-    ] = await Promise.all([
-      govQueryAll('ownership_history',
-        'ownership_id, lease_number, address, city, state, prior_owner, new_owner, transfer_date, square_feet, annual_rent, estimated_value, sale_price, cap_rate, research_status, recorded_owner_name, true_owner_name, principal_names, state_of_incorporation',
-        { order: 'estimated_value.desc' }
       ),
       govQueryAll('contacts',
         'contact_id, name, contact_type, total_volume, phone, email',
         {}
       ),
+
+      // Single queries using govQuery — skip count=exact to avoid expensive sequential scans
       govQuery('gsa_lease_events',
         'lease_number, location_code, event_type, event_date, annual_rent, lease_rsf, lessor_name, changed_fields',
         { order: 'event_date.desc', limit: 500, count: false }
@@ -338,8 +313,18 @@ async function _loadGovPhase2(startTime) {
         'property_id, index_name, loan_amount, loan_type, status',
         { limit: 500, count: false }
       ),
+      // properties count — this one NEEDS count=exact
+      govQuery('properties',
+        'property_id',
+        { limit: 0 }
+      ),
+
+      // Paginated queries using inline pagination helper
       _loadPaginatedQuery('county_authorities',
         'county_name, state_code, netronline_url, assessor_url, recorder_url, treasurer_url, tax_url, gis_url, clerk_url, other_urls'
+      ),
+      _loadPaginatedQuery('properties',
+        'agency,agency_full_name,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,state,agency_risk_level,investment_score,deal_grade,government_type'
       ),
       _loadPaginatedQuery('sales_transactions',
         '*',
@@ -347,7 +332,10 @@ async function _loadGovPhase2(startTime) {
       )
     ]);
 
+    // Assign results to govData
     govData.ownership = ownershipRes.data || [];
+    govData.leads = leadsRes.data || [];
+    govData.listings = listingsRes.data || [];
     govData.contacts = contactsRes.data || [];
     govData.gsaEvents = gsaEventsRes.data || [];
     govData.researchOutcomes = researchOutcomesRes.data || [];
@@ -355,27 +343,39 @@ async function _loadGovPhase2(startTime) {
     govData.frppRecords = frppRes.data || [];
     govData.frppCount = frppRes.count || govData.frppRecords.length;
     govData.loans = loansRes.data || [];
+    govData.properties = [{ count: propsCountRes.count || 0 }];
     govData.countyAuth = countyAuthRes || [];
+    govData.portfolioProperties = portfolioPropsRes || [];
     govData.salesComps = salesCompsRes || [];
 
-    var _totalSec = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.debug('GOV PHASE 2 LOADED (' + _totalSec + 's total):', {
-      ownership: govData.ownership.length,
+    govConnected = true;
+    govDataLoaded = true;
+    _govDataLoading = false;
+    console.debug('GOV DATA LOADED:', {
+      properties: govData.properties,
+      salesComps: govData.salesComps,
+      leads: govData.leads.length,
       contacts: govData.contacts.length,
+      ownership: govData.ownership.length,
+      listings: govData.listings.length,
       gsaEvents: govData.gsaEvents.length,
-      gsaSnapshots: govData.gsaSnapshots.length,
       frpp: govData.frppRecords.length,
-      county: govData.countyAuth.length,
-      salesComps: govData.salesComps.length,
-      loans: govData.loans.length
+      county: govData.countyAuth.length
     });
-    showToast('Gov background data loaded (' + _totalSec + 's total)', 'info');
-    // Re-render if user is still on gov tab so new data appears
+    var _govLoadSec = ((Date.now() - _govLoadStart) / 1000).toFixed(1);
+    showToast(`Gov: ${govData.leads.length} leads, ${govData.ownership.length} ownership, ${govData.listings.length} listings (${_govLoadSec}s)`, 'success');
+    // Only render if user is still viewing the government tab
     if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government') renderGovTab();
 
   } catch (err) {
-    console.error('Gov Phase 2 error (non-fatal):', err);
-    showToast('Some gov data failed to load — try refreshing', 'warning');
+    console.error('Error loading government data:', err);
+    govConnected = false;
+    _govDataLoading = false;
+    showToast('Error loading data', 'error');
+    const inner = document.getElementById('bizPageInner');
+    if (inner) {
+      inner.innerHTML = '<div style="text-align:center;padding:32px;color:var(--red)"><p style="font-size:16px;margin-bottom:8px">Failed to load government data</p><p style="color:var(--text2);font-size:13px">' + esc(err.message || 'Unknown error') + '</p><button class="gov-btn" onclick="this.disabled=true;this.textContent=\'Loading\u2026\';loadGovData()" style="margin-top:12px">Retry</button></div>';
+    }
   }
 }
 
