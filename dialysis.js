@@ -4920,7 +4920,7 @@ function buildDiaLeasesHTML() {
     html += '<div class="widget-title">Lease Renewal Watchlist <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + watchlist.length + ' clinics)</span></div>';
     html += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Clinics with expiring, expired, or at-risk leases — sorted by urgency.</div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th>Risk</th><th style="text-align:right">Months Left</th><th>Expiration</th><th style="text-align:center">Action</th>';
+    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th>Risk</th><th style="text-align:right">Months Left</th><th>Expiration</th>';
     html += '</tr></thead><tbody>';
     var sorted = watchlist.slice().sort(function(a, b) { return (a.months_to_expiration || 999) - (b.months_to_expiration || 999); });
     for (var wi = 0; wi < Math.min(sorted.length, 75); wi++) {
@@ -4932,7 +4932,7 @@ function buildDiaLeasesHTML() {
         : c.closure_watch_level === 'moderate' ? '<span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:4px;font-size:11px">MOD</span>'
         : '<span style="font-size:11px;color:var(--text3)">low</span>';
       var exp = c.lease_expiration ? new Date(c.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
-      html += '<tr class="clickable-row" onclick=\'showDetail(' + safeJSON(c) + ', "dia-clinic")\'>';
+      html += '<tr>';
       html += '<td>' + esc(c.facility_name || '—') + '</td>';
       html += '<td>' + ((c.operator_name || c.parent_organization) ? entityLink(c.operator_name || c.parent_organization, 'operator', null) : '—') + '</td>';
       html += '<td>' + esc(c.city || '—') + '</td>';
@@ -4940,7 +4940,6 @@ function buildDiaLeasesHTML() {
       html += '<td>' + riskBadge + '</td>';
       html += '<td style="text-align:right;color:' + moColor + ';font-weight:600">' + moLabel + '</td>';
       html += '<td>' + exp + '</td>';
-      html += '<td style="text-align:center" onclick="event.stopPropagation()"><button class="lease-flag-btn" data-lid="' + esc(c.clinic_id || c.medicare_id || '') + '" data-lname="' + esc(c.facility_name || '') + '" style="font-size:9px;padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button></td>';
       html += '</tr>';
     }
     html += '</tbody></table></div>';
@@ -4977,41 +4976,6 @@ function buildDiaLeasesHTML() {
   }
 
   html += '</div>';
-
-  // Attach handlers after DOM render (called via setTimeout from renderDiaLeases)
-  setTimeout(function() {
-    document.querySelectorAll('.lease-flag-btn').forEach(function(btn) {
-      btn.addEventListener('click', async function() {
-        var lid = btn.dataset.lid;
-        var lname = btn.dataset.lname;
-        if (!lid) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: lid,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from Lease Watchlist — expiring/at-risk lease',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_lease_flag'
-          });
-          btn.textContent = '✓';
-          btn.style.color = 'var(--success)';
-          btn.style.borderColor = 'var(--success)';
-          showToast('Flagged ' + (lname || lid) + ' for review', 'success');
-        } catch(e) {
-          btn.disabled = false;
-          btn.textContent = 'Flag';
-          showToast('Flag failed: ' + e.message, 'error');
-        }
-      });
-    });
-  }, 0);
-
   return html;
 }
 
@@ -5121,14 +5085,14 @@ function buildDiaLoansHTML() {
   html += '<div class="widget" style="margin-bottom:16px">';
   html += '<div class="widget-title">Largest Loans <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + fmtN(sorted.length) + ' loans with amounts)</span></div>';
   html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-  html += '<th>Facility</th><th>City</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Lender</th><th>Maturity</th><th>Alert</th><th style="text-align:center">Action</th>';
+  html += '<th>Facility</th><th>City</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Lender</th><th>Maturity</th><th>Alert</th>';
   html += '</tr></thead><tbody>';
   for (var li = 0; li < Math.min(sorted.length, 50); li++) {
     var ln = sorted[li];
     var rate = parseFloat(ln.interest_rate_percent) > 0 ? parseFloat(ln.interest_rate_percent).toFixed(2) + '%' : (ln.interest_rate_text || '—');
     var alertBadge = ln.alert_flag ? '<span style="background:#ef4444;color:#fff;padding:1px 6px;border-radius:4px;font-size:11px">FLAG</span>' : '<span style="font-size:11px;color:var(--text3)">—</span>';
     var matDate = ln.maturity_date ? new Date(ln.maturity_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short' }) : '—';
-    html += '<tr class="clickable-row" onclick=\'showDetail(' + safeJSON(ln) + ', "dia-clinic")\'>';
+    html += '<tr>';
     html += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(ln.facility_name || String(ln.property_id || '—')) + '</td>';
     html += '<td>' + esc((ln.city || '') + (ln.state ? ', ' + ln.state : '')) + '</td>';
     html += '<td style="text-align:right;font-weight:600">' + fmt(parseFloat(ln.loan_amount) || 0) + '</td>';
@@ -5137,7 +5101,6 @@ function buildDiaLoansHTML() {
     html += '<td>' + esc(ln.lender_name || '—') + '</td>';
     html += '<td>' + matDate + '</td>';
     html += '<td>' + alertBadge + '</td>';
-    html += '<td style="text-align:center" onclick="event.stopPropagation()"><button class="loan-flag-btn" data-loan-id="' + esc(ln.loan_id || '') + '" data-loan-name="' + esc(ln.facility_name || '') + '" style="font-size:9px;padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for review">' + (ln.alert_flag ? 'Ack' : 'Flag') + '</button></td>';
     html += '</tr>';
   }
   html += '</tbody></table></div>';
@@ -5145,41 +5108,6 @@ function buildDiaLoansHTML() {
   html += '</div>';
 
   html += '</div>';
-
-  // Attach handlers after DOM render
-  setTimeout(function() {
-    document.querySelectorAll('.loan-flag-btn').forEach(function(btn) {
-      btn.addEventListener('click', async function() {
-        var loanId = btn.dataset.loanId;
-        var loanName = btn.dataset.loanName;
-        if (!loanId) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: loanId,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from Loans tab — loan alert acknowledged',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_loan_flag'
-          });
-          btn.textContent = '✓';
-          btn.style.color = 'var(--success)';
-          btn.style.borderColor = 'var(--success)';
-          showToast('Loan flagged: ' + (loanName || loanId), 'success');
-        } catch(e) {
-          btn.disabled = false;
-          btn.textContent = 'Flag';
-          showToast('Flag failed: ' + e.message, 'error');
-        }
-      });
-    });
-  }, 0);
-
   return html;
 }
 // DIALYSIS PLAYERS (Top Operators, Largest Clinics)
