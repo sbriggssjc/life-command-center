@@ -3400,7 +3400,7 @@ function renderPropertyResolution(rec, sourceTable, sourceIdCol) {
   return `<div class="prop-resolution" style="padding:10px;background:var(--bg2);border-radius:6px;margin:8px 0;border:1px dashed var(--warning);">
     <div style="font-size:12px;font-weight:600;color:var(--warning);margin-bottom:8px;">⚠ No Property Linked</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;">
-      <input type="text" id="propResSearch" placeholder="Search by address or name..." onkeydown="if(event.key==='Enter'){event.preventDefault();propResDoSearch('${sourceTable}','${sourceIdCol}',${rec[sourceIdCol]||'null'});}" style="flex:1;padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+      <input type="text" id="propResSearch" placeholder="Search by address or name..." style="flex:1;padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
       <button onclick="propResDoSearch('${sourceTable}','${sourceIdCol}',${rec[sourceIdCol] || 'null'})" style="padding:6px 12px;font-size:11px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;">Search</button>
     </div>
     <div id="propResResults" style="max-height:150px;overflow-y:auto;margin-bottom:8px;"></div>
@@ -4841,22 +4841,6 @@ let diaBrokers = null;       // lazy-loaded from sale_brokers/brokers/sales_tran
 let diaPlayersLoading = false;
 
 function renderDiaPlayers() {
-  // Apply pending navigation filter
-  if (window._pendingOpFilter) {
-    const filter = window._pendingOpFilter;
-    window._pendingOpFilter = null;
-
-    if (filter.type === 'operator') {
-      // Switch to operators view and highlight the matching operator
-      diaPlayersView = 'operators';
-      window._highlightOperator = filter.value;
-    } else if (filter.type === 'state') {
-      // Switch to operators view filtered by state
-      diaPlayersView = 'operators';
-      window._highlightState = filter.value;
-    }
-  }
-
   let html = '<div class="biz-section">';
 
   // View toggle
@@ -4901,13 +4885,7 @@ function renderDiaPlayers() {
 
     topOps.forEach((p, idx) => {
       const avg = p.clinics > 0 ? Math.round(p.patients / p.clinics) : 0;
-
-      // Check for operator or state highlighting
-      const isHighlightOp = window._highlightOperator && (p.name || '').toLowerCase().includes(window._highlightOperator.toLowerCase());
-      const isHighlightState = window._highlightState && p.records.some(r => (r.state || '').toUpperCase() === window._highlightState.toUpperCase());
-      const rowStyle = (isHighlightOp || isHighlightState) ? 'background:var(--accent-bg,rgba(59,130,246,0.1));border-left: 3px solid var(--accent,#3b82f6);' : '';
-
-      html += '<div class="table-row clickable-row" style="' + rowStyle + '" onclick=\'showDetail(' + safeJSON(p.records[0]) + ', "dia-clinic")\'>';
+      html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(p.records[0]) + ', "dia-clinic")\'>';
       html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.clinics + '</div>';
       html += '<div style="flex: 1; text-align: right;">' + fmtN(p.patients) + '</div>';
@@ -4915,10 +4893,6 @@ function renderDiaPlayers() {
       html += '</div>';
     });
     html += '</div></div>';
-
-    // Clear highlight flags after rendering
-    window._highlightOperator = null;
-    window._highlightState = null;
 
   } else if (diaPlayersView === 'largest') {
     // Largest clinics by patient count
@@ -5745,50 +5719,49 @@ async function renderSaleOwnershipTab(record) {
   let html = '<div style="padding: 16px; overflow-y: auto; max-height: calc(100% - 60px);">';
   html += '<h3 style="color: var(--text); font-size: 14px; font-weight: 600; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent);">Ownership History</h3>';
 
-  let owners = [];
   try {
-    owners = await diaQuery('ownership_history', '*', {
+    const owners = await diaQuery('ownership_history', '*', {
       filter: `property_id=eq.${record.property_id}`,
       order: 'start_date.desc',
       limit: 50
-    }) || [];
-  } catch (e) {
-    console.error('Ownership load error:', e);
-    showToast('Failed to load ownership history', 'error');
-  }
-
-  if (!owners || owners.length === 0) {
-    html += '<p style="color: var(--text3); font-size: 13px;">No ownership history records found.</p>';
-  } else {
-    owners.forEach((owner, idx) => {
-      html += '<div style="margin-bottom: 16px; padding: 12px; background: var(--s2); border: 1px solid var(--border); border-radius: 6px;">';
-      html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">';
-
-      html += '<div>';
-      html += '<label style="' + lblStyle + '">Owner Type</label>';
-      html += '<select id="dia-owner-type-' + idx + '" style="' + inpStyle + '">';
-      const ownerTypes = ['Operator', 'Owner', 'Investor', 'Other'];
-      ownerTypes.forEach(t => {
-        html += '<option value="' + esc(t) + '"' + (owner.owner_type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
-      });
-      html += '</select>';
-      html += '</div>';
-
-      html += '<div>';
-      html += '<label style="' + lblStyle + '">Ownership Source</label>';
-      html += '<input type="text" id="dia-owner-source-' + idx + '" value="' + esc(owner.ownership_source || '') + '" placeholder="Source" style="' + inpStyle + '" />';
-      html += '</div>';
-
-      html += '</div>';
-
-      html += '<div>';
-      html += '<label style="' + lblStyle + '">Notes</label>';
-      html += '<textarea id="dia-owner-notes-' + idx + '" placeholder="Notes..." style="' + inpStyle + 'min-height:60px;resize:vertical;">' + esc(owner.notes || '') + '</textarea>';
-      html += '</div>';
-
-      html += '<button onclick="_udBtnGuard(this, saveSaleOwner, ' + owner.ownership_id + ', ' + idx + ')" style="width: 100%; padding: 8px; margin-top: 8px; background: var(--accent); color: white; border: none; border-radius: 4px; font-weight: 600; font-size: 12px; cursor: pointer;">Save Owner Record</button>';
-      html += '</div>';
     });
+
+    if (!owners || owners.length === 0) {
+      html += '<p style="color: var(--text3); font-size: 13px;">No ownership history records found.</p>';
+    } else {
+      owners.forEach((owner, idx) => {
+        html += '<div style="margin-bottom: 16px; padding: 12px; background: var(--s2); border: 1px solid var(--border); border-radius: 6px;">';
+        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">';
+        
+        html += '<div>';
+        html += '<label style="' + lblStyle + '">Owner Type</label>';
+        html += '<select id="dia-owner-type-' + idx + '" style="' + inpStyle + '">';
+        const ownerTypes = ['Operator', 'Owner', 'Investor', 'Other'];
+        ownerTypes.forEach(t => {
+          html += '<option value="' + esc(t) + '"' + (owner.owner_type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+        });
+        html += '</select>';
+        html += '</div>';
+        
+        html += '<div>';
+        html += '<label style="' + lblStyle + '">Ownership Source</label>';
+        html += '<input type="text" id="dia-owner-source-' + idx + '" value="' + esc(owner.ownership_source || '') + '" placeholder="Source" style="' + inpStyle + '" />';
+        html += '</div>';
+        
+        html += '</div>';
+        
+        html += '<div>';
+        html += '<label style="' + lblStyle + '">Notes</label>';
+        html += '<textarea id="dia-owner-notes-' + idx + '" placeholder="Notes..." style="' + inpStyle + 'min-height:60px;resize:vertical;">' + esc(owner.notes || '') + '</textarea>';
+        html += '</div>';
+        
+        html += '<button onclick="_udBtnGuard(this, saveSaleOwner, ' + owner.ownership_id + ', ' + idx + ')" style="width: 100%; padding: 8px; margin-top: 8px; background: var(--accent); color: white; border: none; border-radius: 4px; font-weight: 600; font-size: 12px; cursor: pointer;">Save Owner Record</button>';
+        html += '</div>';
+      });
+    }
+  } catch (e) {
+    console.error('Error loading ownership history:', e);
+    html += '<p style="color: var(--error); font-size: 13px;">Error loading ownership history.</p>';
   }
 
   html += '</div>';
