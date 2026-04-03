@@ -5362,15 +5362,15 @@ async function diaPatchRecord(table, idCol, idVal, data) {
     });
 
     if (!result.ok) {
-      console.error(`diaPatchRecord error: ${(result.errors || []).join(', ')}`);
-      showToast('Error saving data', 'error');
+      console.error('diaPatchRecord error [' + table + '.' + idCol + '=' + idVal + ']:', (result.errors || []).join(', '));
+      showToast('Error saving ' + table + ': ' + ((result.errors || [])[0] || 'unknown error'), 'error');
       return false;
     }
 
     return true;
   } catch (err) {
-    console.error('diaPatchRecord error:', err);
-    showToast('Error saving', 'error');
+    console.error('diaPatchRecord error [' + table + '.' + idCol + '=' + idVal + ']:', err);
+    showToast('Error saving ' + table + ': ' + (err.message || 'unknown error'), 'error');
     return false;
   }
 }
@@ -5960,6 +5960,25 @@ async function saveSaleResearch() {
 }
 
 function closeSaleDetail() {
+  // Check for unsaved changes
+  const body = document.getElementById('detailBody');
+  if (body) {
+    const inputs = body.querySelectorAll('input, select, textarea');
+    const hasDirty = Array.from(inputs).some(function(inp) {
+      if (inp.tagName === 'SELECT') return false; // selects don't track defaultValue well
+      return inp.value !== (inp.defaultValue || '');
+    });
+    if (hasDirty) {
+      lccConfirm('You have unsaved changes. Close anyway?', 'Close').then(function(ok) {
+        if (ok) _closeSaleDetailInner();
+      });
+      return;
+    }
+  }
+  _closeSaleDetailInner();
+}
+
+function _closeSaleDetailInner() {
   window._saleRecord = null;
   window._saleCurrentTab = null;
   const overlay = q('#detailOverlay');
