@@ -106,6 +106,43 @@ Browser → app.js/gov.js/dialysis.js
 
 ---
 
+## CRITICAL: Authentication & Environment Variables
+
+### LCC_API_KEY — DO NOT SET IN VERCEL
+
+The `api/_shared/auth.js` module has a **transitional authentication mode** that is
+essential for the current single-user deployment. The logic works as follows:
+
+- If `LCC_API_KEY` is **NOT set** → transitional mode: unauthenticated requests are
+  allowed through and the system resolves a default owner user from the OPS database.
+  This is the CURRENT PRODUCTION MODE.
+- If `LCC_API_KEY` **IS set** → full auth enforcement: every request must include either
+  a Supabase JWT (`Authorization: Bearer <jwt>`) or the API key (`X-LCC-Key` header).
+  The frontend does NOT currently send either of these headers, so setting this variable
+  **will cause universal 401 errors on every data endpoint**.
+
+**Rules:**
+1. **DO NOT add `LCC_API_KEY` to Vercel environment variables** until the frontend has
+   been updated to send authentication headers on every API call.
+2. **DO NOT recommend setting `LCC_API_KEY`** as a security improvement without also
+   implementing the frontend auth flow (login, token storage, header injection).
+3. The `.env.example` file lists `LCC_API_KEY` as blank — this is intentional.
+4. When the time comes to enable auth, the full implementation requires:
+   - Supabase Auth configured with user accounts
+   - Frontend login flow with JWT token management
+   - `X-LCC-Key` or `Authorization: Bearer` header on every `fetch()` call
+   - OPS database `users` and `workspace_memberships` tables populated
+5. `/api/config` and `/api/treasury` routes in `diagnostics.js` do NOT call
+   `authenticate()` — they are intentionally public. All other endpoints require auth.
+
+### Other Environment Variables
+- `OPS_SUPABASE_URL` / `OPS_SUPABASE_KEY` — Required for OPS database access
+- `GOV_SUPABASE_KEY` — Required for government domain queries via data-proxy
+- `DIA_SUPABASE_KEY` — Required for dialysis domain queries via data-proxy
+- `LCC_ENV` — Defaults to 'development'; set to 'production' in Vercel
+
+---
+
 ## Commit Message Standards
 
 Use descriptive round-numbered commits for feature work:

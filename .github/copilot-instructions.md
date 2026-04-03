@@ -12,3 +12,4 @@ The /api/ directory currently has exactly 12 .js files — there is ZERO room fo
 3. Always verify: `ls api/*.js | wc -l` must be <= 12
 4. Use descriptive commit messages (not "GPT changes")
 5. See .github/AI_INSTRUCTIONS.md for full architecture and routing patterns
+6. NEVER set LCC_API_KEY in Vercel env vars — the frontend has no auth flow yet; setting it causes universal 401s
