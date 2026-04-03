@@ -2602,12 +2602,12 @@ window.navToTransaction = function(saleId) {
  * @param {string} operatorName - Operator name to filter by
  */
 window.navToOperator = function(operatorName) {
-  // Switch to operations tab and filter by operator
-  if (typeof switchDiaTab === 'function') {
-    window._pendingOpFilter = { type: 'operator', value: operatorName };
-    switchDiaTab('operations');
+  window._pendingOpFilter = { type: 'operator', value: operatorName };
+  if (typeof goToDiaTab === 'function') {
+    window.diaPlayersView = 'operators';
+    goToDiaTab('players');
   } else {
-    showToast('Navigate to Dialysis Operations tab to view operator', 'info');
+    showToast('Navigate to Dialysis → Players tab to view operator: ' + operatorName, 'info');
   }
 };
 
@@ -2616,12 +2616,12 @@ window.navToOperator = function(operatorName) {
  * @param {string} stateName - State name to filter by
  */
 window.navToState = function(stateName) {
-  // Switch to operations tab and filter by state
-  if (typeof switchDiaTab === 'function') {
-    window._pendingOpFilter = { type: 'state', value: stateName };
-    switchDiaTab('operations');
+  window._pendingOpFilter = { type: 'state', value: stateName };
+  if (typeof goToDiaTab === 'function') {
+    window.diaPlayersView = 'operators';
+    goToDiaTab('players');
   } else {
-    showToast('Navigate to Dialysis Operations tab to view state', 'info');
+    showToast('Navigate to Dialysis → Players tab to view state: ' + stateName, 'info');
   }
 };
 
@@ -2635,19 +2635,22 @@ window.navToState = function(stateName) {
  * @returns {string} HTML span element with onclick handler
  */
 window.entityLink = function(text, type, id, db) {
-  if (!text || !id) return esc(text || '—');
-  const style = 'color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;';
+  if (!text) return '—';
+  var style = 'color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;';
   switch (type) {
     case 'property':
-      return `<span style="${style}" onclick="navToProperty(${id},'${db || 'dialysis'}')" title="View property details">${esc(text)}</span>`;
+      if (!id) return esc(text);
+      return '<span style="' + style + '" onclick="navToProperty(' + id + ',\'' + (db || 'dialysis') + '\')" title="View property details">' + esc(text) + '</span>';
     case 'contact':
-      return `<span style="${style}" onclick="navToContact(${id},'${db || 'dialysis'}')" title="View contact details">${esc(text)}</span>`;
+      if (!id) return esc(text);
+      return '<span style="' + style + '" onclick="navToContact(' + id + ',\'' + (db || 'dialysis') + '\')" title="View contact details">' + esc(text) + '</span>';
     case 'transaction':
-      return `<span style="${style}" onclick="navToTransaction(${id})" title="View transaction details">${esc(text)}</span>`;
+      if (!id) return esc(text);
+      return '<span style="' + style + '" onclick="navToTransaction(' + id + ')" title="View transaction details">' + esc(text) + '</span>';
     case 'operator':
-      return `<span style="${style}" onclick="navToOperator('${esc(text)}')" title="View operator properties">${esc(text)}</span>`;
+      return '<span style="' + style + '" onclick="navToOperator(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View operator properties">' + esc(text) + '</span>';
     case 'state':
-      return `<span style="${style}" onclick="navToState('${esc(text)}')" title="View state properties">${esc(text)}</span>`;
+      return '<span style="' + style + '" onclick="navToState(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View state properties">' + esc(text) + '</span>';
     default:
       return esc(text);
   }
