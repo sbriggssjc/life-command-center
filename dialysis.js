@@ -75,6 +75,8 @@ async function diaQuery(table, select, params = {}) {
   if (order) url.searchParams.set('order', order);
   if (limit !== undefined) url.searchParams.set('limit', limit);
   if (offset !== undefined) url.searchParams.set('offset', offset);
+  // Skip count=exact by default — views compute from 1M+ row tables, count doubles query cost
+  url.searchParams.set('count', 'false');
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -162,56 +164,35 @@ async function loadDiaData() {
       reconciliation: {}
     };
     
-    // ── BATCH 1: Core data (all independent, run in parallel) ──────────────
-    const [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw] = await Promise.all([
-      diaQuery('v_counts_freshness', '*').catch(e => { console.warn('Freshness view timeout', e); return []; }),
-      diaQuery('v_clinic_inventory_diff_summary', '*').catch(e => { console.warn('Inv summary timeout', e); return []; }),
-      diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 500 }).catch(e => { console.warn('Inv changes timeout', e); return []; }),
-      diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=gt.0', order: 'delta_patients.desc', limit: 10 }).catch(() => []),
-      diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=lt.0', order: 'delta_patients.asc', limit: 10 }).catch(() => [])
+    // ── ALL QUERIES: Run everything in parallel (all independent) ──────────
+    // Previously split into sequential Batch 1 → movers enrichment → Batch 2
+    // Now merged into single Promise.all — cuts load time roughly in half
+    var [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw,
+         npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon
+    ] = await Promise.all([
+      diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
+      diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
+      diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 500 }).catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
+      diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=gt.0', order: 'delta_patients.desc', limit: 10 }).catch(function() { return []; }),
+      diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=lt.0', order: 'delta_patients.asc', limit: 10 }).catch(function() { return []; }),
+      diaQuery('v_npi_inventory_signal_summary', '*').catch(function() { return []; }),
+      diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(function() { return []; }),
+      diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(function() { return []; }),
+      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }).catch(function() { return []; }),
+      diaQuery('research_queue_outcomes', '*', { limit: 500 }).catch(function() { return []; }),
+      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(function() { return []; })
     ]);
+
+    // Assign core data
     if (freshness && freshness.length > 0) diaData.freshness = freshness[0];
     if (invSummary && invSummary.length > 0) {
-      invSummary.forEach(row => { diaData.inventorySummary[row.change_type] = row; });
+      invSummary.forEach(function(row) { diaData.inventorySummary[row.change_type] = row; });
     }
     diaData.inventoryChanges = invChanges || [];
 
-    // Enrich movers with facility names
-    try {
-      const allMovers = [...(moversUpRaw || []), ...(moversDownRaw || [])];
-      const moverIds = [...new Set(allMovers.map(r => r.clinic_id).filter(Boolean))];
-      const nameMap = {};
-      if (moverIds.length > 0) {
-        try {
-          const nameRows = await diaQuery('medicare_clinics', 'medicare_id,facility_name', {
-            filter: 'medicare_id=in.(' + moverIds.join(',') + ')', limit: 30
-          });
-          (nameRows || []).forEach(r => { if (r.medicare_id) nameMap[r.medicare_id] = r.facility_name; });
-        } catch (e) { console.warn('name lookup failed', e); }
-      }
-      (diaData.inventoryChanges || []).forEach(r => {
-        if (r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) nameMap[r.clinic_id] = r.facility_name;
-      });
-      const enrich = (arr) => (arr || []).map(r => ({ ...r, facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id) }));
-      diaData.moversUp = enrich(moversUpRaw);
-      diaData.moversDown = enrich(moversDownRaw);
-    } catch (e) {
-      console.warn('Failed to enrich movers data', e);
-      diaData.moversUp = [];
-      diaData.moversDown = [];
-    }
-
-    // ── BATCH 2: NPI + research tab data (all independent, run in parallel) ──
-    const [npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon] = await Promise.all([
-      diaQuery('v_npi_inventory_signal_summary', '*').catch(() => []),
-      diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(() => []),
-      diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(() => []),
-      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }).catch(() => []),
-      diaQuery('research_queue_outcomes', '*', { limit: 500 }).catch(() => []),
-      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(() => [])
-    ]);
+    // Assign NPI + research data
     if (npiSignalSummary && npiSignalSummary.length > 0) {
-      npiSignalSummary.forEach(row => { diaData.npiSummary[row.signal_type] = row; });
+      npiSignalSummary.forEach(function(row) { diaData.npiSummary[row.signal_type] = row; });
     }
     diaData.npiSignals = npiSignals || [];
     diaData.propertyReviewQueue = propQueue || [];
@@ -219,6 +200,33 @@ async function loadDiaData() {
     diaData.researchOutcomes = outcomes || [];
     if (recon && recon.length > 0) {
       diaData.reconciliation = recon[0];
+    }
+
+    // Enrich movers with facility names (sequential — depends on Batch results)
+    try {
+      var allMovers = [].concat(moversUpRaw || [], moversDownRaw || []);
+      var moverIds = allMovers.map(function(r) { return r.clinic_id; }).filter(Boolean);
+      // Deduplicate
+      moverIds = moverIds.filter(function(v, i, a) { return a.indexOf(v) === i; });
+      var nameMap = {};
+      if (moverIds.length > 0) {
+        try {
+          var nameRows = await diaQuery('medicare_clinics', 'medicare_id,facility_name', {
+            filter: 'medicare_id=in.(' + moverIds.join(',') + ')', limit: 30
+          });
+          (nameRows || []).forEach(function(r) { if (r.medicare_id) nameMap[r.medicare_id] = r.facility_name; });
+        } catch (e) { console.warn('name lookup failed', e); }
+      }
+      (diaData.inventoryChanges || []).forEach(function(r) {
+        if (r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) nameMap[r.clinic_id] = r.facility_name;
+      });
+      var enrich = function(arr) { return (arr || []).map(function(r) { return Object.assign({}, r, { facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id) }); }); };
+      diaData.moversUp = enrich(moversUpRaw);
+      diaData.moversDown = enrich(moversDownRaw);
+    } catch (e) {
+      console.warn('Failed to enrich movers data', e);
+      diaData.moversUp = [];
+      diaData.moversDown = [];
     }
     
     diaDataLoaded = true;
