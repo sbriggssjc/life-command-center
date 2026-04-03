@@ -3239,7 +3239,7 @@ function renderGovOverview() {
           offset += 1000;
         }
         govSalesComps = all;
-      } catch(e) { console.warn('Gov sales comps load failed:', e.message); govSalesComps = []; }
+      } catch(e) { govSalesComps = []; }
       govSalesLoading = false;
       const el = document.getElementById('govOverviewSales');
       if (el) el.innerHTML = renderGovSalesMetrics();

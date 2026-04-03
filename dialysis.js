@@ -146,7 +146,6 @@ async function loadDiaData() {
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading dialysis data...</p></div>';
   }
 
-  var _diaLoadStart = Date.now();
   try {
     diaData = {
       freshness: {},
@@ -234,8 +233,7 @@ async function loadDiaData() {
       outcomes: diaData.researchOutcomes.length,
       recon: diaData.reconciliation
     });
-    var _diaLoadSec = ((Date.now() - _diaLoadStart) / 1000).toFixed(1);
-    showToast(`Dialysis: ${(diaData.freshness || {}).total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals (${_diaLoadSec}s)`, 'success');
+    showToast(`Dialysis: ${(diaData.freshness || {}).total_clinics || 0} clinics, ${diaData.inventoryChanges.length} changes, ${diaData.npiSignals.length} signals loaded`, 'success');
     // Only render if user is still viewing the dialysis tab
     if (typeof currentBizTab !== 'undefined' && currentBizTab === 'dialysis') renderDiaTab();
   } catch (err) {
