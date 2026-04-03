@@ -1330,7 +1330,7 @@ const PROSPECT_PAGE = 20;
 let _mktLoading = false;
 async function loadMarketing() {
   if (_mktLoading) return; // Prevent double-load
-  if (mktLoaded) { _mktLoading = false; renderMarketing(); return; } // Already loaded, just re-render
+  if (mktLoaded) { renderMarketing(); return; } // Already loaded, just re-render
   const el = document.getElementById('bizPageInner');
   if (!el) return;
   _mktLoading = true;
@@ -1355,7 +1355,6 @@ async function loadMarketing() {
 
   // If called just for domain prospects (not Marketing tab), only load opportunities
   if (currentBizTab !== 'marketing' && _mktOpportunitiesLoaded) {
-    _mktLoading = false;
     return; // opportunities already loaded, nothing else needed
   }
 

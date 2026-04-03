@@ -1,0 +1,127 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Minute",
+          "interval": 15
+        }
+      }
+    },
+    "actions": {
+      "Initialize_ListNames": {
+        "type": "Compose",
+        "inputs": ["Work", "Personal", "House", "Kids", "Family", "Health", "Finance"],
+        "runAfter": {}
+      },
+      "Loop_Each_List": {
+        "type": "Foreach",
+        "foreach": "@outputs('Initialize_ListNames')",
+        "actions": {
+          "Get_Completed_Tasks": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['todo']['connectionId']"
+                }
+              },
+              "method": "get",
+              "path": "/v1.0/me/todo/lists/@{items('Loop_Each_List')}/tasks",
+              "queries": {
+                "$filter": "status eq 'completed'",
+                "$top": 100
+              }
+            },
+            "runAfter": {}
+          },
+          "Loop_Completed_Tasks": {
+            "type": "Foreach",
+            "foreach": "@body('Get_Completed_Tasks')?['value']",
+            "actions": {
+              "Check_For_EmailID": {
+                "type": "Condition",
+                "expression": {
+                  "and": [
+                    {
+                      "contains": [
+                        "@items('Loop_Completed_Tasks')?['body']?['content']",
+                        "[EmailID:"
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "Extract_Email_ID": {
+                    "type": "Compose",
+                    "inputs": "@{split(split(items('Loop_Completed_Tasks')?['body']?['content'], '[EmailID:')[1], ']')[0]}",
+                    "runAfter": {}
+                  },
+                  "Unflag_Email": {
+                    "type": "ApiConnection",
+                    "inputs": {
+                      "host": {
+                        "connection": {
+                          "name": "@parameters('$connections')['office365']['connectionId']"
+                        }
+                      },
+                      "method": "patch",
+                      "path": "/v2/Mail/@{outputs('Extract_Email_ID')}",
+                      "body": {
+                        "flag": {
+                          "flagStatus": "complete"
+                        }
+                      }
+                    },
+                    "runAfter": {
+                      "Extract_Email_ID": ["Succeeded"]
+                    }
+                  }
+                },
+                "else": {
+                  "actions": {}
+                },
+                "runAfter": {}
+              }
+            },
+            "runAfter": {
+              "Get_Completed_Tasks": ["Succeeded"]
+            }
+          }
+        },
+        "runAfter": {
+          "Initialize_ListNames": ["Succeeded"]
+        }
+      }
+    }
+  },
+  "connectionReferences": {
+    "office365": {
+      "api": {
+        "id": "/providers/Microsoft.PowerApps/apis/shared_office365"
+      },
+      "connection": {
+        "id": "CONFIGURE_AT_IMPORT"
+      },
+      "connectionName": "shared-office365"
+    },
+    "todo": {
+      "api": {
+        "id": "/providers/Microsoft.PowerApps/apis/shared_todo"
+      },
+      "connection": {
+        "id": "CONFIGURE_AT_IMPORT"
+      },
+      "connectionName": "shared-todo"
+    }
+  }
+}
