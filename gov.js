@@ -199,7 +199,7 @@ async function loadGovOverviewStats() {
       govOverviewStats = rows[0];
       console.debug('[Gov] Overview stats loaded from materialized view:', govOverviewStats);
       // If we're on the overview tab, render immediately
-      if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government' && currentGovTab === 'overview') {
+      if (typeof currentGovTab !== 'undefined' && currentGovTab === 'overview') {
         renderGovTab();
       }
     }
@@ -2386,7 +2386,6 @@ function setResearchMode(mode) {
   } else {
     // For research modes, load the queue
     loadResearchQueue().then(() => {
-      if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
       renderGovTab();
     });
   }
@@ -2396,7 +2395,6 @@ function setResearchFilter(filter) {
   researchFilter = filter;
   researchIdx = 0;
   loadResearchQueue().then(() => {
-    if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
     renderGovTab();
   });
 }
@@ -2904,9 +2902,6 @@ async function loadGovEvidenceObservations(force = false) {
 }
 
 function rerenderGovEvidenceOnly() {
-  // Guard: only re-render if user is still on the government tab
-  // Async callbacks (evidence queue, extraction) can fire after tab switch
-  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
   renderGovTab();
 }
 
@@ -3919,7 +3914,6 @@ window.loadGovPendingUpdates = async function() {
     govPendingUpdates = [];
   }
   govPendingUpdatesLoading = false;
-  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
   renderGovTab();
 };
 
@@ -4294,7 +4288,6 @@ window.loadGovPipelineRuns = async function() {
     showToast('Pipeline load error: ' + govPipelineError, 'error');
   }
   govPipelineLoading = false;
-  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
   renderGovTab();
 };
 
@@ -4433,7 +4426,6 @@ async function loadGovMonitorData() {
     govMonitorData = { noMatch: 0, noContact: 0, noResearch: 0, freshness: [], researchCompleted: 0, researchTotal: 0 };
   }
   govMonitorLoading = false;
-  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
   renderGovTab();
 }
 
