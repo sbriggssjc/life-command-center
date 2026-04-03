@@ -2439,13 +2439,6 @@ function setResearchFilter(filter) {
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
-
-    // Ctrl+Enter / Cmd+Enter to save
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      if (!_researchSaving) researchSave();
-      return;
-    }
     if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
       if (govResearchStep < 4) {

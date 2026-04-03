@@ -1,0 +1,11 @@
+{
+  "name": "flow-outlook-intake-button-to-teams",
+  "description": "Manual/button-trigger fallback for Outlook -> Intake -> Teams workflow.",
+  "trigger": "Manually trigger a flow",
+  "actions": [
+    "HTTP POST /api/sync?action=ingest_emails",
+    "HTTP GET /api/intake-summary?correlation_id=<from previous response>&limit=1",
+    "Post message in Teams channel using same template as primary flow"
+  ],
+  "notes": "This flow provides the OR-button path requested in scope without modifying ingestion internals."
+}
