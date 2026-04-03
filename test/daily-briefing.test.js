@@ -206,6 +206,8 @@ describe('daily briefing snapshot endpoint', () => {
     assert.equal(res._json.global_market_intelligence.summary, 'Rates stable, cap rates still disciplined.');
     assert.equal(res._json.team_level_production_signals.work_counts.open_actions, 14);
     assert.equal(res._json.team_level_production_signals.sync_health.queue_drift.salesforce_open_task_count, 9);
+    assert.ok(res._json.domain_specific_alerts_highlights);
+    assert.ok(res._json.domain_specific_alerts_highlights.government);
     assert.ok(Array.isArray(res._json.actions));
     assert.ok(res._json.actions.length >= 3);
   });
@@ -260,6 +262,6 @@ describe('daily briefing snapshot endpoint', () => {
     assert.equal(res._json.status.completeness, 'degraded');
     assert.ok(res._json.status.missing_sections.includes('global_market_intelligence.structured_payload'));
     assert.equal(res._json.global_market_intelligence.html_fragment, '<div>Fallback morning html only</div>');
+    assert.ok(res._json.domain_specific_alerts_highlights);
   });
 });
-

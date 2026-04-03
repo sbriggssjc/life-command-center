@@ -1714,6 +1714,9 @@ async function quickReassign(itemId, itemType, itemTitle = 'this item') {
 }
 
 async function quickEscalate(itemId, itemTitle = 'this item') {
+  const ok = await lccConfirm('Escalate this item? A manager will be notified.', 'Escalate');
+  if (!ok) return;
+
   const members = await loadWorkspaceMembers();
   if (!members.length) {
     showToast('No workspace members available', 'error');

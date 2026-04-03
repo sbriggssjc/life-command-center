@@ -27,6 +27,26 @@ let govEvidenceState = {
   detectedSource: null
 };
 
+// ============================================================================
+// DIRTY FORM TRACKING
+// ============================================================================
+
+window.addEventListener('beforeunload', function(e) {
+  if (!researchQueue || researchQueue.length === 0) return;
+  if (researchIdx >= researchQueue.length) return;
+  const card = document.querySelector('.research-card');
+  if (!card) return;
+  const inputs = card.querySelectorAll('input[type="text"], input[type="number"], input[type="date"], textarea, select');
+  const hasDirty = Array.from(inputs).some(function(inp) {
+    if (inp.tagName === 'SELECT') return inp.selectedIndex > 0;
+    return inp.value && inp.value.trim() !== '' && inp.value !== (inp.defaultValue || '');
+  });
+  if (hasDirty) {
+    e.preventDefault();
+    e.returnValue = 'You have unsaved research changes.';
+  }
+});
+
 // State code to full name mapping
 const STATE_FULL = {
   'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
@@ -2033,6 +2053,16 @@ async function saveIntel(rec) {
     return false;
   }
 
+  const _intelCard = document.querySelector('.research-card');
+  if (_intelCard) {
+    const _intelInputs = _intelCard.querySelectorAll('input[type="text"], input[type="number"], input[type="date"], textarea, select');
+    const _hasIntelData = Array.from(_intelInputs).some(function(inp) {
+      if (inp.tagName === 'SELECT') return inp.selectedIndex > 0;
+      return inp.value && inp.value.trim() !== '';
+    });
+    if (!_hasIntelData) { showToast('Please fill in at least one intel field before saving', 'info'); return false; }
+  }
+
   const _intelPartialWarns = [];
 
   // ── Prior Sale → sales_transactions table ──
@@ -3344,7 +3374,7 @@ function renderGovOverview() {
       if (unknownInParsed) {
         unknownAgencyStats = { count: unknownInParsed.count || 0, rent: unknownInParsed.rent || 0, sf: unknownInParsed.sf || 0, termSum: unknownInParsed.term_sum || 0, termCount: unknownInParsed.term_count || 0 };
       }
-    } catch { topAgencies = []; topAgenciesByRent = []; }
+    } catch (e) { console.warn('Top agencies parse error:', e.message); topAgencies = []; topAgenciesByRent = []; }
   } else {
     topAgencies = Object.entries(agencyMap).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
     topAgenciesByRent = Object.entries(agencyMap).sort((a,b) => b[1].rent - a[1].rent).slice(0, 10);
@@ -3367,7 +3397,7 @@ function renderGovOverview() {
       const raw = mv.top_states_by_count || mv.top_states_json;
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
       topStates = (parsed || []).map(s => [s.state || s.name, { count: s.count || 0, rent: s.rent || 0, sf: s.sf || 0 }]);
-    } catch { topStates = []; }
+    } catch (e) { console.warn('Top states parse error:', e.message); topStates = []; }
   } else {
     topStates = Object.entries(stateMap).sort((a,b) => b[1].count - a[1].count).slice(0, 10);
   }
