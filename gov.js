@@ -1719,7 +1719,8 @@ async function researchSave() {
   if (!success) { if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || 'Save & Next'; } _researchSaving = false; return; }
 
   researchCompleted++;
-  researchIdx++;
+  researchQueue.splice(researchIdx, 1);
+  // Don't increment — splice shifts next item into current index
   _researchSaving = false;
 
   if (researchIdx >= researchQueue.length) {
@@ -2354,7 +2355,8 @@ async function researchMark(mark) {
 
   const markLabel = mark === 'spe_rename' ? 'SPE Rename' : mark === 'na' ? 'N/A' : mark;
   showToast('Marked as ' + markLabel, 'success');
-  researchIdx++;
+  researchQueue.splice(researchIdx, 1);
+  // Don't increment — splice shifts next item into current index
   renderGovTab();
 }
 
@@ -3923,11 +3925,37 @@ async function govPatch(table, filterStr, data) {
 }
 
 window.resolveGovPendingUpdate = async function(id, resolution) {
-  if (resolution === 'rejected' && !(await lccConfirm('Reject this pending update? The proposed change will be discarded.', 'Reject'))) return;
-  if (resolution === 'expired' && !(await lccConfirm('Expire this update? It will no longer be actionable.', 'Expire'))) return;
+  // Find the clicked button and manage its state
+  const clickedBtn = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  const origBtnText = clickedBtn?.textContent;
+  const actionTexts = {
+    'approved': 'Approving…',
+    'rejected': 'Rejecting…',
+    'expired': 'Expiring…'
+  };
 
-  const notes = document.getElementById('pu-notes')?.value || '';
+  if (clickedBtn) {
+    clickedBtn.disabled = true;
+    clickedBtn.textContent = actionTexts[resolution] || 'Processing…';
+  }
+
   try {
+    if (resolution === 'rejected' && !(await lccConfirm('Reject this pending update? The proposed change will be discarded.', 'Reject'))) {
+      if (clickedBtn) {
+        clickedBtn.disabled = false;
+        clickedBtn.textContent = origBtnText;
+      }
+      return;
+    }
+    if (resolution === 'expired' && !(await lccConfirm('Expire this update? It will no longer be actionable.', 'Expire'))) {
+      if (clickedBtn) {
+        clickedBtn.disabled = false;
+        clickedBtn.textContent = origBtnText;
+      }
+      return;
+    }
+
+    const notes = document.getElementById('pu-notes')?.value || '';
     await govPatch('pending_updates', 'id=eq.' + id, {
       status: resolution,
       resolved_by: 'dashboard',
@@ -3942,6 +3970,11 @@ window.resolveGovPendingUpdate = async function(id, resolution) {
   } catch(e) {
     console.error('resolveGovPendingUpdate error:', e);
     showToast('Failed to resolve update: ' + e.message, 'error');
+  } finally {
+    if (clickedBtn) {
+      clickedBtn.disabled = false;
+      clickedBtn.textContent = origBtnText;
+    }
   }
 };
 

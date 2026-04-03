@@ -5798,6 +5798,8 @@ async function saveSaleTransaction() {
         user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
         metadata: { sale_id: record.sale_id, buyer: buyer, seller: seller, sold_price: price, sale_date: saleDate }
       });
+      // Re-render detail panel to show updated values
+      await renderSaleDetailBody(record);
     }
   } catch (err) {
     console.error('Sale transaction save error:', err);
@@ -5850,6 +5852,8 @@ async function saveSaleProperty() {
         property_name: address || null,
         metadata: { property_id: record.property_id, address: address, city: city, state: state, tenant: tenant }
       });
+      // Re-render detail panel to show updated values
+      await renderSaleDetailBody(record);
     }
   } catch (err) {
     console.error('Sale property save error:', err);
