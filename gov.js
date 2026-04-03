@@ -4731,11 +4731,22 @@ function renderOwnershipOverview(record) {
   html += '</div>';
   html += '</div>';
   
-  html += '<div class="detail-actions">';
-  html += '<button class="gov-btn" onclick="showToast(\'Edit status - coming soon\')">Edit Status</button>';
-  html += '<button class="gov-btn" onclick="showToast(\'View on map - coming soon\')">View on Map</button>';
+  html += '<div class="detail-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">';
+  // Edit Status — inline dropdown
+  html += '<div style="display:flex;gap:6px;align-items:center;">';
+  html += '<select id="govOwnerStatus" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s2);color:var(--text);">';
+  ['pending', 'researching', 'verified', 'needs_review', 'escalated', 'dismissed'].forEach(s => {
+    const sel = (record.research_status || 'pending') === s ? ' selected' : '';
+    html += '<option value="' + s + '"' + sel + '>' + cleanLabel(s) + '</option>';
+  });
+  html += '</select>';
+  html += '<button class="gov-btn" onclick="govUpdateOwnershipStatus(' + (record.id || record.ownership_id || 'null') + ')">Save Status</button>';
   html += '</div>';
-  
+  // View on Map
+  const mapQ = encodeURIComponent((record.address || '') + ' ' + (record.city || '') + ' ' + (record.state || ''));
+  html += '<button class="gov-btn" onclick="window.open(\'https://www.google.com/maps/search/' + mapQ + '\',\'_blank\')">View on Map</button>';
+  html += '</div>';
+
   return html;
 }
 
@@ -5000,11 +5011,11 @@ function renderLeadContacts(record) {
   html += '</div>';
   html += '</div>';
   
-  html += '<div class="detail-actions">';
-  html += '<button class="gov-btn" onclick="showToast(\'Log call - coming soon\')">Log Call</button>';
-  html += '<button class="gov-btn" onclick="showToast(\'Send email - coming soon\')">Send Email</button>';
+  html += '<div class="detail-actions" style="display:flex;gap:8px;margin-top:12px;">';
+  html += '<button class="gov-btn" onclick="govLogCall(' + (record.id || 'null') + ')">Log Call</button>';
+  html += '<button class="gov-btn" onclick="govSendEmail(' + safeJSON(record) + ')">Send Email</button>';
   html += '</div>';
-  
+
   return html;
 }
 
@@ -6211,7 +6222,8 @@ function renderGovSearch() {
       if (contacts.length > 0) {
         html += '<div class="search-results-section"><h4>Contacts (' + contacts.length + ')</h4>';
         contacts.forEach(r => {
-          html += '<div class="search-card">';
+          var idx = pushSearchRef(r, 'gov-lead');
+          html += '<div class="search-card" onclick="showDetail(window._govSearchFlat[' + idx + '], window._govSearchSources[' + idx + '])" style="cursor:pointer;">';
           html += '<div class="search-card-header"><span class="search-card-title">' + esc(norm(r.name) || '—') + '</span>';
           html += '<span class="search-card-badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">Contact</span></div>';
           html += '<div class="search-card-meta">';
@@ -6293,3 +6305,52 @@ async function execGovSearch() {
     renderGovTab();
   }
 }
+
+// ============================================================================
+// OWNERSHIP DETAIL ACTIONS
+// ============================================================================
+
+/**
+ * Update ownership research_status from the detail panel dropdown
+ */
+window.govUpdateOwnershipStatus = async function(ownershipId) {
+  if (!ownershipId) { showToast('No record ID — cannot update', 'error'); return; }
+  const sel = document.getElementById('govOwnerStatus');
+  if (!sel) return;
+  const newStatus = sel.value;
+  try {
+    await govPatch('ownership_history', 'id=eq.' + ownershipId, { research_status: newStatus });
+    showToast('Status updated to ' + cleanLabel(newStatus), 'success');
+  } catch (err) {
+    showToast('Status update failed: ' + err.message, 'error');
+  }
+};
+
+/**
+ * Log a call activity on a lead/contact record
+ */
+window.govLogCall = async function(leadId) {
+  if (!leadId) { showToast('No record ID', 'error'); return; }
+  const notes = prompt('Call notes (optional):');
+  if (notes === null) return; // user cancelled
+  try {
+    await govPatch('prospect_leads', 'id=eq.' + leadId, {
+      last_contact_date: new Date().toISOString(),
+      last_contact_notes: (notes || 'Call logged from dashboard'),
+      last_contact_type: 'phone'
+    });
+    showToast('Call logged', 'success');
+  } catch (err) {
+    showToast('Log call failed: ' + err.message, 'error');
+  }
+};
+
+/**
+ * Open email client for a lead/contact
+ */
+window.govSendEmail = function(record) {
+  const email = record.contact_email || record.email || '';
+  if (!email) { showToast('No email address on record', 'warning'); return; }
+  const subject = encodeURIComponent('Re: ' + (record.address || record.tenant_agency || 'Property Inquiry'));
+  window.open('mailto:' + email + '?subject=' + subject, '_blank');
+};
