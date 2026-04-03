@@ -932,12 +932,32 @@ async function renderDataQualityPage() {
   perf.end();
 }
 
-function viewEntity(entityId) {
-  // Navigate to entity detail (leverages existing detail panel)
-  if (typeof openEntityDetail === 'function') {
-    openEntityDetail(entityId);
-  } else {
-    showToast('Entity detail view coming soon');
+async function viewEntity(entityId) {
+  if (!entityId) { showToast('No entity ID', 'error'); return; }
+  try {
+    const res = await opsApi('/api/entities?id=' + encodeURIComponent(entityId));
+    const entity = res?.data || res;
+    if (!entity || (!entity.name && !entity.id)) { showToast('Entity not found', 'error'); return; }
+    // Route to unified detail based on domain
+    const db = (entity.domain || '').toLowerCase().includes('gov') ? 'gov' : 'dia';
+    const source = db === 'gov' ? 'gov-lead' : 'dia-clinic';
+    // Build a fallback record from entity fields
+    const record = {
+      property_id: entity.property_id || null,
+      address: entity.address || entity.name || '',
+      city: entity.city || '',
+      state: entity.state || '',
+      entity_type: entity.entity_type || '',
+      entity_id: entity.id
+    };
+    if (typeof showDetail === 'function') {
+      showDetail(record, source);
+    } else {
+      showToast('Detail panel unavailable', 'error');
+    }
+  } catch (err) {
+    console.error('viewEntity error:', err);
+    showToast('Could not load entity: ' + err.message, 'error');
   }
 }
 
