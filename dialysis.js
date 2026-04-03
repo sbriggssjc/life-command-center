@@ -498,79 +498,6 @@ function renderDiaOverview() {
   const leaseBackfillPct = totalClinics > 0 ? ((totalClinics - leaseBackfillLen) / totalClinics * 100).toFixed(1) : '—';
 
   // ═══════════════════════════════════════════════
-  // SECTION 0: ACTIONABLE HIGHLIGHTS (Round 54)
-  // Auto-populated from live data — what needs your attention right now
-  // ═══════════════════════════════════════════════
-  const diaHighlights = [];
-
-  // Highlight 1: NPI signals need review
-  if (npiSignalCount > 0) {
-    diaHighlights.push({
-      icon: '📡', color: '#fb923c', urgency: 'warning',
-      title: npiSignalCount + ' NPI signal' + (npiSignalCount > 1 ? 's' : '') + ' need review',
-      detail: 'Provider changes detected — potential ownership transitions or closures',
-      action: 'Review Signals', tab: 'npi'
-    });
-  }
-
-  // Highlight 2: Property review queue backlog
-  if (propQueueLen > 10) {
-    diaHighlights.push({
-      icon: '🔗', color: '#a78bfa', urgency: 'info',
-      title: propQueueLen + ' clinic' + (propQueueLen > 1 ? 's' : '') + ' in property review queue',
-      detail: 'Unlinked clinics need property matching for lease + ownership data',
-      action: 'Start Review', tab: 'research'
-    });
-  }
-
-  // Highlight 3: Lease backfill needed
-  if (leaseBackfillLen > 20) {
-    diaHighlights.push({
-      icon: '📋', color: '#22d3ee', urgency: 'info',
-      title: leaseBackfillLen + ' clinic' + (leaseBackfillLen > 1 ? 's' : '') + ' need lease backfill',
-      detail: 'Missing lease data — prioritize high-value clinics',
-      action: 'Backfill Leases', tab: 'research'
-    });
-  }
-
-  // Highlight 4: Clinics removed from CMS (closures)
-  if (removedCount > 0) {
-    diaHighlights.push({
-      icon: '🚨', color: '#f87171', urgency: 'urgent',
-      title: removedCount + ' clinic' + (removedCount > 1 ? 's' : '') + ' removed from CMS inventory',
-      detail: 'Potential closures — check for acquisition or disposition opportunities',
-      action: 'View Changes', tab: 'changes'
-    });
-  }
-
-  // Highlight 5: New clinics added
-  if (addedCount > 0) {
-    diaHighlights.push({
-      icon: '🆕', color: '#34d399', urgency: 'info',
-      title: addedCount + ' new clinic' + (addedCount > 1 ? 's' : '') + ' added to CMS inventory',
-      detail: 'New facilities — may need property linking and operator research',
-      action: 'View Changes', tab: 'changes'
-    });
-  }
-
-  if (diaHighlights.length > 0) {
-    html += '<div style="margin-bottom:20px">';
-    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;padding-left:2px">Action Items</div>';
-    for (const h of diaHighlights.slice(0, 5)) {
-      const borderColor = h.urgency === 'urgent' ? h.color : h.urgency === 'warning' ? h.color : 'var(--border)';
-      html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="goToDiaTab(\'' + h.tab + '\')">';
-      html += '<span style="font-size:20px;flex-shrink:0">' + h.icon + '</span>';
-      html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(h.title) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(h.detail) + '</div>';
-      html += '</div>';
-      html += '<button class="gov-row-action accent" onclick="event.stopPropagation();goToDiaTab(\'' + h.tab + '\')" style="flex-shrink:0">' + esc(h.action) + '</button>';
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-
-  // ═══════════════════════════════════════════════
   // SECTION 1: DATABASE HEALTH
   // ═══════════════════════════════════════════════
   html += sectionHeader('Database Health', '🏥', 'search');
@@ -1047,7 +974,7 @@ function renderDiaChanges() {
     { key: 'est_home_revenue', label: 'Home Rev', flex: '0.6', align: 'right' },
     { key: 'estimated_annual_revenue', label: 'TTM Rev', flex: '0.6', align: 'right' },
     { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.6', align: 'right' },
-    { key: '_actions', label: 'Actions', flex: '0.7', align: 'center' }
+    { key: '_actions', label: '', flex: '0.4', align: 'center' }
   ];
 
   html += '<div class="table-row" style="font-weight:600;border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3)">';
@@ -1083,7 +1010,7 @@ function renderDiaChanges() {
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${fmtRev(hmRev)}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_annual_revenue ? '$' + (Number(row.estimated_annual_revenue) / 1000000).toFixed(1) + 'M' : '–'}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_ebitda ? '$' + Math.round(Number(row.estimated_ebitda) / 1000).toLocaleString() + 'K' : '–'}</div>`;
-    html += `<div style="flex:0.7;text-align:center;display:flex;gap:3px;justify-content:center" onclick="event.stopPropagation()"><button class="cms-flag-btn" data-clinic-id="${esc(row.clinic_id || row.ccn || '')}" data-clinic-name="${esc(row.facility_name || '')}" style="font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button><button class="gov-row-action" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Ownership")' title="View owner & contacts">📞</button><button class="gov-row-action accent" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Intel")' title="Research & intel">🔍</button></div>`;
+    html += `<div style="flex:0.4;text-align:center"><button class="cms-flag-btn" data-clinic-id="${esc(row.clinic_id || row.ccn || '')}" data-clinic-name="${esc(row.facility_name || '')}" onclick="event.stopPropagation();" style="font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button></div>`;
     html += '</div>';
   });
 
@@ -1331,7 +1258,7 @@ function renderDiaNpi() {
     html += '<div style="flex: 1;">State</div>';
     html += '<div style="flex: 1;">Operator</div>';
     html += '<div style="flex: 1; text-align: right;">Patients</div>';
-    html += '<div style="flex: 1.0; text-align: center;">Actions</div>';
+    html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
     html += '</div>';
     
     filtered.slice(0, 500).forEach((row, idx) => {
@@ -1345,11 +1272,9 @@ function renderDiaNpi() {
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
       html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
-      html += `<div style="flex: 1.0; text-align: center; display: flex; gap: 3px; justify-content: center;" onclick="event.stopPropagation();">`;
+      html += `<div style="flex: 0.8; text-align: center; display: flex; gap: 4px; justify-content: center;" onclick="event.stopPropagation();">`;
       html += `<button class="npi-flag-btn" data-npi-id="${esc(row.npi || row.clinic_id || row.id || '')}" data-npi-name="${esc(row.facility_name || '')}" style="font-size:9px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button>`;
       html += `<button class="npi-dismiss-btn" data-npi-id="${esc(row.npi || row.clinic_id || row.id || '')}" style="font-size:9px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text3);cursor:pointer;" title="Dismiss signal">✕</button>`;
-      html += `<button class="gov-row-action" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Ownership")' title="View owner & contacts">📞</button>`;
-      html += `<button class="gov-row-action accent" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Intel")' title="Research & intel">🔍</button>`;
       html += `</div>`;
       html += '</div>';
     });
@@ -5281,7 +5206,7 @@ function buildDiaLeasesHTML() {
     html += '<div class="widget-title">Lease Renewal Watchlist <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + watchlist.length + ' clinics)</span></div>';
     html += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">Clinics with expiring, expired, or at-risk leases — sorted by urgency.</div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th>Risk</th><th style="text-align:right">Months Left</th><th>Expiration</th><th style="text-align:center;min-width:140px">Actions</th>';
+    html += '<th>Facility</th><th>Operator</th><th>City</th><th>State</th><th>Risk</th><th style="text-align:right">Months Left</th><th>Expiration</th><th style="text-align:center">Action</th>';
     html += '</tr></thead><tbody>';
     var sorted = watchlist.slice().sort(function(a, b) { return (a.months_to_expiration || 999) - (b.months_to_expiration || 999); });
     for (var wi = 0; wi < Math.min(sorted.length, 75); wi++) {
@@ -5301,12 +5226,7 @@ function buildDiaLeasesHTML() {
       html += '<td>' + riskBadge + '</td>';
       html += '<td style="text-align:right;color:' + moColor + ';font-weight:600">' + moLabel + '</td>';
       html += '<td>' + exp + '</td>';
-      html += '<td style="text-align:center" onclick="event.stopPropagation()">';
-      html += '<div style="display:flex;gap:3px;justify-content:center">';
-      html += '<button class="lease-flag-btn" data-lid="' + esc(c.clinic_id || c.medicare_id || '') + '" data-lname="' + esc(c.facility_name || '') + '" style="font-size:9px;padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button>';
-      html += '<button class="gov-row-action" onclick=\'showDetail(' + safeJSON(c) + ', "dia-clinic", "Ownership")\' title="View owner details & contacts">📞</button>';
-      html += '<button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(c) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button>';
-      html += '</div></td>';
+      html += '<td style="text-align:center" onclick="event.stopPropagation()"><button class="lease-flag-btn" data-lid="' + esc(c.clinic_id || c.medicare_id || '') + '" data-lname="' + esc(c.facility_name || '') + '" style="font-size:9px;padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button></td>';
       html += '</tr>';
     }
     html += '</tbody></table></div>';
@@ -5492,7 +5412,7 @@ function buildDiaLoansHTML() {
   html += '<div class="widget" style="margin-bottom:16px">';
   html += '<div class="widget-title">Largest Loans <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + fmtN(sorted.length) + ' loans with amounts)</span></div>';
   html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-  html += '<th>Facility</th><th>City</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Lender</th><th>Maturity</th><th>Alert</th><th style="text-align:center;min-width:140px">Actions</th>';
+  html += '<th>Facility</th><th>City</th><th style="text-align:right">Loan Amount</th><th style="text-align:right">Rate</th><th>Type</th><th>Lender</th><th>Maturity</th><th>Alert</th><th style="text-align:center">Action</th>';
   html += '</tr></thead><tbody>';
   for (var li = 0; li < Math.min(sorted.length, 50); li++) {
     var ln = sorted[li];
@@ -5508,12 +5428,7 @@ function buildDiaLoansHTML() {
     html += '<td>' + esc(ln.lender_name || '—') + '</td>';
     html += '<td>' + matDate + '</td>';
     html += '<td>' + alertBadge + '</td>';
-    html += '<td style="text-align:center" onclick="event.stopPropagation()">';
-    html += '<div style="display:flex;gap:3px;justify-content:center">';
-    html += '<button class="loan-flag-btn" data-loan-id="' + esc(ln.loan_id || '') + '" data-loan-name="' + esc(ln.facility_name || '') + '" style="font-size:9px;padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for review">' + (ln.alert_flag ? 'Ack' : 'Flag') + '</button>';
-    html += '<button class="gov-row-action" onclick=\'showDetail(' + safeJSON(ln) + ', "dia-clinic", "Ownership")\' title="View owner details & contacts">📞</button>';
-    html += '<button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(ln) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button>';
-    html += '</div></td>';
+    html += '<td style="text-align:center" onclick="event.stopPropagation()"><button class="loan-flag-btn" data-loan-id="' + esc(ln.loan_id || '') + '" data-loan-name="' + esc(ln.facility_name || '') + '" style="font-size:9px;padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for review">' + (ln.alert_flag ? 'Ack' : 'Flag') + '</button></td>';
     html += '</tr>';
   }
   html += '</tbody></table></div>';
