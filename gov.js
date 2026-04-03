@@ -626,7 +626,7 @@ function listingsTable(rows) {
   }
   
   let html = '<div class="table-wrapper"><table class="data-table"><thead><tr>';
-  html += '<th>Tenant</th><th>Address</th><th>City, State</th><th>Asking</th><th>Cap Rate</th><th>DOM</th><th>Status</th><th>Source</th>';
+  html += '<th>Tenant</th><th>Address</th><th>City, State</th><th>Asking</th><th>Cap Rate</th><th>DOM</th><th>Status</th><th>Source</th><th style="text-align:center;min-width:80px">Actions</th>';
   html += '</tr></thead><tbody>';
 
   rows.slice(0, 50).forEach(r => {
@@ -642,6 +642,10 @@ function listingsTable(rows) {
     html += `<td>${r.days_on_market || '-'}</td>`;
     html += `<td><span class="pill">${cleanLabel(status)}</span></td>`;
     html += `<td>${esc(cleanLabel(r.listing_source || ''))}</td>`;
+    html += `<td style="text-align:center" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:center">`;
+    html += `<button class="gov-row-action" onclick='showDetail(${safeJSON(r)}, "gov-listing", "Ownership")' title="View owner & contacts">📞</button>`;
+    html += `<button class="gov-row-action accent" onclick='showDetail(${safeJSON(r)}, "gov-listing", "Intel")' title="Research & intel">🔍</button>`;
+    html += `</div></td>`;
     html += '</tr>';
   });
   
@@ -5875,6 +5879,7 @@ async function renderGovSales() {
     html += th('Listing Broker', 100);
     html += thr('DOM', 45);
   }
+  html += '<th style="padding:10px 8px;text-align:center;font-weight:600;font-size:11px;letter-spacing:0.3px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;min-width:80px;position:sticky;right:0;background:var(--s2);z-index:2">Actions</th>';
   html += '</tr></thead>';
 
   // Body
@@ -5925,11 +5930,17 @@ async function renderGovSales() {
       html += td(r.listing_broker, true);
       html += tdr(r.dom != null ? r.dom + 'd' : '—');
     }
+    // Sticky actions column
+    html += '<td style="padding:8px;border-bottom:1px solid var(--border);text-align:center;position:sticky;right:0;background:var(--s1);z-index:1" onclick="event.stopPropagation()">';
+    html += '<div style="display:flex;gap:3px;justify-content:center">';
+    html += '<button class="gov-row-action" onclick=\'showDetail(' + rowData + ', "gov-ownership", "Ownership")\' title="View owner & contacts">📞</button>';
+    html += '<button class="gov-row-action accent" onclick=\'showDetail(' + rowData + ', "gov-ownership", "Intel")\' title="Research & intel">🔍</button>';
+    html += '</div></td>';
     html += '</tr>';
   });
 
   if (pageRows.length === 0) {
-    const colSpan = isComps ? 24 : 20;
+    const colSpan = isComps ? 25 : 21;
     html += '<tr><td colspan="' + colSpan + '" style="text-align: center; padding: 32px; color: var(--text3);">No ' + (isComps ? 'sales comps' : 'available listings') + ' to display</td></tr>';
   }
   html += '</tbody></table></div>';
