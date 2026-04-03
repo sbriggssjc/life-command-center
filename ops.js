@@ -1023,7 +1023,7 @@ async function completeResearch(id) {
 }
 
 async function createFollowup(id) {
-  const members = await loadWorkspaceMembers();
+  const members = await loadWorkspaceMembers() || [];
   const select = document.getElementById('followupUserSelect');
   if (!select) return;
   select.innerHTML = members
@@ -1689,13 +1689,16 @@ async function quickTransition(itemId, newStatus, itemType) {
     } else {
       showToast(res.error || 'Transition failed', 'error');
     }
+  } catch (e) {
+    console.error('quickTransition error:', e);
+    showToast('Transition failed: ' + (e.message || 'Network error'), 'error');
   } finally {
     _quickTransitioning = false;
   }
 }
 
 async function quickReassign(itemId, itemType, itemTitle = 'this item') {
-  const members = await loadWorkspaceMembers();
+  const members = await loadWorkspaceMembers() || [];
   if (!members.length) {
     showToast('No workspace members available', 'error');
     return;
