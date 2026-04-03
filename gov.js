@@ -159,7 +159,7 @@ async function govQueryAll(table, select, params = {}) {
 // METRIC CARD HTML
 // ============================================================================
 
-function metricHTML(label, value, sub, color, extraAttrs) {
+function metricHTML(label, value, sub, color) {
   const colorMap = {
     'blue': '#6c8cff',
     'green': '#34d399',
@@ -168,11 +168,11 @@ function metricHTML(label, value, sub, color, extraAttrs) {
     'purple': '#a78bfa',
     'cyan': '#22d3ee'
   };
-
+  
   const bgColor = colorMap[color] || '#6c8cff';
-
+  
   return `
-    <div class="metric-card" ${extraAttrs || ''}>
+    <div class="metric-card">
       <div class="metric-label">${label}</div>
       <div class="metric-value" style="color: ${bgColor};">${value}</div>
       ${sub ? `<div class="metric-sub">${sub}</div>` : ''}
@@ -3383,92 +3383,6 @@ function renderGovOverview() {
   }
 
   // ═══════════════════════════════════════════════
-  // SECTION 0: ACTIONABLE HIGHLIGHTS (Round 51)
-  // Auto-populated from live portfolio + pipeline data
-  // ═══════════════════════════════════════════════
-  const highlights = [];
-
-  // Highlight 1: Leases expiring within 6 months
-  if (!useMV) {
-    const sixMoLeases = withTerm.filter(p => p.firm_term_remaining != null && p.firm_term_remaining >= 0 && p.firm_term_remaining <= 0.5);
-    if (sixMoLeases.length > 0) {
-      const topLease = sixMoLeases.sort((a, b) => (a.firm_term_remaining || 0) - (b.firm_term_remaining || 0))[0];
-      highlights.push({
-        icon: '⏰', color: '#f87171', urgency: 'urgent',
-        title: sixMoLeases.length + ' lease' + (sixMoLeases.length > 1 ? 's' : '') + ' expiring within 6 months',
-        detail: 'Soonest: ' + (topLease.address || 'Unknown') + ' — ' + (topLease.agency || topLease.agency_full_name || 'Unknown agency'),
-        action: 'Review Leases', tab: 'leases'
-      });
-    }
-  }
-
-  // Highlight 2: Hot leads needing follow-up (>14 days since last contact)
-  const hotLeadsStale = leads.filter(l => l.lead_temperature === 'hot' && l.last_contact_date
-    && (Date.now() - new Date(l.last_contact_date).getTime()) > 14 * 86400000);
-  if (hotLeadsStale.length > 0) {
-    highlights.push({
-      icon: '🔥', color: '#fb923c', urgency: 'warning',
-      title: hotLeadsStale.length + ' hot lead' + (hotLeadsStale.length > 1 ? 's' : '') + ' overdue for follow-up',
-      detail: 'Last contact >14 days ago — risk of going cold',
-      action: 'View Pipeline', tab: 'pipeline'
-    });
-  }
-
-  // Highlight 3: Loans maturing within 12 months
-  if (loans.length > 0) {
-    const oneYrFromNow = new Date();
-    oneYrFromNow.setFullYear(oneYrFromNow.getFullYear() + 1);
-    const maturingSoon = loans.filter(l => l.maturity_date && new Date(l.maturity_date) <= oneYrFromNow && new Date(l.maturity_date) >= now);
-    if (maturingSoon.length > 0) {
-      highlights.push({
-        icon: '🏦', color: '#a78bfa', urgency: 'info',
-        title: maturingSoon.length + ' loan' + (maturingSoon.length > 1 ? 's' : '') + ' maturing within 12 months',
-        detail: 'Potential refinance or disposition opportunities',
-        action: 'View Loans', tab: 'loans'
-      });
-    }
-  }
-
-  // Highlight 4: New pipeline leads (added in last 7 days)
-  const recentLeads = leads.filter(l => l.created_at && (Date.now() - new Date(l.created_at).getTime()) < 7 * 86400000);
-  if (recentLeads.length > 0) {
-    highlights.push({
-      icon: '🎯', color: '#34d399', urgency: 'info',
-      title: recentLeads.length + ' new lead' + (recentLeads.length > 1 ? 's' : '') + ' added this week',
-      detail: 'Review and assign temperatures',
-      action: 'Triage Leads', tab: 'pipeline'
-    });
-  }
-
-  // Highlight 5: Active listings on market
-  const hlActiveListings = listings.filter(l => l.listing_status === 'active');
-  if (hlActiveListings.length > 0) {
-    highlights.push({
-      icon: '📋', color: '#22d3ee', urgency: 'info',
-      title: hlActiveListings.length + ' active listing' + (hlActiveListings.length > 1 ? 's' : '') + ' on market',
-      detail: 'Monitor for competitive intel or acquisition targets',
-      action: 'View Listings', tab: 'listings'
-    });
-  }
-
-  if (highlights.length > 0) {
-    html += '<div style="margin-bottom:20px">';
-    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;padding-left:2px">Action Items</div>';
-    for (const h of highlights.slice(0, 5)) {
-      const borderColor = h.urgency === 'urgent' ? h.color : h.urgency === 'warning' ? h.color : 'var(--border)';
-      html += `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ${borderColor};cursor:pointer" onclick="goToGovTab('${h.tab}')">`;
-      html += `<span style="font-size:20px;flex-shrink:0">${h.icon}</span>`;
-      html += `<div style="flex:1;min-width:0">`;
-      html += `<div style="font-size:13px;font-weight:600;color:var(--text)">${esc(h.title)}</div>`;
-      html += `<div style="font-size:12px;color:var(--text3);margin-top:2px">${esc(h.detail)}</div>`;
-      html += `</div>`;
-      html += `<button class="gov-row-action accent" onclick="event.stopPropagation();goToGovTab('${h.tab}')" style="flex-shrink:0">${esc(h.action)}</button>`;
-      html += `</div>`;
-    }
-    html += '</div>';
-  }
-
-  // ═══════════════════════════════════════════════
   // SECTION 1: PORTFOLIO AT A GLANCE
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Portfolio at a Glance', '🏛️', 'search');
@@ -3886,10 +3800,9 @@ function renderGovPipeline() {
   const atCap = govData.leads.length >= 1000;
   const hotCount = dedupedLeads.filter(l => l.lead_temperature === 'hot').length;
   const warmCount = dedupedLeads.filter(l => l.lead_temperature === 'warm').length;
-  const coolCount = totalLeads - hotCount - warmCount;
 
   const pipelineValue = dedupedLeads.reduce((sum, l) => sum + (l.estimated_value || 0), 0);
-
+  
   // Leads by source
   const bySource = {};
   dedupedLeads.forEach(l => {
@@ -3899,80 +3812,43 @@ function renderGovPipeline() {
 
   const sourceLabels = Object.keys(bySource).sort((a, b) => bySource[b] - bySource[a]).slice(0, 8);
   const sourceData = sourceLabels.map(s => bySource[s]);
-
+  
   // Temperature breakdown
   const tempLabels = ['Hot', 'Warm', 'Cool'];
-  const tempData = [hotCount, warmCount, coolCount];
+  const tempData = [hotCount, warmCount, totalLeads - hotCount - warmCount];
   const tempColors = ['#f87171', '#fbbf24', '#6c8cff'];
-
+  
   // === Action guidance banner ===
   let html = '<div style="padding:10px 14px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Prospect Pipeline</strong> — Review and prioritize leads by temperature and score. Click any row to open property detail. Use temperature filters and sort to triage your pipeline on a call.</div>';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Prospect Pipeline</strong> — Review and prioritize leads by temperature and score. Click any lead to view property details, log activity, update pipeline stage, or record contact information. Use the <em>Research</em> tab for guided ownership and lease research workflows.</div>';
   html += '</div>';
 
-  // ── KPI cards (clickable = temperature filter) ──
   html += '<div class="gov-metrics">';
-  const tfAll = govPipelineTempFilter === 'all';
-  const tfHot = govPipelineTempFilter === 'hot';
-  const tfWarm = govPipelineTempFilter === 'warm';
-  const tfCool = govPipelineTempFilter === 'cool';
-  html += metricHTML('Total Leads', fmtN(totalLeads) + (atCap ? '+' : ''), 'in pipeline' + (atCap ? ' (first 1,000)' : ''), 'blue',
-    `onclick="govPipelineTempFilter='all';renderGovTab()" style="cursor:pointer;${tfAll ? 'outline:2px solid var(--accent);outline-offset:-2px;' : ''}"`);
-  html += metricHTML('Hot', fmtN(hotCount) + (atCap ? '+' : ''), 'high priority', 'red',
-    `onclick="govPipelineTempFilter='hot';renderGovTab()" style="cursor:pointer;${tfHot ? 'outline:2px solid #f87171;outline-offset:-2px;' : ''}"`);
-  html += metricHTML('Warm', fmtN(warmCount) + (atCap ? '+' : ''), 'active prospects', 'yellow',
-    `onclick="govPipelineTempFilter='warm';renderGovTab()" style="cursor:pointer;${tfWarm ? 'outline:2px solid #fbbf24;outline-offset:-2px;' : ''}"`);
+  html += metricHTML('Total Leads', fmtN(totalLeads) + (atCap ? '+' : ''), 'in pipeline' + (atCap ? ' (showing first 1,000)' : ''), 'blue');
+  html += metricHTML('Hot', fmtN(hotCount) + (atCap ? '+' : ''), 'high priority', 'red');
+  html += metricHTML('Warm', fmtN(warmCount) + (atCap ? '+' : ''), 'active prospects', 'yellow');
   html += metricHTML('Pipeline Value', fmt(pipelineValue) + (atCap ? '+' : ''), 'estimated total', 'purple');
   html += '</div>';
-
+  
   html += `<div class="charts-row">`;
-
+  
   if (sourceLabels.length > 0) {
     html += `<div class="chart-container half">
       <h3>Leads by Source</h3>
       <canvas id="chart-leads-source" height="200"></canvas>
     </div>`;
   }
-
+  
   html += `<div class="chart-container half">
     <h3>Temperature</h3>
     <canvas id="chart-leads-temp" height="200"></canvas>
   </div>`;
-
+  
   html += '</div>';
-
-  // ── Filter / Sort / Search toolbar (Round 50) ──
-  html += '<div class="widget" style="margin-bottom:16px;padding:12px 14px">';
-  html += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">';
-  // Search
-  html += '<input type="text" placeholder="Search address, agency, city..." value="' + esc(govPipelineSearch) + '" '
-    + 'oninput="govPipelineSearch=this.value;govRenderPipelineTable()" '
-    + 'style="flex:1;min-width:180px;padding:7px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
-  // Sort
-  html += '<select onchange="govPipelineSort=this.value;govRenderPipelineTable()" style="padding:7px 8px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
-  html += '<option value="score"' + (govPipelineSort === 'score' ? ' selected' : '') + '>Sort: Score (High→Low)</option>';
-  html += '<option value="value"' + (govPipelineSort === 'value' ? ' selected' : '') + '>Sort: Value (High→Low)</option>';
-  html += '<option value="contact"' + (govPipelineSort === 'contact' ? ' selected' : '') + '>Sort: Last Contact (Recent)</option>';
-  html += '<option value="address"' + (govPipelineSort === 'address' ? ' selected' : '') + '>Sort: Address (A→Z)</option>';
-  html += '</select>';
-  // Temperature filter pills (alternative to KPI cards)
-  html += '<div style="display:flex;gap:4px">';
-  const tFilters = [
-    { key: 'all', label: 'All', count: totalLeads },
-    { key: 'hot', label: 'Hot', count: hotCount, color: '#f87171' },
-    { key: 'warm', label: 'Warm', count: warmCount, color: '#fbbf24' },
-    { key: 'cool', label: 'Cool', count: coolCount, color: '#6c8cff' }
-  ];
-  for (const tf of tFilters) {
-    const active = govPipelineTempFilter === tf.key;
-    html += `<button onclick="govPipelineTempFilter='${tf.key}';renderGovTab()" style="padding:4px 10px;font-size:11px;font-weight:600;border:1px solid ${active ? (tf.color || 'var(--accent)') : 'var(--border)'};border-radius:20px;background:${active ? (tf.color ? tf.color + '18' : 'rgba(96,165,250,0.1)') : 'transparent'};color:${active ? (tf.color || 'var(--accent)') : 'var(--text3)'};cursor:pointer">${tf.label} (${fmtN(tf.count)})</button>`;
-  }
-  html += '</div>';
-  html += '</div></div>';
-
-  // ── Filtered + sorted leads table ──
-  html += '<div id="govPipelineTableContainer">';
-  html += buildGovPipelineTable(dedupedLeads);
+  
+  html += '<div class="table-section">';
+  html += '<h3>Top Prospects</h3>';
+  html += leadsTable(dedupedLeads.slice(0, 100));
   html += '</div>';
 
   setTimeout(() => {
@@ -3984,104 +3860,6 @@ function renderGovPipeline() {
 
   return html;
 }
-
-/**
- * Build the filtered + sorted pipeline table (called on search/sort change too).
- */
-function buildGovPipelineTable(allLeads) {
-  // Apply temperature filter
-  let filtered = allLeads;
-  if (govPipelineTempFilter !== 'all') {
-    filtered = filtered.filter(l => (l.lead_temperature || 'cool') === govPipelineTempFilter);
-  }
-
-  // Apply search
-  if (govPipelineSearch.trim()) {
-    const q = govPipelineSearch.trim().toLowerCase();
-    filtered = filtered.filter(l =>
-      (l.address || '').toLowerCase().includes(q) ||
-      (l.tenant_agency || l.agency_full_name || '').toLowerCase().includes(q) ||
-      (l.city || '').toLowerCase().includes(q) ||
-      (l.state || '').toLowerCase().includes(q) ||
-      (l.lessor_name || '').toLowerCase().includes(q)
-    );
-  }
-
-  // Apply sort
-  switch (govPipelineSort) {
-    case 'score':
-      filtered.sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0));
-      break;
-    case 'value':
-      filtered.sort((a, b) => (b.estimated_value || 0) - (a.estimated_value || 0));
-      break;
-    case 'contact':
-      filtered.sort((a, b) => (b.last_contact_date || '').localeCompare(a.last_contact_date || ''));
-      break;
-    case 'address':
-      filtered.sort((a, b) => (a.address || '').localeCompare(b.address || ''));
-      break;
-  }
-
-  if (filtered.length === 0) {
-    return '<div style="text-align:center;padding:24px;color:var(--text3);font-size:13px">'
-      + (govPipelineSearch ? 'No leads match "' + esc(govPipelineSearch) + '"' : 'No leads in this filter')
-      + '</div>';
-  }
-
-  let html = '<div class="widget"><div class="widget-title">Prospects <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + fmtN(filtered.length) + ' showing)</span></div>';
-  html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-  html += '<th>Score</th><th>Temp</th><th>Address</th><th>City, State</th><th>Tenant</th><th style="text-align:right">Value</th><th>Pipeline</th><th>Last Contact</th><th style="text-align:center;min-width:90px">Actions</th>';
-  html += '</tr></thead><tbody>';
-
-  for (const r of filtered.slice(0, 75)) {
-    const tempColor = { hot: '#f87171', warm: '#fbbf24', cool: '#6c8cff' }[r.lead_temperature] || '#9498a8';
-    const pipelineStatus = r.pipeline_status || 'new';
-    const lastContact = r.last_contact_date ? new Date(r.last_contact_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
-    const daysSince = r.last_contact_date ? Math.floor((Date.now() - new Date(r.last_contact_date).getTime()) / 86400000) : null;
-    const contactColor = daysSince === null ? 'var(--text3)' : daysSince > 30 ? 'var(--red)' : daysSince > 14 ? '#fb923c' : 'var(--text2)';
-
-    html += `<tr class="clickable-row" onclick='showDetail(${safeJSON(r)}, "gov-lead")'>`;
-    html += `<td style="font-weight:700">${r.priority_score || 0}</td>`;
-    html += `<td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tempColor};margin-right:4px"></span><span style="color:${tempColor};font-size:12px;font-weight:600">${esc((r.lead_temperature || 'cool').toUpperCase())}</span></td>`;
-    html += `<td style="font-weight:500">${esc(norm(r.address) || '—')}</td>`;
-    html += `<td>${esc(norm(r.city) || '')}${r.state ? ', ' + esc(r.state) : ''}</td>`;
-    html += `<td style="font-size:12px">${esc(norm(r.tenant_agency || r.agency_full_name) || '—')}</td>`;
-    html += `<td style="text-align:right;font-weight:600">${r.estimated_value ? fmt(r.estimated_value) : '—'}</td>`;
-    html += `<td><span style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--s2);border:1px solid var(--border);color:var(--text2)">${cleanLabel(pipelineStatus)}</span></td>`;
-    html += `<td style="color:${contactColor};font-size:12px">${lastContact}${daysSince != null && daysSince > 14 ? ' <span style="font-size:10px">(' + daysSince + 'd ago)</span>' : ''}</td>`;
-    // Actions column
-    html += '<td style="text-align:center" onclick="event.stopPropagation()">';
-    html += '<div style="display:flex;gap:3px;justify-content:center">';
-    html += `<button class="gov-row-action" onclick="showDetail(${safeJSON(r)}, 'gov-lead', 'Ownership')" title="View owner details & contacts">📞</button>`;
-    html += `<button class="gov-row-action accent" onclick="showDetail(${safeJSON(r)}, 'gov-lead', 'Intel')" title="Research & intel">🔍</button>`;
-    html += '</div></td>';
-    html += '</tr>';
-  }
-
-  html += '</tbody></table></div>';
-  if (filtered.length > 75) {
-    html += `<div style="text-align:center;padding:8px;font-size:12px;color:var(--text3)">Showing 75 of ${fmtN(filtered.length)} leads</div>`;
-  }
-  html += '</div>';
-  return html;
-}
-
-/**
- * Re-render just the pipeline table (on search/sort change without full re-render).
- */
-window.govRenderPipelineTable = function() {
-  const container = document.getElementById('govPipelineTableContainer');
-  if (!container || !govData || !govData.leads) return;
-  const seenIds = new Set();
-  const dedupedLeads = govData.leads.filter(l => {
-    const key = l.lead_id || (l.address + '|' + l.city + '|' + l.tenant_agency);
-    if (seenIds.has(key)) return false;
-    seenIds.add(key);
-    return true;
-  });
-  container.innerHTML = buildGovPipelineTable(dedupedLeads);
-};
 
 function renderGovListings() {
   const activeListings = govData.listings.filter(l => l.listing_status === 'active').length;
@@ -6101,7 +5879,7 @@ function buildGovLeasesHTML() {
     html += '<div style="color:var(--text2);font-size:13px;padding:12px 0">No leases expiring within 2 years.</div>';
   } else {
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Agency</th><th>Address</th><th>City</th><th>State</th><th style="text-align:right">Firm Term</th><th>Expiration</th><th style="text-align:right">Rent</th><th style="text-align:right">SF</th><th style="text-align:center;min-width:130px">Actions</th>';
+    html += '<th>Agency</th><th>Address</th><th>City</th><th>State</th><th style="text-align:right">Firm Term</th><th>Expiration</th><th style="text-align:right">Rent</th><th style="text-align:right">SF</th>';
     html += '</tr></thead><tbody>';
     for (const p of urgentLeases.slice(0, 50)) {
       const termColor = (p.firm_term_remaining || 0) < 0 ? 'var(--red)' : (p.firm_term_remaining || 0) <= 1 ? '#f87171' : '#fb923c';
@@ -6116,11 +5894,6 @@ function buildGovLeasesHTML() {
       html += `<td>${expDate}</td>`;
       html += `<td style="text-align:right">${p.gross_rent ? fmt(p.gross_rent) : '—'}</td>`;
       html += `<td style="text-align:right">${p.sf_leased ? fmtN(Math.round(p.sf_leased)) : '—'}</td>`;
-      html += '<td style="text-align:center" onclick="event.stopPropagation()">';
-      html += '<div style="display:flex;gap:4px;justify-content:center">';
-      html += `<button class="gov-row-action" onclick="govQuickLogActivity(${safeJSON(p)}, 'lease')" title="Log a call or note for this property">📞 Log</button>`;
-      html += `<button class="gov-row-action accent" onclick="govQuickAddToPipeline(${safeJSON(p)})" title="Add or update this property in the prospect pipeline">🎯 Pipeline</button>`;
-      html += '</div></td>';
       html += '</tr>';
     }
     html += '</tbody></table></div>';
@@ -6198,11 +5971,6 @@ function buildGovLeasesHTML() {
 let govLoansData = null; // lazy-loaded
 let govLoanPropertyMap = {}; // property_id → {address, city, state, agency}
 let govLoansMaturityFilter = 'all'; // 'all', '1yr', '2yr'
-
-// ── Pipeline filter/sort state (Round 50) ──
-let govPipelineTempFilter = 'all'; // 'all', 'hot', 'warm', 'cool'
-let govPipelineSearch = '';
-let govPipelineSort = 'score'; // 'score', 'value', 'contact', 'address'
 
 function renderGovLoans() {
   const el = document.getElementById('bizPageInner');
@@ -6379,7 +6147,7 @@ function buildGovLoansHTML() {
     html += '<div class="widget">';
     html += '<div class="widget-title">' + maturityLabel + ' <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + maturityLoans.length + ' loans)</span></div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Property</th><th>City</th><th>State</th><th>CMBS Deal</th><th style="text-align:right">Amount</th><th>Maturity</th><th>Status</th><th style="text-align:center;min-width:130px">Actions</th>';
+    html += '<th>Property</th><th>City</th><th>State</th><th>CMBS Deal</th><th style="text-align:right">Amount</th><th>Maturity</th><th>Status</th>';
     html += '</tr></thead><tbody>';
     for (const l of maturityLoans.slice(0, 75)) {
       const prop = propMap[l.property_id] || {};
@@ -6396,11 +6164,6 @@ function buildGovLoansHTML() {
       html += '<td style="text-align:right;font-weight:600">' + (l.loan_amount ? fmt(parseFloat(l.loan_amount)) : '—') + '</td>';
       html += '<td style="color:' + matColor + ';font-weight:600">' + mat + (isPastDue ? ' (past due)' : '') + '</td>';
       html += '<td>' + esc(l.status || '—') + '</td>';
-      html += '<td style="text-align:center" onclick="event.stopPropagation()">';
-      html += '<div style="display:flex;gap:4px;justify-content:center">';
-      html += '<button class="gov-row-action" onclick=\'govQuickLogActivity(' + safeJSON(detailObj) + ', "loan")\' title="Log a call or note for this property">📞 Log</button>';
-      html += '<button class="gov-row-action accent" onclick=\'govQuickAddToPipeline(' + safeJSON(detailObj) + ')\' title="Add or update this property in the prospect pipeline">🎯 Pipeline</button>';
-      html += '</div></td>';
       html += '</tr>';
     }
     html += '</tbody></table></div>';
@@ -6869,25 +6632,4 @@ window.govSendEmail = function(record) {
   if (!email) { showToast('No email address on record', 'warning'); return; }
   const subject = encodeURIComponent('Re: ' + (record.address || record.tenant_agency || 'Property Inquiry'));
   window.open('mailto:' + email + '?subject=' + subject, '_blank');
-};
-
-// ============================================================================
-// ROUND 49: INLINE ROW ACTIONS — Quick Log Activity & Open Pipeline
-// ============================================================================
-
-/**
- * Open the detail panel directly to the Ownership tab for a record.
- * One click from the Leases or Loans table → see owner + contacts, ready to call.
- */
-window.govQuickLogActivity = function(record, context) {
-  const enriched = Object.assign({}, record, { _actionContext: context });
-  showDetail(enriched, 'gov-lead', 'Ownership');
-};
-
-/**
- * Open the detail panel directly to the Intel tab for a record.
- * One click from the Leases or Loans table → research intake + pipeline management.
- */
-window.govQuickAddToPipeline = function(record) {
-  showDetail(record, 'gov-lead', 'Intel');
 };

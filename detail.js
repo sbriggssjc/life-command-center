@@ -62,7 +62,7 @@ let _udIntakeState = {
  * @param {object} ids - { property_id, lease_number } lookup keys
  * @param {object} fallback - the raw record from the list (shown while loading)
  */
-async function openUnifiedDetail(db, ids, fallback, initialTab) {
+async function openUnifiedDetail(db, ids, fallback) {
   _udCache = null;
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
@@ -100,14 +100,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     </div>
     <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
-  // Render tab bar — highlight initialTab if provided, else first tab
+  // Render tab bar
   const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'Intel', 'History'];
-  const activeTab = (initialTab && tabs.includes(initialTab)) ? initialTab : tabs[0];
-  if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
-    `<button class="detail-tab ${t === activeTab ? 'active' : ''}" onclick="switchUnifiedTab('${t}')">${t}</button>`
+  if (tabsEl) tabsEl.innerHTML = tabs.map((t, i) =>
+    `<button class="detail-tab ${i === 0 ? 'active' : ''}" onclick="switchUnifiedTab('${t}')">${t}</button>`
   ).join('');
-  // Store requested initial tab for use after data loads
-  window._udInitialTab = activeTab;
 
   // Show spinner in body
   if (bodyEl) bodyEl.innerHTML =
@@ -150,7 +147,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // using the fields already present on the search card record
     _udCache = { db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true };
     _udRenderFallbackHeader(db, fallback);
-    if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
+    if (bodyEl) bodyEl.innerHTML = _udRenderTab('Property');
     return;
   }
 
@@ -2694,7 +2691,7 @@ function _stars(n) {
  * Called from existing onclick handlers.
  * Extracts property_id and lease_number from any record shape and opens unified detail.
  */
-function showUnifiedDetail(record, source, initialTab) {
+function showUnifiedDetail(record, source) {
   const db = source.startsWith('gov') ? 'gov' : 'dia';
 
   const ids = {
@@ -2702,7 +2699,7 @@ function showUnifiedDetail(record, source, initialTab) {
     lease_number: record.lease_number || null
   };
 
-  openUnifiedDetail(db, ids, record, initialTab);
+  openUnifiedDetail(db, ids, record);
 }
 
 // ============================================================================
