@@ -9,7 +9,7 @@
 // ============================================================================
 
 let diaCharts = {};
-let diaResearchMode = 'quarantine'; // pipeline order: quarantine → unmatched → clarification → property → lease → clinic_leads → staleness → run_health
+let diaResearchMode = 'property'; // 'property' | 'lease' | 'clinic_leads'
 let diaResearchIdx = 0;
 let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
 let diaLeaseFilter = { priority: null, selectedIdx: undefined };
@@ -2534,120 +2534,51 @@ async function resolveDiaUnmatched(updateId, action, propertyId) {
 // ============================================================================
 
 /**
- * Render research workbench — pipeline-ordered human closed-loop interface.
- * Tabs follow the logical data lifecycle from ingest → enrichment → prospecting → monitoring.
+ * Render research workbench
  */
 function renderDiaResearch() {
   let html = '<div class="research-workbench">';
 
-  // Queue counts for badges
-  const qCount = diaQuarantineQueue ? diaQuarantineQueue.length : null;
-  const umCount = diaUnmatchedQueue ? diaUnmatchedQueue.length : null;
-  const clCount = diaClarificationQueue ? diaClarificationQueue.length : null;
-  const prCount = (diaData.propertyReviewQueue || []).length;
-  const lbCount = (diaData.leaseBackfillRows || []).length;
-  const clLeadCount = diaClinicLeadQueue ? diaClinicLeadQueue.length : null;
-
-  // Pipeline step definitions — ordered from data ingest to prospecting to monitoring
-  const pipelineSteps = [
-    { key: 'quarantine',     num: '1', label: 'Quarantine',       count: qCount,     phase: 'ingest',      desc: 'Fix bad data caught during ingest' },
-    { key: 'unmatched',      num: '2', label: 'Unmatched',        count: umCount,    phase: 'ingest',      desc: 'Link clinics to property records' },
-    { key: 'clarification',  num: '3', label: 'Clarification',    count: clCount,    phase: 'ingest',      desc: 'Answer missing required fields' },
-    { key: 'property',       num: '4', label: 'Property Review',  count: prCount,    phase: 'enrichment',  desc: 'Verify property-clinic links' },
-    { key: 'lease',          num: '5', label: 'Lease Backfill',   count: lbCount,    phase: 'enrichment',  desc: 'Research missing lease data' },
-    { key: 'clinic_leads',   num: '6', label: 'Clinic Leads',     count: clLeadCount, phase: 'prospecting', desc: 'Qualify leads for outreach' },
-    { key: 'staleness',      num: '',  label: 'Staleness',        count: null,       phase: 'monitoring',  desc: 'Data freshness monitoring' },
-    { key: 'run_health',     num: '',  label: 'Run Health',       count: null,       phase: 'monitoring',  desc: 'Pipeline run diagnostics' },
-  ];
-
-  // Phase labels for visual grouping
-  const phases = [
-    { key: 'ingest',      label: 'DATA QUALITY',  color: '#f87171', icon: '🛡️' },
-    { key: 'enrichment',  label: 'ENRICHMENT',    color: '#fbbf24', icon: '🔍' },
-    { key: 'prospecting', label: 'PROSPECTING',   color: '#34d399', icon: '🎯' },
-    { key: 'monitoring',  label: 'MONITORING',    color: '#60a5fa', icon: '📊' },
-  ];
-
-  // Current step's phase
-  const currentStep = pipelineSteps.find(s => s.key === diaResearchMode) || pipelineSteps[0];
-  const currentPhase = phases.find(p => p.key === currentStep.phase) || phases[0];
-
-  // === Pipeline progress bar ===
-  html += '<div style="display:flex;gap:0;margin-bottom:16px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:var(--s2);height:4px">';
-  phases.forEach(ph => {
-    const stepsInPhase = pipelineSteps.filter(s => s.phase === ph.key);
-    const isActive = ph.key === currentStep.phase;
-    const isPast = phases.indexOf(ph) < phases.indexOf(currentPhase);
-    const pct = (stepsInPhase.length / pipelineSteps.length * 100).toFixed(0);
-    const bg = isActive ? ph.color : isPast ? ph.color + '60' : 'transparent';
-    html += `<div style="flex:${stepsInPhase.length};height:100%;background:${bg};transition:background 0.3s"></div>`;
-  });
+  // ROW 1: Research mode tabs (always visible)
+  html += '<div style="display: flex; gap: 8px; margin-bottom: 20px; align-items: center;">';
+  html += `<button class="btn-link${diaResearchMode === 'property' ? '-green' : ''}" data-mode="property" style="cursor: pointer; font-weight: ${diaResearchMode === 'property' ? '600' : '500'};">Property Review</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'lease' ? '-green' : ''}" data-mode="lease" style="cursor: pointer; font-weight: ${diaResearchMode === 'lease' ? '600' : '500'};">Lease Backfill</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'clinic_leads' ? '-green' : ''}" data-mode="clinic_leads" style="cursor: pointer; font-weight: ${diaResearchMode === 'clinic_leads' ? '600' : '500'};">Clinic Leads</button>`;
   html += '</div>';
 
-  // === Tab strip — unified pipeline order ===
-  html += '<div style="display:flex;gap:0;margin-bottom:20px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--s2)">';
-
-  let lastPhase = '';
-  pipelineSteps.forEach((step, i) => {
-    const isActive = diaResearchMode === step.key;
-    const phase = phases.find(p => p.key === step.phase);
-    const showSeparator = step.phase !== lastPhase && i > 0;
-    lastPhase = step.phase;
-
-    // Phase separator
-    if (showSeparator) {
-      html += '<div style="width:1px;background:var(--border);flex-shrink:0"></div>';
-    }
-
-    // Tab button
-    const activeBg = isActive ? phase.color + '18' : 'transparent';
-    const activeBorder = isActive ? 'border-bottom:2px solid ' + phase.color + ';' : '';
-    const activeColor = isActive ? phase.color : 'var(--text2)';
-    const fontWeight = isActive ? '700' : '500';
-    const badge = step.count != null && step.count > 0
-      ? `<span style="display:inline-block;min-width:18px;text-align:center;padding:1px 5px;border-radius:10px;font-size:9px;font-weight:700;background:${phase.color}20;color:${phase.color};margin-left:4px">${step.count > 999 ? '999+' : step.count}</span>`
-      : step.count === 0 ? '<span style="display:inline-block;min-width:18px;text-align:center;padding:1px 5px;border-radius:10px;font-size:9px;font-weight:700;background:var(--s3);color:var(--text3);margin-left:4px">0</span>' : '';
-    const numBadge = step.num ? `<span style="display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;font-size:9px;font-weight:700;background:${isActive ? phase.color : 'var(--s3)'};color:${isActive ? '#fff' : 'var(--text3)'};margin-right:4px">${step.num}</span>` : '';
-
-    html += `<button data-mode="${step.key}" style="flex:1;padding:10px 6px;font-size:11px;font-weight:${fontWeight};color:${activeColor};background:${activeBg};border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:2px;white-space:nowrap;${activeBorder}transition:all 0.2s" title="${step.desc}">`;
-    html += numBadge;
-    html += `<span>${step.label}</span>`;
-    html += badge;
-    html += '</button>';
-  });
-
+  // ROW 2: Pipeline Ops modes (separated)
+  html += '<div style="display: flex; gap: 8px; margin-bottom: 20px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--border); align-items: center;">';
+  html += '<span style="font-size: 11px; color: var(--text2); font-weight: 600; margin-right: 5px;">Pipeline Ops</span>';
+  const unmatchedCount = diaUnmatchedQueue ? diaUnmatchedQueue.length : 0;
+  html += `<button class="btn-link${diaResearchMode === 'unmatched' ? '-green' : ''}" data-mode="unmatched" style="cursor: pointer; font-weight: ${diaResearchMode === 'unmatched' ? '600' : '500'};">Unmatched${unmatchedCount > 0 ? ' (' + unmatchedCount + ')' : ''}</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'quarantine' ? '-green' : ''}" data-mode="quarantine" style="cursor: pointer; font-weight: ${diaResearchMode === 'quarantine' ? '600' : '500'};">Quarantine</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'clarification' ? '-green' : ''}" data-mode="clarification" style="cursor: pointer; font-weight: ${diaResearchMode === 'clarification' ? '600' : '500'};">Clarification</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'staleness' ? '-green' : ''}" data-mode="staleness" style="cursor: pointer; font-weight: ${diaResearchMode === 'staleness' ? '600' : '500'};">Staleness</button>`;
+  html += `<button class="btn-link${diaResearchMode === 'run_health' ? '-green' : ''}" data-mode="run_health" style="cursor: pointer; font-weight: ${diaResearchMode === 'run_health' ? '600' : '500'};">Run Health</button>`;
   html += '</div>';
 
-  // === Phase context header ===
-  html += `<div style="padding:10px 14px;background:${currentPhase.color}10;border-radius:8px;border-left:3px solid ${currentPhase.color};margin-bottom:16px;display:flex;align-items:center;gap:10px;">`;
-  html += `<span style="font-size:18px">${currentPhase.icon}</span>`;
-  html += `<div>`;
-  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 6' : ''}</div>`;
-  html += `<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>${currentStep.label}:</strong> ${currentStep.desc}</div>`;
-  html += '</div></div>';
-
-  // Live Intake workbench - only show for enrichment/prospecting modes
+  // Live Intake workbench - only show for research modes
   const isResearchMode = ['property', 'lease', 'clinic_leads'].includes(diaResearchMode);
   if (isResearchMode) {
     html += renderLiveIngestWorkbench('dialysis');
   }
 
   // Render selected mode
-  if (diaResearchMode === 'quarantine') {
-    if (!diaQuarantineQueue) loadDiaQuarantineQueue();
-    html += renderDiaQuarantineReview();
-  } else if (diaResearchMode === 'unmatched') {
-    if (!diaUnmatchedQueue) loadDiaUnmatchedQueue();
-    html += renderDiaUnmatchedClinics();
-  } else if (diaResearchMode === 'clarification') {
-    if (!diaClarificationQueue) loadDiaClarificationQueue();
-    html += renderDiaClarificationQueue();
-  } else if (diaResearchMode === 'property') {
+  if (diaResearchMode === 'property') {
     html += renderDiaPropertyResearch();
   } else if (diaResearchMode === 'lease') {
     html += renderDiaLeaseResearch();
   } else if (diaResearchMode === 'clinic_leads') {
     html += renderDiaClinicLeads();
+  } else if (diaResearchMode === 'unmatched') {
+    if (!diaUnmatchedQueue) loadDiaUnmatchedQueue();
+    html += renderDiaUnmatchedClinics();
+  } else if (diaResearchMode === 'quarantine') {
+    if (!diaQuarantineQueue) loadDiaQuarantineQueue();
+    html += renderDiaQuarantineReview();
+  } else if (diaResearchMode === 'clarification') {
+    if (!diaClarificationQueue) loadDiaClarificationQueue();
+    html += renderDiaClarificationQueue();
   } else if (diaResearchMode === 'staleness') {
     if (!diaStalenessData) loadDiaStalenessData();
     html += renderDiaStalenessMonitor();
