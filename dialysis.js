@@ -1584,6 +1584,7 @@ async function loadDiaUnmatchedQueue() {
     diaUnmatchedQueue = [];
   }
   diaUnmatchedLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
   renderDiaTab();
 }
 
@@ -1605,6 +1606,7 @@ async function loadDiaQuarantineQueue() {
     diaQuarantineQueue = [];
   }
   diaQuarantineLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
   renderDiaTab();
 }
 
@@ -1627,6 +1629,7 @@ async function loadDiaClarificationQueue() {
     diaClarificationQueue = [];
   }
   diaClarificationLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
   renderDiaTab();
 }
 
@@ -1647,6 +1650,7 @@ async function loadDiaStalenessData() {
     showToast('Staleness data load failed: ' + e.message, 'error');
   }
   diaStalenessLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
   renderDiaTab();
 }
 
@@ -1668,6 +1672,7 @@ async function loadDiaRunHealthData() {
     diaRunHealthData = [];
   }
   diaRunHealthLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
   renderDiaTab();
 }
 
