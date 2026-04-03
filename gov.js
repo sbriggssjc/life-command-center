@@ -6,7 +6,7 @@ let govCharts = {};
 let researchQueue = [];
 let researchIdx = 0;
 let researchCompleted = 0;
-let researchMode = "pending_updates"; // pipeline order: pending_updates → pipeline_control → ownership → leads → intel → financial_overrides → monitor
+let researchMode = "leads";
 let researchFilter = "pending";
 let countyCache = {};
 let acTimeout = null;
@@ -3886,9 +3886,12 @@ function renderGovListings() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 window.setGovResearchSection = function(section) {
-  // Legacy — section toggle removed in R43 (unified pipeline tabs).
-  // Kept as no-op so any stale onclick references don't throw.
   govResearchSection = section;
+  if (section === 'pipeline_ops' && !['pending_updates','financial_overrides','pipeline_control','monitor'].includes(researchMode)) {
+    researchMode = 'pending_updates';
+  } else if (section === 'research' && !['ownership','leads','intel'].includes(researchMode)) {
+    researchMode = 'leads';
+  }
   renderGovTab();
 };
 
@@ -4522,104 +4525,40 @@ function renderGovMonitorDashboard() {
 function renderGovResearch() {
   let html = '<div class="research-workbench">';
 
-  // Queue counts for badges
-  const puCount = govPendingUpdates ? govPendingUpdates.length : null;
-  const owCount = govData.ownership ? govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length : 0;
-  const ldCount = govData.leads ? govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length : 0;
-  const portfolio = govData.portfolioProperties || [];
-  const intelCount = portfolio.filter(p => !p.intel_status || p.intel_status === 'pending' || (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)).length;
+  // Section toggle: Research vs Pipeline Ops
+  html += `<div class="research-mode-toggle" style="border-bottom: 2px solid var(--border); margin-bottom: 8px;">
+    <button class="mode-btn ${govResearchSection === 'research' ? 'active' : ''}" onclick="window.setGovResearchSection('research')" style="border-right: 1px solid var(--border);">── Research ──</button>
+    <button class="mode-btn ${govResearchSection === 'pipeline_ops' ? 'active' : ''}" onclick="window.setGovResearchSection('pipeline_ops')" style="border-left: 1px solid var(--border);">── Pipeline Ops ──</button>
+  </div>`;
 
-  // Pipeline step definitions — ordered from data quality to prospecting to monitoring
-  const pipelineSteps = [
-    { key: 'pending_updates',    num: '1', label: 'Pending Updates',   count: puCount,    phase: 'quality',     desc: 'Approve or reject AI-proposed data changes' },
-    { key: 'pipeline_control',   num: '2', label: 'Pipeline Control',  count: null,       phase: 'quality',     desc: 'Monitor ingestion runs and error rates' },
-    { key: 'ownership',          num: '3', label: 'Ownership',         count: owCount,    phase: 'enrichment',  desc: 'Research sale details, entity, and true owner' },
-    { key: 'leads',              num: '4', label: 'Leads',             count: ldCount,    phase: 'enrichment',  desc: 'Complete lead profiles with ownership and contact data' },
-    { key: 'intel',              num: '5', label: 'Intel',             count: intelCount, phase: 'enrichment',  desc: 'Fill property intelligence gaps (value, rent, condition)' },
-    { key: 'financial_overrides',num: '6', label: 'Financials',        count: null,       phase: 'prospecting', desc: 'Override financial metrics for pipeline properties' },
-    { key: 'monitor',            num: '',  label: 'Monitor',           count: null,       phase: 'monitoring',  desc: 'Dashboard: lead gaps, data freshness, research progress' },
-  ];
+  // Render based on section
+  if (govResearchSection === 'research') {
+    // Mode toggle — always visible so user can switch modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'ownership' ? 'active' : ''}" onclick="setResearchMode('ownership')">Ownership Changes</button>
+      <button class="mode-btn ${researchMode === 'leads' ? 'active' : ''}" onclick="setResearchMode('leads')">Leads</button>
+      <button class="mode-btn ${researchMode === 'intel' ? 'active' : ''}" onclick="setResearchMode('intel')">Intel</button>
+    </div>`;
 
-  // Phase labels for visual grouping
-  const phases = [
-    { key: 'quality',     label: 'DATA QUALITY',  color: '#f87171', icon: '🛡️' },
-    { key: 'enrichment',  label: 'ENRICHMENT',    color: '#fbbf24', icon: '🔍' },
-    { key: 'prospecting', label: 'PROSPECTING',   color: '#34d399', icon: '🎯' },
-    { key: 'monitoring',  label: 'MONITORING',    color: '#60a5fa', icon: '📊' },
-  ];
-
-  // Current step's phase
-  const currentStep = pipelineSteps.find(s => s.key === researchMode) || pipelineSteps[0];
-  const currentPhase = phases.find(p => p.key === currentStep.phase) || phases[0];
-
-  // === Pipeline progress bar ===
-  html += '<div style="display:flex;gap:0;margin-bottom:16px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:var(--s2);height:4px">';
-  phases.forEach(ph => {
-    const stepsInPhase = pipelineSteps.filter(s => s.phase === ph.key);
-    const isActive = ph.key === currentStep.phase;
-    const isPast = phases.indexOf(ph) < phases.indexOf(currentPhase);
-    html += `<div style="flex:${stepsInPhase.length};height:100%;background:${isActive ? ph.color : isPast ? ph.color + '60' : 'transparent'};transition:background 0.3s"></div>`;
-  });
-  html += '</div>';
-
-  // === Tab strip — unified pipeline order ===
-  html += '<div style="display:flex;gap:0;margin-bottom:20px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--s2)">';
-
-  let lastPhase = '';
-  pipelineSteps.forEach((step, i) => {
-    const isActive = researchMode === step.key;
-    const phase = phases.find(p => p.key === step.phase);
-    const showSeparator = step.phase !== lastPhase && i > 0;
-    lastPhase = step.phase;
-
-    if (showSeparator) {
-      html += '<div style="width:1px;background:var(--border);flex-shrink:0"></div>';
-    }
-
-    const activeBg = isActive ? phase.color + '18' : 'transparent';
-    const activeBorder = isActive ? 'border-bottom:2px solid ' + phase.color + ';' : '';
-    const activeColor = isActive ? phase.color : 'var(--text2)';
-    const fontWeight = isActive ? '700' : '500';
-    const badge = step.count != null && step.count > 0
-      ? `<span style="display:inline-block;min-width:18px;text-align:center;padding:1px 5px;border-radius:10px;font-size:9px;font-weight:700;background:${phase.color}20;color:${phase.color};margin-left:4px">${step.count > 999 ? '999+' : step.count}</span>`
-      : step.count === 0 ? '<span style="display:inline-block;min-width:18px;text-align:center;padding:1px 5px;border-radius:10px;font-size:9px;font-weight:700;background:var(--s3);color:var(--text3);margin-left:4px">0</span>' : '';
-    const numBadge = step.num ? `<span style="display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;font-size:9px;font-weight:700;background:${isActive ? phase.color : 'var(--s3)'};color:${isActive ? '#fff' : 'var(--text3)'};margin-right:4px">${step.num}</span>` : '';
-
-    html += `<button class="gov-research-tab" data-gov-mode="${step.key}" style="flex:1;padding:10px 6px;font-size:11px;font-weight:${fontWeight};color:${activeColor};background:${activeBg};border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:2px;white-space:nowrap;${activeBorder}transition:all 0.2s" title="${step.desc}">`;
-    html += numBadge;
-    html += `<span>${step.label}</span>`;
-    html += badge;
-    html += '</button>';
-  });
-
-  html += '</div>';
-
-  // === Phase context header ===
-  html += `<div style="padding:10px 14px;background:${currentPhase.color}10;border-radius:8px;border-left:3px solid ${currentPhase.color};margin-bottom:16px;display:flex;align-items:center;gap:10px;">`;
-  html += `<span style="font-size:18px">${currentPhase.icon}</span>`;
-  html += `<div>`;
-  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 6' : ''}</div>`;
-  html += `<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>${currentStep.label}:</strong> ${currentStep.desc}</div>`;
-  html += '</div></div>';
-
-  // === Research modes: show Live Intake + Evidence + filter + queue ===
-  const isResearchMode = ['ownership', 'leads', 'intel'].includes(researchMode);
-
-  if (isResearchMode) {
+    // Original research workflows (Live Intake + Evidence Workbench)
     html += renderLiveIngestWorkbench('government');
     html += renderGovEvidenceWorkbench();
 
     // Filter toggle — pending vs all
+    const portfolio = govData.portfolioProperties || [];
     let totalRecords, pendingCount;
     if (researchMode === 'ownership') {
       totalRecords = govData.ownership.length;
-      pendingCount = owCount;
+      pendingCount = govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length;
     } else if (researchMode === 'intel') {
       totalRecords = portfolio.length;
-      pendingCount = intelCount;
+      pendingCount = portfolio.filter(p =>
+        !p.intel_status || p.intel_status === 'pending' ||
+        (!p.sale_price && !p.last_known_rent && !p.current_value_estimate)
+      ).length;
     } else {
       totalRecords = govData.leads.length;
-      pendingCount = ldCount;
+      pendingCount = govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length;
     }
 
     html += `<div class="research-mode-toggle" style="margin-top:4px">
@@ -4643,34 +4582,36 @@ function renderGovResearch() {
       html += '</div>';
       setTimeout(() => bindLiveIngestWorkbench('government'), 0);
       setTimeout(() => bindGovEvidenceWorkbench(), 0);
-      setTimeout(() => { document.querySelectorAll('[data-gov-mode]').forEach(btn => { btn.addEventListener('click', () => { setResearchMode(btn.dataset.govMode); }); }); }, 0);
       return html;
     }
 
     // Render the research card (progress + card)
     html += renderResearchInner();
 
-  } else if (researchMode === 'pending_updates') {
-    html += renderGovPendingUpdates();
-  } else if (researchMode === 'financial_overrides') {
-    html += renderGovFinancialOverrides();
-  } else if (researchMode === 'pipeline_control') {
-    html += renderGovPipelineControl();
-  } else if (researchMode === 'monitor') {
-    html += renderGovMonitorDashboard();
+  } else if (govResearchSection === 'pipeline_ops') {
+    // Pipeline ops modes
+    html += `<div class="research-mode-toggle">
+      <button class="mode-btn ${researchMode === 'pending_updates' ? 'active' : ''}" onclick="setResearchMode('pending_updates')">Pending Updates (${govPendingUpdates?.length || 0})</button>
+      <button class="mode-btn ${researchMode === 'financial_overrides' ? 'active' : ''}" onclick="setResearchMode('financial_overrides')">Financial Overrides</button>
+      <button class="mode-btn ${researchMode === 'pipeline_control' ? 'active' : ''}" onclick="setResearchMode('pipeline_control')">Pipeline Control</button>
+      <button class="mode-btn ${researchMode === 'monitor' ? 'active' : ''}" onclick="setResearchMode('monitor')">Monitor</button>
+    </div>`;
+
+    // Route to correct pipeline ops component
+    if (researchMode === 'pending_updates') {
+      html += renderGovPendingUpdates();
+    } else if (researchMode === 'financial_overrides') {
+      html += renderGovFinancialOverrides();
+    } else if (researchMode === 'pipeline_control') {
+      html += renderGovPipelineControl();
+    } else if (researchMode === 'monitor') {
+      html += renderGovMonitorDashboard();
+    }
   }
 
   html += '</div>';
   setTimeout(() => bindLiveIngestWorkbench('government'), 0);
   setTimeout(() => bindGovEvidenceWorkbench(), 0);
-  // Attach tab click handlers
-  setTimeout(() => {
-    document.querySelectorAll('[data-gov-mode]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        setResearchMode(btn.dataset.govMode);
-      });
-    });
-  }, 0);
   return html;
 }
 
