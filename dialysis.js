@@ -969,7 +969,7 @@ function renderDiaChanges() {
     const fmtRev = v => v > 0 ? '$' + (v / 1000000).toFixed(1) + 'M' : '–';
 
     html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")' style="font-size:12px">`;
-    html += `<div style="flex:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.operator_name || row.chain_organization || '–')}</div>`;
+    html += `<div style="flex:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${(row.operator_name || row.chain_organization) ? entityLink(row.operator_name || row.chain_organization, 'operator', null) : '–'}</div>`;
     html += `<div style="flex:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(row.facility_name || '')}</div>`;
     html += `<div style="flex:0.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.city || '')}</div>`;
     html += `<div style="flex:0.3;color:var(--text2)">${esc(row.state || '')}</div>`;
@@ -1027,6 +1027,12 @@ function renderDiaChanges() {
           diaCmsSearch = searchEl.value;
           diaCmsPage = 0;
           renderDiaTab();
+          // Restore focus after DOM re-render
+          const restored = document.getElementById('cmsSearch');
+          if (restored) {
+            restored.focus();
+            restored.setSelectionRange(restored.value.length, restored.value.length);
+          }
         }, 300);
       });
     }
@@ -1153,7 +1159,7 @@ function renderDiaNpi() {
       html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(norm(row.operator_name) || '')}</div>`;
+      html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
       html += '</div>';
     });
@@ -2327,7 +2333,7 @@ function renderDiaPropertyResearch() {
       html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-prop-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
+      html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
       html += `<div style="flex: 0.5;">${esc(row.state || '')}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${esc(row.review_type || '')}</div>`;
@@ -2409,7 +2415,7 @@ function renderDiaPropertyCard(item) {
 
   html += `<div class="context-block">`;
   html += `<div class="context-label">Operator / Clinic ID</div>`;
-  html += `<div class="context-value">${esc(item.operator_name || '')} / ${esc(String(item.clinic_id || ''))}</div>`;
+  html += `<div class="context-value">${item.operator_name ? entityLink(item.operator_name, 'operator', null) : ''} / ${esc(String(item.clinic_id || ''))}</div>`;
   html += `</div>`;
 
   html += `<div class="context-block">`;
@@ -2463,6 +2469,11 @@ function renderDiaPropertyCard(item) {
       { label: 'Escalated', value: 'escalated' }
     ]
   });
+
+  // === PROPERTY RESOLUTION (if no property_id) ===
+  if (!item.property_id) {
+    html += renderPropertyResolution(item, 'v_clinic_property_link_review_queue', 'clinic_id');
+  }
 
   // Property ID
   html += guidedField('propPropertyId', 'Property ID', item.property_id, {
@@ -2656,7 +2667,7 @@ function renderDiaLeaseResearch() {
       html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-lease-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.operator_name || '')}</div>`;
+      html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
       html += `<div style="flex: 1; color: ${watchColor};">${esc(row.closure_watch_level || 'none')}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${esc(row.lease_backfill_priority || 'unknown')}</div>`;
@@ -2738,7 +2749,7 @@ function renderDiaLeaseCard(item) {
 
   html += `<div class="context-block">`;
   html += `<div class="context-label">Operator / Clinic ID</div>`;
-  html += `<div class="context-value">${esc(item.operator_name || '')} / ${esc(String(item.clinic_id || ''))}</div>`;
+  html += `<div class="context-value">${item.operator_name ? entityLink(item.operator_name, 'operator', null) : ''} / ${esc(String(item.clinic_id || ''))}</div>`;
   html += `</div>`;
 
   html += `<div class="context-block">`;
@@ -3198,6 +3209,9 @@ function renderClinicLeadCard(rec) {
   }
   html += '</div>';
 
+  // === PROPERTY RESOLUTION ===
+  html += renderPropertyResolution(rec, 'clinic_leads', 'medicare_id');
+
   // === RESEARCH FORM (2-STEP WORKFLOW) ===
   html += '<div style="border-top:1px solid var(--border);padding-top:16px">';
 
@@ -3372,7 +3386,28 @@ window.diaClStepNav = function(idx) {
   renderDiaTab();
 };
 
+/**
+ * Render property resolution component for research cards lacking property_id
+ */
+function renderPropertyResolution(rec, sourceTable, sourceIdCol) {
+  if (rec.property_id) {
+    return `<div class="prop-linked" style="padding:8px;background:var(--bg2);border-radius:6px;margin:8px 0;">
+      <span style="color:var(--success);font-size:12px;">✓ Linked to Property #${rec.property_id}</span>
+      <button onclick="openUnifiedDetail('dialysis',{property_id:${rec.property_id}})" style="margin-left:8px;font-size:11px;padding:2px 8px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;">View Property</button>
+    </div>`;
+  }
 
+  return `<div class="prop-resolution" style="padding:10px;background:var(--bg2);border-radius:6px;margin:8px 0;border:1px dashed var(--warning);">
+    <div style="font-size:12px;font-weight:600;color:var(--warning);margin-bottom:8px;">⚠ No Property Linked</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <input type="text" id="propResSearch" placeholder="Search by address or name..." style="flex:1;padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+      <button onclick="propResDoSearch('${sourceTable}','${sourceIdCol}',${rec[sourceIdCol] || 'null'})" style="padding:6px 12px;font-size:11px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;">Search</button>
+    </div>
+    <div id="propResResults" style="max-height:150px;overflow-y:auto;margin-bottom:8px;"></div>
+    <button onclick="propResShowCreate('${sourceTable}','${sourceIdCol}',${rec[sourceIdCol] || 'null'})" style="font-size:11px;padding:4px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer;">+ Create New Property</button>
+    <div id="propResCreateForm" style="display:none;margin-top:8px;"></div>
+  </div>`;
+}
 
 function _clCtx(label, value) {
   return `<div><span style="color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${label}</span><div style="font-weight:500;color:var(--text)">${value}</div></div>`;
@@ -3729,7 +3764,7 @@ function renderDiaDetailOverview(record) {
   html += _detRow('Address', [r.address, r.city, r.state, r.zip_code].filter(Boolean).join(', ') || '—');
   html += _detRow('CCN / Medicare ID', r.ccn || r.clinic_id || r.medicare_id || '—');
   html += _detRow('NPI', r.npi || r.medicare_npi || '—');
-  html += _detRow('Operator', r.operator_name || r.chain_organization || '—');
+  html += _detRow('Operator', (r.operator_name || r.chain_organization) ? entityLink(r.operator_name || r.chain_organization, 'operator', null) : '—');
   html += _detRow('Parent Org', r.parent_organization || '—');
   html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
 
@@ -4442,6 +4477,12 @@ async function renderDiaSales() {
         diaSalesSearch = e.target.value.trim();
         diaSalesPage = 0;
         renderDiaSales();
+        // Restore focus after DOM re-render
+        const restored = document.getElementById('diaSalesSearchInput');
+        if (restored) {
+          restored.focus();
+          restored.setSelectionRange(restored.value.length, restored.value.length);
+        }
       }, 300);
     });
     searchInput.focus();
@@ -4614,7 +4655,7 @@ function buildDiaLeasesHTML() {
       var exp = c.lease_expiration ? new Date(c.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
       html += '<tr>';
       html += '<td>' + esc(c.facility_name || '—') + '</td>';
-      html += '<td>' + esc(c.operator_name || c.parent_organization || '—') + '</td>';
+      html += '<td>' + ((c.operator_name || c.parent_organization) ? entityLink(c.operator_name || c.parent_organization, 'operator', null) : '—') + '</td>';
       html += '<td>' + esc(c.city || '—') + '</td>';
       html += '<td>' + esc(c.state || '—') + '</td>';
       html += '<td>' + riskBadge + '</td>';
@@ -4875,7 +4916,7 @@ function renderDiaPlayers() {
       html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
       html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(r.facility_name || '—') + '</div>';
       html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
-      html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
+      html += '<div style="flex: 1;" class="truncate">' + (r.operator_name ? entityLink(r.operator_name, 'operator', null) : '—') + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
       html += '<div style="flex: 1; color: var(--text2);">' + esc(r.ccn || '—') + '</div>';
       html += '</div>';
@@ -4908,7 +4949,7 @@ function renderDiaPlayers() {
       html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic")\'>';
       html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(r.facility_name || '—') + '</div>';
       html += '<div style="flex: 1;">' + esc((r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</div>';
-      html += '<div style="flex: 1;" class="truncate">' + esc(r.operator_name || '—') + '</div>';
+      html += '<div style="flex: 1;" class="truncate">' + (r.operator_name ? entityLink(r.operator_name, 'operator', null) : '—') + '</div>';
       html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + ((r.delta_patients || 0) > 0 ? '+' : '') + fmtN(r.delta_patients || 0) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(r.pct_change || 0) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
@@ -4967,7 +5008,7 @@ function renderDiaPlayers() {
       top50.forEach((b, idx) => {
         const avgCapRate = b.capRates.length > 0 ? b.capRates.reduce((s, cr) => s + cr, 0) / b.capRates.length : 0;
         html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "sales-transaction")\'>';
-        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(b.name) + '</div>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(b.name, 'contact', null, 'dialysis') + '</div>';
         html += '<div style="flex: 1;">' + esc(b.type || '—') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
@@ -5029,7 +5070,7 @@ function renderDiaPlayers() {
       top50.forEach((s2, idx) => {
         const avgCapRate = s2.capRates.length > 0 ? s2.capRates.reduce((s, cr) => s + cr, 0) / s2.capRates.length : 0;
         html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(s2.records[0]) + ', "sales-transaction")\'>';
-        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(s2.name) + '</div>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(s2.name, 'contact', null, 'dialysis') + '</div>';
         html += '<div style="flex: 1;">' + esc(s2.type || '—') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + s2.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(s2.volume, 'currency') + '</div>';
@@ -6001,6 +6042,95 @@ function _closeSaleDetailInner() {
   q('#detailTabs').innerHTML = '';
   q('#detailBody').innerHTML = '';
 }
+
+/**
+ * Property Resolution Component Handlers
+ */
+window.propResDoSearch = async function(sourceTable, sourceIdCol, sourceIdVal) {
+  const query = document.getElementById('propResSearch')?.value?.trim();
+  if (!query || query.length < 2) { showToast('Enter at least 2 characters', 'info'); return; }
+  const resultsDiv = document.getElementById('propResResults');
+  if (!resultsDiv) return;
+  resultsDiv.innerHTML = '<div style="padding:4px;font-size:11px;color:var(--text2);">Searching...</div>';
+
+  try {
+    const safeQ = query.replace(/[*()',\\]/g, '');
+    const props = await diaQuery('properties', 'property_id,address,city,state,property_name', {
+      filter: `or(address.ilike.*${safeQ}*,property_name.ilike.*${safeQ}*)`,
+      limit: 10
+    });
+    if (!props || props.length === 0) {
+      resultsDiv.innerHTML = '<div style="padding:4px;font-size:11px;color:var(--text2);">No properties found</div>';
+      return;
+    }
+    resultsDiv.innerHTML = props.map(p =>
+      `<div onclick="propResLink('${sourceTable}','${sourceIdCol}',${sourceIdVal},${p.property_id})" style="padding:6px 8px;font-size:11px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+        <span>${esc(p.address || p.property_name || 'Unknown')}</span>
+        <span style="color:var(--text2);">${esc((p.city || '') + (p.state ? ', ' + p.state : ''))}</span>
+      </div>`
+    ).join('');
+  } catch (e) {
+    resultsDiv.innerHTML = '<div style="padding:4px;font-size:11px;color:var(--error);">Search failed</div>';
+  }
+};
+
+window.propResLink = async function(sourceTable, sourceIdCol, sourceIdVal, propertyId) {
+  if (!(await lccConfirm('Link this record to Property #' + propertyId + '?', 'Link'))) return;
+  const ok = await diaPatchRecord(sourceTable, sourceIdCol, sourceIdVal, { property_id: propertyId });
+  if (ok) {
+    showToast('Property linked successfully!', 'success');
+    renderDiaTab();
+  }
+};
+
+window.propResShowCreate = function(sourceTable, sourceIdCol, sourceIdVal) {
+  const form = document.getElementById('propResCreateForm');
+  if (!form) return;
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  form.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+      <input type="text" id="propNewAddr" placeholder="Address *" style="padding:5px 8px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+      <input type="text" id="propNewName" placeholder="Property Name" style="padding:5px 8px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+      <input type="text" id="propNewCity" placeholder="City *" style="padding:5px 8px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+      <input type="text" id="propNewState" placeholder="State *" style="padding:5px 8px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+    </div>
+    <button onclick="propResCreate('${sourceTable}','${sourceIdCol}',${sourceIdVal})" style="padding:5px 12px;font-size:11px;background:var(--success);color:#fff;border:none;border-radius:4px;cursor:pointer;">Create & Link</button>
+  `;
+};
+
+window.propResCreate = async function(sourceTable, sourceIdCol, sourceIdVal) {
+  const addr = document.getElementById('propNewAddr')?.value?.trim();
+  const city = document.getElementById('propNewCity')?.value?.trim();
+  const state = document.getElementById('propNewState')?.value?.trim();
+  const name = document.getElementById('propNewName')?.value?.trim();
+  if (!addr || !city || !state) { showToast('Address, city, and state are required', 'error'); return; }
+
+  const btn = event.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+
+  try {
+    const result = await applyInsertWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'properties',
+      data: { address: addr, city: city, state: state, property_name: name || addr },
+      source_surface: 'dia_research_prop_create'
+    });
+    if (result && result.ok && result.data && result.data[0]) {
+      const newId = result.data[0].property_id;
+      const linkOk = await diaPatchRecord(sourceTable, sourceIdCol, sourceIdVal, { property_id: newId });
+      if (linkOk) {
+        showToast('Property created (#' + newId + ') and linked!', 'success');
+        renderDiaTab();
+      }
+    } else {
+      showToast('Failed to create property', 'error');
+    }
+  } catch (e) {
+    showToast('Error creating property: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Create & Link'; }
+  }
+};
 
 window.renderDiaChanges = renderDiaChanges;
 window.renderDiaNpi = renderDiaNpi;

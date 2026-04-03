@@ -617,13 +617,13 @@ function _udTabFallbackSummary(fb) {
   html += _row('City / State', (fb.city || '') + (fb.state ? ', ' + fb.state : ''));
   html += _row('County', fb.county);
   html += _row('Zip', fb.zip || fb.zip_code);
-  html += _row('Agency / Tenant', fb.tenant_agency || fb.agency || fb.tenant_operator);
+  html += _rowHtml('Agency / Tenant', fb.tenant_agency || fb.agency || fb.tenant_operator ? entityLink(fb.tenant_agency || fb.agency || fb.tenant_operator, 'operator', null) : '—');
   html += _row('Lease Number', fb.lease_number);
   html += _row('Building Size', fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft ? fmtN(fb.building_sf || fb.rsf || fb.usable_sf || fb.sq_ft) + ' SF' : null);
 
   // Dialysis-specific fields from search results
   if (fb.facility_name) html += _row('Facility', fb.facility_name);
-  if (fb.operator_name) html += _row('Operator', fb.operator_name);
+  if (fb.operator_name) html += _rowHtml('Operator', entityLink(fb.operator_name, 'operator', null));
   if (fb.medicare_npi || fb.npi) html += _row('NPI', fb.medicare_npi || fb.npi);
   if (fb.ccn || fb.clinic_id || fb.medicare_id) html += _row('CCN / Medicare ID', fb.ccn || fb.clinic_id || fb.medicare_id);
   if (fb.latest_total_patients) html += _row('Patients', typeof fmtN === 'function' ? fmtN(fb.latest_total_patients) : fb.latest_total_patients);
@@ -977,7 +977,7 @@ function _udTabOwnership() {
     if (fb && (fb.owner_name || fb.lessor_name || fb.grantor || fb.grantee || fb.buyer_name)) {
       html += '<div class="detail-section"><div class="detail-section-title">Ownership (from search record)</div><div class="detail-grid">';
       html += _row('Owner / Lessor', fb.owner_name || fb.lessor_name || fb.grantor);
-      html += _row('Buyer / Grantee', fb.buyer_name || fb.grantee);
+            html += _rowHtml('Buyer / Grantee', (fb.buyer_name || fb.grantee) && fb.buyer_id ? entityLink(fb.buyer_name || fb.grantee, 'contact', fb.buyer_id, db) : esc(fb.buyer_name || fb.grantee || ''));
       html += _row('Transfer Date', _fmtDate(fb.sale_date || fb.transfer_date));
       html += _rowMoney('Sale Price', fb.sale_price || fb.price);
       html += _row('Cap Rate', fb.cap_rate ? Number(fb.cap_rate).toFixed(2) + '%' : null);
@@ -1030,8 +1030,8 @@ function _udTabOwnership() {
       html += _row('State', own.recorded_owner_state);
       html += _row('True Owner City', own.true_owner_city);
       html += _row('True Owner State', own.true_owner_state);
-      html += _row('Contact 1', own.contact_1_name);
-      html += _row('Contact 2', own.contact_2_name);
+      html += _rowHtml('Contact 1', own.contact_1_name && own.contact_1_id ? entityLink(own.contact_1_name, 'contact', own.contact_1_id, db) : esc(own.contact_1_name || ''));
+      html += _rowHtml('Contact 2', own.contact_2_name && own.contact_2_id ? entityLink(own.contact_2_name, 'contact', own.contact_2_id, db) : esc(own.contact_2_name || ''));
       html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
       html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
       html += _row('Priority', own.priority_level);
@@ -1047,7 +1047,7 @@ function _udTabOwnership() {
       html += _row('True Owner', own.true_owner);
       html += _row('True Owner Type', own.true_owner_type);
       html += _row('True Owner State', own.true_owner_state);
-      html += _row('Contact', own.contact_name);
+      html += _rowHtml('Contact', own.contact_name && own.contact_id ? entityLink(own.contact_name, 'contact', own.contact_id, db) : esc(own.contact_name || ''));
       html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
       html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
     }
@@ -2553,6 +2553,107 @@ function _rowLink(label, text, href) {
     <div class="detail-val">${link}</div>
   </div>`;
 }
+
+// ============================================================================
+// CROSS-ENTITY NAVIGATION HELPERS
+// Turn entity references into clickable links that open detail views
+// ============================================================================
+
+/**
+ * Navigate to a property detail view
+ * @param {number} propertyId - Property ID to navigate to
+ * @param {string} db - Database: 'dialysis' or 'gov' (default: 'dialysis')
+ */
+window.navToProperty = function(propertyId, db) {
+  db = db || 'dialysis';
+  openUnifiedDetail(db, { property_id: propertyId });
+};
+
+/**
+ * Navigate to a contact/owner detail view
+ * @param {number} contactId - Contact ID to navigate to
+ * @param {string} db - Database: 'dialysis' or 'gov' (default: 'dialysis')
+ */
+window.navToContact = function(contactId, db) {
+  db = db || 'dialysis';
+  // Open unified detail with contact focus
+  openUnifiedDetail(db, { contact_id: contactId }, null, 'ownership');
+};
+
+/**
+ * Navigate to a transaction/sale detail view
+ * @param {number} saleId - Sale ID to navigate to
+ */
+window.navToTransaction = function(saleId) {
+  // Find sale record and open sale detail
+  if (typeof renderSaleDetailBody === 'function' && window.diaSalesComps) {
+    const rec = window.diaSalesComps.find(r => r.sale_id === saleId);
+    if (rec) {
+      window._saleRecord = rec;
+      renderSaleDetailBody(rec);
+      return;
+    }
+  }
+  showToast('Transaction not found in current data', 'info');
+};
+
+/**
+ * Navigate to operator view
+ * @param {string} operatorName - Operator name to filter by
+ */
+window.navToOperator = function(operatorName) {
+  // Switch to operations tab and filter by operator
+  if (typeof switchDiaTab === 'function') {
+    window._pendingOpFilter = { type: 'operator', value: operatorName };
+    switchDiaTab('operations');
+  } else {
+    showToast('Navigate to Dialysis Operations tab to view operator', 'info');
+  }
+};
+
+/**
+ * Navigate to state view
+ * @param {string} stateName - State name to filter by
+ */
+window.navToState = function(stateName) {
+  // Switch to operations tab and filter by state
+  if (typeof switchDiaTab === 'function') {
+    window._pendingOpFilter = { type: 'state', value: stateName };
+    switchDiaTab('operations');
+  } else {
+    showToast('Navigate to Dialysis Operations tab to view state', 'info');
+  }
+};
+
+/**
+ * Generate a clickable entity link
+ * Renders as styled span with onclick handler to navigate to entity detail view
+ * @param {string} text - Display text (will be escaped)
+ * @param {string} type - Entity type: 'property', 'contact', 'transaction', 'operator', 'state'
+ * @param {number|string} id - Entity ID (for property/contact/transaction)
+ * @param {string} db - Database context: 'dialysis' or 'gov'
+ * @returns {string} HTML span element with onclick handler
+ */
+window.entityLink = function(text, type, id, db) {
+  if (!text || !id) return esc(text || '—');
+  const style = 'color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;';
+  switch (type) {
+    case 'property':
+      return `<span style="${style}" onclick="navToProperty(${id},'${db || 'dialysis'}')" title="View property details">${esc(text)}</span>`;
+    case 'contact':
+      return `<span style="${style}" onclick="navToContact(${id},'${db || 'dialysis'}')" title="View contact details">${esc(text)}</span>`;
+    case 'transaction':
+      return `<span style="${style}" onclick="navToTransaction(${id})" title="View transaction details">${esc(text)}</span>`;
+    case 'operator':
+      return `<span style="${style}" onclick="navToOperator('${esc(text)}')" title="View operator properties">${esc(text)}</span>`;
+    case 'state':
+      return `<span style="${style}" onclick="navToState('${esc(text)}')" title="View state properties">${esc(text)}</span>`;
+    default:
+      return esc(text);
+  }
+};
+
+
 
 function _fmtDate(d) {
   if (!d) return '—';
