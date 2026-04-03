@@ -49,6 +49,13 @@
   - Added `docs/architecture/daily_briefing_integration_plan.md`
   - Defined ownership boundaries between Morning Briefing repo (intelligence engine) and LCC (orchestration/presentation)
   - Specified unified payload schema, role views, phase-based rollout, and best first integration slice
+- 2026-04-03: Implemented first Daily Briefing integration slice (read-only):
+  - Added endpoint `GET /api/daily-briefing?action=snapshot` in `api/daily-briefing.js`
+  - Composed Morning structured + optional HTML with LCC work counts, my work, inbox summary, unassigned work, and sync health
+  - Added degraded-mode handling for missing Morning structured payload
+  - Added contract doc `docs/architecture/daily_briefing_payload_contract.md`
+  - Added env examples for Morning payload URLs in `.env.example`
+  - Added focused tests `test/daily-briefing.test.js` (full + degraded scenarios)
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.

@@ -8,6 +8,9 @@
 let _udCache = null;
 let _udFormDirty = false; // track unsaved form edits for beforeunload guard
 
+// Helper for safe parseFloat: converts empty strings to null instead of NaN
+function _dpf(v) { return v && v.trim() ? parseFloat(v) : null; }
+
 /**
  * Generic async button guard — disables button during operation, shows "Saving…",
  * re-enables on completion or error. Prevents double-clicks on any async save.
@@ -2974,6 +2977,7 @@ async function _udSaveOwnership(options = {}) {
       });
 
       if (!silent) showToast('Ownership resolution saved!', 'success');
+      _udFormDirty = false;
 
       // Bridge to canonical model with gov change metadata
       canonicalBridge('save_ownership', {
@@ -3178,6 +3182,7 @@ async function _udSaveOwnership(options = {}) {
     } else {
       if (!silent) showToast('Ownership resolution saved!', 'success');
     }
+    _udFormDirty = false;
     canonicalBridge('save_ownership', {
       domain: 'dialysis',
       external_id: String(propertyId),
@@ -3223,8 +3228,8 @@ async function _intelSavePriorSale(options = {}) {
     const payload = {
       property_id: propertyId,
       sale_date: saleDate || null,
-      sold_price: salePrice ? parseFloat(salePrice) : null,
-      cap_rate: capRate ? parseFloat(capRate) : null,
+      sold_price: _dpf(salePrice),
+      cap_rate: _dpf(capRate),
       buyer_name: buyer,
       seller_name: seller
     };
@@ -3238,6 +3243,7 @@ async function _intelSavePriorSale(options = {}) {
       propagation_scope: 'prior_sale_record'
     });
     if (!res.ok) { console.error('Sale save error:', res.errors || []); showToast('Error saving sale', 'error'); return; }
+    _udFormDirty = false;
     if (!silent) showToast('Prior sale saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Prior sale recorded',
@@ -3281,14 +3287,14 @@ async function _intelSaveLoan(options = {}) {
     const payload = {
       property_id: propertyId,
       lender_name: lender,
-      loan_amount: loanAmount ? parseFloat(loanAmount) : null,
-      interest_rate_percent: interestRate ? parseFloat(interestRate) : null,
+      loan_amount: _dpf(loanAmount),
+      interest_rate_percent: _dpf(interestRate),
       loan_type: loanType || null,
       origination_date: origDate || null,
       maturity_date: matDate || null,
       loan_term: amortization ? parseInt(amortization, 10) : null,
       recourse: recourse || null,
-      loan_to_value: ltv ? parseFloat(ltv) : null
+      loan_to_value: _dpf(ltv)
     };
     const res = await applyInsertWithFallback({
       proxyBase,
@@ -3300,6 +3306,7 @@ async function _intelSaveLoan(options = {}) {
       propagation_scope: 'loan_record'
     });
     if (!res.ok) { console.error('Loan save error:', res.errors || []); showToast('Error saving loan', 'error'); return; }
+    _udFormDirty = false;
     if (!silent) showToast('Loan info saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Loan recorded',
@@ -3337,8 +3344,8 @@ async function _intelSaveCashFlow(options = {}) {
 
   try {
     const payload = {
-      last_known_rent: annualRent ? parseFloat(annualRent) : null,
-      current_value_estimate: estValue ? parseFloat(estValue) : null
+      last_known_rent: _dpf(annualRent),
+      current_value_estimate: _dpf(estValue)
     };
     const result = await applyChangeWithFallback({
       proxyBase,
@@ -3350,6 +3357,7 @@ async function _intelSaveCashFlow(options = {}) {
       notes: 'Cash flow / valuation update'
     });
     if (!result.ok) { console.error('Cash flow update error:', (result.errors || []).join(', ')); showToast('Error saving cash flow', 'error'); return; }
+    _udFormDirty = false;
     if (!silent) showToast('Cash flow / valuation saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Cash flow estimate saved',
@@ -3406,6 +3414,7 @@ async function _intelSaveNotes(options = {}) {
       propagation_scope: 'research_queue_outcome'
     });
     if (!res.ok) { console.error('Notes save error:', res.errors || []); showToast('Error saving notes', 'error'); return; }
+    _udFormDirty = false;
     if (!silent) showToast('Research notes saved!', 'success');
     canonicalBridge('log_activity', {
       title: 'Research notes updated',
