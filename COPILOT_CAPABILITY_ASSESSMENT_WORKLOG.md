@@ -65,6 +65,10 @@
   - Added degraded/freshness rendering and expandable market HTML details
   - Added panel styling in `styles.css`
   - Added panel note doc: `docs/architecture/daily_briefing_home_panel_note.md`
+- 2026-04-03: Added Teams Daily Briefing delivery assets (Wave 1, read-only):
+  - Added Adaptive Card template: `docs/architecture/teams_daily_briefing_adaptive_card.json`
+  - Added scheduled flow spec: `flow-daily-briefing-to-teams.json`
+  - Added setup/mapping doc: `docs/architecture/teams_daily_briefing_delivery_workflow.md`
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.
