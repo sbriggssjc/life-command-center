@@ -966,8 +966,7 @@ function renderDiaChanges() {
     { key: 'est_in_center_revenue', label: 'IC Rev', flex: '0.6', align: 'right' },
     { key: 'est_home_revenue', label: 'Home Rev', flex: '0.6', align: 'right' },
     { key: 'estimated_annual_revenue', label: 'TTM Rev', flex: '0.6', align: 'right' },
-    { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.6', align: 'right' },
-    { key: '_actions', label: '', flex: '0.4', align: 'center' }
+    { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.6', align: 'right' }
   ];
 
   html += '<div class="table-row" style="font-weight:600;border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3)">';
@@ -1002,7 +1001,6 @@ function renderDiaChanges() {
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${fmtRev(hmRev)}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_annual_revenue ? '$' + (Number(row.estimated_annual_revenue) / 1000000).toFixed(1) + 'M' : '–'}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_ebitda ? '$' + Math.round(Number(row.estimated_ebitda) / 1000).toLocaleString() + 'K' : '–'}</div>`;
-    html += `<div style="flex:0.4;text-align:center"><button class="cms-flag-btn" data-clinic-id="${esc(row.clinic_id || row.ccn || '')}" data-clinic-name="${esc(row.facility_name || '')}" onclick="event.stopPropagation();" style="font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button></div>`;
     html += '</div>';
   });
 
@@ -1091,37 +1089,6 @@ function renderDiaChanges() {
     const nextBtn = document.getElementById('cmsNext');
     if (prevBtn) prevBtn.addEventListener('click', () => { diaCmsPage--; renderDiaTab(); });
     if (nextBtn) nextBtn.addEventListener('click', () => { diaCmsPage++; renderDiaTab(); });
-    // Flag-for-review buttons
-    document.querySelectorAll('.cms-flag-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const clinicId = btn.dataset.clinicId;
-        const clinicName = btn.dataset.clinicName;
-        if (!clinicId) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: clinicId,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from CMS Data tab for research',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_cms_flag'
-          });
-          btn.textContent = '✓';
-          btn.style.color = 'var(--success)';
-          btn.style.borderColor = 'var(--success)';
-          showToast('Flagged ' + (clinicName || clinicId) + ' for review', 'success');
-        } catch(e) {
-          btn.disabled = false;
-          btn.textContent = 'Flag';
-          showToast('Flag failed: ' + e.message, 'error');
-        }
-      });
-    });
   }, 0);
 
   return html;
@@ -1203,7 +1170,6 @@ function renderDiaNpi() {
     html += '<div style="flex: 1;">State</div>';
     html += '<div style="flex: 1;">Operator</div>';
     html += '<div style="flex: 1; text-align: right;">Patients</div>';
-    html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
     html += '</div>';
     
     filtered.slice(0, 500).forEach(row => {
@@ -1216,10 +1182,6 @@ function renderDiaNpi() {
       html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
       html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
       html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
-      html += `<div style="flex: 0.8; text-align: center; display: flex; gap: 4px; justify-content: center;" onclick="event.stopPropagation();">`;
-      html += `<button class="npi-flag-btn" data-npi-id="${esc(row.npi || row.clinic_id || row.id || '')}" data-npi-name="${esc(row.facility_name || '')}" style="font-size:9px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button>`;
-      html += `<button class="npi-dismiss-btn" data-npi-id="${esc(row.npi || row.clinic_id || row.id || '')}" style="font-size:9px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text3);cursor:pointer;" title="Dismiss signal">✕</button>`;
-      html += `</div>`;
       html += '</div>';
     });
   }
@@ -1237,70 +1199,8 @@ function renderDiaNpi() {
         renderDiaTab();
       });
     });
-    // NPI Flag buttons
-    document.querySelectorAll('.npi-flag-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const npiId = btn.dataset.npiId;
-        const npiName = btn.dataset.npiName;
-        if (!npiId) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: npiId,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from NPI signals tab',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_npi_flag'
-          });
-          btn.textContent = '✓';
-          btn.style.color = 'var(--success)';
-          btn.style.borderColor = 'var(--success)';
-          showToast('Flagged ' + (npiName || npiId) + ' for review', 'success');
-        } catch(e) {
-          btn.disabled = false;
-          btn.textContent = 'Flag';
-          showToast('Flag failed: ' + e.message, 'error');
-        }
-      });
-    });
-    // NPI Dismiss buttons
-    document.querySelectorAll('.npi-dismiss-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const npiId = btn.dataset.npiId;
-        if (!npiId) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: npiId,
-              outcome: 'dismissed',
-              notes: 'Dismissed from NPI signals tab',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_npi_dismiss'
-          });
-          // Remove from the in-memory list
-          const idx = diaData.npiSignals.findIndex(s => (s.npi || s.clinic_id || s.id || '') === npiId);
-          if (idx >= 0) diaData.npiSignals.splice(idx, 1);
-          showToast('Signal dismissed', 'success');
-          renderDiaTab();
-        } catch(e) {
-          btn.disabled = false;
-          btn.textContent = '✕';
-          showToast('Dismiss failed: ' + e.message, 'error');
-        }
-      });
-    });
   }, 0);
-
+  
   return html;
 }
 
@@ -1642,25 +1542,10 @@ function renderDiaUnmatchedClinics() {
     // Action buttons
     html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
     html += `<button class="btn-action primary" data-um-action="resolve" style="flex: 1; min-width: 120px;">Link to Property</button>`;
-    html += `<button class="btn-action warn" data-um-action="create" style="flex: 1; min-width: 120px;">Create New Property</button>`;
+    html += `<button class="btn-action warn" data-um-action="create" style="flex: 1; min-width: 120px; opacity: 0.5; cursor: not-allowed;" disabled title="Coming soon — create new property record">Create New</button>`;
     html += `<button class="btn-action default" data-um-action="skip" style="flex: 1; min-width: 120px;">Skip</button>`;
     html += `<button class="btn-action danger" data-um-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
     html += '</div>';
-
-    // Inline create-property form (hidden by default)
-    html += `<div id="um-create-form" style="display:none;margin-top:16px;padding:14px;background:var(--s3);border-radius:8px;border:1px solid var(--border);">`;
-    html += `<div style="font-weight:600;font-size:13px;margin-bottom:10px;color:var(--accent);">Create New Property</div>`;
-    html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">`;
-    html += `<input type="text" id="um-new-addr" placeholder="Address *" style="padding:7px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);">`;
-    html += `<input type="text" id="um-new-name" placeholder="Property Name" style="padding:7px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);">`;
-    html += `<input type="text" id="um-new-city" placeholder="City *" style="padding:7px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);">`;
-    html += `<input type="text" id="um-new-state" placeholder="State *" style="padding:7px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);">`;
-    html += `</div>`;
-    html += `<div style="display:flex;gap:8px;">`;
-    html += `<button class="btn-action primary" id="um-create-confirm" style="flex:1;">Create & Link</button>`;
-    html += `<button class="btn-action default" id="um-create-cancel" style="flex:0;">Cancel</button>`;
-    html += `</div>`;
-    html += `</div>`;
 
     html += '</div>';
   } else if (total === 0) {
@@ -1750,21 +1635,6 @@ function renderDiaUnmatchedClinics() {
         const item = diaUnmatchedQueue[diaUnmatchedIdx];
         if (!item) return;
 
-        // "Create New Property" toggles inline form
-        if (action === 'create') {
-          const createForm = document.getElementById('um-create-form');
-          if (createForm) {
-            createForm.style.display = createForm.style.display === 'none' ? 'block' : 'none';
-            // Pre-fill with raw record data if available
-            const raw = item.raw || item;
-            if (raw.address) { const el = document.getElementById('um-new-addr'); if (el && !el.value) el.value = raw.address; }
-            if (raw.facility_name) { const el = document.getElementById('um-new-name'); if (el && !el.value) el.value = raw.facility_name; }
-            if (raw.city) { const el = document.getElementById('um-new-city'); if (el && !el.value) el.value = raw.city; }
-            if (raw.state) { const el = document.getElementById('um-new-state'); if (el && !el.value) el.value = raw.state; }
-          }
-          return;
-        }
-
         const propIdEl = document.getElementById('um-property-id');
         const propertyId = propIdEl?.value ? parseInt(propIdEl.value, 10) : null;
 
@@ -1795,49 +1665,6 @@ function renderDiaUnmatchedClinics() {
         }
       });
     });
-
-    // Create-form confirm & cancel
-    const umCreateConfirm = document.getElementById('um-create-confirm');
-    if (umCreateConfirm) {
-      umCreateConfirm.addEventListener('click', async () => {
-        const item = diaUnmatchedQueue[diaUnmatchedIdx];
-        if (!item) return;
-        const addr = document.getElementById('um-new-addr')?.value?.trim();
-        const city = document.getElementById('um-new-city')?.value?.trim();
-        const state = document.getElementById('um-new-state')?.value?.trim();
-        const name = document.getElementById('um-new-name')?.value?.trim();
-        if (!addr || !city || !state) { showToast('Address, city, and state are required', 'error'); return; }
-        umCreateConfirm.disabled = true;
-        umCreateConfirm.textContent = 'Creating\u2026';
-        try {
-          const result = await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'properties',
-            data: { address: addr, city: city, state: state, property_name: name || addr },
-            source_surface: 'dia_unmatched_create'
-          });
-          if (result && result.ok && result.data && result.data[0]) {
-            const newId = result.data[0].property_id || result.data[0].id;
-            await resolveDiaUnmatched(item.id, 'resolve', newId);
-            showToast('Property #' + newId + ' created & linked!', 'success');
-          } else {
-            showToast('Failed to create property', 'error');
-          }
-        } catch (err) {
-          showToast('Error: ' + err.message, 'error');
-        } finally {
-          umCreateConfirm.disabled = false;
-          umCreateConfirm.textContent = 'Create & Link';
-        }
-      });
-    }
-    const umCreateCancel = document.getElementById('um-create-cancel');
-    if (umCreateCancel) {
-      umCreateCancel.addEventListener('click', () => {
-        const f = document.getElementById('um-create-form');
-        if (f) f.style.display = 'none';
-      });
-    }
   }, 0);
 
   return html;
@@ -1909,22 +1736,10 @@ function renderDiaQuarantineReview() {
 
     html += '</div>';
 
-    // Property resolution — search or create to link this quarantined record
-    html += '<div style="margin-top:16px;padding:12px;background:var(--s3);border-radius:6px;border:1px dashed var(--warning);">';
-    html += '<div style="font-size:12px;font-weight:600;color:var(--warning);margin-bottom:8px;">Link to Property (optional)</div>';
-    html += '<div style="display:flex;gap:8px;margin-bottom:8px;">';
-    html += '<input type="text" id="q-prop-search" placeholder="Search by address or name..." style="flex:1;padding:6px 10px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">';
-    html += '<button class="btn-action default" id="q-prop-search-btn" style="padding:6px 12px;font-size:11px;">Search</button>';
-    html += '</div>';
-    html += '<div id="q-prop-results" style="max-height:120px;overflow-y:auto;margin-bottom:8px;"></div>';
-    html += '<div id="q-prop-selected" style="margin-bottom:8px;"></div>';
-    html += '<input type="hidden" id="q-prop-id" value="">';
-    html += '</div>';
-
     // Action buttons
     html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
-    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px;">Resolve & Re-ingest</button>`;
-    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px;">Mark Duplicate</button>`;
+    html += `<button class="btn-action primary" data-q-action="reingest" style="flex: 1; min-width: 120px; opacity: 0.5; cursor: not-allowed;" disabled title="Coming soon — re-ingest after manual fix">Fix & Re-ingest</button>`;
+    html += `<button class="btn-action warn" data-q-action="merge" style="flex: 1; min-width: 120px; opacity: 0.5; cursor: not-allowed;" disabled title="Coming soon — merge with existing record">Merge</button>`;
     html += `<button class="btn-action danger" data-q-action="dismiss" style="flex: 1; min-width: 120px;">Dismiss</button>`;
     html += '</div>';
 
@@ -1944,85 +1759,34 @@ function renderDiaQuarantineReview() {
       });
     });
 
-    // Quarantine property search
-    const qSearchBtn = document.getElementById('q-prop-search-btn');
-    const qSearchInput = document.getElementById('q-prop-search');
-    if (qSearchBtn && qSearchInput) {
-      const doQSearch = async () => {
-        const query = qSearchInput.value.trim();
-        const resultsDiv = document.getElementById('q-prop-results');
-        if (!resultsDiv) return;
-        if (query.length < 2) { showToast('Enter at least 2 characters', 'info'); return; }
-        resultsDiv.innerHTML = '<div style="padding:4px;font-size:11px;color:var(--text2);">Searching...</div>';
-        try {
-          const safeQ = query.replace(/[*()',\\]/g, '');
-          const props = await diaQuery('properties', 'property_id,address,city,state,property_name', {
-            filter: `or(address.ilike.*${safeQ}*,property_name.ilike.*${safeQ}*)`, limit: 10
-          });
-          if (!props || props.length === 0) {
-            resultsDiv.innerHTML = '<div style="padding:4px;font-size:11px;color:var(--text2);">No properties found</div>';
-            return;
-          }
-          resultsDiv.innerHTML = props.map(p =>
-            `<div class="clickable-row q-prop-pick" data-pid="${p.property_id}" style="padding:6px 8px;font-size:11px;border-bottom:1px solid var(--border);cursor:pointer;">${esc(p.address || p.property_name || 'Unknown')} — ${esc((p.city || '') + (p.state ? ', ' + p.state : ''))}</div>`
-          ).join('');
-          document.querySelectorAll('.q-prop-pick').forEach(el => {
-            el.addEventListener('click', () => {
-              const pid = el.dataset.pid;
-              document.getElementById('q-prop-id').value = pid;
-              document.getElementById('q-prop-selected').innerHTML = '<div style="padding:8px;background:rgba(52,211,153,0.1);border-radius:4px;font-size:12px;border-left:3px solid var(--accent);"><strong>Selected:</strong> Property #' + pid + ' — ' + esc(el.textContent) + '</div>';
-              resultsDiv.innerHTML = '';
-            });
-          });
-        } catch(e) {
-          resultsDiv.innerHTML = '<div style="padding:4px;font-size:11px;color:var(--error);">Search failed</div>';
-        }
-      };
-      qSearchBtn.addEventListener('click', doQSearch);
-      qSearchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doQSearch(); } });
-    }
-
     document.querySelectorAll('[data-q-action]').forEach(btn => {
       btn.addEventListener('click', async e => {
         const action = e.target.dataset.qAction;
         const item = diaQuarantineQueue[diaQuarantineIdx];
         if (!item) return;
-        const linkedPropId = document.getElementById('q-prop-id')?.value || null;
 
         console.debug('Quarantine action:', action, item);
-
-        const allQBtns = document.querySelectorAll('[data-q-action]');
-        const origText = e.target.textContent;
-
         if (action === 'dismiss') {
           if (!(await lccConfirm('Dismiss this quarantined record? It will be removed from the queue.', 'Dismiss'))) return;
-        } else if (action === 'reingest') {
-          if (!(await lccConfirm('Mark this record as resolved and re-ingest it?', 'Resolve'))) return;
-        } else if (action === 'merge') {
-          if (!linkedPropId) { showToast('Search and select a property to merge with first', 'warning'); return; }
-          if (!(await lccConfirm('Mark as duplicate and link to Property #' + linkedPropId + '?', 'Merge'))) return;
-        }
-
-        allQBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
-        e.target.textContent = 'Processing\u2026';
-        try {
-          const updateData = {
-            status: action === 'dismiss' ? 'dismissed' : action === 'merge' ? 'merged' : 'resolved',
-            resolved_at: new Date().toISOString(),
-            resolved_by: 'dashboard'
-          };
-          if (linkedPropId) updateData.linked_property_id = parseInt(linkedPropId, 10);
-          await diaPatchRecord('medicare_ingest_quarantine', 'id', item.id, updateData);
+          e.target.disabled = true;
+          e.target.textContent = 'Dismissing...';
+          try {
+            await diaPatchRecord('medicare_ingest_quarantine', 'id', item.id, {
+              status: 'dismissed',
+              resolved_at: new Date().toISOString(),
+              resolved_by: 'dashboard'
+            });
+          } catch (err) {
+            console.error('Quarantine dismiss error:', err);
+            showToast('Dismiss failed: ' + err.message, 'error');
+            e.target.disabled = false;
+            e.target.textContent = 'Dismiss';
+            return;
+          }
           diaQuarantineQueue = diaQuarantineQueue.filter((_, i) => i !== diaQuarantineIdx);
           diaQuarantineIdx = Math.min(diaQuarantineIdx, Math.max(0, diaQuarantineQueue.length - 1));
-          const labels = { dismiss: 'Dismissed', reingest: 'Resolved & queued for re-ingest', merge: 'Merged with property' };
-          showToast(labels[action] || 'Done', 'success');
+          showToast('Quarantine record dismissed', 'success');
           renderDiaTab();
-        } catch (err) {
-          console.error('Quarantine action error:', err);
-          showToast('Action failed: ' + err.message, 'error');
-          allQBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
-          e.target.textContent = origText;
         }
       });
     });
@@ -2091,13 +1855,6 @@ function renderDiaClarificationQueue() {
     html += `<textarea id="cl-response" placeholder="Enter the missing information..." style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--s2); color: var(--text); font-size: 12px; box-sizing: border-box; min-height: 100px;"></textarea>`;
     html += `</div>`;
 
-    // View related record button — lets user open detail panel for context
-    if (item.record_id) {
-      html += `<div style="margin-bottom:12px;">`;
-      html += `<button class="btn-action default" id="cl-view-record" style="width:100%;font-size:12px;padding:8px;">View Related Record in Detail Panel</button>`;
-      html += `</div>`;
-    }
-
     // Action buttons
     html += '<div class="action-row" style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">';
     html += `<button class="btn-action primary" data-cl-action="submit" style="flex: 1; min-width: 120px;">Submit Data</button>`;
@@ -2118,21 +1875,6 @@ function renderDiaClarificationQueue() {
         renderDiaTab();
       });
     });
-
-    // "View Related Record" opens the unified detail panel
-    const clViewBtn = document.getElementById('cl-view-record');
-    if (clViewBtn) {
-      clViewBtn.addEventListener('click', () => {
-        const item = diaClarificationQueue[diaClarificationIdx];
-        if (!item) return;
-        const fakeRec = { property_id: item.property_id || null, medicare_id: item.record_id || null };
-        if (typeof showUnifiedDetail === 'function') {
-          showUnifiedDetail(fakeRec, 'dia-clinic');
-        } else if (typeof showDetail === 'function') {
-          showDetail(fakeRec, 'dia-clinic');
-        }
-      });
-    }
 
     document.querySelectorAll('[data-cl-action]').forEach(btn => {
       btn.addEventListener('click', async e => {

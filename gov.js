@@ -5736,7 +5736,7 @@ function buildGovLeasesHTML() {
       const termColor = (p.firm_term_remaining || 0) < 0 ? 'var(--red)' : (p.firm_term_remaining || 0) <= 1 ? '#f87171' : '#fb923c';
       const termLabel = p.firm_term_remaining != null ? (p.firm_term_remaining < 0 ? 'Expired' : p.firm_term_remaining.toFixed(1) + ' yrs') : '—';
       const expDate = p.lease_expiration ? new Date(p.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
-      html += `<tr class="clickable-row" onclick='showDetail(${safeJSON(p)}, "gov-lead")'>`;
+      html += `<tr class="clickable-row" onclick="goToGovTab('pipeline')">`;
       html += `<td>${esc(p.agency || p.agency_full_name || '—')}</td>`;
       html += `<td>${esc(p.address || '—')}</td>`;
       html += `<td>${esc(p.city || '—')}</td>`;
@@ -5769,7 +5769,7 @@ function buildGovLeasesHTML() {
       const eff = p.lease_commencement ? new Date(p.lease_commencement).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
       const exp = p.lease_expiration ? new Date(p.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
       const term = p.firm_term_remaining != null ? p.firm_term_remaining.toFixed(1) + ' yrs' : '—';
-      html += `<tr class="clickable-row" onclick='showDetail(${safeJSON(p)}, "gov-lead")'>`;
+      html += '<tr>';
       html += `<td>${esc(p.agency || '—')}</td><td>${esc(p.address || '—')}</td><td>${esc(p.state || '—')}</td>`;
       html += `<td>${eff}</td><td>${exp}</td><td style="text-align:right">${term}</td><td style="text-align:right">${p.gross_rent ? fmt(p.gross_rent) : '—'}</td>`;
       html += '</tr>';
