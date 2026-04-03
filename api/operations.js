@@ -1,32 +1,59 @@
 // ============================================================================
-// Workflow Engine — Compound multi-step team operations
-// Life Command Center — Phase 4: Shared Team Workflow Rollout
+// Operations API — Consolidated from bridge.js + workflows.js
+// Life Command Center
 //
-// POST /api/workflows?action=promote_to_shared    — private inbox → shared action
-// POST /api/workflows?action=sf_task_to_action    — SF task inbox → entity-linked action
-// POST /api/workflows?action=research_followup    — research → assigned follow-up action
-// POST /api/workflows?action=reassign             — reassign work item to another user
-// POST /api/workflows?action=escalate             — escalate to manager with reason
-// POST /api/workflows?action=watch                — subscribe to updates on an item
-// POST /api/workflows?action=unwatch              — unsubscribe from item updates
-// POST /api/workflows?action=bulk_assign          — assign multiple items to a user
-// POST /api/workflows?action=bulk_triage          — triage multiple inbox items at once
-// GET  /api/workflows?action=oversight            — manager team overview
-// GET  /api/workflows?action=unassigned           — unassigned work items
-// GET  /api/workflows?action=watchers&item_type=&item_id=  — list watchers
+// BRIDGE ACTIONS (domain activity logging):
+//   POST /api/operations?action=log_activity       — log domain activity
+//   POST /api/operations?action=complete_research   — mark research complete
+//   POST /api/operations?action=log_call           — log call activity
+//   POST /api/operations?action=save_ownership     — ownership save → activity
+//   POST /api/operations?action=dismiss_lead       — lead dismissal → activity
+//   POST /api/operations?action=update_entity      — sync domain → canonical entity
+//
+// WORKFLOW ACTIONS (multi-step team operations):
+//   POST /api/operations?action=promote_to_shared   — inbox → shared action
+//   POST /api/operations?action=sf_task_to_action   — SF task → entity-linked action
+//   POST /api/operations?action=research_followup   — research → follow-up action
+//   POST /api/operations?action=reassign            — reassign work item
+//   POST /api/operations?action=escalate            — escalate to manager
+//   POST /api/operations?action=watch               — subscribe to item updates
+//   POST /api/operations?action=unwatch             — unsubscribe from updates
+//   POST /api/operations?action=bulk_assign         — assign multiple items
+//   POST /api/operations?action=bulk_triage         — triage multiple inbox items
+//   GET  /api/operations?action=oversight           — manager team overview
+//   GET  /api/operations?action=unassigned          — unassigned work items
+//   GET  /api/operations?action=watchers            — list watchers
+//
+// CHAT:
+//   POST /api/operations?_route=chat               — AI copilot chat
+//
+// CONSOLIDATION NOTE (2026-04-03):
+// Merged to stay within Vercel Hobby plan 12-function limit.
+// See LCC_ARCHITECTURE_STRATEGY.md and .github/AI_INSTRUCTIONS.md
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { closeResearchLoop } from './_shared/research-loop.js';
+import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { invokeChatProvider } from './_shared/ai.js';
 import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
 } from './_shared/lifecycle.js';
-import { closeResearchLoop } from './_shared/research-loop.js';
+
+// ============================================================================
+// MAIN DISPATCHER
+// ============================================================================
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
+
+  // Chat route (via vercel.json _route=chat)
+  if (req.query._route === 'chat') {
+    return handleChatRoute(req, res);
+  }
 
   const user = await authenticate(req, res);
   if (!user) return;
@@ -34,12 +61,9 @@ export default withErrorHandler(async function handler(req, res) {
   const workspaceId = req.headers['x-lcc-workspace'] || user.memberships[0]?.workspace_id;
   if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
 
-  const membership = user.memberships.find(m => m.workspace_id === workspaceId);
-  if (!membership) return res.status(403).json({ error: 'Not a member of this workspace' });
-
   const { action } = req.query;
 
-  // GET endpoints
+  // ---- GET endpoints (workflows) ----
   if (req.method === 'GET') {
     switch (action) {
       case 'oversight':   return await getOversight(req, res, user, workspaceId);
@@ -49,13 +73,22 @@ export default withErrorHandler(async function handler(req, res) {
     }
   }
 
-  // POST endpoints — require operator+
+  // ---- POST endpoints ----
   if (req.method === 'POST') {
     if (!requireRole(user, 'operator', workspaceId)) {
       return res.status(403).json({ error: 'Operator role required' });
     }
 
     switch (action) {
+      // Bridge actions
+      case 'log_activity':       return await bridgeLogActivity(req, res, user, workspaceId);
+      case 'complete_research':  return await bridgeCompleteResearch(req, res, user, workspaceId);
+      case 'log_call':           return await bridgeLogCall(req, res, user, workspaceId);
+      case 'save_ownership':     return await bridgeSaveOwnership(req, res, user, workspaceId);
+      case 'dismiss_lead':       return await bridgeDismissLead(req, res, user, workspaceId);
+      case 'update_entity':      return await bridgeUpdateEntity(req, res, user, workspaceId);
+
+      // Workflow actions
       case 'promote_to_shared':  return await promoteToShared(req, res, user, workspaceId);
       case 'sf_task_to_action':  return await sfTaskToAction(req, res, user, workspaceId);
       case 'research_followup':  return await researchFollowup(req, res, user, workspaceId);
@@ -65,7 +98,11 @@ export default withErrorHandler(async function handler(req, res) {
       case 'unwatch':            return await removeWatch(req, res, user, workspaceId);
       case 'bulk_assign':        return await bulkAssign(req, res, user, workspaceId);
       case 'bulk_triage':        return await bulkTriage(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid POST action' });
+
+      default:
+        return res.status(400).json({
+          error: 'Invalid POST action. Bridge: log_activity, complete_research, log_call, save_ownership, dismiss_lead, update_entity. Workflows: promote_to_shared, sf_task_to_action, research_followup, reassign, escalate, watch, unwatch, bulk_assign, bulk_triage'
+        });
     }
   }
 
@@ -73,14 +110,396 @@ export default withErrorHandler(async function handler(req, res) {
 });
 
 // ============================================================================
-// PROMOTE TO SHARED — private inbox item → shared team action
-//
-// Steps:
-// 1. Validate inbox item is private and promotable
-// 2. Create action item with visibility=shared
-// 3. Transition inbox to promoted
-// 4. Auto-watch: creator becomes watcher
-// 5. Log activity with provenance
+// BRIDGE: Generic activity logging for any domain save operation
+// ============================================================================
+
+async function bridgeLogActivity(req, res, user, workspaceId) {
+  const {
+    category, title, body, domain, entity_id, external_id,
+    source_system, source_type, metadata
+  } = req.body || {};
+
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  let resolvedEntityId = entity_id;
+  if (!resolvedEntityId && external_id && source_system) {
+    const link = await ensureEntityLink({
+      workspaceId, userId: user.id, sourceSystem: source_system,
+      sourceType: source_type || 'asset', externalId: external_id,
+      domain, seedFields: { name: title, metadata }
+    });
+    if (link.ok) resolvedEntityId = link.entityId;
+  }
+
+  const activityMetadata = { ...metadata, bridge_source: 'domain_save' };
+  if (req.body.gov_change_event_id) activityMetadata.gov_change_event_id = req.body.gov_change_event_id;
+  if (req.body.gov_correlation_id) activityMetadata.gov_correlation_id = req.body.gov_correlation_id;
+  if (req.body.source_record_id) activityMetadata.source_record_id = req.body.source_record_id;
+  if (req.body.source_table) activityMetadata.source_table = req.body.source_table;
+
+  const result = await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId, actor_id: user.id,
+    category: category || 'note', title,
+    body: body || null, entity_id: resolvedEntityId || null,
+    source_type: source_system || 'system', domain: domain || null,
+    visibility: 'shared', metadata: activityMetadata,
+    occurred_at: new Date().toISOString()
+  });
+
+  if (!result.ok) return res.status(result.status).json({ error: 'Failed to log activity' });
+
+  return res.status(201).json({
+    activity: Array.isArray(result.data) ? result.data[0] : result.data,
+    entity_id: resolvedEntityId
+  });
+}
+
+// ============================================================================
+// BRIDGE: Research completion → canonical activity + optional follow-up action
+// ============================================================================
+
+async function bridgeCompleteResearch(req, res, user, workspaceId) {
+  const {
+    domain, research_type, research_task_id, entity_id,
+    external_id, external_url, source_system, source_type,
+    source_record_id, source_table, outcome, notes,
+    follow_up_title, follow_up_due, follow_up_assignee,
+    title, instructions, entity_fields, metadata
+  } = req.body || {};
+
+  if (!research_type) return res.status(400).json({ error: 'research_type is required' });
+
+  const researchMetadata = { ...(metadata || {}), research_type, outcome, bridge_source: 'research_completion' };
+  if (req.body.gov_change_event_id) researchMetadata.gov_change_event_id = req.body.gov_change_event_id;
+  if (req.body.gov_correlation_id) researchMetadata.gov_correlation_id = req.body.gov_correlation_id;
+  if (source_record_id) researchMetadata.source_record_id = source_record_id;
+  if (source_table) researchMetadata.source_table = source_table;
+
+  const closure = await closeResearchLoop({
+    workspaceId, user, researchTaskId: research_task_id,
+    sourceSystem: source_system, sourceType: source_type || 'asset',
+    sourceRecordId: source_record_id || external_id,
+    sourceTable: source_table || null,
+    externalId: external_id, externalUrl: external_url,
+    researchType: research_type, domain,
+    entityId: entity_id, entitySeedFields: entity_fields || {},
+    title, instructions,
+    outcome: typeof outcome === 'string' ? { status: outcome } : (outcome || { status: 'completed' }),
+    notes,
+    followupTitle: outcome === 'needs_followup' ? follow_up_title : (follow_up_title || null),
+    followupAssignee: follow_up_assignee,
+    followupDue: follow_up_due,
+    activityMetadata: researchMetadata,
+    researchMetadata
+  });
+
+  if (!closure.ok) {
+    return res.status(closure.status || 500).json({ error: closure.error, detail: closure.detail });
+  }
+
+  return res.status(201).json({
+    logged: true,
+    entity_id: closure.entity?.id || closure.researchTask?.entity_id || null,
+    research_task: closure.researchTask,
+    follow_up: closure.followupAction,
+    created_research_task: closure.createdResearchTask
+  });
+}
+
+// ============================================================================
+// BRIDGE: Call logging → canonical activity
+// ============================================================================
+
+async function bridgeLogCall(req, res, user, workspaceId) {
+  const {
+    subject, notes, outcome, domain, entity_id, external_id,
+    source_system, source_type, sf_contact_id, sf_company_id, activity_date
+  } = req.body || {};
+
+  if (!subject) return res.status(400).json({ error: 'subject is required' });
+
+  let resolvedEntityId = entity_id;
+  if (!resolvedEntityId && external_id && source_system) {
+    const link = await ensureEntityLink({
+      workspaceId, userId: user.id, sourceSystem: source_system,
+      sourceType: source_type || 'asset', externalId: external_id,
+      domain, seedFields: { name: subject, metadata: { sf_contact_id, sf_company_id } }
+    });
+    if (link.ok) resolvedEntityId = link.entityId;
+  }
+
+  const result = await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId, actor_id: user.id,
+    category: 'call', title: subject, body: notes || null,
+    entity_id: resolvedEntityId || null, source_type: 'salesforce',
+    domain: domain || null, visibility: 'shared',
+    metadata: {
+      outcome, sf_contact_id, sf_company_id,
+      activity_date: activity_date || new Date().toISOString(),
+      bridge_source: 'log_call'
+    },
+    occurred_at: activity_date || new Date().toISOString()
+  });
+
+  if (!result.ok) return res.status(result.status).json({ error: 'Failed to log call' });
+
+  return res.status(201).json({
+    activity: Array.isArray(result.data) ? result.data[0] : result.data,
+    entity_id: resolvedEntityId
+  });
+}
+
+// ============================================================================
+// BRIDGE: Ownership save → canonical activity
+// ============================================================================
+
+async function bridgeSaveOwnership(req, res, user, workspaceId) {
+  const {
+    domain, entity_id, external_id, source_system,
+    owner_name, true_owner_name, notes
+  } = req.body || {};
+
+  let resolvedEntityId = entity_id;
+  if (!resolvedEntityId && external_id && source_system) {
+    const link = await ensureEntityLink({
+      workspaceId, userId: user.id, sourceSystem: source_system,
+      sourceType: req.body.source_type || 'asset', externalId: external_id,
+      domain, seedFields: { name: true_owner_name || owner_name, org_type: 'owner' }
+    });
+    if (link.ok) resolvedEntityId = link.entityId;
+  }
+
+  const title = true_owner_name
+    ? `Ownership resolved: ${true_owner_name}${owner_name ? ` (recorded: ${owner_name})` : ''}`
+    : `Ownership data saved${owner_name ? `: ${owner_name}` : ''}`;
+
+  const ownershipMetadata = { owner_name, true_owner_name, bridge_source: 'ownership_save' };
+  if (req.body.gov_change_event_id) ownershipMetadata.gov_change_event_id = req.body.gov_change_event_id;
+  if (req.body.gov_correlation_id) ownershipMetadata.gov_correlation_id = req.body.gov_correlation_id;
+  if (req.body.source_record_id) ownershipMetadata.source_record_id = req.body.source_record_id;
+  if (req.body.source_table) ownershipMetadata.source_table = req.body.source_table;
+
+  await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId, actor_id: user.id,
+    category: 'research', title, body: notes || null,
+    entity_id: resolvedEntityId || null,
+    source_type: source_system || 'system', domain: domain || null,
+    visibility: 'shared', metadata: ownershipMetadata,
+    occurred_at: new Date().toISOString()
+  });
+
+  return res.status(201).json({ logged: true, entity_id: resolvedEntityId });
+}
+
+// ============================================================================
+// BRIDGE: Lead dismissal → canonical activity
+// ============================================================================
+
+async function bridgeDismissLead(req, res, user, workspaceId) {
+  const {
+    domain, entity_id, external_id, source_system, reason, notes
+  } = req.body || {};
+
+  let resolvedEntityId = entity_id;
+  if (!resolvedEntityId && external_id && source_system) {
+    const link = await ensureEntityLink({
+      workspaceId, userId: user.id, sourceSystem: source_system,
+      sourceType: req.body.source_type || 'asset', externalId: external_id,
+      domain, seedFields: { name: reason || notes || 'Dismissed lead' }
+    });
+    if (link.ok) resolvedEntityId = link.entityId;
+  }
+
+  await opsQuery('POST', 'activity_events', {
+    workspace_id: workspaceId, actor_id: user.id,
+    category: 'status_change',
+    title: `Lead dismissed${reason ? ': ' + reason : ''}`,
+    body: notes || null, entity_id: resolvedEntityId || null,
+    source_type: source_system || 'system', domain: domain || null,
+    visibility: 'shared', metadata: { reason, bridge_source: 'lead_dismiss' },
+    occurred_at: new Date().toISOString()
+  });
+
+  return res.status(201).json({ logged: true, entity_id: resolvedEntityId });
+}
+
+// ============================================================================
+// BRIDGE: Entity update — sync domain record field changes to canonical entity
+// ============================================================================
+
+async function bridgeUpdateEntity(req, res, user, workspaceId) {
+  const { external_id, source_system, source_type, fields } = req.body || {};
+
+  if (!external_id || !source_system) {
+    return res.status(400).json({ error: 'external_id and source_system are required' });
+  }
+
+  if (!fields || Object.keys(fields).length === 0) {
+    return res.status(200).json({ updated: false, reason: 'No fields to update' });
+  }
+
+  const link = await ensureEntityLink({
+    workspaceId, userId: user.id, sourceSystem: source_system,
+    sourceType: source_type || 'asset', externalId: external_id,
+    seedFields: fields, metadata: { bridge_source: 'update_entity' }
+  });
+  if (!link.ok) {
+    return res.status(500).json({ error: link.error, detail: link.detail });
+  }
+
+  const entityId = link.entityId;
+  const allowedFields = ['name', 'description', 'first_name', 'last_name', 'title', 'phone', 'email',
+    'org_type', 'address', 'city', 'state', 'zip', 'county', 'latitude', 'longitude', 'asset_type'];
+
+  const updates = { updated_at: new Date().toISOString() };
+  let fieldCount = 0;
+  for (const f of allowedFields) {
+    if (fields[f] !== undefined) {
+      updates[f] = fields[f];
+      fieldCount++;
+    }
+  }
+
+  if (fields.name) {
+    updates.canonical_name = normalizeCanonicalName(fields.name);
+  }
+
+  if (fieldCount === 0) {
+    return res.status(200).json({ updated: false, reason: 'No recognized fields to update' });
+  }
+
+  const result = await opsQuery('PATCH',
+    `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
+    updates
+  );
+
+  await opsQuery('PATCH',
+    `external_identities?entity_id=eq.${entityId}&source_system=eq.${pgFilterVal(source_system)}`,
+    { last_synced_at: new Date().toISOString() }
+  );
+
+  if (!result.ok) {
+    return res.status(result.status || 500).json({ error: 'Failed to update entity' });
+  }
+
+  return res.status(200).json({
+    updated: true,
+    entity_id: entityId,
+    fields_updated: fieldCount
+  });
+}
+
+// ============================================================================
+// CHAT: Route /api/chat → invokeChatProvider (AI copilot)
+// ============================================================================
+
+async function fetchPortfolioStats() {
+  const stats = { gov_stats: null, dia_stats: null };
+
+  const govUrl = process.env.GOV_SUPABASE_URL;
+  const govKey = process.env.GOV_SUPABASE_KEY;
+  const diaUrl = process.env.DIA_SUPABASE_URL;
+  const diaKey = process.env.DIA_SUPABASE_KEY;
+
+  const fetches = [];
+
+  if (govUrl && govKey) {
+    fetches.push(
+      fetch(`${govUrl}/rest/v1/mv_gov_overview_stats?select=*&limit=1`, {
+        headers: { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` }
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(rows => { if (Array.isArray(rows) && rows[0]) stats.gov_stats = rows[0]; })
+        .catch(e => console.warn('[operations] Gov stats fetch failed:', e.message))
+    );
+  }
+
+  if (diaUrl && diaKey) {
+    fetches.push(
+      fetch(`${diaUrl}/rest/v1/v_counts_freshness?select=*&limit=1`, {
+        headers: { 'apikey': diaKey, 'Authorization': `Bearer ${diaKey}` }
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(rows => { if (Array.isArray(rows) && rows[0]) stats.dia_stats = rows[0]; })
+        .catch(e => console.warn('[operations] Dialysis stats fetch failed:', e.message))
+    );
+    fetches.push(
+      fetch(`${diaUrl}/rest/v1/clinic_financial_estimates?select=count&limit=1`, {
+        headers: {
+          'apikey': diaKey,
+          'Authorization': `Bearer ${diaKey}`,
+          'Prefer': 'count=exact'
+        }
+      })
+        .then(r => {
+          const range = r.headers.get('content-range');
+          if (range) {
+            const match = range.match(/\/(\d+)/);
+            if (match) stats.dia_clinic_count = parseInt(match[1], 10);
+          }
+          return null;
+        })
+        .catch(e => console.warn('[operations] Dialysis clinic count fetch failed:', e.message))
+    );
+  }
+
+  await Promise.all(fetches);
+  return stats;
+}
+
+async function handleChatRoute(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || '';
+
+  const { message, context, history, attachments } = req.body || {};
+  if (!message) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  let portfolioStats = {};
+  try {
+    portfolioStats = await fetchPortfolioStats();
+  } catch {
+    // Non-fatal
+  }
+
+  const enrichedContext = {
+    ...(context || {}),
+    ...portfolioStats,
+  };
+
+  const result = await invokeChatProvider({
+    message,
+    context: enrichedContext,
+    history: Array.isArray(history) ? history : [],
+    attachments: Array.isArray(attachments) ? attachments : [],
+    user,
+    workspaceId
+  });
+
+  if (!result.ok) {
+    return res.status(result.status || 502).json({
+      error: result.data?.error || 'AI provider request failed',
+      provider: result.provider,
+      details: result.data?.details
+    });
+  }
+
+  return res.status(200).json({
+    response: result.data?.response || result.data?.content?.[0]?.text || '',
+    usage: result.data?.usage || null,
+    provider: result.provider
+  });
+}
+
+// ============================================================================
+// WORKFLOW: PROMOTE TO SHARED — private inbox → shared team action
 // ============================================================================
 
 async function promoteToShared(req, res, user, workspaceId) {
@@ -88,7 +507,6 @@ async function promoteToShared(req, res, user, workspaceId) {
 
   if (!inbox_item_id) return res.status(400).json({ error: 'inbox_item_id is required' });
 
-  // Fetch inbox item
   const inbox = await fetchOne('inbox_items', inbox_item_id, workspaceId);
   if (!inbox) return res.status(404).json({ error: 'Inbox item not found' });
 
@@ -96,38 +514,28 @@ async function promoteToShared(req, res, user, workspaceId) {
     return res.status(400).json({ error: 'Already promoted' });
   }
   if (!canTransitionInbox(inbox.status, 'promoted') && inbox.status !== 'new') {
-    // Allow direct promotion from new (skip triage for this workflow)
     if (!canTransitionInbox(inbox.status, 'triaged')) {
       return res.status(400).json({ error: `Cannot promote from status "${inbox.status}"` });
     }
   }
 
-  // Create shared action
   const action = await opsQuery('POST', 'action_items', {
-    workspace_id: workspaceId,
-    created_by: user.id,
-    owner_id: user.id,
+    workspace_id: workspaceId, created_by: user.id, owner_id: user.id,
     assigned_to: assigned_to || user.id,
-    title: title || inbox.title,
-    description: description || inbox.body,
+    title: title || inbox.title, description: description || inbox.body,
     action_type: isValidEnum(action_type, ACTION_TYPES) ? action_type : 'follow_up',
     status: 'open',
     priority: isValidEnum(priority, PRIORITIES) ? priority : inbox.priority || 'normal',
-    due_date: due_date || null,
-    visibility: 'shared',
-    entity_id: entity_id || inbox.entity_id,
-    inbox_item_id: inbox_item_id,
-    domain: inbox.domain,
-    source_type: 'inbox_promotion',
+    due_date: due_date || null, visibility: 'shared',
+    entity_id: entity_id || inbox.entity_id, inbox_item_id: inbox_item_id,
+    domain: inbox.domain, source_type: 'inbox_promotion',
     source_connector_id: inbox.source_connector_id,
-    external_id: inbox.external_id,
-    external_url: inbox.external_url
+    external_id: inbox.external_id, external_url: inbox.external_url
   });
 
   if (!action.ok) return res.status(500).json({ error: 'Failed to create action' });
   const createdAction = unwrap(action);
 
-  // Transition inbox to promoted (triage first if new)
   if (inbox.status === 'new') {
     await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(inbox_item_id)}`, {
       status: 'promoted', triaged_at: new Date().toISOString(), updated_at: new Date().toISOString()
@@ -138,13 +546,11 @@ async function promoteToShared(req, res, user, workspaceId) {
     });
   }
 
-  // Auto-watch: creator watches the action
   await opsQuery('POST', 'watchers', {
     workspace_id: workspaceId, user_id: user.id,
     action_item_id: createdAction.id, reason: 'creator'
   }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
 
-  // If assigned to someone else, they watch too
   if (assigned_to && assigned_to !== user.id) {
     await opsQuery('POST', 'watchers', {
       workspace_id: workspaceId, user_id: assigned_to,
@@ -152,21 +558,19 @@ async function promoteToShared(req, res, user, workspaceId) {
     }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
   }
 
-  // Log activity
   await logWorkflowActivity(user, workspaceId, {
     category: 'status_change',
     title: `Promoted "${inbox.title}" from private inbox to shared action`,
     entity_id: entity_id || inbox.entity_id,
     action_item_id: createdAction.id,
-    inbox_item_id: inbox_item_id,
-    domain: inbox.domain
+    inbox_item_id: inbox_item_id, domain: inbox.domain
   });
 
   return res.status(201).json({ action: createdAction, inbox_status: 'promoted', workflow: 'promote_to_shared' });
 }
 
 // ============================================================================
-// SF TASK → SHARED ACTION — link Salesforce task to canonical entity
+// WORKFLOW: SF TASK → SHARED ACTION
 // ============================================================================
 
 async function sfTaskToAction(req, res, user, workspaceId) {
@@ -181,52 +585,39 @@ async function sfTaskToAction(req, res, user, workspaceId) {
     return res.status(400).json({ error: 'This workflow is for SF task inbox items only' });
   }
 
-  // Verify entity exists
   const entity = await fetchOne('entities', entity_id, workspaceId);
   if (!entity) return res.status(404).json({ error: 'Entity not found' });
 
-  // Create action linked to entity
   const action = await opsQuery('POST', 'action_items', {
-    workspace_id: workspaceId,
-    created_by: user.id,
-    owner_id: user.id,
+    workspace_id: workspaceId, created_by: user.id, owner_id: user.id,
     assigned_to: assigned_to || user.id,
-    title: inbox.title,
-    description: inbox.body,
+    title: inbox.title, description: inbox.body,
     action_type: isValidEnum(action_type, ACTION_TYPES) ? action_type : 'follow_up',
     status: 'open',
     priority: isValidEnum(priority, PRIORITIES) ? priority : inbox.priority || 'normal',
     due_date: due_date || inbox.metadata?.activity_date || null,
-    visibility: 'shared',
-    entity_id,
-    inbox_item_id,
-    domain: inbox.domain,
-    source_type: 'sf_sync',
+    visibility: 'shared', entity_id, inbox_item_id,
+    domain: inbox.domain, source_type: 'sf_sync',
     source_connector_id: inbox.source_connector_id,
-    external_id: inbox.external_id,
-    external_url: inbox.external_url
+    external_id: inbox.external_id, external_url: inbox.external_url
   });
 
   if (!action.ok) return res.status(500).json({ error: 'Failed to create action' });
   const createdAction = unwrap(action);
 
-  // Link SF external identity to entity if not already linked
   if (inbox.external_id) {
     await opsQuery('POST', 'external_identities', {
       workspace_id: workspaceId, entity_id,
       source_system: 'salesforce', source_type: 'task',
-      external_id: inbox.external_id,
-      external_url: inbox.external_url,
+      external_id: inbox.external_id, external_url: inbox.external_url,
       last_synced_at: new Date().toISOString()
     }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
   }
 
-  // Transition inbox
   await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(inbox_item_id)}`, {
     status: 'promoted', entity_id, updated_at: new Date().toISOString()
   });
 
-  // Auto-watch
   await opsQuery('POST', 'watchers', {
     workspace_id: workspaceId, user_id: user.id,
     action_item_id: createdAction.id, reason: 'creator'
@@ -243,7 +634,7 @@ async function sfTaskToAction(req, res, user, workspaceId) {
 }
 
 // ============================================================================
-// RESEARCH → FOLLOW-UP — complete research and create follow-up action
+// WORKFLOW: RESEARCH → FOLLOW-UP
 // ============================================================================
 
 async function researchFollowup(req, res, user, workspaceId) {
@@ -256,19 +647,14 @@ async function researchFollowup(req, res, user, workspaceId) {
   if (!research) return res.status(404).json({ error: 'Research task not found' });
 
   const closure = await closeResearchLoop({
-    workspaceId,
-    user,
-    researchTaskId: research_task_id,
+    workspaceId, user, researchTaskId: research_task_id,
     sourceRecordId: research.source_record_id || null,
     sourceTable: research.source_table || null,
-    researchType: research.research_type,
-    domain: research.domain,
+    researchType: research.research_type, domain: research.domain,
     entityId: entity_id || research.entity_id,
-    title: research.title,
-    instructions: research.instructions,
+    title: research.title, instructions: research.instructions,
     outcome: outcome || { status: 'completed' },
-    followupTitle: followup_title,
-    followupDescription: followup_description,
+    followupTitle: followup_title, followupDescription: followup_description,
     followupType: isValidEnum(followup_type, ACTION_TYPES) ? followup_type : 'follow_up',
     followupPriority: isValidEnum(followup_priority, PRIORITIES) ? followup_priority : 'normal',
     followupAssignee: assigned_to || user.id,
@@ -289,14 +675,13 @@ async function researchFollowup(req, res, user, workspaceId) {
 
   return res.status(200).json({
     research_status: closure.researchTask?.status || 'completed',
-    action: closure.followupAction,
-    research_task: closure.researchTask,
+    action: closure.followupAction, research_task: closure.researchTask,
     workflow: 'research_followup'
   });
 }
 
 // ============================================================================
-// REASSIGN — transfer ownership/assignment of any work item
+// WORKFLOW: REASSIGN
 // ============================================================================
 
 async function reassignItem(req, res, user, workspaceId) {
@@ -306,7 +691,6 @@ async function reassignItem(req, res, user, workspaceId) {
     return res.status(400).json({ error: 'item_type, item_id, and assigned_to are required' });
   }
 
-  // Verify target user is a workspace member
   const targetMember = await opsQuery('GET',
     `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(assigned_to)}&select=user_id,role`
   );
@@ -327,11 +711,9 @@ async function reassignItem(req, res, user, workspaceId) {
   const previousAssignee = existing.assigned_to;
 
   await opsQuery('PATCH', `${table}?id=eq.${pgFilterVal(item_id)}&workspace_id=eq.${workspaceId}`, {
-    assigned_to,
-    updated_at: new Date().toISOString()
+    assigned_to, updated_at: new Date().toISOString()
   });
 
-  // Auto-watch: new assignee watches the item
   if (item_type === 'action') {
     await opsQuery('POST', 'watchers', {
       workspace_id: workspaceId, user_id: assigned_to,
@@ -339,7 +721,6 @@ async function reassignItem(req, res, user, workspaceId) {
     }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
   }
 
-  // Fetch display names for activity log
   const [fromUser, toUser] = await Promise.all([
     previousAssignee ? fetchUserName(previousAssignee) : Promise.resolve('unassigned'),
     fetchUserName(assigned_to)
@@ -358,7 +739,7 @@ async function reassignItem(req, res, user, workspaceId) {
 }
 
 // ============================================================================
-// ESCALATE — escalate an action to a manager with tracking
+// WORKFLOW: ESCALATE
 // ============================================================================
 
 async function escalateItem(req, res, user, workspaceId) {
@@ -371,7 +752,6 @@ async function escalateItem(req, res, user, workspaceId) {
   const action = await fetchOne('action_items', action_item_id, workspaceId);
   if (!action) return res.status(404).json({ error: 'Action item not found' });
 
-  // Verify target is manager+
   const targetRole = requireRole({ memberships: [{ workspace_id: workspaceId }] }, 'viewer', workspaceId);
   const targetMember = await opsQuery('GET',
     `workspace_memberships?workspace_id=eq.${workspaceId}&user_id=eq.${pgFilterVal(escalate_to)}&select=role`
@@ -380,24 +760,18 @@ async function escalateItem(req, res, user, workspaceId) {
     return res.status(400).json({ error: 'Escalation target is not a workspace member' });
   }
 
-  // Create escalation record
   await opsQuery('POST', 'escalations', {
-    workspace_id: workspaceId,
-    action_item_id,
-    escalated_by: user.id,
-    escalated_to: escalate_to,
-    previous_assignee: action.assigned_to,
-    reason
+    workspace_id: workspaceId, action_item_id,
+    escalated_by: user.id, escalated_to: escalate_to,
+    previous_assignee: action.assigned_to, reason
   });
 
-  // Reassign to escalation target
   await opsQuery('PATCH', `action_items?id=eq.${pgFilterVal(action_item_id)}`, {
     assigned_to: escalate_to,
     priority: action.priority === 'normal' ? 'high' : action.priority,
     updated_at: new Date().toISOString()
   });
 
-  // Auto-watch: both parties watch
   for (const uid of [user.id, escalate_to]) {
     await opsQuery('POST', 'watchers', {
       workspace_id: workspaceId, user_id: uid,
@@ -409,16 +783,14 @@ async function escalateItem(req, res, user, workspaceId) {
   await logWorkflowActivity(user, workspaceId, {
     category: 'assignment',
     title: `Escalated "${action.title}" to ${toName}: ${reason}`,
-    entity_id: action.entity_id,
-    action_item_id,
-    domain: action.domain
+    entity_id: action.entity_id, action_item_id, domain: action.domain
   });
 
   return res.status(200).json({ action_item_id, escalated_to: escalate_to, reason, workflow: 'escalate' });
 }
 
 // ============================================================================
-// WATCH / UNWATCH
+// WORKFLOW: WATCH / UNWATCH
 // ============================================================================
 
 async function addWatch(req, res, user, workspaceId) {
@@ -433,10 +805,7 @@ async function addWatch(req, res, user, workspaceId) {
   if (!column) return res.status(400).json({ error: 'item_type must be: action, entity, or inbox' });
 
   const result = await opsQuery('POST', 'watchers', {
-    workspace_id: workspaceId,
-    user_id: userId,
-    [column]: item_id,
-    reason: 'manual'
+    workspace_id: workspaceId, user_id: userId, [column]: item_id, reason: 'manual'
   }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
 
   if (!result.ok) return res.status(result.status).json({ error: 'Failed to add watch' });
@@ -460,7 +829,7 @@ async function removeWatch(req, res, user, workspaceId) {
 }
 
 // ============================================================================
-// BULK ASSIGN — assign multiple items to one user
+// WORKFLOW: BULK ASSIGN
 // ============================================================================
 
 async function bulkAssign(req, res, user, workspaceId) {
@@ -495,7 +864,7 @@ async function bulkAssign(req, res, user, workspaceId) {
 }
 
 // ============================================================================
-// BULK TRIAGE — triage multiple inbox items at once
+// WORKFLOW: BULK TRIAGE
 // ============================================================================
 
 async function bulkTriage(req, res, user, workspaceId) {
@@ -543,8 +912,7 @@ async function getOversight(req, res, user, workspaceId) {
     team: overview.data || [],
     unassigned_work: unassigned.data || [],
     open_escalations: escalations.data || [],
-    workspace_id: workspaceId,
-    view: 'oversight'
+    workspace_id: workspaceId, view: 'oversight'
   });
 }
 
@@ -582,7 +950,7 @@ async function getWatchers(req, res, user, workspaceId) {
 }
 
 // ============================================================================
-// HELPERS
+// SHARED HELPERS
 // ============================================================================
 
 async function fetchOne(table, id, workspaceId) {
@@ -601,15 +969,12 @@ async function fetchUserName(userId) {
 
 async function logWorkflowActivity(user, workspaceId, { category, title, entity_id, action_item_id, inbox_item_id, domain }) {
   await opsQuery('POST', 'activity_events', {
-    workspace_id: workspaceId,
-    actor_id: user.id,
-    category: category || 'status_change',
-    title,
+    workspace_id: workspaceId, actor_id: user.id,
+    category: category || 'status_change', title,
     entity_id: entity_id || null,
     action_item_id: action_item_id || null,
     inbox_item_id: inbox_item_id || null,
-    source_type: 'system',
-    domain: domain || null,
+    source_type: 'system', domain: domain || null,
     visibility: 'shared',
     occurred_at: new Date().toISOString()
   });

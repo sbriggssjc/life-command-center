@@ -1,0 +1,19 @@
+# Cursor Rules — Life Command Center
+
+> **CRITICAL: Read .github/AI_INSTRUCTIONS.md before modifying any files in /api/.**
+
+## Vercel Hobby Plan Constraint
+
+This project has a HARD LIMIT of 12 serverless functions (12 .js files in /api/).
+We are currently AT the limit with exactly 12 files. Creating a 13th file will break
+the deployment and cause a production 404 error.
+
+## Rules
+
+1. NEVER create new .js files directly in /api/
+2. Add new endpoints as sub-routes to existing functions (use ?action= or ?_route= patterns)
+3. Put new helper code in /api/_shared/ or /api/_handlers/ (not counted as functions)
+4. After ANY change to /api/, verify: `ls api/*.js | wc -l` outputs 12 or less
+5. Update vercel.json rewrites when adding new sub-routes
+6. Use descriptive commit messages — never "GPT changes" or similar generic messages
+7. See .github/AI_INSTRUCTIONS.md for full architecture, routing, and design principles
