@@ -45,6 +45,10 @@
   - Added `docs/architecture/vercel_secret_usage_audit.md`
   - Audited usage/fallback/failure modes for WebEx, OPS, GOV, and DIA env vars
   - Documented existing inbound auth pattern (`LCC_API_KEY` + `X-LCC-Key`) and Power Automate recommendation
+- 2026-04-02: Authored integrated Daily Briefing architecture/rollout plan:
+  - Added `docs/architecture/daily_briefing_integration_plan.md`
+  - Defined ownership boundaries between Morning Briefing repo (intelligence engine) and LCC (orchestration/presentation)
+  - Specified unified payload schema, role views, phase-based rollout, and best first integration slice
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.
