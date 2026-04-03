@@ -5218,58 +5218,7 @@ function renderListingMarket(record) {
 }
 
 function renderListingActivity(record) {
-  if (!record) return '<div class="detail-empty">No activity data available</div>';
-
-  // Try to find GSA events by lease_number or address match
-  let events = [];
-  if (record.lease_number && govData.gsaEvents) {
-    events = govData.gsaEvents.filter(e => e.lease_number === record.lease_number);
-  }
-  if (events.length === 0 && record.address && govData.gsaEvents) {
-    const addr = (record.address || '').toLowerCase().trim();
-    events = govData.gsaEvents.filter(e => (e.address || '').toLowerCase().trim() === addr);
-  }
-
-  // Also pull research outcomes if available
-  let outcomes = [];
-  if (record.property_id && govData.researchOutcomes) {
-    outcomes = govData.researchOutcomes.filter(o => String(o.property_id) === String(record.property_id));
-  }
-
-  if (events.length === 0 && outcomes.length === 0) {
-    return '<div class="detail-empty">No activity recorded for this listing</div>';
-  }
-
-  let html = '<div class="detail-section">';
-  html += '<div class="detail-section-title">Activity Timeline</div>';
-  html += '<div class="detail-timeline">';
-
-  // GSA lease events
-  events.sort((a, b) => (b.event_date || '').localeCompare(a.event_date || '')).forEach(event => {
-    const statusClass = event.event_type === 'renewal' ? 'green' :
-                       event.event_type === 'termination' ? 'red' : 'yellow';
-    html += '<div class="detail-timeline-item ' + statusClass + '">';
-    html += '<div class="detail-card-date">' + esc(event.event_date || '—') + '</div>';
-    html += '<div class="detail-card-title">' + esc(cleanLabel(event.event_type || 'Event')) + '</div>';
-    html += '<div class="detail-card-body">';
-    if (event.lessor_name) html += '<strong>' + esc(event.lessor_name) + '</strong><br>';
-    if (event.annual_rent) html += 'Annual Rent: ' + fmt(event.annual_rent) + '<br>';
-    if (event.lease_rsf) html += 'RSF: ' + fmtN(event.lease_rsf);
-    if (event.changed_fields) html += '<br><span class="detail-val muted">Changed: ' + esc(event.changed_fields) + '</span>';
-    html += '</div></div>';
-  });
-
-  // Research outcomes
-  outcomes.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).forEach(o => {
-    html += '<div class="detail-timeline-item blue">';
-    html += '<div class="detail-card-date">' + esc((o.created_at || '').substring(0, 10)) + '</div>';
-    html += '<div class="detail-card-title">Research: ' + esc(cleanLabel(o.outcome || 'completed')) + '</div>';
-    if (o.notes) html += '<div class="detail-card-body">' + esc(o.notes) + '</div>';
-    html += '</div>';
-  });
-
-  html += '</div></div>';
-  return html;
+  return '<div class="detail-empty">Activity timeline coming soon</div>';
 }
 
 // ============================================================================
