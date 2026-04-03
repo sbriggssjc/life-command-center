@@ -56,6 +56,15 @@
   - Added contract doc `docs/architecture/daily_briefing_payload_contract.md`
   - Added env examples for Morning payload URLs in `.env.example`
   - Added focused tests `test/daily-briefing.test.js` (full + degraded scenarios)
+- 2026-04-03: Implemented homepage Daily Briefing panel (first user-facing surface):
+  - Added homepage widget in `index.html` (`#dailyBriefingWidget`)
+  - Added panel loader/renderer in `app.js`:
+    - `loadDailyBriefingData(force)`
+    - `renderDailyBriefingPanel()`
+    - role-view switch (`broker` / `analyst_ops`) with local storage persistence
+  - Added degraded/freshness rendering and expandable market HTML details
+  - Added panel styling in `styles.css`
+  - Added panel note doc: `docs/architecture/daily_briefing_home_panel_note.md`
 
 ## What Is Working
 - Consolidated API architecture exists with route rewrites and action multiplexing.

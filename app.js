@@ -175,6 +175,9 @@ let canonicalCounts = null;     // work_counts from queue-v2 API
 let canonicalMyWork = null;     // top items from my_work queue
 let canonicalInbox = null;      // recent inbox items (email source)
 let canonicalLoaded = false;    // true once canonical load attempted
+let dailyBriefingSnapshot = null;
+let dailyBriefingLoaded = false;
+let dailyBriefingRoleView = 'broker';
 let logCallData = {};
 let govConnected = false;
 let diaConnected = false;
@@ -480,6 +483,10 @@ function toggleMoreDrawer() {
 // Centralized page load handler — fires ops.js renderers for canonical model pages
 function handlePageLoad(pageId) {
   switch(pageId) {
+    case 'pageHome':
+      renderDailyBriefingPanel();
+      if (!dailyBriefingLoaded) loadDailyBriefingData();
+      break;
     case 'pageMyWork': if (typeof renderMyWork === 'function') renderMyWork(); break;
     case 'pageTeamQueue':
       if (!checkFlag('team_queue_enabled')) {
@@ -5006,6 +5013,218 @@ function renderRecentEmails() {
   return html;
 }
 
+function getDefaultDailyBriefingRoleView() {
+  const role = (LCC_USER.role || '').toLowerCase();
+  if (role === 'operator' || role === 'viewer') return 'analyst_ops';
+  return 'broker';
+}
+
+function getDailyBriefingRoleView() {
+  try {
+    const saved = localStorage.getItem('lcc-daily-briefing-role-view');
+    if (saved === 'broker' || saved === 'analyst_ops') return saved;
+  } catch (_) { /* ignore storage errors */ }
+  return getDefaultDailyBriefingRoleView();
+}
+
+function setDailyBriefingRoleSwitchActive(roleView) {
+  const root = document.getElementById('dailyBriefingRoleSwitch');
+  if (!root) return;
+  root.querySelectorAll('.db-role-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.roleView === roleView);
+  });
+}
+
+function setDailyBriefingRoleView(roleView) {
+  if (roleView !== 'broker' && roleView !== 'analyst_ops') return;
+  dailyBriefingRoleView = roleView;
+  try { localStorage.setItem('lcc-daily-briefing-role-view', roleView); } catch (_) { /* ignore */ }
+  setDailyBriefingRoleSwitchActive(roleView);
+  loadDailyBriefingData(true);
+}
+window.setDailyBriefingRoleView = setDailyBriefingRoleView;
+
+function sanitizeBriefingHtml(rawHtml) {
+  if (!rawHtml) return '';
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(String(rawHtml), 'text/html');
+    doc.querySelectorAll('script, iframe, object, embed, style, link').forEach((node) => node.remove());
+    doc.querySelectorAll('*').forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = String(attr.value || '');
+        if (name.startsWith('on') || name === 'style') {
+          el.removeAttribute(attr.name);
+          return;
+        }
+        if ((name === 'href' || name === 'src') && !/^https?:\/\//i.test(value) && !value.startsWith('#')) {
+          el.removeAttribute(attr.name);
+        }
+      });
+    });
+    return doc.body.innerHTML || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function formatBriefingAsOf(asOf) {
+  if (!asOf) return 'Unknown';
+  const d = new Date(asOf);
+  if (Number.isNaN(d.getTime())) return asOf;
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/Chicago'
+  });
+}
+
+function renderBriefingItems(items, emptyLabel, limit = 5) {
+  const list = Array.isArray(items) ? items.slice(0, limit) : [];
+  if (list.length === 0) return `<div class="db-empty">${esc(emptyLabel)}</div>`;
+  return '<ul class="db-list">' + list.map((item) => {
+    if (typeof item === 'string') return `<li>${esc(item)}</li>`;
+    const title = item?.title || item?.label || item?.id || '(Untitled)';
+    const meta = [item?.status, item?.priority, item?.domain].filter(Boolean).join(' · ');
+    return `<li><span class="db-li-title">${esc(title)}</span>${meta ? `<span class="db-li-meta">${esc(meta)}</span>` : ''}</li>`;
+  }).join('') + '</ul>';
+}
+
+function renderDailyBriefingPanel() {
+  const el = document.getElementById('dailyBriefingContent');
+  if (!el) return;
+
+  const roleView = dailyBriefingRoleView || getDailyBriefingRoleView();
+  setDailyBriefingRoleSwitchActive(roleView);
+
+  if (!dailyBriefingLoaded) {
+    el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+    return;
+  }
+  if (!dailyBriefingSnapshot) {
+    el.innerHTML = '<div class="widget-error"><div class="err-msg">Daily briefing unavailable.</div><button class="retry-btn" onclick="loadDailyBriefingData(true)">Retry</button></div>';
+    return;
+  }
+
+  const snap = dailyBriefingSnapshot;
+  const status = snap.status || {};
+  const degraded = status.completeness === 'degraded';
+  const missing = Array.isArray(status.missing_sections) ? status.missing_sections : [];
+  const gmi = snap.global_market_intelligence || {};
+  const usp = snap.user_specific_priorities || {};
+  const team = snap.team_level_production_signals || {};
+  const wc = team.work_counts || {};
+  const domain = snap.domain_specific_alerts_highlights || {};
+  const actions = Array.isArray(snap.actions) ? snap.actions : [];
+
+  let html = '';
+  html += '<div class="db-meta-row">';
+  html += `<span class="db-asof">As of ${esc(formatBriefingAsOf(snap.as_of))}</span>`;
+  html += `<span class="db-status ${degraded ? 'degraded' : 'full'}">${degraded ? 'Degraded' : 'Complete'}</span>`;
+  html += '</div>';
+
+  if (degraded && missing.length > 0) {
+    html += `<div class="db-missing">Missing: ${missing.slice(0, 4).map((m) => esc(m)).join(', ')}</div>`;
+  }
+
+  html += '<div class="db-section">';
+  html += '<div class="db-section-title">Market Intelligence</div>';
+  html += `<div class="db-summary">${esc(gmi.summary || 'No market summary available yet.')}</div>`;
+  html += renderBriefingItems(gmi.highlights || [], 'No market highlights.', 3);
+  if (gmi.html_fragment) {
+    html += '<details class="db-more-market"><summary>More market detail</summary>';
+    html += `<div class="db-market-html">${sanitizeBriefingHtml(gmi.html_fragment)}</div>`;
+    html += '</details>';
+  }
+  html += '</div>';
+
+  html += '<div class="db-grid">';
+  html += '<div class="db-section">';
+  html += '<div class="db-section-title">My Priorities</div>';
+  html += renderBriefingItems(usp.today_top_5 || [], 'No priority items.', 5);
+  html += '</div>';
+  html += '<div class="db-section">';
+  html += '<div class="db-section-title">Team Signals</div>';
+  html += '<div class="db-kpis">';
+  html += `<div class="db-kpi"><span>Open</span><strong>${Number(wc.open_actions || 0).toLocaleString()}</strong></div>`;
+  html += `<div class="db-kpi"><span>Inbox New</span><strong>${Number(wc.inbox_new || 0).toLocaleString()}</strong></div>`;
+  html += `<div class="db-kpi"><span>Sync Errors</span><strong>${Number(wc.sync_errors || 0).toLocaleString()}</strong></div>`;
+  html += `<div class="db-kpi"><span>Overdue</span><strong>${Number(wc.overdue || 0).toLocaleString()}</strong></div>`;
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  const gov = domain.government || {};
+  const dia = domain.dialysis || {};
+  html += '<div class="db-grid">';
+  html += '<div class="db-section">';
+  html += '<div class="db-section-title">Government Highlights</div>';
+  html += renderBriefingItems(gov.highlights || [], 'No government highlights.', 3);
+  html += '</div>';
+  html += '<div class="db-section">';
+  html += '<div class="db-section-title">Dialysis Highlights</div>';
+  html += renderBriefingItems(dia.highlights || [], 'No dialysis highlights.', 3);
+  html += '</div>';
+  html += '</div>';
+
+  html += '<div class="db-section">';
+  html += '<div class="db-section-title">Action Links</div>';
+  if (actions.length === 0) {
+    html += '<div class="db-empty">No action links.</div>';
+  } else {
+    html += '<div class="db-actions">';
+    actions.slice(0, 6).forEach((action) => {
+      const label = esc(action.label || 'Open');
+      const target = String(action.target || '').trim();
+      if (!target) return;
+      if (target.startsWith('/')) {
+        html += `<a class="db-action" href="${esc(target)}">${label}</a>`;
+      } else if (target.startsWith('http://') || target.startsWith('https://')) {
+        html += `<a class="db-action" href="${safeHref(target)}" target="_blank" rel="noopener">${label}</a>`;
+      } else {
+        html += `<span class="db-action disabled">${label}</span>`;
+      }
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  el.innerHTML = html;
+}
+
+async function loadDailyBriefingData(force = false) {
+  const roleView = getDailyBriefingRoleView();
+  dailyBriefingRoleView = roleView;
+  setDailyBriefingRoleSwitchActive(roleView);
+
+  if (!force && dailyBriefingLoaded && dailyBriefingSnapshot) {
+    renderDailyBriefingPanel();
+    return;
+  }
+
+  dailyBriefingLoaded = false;
+  renderDailyBriefingPanel();
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+
+  try {
+    const res = await fetch(`/api/daily-briefing?action=snapshot&role_view=${encodeURIComponent(roleView)}`, { headers });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    dailyBriefingSnapshot = await res.json();
+  } catch (e) {
+    console.warn('[DailyBriefing] Load failed:', e.message);
+    dailyBriefingSnapshot = null;
+  } finally {
+    dailyBriefingLoaded = true;
+    renderDailyBriefingPanel();
+  }
+}
+window.loadDailyBriefingData = loadDailyBriefingData;
+
 // ============================================================
 // TEAM PULSE — manager/owner widget showing team health at a glance
 // ============================================================
@@ -5866,7 +6085,7 @@ loadUserContext().then(() => {
   loadFeatureFlags().then(() => {
     applyFeatureFlags();
     autoConnectCredentials().then(() => {
-      Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData()])
+      Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData()])
         .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
         .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
     });
@@ -5890,6 +6109,7 @@ function startAutoRefresh() {
     loadWeather();
     loadMarket();
     loadCanonicalData();
+    loadDailyBriefingData(true);
     updateGreeting();
   }, interval);
 }
@@ -5913,6 +6133,7 @@ document.addEventListener('visibilitychange', () => {
       loadWeather();
       loadMarket();
       loadCanonicalData();
+      loadDailyBriefingData(true);
       updateGreeting();
     }
   }
@@ -9056,4 +9277,3 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !is
     }, 3000);
   }
 }
-

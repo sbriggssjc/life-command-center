@@ -135,6 +135,18 @@
               </div>
             </div>
 
+            <!-- Daily Briefing -->
+            <div class="widget" id="dailyBriefingWidget">
+              <div class="widget-title">
+                Daily Briefing
+                <div class="db-role-switch" id="dailyBriefingRoleSwitch">
+                  <button type="button" class="db-role-btn" data-role-view="broker" onclick="setDailyBriefingRoleView('broker')">Broker</button>
+                  <button type="button" class="db-role-btn" data-role-view="analyst_ops" onclick="setDailyBriefingRoleView('analyst_ops')">Analyst/Ops</button>
+                </div>
+              </div>
+              <div id="dailyBriefingContent"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
+
             <!-- Business Metrics -->
             <div class="widget">
               <div class="widget-title">Activity Breakdown</div>
