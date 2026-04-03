@@ -541,6 +541,23 @@ function _drainToast() {
   setTimeout(() => { t.className = 'toast'; setTimeout(_drainToast, 350); }, 3000);
 }
 
+/**
+ * Anti-flicker DOM update — fades container to 0, replaces HTML, fades back in
+ * Prevents visible flash when innerHTML rebuilds destroy the DOM
+ */
+function smoothDOMUpdate(container, html) {
+  if (!container) return;
+  container.style.transition = 'opacity 0.1s ease';
+  container.style.opacity = '0.3';
+  requestAnimationFrame(function() {
+    container.innerHTML = html;
+    requestAnimationFrame(function() {
+      container.style.opacity = '1';
+    });
+  });
+}
+window.smoothDOMUpdate = smoothDOMUpdate;
+
 // ── Custom Modal (async replacements for confirm/prompt) ──────────────
 let _modalResolve = null;
 let _modalPrevFocus = null;
