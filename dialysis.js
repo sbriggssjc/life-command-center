@@ -957,14 +957,8 @@ function renderDiaChanges() {
   if (diaCmsSort.col) {
     const dir = diaCmsSort.dir === 'asc' ? 1 : -1;
     const col = diaCmsSort.col;
-    // Virtual columns for computed payor mix values
-    const _virtualGetter = col === '_medicare_pct' ? r => { const v = r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct) : r.payer_mix_medicare != null ? (Number(r.payer_mix_medicare) <= 1 ? Number(r.payer_mix_medicare) * 100 : Number(r.payer_mix_medicare)) : null; return v; }
-      : col === '_medicaid_pct' ? r => { const v = r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct) : r.payer_mix_medicaid != null ? (Number(r.payer_mix_medicaid) <= 1 ? Number(r.payer_mix_medicaid) * 100 : Number(r.payer_mix_medicaid)) : null; return v; }
-      : col === '_private_pct' ? r => { const v = r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct) : r.payer_mix_commercial != null ? (Number(r.payer_mix_commercial) <= 1 ? Number(r.payer_mix_commercial) * 100 : Number(r.payer_mix_commercial)) : null; return v; }
-      : null;
     filtered = [...filtered].sort((a, b) => {
-      let va = _virtualGetter ? _virtualGetter(a) : a[col];
-      let vb = _virtualGetter ? _virtualGetter(b) : b[col];
+      let va = a[col], vb = b[col];
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
       if (vb == null) return -1;
@@ -988,74 +982,21 @@ function renderDiaChanges() {
   const cntHybrid = filtered.filter(r => r.modality_type === 'hybrid').length;
   const cntIC = filtered.filter(r => r.modality_type === 'in_center').length;
 
-  // Payor mix helper: normalize decimal (0-1) vs pct (0-100) formats
-  const payerPct = (row, field, fieldPct) => {
-    if (row[fieldPct] != null) return Number(row[fieldPct]);
-    if (row[field] != null) { const v = Number(row[field]); return v <= 1 ? v * 100 : v; }
-    return null;
-  };
-  const avgMedicarePct = avg(filtered, r => payerPct(r, 'payer_mix_medicare', 'payer_mix_medicare_pct'));
-  const avgMedicaidPct = avg(filtered, r => payerPct(r, 'payer_mix_medicaid', 'payer_mix_medicaid_pct'));
-  const avgPrivatePct = avg(filtered, r => payerPct(r, 'payer_mix_commercial', 'payer_mix_private_pct'));
-  const avgMargin = avg(filtered, r => r.ttm_operating_margin);
-  const avgStarRating = avg(filtered, r => r.star_rating);
-
   let html = '<div class="biz-section">';
 
   // === Action guidance banner ===
-  html += '<div style="padding:10px 14px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:12px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>CMS Clinic Data</strong> — Browse the latest CMS enrollment data with payor mix, financials, and quality ratings. <strong>Flag</strong> clinics worth researching further. Click any row for full property details. <button onclick="document.getElementById(\'cmsMethodPanel\').style.display=document.getElementById(\'cmsMethodPanel\').style.display===\'none\'?\'block\':\'none\'" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;text-decoration:underline;padding:0;margin-left:4px">Data Sources & Methodology ▾</button></div>';
+  html += '<div style="padding:10px 14px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>CMS Clinic Data</strong> — Browse the latest CMS enrollment data. <strong>Flag</strong> clinics worth researching further (flagged items appear in the Research queue). Click any row to view full property details.</div>';
   html += '</div>';
 
-  // === Methodology & Assumptions Panel (collapsible) ===
-  html += '<div id="cmsMethodPanel" style="display:none;margin-bottom:16px;border:1px solid var(--border);border-radius:10px;background:var(--s1);padding:16px 20px;font-size:12px;line-height:1.6;color:var(--text2)">';
-  html += '<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:10px">Data Sources & Methodology</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">';
-
-  // Left column — Reported Data
-  html += '<div>';
-  html += '<div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">✅ CMS-Reported Data (Direct from Source)</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Patient Counts</strong> — Reported by CMS Medicare enrollment data. Updated monthly as CMS publishes new Dialysis Facility Compare datasets. IC Patients and Home Patients are enrollment-based counts, not census.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Payor Mix (Medicare %, Medicaid %, Private/Comm %)</strong> — Directly from CMS claims data. Reflects the share of patients by primary insurance type. Percentages may not sum to 100% due to dual-eligible patients (e.g., Medicare + Medicaid) being counted in both categories.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Star Rating</strong> — CMS 5-Star Quality Rating from Dialysis Facility Compare. Composite measure of clinical outcomes (mortality, hospitalization, transfusion) and patient experience surveys. Updated by CMS quarterly.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Modality Type</strong> — CMS-designated treatment modality: In-Center (IC), Home, or Hybrid (offering both). Based on CMS certification data.</div>';
-  html += '<div><strong style="color:var(--text)">Facility Name, Location, Operator</strong> — CMS Provider Enrollment data cross-referenced with chain organization filings.</div>';
-  html += '</div>';
-
-  // Right column — Estimated Data
-  html += '<div>';
-  html += '<div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">⚙️ Estimated / Calculated Figures</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Revenue (IC Rev, Home Rev, TTM Rev)</strong> — Estimated using a blended reimbursement model: Medicare patients × ~$290/treatment × 3 treatments/week × 52 weeks, plus commercial patients at 1.4× Medicare rate, plus Medicaid at 0.85× Medicare rate. Home patients use a separate home-therapy rate (~$260/treatment). These are annualized estimates, not audited financials.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">EBITDA</strong> — Estimated by applying an operating cost per-treatment assumption (~$245 for IC, ~$220 for home) to estimated treatment counts, then subtracting from estimated revenue. Industry-standard margin benchmarks (10–18%) are used as sanity checks. Not derived from operator financial statements.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Operating Margin</strong> — Calculated as (TTM Revenue − Estimated Operating Costs) ÷ TTM Revenue × 100. Color-coded: <span style="color:#34d399;font-weight:600">green ≥ 12%</span>, <span style="color:#fbbf24;font-weight:600">yellow 0–12%</span>, <span style="color:#f87171;font-weight:600">red < 0%</span>. Based on estimated revenue and cost models, not reported margins.</div>';
-  html += '<div><strong style="color:var(--text)">Treatment Counts</strong> — Estimated from patient counts × 3 treatments/week (standard in-center protocol). Actual treatment frequency varies by patient acuity and modality. Home patients average fewer weekly treatments (~2.5/week for PD, variable for home HD).</div>';
-  html += '</div>';
-
-  html += '</div>'; // grid
-
-  // Key caveats
-  html += '<div style="margin-top:12px;padding:10px 14px;background:rgba(251,191,36,0.08);border-radius:6px;border-left:3px solid #fbbf24;font-size:11px;color:var(--text2);line-height:1.5">';
-  html += '<strong style="color:var(--text)">Important for Client Conversations:</strong> All revenue and EBITDA figures are modeling estimates based on CMS enrollment data and published reimbursement rates — they are not audited financials. Payor mix percentages and star ratings are CMS-reported. When discussing with buyers or prospects, clearly distinguish: "CMS reports X Medicare patients" vs. "We estimate Y in annual revenue based on published reimbursement rates." Actual facility financials may differ due to contract rates, case mix, ancillary services, and operational efficiency.';
-  html += '</div>';
-
-  html += '</div>'; // cmsMethodPanel
-
-  // === Dynamic average cards — Row 1: Volume & Financial ===
-  html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:8px">';
+  // === Dynamic average cards ===
+  html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px">';
   html += _cmsAvgCard('Clinics', fmtN(n) + '<div style="font-size:9px;color:var(--text3);margin-top:2px">' + cntIC + ' IC · ' + cntHybrid + ' Hyb · ' + cntHome + ' Home</div>', '#60a5fa');
   html += _cmsAvgCard('Avg In-Center Pts', avgICPts != null ? Math.round(avgICPts).toLocaleString() : '–', '#34d399');
   html += _cmsAvgCard('Avg Home Pts', avgHomePts != null ? Math.round(avgHomePts).toLocaleString() : '–', '#a78bfa');
   html += _cmsAvgCard('Avg Revenue', avgRevenue != null ? '$' + (avgRevenue / 1000000).toFixed(1) + 'M' : '–', '#fb923c');
   html += _cmsAvgCard('Avg EBITDA', avgEbitda != null ? '$' + Math.round(avgEbitda / 1000).toLocaleString() + 'K' : '–', '#f87171');
   html += _cmsAvgCard('Est Total Rev', totalEstRevenue > 0 ? '$' + (totalEstRevenue / 1000000000).toFixed(2) + 'B' : '–', '#22d3ee');
-  html += '</div>';
-  // === Row 2: Payor Mix & Quality (averages across filtered set) ===
-  html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px">';
-  html += _cmsAvgCard('Avg Medicare %', avgMedicarePct != null ? avgMedicarePct.toFixed(1) + '%' : '–', '#3b82f6');
-  html += _cmsAvgCard('Avg Medicaid %', avgMedicaidPct != null ? avgMedicaidPct.toFixed(1) + '%' : '–', '#8b5cf6');
-  html += _cmsAvgCard('Avg Private/Comm %', avgPrivatePct != null ? avgPrivatePct.toFixed(1) + '%' : '–', '#10b981');
-  html += _cmsAvgCard('Avg Oper. Margin', avgMargin != null ? avgMargin.toFixed(1) + '%' : '–', avgMargin != null && avgMargin >= 12 ? '#34d399' : avgMargin != null && avgMargin >= 0 ? '#fbbf24' : '#f87171');
-  html += _cmsAvgCard('Avg Star Rating', avgStarRating != null ? avgStarRating.toFixed(1) + ' / 5' : '–', '#fbbf24');
   html += '</div>';
 
   // === Filters row ===
@@ -1091,7 +1032,7 @@ function renderDiaChanges() {
   const totalPages = Math.ceil(filtered.length / DIA_CMS_PAGE_SIZE);
 
   html += '<div class="table-wrapper" style="overflow-x:auto">';
-  html += '<div class="data-table" style="min-width:1200px">';
+  html += '<div class="data-table" style="min-width:900px">';
 
   // Header (sortable)
   const cols = [
@@ -1102,15 +1043,10 @@ function renderDiaChanges() {
     { key: 'modality_type', label: 'Type', flex: '0.5' },
     { key: 'est_in_center_patients', label: 'IC Pts', flex: '0.5', align: 'right' },
     { key: 'est_home_patients', label: 'Home Pts', flex: '0.5', align: 'right' },
-    { key: '_medicare_pct', label: 'Mcare %', flex: '0.45', align: 'right' },
-    { key: '_medicaid_pct', label: 'Mcaid %', flex: '0.45', align: 'right' },
-    { key: '_private_pct', label: 'Priv %', flex: '0.45', align: 'right' },
     { key: 'est_in_center_revenue', label: 'IC Rev', flex: '0.6', align: 'right' },
     { key: 'est_home_revenue', label: 'Home Rev', flex: '0.6', align: 'right' },
     { key: 'estimated_annual_revenue', label: 'TTM Rev', flex: '0.6', align: 'right' },
     { key: 'estimated_ebitda', label: 'EBITDA', flex: '0.6', align: 'right' },
-    { key: 'ttm_operating_margin', label: 'Margin', flex: '0.5', align: 'right' },
-    { key: 'star_rating', label: 'Stars', flex: '0.4', align: 'center' },
     { key: '_actions', label: 'Actions', flex: '0.7', align: 'center' }
   ];
 
@@ -1143,23 +1079,10 @@ function renderDiaChanges() {
     html += `<div style="flex:0.5;font-size:11px">${modBadge}</div>`;
     html += `<div style="flex:0.5;text-align:right;font-weight:500;color:#34d399">${icPts > 0 ? fmtN(icPts) : '–'}</div>`;
     html += `<div style="flex:0.5;text-align:right;font-weight:500;color:#a78bfa">${hmPts > 0 ? fmtN(hmPts) : '–'}</div>`;
-    // Payor mix columns
-    const rMcarePct = payerPct(row, 'payer_mix_medicare', 'payer_mix_medicare_pct');
-    const rMcaidPct = payerPct(row, 'payer_mix_medicaid', 'payer_mix_medicaid_pct');
-    const rPrivPct = payerPct(row, 'payer_mix_commercial', 'payer_mix_private_pct');
-    html += `<div style="flex:0.45;text-align:right;color:#3b82f6;font-size:11px" title="CMS-reported Medicare patient %">${rMcarePct != null ? rMcarePct.toFixed(1) + '%' : '–'}</div>`;
-    html += `<div style="flex:0.45;text-align:right;color:#8b5cf6;font-size:11px" title="CMS-reported Medicaid patient %">${rMcaidPct != null ? rMcaidPct.toFixed(1) + '%' : '–'}</div>`;
-    html += `<div style="flex:0.45;text-align:right;color:#10b981;font-size:11px" title="CMS-reported Private/Commercial %">${rPrivPct != null ? rPrivPct.toFixed(1) + '%' : '–'}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${fmtRev(icRev)}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${fmtRev(hmRev)}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_annual_revenue ? '$' + (Number(row.estimated_annual_revenue) / 1000000).toFixed(1) + 'M' : '–'}</div>`;
     html += `<div style="flex:0.6;text-align:right;color:var(--text2)">${row.estimated_ebitda ? '$' + Math.round(Number(row.estimated_ebitda) / 1000).toLocaleString() + 'K' : '–'}</div>`;
-    // Operating margin & star rating
-    const rowMargin = row.ttm_operating_margin != null ? Number(row.ttm_operating_margin) : null;
-    const marginColor = rowMargin != null ? (rowMargin >= 12 ? '#34d399' : rowMargin >= 0 ? '#fbbf24' : '#f87171') : 'var(--text3)';
-    html += `<div style="flex:0.5;text-align:right;font-size:11px;color:${marginColor}" title="Estimated operating margin (TTM revenue − estimated costs)">${rowMargin != null ? rowMargin.toFixed(1) + '%' : '–'}</div>`;
-    const rowStars = row.star_rating != null ? Number(row.star_rating) : null;
-    html += `<div style="flex:0.4;text-align:center;font-size:11px" title="CMS 5-Star Quality Rating">${rowStars != null ? '<span style="color:#fbbf24">★</span> ' + rowStars.toFixed(1) : '–'}</div>`;
     html += `<div style="flex:0.7;text-align:center;display:flex;gap:3px;justify-content:center" onclick="event.stopPropagation()"><button class="cms-flag-btn" data-clinic-id="${esc(row.clinic_id || row.ccn || '')}" data-clinic-name="${esc(row.facility_name || '')}" style="font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button><button class="gov-row-action" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Ownership")' title="View owner & contacts">📞</button><button class="gov-row-action accent" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Intel")' title="Research & intel">🔍</button></div>`;
     html += '</div>';
   });
@@ -1202,19 +1125,6 @@ function renderDiaChanges() {
     html += _cv('EBITDA', sel.estimated_ebitda ? '$' + Math.round(Number(sel.estimated_ebitda) / 1000).toLocaleString() + 'K' : '—');
     html += _cv('Clinic ID', esc(String(sel.clinic_id || sel.ccn || '—')));
     html += _cv('Medicare ID', esc(String(sel.medicare_id || '—')));
-    html += '</div>';
-    // Payor mix & quality row
-    const selMcarePct = payerPct(sel, 'payer_mix_medicare', 'payer_mix_medicare_pct');
-    const selMcaidPct = payerPct(sel, 'payer_mix_medicaid', 'payer_mix_medicaid_pct');
-    const selPrivPct = payerPct(sel, 'payer_mix_commercial', 'payer_mix_private_pct');
-    const selMargin = sel.ttm_operating_margin != null ? Number(sel.ttm_operating_margin) : null;
-    const selStars = sel.star_rating != null ? Number(sel.star_rating) : null;
-    html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px;font-size:12px">';
-    html += _cv('Medicare %', selMcarePct != null ? '<span style="color:#3b82f6;font-weight:700">' + selMcarePct.toFixed(1) + '%</span> <span style="font-size:9px;color:var(--text3)">CMS reported</span>' : '—');
-    html += _cv('Medicaid %', selMcaidPct != null ? '<span style="color:#8b5cf6;font-weight:700">' + selMcaidPct.toFixed(1) + '%</span> <span style="font-size:9px;color:var(--text3)">CMS reported</span>' : '—');
-    html += _cv('Private/Comm %', selPrivPct != null ? '<span style="color:#10b981;font-weight:700">' + selPrivPct.toFixed(1) + '%</span> <span style="font-size:9px;color:var(--text3)">CMS reported</span>' : '—');
-    html += _cv('Oper. Margin', selMargin != null ? '<span style="color:' + (selMargin >= 12 ? '#34d399' : selMargin >= 0 ? '#fbbf24' : '#f87171') + ';font-weight:700">' + selMargin.toFixed(1) + '%</span> <span style="font-size:9px;color:var(--text3)">Estimated</span>' : '—');
-    html += _cv('Star Rating', selStars != null ? '<span style="color:#fbbf24">★</span> ' + selStars.toFixed(1) + ' <span style="font-size:9px;color:var(--text3)">CMS reported</span>' : '—');
     html += '</div>';
     // Quick actions
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
