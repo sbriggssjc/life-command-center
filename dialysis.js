@@ -5012,7 +5012,6 @@ async function renderDiaSales() {
     html += th('Listing Broker', 100, 'listing_broker');
     html += thr('DOM', 45, 'dom');
   }
-  html += '<th style="text-align:center;min-width:90px;position:sticky;right:0;background:var(--s2);z-index:2;border-left:1px solid var(--border)">Actions</th>';
   html += '</tr></thead>';
 
   // Body
@@ -5061,16 +5060,11 @@ async function renderDiaSales() {
       html += td(r.listing_broker, true);
       html += tdr(r.dom != null ? r.dom + 'd' : '—');
     }
-    html += '<td style="text-align:center;position:sticky;right:0;background:var(--s1);z-index:1;border-left:1px solid var(--border);padding:4px" onclick="event.stopPropagation()">';
-    html += '<div style="display:flex;gap:3px;justify-content:center">';
-    html += '<button class="gov-row-action" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button>';
-    html += '<button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button>';
-    html += '</div></td>';
     html += '</tr>';
   });
 
   if (pageRows.length === 0) {
-    const colSpan = isComps ? 24 : 20;
+    const colSpan = isComps ? 23 : 19;
     html += '<tr><td colspan="' + colSpan + '" style="text-align: center; padding: 32px; color: var(--text3);">No ' + (isComps ? 'sales comps' : 'available listings') + ' to display</td></tr>';
   }
   html += '</tbody></table></div>';
