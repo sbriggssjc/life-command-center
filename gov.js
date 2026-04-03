@@ -6094,8 +6094,32 @@ function buildGovLoansHTML() {
 
   html += '</div>';
 
+  // CMBS Deal/Trust Breakdown (uses index_name populated by Prompt 2 backfill)
+  const dealMap = {};
+  for (const l of loans) {
+    const deal = l.index_name || 'Unidentified';
+    if (!dealMap[deal]) dealMap[deal] = { count: 0, volume: 0 };
+    dealMap[deal].count++;
+    dealMap[deal].volume += (parseFloat(l.loan_amount) || 0);
+  }
+  const topDeals = Object.entries(dealMap).sort((a, b) => b[1].volume - a[1].volume).slice(0, 15);
+  const hasRealDealData = topDeals.some(([name]) => name !== 'Unidentified');
+
+  if (hasRealDealData && topDeals.length > 0) {
+    html += '<div class="widget" style="margin-bottom:16px">';
+    html += '<div class="widget-title">CMBS Deal Breakdown</div>';
+    html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
+    html += '<th>Deal / Trust</th><th style="text-align:right">Loans</th><th style="text-align:right">Volume</th><th style="text-align:right">Avg Loan</th>';
+    html += '</tr></thead><tbody>';
+    for (const [name, data] of topDeals) {
+      const avg = data.count > 0 ? data.volume / data.count : 0;
+      html += '<tr><td>' + esc(name) + '</td><td style="text-align:right">' + fmtN(data.count) + '</td><td style="text-align:right">' + fmt(data.volume) + '</td><td style="text-align:right">' + fmt(avg) + '</td></tr>';
+    }
+    html += '</tbody></table></div></div>';
+  }
+
   // Loan Type Breakdown
-  if (Object.keys(typeMap).length > 0) {
+  if (Object.keys(typeMap).length > 1) {
     html += '<div class="widget" style="margin-bottom:16px">';
     html += '<div class="widget-title">By Loan Type</div>';
     html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
@@ -6123,7 +6147,7 @@ function buildGovLoansHTML() {
     html += '<div class="widget">';
     html += '<div class="widget-title">' + maturityLabel + ' <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + maturityLoans.length + ' loans)</span></div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Property</th><th>City</th><th>State</th><th>Type</th><th style="text-align:right">Amount</th><th>Maturity</th><th>Status</th>';
+    html += '<th>Property</th><th>City</th><th>State</th><th>CMBS Deal</th><th style="text-align:right">Amount</th><th>Maturity</th><th>Status</th>';
     html += '</tr></thead><tbody>';
     for (const l of maturityLoans.slice(0, 75)) {
       const prop = propMap[l.property_id] || {};
@@ -6136,7 +6160,7 @@ function buildGovLoansHTML() {
       html += '<td style="font-weight:500">' + esc(prop.address || '—') + '</td>';
       html += '<td>' + esc(prop.city || '—') + '</td>';
       html += '<td>' + esc(prop.state || '—') + '</td>';
-      html += '<td>' + esc(l.loan_type || '—') + '</td>';
+      html += '<td style="font-size:12px;color:var(--text2)">' + esc(l.index_name || l.loan_type || '—') + '</td>';
       html += '<td style="text-align:right;font-weight:600">' + (l.loan_amount ? fmt(parseFloat(l.loan_amount)) : '—') + '</td>';
       html += '<td style="color:' + matColor + ';font-weight:600">' + mat + (isPastDue ? ' (past due)' : '') + '</td>';
       html += '<td>' + esc(l.status || '—') + '</td>';
