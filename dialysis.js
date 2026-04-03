@@ -2662,8 +2662,8 @@ function renderDiaResearch() {
   setTimeout(() => {
     bindLiveIngestWorkbench('dialysis');
     document.querySelectorAll('[data-mode]').forEach(btn => {
-      btn.addEventListener('click', e => {
-        diaResearchMode = e.target.dataset.mode;
+      btn.addEventListener('click', () => {
+        diaResearchMode = btn.dataset.mode;
         diaResearchIdx = 0;
         renderDiaTab();
       });
