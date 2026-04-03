@@ -1350,10 +1350,7 @@ async function loadMarketing() {
           console.debug('[RCM Backfill] Nothing to backfill', d);
         }
       })
-      .catch(function(e) {
-        console.warn('[RCM Backfill] Skipped:', e.message);
-        showToast('RCM backfill skipped: ' + e.message, 'warning');
-      });
+      .catch(function(e) { console.warn('[RCM Backfill] Skipped:', e.message); });
   }
 
   // If called just for domain prospects (not Marketing tab), only load opportunities

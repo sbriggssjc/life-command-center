@@ -1,0 +1,1568 @@
+import { inflateRawSync, inflateSync } from 'node:zlib';
+
+function decodeHtmlEntities(text = '') {
+  return String(text)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)));
+}
+
+function collapseWhitespace(text = '') {
+  return String(text)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function stripHtml(html = '') {
+  return collapseWhitespace(
+    decodeHtmlEntities(
+      String(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+    )
+  );
+}
+
+function extractRtfText(rtf = '') {
+  return collapseWhitespace(
+    decodeHtmlEntities(
+      String(rtf || '')
+        .replace(/\\par[d]?/gi, '\n')
+        .replace(/\\tab/gi, '\t')
+        .replace(/\\'[0-9a-f]{2}/gi, (match) => String.fromCharCode(parseInt(match.slice(2), 16)))
+        .replace(/\\u(-?\d+)\??/g, (_, code) => {
+          const value = Number.parseInt(code, 10);
+          if (!Number.isFinite(value)) return ' ';
+          return String.fromCharCode(value < 0 ? value + 65536 : value);
+        })
+        .replace(/\\[a-z]+-?\d* ?/gi, ' ')
+        .replace(/[{}]/g, ' ')
+    )
+  );
+}
+
+function extractIcsText(ics = '') {
+  const unfolded = String(ics || '').replace(/\r?\n[ \t]/g, '');
+  const lines = unfolded.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const events = [];
+  let current = null;
+  lines.forEach((line) => {
+    if (line === 'BEGIN:VEVENT') {
+      current = {};
+      return;
+    }
+    if (line === 'END:VEVENT') {
+      if (current) events.push(current);
+      current = null;
+      return;
+    }
+    if (!current) return;
+    const idx = line.indexOf(':');
+    if (idx === -1) return;
+    const rawKey = line.slice(0, idx);
+    const value = decodeHtmlEntities(line.slice(idx + 1).replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';'));
+    const key = rawKey.split(';')[0].toUpperCase();
+    if (!value) return;
+    current[key] = collapseWhitespace(value);
+  });
+  const summaries = events.slice(0, 6).map((event) => {
+    const parts = [
+      event.SUMMARY,
+      event.DTSTART ? `Start: ${event.DTSTART}` : '',
+      event.DTEND ? `End: ${event.DTEND}` : '',
+      event.LOCATION ? `Location: ${event.LOCATION}` : '',
+      event.DESCRIPTION ? `Description: ${event.DESCRIPTION}` : ''
+    ].filter(Boolean);
+    return parts.join('\n');
+  }).filter(Boolean);
+  return collapseWhitespace(summaries.join('\n\n'));
+}
+
+function extractVcardText(vcard = '') {
+  const unfolded = String(vcard || '').replace(/\r?\n[ \t]/g, '');
+  const lines = unfolded.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const cards = [];
+  let current = null;
+  lines.forEach((line) => {
+    if (/^BEGIN:VCARD$/i.test(line)) {
+      current = {};
+      return;
+    }
+    if (/^END:VCARD$/i.test(line)) {
+      if (current) cards.push(current);
+      current = null;
+      return;
+    }
+    if (!current) return;
+    const idx = line.indexOf(':');
+    if (idx === -1) return;
+    const rawKey = line.slice(0, idx);
+    const value = decodeHtmlEntities(line.slice(idx + 1).replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';'));
+    const key = rawKey.split(';')[0].toUpperCase();
+    if (!value) return;
+    current[key] = collapseWhitespace(value);
+  });
+  const summaries = cards.slice(0, 6).map((card) => {
+    const parts = [
+      card.FN || card.N,
+      card.ORG ? `Org: ${card.ORG}` : '',
+      card.TITLE ? `Title: ${card.TITLE}` : '',
+      card.EMAIL ? `Email: ${card.EMAIL}` : '',
+      card.TEL ? `Phone: ${card.TEL}` : ''
+    ].filter(Boolean);
+    return parts.join('\n');
+  }).filter(Boolean);
+  return collapseWhitespace(summaries.join('\n\n'));
+}
+
+function decodeQuotedPrintable(text = '') {
+  return String(text)
+    .replace(/=\r?\n/g, '')
+    .replace(/=([A-Fa-f0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+function decodeTransferEncodingToBuffer(body = '', encoding = '') {
+  const raw = String(body || '');
+  const mode = String(encoding || '').toLowerCase().trim();
+  if (mode === 'base64') {
+    try {
+      return Buffer.from(raw.replace(/\s+/g, ''), 'base64');
+    } catch {
+      return Buffer.from(raw, 'utf8');
+    }
+  }
+  if (mode === 'quoted-printable') {
+    return Buffer.from(decodeQuotedPrintable(raw), 'utf8');
+  }
+  return Buffer.from(raw, 'utf8');
+}
+
+function decodeTransferEncoding(body = '', encoding = '') {
+  return decodeTransferEncodingToBuffer(body, encoding).toString('utf8');
+}
+
+function parseHeaders(headerText = '') {
+  const lines = String(headerText).split(/\r?\n/);
+  const headers = {};
+  let currentKey = null;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (/^\s/.test(line) && currentKey) {
+      headers[currentKey] = `${headers[currentKey]} ${line.trim()}`.trim();
+      continue;
+    }
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    currentKey = line.slice(0, idx).trim().toLowerCase();
+    headers[currentKey] = line.slice(idx + 1).trim();
+  }
+  return headers;
+}
+
+function splitMultipartBody(body = '', boundary = '') {
+  const marker = `--${boundary}`;
+  return String(body)
+    .split(marker)
+    .map((part) => part.replace(/^--\s*$/, '').trim())
+    .filter((part) => part && part !== '--');
+}
+
+function parseContentTypeParts(contentType = '') {
+  const [typePart, ...rest] = String(contentType || '').split(';');
+  const params = {};
+  rest.forEach((part) => {
+    const idx = part.indexOf('=');
+    if (idx === -1) return;
+    const key = part.slice(0, idx).trim().toLowerCase();
+    const value = part.slice(idx + 1).trim().replace(/^"|"$/g, '');
+    params[key] = value;
+  });
+  return {
+    mime: typePart.trim().toLowerCase(),
+    params
+  };
+}
+
+function parseMimePart(part = '') {
+  const match = String(part).match(/\r?\n\r?\n/);
+  if (!match) return null;
+  const headerText = part.slice(0, match.index);
+  const bodyText = part.slice(match.index + match[0].length);
+  const headers = parseHeaders(headerText);
+  const contentType = parseContentTypeParts(headers['content-type'] || 'text/plain');
+  const disposition = parseContentTypeParts(headers['content-disposition'] || '');
+  const bodyBuffer = decodeTransferEncodingToBuffer(bodyText, headers['content-transfer-encoding'] || '');
+  return {
+    headers,
+    contentType,
+    disposition,
+    body: bodyBuffer.toString('utf8'),
+    body_buffer: bodyBuffer
+  };
+}
+
+function isAttachmentPart(part) {
+  if (!part) return false;
+  const disposition = String(part.disposition?.mime || '').toLowerCase();
+  return disposition === 'attachment'
+    || !!part.disposition?.params?.filename
+    || !!part.contentType?.params?.name;
+}
+
+function getAttachmentFilename(part) {
+  return part?.disposition?.params?.filename
+    || part?.contentType?.params?.name
+    || part?.headers?.['x-attachment-id']
+    || 'unnamed attachment';
+}
+
+function isTextLikeMime(mime = '') {
+  const value = String(mime || '').toLowerCase();
+  return value.startsWith('text/')
+    || [
+      'application/msword',
+      'application/json',
+      'application/vnd.ms-excel',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/xml',
+      'application/xhtml+xml',
+      'message/rfc822'
+    ].includes(value);
+}
+
+function isImageMime(mime = '') {
+  return ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'].includes(String(mime || '').toLowerCase());
+}
+
+function normalizeMimeTextPart(part) {
+  if (!part) return '';
+  if (part.contentType.mime === 'text/html') return stripHtml(part.body);
+  if (part.contentType.mime === 'text/plain') return collapseWhitespace(part.body);
+  if (part.contentType.mime === 'text/csv') return collapseWhitespace(part.body);
+  if (part.contentType.mime === 'application/json' || part.contentType.mime === 'application/xml' || part.contentType.mime === 'application/xhtml+xml') {
+    return collapseWhitespace(part.body);
+  }
+  if (part.contentType.mime === 'message/rfc822') {
+    return normalizeEmailText(part.body).normalized_text;
+  }
+  return '';
+}
+
+function summarizeAttachmentPart(part) {
+  const filename = getAttachmentFilename(part);
+  return `${filename} (${part.contentType.mime || 'application/octet-stream'})`;
+}
+
+function findZipCentralDirectoryOffset(buffer) {
+  for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 65557); offset--) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+function extractZipEntries(buffer, wantedNames = []) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 22) return new Map();
+  const wanted = new Set((Array.isArray(wantedNames) ? wantedNames : []).map((name) => String(name || '')));
+  const entries = new Map();
+  const eocdOffset = findZipCentralDirectoryOffset(buffer);
+  if (eocdOffset === -1) return entries;
+  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
+  const directoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+  let offset = directoryOffset;
+  for (let index = 0; index < entryCount && offset + 46 <= buffer.length; index++) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) break;
+    const compression = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.slice(offset + 46, offset + 46 + fileNameLength).toString('utf8');
+    offset += 46 + fileNameLength + extraLength + commentLength;
+    if (wanted.size && !wanted.has(fileName)) continue;
+    if (localHeaderOffset + 30 > buffer.length || buffer.readUInt32LE(localHeaderOffset) !== 0x04034b50) continue;
+    const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+    const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataOffset + compressedSize;
+    if (dataOffset > buffer.length || dataEnd > buffer.length) continue;
+    const data = buffer.slice(dataOffset, dataEnd);
+    try {
+      const content = compression === 8 ? inflateRawSync(data) : compression === 0 ? data : null;
+      if (content) entries.set(fileName, content);
+    } catch {
+      // Skip unreadable entries and continue with the rest.
+    }
+  }
+  return entries;
+}
+
+function extractDocxRevisionMetaFromAttrs(attrsText = '') {
+  const author = String(attrsText.match(/(?:w:author|author)="([^"]+)"/)?.[1] || '').trim();
+  const date = String(attrsText.match(/(?:w:date|date)="([^"]+)"/)?.[1] || '').trim();
+  const bits = [];
+  if (author) bits.push(`by ${author}`);
+  if (date) bits.push(`on ${date}`);
+  return bits.length ? ` ${bits.join(' ')}` : '';
+}
+
+function extractDocxFragmentText(fragmentXml = '', commentsMap = {}, revisionContext = '', depth = 0) {
+  if (!fragmentXml || depth > 6) return '';
+  const commentIds = Array.from(String(fragmentXml || '').matchAll(/<w:commentReference\b[^>]*?(?:w:id|id)="([^"]+)"[^>]*\/>/g))
+    .map((match) => String(match[1] || '').trim())
+    .filter(Boolean);
+  const revised = String(fragmentXml || '').replace(/<w:(ins|del)\b([^>]*)>([\s\S]*?)<\/w:\1>/g, (_, type, attrs, inner) => {
+    const innerText = extractDocxFragmentText(inner, commentsMap, type, depth + 1);
+    if (!innerText) return ' ';
+    const label = type === 'ins' ? 'Inserted' : 'Deleted';
+    return ` [${label}${extractDocxRevisionMetaFromAttrs(attrs)}: ${innerText}] `;
+  });
+  const text = decodeHtmlEntities(
+    revised
+      .replace(/<w:delText\b[^>]*>([\s\S]*?)<\/w:delText>/g, (_, value) => revisionContext === 'del' ? ` ${value} ` : ` [Deleted: ${value}] `)
+      .replace(/<w:(?:tab)\b[^>]*\/>/g, '\t')
+      .replace(/<w:(?:br|cr)\b[^>]*\/>/g, '\n')
+      .replace(/<\/w:(?:p|tr|tc)>/g, '\n')
+      .replace(/<[^>]+>/g, '')
+  );
+  const comments = Array.from(new Set(commentIds))
+    .map((id) => commentsMap[id])
+    .filter(Boolean)
+    .map((value) => `[Comment: ${value}]`);
+  return collapseWhitespace([text, ...comments].filter(Boolean).join(' '));
+}
+
+function extractDocxParagraphTextFromXml(paragraphXml = '', commentsMap = {}) {
+  return extractDocxFragmentText(paragraphXml, commentsMap);
+}
+
+function buildDocxCommentsMapFromXml(xmlText = '') {
+  const map = {};
+  for (const match of String(xmlText || '').matchAll(/<w:comment\b[\s\S]*?(?:w:id|id)="([^"]+)"[\s\S]*?>([\s\S]*?)<\/w:comment>/g)) {
+    const id = String(match[1] || '').trim();
+    const body = String(match[2] || '');
+    if (!id) continue;
+    const paragraphs = Array.from(body.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
+      .map((paragraph) => extractDocxParagraphTextFromXml(paragraph[0], {}))
+      .filter(Boolean);
+    map[id] = paragraphs.join(' ').trim();
+  }
+  return map;
+}
+
+function extractDocxNotesFromXml(xmlText = '', label = 'Notes') {
+  const notes = Array.from(String(xmlText || '').matchAll(/<w:(?:footnote|endnote)\b[\s\S]*?(?:w:id|id)="([^"]+)"[\s\S]*?>([\s\S]*?)<\/w:(?:footnote|endnote)>/g))
+    .filter((match) => !['-1', '0'].includes(String(match[1] || '').trim()))
+    .map((match) => {
+      const paragraphs = Array.from(String(match[2] || '').matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
+        .map((paragraph) => extractDocxParagraphTextFromXml(paragraph[0], {}))
+        .filter(Boolean);
+      return paragraphs.join(' ').trim();
+    })
+    .filter(Boolean);
+  return notes.length ? `${label}:\n${notes.join('\n')}` : '';
+}
+
+function extractDocxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'word/document.xml',
+    'word/comments.xml',
+    'word/footnotes.xml',
+    'word/endnotes.xml'
+  ]);
+  const documentXml = entries.get('word/document.xml')?.toString('utf8') || '';
+  if (!documentXml) return '';
+  const commentsMap = buildDocxCommentsMapFromXml(entries.get('word/comments.xml')?.toString('utf8') || '');
+  const paragraphs = Array.from(documentXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g))
+    .map((paragraph) => extractDocxParagraphTextFromXml(paragraph[0], commentsMap))
+    .filter(Boolean);
+  const footnotes = extractDocxNotesFromXml(entries.get('word/footnotes.xml')?.toString('utf8') || '', 'Footnotes');
+  const endnotes = extractDocxNotesFromXml(entries.get('word/endnotes.xml')?.toString('utf8') || '', 'Endnotes');
+  return [paragraphs.join('\n'), footnotes, endnotes].filter(Boolean).join('\n\n').trim();
+}
+
+function isDocxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    || filename.endsWith('.docx');
+}
+
+function extractLegacyOfficeStringsFromBuffer(buffer, label = 'office') {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const ascii = extractLegacyOfficeLinesFromText(
+    buffer
+      .toString('latin1')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/g, ' '),
+    label
+  );
+  let utf16Text = '';
+  let current = '';
+  for (let index = 0; index + 1 < buffer.length; index += 2) {
+    const code = buffer.readUInt16LE(index);
+    if (code === 9) {
+      current += '\t';
+      continue;
+    }
+    if (code === 10 || code === 13) {
+      if (current.trim()) utf16Text += `${current}\n`;
+      current = '';
+      continue;
+    }
+    if (code >= 32 && code <= 126) {
+      current += String.fromCharCode(code);
+      continue;
+    }
+    if (current.trim()) utf16Text += `${current}\n`;
+    current = '';
+  }
+  if (current.trim()) utf16Text += current;
+  const utf16Lines = extractLegacyOfficeLinesFromText(utf16Text, label);
+  const merged = Array.from(new Set([...ascii, ...utf16Lines]))
+    .filter((line) => isUsefulLegacyOfficeLine(line, label))
+    .slice(0, 120);
+  if (!merged.length) return '';
+  const header = label === 'xls'
+    ? 'Legacy Excel text preview'
+    : label === 'ppt'
+      ? 'Legacy PowerPoint text preview'
+      : 'Legacy Word text preview';
+  return `${header}\n${merged.join('\n')}`.trim();
+}
+
+function extractLegacyOfficeLinesFromText(text = '', label = 'office') {
+  return Array.from(new Set(
+    String(text || '')
+      .split(/\r?\n+/)
+      .map((line) => normalizeLegacyOfficePreviewLine(line, label))
+      .filter((line) => isUsefulLegacyOfficeLine(line, label))
+  ));
+}
+
+function normalizeLegacyOfficePreviewLine(line = '', label = 'office') {
+  const raw = String(line || '')
+    .replace(/[^\S\r\n\t]+/g, ' ')
+    .replace(/ ?\t ?/g, '\t')
+    .trim();
+  if (label === 'xls') {
+    return raw
+      .split('\t')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join('\t');
+  }
+  return collapseWhitespace(raw);
+}
+
+function isUsefulLegacyOfficeLine(line = '', label = 'office') {
+  const value = String(line || '').trim();
+  if (value.length < 4) return false;
+  if (!/[A-Za-z]{3,}/.test(value)) return false;
+  if (/^[A-Z0-9_\/\\.-]{12,}$/.test(value)) return false;
+  if (/^(root entry|objectpool|compobj|summaryinformation|documentsummaryinformation)$/i.test(value)) return false;
+  if (label === 'xls') {
+    return value.includes('\t') || /[A-Za-z]{3,}.*\d{2,}/.test(value) || /\d{2,}.*[A-Za-z]{3,}/.test(value);
+  }
+  return true;
+}
+
+function isLegacyDocPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/msword'
+    || filename.endsWith('.doc');
+}
+
+function extractXlsxSharedStringsFromXml(xmlText = '') {
+  return Array.from(String(xmlText || '').matchAll(/<si\b[\s\S]*?>([\s\S]*?)<\/si>/g))
+    .map((match) => decodeHtmlEntities((match[1] || '').replace(/<[^>]+>/g, '')))
+    .map((value) => collapseWhitespace(value))
+    .filter(Boolean);
+}
+
+function extractXlsxRelationshipMap(xmlText = '') {
+  const map = new Map();
+  for (const match of String(xmlText || '').matchAll(/<Relationship\b[\s\S]*?\bId="([^"]+)"[\s\S]*?\bTarget="([^"]+)"[\s\S]*?\/>/g)) {
+    const id = String(match[1] || '').trim();
+    const target = String(match[2] || '').trim().replace(/^\/+/, '');
+    if (!id || !target) continue;
+    map.set(id, target.startsWith('xl/') ? target : `xl/${target.replace(/^(\.\.\/)+/, '')}`);
+  }
+  return map;
+}
+
+function extractXlsxSheetRowsFromXml(xmlText = '', sharedStrings = []) {
+  return Array.from(String(xmlText || '').matchAll(/<row\b[\s\S]*?>([\s\S]*?)<\/row>/g))
+    .map((rowMatch) => {
+      const rowXml = String(rowMatch[1] || '');
+      const cells = Array.from(rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)).map((cellMatch) => {
+        const attrs = String(cellMatch[1] || '');
+        const cellXml = String(cellMatch[2] || '');
+        const type = attrs.match(/\bt="([^"]+)"/)?.[1] || '';
+        if (type === 'inlineStr') {
+          return collapseWhitespace(decodeHtmlEntities(cellXml.replace(/<[^>]+>/g, '')));
+        }
+        const rawValue = cellXml.match(/<v\b[^>]*>([\s\S]*?)<\/v>/)?.[1] || '';
+        if (type === 's') {
+          const idx = parseInt(rawValue, 10);
+          return Number.isNaN(idx) ? '' : (sharedStrings[idx] || '');
+        }
+        return collapseWhitespace(decodeHtmlEntities(rawValue));
+      }).filter(Boolean);
+      return cells.join('\t').trim();
+    })
+    .filter(Boolean);
+}
+
+function extractXlsxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    'xl/sharedStrings.xml'
+  ]);
+  if (!entries.get('xl/workbook.xml')) return '';
+  const workbookXml = entries.get('xl/workbook.xml')?.toString('utf8') || '';
+  const relMap = extractXlsxRelationshipMap(entries.get('xl/_rels/workbook.xml.rels')?.toString('utf8') || '');
+  const sharedStrings = extractXlsxSharedStringsFromXml(entries.get('xl/sharedStrings.xml')?.toString('utf8') || '');
+  const sheets = Array.from(workbookXml.matchAll(/<sheet\b[\s\S]*?\bname="([^"]+)"[\s\S]*?\br:id="([^"]+)"[\s\S]*?\/>/g))
+    .map((match, index) => ({
+      name: String(match[1] || '').trim() || `Sheet ${index + 1}`,
+      path: relMap.get(String(match[2] || '').trim()) || `xl/worksheets/sheet${index + 1}.xml`
+    }));
+  const wantedSheetPaths = sheets.map((sheet) => sheet.path).slice(0, 6);
+  const sheetEntries = extractZipEntries(buffer, wantedSheetPaths);
+  const outputs = sheets.slice(0, 6).map((sheet) => {
+    const rows = extractXlsxSheetRowsFromXml(sheetEntries.get(sheet.path)?.toString('utf8') || '', sharedStrings);
+    return rows.length ? `${sheet.name}\n${rows.join('\n')}` : '';
+  }).filter(Boolean);
+  return outputs.join('\n\n').trim();
+}
+
+function isXlsxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    || filename.endsWith('.xlsx');
+}
+
+function isLegacyXlsPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.ms-excel'
+    || filename.endsWith('.xls');
+}
+
+function isLegacyPptPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.ms-powerpoint'
+    || filename.endsWith('.ppt');
+}
+
+function extractPptxRelationshipMap(xmlText = '', basePrefix = 'ppt/') {
+  const map = new Map();
+  for (const match of String(xmlText || '').matchAll(/<Relationship\b[\s\S]*?\bId="([^"]+)"[\s\S]*?\bTarget="([^"]+)"[\s\S]*?\/>/g)) {
+    const id = String(match[1] || '').trim();
+    const target = String(match[2] || '').trim().replace(/^\/+/, '');
+    if (!id || !target) continue;
+    map.set(id, target.startsWith(basePrefix) ? target : `${basePrefix}${target.replace(/^(\.\.\/)+/, '')}`);
+  }
+  return map;
+}
+
+function extractPptxTextFromXml(xmlText = '') {
+  return Array.from(String(xmlText || '').matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g))
+    .map((match) => decodeHtmlEntities(match[1] || ''))
+    .map((value) => collapseWhitespace(value))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function extractPptxTextFromBuffer(buffer) {
+  const entries = extractZipEntries(buffer, [
+    'ppt/presentation.xml',
+    'ppt/_rels/presentation.xml.rels'
+  ]);
+  if (!entries.get('ppt/presentation.xml')) return '';
+  const presentationXml = entries.get('ppt/presentation.xml')?.toString('utf8') || '';
+  const relMap = extractPptxRelationshipMap(entries.get('ppt/_rels/presentation.xml.rels')?.toString('utf8') || '');
+  const slides = Array.from(presentationXml.matchAll(/<p:sldId\b[\s\S]*?\br:id="([^"]+)"[\s\S]*?\/>/g))
+    .map((match, index) => ({
+      name: `Slide ${index + 1}`,
+      path: relMap.get(String(match[1] || '').trim()) || `ppt/slides/slide${index + 1}.xml`,
+      notesPath: `ppt/notesSlides/notesSlide${index + 1}.xml`
+    }));
+  const wantedPaths = slides.slice(0, 10).flatMap((slide) => [slide.path, slide.notesPath]);
+  const slideEntries = extractZipEntries(buffer, wantedPaths);
+  const outputs = slides.slice(0, 10).map((slide) => {
+    const slideText = extractPptxTextFromXml(slideEntries.get(slide.path)?.toString('utf8') || '');
+    const notesText = extractPptxTextFromXml(slideEntries.get(slide.notesPath)?.toString('utf8') || '');
+    const combined = [
+      slideText ? `${slide.name}\n${slideText}` : '',
+      notesText ? `Notes\n${notesText}` : ''
+    ].filter(Boolean).join('\n');
+    return combined.trim();
+  }).filter(Boolean);
+  return outputs.join('\n\n').trim();
+}
+
+function isPptxPart(part) {
+  const mime = String(part?.contentType?.mime || '').toLowerCase();
+  const filename = getAttachmentFilename(part).toLowerCase();
+  return mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    || filename.endsWith('.pptx');
+}
+
+function extractPdfTextPreviewFromBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const latin = buffer.toString('latin1');
+  const operatorText = dedupePdfPreviewLines([
+    ...extractPdfMetadataLines(latin),
+    ...extractPdfOperatorTextLines(latin),
+    ...extractCompressedPdfOperatorTextLines(latin)
+  ]).join('\n').trim();
+  if (operatorText) return operatorText.slice(0, 4000);
+  const asciiRuns = latin.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_-]{20,}/g) || [];
+  const filtered = dedupePdfPreviewLines(asciiRuns
+    .map((text) => collapseWhitespace(text))
+    .filter((text) => /[A-Za-z]{4,}/.test(text))
+    .filter((text) => !/^endobj|stream|endstream|xref|trailer/i.test(text)));
+  return collapseWhitespace(filtered.join('\n')).slice(0, 4000);
+}
+
+function extractPdfOperatorText(latin = '') {
+  return extractPdfOperatorTextLines(latin).join('\n').trim();
+}
+
+function extractPdfMetadataLines(latin = '') {
+  const lines = [];
+  const text = String(latin || '');
+  const keys = ['Title', 'Subject', 'Author', 'Keywords', 'Creator', 'Producer'];
+  keys.forEach((key) => {
+    Array.from(text.matchAll(new RegExp(`/${key}\\s*\\(([^)]*)\\)`, 'g'))).forEach((match) => {
+      const value = collapseWhitespace(decodePdfLiteralString(match[1] || ''));
+      if (value) lines.push(`${key}: ${value}`);
+    });
+    Array.from(text.matchAll(new RegExp(`/${key}\\s*<([^>]+)>`, 'g'))).forEach((match) => {
+      const value = collapseWhitespace(decodePdfHexString(match[1] || ''));
+      if (value) lines.push(`${key}: ${value}`);
+    });
+  });
+  Array.from(text.matchAll(/<(?:dc:title|dc:description|pdf:Keywords)[^>]*>([\s\S]*?)<\/(?:dc:title|dc:description|pdf:Keywords)>/gi))
+    .forEach((match) => {
+      const xml = String(match[1] || '');
+      const value = collapseWhitespace(stripHtml(xml));
+      if (value) lines.push(value);
+    });
+  extractPdfEmbeddedFileLines(text).forEach((line) => lines.push(line));
+  extractPdfEmbeddedPayloadLines(text).forEach((line) => lines.push(line));
+  extractPdfAnnotationLines(text).forEach((line) => lines.push(line));
+  return dedupePdfPreviewLines(lines);
+}
+
+function extractPdfEmbeddedFileLines(latin = '') {
+  const text = String(latin || '');
+  const outputs = [];
+  const objectMatches = Array.from(text.matchAll(/<<[\s\S]*?\/Type\s*\/Filespec[\s\S]*?>>/g));
+  objectMatches.forEach((match) => {
+    const objectText = String(match[0] || '');
+    const entries = [
+      { label: 'Embedded File', key: 'UF' },
+      { label: 'Embedded File', key: 'F' },
+      { label: 'Embedded Description', key: 'Desc' }
+    ];
+    entries.forEach(({ label, key }) => {
+      const literalMatch = objectText.match(new RegExp(`/${key}\\s*\\(([^)]*)\\)`));
+      const hexMatch = objectText.match(new RegExp(`/${key}\\s*<([^>]+)>`));
+      const value = collapseWhitespace(literalMatch
+        ? decodePdfLiteralString(literalMatch[1] || '')
+        : decodePdfHexString(hexMatch?.[1] || ''));
+      if (value) outputs.push(`${label}: ${value}`);
+    });
+  });
+  return outputs;
+}
+
+function extractPdfEmbeddedPayloadLines(latin = '') {
+  const text = String(latin || '');
+  const outputs = [];
+  const streamMatches = Array.from(text.matchAll(/(<<[\s\S]*?\/Type\s*\/EmbeddedFile[\s\S]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  streamMatches.forEach((match) => {
+    const dict = String(match[1] || '');
+    const raw = Buffer.from(String(match[2] || ''), 'latin1');
+    const filters = extractPdfStreamFilters(dict);
+    const decoded = filters.length
+      ? decodePdfStreamByFilters(raw, filters, extractPdfDecodeParams(dict, filters.length))
+      : raw;
+    if (!decoded || !Buffer.isBuffer(decoded) || !decoded.length) return;
+    const payloadLines = extractPdfEmbeddedPayloadPreview(decoded, dict).split(/\r?\n/).map((line) => collapseWhitespace(line)).filter(Boolean).slice(0, 6);
+    payloadLines.forEach((line) => {
+      outputs.push(`Embedded Payload: ${line}`);
+    });
+  });
+  return outputs;
+}
+
+function extractPdfEmbeddedImagesFromBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return [];
+  const text = buffer.toString('latin1');
+  const streamMatches = Array.from(text.matchAll(/(<<[\s\S]*?\/Type\s*\/EmbeddedFile[\s\S]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  const outputs = [];
+  streamMatches.forEach((match, index) => {
+    const dict = String(match[1] || '');
+    const subtype = extractPdfEmbeddedSubtype(dict);
+    if (!isImageMime(subtype)) return;
+    const raw = Buffer.from(String(match[2] || ''), 'latin1');
+    const filters = extractPdfStreamFilters(dict);
+    const decoded = filters.length
+      ? decodePdfStreamByFilters(raw, filters, extractPdfDecodeParams(dict, filters.length))
+      : raw;
+    if (!decoded || !Buffer.isBuffer(decoded) || !decoded.length) return;
+    outputs.push({
+      kind: 'image',
+      name: `pdf-embedded-image-${index + 1}.${subtype.split('/')[1] || 'bin'}`,
+      mime_type: subtype,
+      data_url: `data:${subtype};base64,${decoded.toString('base64')}`
+    });
+  });
+  return outputs.slice(0, 3);
+}
+
+function extractPdfEmbeddedPayloadPreview(buffer, dict = '') {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const subtype = extractPdfEmbeddedSubtype(dict);
+  if (subtype === 'message/rfc822') return normalizeEmailText(buffer.toString('utf8')).normalized_text.slice(0, 4000);
+  if (isLegacyDocLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'doc').slice(0, 4000);
+  if (isLegacyXlsLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'xls').slice(0, 4000);
+  if (isLegacyPptLikeBuffer(buffer, subtype)) return extractLegacyOfficeStringsFromBuffer(buffer, 'ppt').slice(0, 4000);
+  if (isDocxLikeBuffer(buffer)) return extractDocxTextFromBuffer(buffer).slice(0, 4000);
+  if (isXlsxLikeBuffer(buffer)) return extractXlsxTextFromBuffer(buffer).slice(0, 4000);
+  if (isPptxLikeBuffer(buffer)) return extractPptxTextFromBuffer(buffer).slice(0, 4000);
+  if (isZipLikeBuffer(buffer, subtype)) return extractGenericZipTextPreview(buffer).slice(0, 4000);
+  if (isRtfLikeBuffer(buffer, subtype)) return extractRtfText(buffer.toString('utf8')).slice(0, 4000);
+  if (isIcsLikeBuffer(buffer, subtype)) return extractIcsText(buffer.toString('utf8')).slice(0, 4000);
+  if (isVcardLikeBuffer(buffer, subtype)) return extractVcardText(buffer.toString('utf8')).slice(0, 4000);
+  if (isDelimitedTextLikeBuffer(buffer, subtype)) return extractDelimitedText(buffer.toString('utf8')).slice(0, 4000);
+  if (isYamlLikeBuffer(buffer, subtype)) return extractYamlText(buffer.toString('utf8')).slice(0, 4000);
+  if (isXmlLikeBuffer(buffer, subtype)) return extractXmlText(buffer.toString('utf8')).slice(0, 4000);
+  if (subtype === 'text/html') return stripHtml(buffer.toString('utf8')).slice(0, 4000);
+  if (subtype === 'application/json' || subtype === 'text/csv' || subtype === 'text/plain' || subtype.startsWith('text/')) {
+    return collapseWhitespace(buffer.toString('utf8')).slice(0, 4000);
+  }
+  if (buffer.subarray(0, 5).toString('latin1') === '%PDF-') return extractPdfTextPreviewFromBuffer(buffer).slice(0, 4000);
+  return extractPdfTextLikeRuns(buffer.toString('latin1')).join('\n').slice(0, 4000);
+}
+
+function extractPdfEmbeddedSubtype(dict = '') {
+  const text = String(dict || '');
+  const match = text.match(/\/Subtype\s*\/([A-Za-z0-9#.+-]+)/);
+  if (!match) return '';
+  return String(match[1] || '').replace(/#([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))).toLowerCase();
+}
+
+function isDocxLikeBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('word/document.xml', 'utf8'));
+}
+
+function isLegacyDocLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered.includes('msword') || buffer.includes(Buffer.from('Word.Document', 'utf8'));
+}
+
+function isLegacyXlsLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered.includes('excel') || buffer.includes(Buffer.from('Workbook', 'utf8'));
+}
+
+function isLegacyPptLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered.includes('powerpoint') || buffer.includes(Buffer.from('PowerPoint Document', 'utf8'));
+}
+
+function isXlsxLikeBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('xl/workbook.xml', 'utf8'));
+}
+
+function isPptxLikeBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer.includes(Buffer.from('ppt/presentation.xml', 'utf8'));
+}
+
+function isZipLikeBuffer(buffer, subtype = '') {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  const lowered = String(subtype || '').toLowerCase();
+  return (buffer[0] === 0x50 && buffer[1] === 0x4b)
+    || lowered === 'application/zip'
+    || lowered === 'application/x-zip-compressed';
+}
+
+function isRtfLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  return lowered === 'application/rtf'
+    || lowered === 'text/rtf'
+    || buffer.subarray(0, 5).toString('latin1').toLowerCase() === '{\\rtf';
+}
+
+function isIcsLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 64).toString('utf8').toUpperCase();
+  return lowered === 'text/calendar'
+    || lowered === 'application/ics'
+    || head.includes('BEGIN:VCALENDAR');
+}
+
+function isVcardLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 128).toString('utf8').toUpperCase();
+  return lowered === 'text/vcard'
+    || lowered === 'text/x-vcard'
+    || lowered === 'application/vcard'
+    || head.includes('BEGIN:VCARD');
+}
+
+function isDelimitedTextLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 256).toString('utf8');
+  return lowered === 'text/tab-separated-values'
+    || lowered === 'application/tab-separated-values'
+    || (head.includes('\t') && /\r?\n/.test(head));
+}
+
+function extractDelimitedText(text = '') {
+  const rows = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((line) => collapseWhitespace(line.replace(/\t+/g, ' | ')));
+  return collapseWhitespace(rows.join('\n'));
+}
+
+function isYamlLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 256).toString('utf8');
+  return lowered === 'application/yaml'
+    || lowered === 'application/x-yaml'
+    || lowered === 'text/yaml'
+    || /^[A-Za-z0-9_-]+:\s*\S/m.test(head);
+}
+
+function extractYamlText(text = '') {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\t/g, '  '))
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() && !line.trim().startsWith('#'))
+    .slice(0, 20)
+    .map((line) => collapseWhitespace(line.replace(/^-\s*/, '- ')));
+  return collapseWhitespace(lines.join('\n'));
+}
+
+function isXmlLikeBuffer(buffer, subtype = '') {
+  const lowered = String(subtype || '').toLowerCase();
+  const head = buffer.subarray(0, 256).toString('utf8');
+  return lowered === 'application/xml'
+    || lowered === 'text/xml'
+    || /^\s*<\?xml\b/i.test(head)
+    || /^\s*<[A-Za-z_:][\w:.-]*/.test(head);
+}
+
+function extractXmlText(text = '') {
+  return stripHtml(
+    String(text || '')
+      .replace(/<\?xml[\s\S]*?\?>/gi, ' ')
+  );
+}
+
+function extractGenericZipTextPreview(buffer) {
+  const entries = Array.from(extractZipEntries(buffer).entries()).slice(0, 12);
+  const outputs = [];
+  entries.forEach(([name, content]) => {
+    const lowerName = String(name || '').toLowerCase();
+    let preview = '';
+    if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) preview = stripHtml(content.toString('utf8'));
+    else if (lowerName.endsWith('.eml')) preview = normalizeEmailText(content.toString('utf8')).normalized_text;
+    else if (lowerName.endsWith('.json') || lowerName.endsWith('.csv') || lowerName.endsWith('.txt') || lowerName.endsWith('.md') || lowerName.endsWith('.xml')) {
+      preview = collapseWhitespace(content.toString('utf8'));
+    }
+    if (!preview) return;
+    outputs.push(`${name}\n${preview.slice(0, 800)}`);
+  });
+  return collapseWhitespace(outputs.join('\n\n'));
+}
+
+function extractPdfAnnotationLines(latin = '') {
+  const text = String(latin || '');
+  const outputs = [];
+  const patterns = [
+    { label: 'Annotation', regex: /\/Contents\s*\\?\(([^)]*)\)|\/Contents\s*<([^>]+)>/g },
+    { label: 'Annotation Author', regex: /\/T(?![A-Za-z])\s*\\?\(([^)]*)\)|\/T(?![A-Za-z])\s*<([^>]+)>/g },
+    { label: 'Alt', regex: /\/Alt\s*\\?\(([^)]*)\)|\/Alt\s*<([^>]+)>/g },
+    { label: 'ActualText', regex: /\/ActualText\s*\\?\(([^)]*)\)|\/ActualText\s*<([^>]+)>/g }
+  ];
+  patterns.forEach(({ label, regex }) => {
+    Array.from(text.matchAll(regex)).forEach((match) => {
+      const literal = match[1] || '';
+      const hex = match[2] || '';
+      const value = collapseWhitespace(literal ? decodePdfLiteralString(literal) : decodePdfHexString(hex));
+      if (value) outputs.push(`${label}: ${value}`);
+    });
+  });
+  return outputs;
+}
+
+function extractPdfOperatorTextLines(latin = '') {
+  const lines = [];
+  const textBlocks = Array.from(String(latin || '').matchAll(/BT([\s\S]*?)ET/g)).map((match) => match[1] || '');
+  textBlocks.forEach((block) => {
+    const normalized = String(block)
+      .replace(/\]\s*TJ/g, '] TJ')
+      .replace(/\)\s*Tj/g, ') Tj')
+      .replace(/\)\s*'/g, ") '")
+      .replace(/\)\s*"/g, ') "')
+      .replace(/>\s*Tj/g, '> Tj')
+      .replace(/>\s*TJ/g, '> TJ');
+    Array.from(normalized.matchAll(/\[((?:\s*\([^)]*\)\s*-?\d*\s*)+)\]\s*TJ/g)).forEach((match) => {
+      const fragments = Array.from(String(match[1] || '').matchAll(/\(([^)]*)\)/g))
+        .map((part) => decodePdfLiteralString(part[1] || ''))
+        .map((part) => collapseWhitespace(part))
+        .filter(Boolean);
+      if (fragments.length) lines.push(fragments.join(' '));
+    });
+    Array.from(normalized.matchAll(/\[((?:\s*<[^>]+>\s*-?\d*\s*)+)\]\s*TJ/g)).forEach((match) => {
+      const fragments = Array.from(String(match[1] || '').matchAll(/<([^>]+)>/g))
+        .map((part) => decodePdfHexString(part[1] || ''))
+        .map((part) => collapseWhitespace(part))
+        .filter(Boolean);
+      if (fragments.length) lines.push(fragments.join(' '));
+    });
+    Array.from(normalized.matchAll(/\(([^)]*)\)\s*(?:Tj|'|")/g)).forEach((match) => {
+      const text = collapseWhitespace(decodePdfLiteralString(match[1] || ''));
+      if (text) lines.push(text);
+    });
+    Array.from(normalized.matchAll(/<([^>]+)>\s*(?:Tj|')/g)).forEach((match) => {
+      const text = collapseWhitespace(decodePdfHexString(match[1] || ''));
+      if (text) lines.push(text);
+    });
+  });
+  const merged = dedupePdfPreviewLines(lines
+    .map((line) => collapseWhitespace(line))
+    .filter((line) => /[A-Za-z]{3,}/.test(line) && line.length >= 4)
+    .filter((line) => !/^(BT|ET|Tj|TJ|Tm|Tf)$/i.test(line)));
+  return merged;
+}
+
+function extractCompressedPdfOperatorTextLines(latin = '') {
+  const matches = Array.from(String(latin || '').matchAll(/(<<[\s\S]*>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g));
+  const lines = [];
+  matches.forEach((match) => {
+    const dict = String(match[1] || '');
+    const raw = Buffer.from(String(match[2] || ''), 'latin1');
+    const filters = extractPdfStreamFilters(dict);
+    const decoded = decodePdfStreamByFilters(raw, filters, extractPdfDecodeParams(dict, filters.length));
+    if (!decoded) return;
+    const decodedText = decoded.toString('latin1');
+    const operatorLines = extractPdfOperatorTextLines(decodedText);
+    if (operatorLines.length) {
+      lines.push(...operatorLines);
+      return;
+    }
+    lines.push(...extractPdfTextLikeRuns(decodedText));
+  });
+  return lines;
+}
+
+function extractPdfStreamFilters(dict = '') {
+  const text = String(dict || '');
+  const arrayMatch = text.match(/\/Filter\s*\[([\s\S]*?)\]/);
+  if (arrayMatch) {
+    return Array.from(String(arrayMatch[1] || '').matchAll(/\/([A-Za-z0-9]+)/g))
+      .map((match) => String(match[1] || '').trim())
+      .filter(Boolean);
+  }
+  const singleMatch = text.match(/\/Filter\s*\/([A-Za-z0-9]+)/);
+  return singleMatch ? [String(singleMatch[1] || '').trim()] : [];
+}
+
+function extractPdfDecodeParams(dict = '', filterCount = 0) {
+  const text = String(dict || '');
+  const requestedCount = Number.isFinite(filterCount) && filterCount > 0 ? filterCount : 0;
+  const arrayMatch = text.match(/\/DecodeParms\s*\[([\s\S]*?)\]/);
+  if (arrayMatch) {
+    const entries = [];
+    const body = String(arrayMatch[1] || '');
+    Array.from(body.matchAll(/<<(.*?)>>|null/gs)).forEach((match) => {
+      const chunk = String(match[0] || '').trim();
+      if (/^null$/i.test(chunk)) {
+        entries.push(null);
+        return;
+      }
+      entries.push(parsePdfDecodeParamsDict(chunk));
+    });
+    if (requestedCount && entries.length < requestedCount) {
+      while (entries.length < requestedCount) entries.push(null);
+    }
+    return entries;
+  }
+  const singleMatch = text.match(/\/DecodeParms\s*(<<[\s\S]*?>>)/);
+  if (singleMatch) {
+    const params = parsePdfDecodeParamsDict(singleMatch[1] || '');
+    return requestedCount ? Array.from({ length: requestedCount }, (_, index) => (index === requestedCount - 1 ? params : null)) : [params];
+  }
+  return requestedCount ? Array.from({ length: requestedCount }, () => null) : [];
+}
+
+function parsePdfDecodeParamsDict(dictText = '') {
+  const text = String(dictText || '');
+  return {
+    predictor: readPdfDecodeParamInt(text, 'Predictor'),
+    columns: readPdfDecodeParamInt(text, 'Columns'),
+    colors: readPdfDecodeParamInt(text, 'Colors'),
+    bitsPerComponent: readPdfDecodeParamInt(text, 'BitsPerComponent')
+  };
+}
+
+function readPdfDecodeParamInt(dictText = '', key = '') {
+  const match = String(dictText || '').match(new RegExp(`/${key}\\s+(\\d+)`));
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function decodePdfStreamByFilters(buffer, filters = [], decodeParams = []) {
+  let current = Buffer.isBuffer(buffer) ? buffer : null;
+  const chain = Array.isArray(filters) ? filters : [];
+  const params = Array.isArray(decodeParams) ? decodeParams : [];
+  for (let index = 0; index < chain.length; index += 1) {
+    const filter = chain[index];
+    if (!current) return null;
+    const name = String(filter || '').trim();
+    const filterParams = params[index] || null;
+    if (!name) continue;
+    if (name === 'ASCIIHexDecode' || name === 'AHx') {
+      current = decodePdfAsciiHexBuffer(current);
+      continue;
+    }
+    if (name === 'ASCII85Decode' || name === 'A85') {
+      current = decodePdfAscii85Buffer(current);
+      continue;
+    }
+    if (name === 'FlateDecode' || name === 'Fl') {
+      current = tryInflatePdfStream(current);
+      current = decodePdfPredictorBuffer(current, filterParams);
+      continue;
+    }
+    if (name === 'LZWDecode' || name === 'LZW') {
+      current = decodePdfLzwBuffer(current);
+      current = decodePdfPredictorBuffer(current, filterParams);
+      continue;
+    }
+    if (name === 'RunLengthDecode' || name === 'RL') {
+      current = decodePdfRunLengthBuffer(current);
+      continue;
+    }
+    return null;
+  }
+  if (!chain.length) return tryInflatePdfStream(current);
+  return current;
+}
+
+function tryInflatePdfStream(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return null;
+  try {
+    return inflateSync(buffer);
+  } catch {
+    try {
+      return inflateRawSync(buffer);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function decodePdfAsciiHexBuffer(buffer) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString('latin1') : String(buffer || '');
+  const body = text.split('>')[0] || '';
+  const clean = body.replace(/[^0-9A-Fa-f]/g, '');
+  const padded = clean.length % 2 ? `${clean}0` : clean;
+  return Buffer.from(padded, 'hex');
+}
+
+function decodePdfAscii85Buffer(buffer) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString('latin1') : String(buffer || '');
+  const clean = text
+    .replace(/<~/g, '')
+    .replace(/~>/g, '')
+    .replace(/\s+/g, '');
+  const bytes = [];
+  let chunk = [];
+  for (const char of clean) {
+    if (char === 'z' && !chunk.length) {
+      bytes.push(0, 0, 0, 0);
+      continue;
+    }
+    const code = char.charCodeAt(0);
+    if (code < 33 || code > 117) continue;
+    chunk.push(code - 33);
+    if (chunk.length === 5) {
+      let value = 0;
+      chunk.forEach((digit) => { value = value * 85 + digit; });
+      bytes.push((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+      chunk = [];
+    }
+  }
+  if (chunk.length) {
+    const padLength = 5 - chunk.length;
+    while (chunk.length < 5) chunk.push(84);
+    let value = 0;
+    chunk.forEach((digit) => { value = value * 85 + digit; });
+    const tail = [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+    bytes.push(...tail.slice(0, 4 - padLength));
+  }
+  return Buffer.from(bytes);
+}
+
+function decodePdfRunLengthBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return null;
+  const bytes = [];
+  for (let index = 0; index < buffer.length; index += 1) {
+    const control = buffer[index];
+    if (control === 128) break;
+    if (control <= 127) {
+      const length = control + 1;
+      const end = Math.min(index + 1 + length, buffer.length);
+      for (let cursor = index + 1; cursor < end; cursor += 1) bytes.push(buffer[cursor]);
+      index += length;
+      continue;
+    }
+    const repeat = 257 - control;
+    const value = buffer[index + 1];
+    if (typeof value !== 'number') break;
+    for (let count = 0; count < repeat; count += 1) bytes.push(value);
+    index += 1;
+  }
+  return Buffer.from(bytes);
+}
+
+function extractPdfTextLikeRuns(latin = '') {
+  const normalized = String(latin || '').replace(/[|]+/g, '\n');
+  const asciiRuns = normalized.match(/[A-Za-z0-9][A-Za-z0-9 ,.:;()/%$#&@'"_\-\n]{12,}/g) || [];
+  return dedupePdfPreviewLines(asciiRuns
+    .map((text) => collapseWhitespace(text))
+    .filter((text) => /[A-Za-z]{4,}/.test(text))
+    .filter((text) => !/^endobj|stream|endstream|xref|trailer|obj|Length\s+\d+/i.test(text)));
+}
+
+function decodePdfLzwBuffer(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return null;
+  const CLEAR = 256;
+  const EOD = 257;
+  let bitPos = 0;
+  let codeSize = 9;
+  let nextCode = 258;
+  const dictionary = new Map();
+  const resetDictionary = () => {
+    dictionary.clear();
+    for (let code = 0; code < 256; code += 1) dictionary.set(code, [code]);
+    codeSize = 9;
+    nextCode = 258;
+  };
+  const readCode = () => {
+    let value = 0;
+    for (let bit = 0; bit < codeSize; bit += 1) {
+      const absolute = bitPos + bit;
+      const byteIndex = Math.floor(absolute / 8);
+      if (byteIndex >= buffer.length) return null;
+      const byte = buffer[byteIndex];
+      const shift = 7 - (absolute % 8);
+      value = (value << 1) | ((byte >> shift) & 1);
+    }
+    bitPos += codeSize;
+    return value;
+  };
+  resetDictionary();
+  const output = [];
+  let previous = null;
+  while (true) {
+    const code = readCode();
+    if (code == null) break;
+    if (code === CLEAR) {
+      resetDictionary();
+      previous = null;
+      continue;
+    }
+    if (code === EOD) break;
+    let entry = dictionary.get(code);
+    if (!entry && code === nextCode && previous) {
+      entry = previous.concat(previous[0]);
+    }
+    if (!entry) return null;
+    output.push(...entry);
+    if (previous) {
+      dictionary.set(nextCode, previous.concat(entry[0]));
+      nextCode += 1;
+      if (nextCode === 512) codeSize = 10;
+      else if (nextCode === 1024) codeSize = 11;
+      else if (nextCode === 2048) codeSize = 12;
+    }
+    previous = entry;
+  }
+  return Buffer.from(output);
+}
+
+function decodePdfPredictorBuffer(buffer, params = null) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length || !params) return buffer;
+  const predictor = Number(params.predictor || 1);
+  if (predictor <= 1) return buffer;
+  const colors = Math.max(1, Number(params.colors || 1));
+  const bitsPerComponent = Math.max(1, Number(params.bitsPerComponent || 8));
+  const columns = Math.max(1, Number(params.columns || 1));
+  if (predictor === 2) return decodeTiffPredictorBuffer(buffer, colors, bitsPerComponent, columns);
+  if (predictor >= 10 && predictor <= 15) {
+    return decodePngPredictorBuffer(buffer, colors, bitsPerComponent, columns);
+  }
+  return buffer;
+}
+
+function decodeTiffPredictorBuffer(buffer, colors = 1, bitsPerComponent = 8, columns = 1) {
+  if (!buffer || !Buffer.isBuffer(buffer) || bitsPerComponent !== 8) return buffer;
+  const bytesPerPixel = Math.max(1, Math.ceil((colors * bitsPerComponent) / 8));
+  const rowLength = Math.max(1, columns * bytesPerPixel);
+  if (buffer.length < rowLength) return buffer;
+  const output = Buffer.from(buffer);
+  for (let rowStart = 0; rowStart + rowLength <= output.length; rowStart += rowLength) {
+    for (let index = rowStart + bytesPerPixel; index < rowStart + rowLength; index += 1) {
+      output[index] = (output[index] + output[index - bytesPerPixel]) & 0xff;
+    }
+  }
+  return output;
+}
+
+function decodePngPredictorBuffer(buffer, colors = 1, bitsPerComponent = 8, columns = 1) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length || bitsPerComponent % 8 !== 0) return buffer;
+  const bytesPerPixel = Math.max(1, Math.ceil((colors * bitsPerComponent) / 8));
+  const rowLength = Math.max(1, Math.ceil((colors * columns * bitsPerComponent) / 8));
+  const stride = rowLength + 1;
+  if (buffer.length < stride) return buffer;
+  const rows = [];
+  let previous = Buffer.alloc(rowLength, 0);
+  for (let offset = 0; offset + stride <= buffer.length; offset += stride) {
+    const filter = buffer[offset];
+    const encoded = buffer.subarray(offset + 1, offset + 1 + rowLength);
+    const row = Buffer.alloc(rowLength);
+    for (let index = 0; index < rowLength; index += 1) {
+      const left = index >= bytesPerPixel ? row[index - bytesPerPixel] : 0;
+      const up = previous[index] || 0;
+      const upLeft = index >= bytesPerPixel ? previous[index - bytesPerPixel] || 0 : 0;
+      const value = encoded[index];
+      if (filter === 0) row[index] = value;
+      else if (filter === 1) row[index] = (value + left) & 0xff;
+      else if (filter === 2) row[index] = (value + up) & 0xff;
+      else if (filter === 3) row[index] = (value + Math.floor((left + up) / 2)) & 0xff;
+      else if (filter === 4) row[index] = (value + paethPredictor(left, up, upLeft)) & 0xff;
+      else return buffer;
+    }
+    rows.push(row);
+    previous = row;
+  }
+  return rows.length ? Buffer.concat(rows) : buffer;
+}
+
+function paethPredictor(left, up, upLeft) {
+  const initial = left + up - upLeft;
+  const leftDistance = Math.abs(initial - left);
+  const upDistance = Math.abs(initial - up);
+  const upLeftDistance = Math.abs(initial - upLeft);
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
+  if (upDistance <= upLeftDistance) return up;
+  return upLeft;
+}
+
+function dedupePdfPreviewLines(lines = []) {
+  const sorted = (Array.isArray(lines) ? lines : [])
+    .map((line) => collapseWhitespace(line))
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const kept = [];
+  sorted.forEach((line) => {
+    const normalized = line.toLowerCase();
+    const duplicate = kept.some((existing) => {
+      const compare = existing.toLowerCase();
+      return compare === normalized
+        || compare.includes(normalized)
+        || normalized.includes(compare);
+    });
+    if (!duplicate) kept.push(line);
+  });
+  return kept.sort((a, b) => a.localeCompare(b));
+}
+
+function decodePdfLiteralString(text = '') {
+  return String(text || '')
+    .replace(/\\([nrtbf()\\])/g, (_, code) => {
+      if (code === 'n' || code === 'r') return '\n';
+      if (code === 't') return '\t';
+      if (code === 'b' || code === 'f') return ' ';
+      return code;
+    })
+    .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
+    .replace(/\\\r?\n/g, '')
+    .trim();
+}
+
+function decodePdfHexString(text = '') {
+  const clean = String(text || '').replace(/[^0-9A-Fa-f]/g, '');
+  const padded = clean.length % 2 ? `${clean}0` : clean;
+  let output = '';
+  for (let index = 0; index < padded.length; index += 2) {
+    const code = parseInt(padded.slice(index, index + 2), 16);
+    if (!Number.isFinite(code)) continue;
+    output += code >= 32 || code === 9 || code === 10 || code === 13 ? String.fromCharCode(code) : ' ';
+  }
+  return output.trim();
+}
+
+function extractAttachmentPreview(part) {
+  if (!part) return '';
+  const mime = String(part.contentType?.mime || '').toLowerCase();
+  if (isTextLikeMime(mime)) {
+    if (isLegacyDocPart(part)) {
+      return extractLegacyOfficeStringsFromBuffer(part.body_buffer, 'doc').slice(0, 4000);
+    }
+    if (isDocxPart(part)) {
+      return extractDocxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isLegacyXlsPart(part)) {
+      return extractLegacyOfficeStringsFromBuffer(part.body_buffer, 'xls').slice(0, 4000);
+    }
+    if (isXlsxPart(part)) {
+      return extractXlsxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    if (isLegacyPptPart(part)) {
+      return extractLegacyOfficeStringsFromBuffer(part.body_buffer, 'ppt').slice(0, 4000);
+    }
+    if (isPptxPart(part)) {
+      return extractPptxTextFromBuffer(part.body_buffer).slice(0, 4000);
+    }
+    return normalizeMimeTextPart(part).slice(0, 4000);
+  }
+  if (mime === 'application/pdf') {
+    return extractPdfTextPreviewFromBuffer(part.body_buffer);
+  }
+  return '';
+}
+
+function collectMimeInsights(part, depth = 0) {
+  if (!part || depth > 6) {
+    return { textParts: [], attachments: [], imageAttachments: [] };
+  }
+
+  const mime = String(part.contentType?.mime || '').toLowerCase();
+  if (mime.startsWith('multipart/')) {
+    const boundary = part.contentType?.params?.boundary;
+    if (!boundary) return { textParts: [], attachments: [], imageAttachments: [] };
+    return splitMultipartBody(part.body, boundary)
+      .map(parseMimePart)
+      .filter(Boolean)
+      .reduce((acc, child) => {
+        const childInsights = collectMimeInsights(child, depth + 1);
+        acc.textParts.push(...childInsights.textParts);
+        acc.attachments.push(...childInsights.attachments);
+        acc.imageAttachments.push(...childInsights.imageAttachments);
+        return acc;
+      }, { textParts: [], attachments: [], imageAttachments: [] });
+  }
+
+  if (isAttachmentPart(part)) {
+    const preview = extractAttachmentPreview(part);
+    const embeddedPdfImages = mime === 'application/pdf' ? extractPdfEmbeddedImagesFromBuffer(part.body_buffer) : [];
+    const imageAttachment = isImageMime(mime) && part.body_buffer?.length
+      ? {
+          kind: 'image',
+          name: getAttachmentFilename(part),
+          mime_type: mime,
+          data_url: `data:${mime};base64,${part.body_buffer.toString('base64')}`
+        }
+      : null;
+    return {
+      textParts: [],
+      attachments: [{
+        summary: summarizeAttachmentPart(part),
+        preview
+      }],
+      imageAttachments: [
+        ...(imageAttachment ? [imageAttachment] : []),
+        ...embeddedPdfImages
+      ]
+    };
+  }
+
+  const text = normalizeMimeTextPart(part);
+  return {
+    textParts: text ? [text] : [],
+    attachments: [],
+    imageAttachments: []
+  };
+}
+
+function normalizeEmailText(text = '') {
+  const raw = String(text || '');
+  const sepMatch = raw.match(/\r?\n\r?\n/);
+  if (!sepMatch) {
+    return { normalized_text: collapseWhitespace(raw), metadata: {} };
+  }
+
+  const splitIndex = sepMatch.index;
+  const headerText = raw.slice(0, splitIndex);
+  const bodyText = raw.slice(splitIndex + sepMatch[0].length);
+  const headers = parseHeaders(headerText);
+  const contentType = headers['content-type'] || 'text/plain';
+  const transferEncoding = headers['content-transfer-encoding'] || '';
+  let extracted = '';
+  let attachmentSummary = '';
+  let attachmentPreviews = '';
+  let attachmentPreviewCount = 0;
+  let extractedAttachments = [];
+
+  const rootPart = {
+    headers,
+    contentType: parseContentTypeParts(contentType),
+    disposition: parseContentTypeParts(headers['content-disposition'] || ''),
+    body: decodeTransferEncoding(bodyText, transferEncoding),
+    body_buffer: decodeTransferEncodingToBuffer(bodyText, transferEncoding)
+  };
+
+  if (rootPart.contentType.mime.startsWith('multipart/')) {
+    const insights = collectMimeInsights(rootPart);
+    if (insights.textParts.length) {
+      extracted = insights.textParts.join('\n\n');
+    }
+    if (insights.imageAttachments.length) {
+      extractedAttachments = insights.imageAttachments.slice(0, 3);
+    }
+    if (insights.attachments.length) {
+      attachmentSummary = `Attachments:\n${insights.attachments.map((item) => `- ${item.summary}`).join('\n')}`;
+      const previews = insights.attachments
+        .filter((item) => item.preview)
+        .map((item) => `${item.summary}\n${item.preview}`);
+      if (previews.length) {
+        attachmentPreviewCount = previews.length;
+        attachmentPreviews = `Attachment content excerpts:\n\n${previews.join('\n\n')}`;
+      }
+    }
+  }
+
+  if (!extracted) {
+    extracted = /text\/html/i.test(contentType) ? stripHtml(rootPart.body) : collapseWhitespace(rootPart.body);
+  }
+
+  const metadata = {
+    subject: headers.subject || null,
+    from: headers.from || null,
+    to: headers.to || null,
+    date: headers.date || null
+  };
+  const headerSummary = [
+    metadata.subject ? `Subject: ${metadata.subject}` : null,
+    metadata.from ? `From: ${metadata.from}` : null,
+    metadata.to ? `To: ${metadata.to}` : null,
+    metadata.date ? `Date: ${metadata.date}` : null
+  ].filter(Boolean).join('\n');
+
+  return {
+    normalized_text: collapseWhitespace([headerSummary, extracted, attachmentSummary, attachmentPreviews].filter(Boolean).join('\n\n')),
+    metadata: {
+      ...metadata,
+      attachment_summary: attachmentSummary || null,
+      attachment_preview_count: attachmentPreviewCount
+    },
+    extracted_attachments: extractedAttachments
+  };
+}
+
+export function normalizeLiveIngestDocument(doc = {}) {
+  const name = String(doc.name || 'document');
+  const mimeType = String(doc.mime_type || '').toLowerCase();
+  const text = String(doc.text || '');
+  const lowerName = name.toLowerCase();
+
+  if (mimeType.includes('html') || lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
+    return {
+      name,
+      mime_type: mimeType || 'text/html',
+      source_kind: 'html',
+      normalized_text: stripHtml(text),
+      metadata: {}
+    };
+  }
+
+  if (mimeType === 'message/rfc822' || lowerName.endsWith('.eml')) {
+    const email = normalizeEmailText(text);
+    return {
+      name,
+      mime_type: mimeType || 'message/rfc822',
+      source_kind: 'email',
+      normalized_text: email.normalized_text,
+      metadata: email.metadata || {},
+      extracted_attachments: Array.isArray(email.extracted_attachments) ? email.extracted_attachments : []
+    };
+  }
+
+  if (mimeType === 'application/pdf' || lowerName.endsWith('.pdf')) {
+    const buffer = doc.buffer_base64
+      ? Buffer.from(String(doc.buffer_base64 || ''), 'base64')
+      : Buffer.from(text, 'latin1');
+    return {
+      name,
+      mime_type: mimeType || 'application/pdf',
+      source_kind: 'pdf',
+      normalized_text: extractPdfTextPreviewFromBuffer(buffer),
+      metadata: {},
+      extracted_attachments: extractPdfEmbeddedImagesFromBuffer(buffer)
+    };
+  }
+
+  return {
+    name,
+    mime_type: mimeType || 'text/plain',
+    source_kind: 'text',
+    normalized_text: collapseWhitespace(text),
+    metadata: {},
+    extracted_attachments: []
+  };
+}
+
+export function normalizeLiveIngestDocuments(docs = []) {
+  return (Array.isArray(docs) ? docs : [])
+    .filter((doc) => doc && typeof doc === 'object')
+    .slice(0, 6)
+    .map((doc) => normalizeLiveIngestDocument(doc))
+    .map((doc) => ({
+      ...doc,
+      normalized_text: String(doc.normalized_text || '').slice(0, 30000),
+      extracted_attachments: (Array.isArray(doc.extracted_attachments) ? doc.extracted_attachments : [])
+        .filter((item) => item && item.kind === 'image' && item.data_url)
+        .slice(0, 3)
+    }))
+    .filter((doc) => doc.normalized_text);
+}

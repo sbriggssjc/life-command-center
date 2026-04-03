@@ -1,0 +1,114 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "manual": {
+        "type": "Request",
+        "kind": "Button",
+        "inputs": {
+          "schema": {}
+        }
+      }
+    },
+    "actions": {
+      "Get_emails_from_RCM_folder": {
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "method": "get",
+          "path": "/v2/Mail",
+          "queries": {
+            "folderPath": "Inbox/Property marketing/RCM",
+            "fetchOnlyUnread": false,
+            "top": 100,
+            "importance": "Any",
+            "fetchOnlyWithAttachment": false
+          }
+        },
+        "runAfter": {}
+      },
+      "Apply_to_each_RCM_email": {
+        "type": "Foreach",
+        "foreach": "@body('Get_emails_from_RCM_folder')?['value']",
+        "actions": {
+          "Html_to_text": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['conversionservice']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/html2text",
+              "body": "@items('Apply_to_each_RCM_email')?['body']?['content']"
+            },
+            "runAfter": {}
+          },
+          "POST_to_RCM_ingest": {
+            "type": "Http",
+            "inputs": {
+              "method": "POST",
+              "uri": "https://life-command-center-nine.vercel.app/api/rcm-ingest",
+              "headers": {
+                "Content-Type": "application/json",
+                "X-PA-Webhook-Secret": "REPLACE_WITH_PA_WEBHOOK_SECRET"
+              },
+              "body": {
+                "source": "rcm",
+                "source_ref": "@{items('Apply_to_each_RCM_email')?['id']}",
+                "deal_name": "@{items('Apply_to_each_RCM_email')?['subject']}",
+                "raw_body": "@{body('Html_to_text')?['text']}",
+                "status": "new"
+              }
+            },
+            "runAfter": {
+              "Html_to_text": ["Succeeded"]
+            }
+          },
+          "Delay_between_emails": {
+            "type": "Wait",
+            "inputs": {
+              "interval": {
+                "count": 1,
+                "unit": "Second"
+              }
+            },
+            "runAfter": {
+              "POST_to_RCM_ingest": ["Succeeded", "Failed"]
+            }
+          }
+        },
+        "runAfter": {
+          "Get_emails_from_RCM_folder": ["Succeeded"]
+        },
+        "operationOptions": "Sequential"
+      }
+    }
+  },
+  "connectionReferences": {
+    "office365": {
+      "connectionName": "shared_office365",
+      "source": "Invoker",
+      "id": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "tier": "NotSpecified"
+    },
+    "conversionservice": {
+      "connectionName": "shared_conversionservice",
+      "source": "Invoker",
+      "id": "/providers/Microsoft.PowerApps/apis/shared_conversionservice",
+      "tier": "NotSpecified"
+    }
+  }
+}
