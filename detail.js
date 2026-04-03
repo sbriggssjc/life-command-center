@@ -230,6 +230,7 @@ async function openUnifiedDetail(db, ids, fallback) {
 
   } catch (err) {
     console.error('Unified detail load error:', err);
+    showToast('Error loading details: ' + (err.message || 'unknown'), 'error');
     if (bodyEl) bodyEl.innerHTML =
       `<div class="detail-empty">Error loading details: ${esc(err.message)}</div>`;
   }
@@ -1315,6 +1316,7 @@ async function _loadActivityFeed(own) {
 
   } catch (err) {
     console.error('Activity feed error:', err);
+    showToast('Failed to load activity feed', 'error');
     feedEl.innerHTML = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div><div class="detail-empty">Error loading activity feed</div></div>';
   }
 }
@@ -2734,6 +2736,7 @@ async function _loadEmailTemplates(own) {
     sel.innerHTML = opts;
   } catch (e) {
     console.error('Template load error:', e);
+    showToast('Failed to load email templates', 'error');
     sel.innerHTML = '<option value="">Error loading templates</option>';
   }
 }
@@ -2909,6 +2912,7 @@ async function _loadTouchpoints(own) {
     el.innerHTML = html;
   } catch (e) {
     console.error('Touchpoints load error:', e);
+    showToast('Failed to load touchpoints', 'error');
     el.innerHTML = '';
   }
 }

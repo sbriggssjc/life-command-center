@@ -1557,10 +1557,13 @@ function renderDiaUnmatchedClinics() {
             const safeQ = query.replace(/[*()',\\]/g, '');
             if (!safeQ) { resultsDiv.innerHTML = ''; return; }
             resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--text2);">Searching...</div>';
-            const props = await diaQuery('properties', 'id, address, city, state, property_name', {
-              filter: `or(address=ilike.*${safeQ}*,property_name=ilike.*${safeQ}*)`,
-              limit: 10
-            });
+            const props = await Promise.race([
+              diaQuery('properties', 'id, address, city, state, property_name', {
+                filter: `or(address=ilike.*${safeQ}*,property_name=ilike.*${safeQ}*)`,
+                limit: 10
+              }),
+              new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 5000); })
+            ]);
 
             if (props.length === 0) {
               resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--text2);">No properties found</div>';
@@ -1588,8 +1591,11 @@ function renderDiaUnmatchedClinics() {
             }
           } catch(err) {
             console.error('Property search error:', err);
-            showToast('Property search failed', 'error');
-            resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--red);">Search error</div>';
+            if (err.message === 'timeout') {
+              resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--error);">Search timed out — try again</div>';
+            } else {
+              resultsDiv.innerHTML = '<div style="padding: 8px; font-size: 12px; color: var(--error);">Search error</div>';
+            }
           }
         }, 300);
       });
@@ -2218,6 +2224,13 @@ function renderDiaResearch() {
       // Click the visible save/confirm button
       var saveBtn = document.querySelector('[data-confirm-prop]') || document.querySelector('[data-verify-lease]') || document.getElementById('clSaveBtn');
       if (saveBtn) saveBtn.click();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      // Ctrl+Enter (or Cmd+Enter on Mac) saves the current research card
+      var saveBtn = document.querySelector('.research-card button[onclick*="save"], .research-card button[onclick*="Save"]');
+      if (saveBtn && !saveBtn.disabled) {
+        saveBtn.click();
+      }
     }
   });
 })();
