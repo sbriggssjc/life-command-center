@@ -6706,6 +6706,10 @@ function renderGovSearch() {
           if (r.recorded_owner) html += '<span>Recorded: ' + esc(norm(r.recorded_owner)) + '</span>';
           if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
           if (r.pipeline_status) html += '<span>Stage: ' + esc(cleanLabel(r.pipeline_status)) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-lead\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-lead\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -6723,6 +6727,10 @@ function renderGovSearch() {
           if (r.prior_owner) html += '<span>From: ' + esc(norm(r.prior_owner)) + '</span>';
           if (r.new_owner) html += '<span>To: ' + esc(norm(r.new_owner)) + '</span>';
           if (r.estimated_value) html += '<span>Value: ' + fmt(r.estimated_value) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-ownership\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-ownership\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -6741,6 +6749,10 @@ function renderGovSearch() {
           if (r.seller_name) html += '<span>Owner: ' + esc(norm(r.seller_name)) + '</span>';
           if (r.asking_price) html += '<span>Asking: ' + fmt(r.asking_price) + '</span>';
           if (r.listing_status) html += '<span>Status: ' + esc(cleanLabel(r.listing_status)) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-listing\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-listing\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -6758,6 +6770,10 @@ function renderGovSearch() {
           if (r.total_volume) html += '<span>Volume: ' + fmt(r.total_volume) + '</span>';
           if (r.phone) html += '<span>' + esc(r.phone) + '</span>';
           if (r.email) html += '<span>' + esc(r.email) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-lead\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-lead\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         html += '</div>';
@@ -6773,6 +6789,10 @@ function renderGovSearch() {
           html += '<div class="search-card-meta">';
           if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
           if (r.property_type) html += '<span>Type: ' + esc(norm(r.property_type)) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-ownership\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._govSearchFlat[' + idx + '], \'gov-ownership\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         html += '</div>';

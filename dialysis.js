@@ -5635,6 +5635,7 @@ function renderDiaPlayers() {
     html += '<div style="flex: 1; text-align: right;">Clinics</div>';
     html += '<div style="flex: 1; text-align: right;">Total Patients</div>';
     html += '<div style="flex: 1; text-align: right;">Avg Patients</div>';
+    html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
     html += '</div>';
 
     topOps.forEach((p, idx) => {
@@ -5650,6 +5651,7 @@ function renderDiaPlayers() {
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.clinics + '</div>';
       html += '<div style="flex: 1; text-align: right;">' + fmtN(p.patients) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + fmtN(avg) + '</div>';
+      html += '<div style="flex: 0.8; text-align: center;" onclick="event.stopPropagation()"><button class="gov-row-action" onclick=\'showDetail(' + safeJSON(p.records[0]) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button> <button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(p.records[0]) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button></div>';
       html += '</div>';
     });
     html += '</div></div>';
@@ -5674,6 +5676,7 @@ function renderDiaPlayers() {
     html += '<div style="flex: 1;">Operator</div>';
     html += '<div style="flex: 1; text-align: right;">Patients</div>';
     html += '<div style="flex: 1;">CCN</div>';
+    html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
     html += '</div>';
 
     sorted.forEach((r, idx) => {
@@ -5683,6 +5686,7 @@ function renderDiaPlayers() {
       html += '<div style="flex: 1;" class="truncate">' + (r.operator_name ? entityLink(r.operator_name, 'operator', null) : '—') + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
       html += '<div style="flex: 1; color: var(--text2);">' + esc(r.ccn || '—') + '</div>';
+      html += '<div style="flex: 0.8; text-align: center;" onclick="event.stopPropagation()"><button class="gov-row-action" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button> <button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button></div>';
       html += '</div>';
     });
     html += '</div></div>';
@@ -5706,6 +5710,7 @@ function renderDiaPlayers() {
     html += '<div style="flex: 1; text-align: right;">Delta</div>';
     html += '<div style="flex: 1; text-align: right;">% Change</div>';
     html += '<div style="flex: 1; text-align: right;">Current</div>';
+    html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
     html += '</div>';
 
     sorted.forEach((r, idx) => {
@@ -5717,6 +5722,7 @@ function renderDiaPlayers() {
       html += '<div style="flex: 1; text-align: right; color: ' + deltaColor + ';">' + ((r.delta_patients || 0) > 0 ? '+' : '') + fmtN(r.delta_patients || 0) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(r.pct_change || 0) + '</div>';
       html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + fmtN(r.latest_total_patients || 0) + '</div>';
+      html += '<div style="flex: 0.8; text-align: center;" onclick="event.stopPropagation()"><button class="gov-row-action" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button> <button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button></div>';
       html += '</div>';
     });
     html += '</div></div>';
@@ -5767,6 +5773,7 @@ function renderDiaPlayers() {
       html += '<div style="flex: 1; text-align: right;">Deals</div>';
       html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
       html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
+      html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
       html += '</div>';
 
       top50.forEach((b, idx) => {
@@ -5777,6 +5784,7 @@ function renderDiaPlayers() {
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';
+        html += '<div style="flex: 0.8; text-align: center;" onclick="event.stopPropagation()"><button class="gov-row-action" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button> <button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button></div>';
         html += '</div>';
       });
       html += '</div></div>';
@@ -5829,6 +5837,7 @@ function renderDiaPlayers() {
       html += '<div style="flex: 1; text-align: right;">Deals</div>';
       html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
       html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
+      html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
       html += '</div>';
 
       top50.forEach((s2, idx) => {
@@ -5839,6 +5848,7 @@ function renderDiaPlayers() {
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + s2.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(s2.volume, 'currency') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';
+        html += '<div style="flex: 0.8; text-align: center;" onclick="event.stopPropagation()"><button class="gov-row-action" onclick=\'showDetail(' + safeJSON(s2.records[0]) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button> <button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(s2.records[0]) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button></div>';
         html += '</div>';
       });
       html += '</div></div>';
@@ -5921,6 +5931,7 @@ function renderDiaPlayers() {
       html += '<div style="flex: 1; text-align: right;">Deals</div>';
       html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
       html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
+      html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
       html += '</div>';
 
       top50.forEach((b, idx) => {
@@ -5931,6 +5942,7 @@ function renderDiaPlayers() {
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';
+        html += '<div style="flex: 0.8; text-align: center;" onclick="event.stopPropagation()"><button class="gov-row-action" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button> <button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button></div>';
         html += '</div>';
       });
       html += '</div></div>';
@@ -6012,6 +6024,10 @@ function renderDiaSearch() {
           if (r.operator_name) html += '<span>Op: ' + esc(norm(r.operator_name)) + '</span>';
           if (r.latest_total_patients) html += '<span>Patients: ' + fmtN(r.latest_total_patients) + '</span>';
           if (r.change_type) html += '<span>' + esc(cleanLabel(r.change_type)) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         if (clinics.length > DIA_SEARCH_COLLAPSED_LIMIT) {
@@ -6037,6 +6053,10 @@ function renderDiaSearch() {
           if (r.city || r.state) html += '<span>' + esc((norm(r.city) || '') + (r.city && r.state ? ', ' : '') + (r.state || '')) + '</span>';
           if (r.signal_type) html += '<span>Signal: ' + esc(cleanLabel(r.signal_type)) + '</span>';
           if (r.npi) html += '<span>NPI: ' + esc(r.npi) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         if (npiSignals.length > DIA_SEARCH_COLLAPSED_LIMIT) {
@@ -6062,6 +6082,10 @@ function renderDiaSearch() {
           if (r.state) html += '<span>' + esc(r.state) + '</span>';
           if (r.operator_name) html += '<span>Op: ' + esc(norm(r.operator_name)) + '</span>';
           if (r.review_type) html += '<span>Review: ' + esc(cleanLabel(r.review_type)) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         if (propQueue.length > DIA_SEARCH_COLLAPSED_LIMIT) {
@@ -6087,6 +6111,10 @@ function renderDiaSearch() {
           if (r.status) html += '<span>Status: ' + esc(r.status) + '</span>';
           if (r.queue_type) html += '<span>Type: ' + esc(r.queue_type) + '</span>';
           if (r.source_bucket) html += '<span>Source: ' + esc(r.source_bucket) + '</span>';
+          html += '</div>';
+          html += '<div style="display:flex;gap:4px;margin-top:6px" onclick="event.stopPropagation()">';
+          html += '<button class="gov-row-action" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Ownership\')" title="View owner & contacts">📞 Contacts</button>';
+          html += '<button class="gov-row-action accent" onclick="showDetail(window._diaSearchFlat[' + idx + '], \'dia-clinic\', \'Intel\')" title="Research & intel">🔍 Intel</button>';
           html += '</div></div>';
         });
         if (outcomes.length > DIA_SEARCH_COLLAPSED_LIMIT) {
