@@ -257,10 +257,7 @@ async function loadDiaData() {
 function renderDiaTab() {
   const inner = q('#bizPageInner');
   if (!inner) return;
-
-  // Track tabs that benefit from anti-flicker rendering
-  const useFlickerFix = currentDiaTab === 'research' || currentDiaTab === 'changes';
-
+  
   switch (currentDiaTab) {
     case 'overview':
       inner.innerHTML = renderDiaOverview();
@@ -269,11 +266,7 @@ function renderDiaTab() {
       inner.innerHTML = renderDiaSearch();
       break;
     case 'changes':
-      if (useFlickerFix && typeof smoothDOMUpdate === 'function') {
-        smoothDOMUpdate(inner, renderDiaChanges());
-      } else {
-        inner.innerHTML = renderDiaChanges();
-      }
+      inner.innerHTML = renderDiaChanges();
       break;
     case 'npi':
       inner.innerHTML = renderDiaNpi();
@@ -291,11 +284,7 @@ function renderDiaTab() {
       inner.innerHTML = renderDiaPlayers();
       break;
     case 'research':
-      if (useFlickerFix && typeof smoothDOMUpdate === 'function') {
-        smoothDOMUpdate(inner, renderDiaResearch());
-      } else {
-        inner.innerHTML = renderDiaResearch();
-      }
+      inner.innerHTML = renderDiaResearch();
       break;
     case 'prospects':
       // Render dialysis-domain prospects from domain-classified opportunities
