@@ -549,9 +549,11 @@ function smoothDOMUpdate(container, html) {
   if (!container) return;
   container.style.transition = 'opacity 0.1s ease';
   container.style.opacity = '0.3';
-  container.innerHTML = html;           // synchronous — DOM exists immediately for event listeners
   requestAnimationFrame(function() {
-    container.style.opacity = '1';      // only the fade-in is deferred
+    container.innerHTML = html;
+    requestAnimationFrame(function() {
+      container.style.opacity = '1';
+    });
   });
 }
 window.smoothDOMUpdate = smoothDOMUpdate;

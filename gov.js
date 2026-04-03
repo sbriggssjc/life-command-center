@@ -87,7 +87,6 @@ async function govQuery(table, select, params = {}) {
   if (params.order) url.searchParams.set('order', params.order);
   if (params.limit !== undefined) url.searchParams.set('limit', params.limit);
   if (params.offset !== undefined) url.searchParams.set('offset', params.offset);
-  if (params.count === false) url.searchParams.set('count', 'false');
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -145,9 +144,9 @@ async function govWriteService(endpoint, data) {
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
 async function govQueryAll(table, select, params = {}) {
   let all = [], offset = 0;
-  const pageSize = 5000;  // MAX_LIMIT — minimise round-trips through serverless proxy
+  const pageSize = 1000;
   while (true) {
-    const result = await govQuery(table, select, { ...params, limit: pageSize, offset, count: false });
+    const result = await govQuery(table, select, { ...params, limit: pageSize, offset });
     all = all.concat(result.data || []);
     if ((result.data || []).length < pageSize) break;
     offset += pageSize;
@@ -212,10 +211,10 @@ async function loadGovOverviewStats() {
 let _govDataLoading = false;
 
 // Helper function to paginate a query until all rows are fetched
-async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 5000) {
+async function _loadPaginatedQuery(table, columns, options = {}, pageSize = 1000) {
   let all = [], offset = 0;
   while (true) {
-    const batch = await govQuery(table, columns, { ...options, limit: pageSize, offset, count: false });
+    const batch = await govQuery(table, columns, { ...options, limit: pageSize, offset });
     all = all.concat(batch.data || []);
     if (!batch.data || batch.data.length < pageSize) break;
     offset += pageSize;
@@ -254,11 +253,10 @@ async function loadGovData() {
   govData.researchOutcomes = [];
   
   showToast('Loading government data...', 'info');
-  var _govLoadStart = Date.now();
 
   try {
     // BATCH 1: Load all independent queries in parallel
-    // Page size 5000 (MAX_LIMIT) + count=false on inner pages minimises round-trips
+    // This reduces load time from 40-60s (sequential) to 5-10s (parallel)
     const [
       ownershipRes,
       leadsRes,
@@ -292,28 +290,27 @@ async function loadGovData() {
         {}
       ),
 
-      // Single queries using govQuery — skip count=exact to avoid expensive sequential scans
+      // Single queries using govQuery
       govQuery('gsa_lease_events',
         'lease_number, location_code, event_type, event_date, annual_rent, lease_rsf, lessor_name, changed_fields',
-        { order: 'event_date.desc', limit: 500, count: false }
+        { order: 'event_date.desc', limit: 500 }
       ),
       govQuery('research_queue_outcomes',
         'queue_type, status, notes, assigned_at, created_at, assigned_to, selected_property_id, clinic_id',
-        { order: 'assigned_at.desc', limit: 500, count: false }
+        { order: 'assigned_at.desc', limit: 500 }
       ),
       govQuery('gsa_snapshots',
         'snapshot_date, lease_number, address, city, state, lease_rsf, annual_rent, lessor_name, lease_effective, lease_expiration, field_office_name',
-        { order: 'snapshot_date.desc', limit: 500, count: false }
+        { order: 'snapshot_date.desc', limit: 500 }
       ),
       govQuery('frpp_records',
         'using_agency, using_bureau, street_address, city_name, state_name, square_feet, annual_rent_to_lessor, lease_expiration_date, property_type',
-        { limit: 5000, count: false }
+        { limit: 1000 }
       ),
       govQuery('loans',
         'property_id, index_name, loan_amount, loan_type, status',
-        { limit: 500, count: false }
+        { limit: 500 }
       ),
-      // properties count — this one NEEDS count=exact
       govQuery('properties',
         'property_id',
         { limit: 0 }
@@ -362,8 +359,7 @@ async function loadGovData() {
       frpp: govData.frppRecords.length,
       county: govData.countyAuth.length
     });
-    var _govLoadSec = ((Date.now() - _govLoadStart) / 1000).toFixed(1);
-    showToast(`Gov: ${govData.leads.length} leads, ${govData.ownership.length} ownership, ${govData.listings.length} listings (${_govLoadSec}s)`, 'success');
+    showToast(`Gov: ${govData.leads.length} leads, ${govData.ownership.length} ownership, ${govData.listings.length} listings loaded`, 'success');
     // Only render if user is still viewing the government tab
     if (typeof currentBizTab !== 'undefined' && currentBizTab === 'government') renderGovTab();
 
