@@ -6273,20 +6273,24 @@ function renderGovPlayers() {
       // Use transaction_type if available (from Prompt 1 migration); otherwise fall back to string check
       const txType = r.transaction_type;
       if (txType && txType !== 'brokered') return;
-      const broker = r.listing_broker;
+      // Prefer enriched broker name (e.g., "TRAVIS TRAUTVETTER — CUSHMAN & WAKEFIELD") over raw first-name-only
+      const brokerRaw = r.listing_broker;
+      const brokerEnriched = r.listing_broker_enriched;
+      const broker = brokerEnriched || brokerRaw;
       if (!broker) return;
       // Skip known non-broker values (fallback for data not yet migrated)
-      const bl = broker.trim().toUpperCase();
+      const bl = (brokerRaw || broker).trim().toUpperCase();
       if (['DIRECT', 'FORECLOSURE', 'AUCTION', 'REO', 'N/A', 'NONE', 'UNKNOWN'].includes(bl)) return;
 
       const key = normalizeEntity(broker);
-      if (!brokerMap[key]) brokerMap[key] = { name: broker, deals: 0, volume: 0, records: [], nameQuality: r.listing_broker_name_quality || null };
+      const nameQual = brokerEnriched ? 'full_name' : (r.listing_broker_name_quality || null);
+      if (!brokerMap[key]) brokerMap[key] = { name: broker, deals: 0, volume: 0, records: [], nameQuality: nameQual };
       brokerMap[key].deals++;
       brokerMap[key].volume += (r.sold_price || r.price || 0);
       brokerMap[key].records.push(r);
-      // Track name quality — use best quality seen across records
-      if (r.listing_broker_name_quality === 'full_name' || r.listing_broker_name_quality === 'company') {
-        brokerMap[key].nameQuality = r.listing_broker_name_quality;
+      // Track name quality — enriched or full_name/company overrides first_only
+      if (brokerEnriched || r.listing_broker_name_quality === 'full_name' || r.listing_broker_name_quality === 'company') {
+        brokerMap[key].nameQuality = 'full_name';
       }
     });
     listings.forEach(r => {
