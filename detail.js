@@ -68,6 +68,8 @@ async function openUnifiedDetail(db, ids, fallback) {
   const overlay = document.getElementById('detailOverlay');
   if (!panel || !overlay) return;
 
+  fallback = fallback || {};  // guard against null/undefined callers
+
   // Show panel immediately with loading state
   panel.style.display = 'block';
   overlay.classList.add('open');
@@ -1952,6 +1954,7 @@ function _intelApplyIntakeAnalysis() {
   }
   const draft = _udExtractAssistantSection(analysis, 5) || _udExtractAssistantSection(analysis, 1) || analysis;
   target.value = [target.value?.trim(), draft].filter(Boolean).join(target.value?.trim() ? '\n\n' : '');
+  _udFormDirty = true;
   showToast('Research notes updated from intake analysis', 'success');
 }
 
@@ -2020,6 +2023,7 @@ function _intelApplyIntakeFields() {
     return;
   }
 
+  _udFormDirty = true;
   showToast(`Applied ${updated} extracted field${updated === 1 ? '' : 's'} for review`, 'success');
 }
 
