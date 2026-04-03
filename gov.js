@@ -5969,20 +5969,23 @@ function buildGovLeasesHTML() {
 // GOVERNMENT LOANS TAB
 // ============================================================================
 let govLoansData = null; // lazy-loaded
+let govLoanPropertyMap = {}; // property_id → {address, city, state, agency}
+let govLoansMaturityFilter = 'all'; // 'all', '1yr', '2yr'
 
 function renderGovLoans() {
   const el = document.getElementById('bizPageInner');
   if (!el) return '';
 
-  // Lazy-load loans
+  // Lazy-load loans + property address map
   if (!govLoansData) {
     el.innerHTML = '<div class="loading"><span class="spinner"></span> Loading loan data...</div>';
     (async () => {
       try {
+        // Load loans (paginated)
         let allLoans = [], pg = 0;
         while (true) {
           const batch = await govQuery('loans',
-            'loan_id,property_id,index_name,loan_amount,loan_type,status,maturity_date,interest_rate,origination_date,lender_id,rate_type,term_years',
+            'loan_id,property_id,index_name,loan_amount,loan_type,status,maturity_date,interest_rate,origination_date,lender_id,rate_type,term_years,data_source',
             { limit: 2000, offset: pg * 2000 }
           );
           allLoans = allLoans.concat(batch.data || []);
@@ -5990,6 +5993,35 @@ function renderGovLoans() {
           pg++;
         }
         govLoansData = allLoans;
+
+        // Build property address map from portfolioProperties if available,
+        // otherwise load property addresses for loan property_ids
+        govLoanPropertyMap = {};
+        if (govData.portfolioProperties && govData.portfolioProperties.length > 0) {
+          for (const p of govData.portfolioProperties) {
+            if (p.property_id) govLoanPropertyMap[p.property_id] = p;
+          }
+        } else {
+          // Load addresses for unique property_ids referenced by loans
+          const propIds = [...new Set(allLoans.map(l => l.property_id).filter(Boolean))];
+          if (propIds.length > 0) {
+            let allProps = [], ppg = 0;
+            while (true) {
+              const pbatch = await govQuery('properties',
+                'property_id,address,city,state,agency,agency_full_name',
+                { limit: 2000, offset: ppg * 2000 }
+              );
+              allProps = allProps.concat(pbatch.data || []);
+              if (!pbatch.data || pbatch.data.length < 2000) break;
+              ppg++;
+            }
+            for (const p of allProps) {
+              if (p.property_id) govLoanPropertyMap[p.property_id] = p;
+            }
+          }
+        }
+
+        if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
         el.innerHTML = buildGovLoansHTML();
       } catch (e) {
         console.error('Loans load error:', e);
@@ -6005,12 +6037,12 @@ function renderGovLoans() {
 
 function buildGovLoansHTML() {
   const loans = govLoansData || [];
+  const propMap = govLoanPropertyMap || {};
 
   let html = '<div style="margin-bottom:24px">';
   html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">🏦</span> Loan Intelligence</div>';
 
   if (loans.length === 0) {
-    // Empty state — scaffold for future data
     html += '<div class="widget" style="text-align:center;padding:40px 20px">';
     html += '<div style="font-size:48px;margin-bottom:12px;opacity:0.3">🏦</div>';
     html += '<div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--text)">Loan Data Coming Soon</div>';
@@ -6033,18 +6065,8 @@ function buildGovLoansHTML() {
   const now = new Date();
   const oneYr = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
   const twoYr = new Date(now.getFullYear() + 2, now.getMonth(), now.getDate());
-  const maturingUnder1 = withMaturity.filter(l => new Date(l.maturity_date) <= oneYr).length;
-  const maturingUnder2 = withMaturity.filter(l => new Date(l.maturity_date) <= twoYr).length;
-
-  // Lender breakdown
-  const lenderMap = {};
-  for (const l of loans) {
-    const lender = l.index_name || l.rate_type || 'Unknown';
-    if (!lenderMap[lender]) lenderMap[lender] = { count: 0, volume: 0 };
-    lenderMap[lender].count++;
-    lenderMap[lender].volume += (parseFloat(l.loan_amount) || 0);
-  }
-  const topLenders = Object.entries(lenderMap).sort((a, b) => b[1].volume - a[1].volume).slice(0, 10);
+  const maturingUnder1 = withMaturity.filter(l => new Date(l.maturity_date) <= oneYr);
+  const maturingUnder2 = withMaturity.filter(l => new Date(l.maturity_date) <= twoYr);
 
   // Type breakdown
   const typeMap = {};
@@ -6055,26 +6077,22 @@ function buildGovLoansHTML() {
     typeMap[t].volume += (parseFloat(l.loan_amount) || 0);
   }
 
+  // KPI cards — clickable to filter maturity table
+  const filterActive = govLoansMaturityFilter || 'all';
   html += '<div class="dia-grid dia-grid-4" style="margin-bottom:20px">';
-  html += metricHTML('Total Loans', fmtN(loans.length), 'In database', 'blue');
-  html += metricHTML('Total Volume', fmt(totalVolume), fmtN(loans.length) + ' loans', 'green');
-  html += metricHTML('Maturing < 1yr', fmtN(maturingUnder1), 'Refi opportunities', 'red');
-  html += metricHTML('Maturing < 2yr', fmtN(maturingUnder2), 'Watch list', 'orange');
-  html += '</div>';
 
-  // Lender Breakdown
-  if (topLenders.length > 0) {
-    html += '<div class="widget" style="margin-bottom:16px">';
-    html += '<div class="widget-title">Lender Breakdown</div>';
-    html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Lender</th><th style="text-align:right">Loans</th><th style="text-align:right">Volume</th><th style="text-align:right">Avg Loan</th>';
-    html += '</tr></thead><tbody>';
-    for (const [name, data] of topLenders) {
-      const avg = data.count > 0 ? data.volume / data.count : 0;
-      html += `<tr><td>${esc(name)}</td><td style="text-align:right">${fmtN(data.count)}</td><td style="text-align:right">${fmt(data.volume)}</td><td style="text-align:right">${fmt(avg)}</td></tr>`;
-    }
-    html += '</tbody></table></div></div>';
-  }
+  html += '<div class="stat-card' + (filterActive === 'all' ? ' stat-card-active' : '') + '" style="min-width:120px;cursor:pointer;' + (filterActive === 'all' ? 'outline:2px solid var(--accent);outline-offset:-2px;' : '') + '" onclick="govLoansMaturityFilter=\'all\';document.getElementById(\'bizPageInner\').innerHTML=buildGovLoansHTML()">';
+  html += '<div class="stat-label" style="color:var(--blue)">Total Loans</div><div class="stat-value">' + fmtN(loans.length) + '</div><div class="stat-sub">In database</div></div>';
+
+  html += '<div class="stat-card" style="min-width:120px"><div class="stat-label" style="color:var(--green)">Total Volume</div><div class="stat-value">' + fmt(totalVolume) + '</div><div class="stat-sub">' + fmtN(loans.length) + ' loans</div></div>';
+
+  html += '<div class="stat-card' + (filterActive === '1yr' ? ' stat-card-active' : '') + '" style="min-width:120px;cursor:pointer;' + (filterActive === '1yr' ? 'outline:2px solid var(--red);outline-offset:-2px;' : '') + '" onclick="govLoansMaturityFilter=\'1yr\';document.getElementById(\'bizPageInner\').innerHTML=buildGovLoansHTML()">';
+  html += '<div class="stat-label" style="color:var(--red)">Maturing &lt; 1yr</div><div class="stat-value">' + fmtN(maturingUnder1.length) + '</div><div class="stat-sub">Refi opportunities</div></div>';
+
+  html += '<div class="stat-card' + (filterActive === '2yr' ? ' stat-card-active' : '') + '" style="min-width:120px;cursor:pointer;' + (filterActive === '2yr' ? 'outline:2px solid var(--orange);outline-offset:-2px;' : '') + '" onclick="govLoansMaturityFilter=\'2yr\';document.getElementById(\'bizPageInner\').innerHTML=buildGovLoansHTML()">';
+  html += '<div class="stat-label" style="color:var(--orange)">Maturing &lt; 2yr</div><div class="stat-value">' + fmtN(maturingUnder2.length) + '</div><div class="stat-sub">Watch list</div></div>';
+
+  html += '</div>';
 
   // Loan Type Breakdown
   if (Object.keys(typeMap).length > 0) {
@@ -6082,25 +6100,55 @@ function buildGovLoansHTML() {
     html += '<div class="widget-title">By Loan Type</div>';
     html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
     for (const [type, data] of Object.entries(typeMap).sort((a, b) => b[1].volume - a[1].volume)) {
-      html += `<div class="stat-card" style="min-width:120px;flex:1"><div class="stat-label">${esc(type)}</div><div class="stat-value" style="font-size:18px">${fmtN(data.count)}</div><div class="stat-sub">${fmt(data.volume)}</div></div>`;
+      html += '<div class="stat-card" style="min-width:120px;flex:1"><div class="stat-label">' + esc(type) + '</div><div class="stat-value" style="font-size:18px">' + fmtN(data.count) + '</div><div class="stat-sub">' + fmt(data.volume) + '</div></div>';
     }
     html += '</div></div>';
   }
 
-  // Maturity Schedule
-  if (withMaturity.length > 0) {
-    const maturing = withMaturity.sort((a, b) => (a.maturity_date || '').localeCompare(b.maturity_date || ''));
+  // Maturity Schedule — filtered by KPI card selection
+  let maturityLoans;
+  let maturityLabel;
+  if (filterActive === '1yr') {
+    maturityLoans = maturingUnder1.sort((a, b) => (a.maturity_date || '').localeCompare(b.maturity_date || ''));
+    maturityLabel = 'Maturing Within 1 Year';
+  } else if (filterActive === '2yr') {
+    maturityLoans = maturingUnder2.sort((a, b) => (a.maturity_date || '').localeCompare(b.maturity_date || ''));
+    maturityLabel = 'Maturing Within 2 Years';
+  } else {
+    maturityLoans = withMaturity.sort((a, b) => (a.maturity_date || '').localeCompare(b.maturity_date || ''));
+    maturityLabel = 'All Loans by Maturity';
+  }
+
+  if (maturityLoans.length > 0) {
     html += '<div class="widget">';
-    html += `<div class="widget-title">Maturity Schedule <span style="font-size:12px;font-weight:400;color:var(--text3)">(${withMaturity.length} loans)</span></div>`;
+    html += '<div class="widget-title">' + maturityLabel + ' <span style="font-size:12px;font-weight:400;color:var(--text3)">(' + maturityLoans.length + ' loans)</span></div>';
     html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
-    html += '<th>Lender</th><th>Type</th><th style="text-align:right">Amount</th><th>Maturity</th><th>Status</th>';
+    html += '<th>Property</th><th>City</th><th>State</th><th>Type</th><th style="text-align:right">Amount</th><th>Maturity</th><th>Status</th>';
     html += '</tr></thead><tbody>';
-    for (const l of maturing.slice(0, 50)) {
+    for (const l of maturityLoans.slice(0, 75)) {
+      const prop = propMap[l.property_id] || {};
       const mat = l.maturity_date ? new Date(l.maturity_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
       const isPastDue = l.maturity_date && new Date(l.maturity_date) < now;
-      html += `<tr><td>${esc(l.index_name || '—')}</td><td>${esc(l.loan_type || '—')}</td><td style="text-align:right">${l.loan_amount ? fmt(parseFloat(l.loan_amount)) : '—'}</td><td style="color:${isPastDue ? 'var(--red)' : 'var(--text)'}">${mat}${isPastDue ? ' (past due)' : ''}</td><td>${esc(l.status || '—')}</td></tr>`;
+      const matColor = isPastDue ? 'var(--red)' : (new Date(l.maturity_date) <= oneYr ? '#f87171' : 'var(--text)');
+      // Build a detail object that combines loan + property data for showDetail
+      const detailObj = Object.assign({}, prop, l, { address: prop.address, city: prop.city, state: prop.state, agency: prop.agency || prop.agency_full_name });
+      html += '<tr class="clickable-row" onclick=\'showDetail(' + safeJSON(detailObj) + ', "gov-lead")\'>';
+      html += '<td style="font-weight:500">' + esc(prop.address || '—') + '</td>';
+      html += '<td>' + esc(prop.city || '—') + '</td>';
+      html += '<td>' + esc(prop.state || '—') + '</td>';
+      html += '<td>' + esc(l.loan_type || '—') + '</td>';
+      html += '<td style="text-align:right;font-weight:600">' + (l.loan_amount ? fmt(parseFloat(l.loan_amount)) : '—') + '</td>';
+      html += '<td style="color:' + matColor + ';font-weight:600">' + mat + (isPastDue ? ' (past due)' : '') + '</td>';
+      html += '<td>' + esc(l.status || '—') + '</td>';
+      html += '</tr>';
     }
-    html += '</tbody></table></div></div>';
+    html += '</tbody></table></div>';
+    if (maturityLoans.length > 75) {
+      html += '<div style="text-align:center;padding:12px;color:var(--text3);font-size:13px">Showing 75 of ' + maturityLoans.length + ' loans</div>';
+    }
+    html += '</div>';
+  } else {
+    html += '<div class="widget"><div style="text-align:center;padding:24px;color:var(--text3)">No loans match this maturity filter</div></div>';
   }
 
   html += '</div>';
@@ -6225,6 +6273,9 @@ function renderGovPlayers() {
   return html;
 }
 
+let govPlayersExpandedIdx = -1; // which player row is expanded (-1 = none)
+let govPlayersSearch = ''; // search filter for players table
+
 function renderPlayersTable(players, roleLabel, project) {
   let html = '<div class="gov-metrics">';
   html += metricHTML('Total ' + roleLabel + 's', fmtN(players.length), 'unique entities', 'blue');
@@ -6234,6 +6285,15 @@ function renderPlayersTable(players, roleLabel, project) {
   html += metricHTML('Total Volume', fmt(topVolume), 'across all ' + roleLabel.toLowerCase() + 's', 'yellow');
   html += '</div>';
 
+  // Search filter
+  html += '<div style="margin-bottom:12px">';
+  html += '<input type="text" id="playersSearchInput" placeholder="Filter ' + roleLabel.toLowerCase() + 's by name..." value="' + esc(govPlayersSearch) + '" style="width:100%;max-width:400px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:14px" oninput="govPlayersSearch=this.value;govPlayersExpandedIdx=-1;renderGovTab()" />';
+  html += '</div>';
+
+  // Apply search filter
+  const searchTerm = (govPlayersSearch || '').toLowerCase();
+  const filtered = searchTerm ? players.filter(p => (p.name || '').toLowerCase().includes(searchTerm)) : players;
+
   html += '<div class="table-wrapper"><div class="data-table">';
   html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
   html += '<div style="flex: 3;">' + roleLabel + '</div>';
@@ -6242,20 +6302,61 @@ function renderPlayersTable(players, roleLabel, project) {
   html += '<div style="flex: 2;">Most Recent</div>';
   html += '</div>';
 
-  players.forEach((p, idx) => {
+  filtered.forEach((p, idx) => {
+    const isExpanded = govPlayersExpandedIdx === idx;
     const latestRecord = p.records[0] || {};
-    const source = project === 'gov' ? (latestRecord.lead_id ? 'gov-lead' : 'gov-ownership') : 'dia-clinic';
 
-    html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(latestRecord) + ', "' + source + '")\'>';
-    html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
+    // Main row — click to expand/collapse portfolio
+    html += '<div class="table-row clickable-row" style="' + (isExpanded ? 'background:var(--surface2);border-left:3px solid var(--accent);' : '') + '" onclick="govPlayersExpandedIdx=' + (isExpanded ? '-1' : idx) + ';renderGovTab()">';
+    html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">' + (isExpanded ? '&#9660;' : '&#9654;') + '</span><span style="color: var(--text2); margin-right: 6px;">#' + (idx + 1) + '</span>' + esc(p.name) + '</div>';
     html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + p.deals + '</div>';
     html += '<div style="flex: 2; text-align: right;">' + fmt(p.volume) + '</div>';
     html += '<div style="flex: 2; color: var(--text2);">' + esc(latestRecord.address || latestRecord.facility_name || '—') + '</div>';
     html += '</div>';
+
+    // Expanded portfolio panel
+    if (isExpanded) {
+      html += '<div style="background:var(--surface);border-left:3px solid var(--accent);padding:12px 16px;margin-bottom:4px">';
+      html += '<div style="font-weight:600;margin-bottom:8px;font-size:14px">' + esc(p.name) + ' — Portfolio (' + p.records.length + ' deals)</div>';
+
+      // Portfolio sub-table
+      html += '<div class="gov-table-card" style="margin-bottom:8px"><table class="gov-table" style="font-size:13px"><thead><tr>';
+      html += '<th>Address</th><th>City</th><th>State</th><th style="text-align:right">Price</th><th>Date</th>';
+      html += '</tr></thead><tbody>';
+
+      const sortedRecords = p.records.slice().sort((a, b) => {
+        const dA = a.sale_date || a.sold_date || a.recording_date || '';
+        const dB = b.sale_date || b.sold_date || b.recording_date || '';
+        return dB.localeCompare(dA); // newest first
+      });
+
+      for (const r of sortedRecords.slice(0, 25)) {
+        const addr = r.address || r.facility_name || '—';
+        const city = r.city || '—';
+        const state = r.state || '—';
+        const price = r.sold_price || r.price || r.sale_price || r.estimated_value || 0;
+        const date = r.sale_date || r.sold_date || r.recording_date || '—';
+        const dateDisplay = date !== '—' ? new Date(date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
+        const source = project === 'gov' ? (r.lead_id ? 'gov-lead' : 'gov-ownership') : 'dia-clinic';
+
+        html += '<tr class="clickable-row" onclick=\'event.stopPropagation();showDetail(' + safeJSON(r) + ', "' + source + '")\'>';
+        html += '<td style="font-weight:500">' + esc(addr) + '</td>';
+        html += '<td>' + esc(city) + '</td>';
+        html += '<td>' + esc(state) + '</td>';
+        html += '<td style="text-align:right">' + (price ? fmt(price) : '—') + '</td>';
+        html += '<td>' + dateDisplay + '</td>';
+        html += '</tr>';
+      }
+      if (sortedRecords.length > 25) {
+        html += '<tr><td colspan="5" style="text-align:center;color:var(--text3);font-style:italic">Showing 25 of ' + sortedRecords.length + ' deals</td></tr>';
+      }
+      html += '</tbody></table></div>';
+      html += '</div>';
+    }
   });
 
-  if (players.length === 0) {
-    html += '<div class="table-empty">No ' + roleLabel.toLowerCase() + ' data available</div>';
+  if (filtered.length === 0) {
+    html += '<div class="table-empty">' + (searchTerm ? 'No ' + roleLabel.toLowerCase() + 's match "' + esc(searchTerm) + '"' : 'No ' + roleLabel.toLowerCase() + ' data available') + '</div>';
   }
 
   html += '</div></div>';
