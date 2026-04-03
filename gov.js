@@ -3749,12 +3749,7 @@ function renderGovOwnership() {
   const yearLabels = Object.keys(valByYear).sort();
   const yearData = yearLabels.map(y => valByYear[y]);
   
-  // === Action guidance banner ===
-  let html = '<div style="padding:10px 14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Ownership Transfers</strong> — Review recent property ownership changes. Click any row to view transfer details, update research status, and verify sale information. Records marked "Needs Research" require ownership verification in the <em>Research</em> tab.</div>';
-  html += '</div>';
-
-  html += '<div class="gov-metrics">';
+  let html = '<div class="gov-metrics">';
   html += metricHTML('Total Changes', fmtN(totalChanges), 'Ownership transfers', 'blue');
   html += metricHTML('With Sale Price', fmtN(withSalePrice), 'Confirmed value', 'green');
   html += metricHTML('Needs Research', fmtN(needsResearch), 'Pending', 'yellow');
@@ -3813,12 +3808,7 @@ function renderGovPipeline() {
   const tempData = [hotCount, warmCount, totalLeads - hotCount - warmCount];
   const tempColors = ['#f87171', '#fbbf24', '#6c8cff'];
   
-  // === Action guidance banner ===
-  let html = '<div style="padding:10px 14px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Prospect Pipeline</strong> — Review and prioritize leads by temperature and score. Click any lead to view property details, log activity, update pipeline stage, or record contact information. Use the <em>Research</em> tab for guided ownership and lease research workflows.</div>';
-  html += '</div>';
-
-  html += '<div class="gov-metrics">';
+  let html = '<div class="gov-metrics">';
   html += metricHTML('Total Leads', fmtN(totalLeads) + (atCap ? '+' : ''), 'in pipeline' + (atCap ? ' (showing first 1,000)' : ''), 'blue');
   html += metricHTML('Hot', fmtN(hotCount) + (atCap ? '+' : ''), 'high priority', 'red');
   html += metricHTML('Warm', fmtN(warmCount) + (atCap ? '+' : ''), 'active prospects', 'yellow');
@@ -3861,12 +3851,7 @@ function renderGovListings() {
   const totalAsking = govData.listings.reduce((sum, l) => sum + (l.asking_price || 0), 0);
   const underContract = govData.listings.filter(l => l.listing_status === 'under_contract').length;
   
-  // === Action guidance banner ===
-  let html = '<div style="padding:10px 14px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid #34d399;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Active Listings</strong> — Monitor government-leased properties currently on market. Click any listing to view asking price, lease details, and market comps. Identify acquisition opportunities or competitive intelligence for your pipeline.</div>';
-  html += '</div>';
-
-  html += '<div class="gov-metrics">';
+  let html = '<div class="gov-metrics">';
   html += metricHTML('Active Listings', fmtN(activeListings), 'Currently on market', 'blue');
   html += metricHTML('Total Asking', fmt(totalAsking), 'Combined value', 'green');
   html += metricHTML('All Listings', fmtN(govData.listings.length), 'All statuses', 'yellow');
@@ -5751,12 +5736,7 @@ function buildGovLeasesHTML() {
   const totalRent = props.reduce((s, p) => s + (p.gross_rent || 0), 0);
 
   let html = '<div style="margin-bottom:24px">';
-  html += '<div style="font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">📋</span> Lease Intelligence</div>';
-
-  // === Action guidance banner ===
-  html += '<div style="padding:10px 14px;background:rgba(248,113,113,0.08);border-radius:8px;border-left:3px solid #f87171;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Action:</strong> Identify high-priority prospecting targets from expiring and recently executed leases. Click any row to view property details, ownership, and lease terms. Properties with short remaining terms are prime candidates for pipeline outreach.</div>';
-  html += '</div>';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">📋</span> Lease Intelligence</div>';
 
   // ── Summary Stats ──
   html += '<div class="dia-grid dia-grid-4" style="margin-bottom:20px">';
