@@ -17,3 +17,4 @@ the deployment and cause a production 404 error.
 5. Update vercel.json rewrites when adding new sub-routes
 6. Use descriptive commit messages — never "GPT changes" or similar generic messages
 7. See .github/AI_INSTRUCTIONS.md for full architecture, routing, and design principles
+8. NEVER set LCC_API_KEY in Vercel env vars — no frontend auth flow exists yet; setting it breaks all data endpoints with 401s
