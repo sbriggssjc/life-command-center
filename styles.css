@@ -485,6 +485,12 @@ body.compact .greeting { font-size: 18px; }
 .gov-action-buttons { display: flex; gap: 8px; margin-top: 12px; }
 .gov-action-buttons button { flex: 1; }
 
+/* Inline row action buttons (Round 49) — compact buttons inside table rows */
+.gov-row-action { padding: 4px 8px; font-size: 11px; font-weight: 600; border: 1px solid var(--border); border-radius: 5px; background: var(--s2); color: var(--text2); cursor: pointer; white-space: nowrap; transition: all 0.15s ease; }
+.gov-row-action:hover { border-color: var(--accent); color: var(--text); background: rgba(96,165,250,0.08); }
+.gov-row-action.accent { border-color: rgba(96,165,250,0.3); color: var(--accent); }
+.gov-row-action.accent:hover { background: rgba(96,165,250,0.15); border-color: var(--accent); }
+
 /* Gov.js module class mappings (unprefixed aliases used by gov.js) */
 .metric-card { background: var(--s1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; position: relative; overflow: hidden; }
 .metric-label { color: var(--text2); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px; }

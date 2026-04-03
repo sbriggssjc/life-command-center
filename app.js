@@ -3655,12 +3655,12 @@ window._detailRecord = null;
 window._detailSource = null;
 window._detailTab = 'Overview';
 
-function showDetail(record, source = 'activity') {
+function showDetail(record, source = 'activity', initialTab) {
   // Route gov/dia property sources to unified detail page
   if (source === 'gov-ownership' || source === 'gov-lead' || source === 'gov-listing' ||
       source === 'dia-clinic') {
     if (typeof showUnifiedDetail === 'function') {
-      showUnifiedDetail(record, source);
+      showUnifiedDetail(record, source, initialTab);
       return;
     }
   }
