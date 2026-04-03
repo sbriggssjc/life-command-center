@@ -27,7 +27,9 @@ let diaCmsStateFilter = '';
 let diaCmsOperatorFilter = '';
 let diaCmsModalityFilter = '';
 const DIA_CMS_PAGE_SIZE = 50;
+let diaCmsSelectedIdx = undefined; // selected row in CMS table
 let diaNpiFilter = null; // filter by signal_type
+let diaNpiSelectedIdx = undefined; // selected row in NPI table
 let diaSalesView = 'comps'; // 'comps' | 'available'
 let diaSalesComps = null;   // lazy-loaded from v_sales_comps
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
@@ -909,6 +911,11 @@ function renderDiaChanges() {
 
   let html = '<div class="biz-section">';
 
+  // === Action guidance banner ===
+  html += '<div style="padding:10px 14px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>CMS Clinic Data</strong> — Browse the latest CMS enrollment data. <strong>Flag</strong> clinics worth researching further (flagged items appear in the Research queue). Click any row to view full property details.</div>';
+  html += '</div>';
+
   // === Dynamic average cards ===
   html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px">';
   html += _cmsAvgCard('Clinics', fmtN(n) + '<div style="font-size:9px;color:var(--text3);margin-top:2px">' + cntIC + ' IC · ' + cntHybrid + ' Hyb · ' + cntHome + ' Home</div>', '#60a5fa');
@@ -980,7 +987,7 @@ function renderDiaChanges() {
   html += '</div>';
 
   // Rows
-  page.forEach(row => {
+  page.forEach((row, idx) => {
     const modBadge = row.modality_type === 'hybrid' ? '<span style="color:#fbbf24;font-weight:600">Hybrid</span>'
       : row.modality_type === 'home' ? '<span style="color:#a78bfa;font-weight:600">Home</span>'
       : '<span style="color:#34d399;font-weight:600">IC</span>';
@@ -989,8 +996,9 @@ function renderDiaChanges() {
     const icRev = Number(row.est_in_center_revenue) || 0;
     const hmRev = Number(row.est_home_revenue) || 0;
     const fmtRev = v => v > 0 ? '$' + (v / 1000000).toFixed(1) + 'M' : '–';
+    const isSelected = diaCmsSelectedIdx === idx;
 
-    html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")' style="font-size:12px">`;
+    html += `<div class="table-row clickable-row" data-cms-row-idx="${idx}" style="font-size:12px;cursor:pointer;${isSelected ? 'background:rgba(96,165,250,0.1);border-left:3px solid #60a5fa;' : ''}">`;
     html += `<div style="flex:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${(row.operator_name || row.chain_organization) ? entityLink(row.operator_name || row.chain_organization, 'operator', null) : '–'}</div>`;
     html += `<div style="flex:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(row.facility_name || '')}</div>`;
     html += `<div style="flex:0.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${esc(row.city || '')}</div>`;
@@ -1022,10 +1030,51 @@ function renderDiaChanges() {
     html += '</div>';
   }
 
+  // === Inline context card for selected row ===
+  if (diaCmsSelectedIdx !== undefined && page[diaCmsSelectedIdx]) {
+    const sel = page[diaCmsSelectedIdx];
+    html += '<div style="margin-top:16px;border:1px solid #60a5fa;border-radius:12px;padding:16px 20px;background:var(--s1)">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">';
+    html += '<div>';
+    html += '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text)">' + esc(sel.facility_name || 'Unknown') + '</h3>';
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc((sel.city || '') + (sel.state ? ', ' + sel.state : '')) + (sel.address ? ' — ' + esc(sel.address) : '') + '</div>';
+    html += '</div>';
+    html += '<button style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);cursor:pointer" onclick="diaCmsSelectedIdx=undefined;renderDiaTab()">Close</button>';
+    html += '</div>';
+    // Key clinic data grid
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;font-size:12px">';
+    const _cv = (lbl, val) => '<div style="background:var(--s2);padding:8px;border-radius:6px"><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">' + lbl + '</div><div style="font-weight:600;color:var(--text)">' + val + '</div></div>';
+    html += _cv('Operator', esc(sel.operator_name || sel.chain_organization || '—'));
+    html += _cv('Modality', esc(sel.modality_type ? sel.modality_type.replace(/_/g, ' ') : '—'));
+    html += _cv('IC Patients', fmtN(Number(sel.est_in_center_patients) || 0));
+    html += _cv('Home Patients', fmtN(Number(sel.est_home_patients) || 0));
+    html += _cv('Annual Revenue', sel.estimated_annual_revenue ? '$' + (Number(sel.estimated_annual_revenue) / 1e6).toFixed(1) + 'M' : '—');
+    html += _cv('EBITDA', sel.estimated_ebitda ? '$' + Math.round(Number(sel.estimated_ebitda) / 1000).toLocaleString() + 'K' : '—');
+    html += _cv('Clinic ID', esc(String(sel.clinic_id || sel.ccn || '—')));
+    html += _cv('Medicare ID', esc(String(sel.medicare_id || '—')));
+    html += '</div>';
+    // Quick actions
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    const searchQ = (sel.facility_name || '') + ' ' + (sel.address || '') + ' ' + (sel.city || '') + ' ' + (sel.state || '') + ' dialysis';
+    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>';
+    html += '<button class="btn-action default" style="font-size:11px;padding:5px 12px;" onclick=\'showDetail(' + safeJSON(sel) + ',"dia-clinic")\'>Open Full Detail</button>';
+    html += '<button class="cms-flag-btn" data-clinic-id="' + esc(sel.clinic_id || sel.ccn || '') + '" data-clinic-name="' + esc(sel.facility_name || '') + '" style="font-size:11px;padding:5px 12px;border:1px solid var(--accent);border-radius:6px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag for Research</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+
   html += '</div>'; // biz-section
 
   // === Attach handlers ===
   setTimeout(() => {
+    // CMS row clicks — show inline context card
+    document.querySelectorAll('[data-cms-row-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.cmsRowIdx, 10);
+        diaCmsSelectedIdx = diaCmsSelectedIdx === idx ? undefined : idx;
+        renderDiaTab();
+      });
+    });
     // Sort headers
     document.querySelectorAll('[data-cms-sort]').forEach(el => {
       el.addEventListener('click', () => {
@@ -1037,6 +1086,7 @@ function renderDiaChanges() {
           diaCmsSort.dir = 'desc';
         }
         diaCmsPage = 0;
+        diaCmsSelectedIdx = undefined;
         renderDiaTab();
       });
     });
@@ -1089,8 +1139,8 @@ function renderDiaChanges() {
     // Pagination
     const prevBtn = document.getElementById('cmsPrev');
     const nextBtn = document.getElementById('cmsNext');
-    if (prevBtn) prevBtn.addEventListener('click', () => { diaCmsPage--; renderDiaTab(); });
-    if (nextBtn) nextBtn.addEventListener('click', () => { diaCmsPage++; renderDiaTab(); });
+    if (prevBtn) prevBtn.addEventListener('click', () => { diaCmsPage--; diaCmsSelectedIdx = undefined; renderDiaTab(); });
+    if (nextBtn) nextBtn.addEventListener('click', () => { diaCmsPage++; diaCmsSelectedIdx = undefined; renderDiaTab(); });
     // Flag-for-review buttons
     document.querySelectorAll('.cms-flag-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -1143,7 +1193,12 @@ function _cmsAvgCard(title, value, color) {
  */
 function renderDiaNpi() {
   let html = '<div class="biz-section">';
-  
+
+  // === Action guidance banner ===
+  html += '<div style="padding:10px 14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>NPI Intelligence Signals</strong> — Review provider-level changes detected from NPI registry data. <strong>Flag</strong> signals that warrant ownership or lease research. <strong>Dismiss</strong> signals that are routine or irrelevant. Click any row to view full property details.</div>';
+  html += '</div>';
+
   // Signal summary metrics
   html += '<div class="gov-metrics">';
   
@@ -1206,10 +1261,11 @@ function renderDiaNpi() {
     html += '<div style="flex: 0.8; text-align: center;">Actions</div>';
     html += '</div>';
     
-    filtered.slice(0, 500).forEach(row => {
+    filtered.slice(0, 500).forEach((row, idx) => {
       const signalColor = row.signal_type === 'npi_changed' ? 'var(--accent)' : 'var(--text2)';
-      
-      html += `<div class="table-row clickable-row" onclick='showDetail(${safeJSON(row)}, "dia-clinic")'>`;
+      const isSelected = diaNpiSelectedIdx === idx;
+
+      html += `<div class="table-row clickable-row" data-npi-row-idx="${idx}" style="cursor:pointer;${isSelected ? 'background:rgba(251,191,36,0.1);border-left:3px solid #fbbf24;' : ''}">`;
       html += `<div style="flex: 1.5; color: ${signalColor};">${esc(cleanLabel(row.signal_type || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
       html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
@@ -1226,14 +1282,73 @@ function renderDiaNpi() {
   
   html += '</div>';
   html += '</div>';
+
+  // === Inline context card for selected NPI signal ===
+  const npiFiltered = diaNpiFilter ? diaData.npiSignals.filter(r => r.signal_type === diaNpiFilter) : diaData.npiSignals;
+  if (diaNpiSelectedIdx !== undefined && npiFiltered[diaNpiSelectedIdx]) {
+    const sel = npiFiltered[diaNpiSelectedIdx];
+    const signalExplanations = {
+      'npi_changed': 'The NPI (National Provider Identifier) for this clinic has changed, which may indicate a change in operating entity, ownership transition, or administrative restructuring.',
+      'npi_deactivated': 'This clinic\'s NPI has been deactivated, which may signal closure, merger, or regulatory action. Verify current operating status.',
+      'new_npi': 'A new NPI has been registered at or near this facility\'s address. This could indicate a new operator, rebranding, or ownership change.',
+      'address_change': 'The registered address for this NPI has changed. Verify if the clinic relocated or if this is an administrative update.',
+      'taxonomy_change': 'The provider taxonomy code changed, which may indicate a shift in services offered (e.g., adding home dialysis).',
+      'name_change': 'The organization name associated with this NPI changed. This often signals ownership transition or rebranding.',
+    };
+    const sigExplain = signalExplanations[sel.signal_type] || 'An NPI registry change was detected for this clinic. Review the details and determine if research or pipeline action is needed.';
+
+    html += '<div style="margin-top:16px;border:1px solid #fbbf24;border-radius:12px;padding:16px 20px;background:var(--s1)">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
+    html += '<div>';
+    html += '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text)">' + esc(norm(sel.facility_name) || 'Unknown') + '</h3>';
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc((sel.city || '') + (sel.state ? ', ' + sel.state : '')) + '</div>';
+    html += '</div>';
+    html += '<button style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);cursor:pointer" onclick="diaNpiSelectedIdx=undefined;renderDiaTab()">Close</button>';
+    html += '</div>';
+    // Signal explanation
+    html += '<div style="padding:10px 14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:12px;">';
+    html += '<div style="font-weight:700;font-size:12px;margin-bottom:4px;color:var(--text)">Signal: ' + esc(cleanLabel(sel.signal_type || '')) + '</div>';
+    html += '<div style="font-size:12px;color:var(--text);line-height:1.4;">' + esc(sigExplain) + '</div>';
+    html += '</div>';
+    // Context grid
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;font-size:12px">';
+    const _nv = (lbl, val) => '<div style="background:var(--s2);padding:8px;border-radius:6px"><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">' + lbl + '</div><div style="font-weight:600;color:var(--text)">' + val + '</div></div>';
+    html += _nv('Operator', esc(sel.operator_name || '—'));
+    html += _nv('Patients', fmtN(sel.latest_total_patients || 0));
+    html += _nv('NPI', esc(String(sel.npi || '—')));
+    html += _nv('Clinic ID', esc(String(sel.clinic_id || sel.id || '—')));
+    html += _nv('State', esc(sel.state || '—'));
+    html += _nv('Signal Date', sel.signal_date ? new Date(sel.signal_date).toLocaleDateString() : '—');
+    html += '</div>';
+    // Actions
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    const npiSearchQ = (sel.facility_name || '') + ' ' + (sel.city || '') + ' ' + (sel.state || '') + ' NPI ' + (sel.npi || '');
+    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(npiSearchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>';
+    html += '<a href="https://npiregistry.cms.hhs.gov/provider-view/' + encodeURIComponent(sel.npi || '') + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">NPI Registry</a>';
+    html += '<button class="btn-action default" style="font-size:11px;padding:5px 12px;" onclick=\'showDetail(' + safeJSON(sel) + ',"dia-clinic")\'>Open Full Detail</button>';
+    html += '<button class="npi-flag-btn" data-npi-id="' + esc(sel.npi || sel.clinic_id || sel.id || '') + '" data-npi-name="' + esc(sel.facility_name || '') + '" style="font-size:11px;padding:5px 12px;border:1px solid var(--accent);border-radius:6px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag for Research</button>';
+    html += '<button class="npi-dismiss-btn" data-npi-id="' + esc(sel.npi || sel.clinic_id || sel.id || '') + '" style="font-size:11px;padding:5px 12px;border:1px solid #f87171;border-radius:6px;background:rgba(248,113,113,0.1);color:#f87171;cursor:pointer;font-weight:600">Dismiss Signal</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+
   html += '</div>';
-  
+
   // Attach filter handlers
   setTimeout(() => {
+    // NPI row clicks — show inline context card
+    document.querySelectorAll('[data-npi-row-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.npiRowIdx, 10);
+        diaNpiSelectedIdx = diaNpiSelectedIdx === idx ? undefined : idx;
+        renderDiaTab();
+      });
+    });
     document.querySelectorAll('.pills .pill').forEach(btn => {
       btn.addEventListener('click', e => {
         const filter = e.target.dataset.filter;
         diaNpiFilter = filter === 'all' ? null : filter;
+        diaNpiSelectedIdx = undefined;
         renderDiaTab();
       });
     });
@@ -4626,6 +4741,15 @@ async function renderDiaSales() {
 
   let html = '<div class="biz-section">';
 
+  // === Action guidance banner ===
+  html += '<div style="padding:10px 14px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid #34d399;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  if (isComps) {
+    html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Sales Comps</strong> — Browse closed dialysis property transactions. Use these as comparable evidence for BOV underwriting. Click any row to view full property details and financials.</div>';
+  } else {
+    html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Available Listings</strong> — Monitor on-market dialysis properties. Identify acquisition opportunities or competitive positioning for your pipeline. Click any row for property details.</div>';
+  }
+  html += '</div>';
+
   // Sub-tab toggle: Sales Comps | Available
   html += '<div class="pills" style="margin-bottom: 16px;">';
   html += '<button class="pill' + (isComps ? ' active' : '') + '" data-sales-view="comps">Sales Comps (' + (diaSalesComps ? fmtN(diaSalesComps.length) : '…') + ')</button>';
@@ -4950,7 +5074,12 @@ function buildDiaLeasesHTML() {
   const missingFollow = watchlist.filter(function(w) { return w.renewal_watchlist_type === 'missing_lease_followup'; });
 
   let html = '<div style="margin-bottom:24px">';
-  html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">📋</span> Dialysis Lease Intelligence</div>';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">📋</span> Dialysis Lease Intelligence</div>';
+
+  // === Action guidance banner ===
+  html += '<div style="padding:10px 14px;background:rgba(248,113,113,0.08);border-radius:8px;border-left:3px solid #f87171;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Action:</strong> Review lease expirations and data gaps across tracked clinics. <strong>Flag</strong> watchlist items that need lease research or pipeline consideration. Use the <em>Research Workbench</em> to backfill missing lease data.</div>';
+  html += '</div>';
 
   // Summary Stats
   html += '<div class="dia-grid dia-grid-4" style="margin-bottom:20px">';
@@ -5133,7 +5262,12 @@ function buildDiaLoansHTML() {
   const loans = diaLoansData || [];
 
   let html = '<div style="margin-bottom:24px">';
-  html += '<div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">🏦</span> Dialysis Loan Intelligence</div>';
+  html += '<div style="font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">🏦</span> Dialysis Loan Intelligence</div>';
+
+  // === Action guidance banner ===
+  html += '<div style="padding:10px 14px;background:rgba(108,140,255,0.08);border-radius:8px;border-left:3px solid #6c8cff;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Action:</strong> Review loan data for maturity signals and financing patterns. <strong>Flag</strong> loans approaching maturity or with distress indicators for prospecting consideration. <strong>Ack</strong> (acknowledge) flagged loans you have already reviewed.</div>';
+  html += '</div>';
 
   if (loans.length === 0) {
     html += '<div class="widget" style="text-align:center;padding:40px 20px">';
@@ -5292,6 +5426,11 @@ function renderDiaPlayers() {
   }
 
   let html = '<div class="biz-section">';
+
+  // === Action guidance banner ===
+  html += '<div style="padding:10px 14px;background:rgba(167,139,250,0.08);border-radius:8px;border-left:3px solid #a78bfa;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Market Players</strong> — Analyze operators, buyers, sellers, and brokers active in the dialysis property market. Click any row to view entity details and related properties. Use this intelligence for pipeline targeting and competitive positioning.</div>';
+  html += '</div>';
 
   // View toggle
   html += '<div class="pills" style="margin-bottom: 20px;">';
