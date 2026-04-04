@@ -367,24 +367,33 @@ export default async function handler(req, res) {
   url.searchParams.set('select', safeSelect(select));
 
   if (filter) {
-    const eqIdx = filter.indexOf('=');
-    if (eqIdx > 0) {
-      const col = safeColumn(filter.substring(0, eqIdx));
-      if (!col) return res.status(400).json({ error: 'Invalid column name in filter' });
-      const val = filter.substring(eqIdx + 1);
-      url.searchParams.set(col, val);
+    // Support PostgREST or() / and() compound filters — pass through as query param
+    if (filter.startsWith('or(') || filter.startsWith('and(')) {
+      url.searchParams.set(filter.startsWith('or(') ? 'or' : 'and', filter.slice(filter.indexOf('(') + 1, filter.lastIndexOf(')')));
+    } else {
+      const eqIdx = filter.indexOf('=');
+      if (eqIdx > 0) {
+        const col = safeColumn(filter.substring(0, eqIdx));
+        if (!col) return res.status(400).json({ error: 'Invalid column name in filter' });
+        const val = filter.substring(eqIdx + 1);
+        url.searchParams.set(col, val);
+      }
     }
   }
 
   // Support a second filter condition on GET queries (same logic as POST/PATCH filter2)
   const { filter2 } = req.query;
   if (filter2) {
-    const eqIdx = filter2.indexOf('=');
-    if (eqIdx > 0) {
-      const col = safeColumn(filter2.substring(0, eqIdx));
-      if (!col) return res.status(400).json({ error: 'Invalid column name in filter2' });
-      const val = filter2.substring(eqIdx + 1);
-      url.searchParams.set(col, val);
+    if (filter2.startsWith('or(') || filter2.startsWith('and(')) {
+      url.searchParams.set(filter2.startsWith('or(') ? 'or' : 'and', filter2.slice(filter2.indexOf('(') + 1, filter2.lastIndexOf(')')));
+    } else {
+      const eqIdx = filter2.indexOf('=');
+      if (eqIdx > 0) {
+        const col = safeColumn(filter2.substring(0, eqIdx));
+        if (!col) return res.status(400).json({ error: 'Invalid column name in filter2' });
+        const val = filter2.substring(eqIdx + 1);
+        url.searchParams.set(col, val);
+      }
     }
   }
 
