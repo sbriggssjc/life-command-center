@@ -368,8 +368,11 @@ export default async function handler(req, res) {
 
   if (filter) {
     // Support PostgREST or() / and() compound filters — pass through as query param
+    // PostgREST expects: ?or=(col.op.val,col.op.val) — parentheses required in the value
     if (filter.startsWith('or(') || filter.startsWith('and(')) {
-      url.searchParams.set(filter.startsWith('or(') ? 'or' : 'and', filter.slice(filter.indexOf('(') + 1, filter.lastIndexOf(')')));
+      const key = filter.startsWith('or(') ? 'or' : 'and';
+      const inner = filter.slice(filter.indexOf('(') + 1, filter.lastIndexOf(')'));
+      url.searchParams.set(key, '(' + inner + ')');
     } else {
       const eqIdx = filter.indexOf('=');
       if (eqIdx > 0) {
@@ -385,7 +388,9 @@ export default async function handler(req, res) {
   const { filter2 } = req.query;
   if (filter2) {
     if (filter2.startsWith('or(') || filter2.startsWith('and(')) {
-      url.searchParams.set(filter2.startsWith('or(') ? 'or' : 'and', filter2.slice(filter2.indexOf('(') + 1, filter2.lastIndexOf(')')));
+      const key = filter2.startsWith('or(') ? 'or' : 'and';
+      const inner = filter2.slice(filter2.indexOf('(') + 1, filter2.lastIndexOf(')'));
+      url.searchParams.set(key, '(' + inner + ')');
     } else {
       const eqIdx = filter2.indexOf('=');
       if (eqIdx > 0) {
