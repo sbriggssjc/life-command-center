@@ -908,7 +908,6 @@ function renderDiaChanges() {
     diaCmsLoading = true;
     (async () => {
       try {
-        // Fetch CMS base data
         let all = [], offset = 0;
         while (true) {
           const batch = await diaQuery('v_cms_data', '*', {
@@ -918,42 +917,6 @@ function renderDiaChanges() {
           all = all.concat(batch || []);
           if (!batch || batch.length < 1000) break;
           offset += 1000;
-        }
-        // Fetch rankings data (payor mix, quality, margin) and merge by medicare_id → clinic_id
-        try {
-          let rankings = [], rOff = 0;
-          while (true) {
-            const rb = await diaQuery('v_property_rankings', 'medicare_id,payer_mix_medicare_pct,payer_mix_medicaid_pct,payer_mix_private_pct,star_rating,deficiency_count,ttm_operating_margin,ttm_revenue,ttm_operating_costs,ttm_operating_profit,ttm_total_treatments,ttm_medicare_treatments,ttm_commercial_treatments,revenue_calc_method,profit_nonprofit', {
-              limit: 1000, offset: rOff
-            });
-            rankings = rankings.concat(rb || []);
-            if (!rb || rb.length < 1000) break;
-            rOff += 1000;
-          }
-          const rankMap = {};
-          rankings.forEach(r => { if (r.medicare_id) rankMap[r.medicare_id] = r; });
-          all.forEach(row => {
-            const rk = rankMap[row.clinic_id];
-            if (rk) {
-              row.payer_mix_medicare_pct = rk.payer_mix_medicare_pct;
-              row.payer_mix_medicaid_pct = rk.payer_mix_medicaid_pct;
-              row.payer_mix_private_pct = rk.payer_mix_private_pct;
-              row.star_rating = rk.star_rating;
-              row.deficiency_count = rk.deficiency_count;
-              row.ttm_operating_margin = rk.ttm_operating_margin != null ? Number(rk.ttm_operating_margin) * 100 : null;
-              row.ttm_revenue = rk.ttm_revenue;
-              row.ttm_operating_costs = rk.ttm_operating_costs;
-              row.ttm_operating_profit = rk.ttm_operating_profit;
-              row.ttm_total_treatments = rk.ttm_total_treatments;
-              row.ttm_medicare_treatments = rk.ttm_medicare_treatments;
-              row.ttm_commercial_treatments = rk.ttm_commercial_treatments;
-              row.revenue_calc_method = rk.revenue_calc_method;
-              row.profit_nonprofit = rk.profit_nonprofit;
-            }
-          });
-          console.log('[CMS] Merged rankings for', Object.keys(rankMap).length, 'clinics');
-        } catch (re) {
-          console.warn('Rankings merge skipped:', re.message);
         }
         diaCmsData = all;
       } catch (e) {
@@ -1053,7 +1016,7 @@ function renderDiaChanges() {
   html += '<div>';
   html += '<div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">✅ CMS-Reported Data (Direct from Source)</div>';
   html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Patient Counts</strong> — Reported by CMS Medicare enrollment data. Updated monthly as CMS publishes new Dialysis Facility Compare datasets. IC Patients and Home Patients are enrollment-based counts, not census.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Payor Mix (Medicare %, Medicaid %, Private/Comm %)</strong> — Derived from CMS claims data via the property rankings model. Reflects the share of patients by primary insurance type. Coverage: ~7% of clinics have payor mix data. Percentages may not sum to 100% due to dual-eligible patients (e.g., Medicare + Medicaid) being counted in both categories. Clinics showing "–" have no payor mix data available from CMS.</div>';
+  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Payor Mix (Medicare %, Medicaid %, Private/Comm %)</strong> — Directly from CMS claims data. Reflects the share of patients by primary insurance type. Percentages may not sum to 100% due to dual-eligible patients (e.g., Medicare + Medicaid) being counted in both categories.</div>';
   html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Star Rating</strong> — CMS 5-Star Quality Rating from Dialysis Facility Compare. Composite measure of clinical outcomes (mortality, hospitalization, transfusion) and patient experience surveys. Updated by CMS quarterly.</div>';
   html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Modality Type</strong> — CMS-designated treatment modality: In-Center (IC), Home, or Hybrid (offering both). Based on CMS certification data.</div>';
   html += '<div><strong style="color:var(--text)">Facility Name, Location, Operator</strong> — CMS Provider Enrollment data cross-referenced with chain organization filings.</div>';
@@ -1064,7 +1027,7 @@ function renderDiaChanges() {
   html += '<div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px">⚙️ Estimated / Calculated Figures</div>';
   html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Revenue (IC Rev, Home Rev, TTM Rev)</strong> — Estimated using a blended reimbursement model: Medicare patients × ~$290/treatment × 3 treatments/week × 52 weeks, plus commercial patients at 1.4× Medicare rate, plus Medicaid at 0.85× Medicare rate. Home patients use a separate home-therapy rate (~$260/treatment). These are annualized estimates, not audited financials.</div>';
   html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">EBITDA</strong> — Estimated by applying an operating cost per-treatment assumption (~$245 for IC, ~$220 for home) to estimated treatment counts, then subtracting from estimated revenue. Industry-standard margin benchmarks (10–18%) are used as sanity checks. Not derived from operator financial statements.</div>';
-  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Operating Margin</strong> — Calculated as (TTM Revenue − Estimated Operating Costs) ÷ TTM Revenue × 100. Coverage: ~97% of clinics. Color-coded: <span style="color:#34d399;font-weight:600">green ≥ 12%</span>, <span style="color:#fbbf24;font-weight:600">yellow 0–12%</span>, <span style="color:#f87171;font-weight:600">red < 0%</span>. Based on estimated revenue and cost models, not reported margins.</div>';
+  html += '<div style="margin-bottom:8px"><strong style="color:var(--text)">Operating Margin</strong> — Calculated as (TTM Revenue − Estimated Operating Costs) ÷ TTM Revenue × 100. Color-coded: <span style="color:#34d399;font-weight:600">green ≥ 12%</span>, <span style="color:#fbbf24;font-weight:600">yellow 0–12%</span>, <span style="color:#f87171;font-weight:600">red < 0%</span>. Based on estimated revenue and cost models, not reported margins.</div>';
   html += '<div><strong style="color:var(--text)">Treatment Counts</strong> — Estimated from patient counts × 3 treatments/week (standard in-center protocol). Actual treatment frequency varies by patient acuity and modality. Home patients average fewer weekly treatments (~2.5/week for PD, variable for home HD).</div>';
   html += '</div>';
 
