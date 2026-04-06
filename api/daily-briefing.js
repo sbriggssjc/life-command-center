@@ -10,6 +10,10 @@ import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 
 const MORNING_STRUCTURED_URL = process.env.MORNING_BRIEFING_STRUCTURED_URL || '';
 const MORNING_HTML_URL = process.env.MORNING_BRIEFING_HTML_URL || '';
+const GOV_URL = process.env.GOV_SUPABASE_URL;
+const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+const DIA_URL = process.env.DIA_SUPABASE_URL;
+const DIA_KEY = process.env.DIA_SUPABASE_KEY;
 
 function pickRoleView(requested, membershipRole) {
   if (requested === 'analyst_ops' || requested === 'broker' || requested === 'manager') return requested;
@@ -239,6 +243,291 @@ function mapPriorityItems(items, limit = 5) {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// STRATEGIC DATA FETCHERS — pull from all business-critical sources
+// ---------------------------------------------------------------------------
+
+async function fetchRecentSfActivity(workspaceId, limit = 30) {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const result = await opsQuery('GET',
+    `activity_events?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.salesforce&occurred_at=gte.${encodeURIComponent(sevenDaysAgo)}&order=occurred_at.desc&limit=${limit}&select=id,category,title,body,source_type,external_url,metadata,occurred_at`
+  );
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+async function fetchHotContacts(limit = 15) {
+  if (!GOV_URL || !GOV_KEY) return [];
+  try {
+    const res = await fetch(
+      `${GOV_URL}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`,
+      { headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}` } }
+    );
+    return res.ok ? await res.json() : [];
+  } catch { return []; }
+}
+
+async function fetchDiaPipeline() {
+  if (!DIA_URL || !DIA_KEY) return { deals: [], leads: [] };
+  try {
+    const [dealsRes, leadsRes] = await Promise.all([
+      fetch(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&is_closed=eq.false&order=activity_date.desc&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
+        headers: { 'apikey': DIA_KEY, 'Authorization': `Bearer ${DIA_KEY}` }
+      }),
+      fetch(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Task&is_closed=eq.false&order=due_date.asc.nullslast&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
+        headers: { 'apikey': DIA_KEY, 'Authorization': `Bearer ${DIA_KEY}` }
+      })
+    ]);
+    return {
+      deals: dealsRes.ok ? await dealsRes.json() : [],
+      leads: leadsRes.ok ? await leadsRes.json() : []
+    };
+  } catch { return { deals: [], leads: [] }; }
+}
+
+// ---------------------------------------------------------------------------
+// STRATEGIC PRIORITY SCORING ENGINE
+//
+// Every item gets a score based on:
+//   - Strategic value (deal/revenue impact, listing pursuit, relationship)
+//   - Time sensitivity (overdue, due today, due this week)
+//   - Engagement signal (who is it from, are they a hot contact)
+//   - Business stage (active offer > under contract > marketing > pursuit)
+// ---------------------------------------------------------------------------
+
+const DEAL_KEYWORDS = /offer|under contract|loi|letter of intent|closing|escrow|due diligence|earnest money|psa|purchase|disposition|assignment/i;
+const REVENUE_KEYWORDS = /commission|fee|listing agreement|exclusive|signed|engaged|retained/i;
+const PURSUIT_KEYWORDS = /bov|proposal|valuation|pitch|pursuit|prospect|owner|developer|seller/i;
+const RELATIONSHIP_KEYWORDS = /follow[- ]?up|check[- ]?in|touch base|reconnect|introduction|referral|thank you|congrat/i;
+const URGENT_SENDER_KEYWORDS = /client|seller|buyer|attorney|lender|title|escrow/i;
+
+function scoreItem(item, hotContactMap) {
+  let score = 0;
+  let tier = 'urgent'; // default: operational urgency
+  const title = (item.title || '').toLowerCase();
+  const body = (item.body || '').toLowerCase();
+  const combined = title + ' ' + body;
+  const senderEmail = item.metadata?.sender_email || '';
+  const senderName = item.metadata?.sender_name || item.metadata?.sf_who || '';
+
+  // --- Strategic scoring (highest value) ---
+  if (DEAL_KEYWORDS.test(combined)) {
+    score += 100;
+    tier = 'strategic';
+  }
+  if (REVENUE_KEYWORDS.test(combined)) {
+    score += 90;
+    tier = 'strategic';
+  }
+  if (PURSUIT_KEYWORDS.test(combined)) {
+    score += 70;
+    if (tier !== 'strategic') tier = 'strategic';
+  }
+
+  // --- Relationship scoring ---
+  if (RELATIONSHIP_KEYWORDS.test(combined)) {
+    score += 50;
+    if (tier === 'urgent') tier = 'important';
+  }
+
+  // --- Contact engagement boost ---
+  if (senderEmail && hotContactMap) {
+    const contact = hotContactMap.get(senderEmail.toLowerCase());
+    if (contact) {
+      score += Math.min(contact.engagement_score || 0, 50); // up to +50 for hot contacts
+      if (contact.engagement_score >= 60) tier = tier === 'urgent' ? 'important' : tier;
+    }
+  }
+
+  // --- Time sensitivity ---
+  if (item.due_date) {
+    const due = new Date(item.due_date);
+    const now = new Date();
+    const daysUntil = (due - now) / 86400000;
+    if (daysUntil < 0) score += 40; // overdue
+    else if (daysUntil < 1) score += 30; // due today
+    else if (daysUntil < 3) score += 20; // due within 3 days
+    else if (daysUntil < 7) score += 10; // due this week
+  }
+
+  // --- Priority boost ---
+  if (item.priority === 'urgent') score += 30;
+  else if (item.priority === 'high') score += 20;
+
+  // --- Source type boost ---
+  if (item.source_type === 'sf_task') score += 15; // Salesforce tasks represent real CRM work
+  if (item.source_type === 'flagged_email') score += 10; // user flagged it for a reason
+
+  // --- Attachment/deal signal ---
+  if (item.metadata?.has_attachments) score += 5;
+
+  return { score, tier };
+}
+
+function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts) {
+  const today = new Date();
+  const weekEnd = new Date(today);
+  weekEnd.setDate(today.getDate() + 7);
+
+  // Build hot contact lookup by email
+  const hotContactMap = new Map();
+  (hotContacts || []).forEach(c => {
+    if (c.email) hotContactMap.set(c.email.toLowerCase(), c);
+  });
+
+  // Score and classify all items
+  const allItems = [];
+
+  // Score inbox items
+  for (const item of (inboxItems || [])) {
+    const { score, tier } = scoreItem(item, hotContactMap);
+    allItems.push({ ...item, _score: score, _tier: tier, _source: 'inbox' });
+  }
+
+  // Score my work items
+  for (const item of (myWork || [])) {
+    const { score, tier } = scoreItem(item, hotContactMap);
+    allItems.push({ ...item, _score: score, _tier: tier, _source: 'work' });
+  }
+
+  // Score SF activities as potential priorities
+  for (const item of (sfActivity || [])) {
+    const { score, tier } = scoreItem(item, hotContactMap);
+    if (score >= 30) { // only surface SF items with meaningful scores
+      allItems.push({
+        id: item.id,
+        title: item.title,
+        status: item.metadata?.sf_status || 'open',
+        priority: item.metadata?.priority || 'normal',
+        due_date: item.metadata?.activity_date || null,
+        domain: null,
+        type: 'sf_activity',
+        metadata: item.metadata,
+        _score: score,
+        _tier: tier,
+        _source: 'salesforce'
+      });
+    }
+  }
+
+  // Score Dia pipeline deals
+  for (const deal of (diaPipeline?.deals || [])) {
+    const pseudoItem = {
+      title: deal.subject || deal.what_name || '(deal)',
+      body: deal.description || '',
+      due_date: deal.due_date || deal.activity_date,
+      priority: deal.priority === 'High' ? 'high' : 'normal',
+      metadata: { sf_who: deal.who_name, sf_what: deal.what_name }
+    };
+    const { score, tier } = scoreItem(pseudoItem, hotContactMap);
+    if (score >= 20) {
+      allItems.push({
+        id: deal.id,
+        title: deal.subject || deal.what_name || '(deal)',
+        status: deal.status || 'open',
+        priority: pseudoItem.priority,
+        due_date: pseudoItem.due_date,
+        domain: 'dialysis',
+        type: 'sf_deal',
+        _score: score + 20, // pipeline deals get a base boost
+        _tier: tier === 'urgent' ? 'important' : tier,
+        _source: 'pipeline'
+      });
+    }
+  }
+
+  // Sort by score descending
+  allItems.sort((a, b) => b._score - a._score);
+
+  // Split into tiers
+  const strategic = allItems.filter(i => i._tier === 'strategic');
+  const important = allItems.filter(i => i._tier === 'important');
+  const urgent = allItems.filter(i => i._tier === 'urgent');
+
+  // Build today's prioritized list: strategic first, then important, then urgent
+  const todayPriorities = [
+    ...strategic.slice(0, 3),
+    ...important.slice(0, 3),
+    ...urgent.slice(0, 4)
+  ].slice(0, 7);
+
+  // Contacts who need a touchpoint (haven't been called in 14+ days, high engagement)
+  const now = Date.now();
+  const staleTouchpoints = (hotContacts || [])
+    .filter(c => {
+      const lastTouch = Math.max(
+        c.last_call_date ? new Date(c.last_call_date).getTime() : 0,
+        c.last_email_date ? new Date(c.last_email_date).getTime() : 0,
+        c.last_meeting_date ? new Date(c.last_meeting_date).getTime() : 0
+      );
+      return lastTouch > 0 && (now - lastTouch) > 14 * 86400000;
+    })
+    .sort((a, b) => (b.engagement_score || 0) - (a.engagement_score || 0))
+    .slice(0, 5)
+    .map(c => ({
+      id: c.unified_id,
+      name: c.full_name,
+      company: c.company_name,
+      score: c.engagement_score,
+      days_since_touch: Math.floor((now - Math.max(
+        c.last_call_date ? new Date(c.last_call_date).getTime() : 0,
+        c.last_email_date ? new Date(c.last_email_date).getTime() : 0,
+        c.last_meeting_date ? new Date(c.last_meeting_date).getTime() : 0
+      )) / 86400000),
+      reason: 'High engagement contact overdue for touchpoint'
+    }));
+
+  // Overdue items (across all sources)
+  const overdue = allItems.filter(i => i.due_date && new Date(i.due_date) < today);
+  const dueThisWeek = allItems.filter(i => {
+    if (!i.due_date) return false;
+    const due = new Date(i.due_date);
+    return due >= today && due <= weekEnd;
+  });
+
+  return {
+    today_priorities: todayPriorities.map(i => ({
+      id: i.id,
+      title: i.title || '(Untitled)',
+      status: i.status || null,
+      priority: i.priority || null,
+      due_date: i.due_date || null,
+      domain: i.domain || null,
+      type: i.type || i.item_type || i.source_type || 'action',
+      tier: i._tier,
+      score: i._score,
+      source: i._source
+    })),
+    strategic_count: strategic.length,
+    important_count: important.length,
+    urgent_count: urgent.length,
+    my_overdue: mapPriorityItems(overdue, 5),
+    my_due_this_week: mapPriorityItems(dueThisWeek, 5),
+    recommended_calls: staleTouchpoints,
+    recommended_followups: mapPriorityItems(
+      inboxItems.filter(i => {
+        const { score } = scoreItem(i, hotContactMap);
+        return score >= 20;
+      }).slice(0, 5),
+      5
+    ),
+    pipeline_deals: (diaPipeline?.deals || []).slice(0, 5).map(d => ({
+      id: d.id,
+      title: d.subject || d.what_name,
+      contact: d.who_name,
+      status: d.status,
+      due: d.due_date || d.activity_date,
+      domain: 'dialysis'
+    })),
+    sf_activity_summary: {
+      total_7d: (sfActivity || []).length,
+      calls: (sfActivity || []).filter(a => a.category === 'call').length,
+      emails: (sfActivity || []).filter(a => a.category === 'email').length,
+      tasks: (sfActivity || []).filter(a => a.category === 'note').length
+    }
+  };
+}
+
+// Legacy priority projection (kept for analyst_ops and manager role views)
 function projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts) {
   const today = new Date();
   const weekEnd = new Date(today);
@@ -420,14 +709,17 @@ export default withErrorHandler(async function handler(req, res) {
   const roleView = pickRoleView(req.query.role_view, membership.role);
   const asOf = new Date().toISOString();
 
-  const [morningStructured, morningHtml, workCounts, myWork, inboxSummary, unassignedWork, syncHealth] = await Promise.all([
+  const [morningStructured, morningHtml, workCounts, myWork, inboxSummary, unassignedWork, syncHealth, sfActivity, hotContacts, diaPipeline] = await Promise.all([
     fetchMorningStructured(),
     fetchMorningHtml(),
     fetchWorkCounts(workspaceId, user.id),
     fetchMyWork(workspaceId, user.id, 15),
     fetchInboxSummary(workspaceId, 10),
     fetchUnassignedWork(workspaceId, 10),
-    fetchSyncHealthSnapshot(workspaceId)
+    fetchSyncHealthSnapshot(workspaceId),
+    fetchRecentSfActivity(workspaceId, 30),
+    fetchHotContacts(15),
+    fetchDiaPipeline()
   ]);
 
   const missingSections = [];
@@ -473,7 +765,9 @@ export default withErrorHandler(async function handler(req, res) {
       missing_sections: missingSections
     },
     global_market_intelligence: globalMarketIntelligence,
-    user_specific_priorities: projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts),
+    user_specific_priorities: roleView === 'broker'
+      ? buildStrategicPriorities(roleView, myWork, inboxSummary.items, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts)
+      : projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts),
     team_level_production_signals: {
       work_counts: {
         open_actions: workCounts.open_actions,
