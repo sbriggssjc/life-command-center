@@ -982,7 +982,7 @@ function _udTabOperations() {
     const costPerTx = Number(r.ttm_operating_costs) / Number(annualTx);
     html += _rowHtml('Cost / Treatment', '$' + fmtN(Math.round(costPerTx)));
   }
-  html += _row('Treatments / Year', annualTx ? fmtN(annualTx) + (txLooksPartial ? ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>' : '') : null);
+  html += _rowHtml('Treatments / Year', annualTx ? fmtN(annualTx) + (txLooksPartial ? ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>' : '') : null);
   html += '</div>';
 
   // Payer Mix — multi-level comparison: HCRIS Actual → Rankings → National Default
