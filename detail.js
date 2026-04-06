@@ -988,16 +988,30 @@ function _udTabOperations() {
   html += _rowHtml('Treatments / Year', annualTx ? fmtN(annualTx) + (txLooksPartial ? ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>' : '') : null);
   html += '</div>';
 
-  // Payer Mix — 4-level comparison: National → County Avg → State Avg → This Clinic
+  // Payer Mix — 4-level comparison: Clinic → County Avg → State Avg → National (smallest to largest)
   const payerBars = [];
   const _natl = { label: 'National Default', med: 65, mcd: 20, pvt: 11 };
   _natl.oth = Math.max(0, 100 - _natl.med - _natl.mcd - _natl.pvt);
-  payerBars.push(_natl);
 
   const clinicState = geoPayerMix ? (geoPayerMix.state || r.state || '') : (r.state || '');
   const clinicCounty = geoPayerMix ? (geoPayerMix.county || r.county || '') : (r.county || '');
 
-  // County average (from geo view)
+  // 1. This Clinic (HCRIS actual or rankings fallback) — first/smallest
+  let clinicBar = null;
+  if (payerMixHcris && payerMixHcris.medicare_pct != null) {
+    const hMed = Number(payerMixHcris.medicare_pct);
+    const hMcd = Number(payerMixHcris.medicaid_pct || 0);
+    const hPvt = Number(payerMixHcris.private_pct || 0);
+    clinicBar = { label: 'This Clinic (HCRIS)', med: hMed, mcd: hMcd, pvt: hPvt, oth: Math.max(0, 100 - hMed - hMcd - hPvt), source: 'revenue' };
+  } else if (r.payer_mix_medicare_pct != null) {
+    const rMed = Number(r.payer_mix_medicare_pct);
+    const rMcd = Number(r.payer_mix_medicaid_pct || 0);
+    const rPvt = Number(r.payer_mix_private_pct || 0);
+    clinicBar = { label: 'This Clinic', med: rMed, mcd: rMcd, pvt: rPvt, oth: Math.max(0, 100 - rMed - rMcd - rPvt) };
+  }
+  if (clinicBar) payerBars.push(clinicBar);
+
+  // 2. County average (from geo view)
   if (geoPayerMix && geoPayerMix.county_medicare_pct != null) {
     const cMed = Number(geoPayerMix.county_medicare_pct);
     const cMcd = Number(geoPayerMix.county_medicaid_pct || 0);
@@ -1006,7 +1020,7 @@ function _udTabOperations() {
     payerBars.push({ label: clinicCounty ? clinicCounty + ' Co. Avg' : 'County Avg', med: cMed, mcd: cMcd, pvt: cPvt, oth: Math.max(0, 100 - cMed - cMcd - cPvt), note: cCount + ' clinic' + (cCount !== 1 ? 's' : '') });
   }
 
-  // State average (from geo view)
+  // 3. State average (from geo view)
   if (geoPayerMix && geoPayerMix.state_medicare_pct != null) {
     const sMed = Number(geoPayerMix.state_medicare_pct);
     const sMcd = Number(geoPayerMix.state_medicaid_pct || 0);
@@ -1015,22 +1029,11 @@ function _udTabOperations() {
     payerBars.push({ label: clinicState ? clinicState + ' State Avg' : 'State Avg', med: sMed, mcd: sMcd, pvt: sPvt, oth: Math.max(0, 100 - sMed - sMcd - sPvt), note: sCount + ' clinics' });
   }
 
-  // HCRIS actual payer mix (revenue-based, from cost reports) — this clinic
-  if (payerMixHcris && payerMixHcris.medicare_pct != null) {
-    const hMed = Number(payerMixHcris.medicare_pct);
-    const hMcd = Number(payerMixHcris.medicaid_pct || 0);
-    const hPvt = Number(payerMixHcris.private_pct || 0);
-    payerBars.push({ label: 'This Clinic (HCRIS)', med: hMed, mcd: hMcd, pvt: hPvt, oth: Math.max(0, 100 - hMed - hMcd - hPvt), source: 'revenue' });
-  } else if (r.payer_mix_medicare_pct != null) {
-    // Fallback: rankings payer mix (patient-based)
-    const rMed = Number(r.payer_mix_medicare_pct);
-    const rMcd = Number(r.payer_mix_medicaid_pct || 0);
-    const rPvt = Number(r.payer_mix_private_pct || 0);
-    payerBars.push({ label: 'This Clinic', med: rMed, mcd: rMcd, pvt: rPvt, oth: Math.max(0, 100 - rMed - rMcd - rPvt) });
-  }
+  // 4. National Default — last/largest
+  payerBars.push(_natl);
 
   // Determine the "active" payer mix for revenue estimates (prefer clinic-specific > national)
-  const activePayer = payerBars.length > 1 ? payerBars[payerBars.length - 1] : _natl;
+  const activePayer = clinicBar || _natl;
   const payerIsDefault = activePayer === _natl;
 
   html += '<div style="margin-top:14px">';

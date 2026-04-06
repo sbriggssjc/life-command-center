@@ -223,7 +223,7 @@ const GOV_TAB_GROUPS = {
 
 const DIA_TAB_GROUPS = {
   overview: ['overview', 'search', 'changes', 'npi'],
-  pipeline: ['prospects', 'activity', 'sales'],
+  pipeline: ['activity', 'sales', 'prospects'],
   research: ['research'],
   reference: ['leases', 'loans', 'players']
 };
@@ -776,6 +776,16 @@ document.querySelectorAll('.bnav[data-page]').forEach(btn => {
 document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   const tab = e.target.closest('.sub-tab');
   if (!tab) return;
+  // Ensure pageBiz is the active page (prevents overlay from pageHome/pageMyWork/etc.)
+  const bizPage_ = document.getElementById('pageBiz');
+  if (bizPage_ && !bizPage_.classList.contains('active')) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    bizPage_.classList.add('active');
+    document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
+    const moreItem = document.querySelector('.more-drawer-item[data-page="pageBiz"]');
+    if (moreItem) moreItem.classList.add('active');
+  }
   document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
   currentBizTab = tab.dataset.biz;
