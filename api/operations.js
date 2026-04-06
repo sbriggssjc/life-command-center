@@ -1466,12 +1466,30 @@ async function handleGuidedEntityMerge(params, user, workspaceId) {
 async function fetchOpsContext(workspaceId, userId) {
   if (!workspaceId) return {};
   try {
-    const [countResult, inboxResult, syncResult] = await Promise.all([
+    const [countResult, syncResult, recentInbox, recentSf] = await Promise.all([
       opsQuery('GET', `mv_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`),
-      opsQuery('GET', `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.new&select=id&limit=0`),
-      opsQuery('GET', `sync_errors?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id&limit=0`)
+      opsQuery('GET', `sync_errors?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id&limit=0`),
+      // Fetch recent inbox items with titles so the AI can reference specific items
+      opsQuery('GET', `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=in.(new,triaged)&order=received_at.desc&limit=8&select=id,title,status,priority,source_type,metadata,received_at`),
+      // Fetch recent SF activity so AI knows about deal-related work
+      opsQuery('GET', `activity_events?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.salesforce&order=occurred_at.desc&limit=10&select=title,category,metadata,occurred_at`)
     ]);
     const counts = countResult.data?.[0] || {};
+    const inboxItems = (recentInbox.data || []).map(i => ({
+      title: i.title,
+      from: i.metadata?.sender_email || i.metadata?.sf_who || null,
+      type: i.source_type,
+      priority: i.priority,
+      received: i.received_at
+    }));
+    const sfItems = (recentSf.data || []).map(a => ({
+      title: a.title,
+      type: a.category,
+      contact: a.metadata?.sf_who || null,
+      deal: a.metadata?.sf_what || null,
+      date: a.occurred_at
+    }));
+
     return {
       ops_work_counts: {
         open_actions: counts.open_actions || 0,
@@ -1482,7 +1500,9 @@ async function fetchOpsContext(workspaceId, userId) {
         open_escalations: counts.open_escalations || 0,
         due_this_week: counts.due_this_week || 0,
         completed_week: counts.completed_week || 0
-      }
+      },
+      recent_inbox_items: inboxItems,
+      recent_sf_activity: sfItems
     };
   } catch {
     return {};
