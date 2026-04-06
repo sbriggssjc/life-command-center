@@ -464,6 +464,11 @@ const ACTION_REGISTRY = {
   list_dialysis_review_queue:  { method: 'GET', path: 'dia-query?table=v_clinic_property_link_review_queue&select=*', tier: 0, alias: 'data-proxy?_source=dia&table=v_clinic_property_link_review_queue&select=*' },
   get_work_counts:             { method: 'GET', path: 'queue-v2?view=work_counts', tier: 0, alias: 'queue?_version=v2&view=work_counts' },
 
+  // Tier 0-1: AI-powered actions (fetch context + generate content)
+  generate_prospecting_brief:  { tier: 0, handler: 'prospecting_brief' },
+  draft_outreach_email:        { tier: 1, handler: 'draft_outreach', confirm: 'explicit' },
+  draft_seller_update_email:   { tier: 1, handler: 'draft_seller_update', confirm: 'explicit' },
+
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
   triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
@@ -479,8 +484,8 @@ async function dispatchAction(actionName, params, user, workspaceId) {
     return { ok: false, error: `Unknown action: ${actionName}`, available_actions: Object.keys(ACTION_REGISTRY) };
   }
 
-  // Enforce confirmation for write actions
-  if (spec.tier >= 1 && !params?._confirmed) {
+  // Enforce confirmation for write/draft actions
+  if (spec.tier >= 1 && spec.confirm && !params?._confirmed) {
     return {
       ok: false,
       requires_confirmation: true,
@@ -491,9 +496,18 @@ async function dispatchAction(actionName, params, user, workspaceId) {
     };
   }
 
+  // AI-powered actions have dedicated handlers
+  if (spec.handler) {
+    switch (spec.handler) {
+      case 'prospecting_brief':   return handleProspectingBrief(params, user, workspaceId);
+      case 'draft_outreach':      return handleDraftOutreachEmail(params, user, workspaceId);
+      case 'draft_seller_update': return handleDraftSellerUpdate(params, user, workspaceId);
+      default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
+    }
+  }
+
   // Build internal fetch URL using opsQuery for GET reads, or compose for mutations
   if (spec.method === 'GET') {
-    // For read actions, call opsQuery or use internal endpoint logic
     return await executeReadAction(spec, params, user, workspaceId);
   }
 
@@ -535,6 +549,165 @@ async function executeReadAction(spec, params, user, workspaceId) {
     action: spec.path.split('?')[0],
     data: result.data,
     count: result.count || undefined
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AI-POWERED ACTIONS — fetch context, compose prompt, call AI provider
+// ---------------------------------------------------------------------------
+
+const GOV_URL = process.env.GOV_SUPABASE_URL;
+const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+
+async function govContactQuery(path) {
+  if (!GOV_URL || !GOV_KEY) return { ok: false, data: [] };
+  const res = await fetch(`${GOV_URL}/rest/v1/${path}`, {
+    headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}`, 'Prefer': 'count=exact' }
+  });
+  const data = await res.json().catch(() => []);
+  return { ok: res.ok, data: Array.isArray(data) ? data : [] };
+}
+
+async function handleProspectingBrief(params, user, workspaceId) {
+  const limit = Math.min(parseInt(params?.limit) || 10, 25);
+
+  // Fetch hot leads
+  const hotResult = await govContactQuery(
+    `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`
+  );
+
+  const contacts = (hotResult.data || []).map(c => ({
+    name: c.full_name,
+    company: c.company_name || '',
+    title: c.title || '',
+    email: c.email || '',
+    phone: c.phone || '',
+    score: c.engagement_score,
+    heat: c.engagement_score >= 60 ? 'hot' : c.engagement_score >= 30 ? 'warm' : 'cool',
+    last_call: c.last_call_date || 'never',
+    last_email: c.last_email_date || 'never',
+    last_meeting: c.last_meeting_date || 'never',
+    total_calls: c.total_calls || 0,
+    total_emails: c.total_emails_sent || 0
+  }));
+
+  if (!contacts.length) {
+    return { ok: true, action: 'generate_prospecting_brief', response: 'No business contacts with engagement scores found. Start by ingesting contacts from Outlook or Salesforce.', contacts: [] };
+  }
+
+  const contactList = contacts.map((c, i) =>
+    `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
+  ).join('\n\n');
+
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  const prompt = `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'generate_prospecting_brief' },
+    history: [],
+    attachments: [],
+    user,
+    workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'generate_prospecting_brief',
+    response: result.data?.response || '',
+    contacts,
+    provider: result.provider
+  };
+}
+
+async function handleDraftOutreachEmail(params, user, workspaceId) {
+  const { contact_id, contact_name, intent, tone } = params || {};
+
+  // Fetch contact context if ID provided
+  let contactContext = '';
+  if (contact_id) {
+    const result = await govContactQuery(
+      `unified_contacts?unified_id=eq.${encodeURIComponent(contact_id)}&limit=1&select=full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent,city,state`
+    );
+    const c = result.data?.[0];
+    if (c) {
+      contactContext = `\nRecipient Profile:\n- Name: ${c.full_name}\n- Company: ${c.company_name || 'unknown'}\n- Title: ${c.title || 'unknown'}\n- Location: ${[c.city, c.state].filter(Boolean).join(', ') || 'unknown'}\n- Engagement: score ${c.engagement_score || 0}, ${c.total_calls || 0} calls, ${c.total_emails_sent || 0} emails sent\n- Last call: ${c.last_call_date || 'never'} | Last email: ${c.last_email_date || 'never'} | Last meeting: ${c.last_meeting_date || 'never'}`;
+    }
+  } else if (contact_name) {
+    contactContext = `\nRecipient: ${contact_name}`;
+  }
+
+  const toneGuide = tone || 'professional, warm, and concise';
+  const intentGuide = intent || 'reconnect and explore potential listing opportunities';
+
+  const prompt = `Draft a personalized outreach email for a commercial real estate broker.\n${contactContext}\n\nIntent: ${intentGuide}\nTone: ${toneGuide}\n\nRequirements:\n- Subject line + email body\n- Reference any relevant engagement history to make it personal\n- Keep it under 150 words\n- Include a clear but soft call-to-action\n- Do NOT use generic filler — make it specific to the recipient\n- This is a DRAFT for the broker to review before sending`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'draft_outreach_email' },
+    history: Array.isArray(params?.history) ? params.history : [],
+    attachments: [],
+    user,
+    workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'draft_outreach_email',
+    response: result.data?.response || '',
+    requires_review: true,
+    note: 'This is a draft. Review and edit before sending from Outlook.',
+    provider: result.provider
+  };
+}
+
+async function handleDraftSellerUpdate(params, user, workspaceId) {
+  const { entity_id, entity_name, listing_context } = params || {};
+
+  // Fetch activity timeline if entity_id provided
+  let activityContext = '';
+  if (entity_id) {
+    const timelineResult = await opsQuery('GET',
+      `v_entity_timeline?entity_id=eq.${encodeURIComponent(entity_id)}&limit=20&order=created_at.desc`
+    );
+    const events = timelineResult.data || [];
+    if (events.length) {
+      activityContext = '\nRecent Activity Timeline:\n' + events.map(e =>
+        `- ${e.created_at?.split('T')[0] || 'unknown'}: ${e.event_type || e.action_type || 'activity'} — ${e.title || e.subject || e.description || '(no description)'}`
+      ).join('\n');
+    }
+
+    // Also try to get entity details from ops
+    const entityResult = await opsQuery('GET',
+      `entities?id=eq.${encodeURIComponent(entity_id)}&limit=1`
+    );
+    const entity = entityResult.data?.[0];
+    if (entity) {
+      activityContext = `\nProperty/Entity: ${entity.name || entity_name || 'Unknown'}\nType: ${entity.entity_type || 'unknown'}\nDomain: ${entity.domain || 'unknown'}` + activityContext;
+    }
+  }
+
+  const extraContext = listing_context ? `\nAdditional Context: ${listing_context}` : '';
+
+  const prompt = `Draft a weekly seller update email for a commercial real estate listing.\n${activityContext}${extraContext}\n\nRequirements:\n- Professional but approachable tone\n- Summarize this week's marketing activity and buyer engagement\n- Highlight key metrics (inquiries, showings, OM downloads if available)\n- Note any buyer follow-up actions taken\n- Brief market conditions commentary if relevant\n- End with next steps and timeline\n- Keep it under 250 words\n- This is a DRAFT for the broker to review before sending to the seller`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'draft_seller_update_email' },
+    history: Array.isArray(params?.history) ? params.history : [],
+    attachments: [],
+    user,
+    workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'draft_seller_update_email',
+    response: result.data?.response || '',
+    requires_review: true,
+    note: 'This is a draft. Review and personalize before sending to the seller.',
+    provider: result.provider
   };
 }
 
