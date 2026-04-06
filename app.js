@@ -9109,4 +9109,4 @@ function acknowledgeLiveIngestVisibleRisk(state, visibleIndices) {
   if (selectedVisible.some(({ op }) => op?._citationRisk) && !selectedOutside.some(({ op }) => op?._citationRisk)) {
     state.citationRiskAcknowledged = true;
   }
-  if 
+}
