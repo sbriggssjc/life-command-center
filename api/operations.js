@@ -447,6 +447,131 @@ async function fetchPortfolioStats() {
   return stats;
 }
 
+// ---------------------------------------------------------------------------
+// ACTION DISPATCHER — structured action invocation from Copilot
+// ---------------------------------------------------------------------------
+
+const ACTION_REGISTRY = {
+  // Tier 0: read-only
+  get_daily_briefing_snapshot: { method: 'GET', path: 'daily-briefing?action=snapshot', tier: 0 },
+  list_staged_intake_inbox:    { method: 'GET', path: 'inbox', tier: 0 },
+  get_my_execution_queue:      { method: 'GET', path: 'queue-v2?view=my_work', tier: 0, alias: 'queue?_version=v2&view=my_work' },
+  get_sync_run_health:         { method: 'GET', path: 'sync?action=health', tier: 0 },
+  get_hot_business_contacts:   { method: 'GET', path: 'contacts?action=hot_leads', tier: 0, alias: 'entity-hub?_domain=contacts&action=hot_leads' },
+  search_entity_targets:       { method: 'GET', path: 'entities?action=search', tier: 0, alias: 'entity-hub?_domain=entities&action=search' },
+  fetch_listing_activity_context: { method: 'GET', path: 'queue-v2?view=entity_timeline', tier: 0, alias: 'queue?_version=v2&view=entity_timeline' },
+  list_government_review_observations: { method: 'GET', path: 'gov-evidence?endpoint=research-observations', tier: 0, alias: 'data-proxy?_route=gov-evidence&endpoint=research-observations' },
+  list_dialysis_review_queue:  { method: 'GET', path: 'dia-query?table=v_clinic_property_link_review_queue&select=*', tier: 0, alias: 'data-proxy?_source=dia&table=v_clinic_property_link_review_queue&select=*' },
+  get_work_counts:             { method: 'GET', path: 'queue-v2?view=work_counts', tier: 0, alias: 'queue?_version=v2&view=work_counts' },
+
+  // Tier 1-2: mutations (require confirmation)
+  ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
+  triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
+  promote_intake_to_action:    { method: 'POST', path: 'workflows?action=promote_to_shared', tier: 2, confirm: 'explicit', alias: 'operations?action=promote_to_shared' },
+  create_listing_pursuit_followup_task: { method: 'POST', path: 'actions', tier: 2, confirm: 'explicit' },
+  update_execution_task_status: { method: 'PATCH', path: 'actions', tier: 2, confirm: 'explicit' },
+  retry_sync_error_record:     { method: 'POST', path: 'sync?action=retry', tier: 2, confirm: 'explicit' },
+};
+
+async function dispatchAction(actionName, params, user, workspaceId) {
+  const spec = ACTION_REGISTRY[actionName];
+  if (!spec) {
+    return { ok: false, error: `Unknown action: ${actionName}`, available_actions: Object.keys(ACTION_REGISTRY) };
+  }
+
+  // Enforce confirmation for write actions
+  if (spec.tier >= 1 && !params?._confirmed) {
+    return {
+      ok: false,
+      requires_confirmation: true,
+      action: actionName,
+      confirmation_level: spec.confirm || 'explicit',
+      message: `Action "${actionName}" requires ${spec.confirm || 'explicit'} confirmation. Resend with _confirmed: true to execute.`,
+      tier: spec.tier
+    };
+  }
+
+  // Build internal fetch URL using opsQuery for GET reads, or compose for mutations
+  if (spec.method === 'GET') {
+    // For read actions, call opsQuery or use internal endpoint logic
+    return await executeReadAction(spec, params, user, workspaceId);
+  }
+
+  // Write actions return metadata about what to call — the frontend or
+  // Copilot should invoke the real endpoint directly with proper auth.
+  // This avoids double-proxying and keeps audit trails clean.
+  return {
+    ok: true,
+    action: actionName,
+    method: spec.method,
+    endpoint: `/api/${spec.path}`,
+    params_to_send: params || {},
+    note: 'Execute this endpoint directly with your auth credentials to complete the action.'
+  };
+}
+
+async function executeReadAction(spec, params, user, workspaceId) {
+  // Build the query path with user params
+  let path = spec.path;
+  if (params) {
+    const queryParts = [];
+    for (const [key, val] of Object.entries(params)) {
+      if (key.startsWith('_')) continue; // skip internal flags
+      queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
+    }
+    if (queryParts.length) {
+      path += (path.includes('?') ? '&' : '?') + queryParts.join('&');
+    }
+  }
+
+  // Add workspace filter where relevant
+  if (!path.includes('workspace_id') && workspaceId) {
+    path += (path.includes('?') ? '&' : '?') + `workspace_id=eq.${encodeURIComponent(workspaceId)}`;
+  }
+
+  const result = await opsQuery('GET', path);
+  return {
+    ok: result.ok,
+    action: spec.path.split('?')[0],
+    data: result.data,
+    count: result.count || undefined
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fetch operational context for Copilot enrichment
+// ---------------------------------------------------------------------------
+
+async function fetchOpsContext(workspaceId, userId) {
+  if (!workspaceId) return {};
+  try {
+    const [countResult, inboxResult, syncResult] = await Promise.all([
+      opsQuery('GET', `mv_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`),
+      opsQuery('GET', `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.new&select=id&limit=0`),
+      opsQuery('GET', `sync_errors?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id&limit=0`)
+    ]);
+    const counts = countResult.data?.[0] || {};
+    return {
+      ops_work_counts: {
+        open_actions: counts.open_actions || 0,
+        overdue: counts.overdue_actions || 0,
+        inbox_new: counts.inbox_new || 0,
+        research_active: counts.research_active || 0,
+        sync_errors: syncResult.count || 0,
+        open_escalations: counts.open_escalations || 0,
+        due_this_week: counts.due_this_week || 0,
+        completed_week: counts.completed_week || 0
+      }
+    };
+  } catch {
+    return {};
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CHAT HANDLER
+// ---------------------------------------------------------------------------
+
 async function handleChatRoute(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
@@ -458,13 +583,32 @@ async function handleChatRoute(req, res) {
   const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || '';
 
   const { message, context, history, attachments } = req.body || {};
+
+  // --- Structured action dispatch ---
+  // If the request includes an action field, dispatch it directly instead of
+  // routing through the LLM. This is the programmatic entry point for Copilot
+  // agents, Teams cards, and Power Automate flows.
+  if (req.body?.copilot_action) {
+    const { copilot_action, params } = req.body;
+    const result = await dispatchAction(copilot_action, params || {}, user, workspaceId);
+    return res.status(result.ok === false && result.requires_confirmation ? 200 : (result.ok ? 200 : 400)).json({
+      ...result,
+      source: 'copilot_action_dispatch'
+    });
+  }
+
   if (!message) {
     return res.status(400).json({ error: 'message is required' });
   }
 
+  // --- Enrich context with portfolio stats + operational signals ---
   let portfolioStats = {};
+  let opsContext = {};
   try {
-    portfolioStats = await fetchPortfolioStats();
+    [portfolioStats, opsContext] = await Promise.all([
+      fetchPortfolioStats(),
+      fetchOpsContext(workspaceId, user.id)
+    ]);
   } catch {
     // Non-fatal
   }
@@ -472,6 +616,7 @@ async function handleChatRoute(req, res) {
   const enrichedContext = {
     ...(context || {}),
     ...portfolioStats,
+    ...opsContext,
   };
 
   const result = await invokeChatProvider({
