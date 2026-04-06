@@ -93,28 +93,9 @@
       <div class="page-inner">
         <div class="greeting" id="greeting">Good morning</div>
         <div class="greeting-date" id="greetingDate"></div>
-
-        <!-- COMMAND QUEUE — the primary homepage element -->
-        <div class="widget" id="commandQueueWidget">
-          <div class="widget-title">
-            Today's Priorities
-            <div class="db-role-switch" id="dailyBriefingRoleSwitch">
-              <button type="button" class="db-role-btn" data-role-view="broker" onclick="setDailyBriefingRoleView('broker')">Broker</button>
-              <button type="button" class="db-role-btn" data-role-view="analyst_ops" onclick="setDailyBriefingRoleView('analyst_ops')">Analyst/Ops</button>
-            </div>
-          </div>
-          <div id="commandQueueContent"><div class="loading"><span class="spinner"></span></div></div>
-        </div>
-
-        <!-- BD CADENCE TRACKER -->
-        <div class="widget" id="bdCadenceWidget">
-          <div class="widget-title">Business Development Cadence</div>
-          <div id="bdCadenceContent"><div class="loading"><span class="spinner"></span></div></div>
-        </div>
-
         <div class="home-layout">
           <div class="home-main">
-            <!-- Stats (condensed) -->
+            <!-- Stats -->
             <div class="widget-grid" id="homeStats">
               <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Open Activities</div><div class="stat-value" id="statActivities">-</div><div class="stat-sub">Salesforce</div></div>
               <div class="stat-card clickable" onclick="navTo('pageMessages')"><div class="stat-label">Flagged Emails</div><div class="stat-value" id="statEmails">-</div><div class="stat-sub">Outlook</div></div>
@@ -122,57 +103,66 @@
               <div class="stat-card clickable" onclick="navTo('pageBiz')"><div class="stat-label">Due This Week</div><div class="stat-value" id="statDue">-</div><div class="stat-sub">Tasks</div></div>
             </div>
 
-            <!-- Today's Schedule -->
-            <div class="widget">
-              <div class="widget-title">Today's Schedule</div>
-              <div id="todaySchedule" class="schedule-timeline"><div class="loading"><span class="spinner"></span></div></div>
+            <!-- Weather -->
+            <div class="widget" id="weatherWidget">
+              <div class="widget-title">Weather — Locating...</div>
+              <div class="weather-row">
+                <div class="weather-temp" id="wxTemp">--°</div>
+                <div class="weather-details" id="wxDetails">Loading...</div>
+              </div>
             </div>
 
-            <!-- Market (collapsed by default) -->
-            <details class="widget">
-              <summary class="widget-title" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px">
-                <span style="font-size:10px;color:var(--text3)">&#9654;</span> Markets &amp; Weather
-              </summary>
-              <div id="marketWidget" style="padding-top:8px">
-                <div class="market-row" id="marketData">
-                  <div class="market-item"><div class="market-label">10Y Treasury Yield</div><div class="market-val" id="mktTreasury">--</div><div class="market-chg" id="mktTreasuryChg">--</div></div>
+            <!-- Market -->
+            <div class="widget" id="marketWidget">
+              <div class="widget-title">Markets</div>
+              <div class="market-row" id="marketData">
+                <div class="market-item"><div class="market-label">10Y Treasury Yield</div><div class="market-val" id="mktTreasury">--</div><div class="market-chg" id="mktTreasuryChg">--</div></div>
+              </div>
+              <div class="yield-chart-wrap">
+                <div class="yield-chart-controls" id="yieldChartControls">
+                  <button data-range="1D" class="active">1D</button>
+                  <button data-range="5D">5D</button>
+                  <button data-range="1M">1M</button>
+                  <button data-range="3M">3M</button>
+                  <button data-range="6M">6M</button>
+                  <button data-range="YTD">YTD</button>
+                  <button data-range="1Y">1Y</button>
+                  <button data-range="3Y">3Y</button>
                 </div>
-                <div class="yield-chart-wrap">
-                  <div class="yield-chart-controls" id="yieldChartControls">
-                    <button data-range="1D" class="active">1D</button>
-                    <button data-range="5D">5D</button>
-                    <button data-range="1M">1M</button>
-                    <button data-range="3M">3M</button>
-                    <button data-range="6M">6M</button>
-                    <button data-range="YTD">YTD</button>
-                    <button data-range="1Y">1Y</button>
-                    <button data-range="3Y">3Y</button>
-                  </div>
-                  <div class="yield-chart-container" id="yieldChartContainer">
-                    <div class="chart-loading"><span class="spinner"></span></div>
-                  </div>
+                <div class="yield-chart-container" id="yieldChartContainer">
+                  <div class="chart-loading"><span class="spinner"></span></div>
                 </div>
               </div>
-              <div id="weatherWidget" style="padding-top:8px">
-                <div class="weather-row">
-                  <div class="weather-temp" id="wxTemp">--°</div>
-                  <div class="weather-details" id="wxDetails">Loading...</div>
+            </div>
+
+            <!-- Daily Briefing -->
+            <div class="widget" id="dailyBriefingWidget">
+              <div class="widget-title">
+                Daily Briefing
+                <div class="db-role-switch" id="dailyBriefingRoleSwitch">
+                  <button type="button" class="db-role-btn" data-role-view="broker" onclick="setDailyBriefingRoleView('broker')">Broker</button>
+                  <button type="button" class="db-role-btn" data-role-view="analyst_ops" onclick="setDailyBriefingRoleView('analyst_ops')">Analyst/Ops</button>
                 </div>
               </div>
-            </details>
+              <div id="dailyBriefingContent"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
 
-            <!-- Activity Breakdown (collapsed) -->
-            <details class="widget">
-              <summary class="widget-title" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px">
-                <span style="font-size:10px;color:var(--text3)">&#9654;</span> Activity Breakdown
-              </summary>
-              <div id="categoryMetrics" style="padding-top:8px"><div class="loading"><span class="spinner"></span></div></div>
-            </details>
+            <!-- Business Metrics -->
+            <div class="widget">
+              <div class="widget-title">Activity Breakdown</div>
+              <div id="categoryMetrics"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
 
-            <!-- Team Pulse — visible to managers/owners -->
+            <!-- Team Pulse — visible to managers/owners when canonical model is active -->
             <div class="widget" id="teamPulseWidget" style="display:none">
               <div class="widget-title">Team Pulse</div>
               <div id="teamPulseContent"></div>
+            </div>
+
+            <!-- Today's Schedule - Time Block Calendar -->
+            <div class="widget">
+              <div class="widget-title">Today's Schedule</div>
+              <div id="todaySchedule" class="schedule-timeline"><div class="loading"><span class="spinner"></span></div></div>
             </div>
           </div>
           <div class="home-sidebar">
