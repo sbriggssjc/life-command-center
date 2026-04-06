@@ -404,32 +404,33 @@ async function fetchPortfolioStats() {
   const fetches = [];
 
   if (govUrl && govKey) {
+    const govHeaders = { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` };
     fetches.push(
-      fetch(`${govUrl}/rest/v1/mv_gov_overview_stats?select=*&limit=1`, {
-        headers: { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` }
-      })
+      fetch(`${govUrl}/rest/v1/mv_gov_overview_stats?select=*&limit=1`, { headers: govHeaders })
         .then(r => r.ok ? r.json() : null)
         .then(rows => { if (Array.isArray(rows) && rows[0]) stats.gov_stats = rows[0]; })
         .catch(e => console.warn('[operations] Gov stats fetch failed:', e.message))
     );
+    // Fetch government pipeline opportunities
+    fetches.push(
+      fetch(`${govUrl}/rest/v1/v_opportunity_domain_classified?domain=eq.government&status=eq.Open&order=activity_date.desc.nullslast&limit=10&select=deal_display_name,contact_name,company_name,activity_date,deal_priority`, { headers: govHeaders })
+        .then(r => r.ok ? r.json() : [])
+        .then(rows => { if (Array.isArray(rows)) stats.gov_opportunities = rows; })
+        .catch(() => {})
+    );
   }
 
   if (diaUrl && diaKey) {
+    const diaHeaders = { 'apikey': diaKey, 'Authorization': `Bearer ${diaKey}` };
     fetches.push(
-      fetch(`${diaUrl}/rest/v1/v_counts_freshness?select=*&limit=1`, {
-        headers: { 'apikey': diaKey, 'Authorization': `Bearer ${diaKey}` }
-      })
+      fetch(`${diaUrl}/rest/v1/v_counts_freshness?select=*&limit=1`, { headers: diaHeaders })
         .then(r => r.ok ? r.json() : null)
         .then(rows => { if (Array.isArray(rows) && rows[0]) stats.dia_stats = rows[0]; })
         .catch(e => console.warn('[operations] Dialysis stats fetch failed:', e.message))
     );
     fetches.push(
       fetch(`${diaUrl}/rest/v1/clinic_financial_estimates?select=count&limit=1`, {
-        headers: {
-          'apikey': diaKey,
-          'Authorization': `Bearer ${diaKey}`,
-          'Prefer': 'count=exact'
-        }
+        headers: { ...diaHeaders, 'Prefer': 'count=exact' }
       })
         .then(r => {
           const range = r.headers.get('content-range');
@@ -440,6 +441,20 @@ async function fetchPortfolioStats() {
           return null;
         })
         .catch(e => console.warn('[operations] Dialysis clinic count fetch failed:', e.message))
+    );
+    // Fetch dialysis pipeline opportunities
+    fetches.push(
+      fetch(`${diaUrl}/rest/v1/v_opportunity_domain_classified?domain=eq.dialysis&status=eq.Open&order=activity_date.desc.nullslast&limit=10&select=deal_display_name,contact_name,company_name,activity_date,deal_priority`, { headers: diaHeaders })
+        .then(r => r.ok ? r.json() : [])
+        .then(rows => { if (Array.isArray(rows)) stats.dia_opportunities = rows; })
+        .catch(() => {})
+    );
+    // Fetch top-growth clinics (patient count movers)
+    fetches.push(
+      fetch(`${diaUrl}/rest/v1/v_facility_patient_counts_mom?patient_delta=gt.5&order=patient_delta.desc&limit=5&select=facility_name,city,state,patient_count,patient_delta,pct_change`, { headers: diaHeaders })
+        .then(r => r.ok ? r.json() : [])
+        .then(rows => { if (Array.isArray(rows)) stats.dia_growth_clinics = rows; })
+        .catch(() => {})
     );
   }
 
@@ -1466,13 +1481,12 @@ async function handleGuidedEntityMerge(params, user, workspaceId) {
 async function fetchOpsContext(workspaceId, userId) {
   if (!workspaceId) return {};
   try {
-    const [countResult, syncResult, recentInbox, recentSf] = await Promise.all([
+    const [countResult, syncResult, recentInbox, recentSf, researchBacklog] = await Promise.all([
       opsQuery('GET', `mv_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`),
       opsQuery('GET', `sync_errors?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id&limit=0`),
-      // Fetch recent inbox items with titles so the AI can reference specific items
       opsQuery('GET', `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=in.(new,triaged)&order=received_at.desc&limit=8&select=id,title,status,priority,source_type,metadata,received_at`),
-      // Fetch recent SF activity so AI knows about deal-related work
-      opsQuery('GET', `activity_events?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.salesforce&order=occurred_at.desc&limit=10&select=title,category,metadata,occurred_at`)
+      opsQuery('GET', `activity_events?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.salesforce&order=occurred_at.desc&limit=10&select=title,category,metadata,occurred_at`),
+      opsQuery('GET', `research_tasks?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=in.(queued,in_progress)&order=priority.desc,created_at.asc&limit=5&select=id,title,research_type,domain,status,priority,created_at`)
     ]);
     const counts = countResult.data?.[0] || {};
     const inboxItems = (recentInbox.data || []).map(i => ({
@@ -1489,6 +1503,37 @@ async function fetchOpsContext(workspaceId, userId) {
       deal: a.metadata?.sf_what || null,
       date: a.occurred_at
     }));
+    const research = (researchBacklog.data || []).map(r => ({
+      title: r.title,
+      type: r.research_type,
+      domain: r.domain,
+      status: r.status,
+      age_days: Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000)
+    }));
+
+    // Fetch hot contacts from Gov DB for chat context
+    let topContacts = [];
+    const govUrl = process.env.GOV_SUPABASE_URL;
+    const govKey = process.env.GOV_SUPABASE_KEY;
+    if (govUrl && govKey) {
+      try {
+        const cRes = await fetch(
+          `${govUrl}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.20&order=engagement_score.desc&limit=5&select=full_name,company_name,engagement_score,last_call_date,last_email_date,contact_type`,
+          { headers: { 'apikey': govKey, 'Authorization': `Bearer ${govKey}` } }
+        );
+        if (cRes.ok) {
+          const contacts = await cRes.json();
+          topContacts = (contacts || []).map(c => ({
+            name: c.full_name,
+            company: c.company_name,
+            score: c.engagement_score,
+            type: c.contact_type,
+            last_call: c.last_call_date || 'never',
+            last_email: c.last_email_date || 'never'
+          }));
+        }
+      } catch { /* non-fatal */ }
+    }
 
     return {
       ops_work_counts: {
@@ -1502,7 +1547,9 @@ async function fetchOpsContext(workspaceId, userId) {
         completed_week: counts.completed_week || 0
       },
       recent_inbox_items: inboxItems,
-      recent_sf_activity: sfItems
+      recent_sf_activity: sfItems,
+      research_backlog: research,
+      top_engaged_contacts: topContacts
     };
   } catch {
     return {};
