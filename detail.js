@@ -849,8 +849,10 @@ function _udTabOperations() {
 
   // ── Reconcile operating margin: compute from profit/revenue if stored value is 0 but profit exists ──
   let margin = r.ttm_operating_margin != null ? Number(r.ttm_operating_margin) : null;
-  if ((margin === 0 || margin == null) && r.ttm_operating_profit && r.ttm_revenue && Number(r.ttm_revenue) > 0) {
-    margin = (Number(r.ttm_operating_profit) / Number(r.ttm_revenue)) * 100;
+  const bestProfit = finDetail.estimated_operating_profit || r.ttm_operating_profit;
+  const bestRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
+  if ((margin === 0 || margin == null) && bestProfit && bestRevenue && Number(bestRevenue) > 0) {
+    margin = (Number(bestProfit) / Number(bestRevenue)) * 100;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
