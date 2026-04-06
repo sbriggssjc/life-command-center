@@ -472,6 +472,12 @@ const ACTION_REGISTRY = {
   // Tier 2: Microsoft To Do task creation (Wave 2)
   create_todo_task:            { tier: 2, handler: 'create_todo_task', confirm: 'explicit' },
 
+  // Tier 0: AI-powered listing pursuit (Wave 2)
+  generate_listing_pursuit_dossier: { tier: 0, handler: 'listing_pursuit_dossier' },
+
+  // Tier 0: Teams card generation (Wave 2)
+  generate_teams_card:         { tier: 0, handler: 'teams_card' },
+
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
   triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
@@ -479,6 +485,11 @@ const ACTION_REGISTRY = {
   create_listing_pursuit_followup_task: { method: 'POST', path: 'actions', tier: 2, confirm: 'explicit' },
   update_execution_task_status: { method: 'PATCH', path: 'actions', tier: 2, confirm: 'explicit' },
   retry_sync_error_record:     { method: 'POST', path: 'sync?action=retry', tier: 2, confirm: 'explicit' },
+
+  // Tier 2-3: Wave 2 workflow actions (existing endpoints, now dispatchable)
+  research_followup:           { method: 'POST', path: 'operations?action=research_followup', tier: 2, confirm: 'explicit' },
+  reassign_work_item:          { method: 'POST', path: 'operations?action=reassign', tier: 2, confirm: 'explicit' },
+  escalate_action:             { method: 'POST', path: 'operations?action=escalate', tier: 3, confirm: 'explicit' },
 };
 
 async function dispatchAction(actionName, params, user, workspaceId) {
@@ -502,10 +513,12 @@ async function dispatchAction(actionName, params, user, workspaceId) {
   // AI-powered actions have dedicated handlers
   if (spec.handler) {
     switch (spec.handler) {
-      case 'prospecting_brief':   return handleProspectingBrief(params, user, workspaceId);
-      case 'draft_outreach':      return handleDraftOutreachEmail(params, user, workspaceId);
-      case 'draft_seller_update': return handleDraftSellerUpdate(params, user, workspaceId);
-      case 'create_todo_task':    return createTodoTask(params, user, workspaceId);
+      case 'prospecting_brief':      return handleProspectingBrief(params, user, workspaceId);
+      case 'draft_outreach':         return handleDraftOutreachEmail(params, user, workspaceId);
+      case 'draft_seller_update':    return handleDraftSellerUpdate(params, user, workspaceId);
+      case 'create_todo_task':       return createTodoTask(params, user, workspaceId);
+      case 'listing_pursuit_dossier': return handleListingPursuitDossier(params, user, workspaceId);
+      case 'teams_card':             return generateTeamsCard(params);
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
   }
@@ -821,6 +834,188 @@ async function handleDraftSellerUpdate(params, user, workspaceId) {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// LISTING PURSUIT DOSSIER — assemble context for pursuit strategy (Wave 2)
+// ---------------------------------------------------------------------------
+
+async function handleListingPursuitDossier(params, user, workspaceId) {
+  const { entity_id, entity_name, q } = params || {};
+
+  // Try to find entity context
+  let entityContext = '';
+  let entityData = null;
+  let govData = [];
+  let diaData = [];
+
+  if (entity_id) {
+    const entityResult = await opsQuery('GET', `entities?id=eq.${encodeURIComponent(entity_id)}&limit=1`);
+    entityData = entityResult.data?.[0];
+  } else if (q || entity_name) {
+    const searchTerm = q || entity_name;
+    const entityResult = await opsQuery('GET', `entities?name=ilike.*${encodeURIComponent(searchTerm)}*&limit=5`);
+    entityData = entityResult.data?.[0]; // take best match
+  }
+
+  if (entityData) {
+    entityContext += `\nTarget Entity: ${entityData.name}\nType: ${entityData.entity_type || 'unknown'}\nDomain: ${entityData.domain || 'unknown'}`;
+
+    // Fetch activity timeline
+    const timeline = await opsQuery('GET',
+      `v_entity_timeline?entity_id=eq.${encodeURIComponent(entityData.id)}&limit=15&order=created_at.desc`
+    );
+    if (timeline.data?.length) {
+      entityContext += '\n\nInteraction History:\n' + timeline.data.map(e =>
+        `- ${e.created_at?.split('T')[0] || '?'}: ${e.event_type || 'activity'} — ${e.title || e.description || '(no details)'}`
+      ).join('\n');
+    }
+  }
+
+  // Fetch domain-specific context if available
+  const diaUrl = process.env.DIA_SUPABASE_URL;
+  const diaKey = process.env.DIA_SUPABASE_KEY;
+  if (diaUrl && diaKey && entityData?.domain === 'dialysis') {
+    try {
+      const r = await fetch(`${diaUrl}/rest/v1/v_clinic_overview?property_name=ilike.*${encodeURIComponent(entityData.name)}*&limit=3`, {
+        headers: { 'apikey': diaKey, 'Authorization': `Bearer ${diaKey}` }
+      });
+      if (r.ok) diaData = await r.json();
+    } catch { /* non-fatal */ }
+  }
+
+  if (GOV_URL && GOV_KEY && entityData?.domain === 'government') {
+    try {
+      const r = await fetch(`${GOV_URL}/rest/v1/mv_gov_overview_stats?select=*&limit=1`, {
+        headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}` }
+      });
+      if (r.ok) govData = await r.json();
+    } catch { /* non-fatal */ }
+  }
+
+  const domainContext = diaData.length
+    ? '\n\nDomain Intelligence (Dialysis):\n' + JSON.stringify(diaData[0], null, 2)
+    : govData.length
+    ? '\n\nDomain Intelligence (Government):\n' + JSON.stringify(govData[0], null, 2)
+    : '';
+
+  const prompt = `Generate a listing pursuit dossier for a commercial real estate broker preparing to pursue an exclusive sell-side assignment.\n${entityContext}${domainContext}\n\nInclude these sections:\n1. **Target Summary** — property/entity overview, key facts\n2. **Ownership & Decision-Maker Context** — what we know about the owner/principals\n3. **Market Position** — comparable sales, market conditions, estimated value range\n4. **Pursuit Strategy** — recommended approach, timing, key differentiators\n5. **Call Prep Notes** — 3-5 talking points for the initial outreach\n6. **Next Steps** — specific actions to take this week\n\nBe concise but substantive. Use actual data from the context provided. Where data is missing, note the gap and suggest how to fill it.`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'generate_listing_pursuit_dossier' },
+    history: [],
+    attachments: [],
+    user,
+    workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'generate_listing_pursuit_dossier',
+    response: result.data?.response || '',
+    entity: entityData ? { id: entityData.id, name: entityData.name, domain: entityData.domain } : null,
+    provider: result.provider
+  };
+}
+
+// ---------------------------------------------------------------------------
+// TEAMS CARD GENERATOR — produce adaptive card JSON for any action (Wave 2)
+// ---------------------------------------------------------------------------
+
+function generateTeamsCard(params) {
+  const { card_type, data, lcc_host } = params || {};
+  const baseUrl = lcc_host || process.env.LCC_APP_URL || 'https://life-command-center.vercel.app';
+
+  if (card_type === 'inbox_triage') {
+    const item = data || {};
+    return {
+      ok: true,
+      action: 'generate_teams_card',
+      card_type: 'inbox_triage',
+      card: {
+        type: 'AdaptiveCard',
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.4',
+        body: [
+          { type: 'TextBlock', text: 'Inbox Item Needs Triage', weight: 'Bolder', size: 'Medium' },
+          { type: 'FactSet', facts: [
+            { title: 'From', value: item.sender || item.from || 'Unknown' },
+            { title: 'Subject', value: item.title || item.subject || '(no subject)' },
+            { title: 'Received', value: item.received_at || item.created_at || '' },
+            { title: 'Domain', value: item.domain || 'unclassified' },
+            { title: 'Priority', value: item.priority || 'normal' }
+          ]},
+          { type: 'TextBlock', text: item.summary || item.body_preview || '', wrap: true, spacing: 'Small', size: 'Small' }
+        ],
+        actions: [
+          { type: 'Action.OpenUrl', title: 'View in LCC', url: `${baseUrl}/?tab=inbox&id=${item.id || ''}` },
+          { type: 'Action.OpenUrl', title: 'Triage', url: `${baseUrl}/?tab=inbox&action=triage&id=${item.id || ''}` },
+          { type: 'Action.OpenUrl', title: 'Promote to Action', url: `${baseUrl}/?tab=inbox&action=promote&id=${item.id || ''}` }
+        ]
+      }
+    };
+  }
+
+  if (card_type === 'action_review') {
+    const item = data || {};
+    return {
+      ok: true,
+      action: 'generate_teams_card',
+      card_type: 'action_review',
+      card: {
+        type: 'AdaptiveCard',
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.4',
+        body: [
+          { type: 'TextBlock', text: 'Action Needs Review', weight: 'Bolder', size: 'Medium' },
+          { type: 'FactSet', facts: [
+            { title: 'Title', value: item.title || '(untitled)' },
+            { title: 'Status', value: item.status || 'open' },
+            { title: 'Priority', value: item.priority || 'normal' },
+            { title: 'Assigned To', value: item.assigned_to_name || item.assigned_to || 'Unassigned' },
+            { title: 'Due', value: item.due_date || 'No due date' },
+            { title: 'Domain', value: item.domain || '' }
+          ]}
+        ],
+        actions: [
+          { type: 'Action.OpenUrl', title: 'Open in LCC', url: `${baseUrl}/?tab=queue&id=${item.id || ''}` },
+          { type: 'Action.OpenUrl', title: 'Reassign', url: `${baseUrl}/?tab=queue&action=reassign&id=${item.id || ''}` },
+          { type: 'Action.OpenUrl', title: 'Escalate', url: `${baseUrl}/?tab=queue&action=escalate&id=${item.id || ''}` }
+        ]
+      }
+    };
+  }
+
+  if (card_type === 'escalation') {
+    const item = data || {};
+    return {
+      ok: true,
+      action: 'generate_teams_card',
+      card_type: 'escalation',
+      card: {
+        type: 'AdaptiveCard',
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.4',
+        body: [
+          { type: 'TextBlock', text: 'Escalation', weight: 'Bolder', size: 'Medium', color: 'Attention' },
+          { type: 'FactSet', facts: [
+            { title: 'Action', value: item.title || '(untitled)' },
+            { title: 'Escalated By', value: item.escalated_by_name || '' },
+            { title: 'Reason', value: item.reason || '' },
+            { title: 'Priority', value: item.priority || 'high' }
+          ]},
+          { type: 'TextBlock', text: item.description || '', wrap: true, spacing: 'Small', size: 'Small' }
+        ],
+        actions: [
+          { type: 'Action.OpenUrl', title: 'Review in LCC', url: `${baseUrl}/?tab=queue&id=${item.action_item_id || ''}` },
+          { type: 'Action.OpenUrl', title: 'Reassign', url: `${baseUrl}/?tab=queue&action=reassign&id=${item.action_item_id || ''}` }
+        ]
+      }
+    };
+  }
+
+  return { ok: false, error: `Unknown card_type: ${card_type}. Supported: inbox_triage, action_review, escalation` };
+}
+
 // Fetch operational context for Copilot enrichment
 // ---------------------------------------------------------------------------
 
