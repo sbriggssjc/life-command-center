@@ -1343,7 +1343,29 @@ async function handleChatRoute(req, res) {
   // agents, Teams cards, and Power Automate flows.
   if (req.body?.copilot_action) {
     const { copilot_action, params } = req.body;
+    const startMs = Date.now();
     const result = await dispatchAction(copilot_action, params || {}, user, workspaceId);
+    const durationMs = Date.now() - startMs;
+
+    // Log activity for all non-confirmation dispatches
+    if (workspaceId && !result.requires_confirmation) {
+      opsQuery('POST', 'activity_events', {
+        workspace_id: workspaceId,
+        user_id: user?.id,
+        event_type: 'copilot_action',
+        category: 'system',
+        source: 'copilot',
+        title: `Copilot action: ${copilot_action}`,
+        metadata: {
+          action: copilot_action,
+          ok: result.ok !== false,
+          duration_ms: durationMs,
+          tier: ACTION_REGISTRY[copilot_action]?.tier,
+          provider: result.provider || null
+        }
+      }).catch(() => {}); // fire-and-forget
+    }
+
     return res.status(result.ok === false && result.requires_confirmation ? 200 : (result.ok ? 200 : 400)).json({
       ...result,
       source: 'copilot_action_dispatch'

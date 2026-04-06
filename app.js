@@ -5831,7 +5831,6 @@ async function sendCopilotAction(actionName, params = {}, confirmed = false) {
     if (typingEl) typingEl.remove();
 
     if (data.requires_confirmation) {
-      // Show confirmation prompt with an action button
       const msg = data.message || `Action "${actionName}" requires confirmation.`;
       appendCopilotMsg(msg, 'bot');
       appendCopilotMsg(
@@ -5841,15 +5840,168 @@ async function sendCopilotAction(actionName, params = {}, confirmed = false) {
       return;
     }
 
-    // Format response based on action type
-    const reply = data.response || data.message || (data.data ? `Retrieved ${Array.isArray(data.data) ? data.data.length : 1} result(s).` : 'Done.');
-    appendCopilotMsg(reply, 'bot');
-    copilotHistory.push({ role: 'assistant', content: reply });
+    // Render structured result
+    renderCopilotActionResult(actionName, data);
 
   } catch (e) {
     const typingEl = document.getElementById(typingId);
     if (typingEl) typingEl.remove();
     appendCopilotMsg(`Action failed: ${e.message}`, 'bot');
+  }
+}
+
+/**
+ * Render structured action results with rich formatting and follow-up chips.
+ */
+function renderCopilotActionResult(actionName, data) {
+  // AI-generated text response
+  if (data.response) {
+    appendCopilotMsg(data.response, 'bot');
+    copilotHistory.push({ role: 'assistant', content: data.response });
+  }
+
+  // Contact list card (prospecting brief)
+  if (data.contacts && data.contacts.length) {
+    let html = '<div style="font-size:12px;margin-top:4px">';
+    html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text2)">Top Contacts</div>';
+    data.contacts.slice(0, 5).forEach(function(c) {
+      const heatColor = c.heat === 'hot' ? '#d32f2f' : c.heat === 'warm' ? '#f57c00' : '#1565c0';
+      html += '<div style="padding:6px 0;border-bottom:1px solid var(--border)">';
+      html += '<div style="display:flex;justify-content:space-between"><strong>' + esc(c.name) + '</strong><span style="color:' + heatColor + ';font-size:11px;font-weight:600">' + (c.heat || '').toUpperCase() + ' (' + (c.score || 0) + ')</span></div>';
+      if (c.company) html += '<div style="color:var(--text3);font-size:11px">' + esc(c.company) + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
+  // Relationship context card
+  if (data.contact && data.contact.relationship_health) {
+    const c = data.contact;
+    const healthColor = c.relationship_health.score >= 80 ? 'var(--green)' : c.relationship_health.score >= 50 ? '#f57c00' : '#d32f2f';
+    let html = '<div style="font-size:12px;background:var(--s2);border-radius:8px;padding:10px;margin-top:4px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center"><strong>' + esc(c.name) + '</strong><span style="color:' + healthColor + ';font-size:11px;font-weight:600">' + (c.relationship_health.label || '').toUpperCase() + ' (' + c.relationship_health.score + ')</span></div>';
+    if (c.company) html += '<div style="color:var(--text3);font-size:11px">' + esc(c.company) + (c.title ? ' &middot; ' + esc(c.title) : '') + '</div>';
+    html += '<div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--text2)">';
+    html += '<span>Calls: ' + c.total_calls + '</span><span>Emails: ' + c.total_emails + '</span>';
+    if (c.days_since_last_touch !== null) html += '<span>Last touch: ' + c.days_since_last_touch + 'd ago</span>';
+    html += '</div></div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
+  // Pipeline stats card
+  if (data.pipeline) {
+    const p = data.pipeline;
+    let html = '<div style="font-size:12px;margin-top:4px">';
+    html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text2)">Pipeline Snapshot</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    html += _statChip('Active', p.total_active, 'var(--accent)');
+    html += _statChip('Completed (30d)', p.total_completed_30d, 'var(--green)');
+    html += _statChip('Overdue', p.overdue?.count || 0, p.overdue?.count > 0 ? '#d32f2f' : 'var(--text3)');
+    html += _statChip('Stale', p.stale?.count || 0, p.stale?.count > 0 ? '#f57c00' : 'var(--text3)');
+    html += _statChip('Escalations', p.escalations?.open_count || 0, p.escalations?.open_count > 0 ? '#d32f2f' : 'var(--text3)');
+    if (p.avg_days_to_complete !== null) html += _statChip('Avg Days', p.avg_days_to_complete, 'var(--text2)');
+    html += '</div></div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
+  // Entity merge results
+  if (data.entity_duplicates || data.contact_merge_queue) {
+    let html = '<div style="font-size:12px;margin-top:4px">';
+    if (data.entity_duplicates?.groups > 0) {
+      html += '<div style="font-weight:600;color:var(--text2)">Entity Duplicates: ' + data.entity_duplicates.groups + ' group(s)</div>';
+    }
+    if (data.contact_merge_queue?.pending > 0) {
+      html += '<div style="font-weight:600;color:var(--text2);margin-top:4px">Contact Merges Pending: ' + data.contact_merge_queue.pending + '</div>';
+    }
+    html += '</div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
+  // To Do task created
+  if (data.task && data.task.id) {
+    let html = '<div style="font-size:12px;background:var(--s2);border-radius:8px;padding:10px;margin-top:4px">';
+    html += '<div style="font-weight:600;color:var(--green)">Task Created in Microsoft To Do</div>';
+    html += '<div style="margin-top:4px">' + esc(data.task.title) + '</div>';
+    html += '<div style="color:var(--text3);font-size:11px;margin-top:2px">List: ' + esc(data.task.list) + ' &middot; Status: ' + (data.task.status || 'notStarted') + '</div>';
+    html += '</div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
+  // Fallback for unstructured data results
+  if (!data.response && data.data && !data.contacts && !data.pipeline && !data.contact) {
+    const count = Array.isArray(data.data) ? data.data.length : 1;
+    appendCopilotMsg(`Retrieved ${count} result(s).`, 'bot');
+  }
+
+  // Contextual follow-up suggestions
+  const followUps = getFollowUpSuggestions(actionName, data);
+  if (followUps.length) {
+    let html = '<div class="copilot-suggestions" style="margin-top:4px">';
+    followUps.forEach(function(f) {
+      if (f.action) {
+        html += '<button class="copilot-suggestion" onclick="sendCopilotAction(\'' + f.action + '\', ' + JSON.stringify(f.params || {}).replace(/'/g, "\\'") + ')">' + esc(f.label) + '</button>';
+      } else {
+        html += '<button class="copilot-suggestion" onclick="sendCopilotSuggestion(\'' + f.text.replace(/'/g, "\\'") + '\')">' + esc(f.label) + '</button>';
+      }
+    });
+    html += '</div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+}
+
+function _statChip(label, value, color) {
+  return '<div style="background:var(--s2);border-radius:6px;padding:4px 8px;text-align:center"><div style="font-size:16px;font-weight:700;color:' + color + '">' + value + '</div><div style="font-size:10px;color:var(--text3)">' + label + '</div></div>';
+}
+
+function getFollowUpSuggestions(actionName, data) {
+  switch (actionName) {
+    case 'generate_prospecting_brief':
+      if (data.contacts?.length) {
+        const top = data.contacts[0];
+        return [
+          { label: 'Draft email to ' + (top.name || 'top contact'), action: 'draft_outreach_email', params: { contact_name: top.name, intent: 'reconnect and explore opportunities' } },
+          { label: 'Relationship context', action: 'get_relationship_context', params: { contact_name: top.name } },
+          { label: 'Pipeline health', action: 'get_pipeline_intelligence' }
+        ];
+      }
+      return [];
+    case 'draft_outreach_email':
+    case 'draft_seller_update_email':
+      return [
+        { label: 'Create To Do follow-up', action: 'create_todo_task', params: { title: 'Follow up on email draft', list_name: 'Work' } },
+        { label: 'Back to call sheet', action: 'generate_prospecting_brief' }
+      ];
+    case 'get_relationship_context':
+      return [
+        { label: 'Draft outreach', action: 'draft_outreach_email', params: { contact_name: data.contact?.name } },
+        { label: 'Pursuit dossier', action: 'generate_listing_pursuit_dossier', params: { entity_name: data.contact?.company } },
+        { label: 'Pipeline health', action: 'get_pipeline_intelligence' }
+      ];
+    case 'get_pipeline_intelligence':
+      return [
+        { label: 'Daily briefing', action: 'get_daily_briefing_snapshot' },
+        { label: 'Check sync health', text: 'Any sync issues?' },
+        { label: 'Review duplicates', action: 'guided_entity_merge' }
+      ];
+    case 'generate_listing_pursuit_dossier':
+      return [
+        { label: 'Create follow-up task', action: 'create_listing_pursuit_followup_task', params: { title: 'Pursuit follow-up: ' + (data.entity?.name || ''), action_type: 'follow_up' } },
+        { label: 'Draft outreach to owner', action: 'draft_outreach_email', params: { intent: 'listing pursuit introduction' } }
+      ];
+    case 'guided_entity_merge':
+      return [
+        { label: 'Data quality report', text: 'Show me data quality issues' },
+        { label: 'Pipeline health', action: 'get_pipeline_intelligence' }
+      ];
+    case 'get_daily_briefing_snapshot':
+      return [
+        { label: 'Prospecting call sheet', action: 'generate_prospecting_brief' },
+        { label: 'Check inbox', text: 'What needs triage in the inbox?' },
+        { label: 'Pipeline health', action: 'get_pipeline_intelligence' }
+      ];
+    default:
+      return [];
   }
 }
 
