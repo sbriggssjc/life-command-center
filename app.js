@@ -5870,6 +5870,23 @@ function renderCopilotActionResult(actionName, data) {
     copilotHistory.push({ role: 'assistant', content: data.response });
   }
 
+  // Briefing snapshot stats card
+  if (data.snapshot && data.snapshot.work_counts) {
+    const s = data.snapshot;
+    const wc = s.work_counts;
+    let html = '<div style="font-size:12px;margin-top:4px">';
+    html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text2)">Today\'s Snapshot</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    if (s.strategic_count > 0) html += _statChip('Strategic', s.strategic_count, '#d32f2f');
+    if (s.important_count > 0) html += _statChip('Important', s.important_count, '#f57c00');
+    if (s.urgent_count > 0) html += _statChip('Urgent', s.urgent_count, 'var(--accent)');
+    html += _statChip('Inbox', s.inbox_total || 0, 'var(--text2)');
+    if (wc.overdue > 0) html += _statChip('Overdue', wc.overdue, '#d32f2f');
+    if (wc.due_this_week > 0) html += _statChip('Due This Week', wc.due_this_week, '#f57c00');
+    html += '</div></div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
   // Contact list card (prospecting brief)
   if (data.contacts && data.contacts.length) {
     let html = '<div style="font-size:12px;margin-top:4px">';

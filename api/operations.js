@@ -468,7 +468,7 @@ async function fetchPortfolioStats() {
 
 const ACTION_REGISTRY = {
   // Tier 0: read-only
-  get_daily_briefing_snapshot: { method: 'GET', path: 'daily-briefing?action=snapshot', tier: 0 },
+  get_daily_briefing_snapshot: { tier: 0, handler: 'daily_briefing' },
   list_staged_intake_inbox:    { method: 'GET', path: 'inbox', tier: 0 },
   get_my_execution_queue:      { method: 'GET', path: 'queue-v2?view=my_work', tier: 0, alias: 'queue?_version=v2&view=my_work' },
   get_sync_run_health:         { method: 'GET', path: 'sync?action=health', tier: 0 },
@@ -534,6 +534,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   // AI-powered actions have dedicated handlers
   if (spec.handler) {
     switch (spec.handler) {
+      case 'daily_briefing':          return handleDailyBriefing(params, user, workspaceId, req);
       case 'prospecting_brief':      return handleProspectingBrief(params, user, workspaceId);
       case 'draft_outreach':         return handleDraftOutreachEmail(params, user, workspaceId);
       case 'draft_seller_update':    return handleDraftSellerUpdate(params, user, workspaceId);
@@ -725,6 +726,118 @@ async function govContactQuery(path) {
   });
   const data = await res.json().catch(() => []);
   return { ok: res.ok, data: Array.isArray(data) ? data : [] };
+}
+
+async function handleDailyBriefing(params, user, workspaceId, req) {
+  // Fetch the structured snapshot from the daily-briefing endpoint
+  const proto = req?.headers?.['x-forwarded-proto'] || 'https';
+  const host = req?.headers?.host || 'localhost:3000';
+  const roleView = params?.role_view || 'broker';
+  const headers = { 'Content-Type': 'application/json' };
+  if (req?.headers?.['authorization']) headers['authorization'] = req.headers['authorization'];
+  if (req?.headers?.['x-lcc-key']) headers['x-lcc-key'] = req.headers['x-lcc-key'];
+  if (workspaceId) headers['x-lcc-workspace'] = workspaceId;
+
+  let snapshot = null;
+  try {
+    const res = await fetch(`${proto}://${host}/api/daily-briefing?action=snapshot&role_view=${roleView}`, { headers });
+    if (res.ok) snapshot = await res.json();
+  } catch { /* non-fatal */ }
+
+  if (!snapshot) {
+    return { ok: false, error: 'Could not fetch daily briefing snapshot' };
+  }
+
+  // Build a data-rich prompt from the actual snapshot
+  const priorities = snapshot.user_specific_priorities;
+  const counts = snapshot.team_level_production_signals?.work_counts || {};
+  const inbox = snapshot.team_level_production_signals?.inbox_summary || {};
+  const syncHealth = snapshot.team_level_production_signals?.sync_health || {};
+  const domainSignals = snapshot.domain_specific_alerts_highlights || {};
+
+  let dataContext = `TODAY'S DATA (${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}):\n`;
+
+  // Strategic priorities from the scoring engine
+  if (priorities?.today_priorities?.length) {
+    dataContext += '\nTOP PRIORITIES (ranked by strategic value):\n';
+    priorities.today_priorities.forEach((p, i) => {
+      dataContext += `${i + 1}. [${(p.tier || 'urgent').toUpperCase()}] ${p.title} (score: ${p.score}, source: ${p.source || p.type})\n`;
+    });
+    dataContext += `Strategic items: ${priorities.strategic_count || 0} | Important: ${priorities.important_count || 0} | Urgent: ${priorities.urgent_count || 0}\n`;
+  }
+
+  // Inbox items with actual subjects
+  if (inbox.items?.length) {
+    dataContext += `\nINBOX (${inbox.total_new || 0} new, ${inbox.total_triaged || 0} triaged):\n`;
+    inbox.items.slice(0, 5).forEach(item => {
+      const sender = item.metadata?.sender_email || item.metadata?.sf_who || 'unknown';
+      dataContext += `- "${item.title}" from ${sender} (${item.source_type})\n`;
+    });
+  }
+
+  // Pipeline deals
+  if (priorities?.pipeline_deals?.length) {
+    dataContext += '\nACTIVE PIPELINE DEALS:\n';
+    priorities.pipeline_deals.forEach(d => {
+      dataContext += `- ${d.title} | Contact: ${d.contact || 'unknown'} | Status: ${d.status || 'open'}\n`;
+    });
+  }
+
+  // Recommended calls (stale touchpoints)
+  if (priorities?.recommended_calls?.length) {
+    dataContext += '\nCONTACTS OVERDUE FOR TOUCHPOINT:\n';
+    priorities.recommended_calls.forEach(c => {
+      dataContext += `- ${c.name} (${c.company || 'unknown'}) — score: ${c.score}, ${c.days_since_touch} days since last touch\n`;
+    });
+  }
+
+  // SF activity summary
+  if (priorities?.sf_activity_summary) {
+    const sf = priorities.sf_activity_summary;
+    dataContext += `\nSALESFORCE ACTIVITY (7 days): ${sf.total_7d} total (${sf.calls} calls, ${sf.emails} emails, ${sf.tasks} tasks)\n`;
+  }
+
+  // Work counts
+  dataContext += `\nWORK QUEUE: ${counts.open_actions || 0} open | ${counts.overdue || 0} overdue | ${counts.due_this_week || 0} due this week | ${counts.inbox_new || 0} inbox | ${counts.sync_errors || 0} sync errors\n`;
+
+  // Domain highlights
+  if (domainSignals.government?.highlights?.length) {
+    dataContext += '\nGOVERNMENT DOMAIN: ' + domainSignals.government.highlights.join('; ') + '\n';
+  }
+  if (domainSignals.dialysis?.highlights?.length) {
+    dataContext += 'DIALYSIS DOMAIN: ' + domainSignals.dialysis.highlights.join('; ') + '\n';
+  }
+
+  // Sync health
+  if (syncHealth.summary) {
+    const s = syncHealth.summary;
+    dataContext += `\nSYSTEM HEALTH: ${s.total_connectors} connectors (${s.healthy} healthy, ${s.error} error) | ${syncHealth.unresolved_errors?.length || 0} unresolved sync errors\n`;
+  }
+
+  const prompt = `You are briefing Scott Briggs, a net lease investment sales broker at NorthMarq specializing in government-leased and dialysis/kidney care assets. Using ONLY the data below, deliver a concise morning briefing.\n\n${dataContext}\n\nStructure your briefing as:\n\n**STRATEGIC (do first — revenue and deal actions):**\nList the strategic-tier items. For each, explain WHY it's strategic and WHAT to do.\n\n**IMPORTANT (do second — pipeline and relationships):**\nList important-tier items. Reference specific contacts by name.\n\n**URGENT (do third — operational items):**\nBriefly note any operational items that need attention.\n\n**CALL LIST:**\nIf there are contacts overdue for touchpoints, list them with suggested talking points.\n\nRules:\n- Reference ONLY the data provided. Do not invent market commentary, cap rates, or generic advice.\n- Use specific names, deal names, and numbers from the data.\n- If the data is sparse, say what data sources need to be connected — don't fill with generic CRE advice.\n- Keep it under 400 words.`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'get_daily_briefing_snapshot' },
+    history: [], attachments: [], user, workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'get_daily_briefing_snapshot',
+    response: result.data?.response || '',
+    snapshot: {
+      as_of: snapshot.as_of,
+      role_view: snapshot.role_view,
+      status: snapshot.status,
+      strategic_count: priorities?.strategic_count || 0,
+      important_count: priorities?.important_count || 0,
+      urgent_count: priorities?.urgent_count || 0,
+      work_counts: counts,
+      inbox_total: (inbox.total_new || 0) + (inbox.total_triaged || 0)
+    },
+    provider: result.provider
+  };
 }
 
 async function handleProspectingBrief(params, user, workspaceId) {
