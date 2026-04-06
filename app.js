@@ -5928,6 +5928,26 @@ function renderCopilotActionResult(actionName, data) {
     appendCopilotMsg(html, 'bot html');
   }
 
+  // Document assembly result
+  if (data.saved_file) {
+    let html = '<div style="font-size:12px;background:var(--s2);border-radius:8px;padding:10px;margin-top:4px">';
+    html += '<div style="font-weight:600;color:var(--green)">Document Saved to OneDrive</div>';
+    html += '<div style="margin-top:4px">' + esc(data.title || data.saved_file.name) + '</div>';
+    html += '<div style="color:var(--text3);font-size:11px;margin-top:2px">Folder: ' + esc(data.saved_file.folder) + '</div>';
+    if (data.saved_file.web_url) {
+      html += '<div style="margin-top:6px"><a href="' + data.saved_file.web_url + '" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none">Open in OneDrive &rarr;</a></div>';
+    }
+    html += '</div>';
+    appendCopilotMsg(html, 'bot html');
+  } else if (data.doc_type && data.html_available && !data.saved_file) {
+    let html = '<div style="font-size:12px;background:var(--s2);border-radius:8px;padding:10px;margin-top:4px">';
+    html += '<div style="font-weight:600;color:var(--text2)">Document Generated</div>';
+    html += '<div style="margin-top:4px">' + esc(data.title || '') + '</div>';
+    html += '<div style="color:var(--text3);font-size:11px;margin-top:2px">Configure MS_GRAPH_TOKEN with Files.ReadWrite scope to auto-save to OneDrive.</div>';
+    html += '</div>';
+    appendCopilotMsg(html, 'bot html');
+  }
+
   // Fallback for unstructured data results
   if (!data.response && data.data && !data.contacts && !data.pipeline && !data.contact) {
     const count = Array.isArray(data.data) ? data.data.length : 1;
@@ -5988,6 +6008,12 @@ function getFollowUpSuggestions(actionName, data) {
       return [
         { label: 'Create follow-up task', action: 'create_listing_pursuit_followup_task', params: { title: 'Pursuit follow-up: ' + (data.entity?.name || ''), action_type: 'follow_up' } },
         { label: 'Draft outreach to owner', action: 'draft_outreach_email', params: { intent: 'listing pursuit introduction' } }
+      ];
+    case 'generate_document':
+      return [
+        { label: 'Create follow-up task', action: 'create_todo_task', params: { title: 'Review and finalize ' + (data.doc_type || 'document'), list_name: 'Work' } },
+        { label: 'Draft email to client', action: 'draft_outreach_email', params: { intent: 'share ' + (data.doc_type || 'document') + ' for review' } },
+        { label: 'Pursuit dossier', action: 'generate_listing_pursuit_dossier', params: { entity_name: data.entity?.name } }
       ];
     case 'guided_entity_merge':
       return [
