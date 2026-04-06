@@ -498,7 +498,7 @@ const ACTION_REGISTRY = {
   escalate_action:             { method: 'POST', path: 'operations?action=escalate', tier: 3, confirm: 'explicit' },
 };
 
-async function dispatchAction(actionName, params, user, workspaceId) {
+async function dispatchAction(actionName, params, user, workspaceId, req) {
   const spec = ACTION_REGISTRY[actionName];
   if (!spec) {
     return { ok: false, error: `Unknown action: ${actionName}`, available_actions: Object.keys(ACTION_REGISTRY) };
@@ -533,9 +533,9 @@ async function dispatchAction(actionName, params, user, workspaceId) {
     }
   }
 
-  // Build internal fetch URL using opsQuery for GET reads, or compose for mutations
+  // Build internal fetch URL using internal API calls for GET reads
   if (spec.method === 'GET') {
-    return await executeReadAction(spec, params, user, workspaceId);
+    return await executeReadAction(spec, params, user, workspaceId, req);
   }
 
   // Write actions return metadata about what to call — the frontend or
@@ -551,8 +551,8 @@ async function dispatchAction(actionName, params, user, workspaceId) {
   };
 }
 
-async function executeReadAction(spec, params, user, workspaceId) {
-  // Build the query path with user params
+async function executeReadAction(spec, params, user, workspaceId, req) {
+  // Build the internal API URL — these are LCC API routes, not PostgREST tables
   let path = spec.path;
   if (params) {
     const queryParts = [];
@@ -565,18 +565,30 @@ async function executeReadAction(spec, params, user, workspaceId) {
     }
   }
 
-  // Add workspace filter where relevant
-  if (!path.includes('workspace_id') && workspaceId) {
-    path += (path.includes('?') ? '&' : '?') + `workspace_id=eq.${encodeURIComponent(workspaceId)}`;
-  }
+  // Determine the base URL for internal API calls
+  const proto = req?.headers?.['x-forwarded-proto'] || 'https';
+  const host = req?.headers?.host || 'localhost:3000';
+  const baseUrl = `${proto}://${host}`;
 
-  const result = await opsQuery('GET', path);
-  return {
-    ok: result.ok,
-    action: spec.path.split('?')[0],
-    data: result.data,
-    count: result.count || undefined
-  };
+  // Build headers to forward auth context
+  const headers = { 'Content-Type': 'application/json' };
+  if (req?.headers?.['authorization']) headers['authorization'] = req.headers['authorization'];
+  if (req?.headers?.['x-lcc-key']) headers['x-lcc-key'] = req.headers['x-lcc-key'];
+  if (workspaceId) headers['x-lcc-workspace'] = workspaceId;
+
+  try {
+    const res = await fetch(`${baseUrl}/api/${path}`, { method: 'GET', headers });
+    const data = await res.json().catch(() => ({}));
+    return {
+      ok: res.ok,
+      action: spec.path.split('?')[0],
+      data: res.ok ? data : undefined,
+      error: res.ok ? undefined : (data.error || `API returned ${res.status}`),
+      count: data.count || undefined
+    };
+  } catch (e) {
+    return { ok: false, action: spec.path.split('?')[0], error: `Internal API call failed: ${e.message}` };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,7 +1512,7 @@ async function handleChatRoute(req, res) {
   if (req.body?.copilot_action) {
     const { copilot_action, params } = req.body;
     const startMs = Date.now();
-    const result = await dispatchAction(copilot_action, params || {}, user, workspaceId);
+    const result = await dispatchAction(copilot_action, params || {}, user, workspaceId, req);
     const durationMs = Date.now() - startMs;
 
     // Log activity for all non-confirmation dispatches
