@@ -64,6 +64,7 @@ let _udIntakeState = {
  */
 async function openUnifiedDetail(db, ids, fallback, initialTab) {
   _udCache = null;
+  _opsExtraCache = null; // reset operations extra data for new clinic
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
   if (!panel || !overlay) return;
@@ -231,7 +232,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Render active tab (preserve on refresh) or default to Property
     const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
     const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Property';
-    if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
+    // Operations tab needs async data loading
+    if (activeTab === 'Operations' && db === 'dia') {
+      _udRenderOperationsAsync(bodyEl);
+    } else {
+      if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
+    }
 
   } catch (err) {
     console.error('Unified detail load error:', err);
@@ -466,7 +472,78 @@ function switchUnifiedTab(tabName) {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
   const bodyEl = document.getElementById('detailBody');
-  if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
+  // Operations tab may need async data loading
+  if (tabName === 'Operations' && _udCache.db === 'dia') {
+    _udRenderOperationsAsync(bodyEl);
+  } else {
+    if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
+  }
+}
+
+/** Lazy-load additional clinic data for the Operations tab, then render */
+let _opsExtraCache = null; // { medicare_id, patientHistory, trends, quality, financialDetail, costReports, lease }
+async function _udRenderOperationsAsync(bodyEl) {
+  const fb = _udCache.fallback || {};
+  const clinicId = fb.clinic_id || fb.medicare_id || fb.ccn;
+
+  // If we already loaded extra data for this clinic, just render
+  if (_opsExtraCache && _opsExtraCache.medicare_id === clinicId) {
+    if (bodyEl) bodyEl.innerHTML = _udTabOperations();
+    return;
+  }
+
+  // Show loading skeleton
+  if (bodyEl) bodyEl.innerHTML = _opsLoadingSkeleton();
+
+  // Fetch additional tables in parallel (graceful — empty array on failure)
+  const extras = {};
+  try {
+    const promises = [];
+    if (clinicId) {
+      const mFilter = `medicare_id=eq.${encodeURIComponent(clinicId)}`;
+      promises.push(diaQuery('facility_patient_counts', '*', { filter: mFilter, order: 'snapshot_date.asc', limit: 100 }).catch(() => []));
+      promises.push(diaQuery('clinic_trends', '*', { filter: mFilter, limit: 1 }).catch(() => []));
+      promises.push(diaQuery('clinic_quality_metrics', '*', { filter: mFilter, order: 'snapshot_date.desc', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter + '&is_primary=eq.true', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year.desc', limit: 1 }).catch(() => []));
+      // Lease via property_id
+      const propId = _udCache.ids?.property_id || _udCache.property?.property_id;
+      if (propId) {
+        promises.push(diaQuery('leases', '*', { filter: `property_id=eq.${encodeURIComponent(propId)}`, limit: 5 }).catch(() => []));
+      } else {
+        promises.push(Promise.resolve([]));
+      }
+    }
+    const [patientHistory, trends, quality, financialDetail, costReports, leaseData] = clinicId
+      ? await Promise.all(promises)
+      : [[], [], [], [], [], []];
+
+    _opsExtraCache = {
+      medicare_id: clinicId,
+      patientHistory: patientHistory || [],
+      trends: (trends || [])[0] || null,
+      quality: (quality || [])[0] || null,
+      financialDetail: (financialDetail || [])[0] || null,
+      costReports: (costReports || [])[0] || null,
+      lease: (leaseData || [])[0] || null,
+    };
+  } catch (err) {
+    console.warn('Operations extra data load error:', err);
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, lease: null };
+  }
+
+  if (bodyEl) bodyEl.innerHTML = _udTabOperations();
+}
+
+/** Loading skeleton for Operations tab */
+function _opsLoadingSkeleton() {
+  const skeletonCard = '<div style="background:var(--s2);border-radius:10px;padding:16px;animation:pulse 1.5s ease-in-out infinite"><div style="height:12px;background:var(--s3);border-radius:4px;width:60%;margin-bottom:8px"></div><div style="height:24px;background:var(--s3);border-radius:4px;width:40%"></div></div>';
+  return '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}</style>' +
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">' +
+    skeletonCard + skeletonCard + skeletonCard +
+    '</div>' +
+    '<div style="background:var(--s2);border-radius:10px;padding:20px;margin-bottom:12px;animation:pulse 1.5s ease-in-out infinite"><div style="height:14px;background:var(--s3);border-radius:4px;width:30%;margin-bottom:12px"></div><div style="height:10px;background:var(--s3);border-radius:4px;width:90%;margin-bottom:8px"></div><div style="height:10px;background:var(--s3);border-radius:4px;width:75%;margin-bottom:8px"></div><div style="height:10px;background:var(--s3);border-radius:4px;width:80%"></div></div>' +
+    '<div style="background:var(--s2);border-radius:10px;padding:20px;animation:pulse 1.5s ease-in-out infinite"><div style="height:14px;background:var(--s3);border-radius:4px;width:25%;margin-bottom:12px"></div><div style="height:80px;background:var(--s3);border-radius:4px;width:100%"></div></div>';
 }
 
 // ============================================================================
@@ -755,147 +832,470 @@ function _udTabOperations() {
   if (!rankings) return '<div class="detail-empty">No operational data available</div>';
 
   const r = rankings;
+  const ext = _opsExtraCache || {};
+  const trends = ext.trends || {};
+  const quality = ext.quality || {};
+  const finDetail = ext.financialDetail || {};
+  const costRpt = ext.costReports || {};
+  const lease = ext.lease || {};
+  const patientHistory = ext.patientHistory || [];
   let html = '';
 
-  // ── KPI SUMMARY CARDS ──
-  const kpis = [];
-  if (r.latest_estimated_patients) kpis.push({ label: 'Patients', value: fmtN(r.latest_estimated_patients), trend: _trendArrow(r.patient_yoy_pct, 'YoY'), sub: r.patient_vs_3yr_avg_pct != null ? _trendBadge(r.patient_vs_3yr_avg_pct, 'vs 3yr avg') : '' });
-  if (r.ttm_revenue) kpis.push({ label: 'Revenue (TTM)', value: '$' + _fmtCompact(r.ttm_revenue), trend: r.estimated_annual_revenue ? _trendCompare(r.ttm_revenue, r.estimated_annual_revenue, 'vs Est') : '', sub: '' });
-  if (r.ttm_operating_profit) kpis.push({ label: 'Oper. Profit', value: '$' + _fmtCompact(r.ttm_operating_profit), trend: r.ttm_operating_margin != null ? '<span style="font-size:11px;color:' + (Number(r.ttm_operating_margin) >= 12 ? 'var(--green)' : Number(r.ttm_operating_margin) >= 0 ? 'var(--yellow)' : 'var(--red)') + '">' + Number(r.ttm_operating_margin).toFixed(1) + '% margin</span>' : '', sub: '' });
-  if (r.capacity_utilization_pct != null) kpis.push({ label: 'Utilization', value: Number(r.capacity_utilization_pct).toFixed(0) + '%', trend: '<span style="font-size:11px;color:' + (Number(r.capacity_utilization_pct) >= 85 ? 'var(--green)' : Number(r.capacity_utilization_pct) >= 65 ? 'var(--yellow)' : 'var(--red)') + '">' + (Number(r.capacity_utilization_pct) >= 85 ? 'High' : Number(r.capacity_utilization_pct) >= 65 ? 'Moderate' : 'Low') + '</span>', sub: '' });
+  // ════════════════════════════════════════════════════════════════════════════
+  // 1. KEY METRICS BANNER — always visible at top
+  // ════════════════════════════════════════════════════════════════════════════
 
-  if (kpis.length > 0) {
-    html += '<div style="display:grid;grid-template-columns:repeat(' + Math.min(kpis.length, 4) + ',1fr);gap:10px;margin-bottom:16px">';
-    kpis.forEach(k => {
-      html += '<div style="background:var(--s2);border-radius:10px;padding:12px 14px;text-align:center">';
-      html += '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">' + esc(k.label) + '</div>';
-      html += '<div style="font-size:20px;font-weight:700;color:var(--text1)">' + k.value + '</div>';
-      if (k.trend) html += '<div style="margin-top:4px">' + k.trend + '</div>';
-      if (k.sub) html += '<div style="margin-top:2px">' + k.sub + '</div>';
+  const kpis = [];
+
+  // Revenue KPI
+  const estRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
+  kpis.push({
+    label: 'Est. Annual Revenue',
+    value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'N/A',
+    color: estRevenue ? '' : 'var(--text3)',
+    info: 'Revenue estimated using 4-payer treatment model'
+  });
+
+  // Operating Margin KPI
+  const margin = r.ttm_operating_margin != null ? Number(r.ttm_operating_margin) : null;
+  const marginColor = margin != null ? (margin > 12 ? 'var(--green)' : margin >= 5 ? 'var(--yellow)' : 'var(--red)') : 'var(--text3)';
+  kpis.push({
+    label: 'Operating Margin',
+    value: margin != null ? margin.toFixed(1) + '%' : 'N/A',
+    color: marginColor,
+    info: margin != null ? (margin > 12 ? 'Healthy' : margin >= 5 ? 'Caution' : 'Below target') : ''
+  });
+
+  // Patient Census KPI
+  kpis.push({
+    label: 'Patient Census',
+    value: r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : 'N/A',
+    color: '',
+    trend: _trendArrow(r.patient_yoy_pct, 'YoY'),
+    info: 'Current total patients from latest CMS snapshot'
+  });
+
+  // Star Rating KPI
+  const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
+  kpis.push({
+    label: 'Star Rating',
+    value: starVal != null ? _starsCompact(starVal) : 'N/A',
+    color: '',
+    info: 'CMS Dialysis Facility Compare star rating (1-5)'
+  });
+
+  // Trend KPI
+  const trendDir = trends.trend_direction || (r.patient_yoy_pct > 2 ? 'growth' : r.patient_yoy_pct < -2 ? 'decline' : 'stable');
+  const trendArrowIcon = trendDir === 'growth' ? '&#9650;' : trendDir === 'decline' ? '&#9660;' : '&#9654;';
+  const trendColor = trendDir === 'growth' ? 'var(--green)' : trendDir === 'decline' ? 'var(--red)' : 'var(--text3)';
+  const trendLabel = trendDir === 'growth' ? 'Growth' : trendDir === 'decline' ? 'Decline' : 'Stable';
+  kpis.push({
+    label: 'Trend',
+    value: '<span style="color:' + trendColor + '">' + trendArrowIcon + ' ' + esc(trendLabel) + '</span>',
+    color: '',
+    info: trends.trend_confidence ? 'Confidence: ' + trends.trend_confidence : ''
+  });
+
+  // Lease Expiration KPI
+  let leaseMonths = null;
+  if (lease.expiration_date) {
+    const expDate = new Date(lease.expiration_date);
+    const now = new Date();
+    leaseMonths = Math.round((expDate - now) / (1000 * 60 * 60 * 24 * 30.44));
+  } else if (_udCache.leases && _udCache.leases.length > 0) {
+    const primaryLease = _udCache.leases[0];
+    if (primaryLease.expiration_date || primaryLease.lease_expiration) {
+      const expDate = new Date(primaryLease.expiration_date || primaryLease.lease_expiration);
+      const now = new Date();
+      leaseMonths = Math.round((expDate - now) / (1000 * 60 * 60 * 24 * 30.44));
+    }
+  }
+  const leaseColor = leaseMonths != null ? (leaseMonths < 24 ? 'var(--red)' : leaseMonths < 60 ? 'var(--yellow)' : 'var(--green)') : 'var(--text3)';
+  kpis.push({
+    label: 'Lease Expiration',
+    value: leaseMonths != null ? (leaseMonths > 0 ? leaseMonths + ' mo' : 'Expired') : 'N/A',
+    color: leaseColor,
+    info: leaseMonths != null && leaseMonths < 24 ? 'Less than 24 months remaining' : ''
+  });
+
+  // Render KPI cards
+  html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">';
+  kpis.forEach(k => {
+    html += '<div style="background:var(--s2);border-radius:10px;padding:10px 12px;text-align:center;position:relative">';
+    if (k.info) html += '<span title="' + esc(k.info) + '" style="position:absolute;top:6px;right:8px;font-size:10px;color:var(--text3);cursor:help;width:14px;height:14px;border:1px solid var(--text3);border-radius:50%;display:inline-flex;align-items:center;justify-content:center">i</span>';
+    html += '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">' + esc(k.label) + '</div>';
+    html += '<div style="font-size:18px;font-weight:700;' + (k.color ? 'color:' + k.color : 'color:var(--text1)') + '">' + k.value + '</div>';
+    if (k.trend) html += '<div style="margin-top:2px">' + k.trend + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 2. FINANCIAL SUMMARY
+  // ════════════════════════════════════════════════════════════════════════════
+
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Financial Summary</div>';
+
+  // Source badge
+  const revSource = finDetail.estimate_source || r.revenue_calc_method || 'CMS Patient Count';
+  html += '<div style="margin-bottom:10px"><span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;background:var(--purple);color:#fff;font-weight:600;letter-spacing:0.3px">' + esc(revSource) + '</span></div>';
+
+  html += '<div class="detail-grid">';
+  html += _rowMoney('Est. Annual Revenue', finDetail.estimated_annual_revenue || r.estimated_annual_revenue);
+  html += _rowMoney('Total Operating Costs', r.ttm_operating_costs);
+  html += _rowMoney('Operating Profit', finDetail.estimated_operating_profit || r.ttm_operating_profit);
+  html += _rowHtml('Operating Margin', margin != null ? _marginBadge(margin) : null);
+
+  // Revenue & cost per treatment
+  const annualTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  if (annualTx && estRevenue) {
+    html += _rowMoney('Revenue / Treatment', Math.round(Number(estRevenue) / Number(annualTx)));
+  }
+  if (annualTx && r.ttm_operating_costs) {
+    html += _rowMoney('Cost / Treatment', Math.round(Number(r.ttm_operating_costs) / Number(annualTx)));
+  }
+  html += _row('Treatments / Year', annualTx ? fmtN(annualTx) : null);
+  html += '</div>';
+
+  // Payer Mix stacked bar + percentages
+  const medPct = r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct) : null;
+  const mcdPct = r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct) : null;
+  const pvtPct = r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct) : null;
+
+  if (medPct != null || mcdPct != null || pvtPct != null) {
+    const otherPct = Math.max(0, 100 - (medPct || 0) - (mcdPct || 0) - (pvtPct || 0));
+    html += '<div style="margin-top:14px">';
+    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600">Payer Mix</div>';
+    // Stacked bar
+    html += '<div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:8px">';
+    if (medPct) html += '<div style="width:' + medPct + '%;background:#3b82f6" title="Medicare ' + medPct.toFixed(1) + '%"></div>';
+    if (mcdPct) html += '<div style="width:' + mcdPct + '%;background:#8b5cf6" title="Medicaid ' + mcdPct.toFixed(1) + '%"></div>';
+    if (pvtPct) html += '<div style="width:' + pvtPct + '%;background:#10b981" title="Commercial ' + pvtPct.toFixed(1) + '%"></div>';
+    if (otherPct > 0.5) html += '<div style="width:' + otherPct + '%;background:var(--text3)" title="Other ' + otherPct.toFixed(1) + '%"></div>';
+    html += '</div>';
+    // Legend
+    html += '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px">';
+    if (medPct != null) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#3b82f6;margin-right:3px"></span>Medicare ' + medPct.toFixed(1) + '%</span>';
+    if (mcdPct != null) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#8b5cf6;margin-right:3px"></span>Medicaid ' + mcdPct.toFixed(1) + '%</span>';
+    if (pvtPct != null) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#10b981;margin-right:3px"></span>Commercial ' + pvtPct.toFixed(1) + '%</span>';
+    if (otherPct > 0.5) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--text3);margin-right:3px"></span>Other ' + otherPct.toFixed(1) + '%</span>';
+    html += '</div>';
+
+    // Payer mix dollar estimates
+    if (estRevenue) {
+      const rev = Number(estRevenue);
+      html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px 12px;margin-top:8px;font-size:12px;color:var(--text2)">';
+      if (medPct != null) html += '<div>Medicare</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * medPct / 100) + '</div>';
+      if (mcdPct != null) html += '<div>Medicaid</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * mcdPct / 100) + '</div>';
+      if (pvtPct != null) html += '<div>Commercial</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * pvtPct / 100) + '</div>';
+      if (otherPct > 0.5) html += '<div>Other</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * otherPct / 100) + '</div>';
       html += '</div>';
-    });
+    }
     html += '</div>';
   }
 
-  // ── CLINIC INFRASTRUCTURE ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Clinic Infrastructure</div>';
-  html += '<div class="detail-grid">';
-  html += _row('Chairs', r.number_of_chairs ? fmtN(r.number_of_chairs) : null);
-  html += _row('Stations', r.stations ? fmtN(r.stations) : null);
-  html += _row('Estimated Capacity', r.estimated_capacity ? fmtN(r.estimated_capacity) + ' patients' : (r.max_patient_capacity ? fmtN(r.max_patient_capacity) + ' patients' : null));
-  html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
-  html += _rowHtml('Utilization', r.capacity_utilization_pct != null ? _utilBar(Number(r.capacity_utilization_pct)) : null);
-  // Derived KPIs
-  if (r.latest_estimated_patients && r.number_of_chairs) {
-    html += _row('Patients / Chair', (Number(r.latest_estimated_patients) / Number(r.number_of_chairs)).toFixed(1));
+  // HCRIS Modeled vs Actual comparison callout
+  if (costRpt && costRpt.total_patient_revenue && estRevenue) {
+    const actual = Number(costRpt.total_patient_revenue);
+    const modeled = Number(estRevenue);
+    const variance = ((modeled - actual) / actual * 100).toFixed(1);
+    html += '<div style="margin-top:14px;padding:10px 12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">&#x1F4CA; Modeled vs. HCRIS Actual (FY' + (costRpt.fiscal_year || '?') + ')</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
+    html += '<div style="color:var(--text3)">Modeled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
+    html += '<div style="color:var(--text3)">HCRIS Actual</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
+    html += '<div style="color:var(--text3)">Variance</div><div style="text-align:right;font-weight:600;color:' + (Math.abs(variance) < 10 ? 'var(--green)' : 'var(--yellow)') + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
+    html += '</div></div>';
   }
-  html += '</div></div>';
 
-  // ── PATIENT TRENDS ──
+  html += '</div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 3. PATIENT CENSUS & TRENDS
+  // ════════════════════════════════════════════════════════════════════════════
+
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Patient Trends</div>';
+  html += '<div class="detail-section-title">Patient Census & Trends</div>';
+
+  // Sparkline chart from patient history
+  if (patientHistory.length >= 2) {
+    html += _opsSparkline(patientHistory);
+  }
+
+  // Trend direction badge
+  const trendConf = trends.trend_confidence || '';
+  html += '<div style="display:flex;gap:8px;align-items:center;margin:10px 0">';
+  html += '<span style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;background:' + trendColor + '22;color:' + trendColor + '">' + trendArrowIcon + ' ' + esc(trendLabel) + '</span>';
+  if (trendConf) html += '<span style="font-size:11px;color:var(--text3)">Confidence: ' + esc(String(trendConf)) + '</span>';
+  html += '</div>';
+
   html += '<div class="detail-grid">';
   html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
   if (r.patients_last_year) html += _rowTrend('Last Year', fmtN(r.patients_last_year), r.patient_yoy_pct);
   if (r.patients_two_years_ago) html += _row('Two Years Ago', fmtN(r.patients_two_years_ago));
   if (r.patient_3yr_avg) html += _rowTrend('3-Year Average', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
-  if (r.patient_trend_3yr != null) html += _rowHtml('3-Yr Trend', _trendArrow(r.patient_trend_3yr));
-  html += '</div></div>';
 
-  // ── FINANCIAL (TTM) ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Financial Performance (TTM)</div>';
-  html += '<div class="detail-grid">';
-  html += _rowMoney('Revenue', r.ttm_revenue);
-  html += _rowMoney('Operating Costs', r.ttm_operating_costs);
-  html += _rowMoney('Operating Profit', r.ttm_operating_profit);
-  html += _rowHtml('Operating Margin', r.ttm_operating_margin != null ? _marginBadge(Number(r.ttm_operating_margin)) : null);
-  // Revenue per patient & per chair
-  if (r.ttm_revenue && r.latest_estimated_patients) {
-    html += _rowMoney('Revenue / Patient', Math.round(Number(r.ttm_revenue) / Number(r.latest_estimated_patients)));
+  // Annualized growth rate (CAGR)
+  const cagr = trends.annualized_growth_rate;
+  if (cagr != null) {
+    const cagrColor = Number(cagr) > 0 ? 'var(--green)' : Number(cagr) < 0 ? 'var(--red)' : 'var(--text3)';
+    html += _rowHtml('Annualized Growth (CAGR)', '<span style="color:' + cagrColor + ';font-weight:600">' + (Number(cagr) > 0 ? '+' : '') + Number(cagr).toFixed(1) + '%</span>');
   }
-  if (r.ttm_revenue && r.number_of_chairs) {
-    html += _rowMoney('Revenue / Chair', Math.round(Number(r.ttm_revenue) / Number(r.number_of_chairs)));
+  // Regression slope
+  if (trends.regression_slope != null) {
+    const slope = Number(trends.regression_slope);
+    html += _row('Regression Slope', (slope > 0 ? '+' : '') + slope.toFixed(1) + ' patients/yr');
   }
-  html += '</div></div>';
-
-  // ── FINANCIAL ESTIMATES ──
-  if (r.estimated_annual_revenue || r.estimated_annual_profit || r.estimated_weekly_revenue) {
-    html += '<div class="detail-section">';
-    html += '<div class="detail-section-title">Financial Estimates</div>';
-    html += '<div class="detail-grid">';
-    html += _rowMoney('Est. Annual Revenue', r.estimated_annual_revenue);
-    html += _rowMoney('Est. Annual Profit', r.estimated_annual_profit);
-    html += _rowMoney('Est. Weekly Revenue', r.estimated_weekly_revenue);
-    html += _rowMoney('Est. Weekly Profit', r.estimated_weekly_profit);
-    html += _rowMoney('Max Annual Revenue', r.max_annual_revenue);
-    if (r.ttm_revenue && r.estimated_annual_revenue) {
-      const pctDiff = ((Number(r.ttm_revenue) - Number(r.estimated_annual_revenue)) / Number(r.estimated_annual_revenue) * 100).toFixed(1);
-      html += _rowHtml('TTM vs Estimate', _trendArrow(pctDiff, 'variance'));
-    }
-    if (r.revenue_calc_method) html += _row('Calc Method', r.revenue_calc_method);
-    html += '</div></div>';
+  if (trends.regression_r_squared != null) {
+    html += _row('R\u00B2', Number(trends.regression_r_squared).toFixed(3));
   }
-
-  // ── TREATMENT MIX ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Treatment Mix (TTM)</div>';
-  html += '<div class="detail-grid">';
-  html += _row('Total Treatments', r.ttm_total_treatments ? fmtN(r.ttm_total_treatments) : null);
-  html += _row('Medicare Treatments', r.ttm_medicare_treatments ? fmtN(r.ttm_medicare_treatments) : null);
-  html += _row('Commercial Treatments', r.ttm_commercial_treatments ? fmtN(r.ttm_commercial_treatments) : null);
-  if (r.estimated_annual_treatments) html += _row('Est. Annual Treatments', fmtN(r.estimated_annual_treatments));
-  if (r.estimated_treatments_per_week) html += _row('Est. Treatments/Week', fmtN(r.estimated_treatments_per_week));
-  html += '</div></div>';
-
-  // ── PAYER MIX ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Payer Mix</div>';
-  html += '<div class="detail-grid">';
-  html += _row('Medicare %', r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct).toFixed(1) + '%' : null);
-  html += _row('Medicaid %', r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct).toFixed(1) + '%' : null);
-  html += _row('Private %', r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct).toFixed(1) + '%' : null);
-  html += '</div></div>';
-
-  // ── QUALITY ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Quality & Compliance</div>';
-  html += '<div class="detail-grid">';
-  html += _rowHtml('Star Rating', r.star_rating != null ? _stars(Number(r.star_rating)) : null);
-  html += _row('Deficiency Count', r.deficiency_count != null ? fmtN(r.deficiency_count) : null);
-  html += _row('Profit/Non-Profit', r.profit_nonprofit);
-  html += '</div></div>';
-
-  // ── OPERATOR ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Operator</div>';
-  html += '<div class="detail-grid">';
-  html += _row('Operator', r.operator_name);
-  html += _row('Chain Organization', r.chain_organization);
-  html += '</div></div>';
-
-  // ── COMPARATIVE RANKINGS (PATIENTS) ──
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Comparative Rankings (Patients)</div>';
-  html += _rankingBar('County', r.county_patient_rank, r.county_total, r.county);
-  html += _rankingBar('State', r.state_patient_rank, r.state_total, r.state);
-  html += _rankingBar('Operator', r.operator_patient_rank, r.operator_total, r.operator_name);
-  html += _rankingBar('National', r.national_patient_rank, r.national_total);
+  // Projections
+  if (trends.projected_patients_1yr != null) html += _row('Projected Patients (1yr)', fmtN(Math.round(Number(trends.projected_patients_1yr))));
+  if (trends.projected_patients_3yr != null) html += _row('Projected Patients (3yr)', fmtN(Math.round(Number(trends.projected_patients_3yr))));
+  if (trends.projected_revenue_1yr != null) html += _rowMoney('Projected Revenue (1yr)', trends.projected_revenue_1yr);
+  if (trends.projected_revenue_3yr != null) html += _rowMoney('Projected Revenue (3yr)', trends.projected_revenue_3yr);
   html += '</div>';
 
-  // ── COMPARATIVE RANKINGS (REVENUE) ──
-  if (r.state_revenue_rank || r.county_revenue_rank || r.national_revenue_rank) {
-    html += '<div class="detail-section">';
-    html += '<div class="detail-section-title">Comparative Rankings (Revenue)</div>';
-    html += _rankingBar('County', r.county_revenue_rank, r.county_total, r.county);
-    html += _rankingBar('State', r.state_revenue_rank, r.state_total, r.state);
-    html += _rankingBar('Operator', r.operator_revenue_rank, r.operator_revenue_total || r.operator_total, r.operator_name);
-    html += _rankingBar('National', r.national_revenue_rank, r.national_total);
+  // Modality breakdown (if data available from rankings or medicare_clinics)
+  const hasModality = r.offers_in_center_hemodialysis || r.offers_home_hemodialysis_training || r.offers_peritoneal_dialysis;
+  if (hasModality) {
+    html += '<div style="margin-top:12px;font-size:12px;color:var(--text2);font-weight:600;margin-bottom:6px">Treatment Modalities</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    if (r.offers_in_center_hemodialysis) html += '<span style="padding:3px 8px;border-radius:6px;background:rgba(59,130,246,0.12);color:#3b82f6;font-size:11px;font-weight:600">In-Center HD</span>';
+    if (r.offers_home_hemodialysis_training) html += '<span style="padding:3px 8px;border-radius:6px;background:rgba(16,185,129,0.12);color:#10b981;font-size:11px;font-weight:600">Home HD</span>';
+    if (r.offers_peritoneal_dialysis) html += '<span style="padding:3px 8px;border-radius:6px;background:rgba(139,92,246,0.12);color:#8b5cf6;font-size:11px;font-weight:600">Peritoneal</span>';
     html += '</div>';
   }
 
+  html += '</div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 4. CAPACITY & UTILIZATION
+  // ════════════════════════════════════════════════════════════════════════════
+
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Capacity & Utilization</div>';
+  html += '<div class="detail-grid">';
+  html += _row('Dialysis Stations/Chairs', r.number_of_chairs ? fmtN(r.number_of_chairs) : (r.stations ? fmtN(r.stations) : null));
+  html += _row('Estimated Capacity', r.estimated_capacity ? fmtN(r.estimated_capacity) + ' patients' : (r.max_patient_capacity ? fmtN(r.max_patient_capacity) + ' patients' : null));
+  html += _rowHtml('Capacity Utilization', r.capacity_utilization_pct != null ? _utilBar(Number(r.capacity_utilization_pct)) : null);
+  if (r.latest_estimated_patients && r.number_of_chairs) {
+    html += _row('Patients / Chair', (Number(r.latest_estimated_patients) / Number(r.number_of_chairs)).toFixed(1));
+  }
+  html += _row('Operator', r.operator_name);
+  html += _row('Chain', r.chain_organization);
+  html += '</div></div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 5. QUALITY & RISK — two panels side by side
+  // ════════════════════════════════════════════════════════════════════════════
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">';
+
+  // ── Quality Metrics Panel ──
+  html += '<div class="detail-section" style="margin-bottom:0">';
+  html += '<div class="detail-section-title">Quality Metrics</div>';
+  html += '<div class="detail-grid">';
+  html += _rowHtml('CMS Star Rating', starVal != null ? _stars(starVal) : null);
+  html += _row('Mortality Rate', quality.mortality_rate != null ? Number(quality.mortality_rate).toFixed(2) : (r.mortality_rate != null ? Number(r.mortality_rate).toFixed(2) : null));
+  html += _row('Hospitalization Rate', quality.hospitalization_rate != null ? Number(quality.hospitalization_rate).toFixed(2) : null);
+  html += _row('Readmission Rate', quality.readmission_rate != null ? Number(quality.readmission_rate).toFixed(2) : null);
+  html += _row('Infection Ratio', quality.infection_ratio != null ? Number(quality.infection_ratio).toFixed(2) : null);
+  html += _row('Transplant Waitlist', quality.transplant_waitlist_ratio != null ? Number(quality.transplant_waitlist_ratio).toFixed(2) : null);
+  html += _row('Deficiency Count', r.deficiency_count != null ? fmtN(r.deficiency_count) : null);
+  html += '</div></div>';
+
+  // ── Risk Assessment Panel ──
+  html += '<div class="detail-section" style="margin-bottom:0">';
+  html += '<div class="detail-section-title">Risk Assessment</div>';
+
+  // Compute composite lease risk score (0-100)
+  const riskScores = _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin);
+  const riskLevel = riskScores.total <= 25 ? 'Low' : riskScores.total <= 50 ? 'Moderate' : riskScores.total <= 75 ? 'High' : 'Critical';
+  const riskColor = riskScores.total <= 25 ? 'var(--green)' : riskScores.total <= 50 ? 'var(--yellow)' : riskScores.total <= 75 ? 'var(--orange)' : 'var(--red)';
+
+  // Gauge visual
+  html += '<div style="text-align:center;margin-bottom:10px">';
+  html += '<div style="position:relative;width:80px;height:40px;margin:0 auto;overflow:hidden">';
+  html += '<div style="width:80px;height:80px;border-radius:50%;border:6px solid var(--s3);border-bottom-color:transparent;border-left-color:transparent;transform:rotate(225deg);box-sizing:border-box"></div>';
+  html += '<div style="position:absolute;top:0;left:0;width:80px;height:80px;border-radius:50%;border:6px solid ' + riskColor + ';border-bottom-color:transparent;border-left-color:transparent;transform:rotate(' + (225 + riskScores.total * 1.8) + 'deg);box-sizing:border-box;clip-path:inset(0 0 50% 0)"></div>';
+  html += '<div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);font-size:16px;font-weight:700;color:' + riskColor + '">' + riskScores.total + '</div>';
+  html += '</div>';
+  html += '<span style="display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;background:' + riskColor + '22;color:' + riskColor + '">' + riskLevel + ' Risk</span>';
+  html += '</div>';
+
+  // Component breakdown
+  html += '<div style="font-size:11px;color:var(--text3)">';
+  const riskComponents = [
+    { label: 'Patient Trend', value: riskScores.patientTrend, weight: '30%' },
+    { label: 'Financial', value: riskScores.financial, weight: '25%' },
+    { label: 'Quality', value: riskScores.quality, weight: '20%' },
+    { label: 'Lease Expiration', value: riskScores.leaseExp, weight: '15%' },
+    { label: 'Market', value: riskScores.market, weight: '10%' }
+  ];
+  riskComponents.forEach(rc => {
+    const rcColor = rc.value <= 25 ? 'var(--green)' : rc.value <= 50 ? 'var(--yellow)' : rc.value <= 75 ? 'var(--orange)' : 'var(--red)';
+    html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
+    html += '<span style="width:90px;flex-shrink:0">' + rc.label + ' (' + rc.weight + ')</span>';
+    html += '<div style="flex:1;height:4px;background:var(--s3);border-radius:2px;overflow:hidden"><div style="width:' + rc.value + '%;height:100%;background:' + rcColor + ';border-radius:2px"></div></div>';
+    html += '<span style="width:20px;text-align:right;font-weight:600;color:' + rcColor + '">' + rc.value + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  html += '</div>';
+  html += '</div>'; // end side-by-side grid
+
+  // ── COMPARATIVE RANKINGS ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Comparative Rankings</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">';
+  html += '<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">By Patients</div>';
+  html += '<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">By Revenue</div>';
+  html += '</div>';
+  const rankScopes = [
+    { label: 'County', patRank: r.county_patient_rank, revRank: r.county_revenue_rank, total: r.county_total, ctx: r.county },
+    { label: 'State', patRank: r.state_patient_rank, revRank: r.state_revenue_rank, total: r.state_total, ctx: r.state },
+    { label: 'Operator', patRank: r.operator_patient_rank, revRank: r.operator_revenue_rank, total: r.operator_total, ctx: r.operator_name },
+    { label: 'National', patRank: r.national_patient_rank, revRank: r.national_revenue_rank, total: r.national_total, ctx: null }
+  ];
+  rankScopes.forEach(rs => {
+    if (!rs.patRank && !rs.revRank) return;
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">';
+    html += '<div>' + _rankingBar(rs.label, rs.patRank, rs.total, rs.ctx) + '</div>';
+    html += '<div>' + (rs.revRank ? _rankingBar(rs.label, rs.revRank, rs.total, rs.ctx) : '<div style="color:var(--text3);font-size:11px;padding:8px 0">N/A</div>') + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 6. METHODOLOGY & SOURCES FOOTER
+  // ════════════════════════════════════════════════════════════════════════════
+
+  html += '<div class="detail-section" style="border-top:1px solid var(--s3);padding-top:12px">';
+  html += '<div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'span\').textContent=this.nextElementSibling.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\'" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text2);display:flex;align-items:center;gap:6px">';
+  html += '<span>&#x25B6;</span> Methodology & Data Sources</div>';
+  html += '<div style="display:none;margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6">';
+
+  html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer model: Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). State-level payer mix baselines with demographic adjustments.</p>';
+
+  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Risk Score Weights:</strong> Patient Trend 30%, Financial Health 25%, Quality Metrics 20%, Lease Expiration 15%, Market Conditions 10%.</p>';
+
+  // Data freshness
+  const latestSnapshot = patientHistory.length > 0 ? patientHistory[patientHistory.length - 1].snapshot_date : null;
+  const qualityDate = quality.snapshot_date || null;
+  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Data Freshness:</strong> ';
+  html += 'Patient data as of ' + (latestSnapshot ? _fmtDate(latestSnapshot) : 'N/A') + '. ';
+  html += 'Quality metrics as of ' + (qualityDate ? _fmtDate(qualityDate) : 'N/A') + '.</p>';
+
+  html += '<p style="margin:0"><strong style="color:var(--text2)">Sources:</strong> CMS Dialysis Facility Compare, USRDS, DaVita 10-K, MedPAC Reports, Census ACS, CDC PLACES.</p>';
+  html += '</div>';
+  html += '</div>';
+
   return html;
+}
+
+/** Compact star display for KPI card */
+function _starsCompact(n) {
+  if (n == null) return 'N/A';
+  const full = Math.floor(n);
+  const color = n >= 4 ? 'var(--green)' : n >= 3 ? 'var(--yellow)' : 'var(--red)';
+  return '<span style="color:' + color + ';letter-spacing:1px">' +
+    '&#9733;'.repeat(full) +
+    '<span style="color:var(--text3)">' + '&#9734;'.repeat(5 - full) + '</span>' +
+    '</span>';
+}
+
+/** Patient history sparkline (inline SVG) */
+function _opsSparkline(history) {
+  if (!history || history.length < 2) return '';
+  const pts = history.map(h => Number(h.total_patients || h.patient_count || 0)).filter(v => v > 0);
+  if (pts.length < 2) return '';
+
+  const w = 280, h = 50, pad = 4;
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const range = max - min || 1;
+
+  const points = pts.map((v, i) => {
+    const x = pad + (i / (pts.length - 1)) * (w - 2 * pad);
+    const y = pad + (1 - (v - min) / range) * (h - 2 * pad);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  });
+
+  const lastVal = pts[pts.length - 1];
+  const firstVal = pts[0];
+  const trendColor = lastVal >= firstVal ? 'var(--green)' : 'var(--red)';
+
+  let svg = '<div style="margin-bottom:8px">';
+  svg += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:2px">';
+  svg += '<span>' + (history[0].snapshot_date ? _fmtDate(history[0].snapshot_date) : '') + '</span>';
+  svg += '<span>Patient Census History</span>';
+  svg += '<span>' + (history[history.length - 1].snapshot_date ? _fmtDate(history[history.length - 1].snapshot_date) : '') + '</span>';
+  svg += '</div>';
+  svg += '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="display:block">';
+  // Fill area
+  svg += '<polygon points="' + pad + ',' + h + ' ' + points.join(' ') + ' ' + (w - pad) + ',' + h + '" fill="' + trendColor + '" fill-opacity="0.08"/>';
+  // Line
+  svg += '<polyline points="' + points.join(' ') + '" fill="none" stroke="' + trendColor + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+  // Endpoint dot
+  const lastPt = points[points.length - 1].split(',');
+  svg += '<circle cx="' + lastPt[0] + '" cy="' + lastPt[1] + '" r="3" fill="' + trendColor + '"/>';
+  svg += '</svg>';
+  svg += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)">';
+  svg += '<span>' + fmtN(firstVal) + ' patients</span>';
+  svg += '<span style="font-weight:600;color:' + trendColor + '">' + fmtN(lastVal) + ' patients</span>';
+  svg += '</div>';
+  svg += '</div>';
+  return svg;
+}
+
+/** Compute composite lease risk score (0-100) */
+function _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin) {
+  // Patient Trend Risk (30%)
+  let ptRisk = 50; // default moderate
+  if (r.patient_yoy_pct != null) {
+    const yoy = Number(r.patient_yoy_pct);
+    ptRisk = yoy > 5 ? 10 : yoy > 0 ? 25 : yoy > -5 ? 60 : yoy > -10 ? 80 : 95;
+  }
+  if (trends.trend_direction === 'growth') ptRisk = Math.min(ptRisk, 20);
+  if (trends.trend_direction === 'decline') ptRisk = Math.max(ptRisk, 70);
+
+  // Financial Risk (25%)
+  let finRisk = 50;
+  if (margin != null) {
+    finRisk = margin > 15 ? 10 : margin > 8 ? 25 : margin > 3 ? 50 : margin > 0 ? 75 : 95;
+  }
+
+  // Quality Risk (20%)
+  let qRisk = 50;
+  const stars = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
+  if (stars != null) {
+    qRisk = stars >= 4 ? 15 : stars >= 3 ? 35 : stars >= 2 ? 65 : 90;
+  }
+
+  // Lease Expiration Risk (15%)
+  let leaseRisk = 50;
+  if (leaseMonths != null) {
+    leaseRisk = leaseMonths > 84 ? 10 : leaseMonths > 60 ? 20 : leaseMonths > 36 ? 40 : leaseMonths > 24 ? 60 : leaseMonths > 12 ? 80 : 95;
+  }
+
+  // Market Risk (10%) — use utilization as proxy
+  let mktRisk = 50;
+  if (r.capacity_utilization_pct != null) {
+    const util = Number(r.capacity_utilization_pct);
+    mktRisk = util >= 85 ? 15 : util >= 70 ? 35 : util >= 50 ? 60 : 85;
+  }
+
+  const total = Math.round(ptRisk * 0.30 + finRisk * 0.25 + qRisk * 0.20 + leaseRisk * 0.15 + mktRisk * 0.10);
+  return {
+    total: Math.min(100, Math.max(0, total)),
+    patientTrend: Math.round(ptRisk),
+    financial: Math.round(finRisk),
+    quality: Math.round(qRisk),
+    leaseExp: Math.round(leaseRisk),
+    market: Math.round(mktRisk)
+  };
 }
 
 /** Format large numbers compactly ($1.2M, $450K) */

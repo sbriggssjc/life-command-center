@@ -106,6 +106,12 @@ export const DIA_READ_TABLES = new Set([
   'v_ownership_current',
   'v_ownership_chain',
   'v_property_rankings',
+  // Operations tab — clinic detail data
+  'facility_patient_counts',
+  'clinic_trends',
+  'clinic_quality_metrics',
+  'facility_cost_reports',
+  'leases',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)
