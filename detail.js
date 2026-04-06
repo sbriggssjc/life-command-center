@@ -847,12 +847,18 @@ function _udTabOperations() {
     : 0;
   const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
 
-  // ── Reconcile operating margin: compute from profit/revenue if stored value is 0 but profit exists ──
-  let margin = r.ttm_operating_margin != null ? Number(r.ttm_operating_margin) : null;
+  // ── Reconcile operating margin ──
+  // Always prefer computing margin from profit / revenue for consistency,
+  // since ttm_operating_margin may be stored as a raw ratio (0.008) instead of a percentage (0.8)
   const bestProfit = finDetail.estimated_operating_profit || r.ttm_operating_profit;
   const bestRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
-  if ((margin === 0 || margin == null) && bestProfit && bestRevenue && Number(bestRevenue) > 0) {
+  let margin = null;
+  if (bestProfit && bestRevenue && Number(bestRevenue) > 0) {
     margin = (Number(bestProfit) / Number(bestRevenue)) * 100;
+  } else if (r.ttm_operating_margin != null) {
+    // Fallback: use stored value, converting ratio to percentage if needed
+    margin = Number(r.ttm_operating_margin);
+    if (Math.abs(margin) > 0 && Math.abs(margin) < 1) margin = margin * 100;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
