@@ -44,6 +44,7 @@ When the user's intent maps to a specific action, suggest it clearly:
 - retry_sync_error_record — retry a failed sync (needs confirmation)
 - list_government_review_observations — gov evidence awaiting review
 - list_dialysis_review_queue — dialysis link review items
+- create_todo_task — create a task in Microsoft To Do (needs confirmation)
 - ingest_outlook_flagged_emails — pull flagged emails into intake (needs confirmation)
 
 ## Rules
