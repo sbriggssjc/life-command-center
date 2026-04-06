@@ -19,6 +19,7 @@ let govEvidenceState = {
   queueLoading: false,
   queueLoaded: false,
   queueError: '',
+  _toastShown: false,
   healthLoading: false,
   brokerFeedback: null,
   brokerFeedbackLoading: false,
@@ -2503,6 +2504,7 @@ function syncGovEvidenceContext() {
     queueLoading: false,
     queueLoaded: false,
     queueError: '',
+    _toastShown: false,
     healthLoading: false,
     brokerFeedback: null,
     brokerFeedbackLoading: false,
@@ -2899,7 +2901,11 @@ async function loadGovEvidenceObservations(force = false) {
     govEvidenceState.queueLoaded = true;
   } catch (err) {
     govEvidenceState.queueError = err.message || 'Could not load evidence queue';
-    showToast('Evidence queue load failed: ' + govEvidenceState.queueError, 'error');
+    govEvidenceState.queueLoaded = true; // Prevent retry loop on config errors
+    if (!govEvidenceState._toastShown) {
+      showToast('Evidence queue load failed: ' + govEvidenceState.queueError, 'error');
+      govEvidenceState._toastShown = true;
+    }
   } finally {
     govEvidenceState.queueLoading = false;
     govEvidenceState.brokerFeedbackLoading = false;
