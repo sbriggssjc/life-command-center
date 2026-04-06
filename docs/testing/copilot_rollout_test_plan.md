@@ -36,8 +36,8 @@ Before testing, confirm these are in place:
 | `GOV_SUPABASE_URL` + `GOV_SUPABASE_KEY` set? | [ ] Yes / [ ] No | |
 | `AI_CHAT_PROVIDER` set? | [ ] Yes / [ ] No | Value: _____________ |
 | `MS_GRAPH_TOKEN` set? | [ ] Yes / [ ] No | |
-| Can access LCC in browser? | [ ] Yes / [ ] No | URL: _____________ |
-| Copilot panel opens? | [ ] Yes / [ ] No | |
+| Can access LCC in browser? | [x ] Yes / [ ] No | URL: _____________ |
+| Copilot panel opens? | [x ] Yes / [ ] No | |
 
 ---
 
@@ -53,9 +53,9 @@ node test/smoke-copilot-actions.mjs
 LCC_API_KEY=your-key node test/smoke-copilot-actions.mjs https://your-app.vercel.app
 ```
 
-**Result:** [ ] Pass / [ ] Fail / [ ] Partial
+**Result:** [x ] Pass / [ ] Fail / [ ] Partial
 
-**Passed count:** _____ / _____
+**Passed count:** _____31 / _____31
 
 **Failed tests (copy from terminal output):**
 ```
@@ -76,15 +76,15 @@ LCC_API_KEY=your-key node test/smoke-copilot-actions.mjs https://your-app.vercel
 2. Click the Copilot FAB button (bottom-right, purple gradient circle)
 3. Panel should slide up with welcome message and 6 suggestion chips
 
-**Result:** [ ] Pass / [ ] Fail
+**Result:** [x ] Pass / [ ] Fail
 
 **Do you see these 6 chips?**
-- [ ] "Daily briefing"
-- [ ] "Prospecting call sheet"
-- [ ] "My queue"
-- [ ] "Sync health"
-- [ ] "Inbox triage"
-- [ ] "Today's priorities"
+- [x ] "Daily briefing"
+- [x ] "Prospecting call sheet"
+- [x ] "My queue"
+- [x ] "Sync health"
+- [x ] "Inbox triage"
+- [x ] "Today's priorities"
 
 **Screenshot:**
 
@@ -97,12 +97,12 @@ LCC_API_KEY=your-key node test/smoke-copilot-actions.mjs https://your-app.vercel
 1. Click the **"Daily briefing"** chip
 2. Wait for response
 
-**Result:** [ ] Pass / [ ] Fail / [ ] Partial
+**Result:** [ ] Pass / [ ] Fail / [x ] Partial (very generic responses and not based on my task lists or to dos or emails or Salesforce tasks)
 
 **What appeared?**
-- [ ] AI-generated text response about today's priorities
+- [ x] AI-generated text response about today's priorities
 - [ ] Work count numbers mentioned
-- [ ] Follow-up suggestion chips appeared after the response
+- [ x] Follow-up suggestion chips appeared after the response
 - [ ] Error message (copy below)
 
 **Error message (if any):**
@@ -113,7 +113,41 @@ LCC_API_KEY=your-key node test/smoke-copilot-actions.mjs https://your-app.vercel
 **Screenshot:**
 
 > [INSERT SCREENSHOT: Daily briefing response in Copilot panel]
+# Daily CRE Net Lease Briefing - Northmarq
 
+## Market Snapshot
+- 10-Year Treasury: Currently impacting net lease cap rates (~25-50bp spread compression expected)
+- Net Lease Transaction Volume: Down ~15-20% YoY industry-wide, creating opportunities for active players
+- Key Sectors: QSR, healthcare, and essential retail showing resilience
+
+## Priority Actions Today
+
+### 🎯 Client Outreach
+- Follow up on pending LOIs (aim for 48-hour response time)
+- Connect with 3 existing clients about Q4 acquisition goals
+- Review any overnight inquiries from marketing campaigns
+
+### 📊 Pipeline Management
+- Update deal status in CRM for properties closing this month
+- Prepare materials for tomorrow's client presentations
+- Review comp analysis for active listings
+
+### 🔍 Market Intelligence
+- Monitor new listings in target MSAs (focus on $2M-$25M range)
+- Track competing brokerages' recent closes
+- Review rent roll expirations for portfolio clients (2024-2025)
+
+## Immediate Opportunities
+- Distressed retail conversions to net lease format
+- Sale-leaseback opportunities with regional chains facing capital needs
+- 1031 exchange buyers seeking replacement properties before year-end
+
+## Next Steps
+1. Schedule: 2-3 client check-ins before noon
+2. Research: Pull comps for [specific market/client need]
+3. Prepare: Materials for this week's prospect meetings
+
+What specific market or client situation should we dive deeper into?
 ---
 
 ### Test 2.3: Prospecting Call Sheet
@@ -121,10 +155,10 @@ LCC_API_KEY=your-key node test/smoke-copilot-actions.mjs https://your-app.vercel
 1. Click the **"Prospecting call sheet"** chip (or type "Who should I call today?")
 2. Wait for response
 
-**Result:** [ ] Pass / [ ] Fail / [ ] Partial
+**Result:** [ ] Pass / [ ] Fail / [ x] Partial (generic and not based on our intel)
 
 **What appeared?**
-- [ ] AI-generated call sheet text
+- [ x] AI-generated call sheet text
 - [ ] Contact list cards with heat badges (hot/warm/cool) and engagement scores
 - [ ] Follow-up chips (e.g., "Draft email to [name]", "Relationship context")
 - [ ] "No business contacts" message (this is OK if no contacts ingested yet)
@@ -135,7 +169,44 @@ LCC_API_KEY=your-key node test/smoke-copilot-actions.mjs https://your-app.vercel
 **Screenshot:**
 
 > [INSERT SCREENSHOT: Prospecting brief with contact cards]
+# Priority Call List - Today
 
+## 🔥 HOT - Call First (9-11 AM)
+
+### Existing Deals in Motion
+1. [Client Name with pending LOI] - Follow up on LOI response deadline
+2. [1031 Exchange Buyer] - 45-day identification period closing soon
+3. [Sale-leaseback prospect] - Decision expected this week
+
+### High-Value Pipeline
+4. Multi-unit QSR Owner - Discussed portfolio disposition last week
+5. Regional Healthcare REIT - Looking for $10M+ acquisitions Q4
+
+## ⚡ WARM - Call Mid-Morning (11 AM-1 PM)
+
+### Quarterly Check-ins Due
+6. Top 3 investors who closed deals with you in Q2/Q3
+7. Portfolio client with lease expirations in 2025
+8. Family office contact - Haven't connected in 6 weeks
+
+## 📞 PROSPECTING - Afternoon (2-4 PM)
+
+### New Opportunities
+9. Recent property acquisition (public records from last 30 days)
+10. Referral from [existing client/contact]
+11. LinkedIn connection who engaged with your recent market report
+
+## 🎯 Call Strategy Tips
+- Morning calls: Focus on deal advancement, time-sensitive items
+- Afternoon calls: Relationship building, market updates, prospecting
+- Goal: 8-12 meaningful conversations today
+
+## Key Talking Points Ready
+- Q4 cap rate trends in their target markets
+- Tax advantages of net lease before year-end
+- New inventory matching their criteria
+
+Who from your existing pipeline should be priority #1 today? I can help craft the specific talking points for that call.
 ---
 
 ### Test 2.4: Draft Outreach Email
@@ -324,9 +395,9 @@ Test that the AI understands operational questions using the enriched context.
 4. Check LCC inbox page — did a new intake item appear?
 5. Check Teams Intake Notifications channel — did a card post?
 
-**Result:** [ ] Pass / [ ] Fail / [ ] Skipped
+**Result:** [ x] Pass / [ ] Fail / [ ] Skipped
 
-**Intake item appeared in LCC?** [ ] Yes / [ ] No
+**Intake item appeared in LCC?** [ x] Yes / [ ] No
 **Teams card posted?** [ ] Yes / [ ] No
 **Latency (seconds):** _____
 
