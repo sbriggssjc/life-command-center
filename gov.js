@@ -2689,6 +2689,9 @@ function applyGovEvidenceReviewToForm(review) {
 }
 
 function renderGovEvidenceWorkbench() {
+  // Evidence workbench requires the GovernmentProject FastAPI service (GOV_API_URL).
+  // Until that service is deployed, skip rendering to avoid error loops.
+  return '';
   const rec = syncGovEvidenceContext();
   const binding = getGovEvidenceBinding(rec);
   const queueHtml = govEvidenceState.queueLoading
@@ -2869,6 +2872,8 @@ function buildGovBrokerFeedbackSummary(summary) {
 }
 
 async function loadGovEvidenceObservations(force = false) {
+  // Evidence workbench disabled until GovernmentProject FastAPI is deployed
+  return;
   const rec = syncGovEvidenceContext();
   if (!rec) return;
   if (govEvidenceState.queueLoaded && !force) return;
