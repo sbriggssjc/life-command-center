@@ -478,6 +478,11 @@ const ACTION_REGISTRY = {
   // Tier 0: Teams card generation (Wave 2)
   generate_teams_card:         { tier: 0, handler: 'teams_card' },
 
+  // Tier 0: Wave 2-3 intelligence actions
+  get_relationship_context:    { tier: 0, handler: 'relationship_context' },
+  get_pipeline_intelligence:   { tier: 0, handler: 'pipeline_intelligence' },
+  guided_entity_merge:         { tier: 0, handler: 'guided_entity_merge' },
+
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
   triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
@@ -519,6 +524,9 @@ async function dispatchAction(actionName, params, user, workspaceId) {
       case 'create_todo_task':       return createTodoTask(params, user, workspaceId);
       case 'listing_pursuit_dossier': return handleListingPursuitDossier(params, user, workspaceId);
       case 'teams_card':             return generateTeamsCard(params);
+      case 'relationship_context':   return handleRelationshipContext(params, user, workspaceId);
+      case 'pipeline_intelligence':  return handlePipelineIntelligence(params, user, workspaceId);
+      case 'guided_entity_merge':    return handleGuidedEntityMerge(params, user, workspaceId);
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
   }
@@ -1016,7 +1024,275 @@ function generateTeamsCard(params) {
   return { ok: false, error: `Unknown card_type: ${card_type}. Supported: inbox_triage, action_review, escalation` };
 }
 
+// ---------------------------------------------------------------------------
+// RELATIONSHIP MEMORY — pre-call/pre-meeting context synthesis (Wave 3)
+// ---------------------------------------------------------------------------
+
+async function handleRelationshipContext(params, user, workspaceId) {
+  const { contact_id, contact_name } = params || {};
+  if (!contact_id && !contact_name) {
+    return { ok: false, error: 'contact_id or contact_name is required' };
+  }
+
+  // Fetch contact profile
+  let contact = null;
+  if (contact_id) {
+    const r = await govContactQuery(
+      `unified_contacts?unified_id=eq.${encodeURIComponent(contact_id)}&limit=1&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent,city,state,contact_class,contact_type,industry,notes`
+    );
+    contact = r.data?.[0];
+  } else {
+    const r = await govContactQuery(
+      `unified_contacts?full_name=ilike.*${encodeURIComponent(contact_name)}*&limit=1&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent,city,state,contact_class,contact_type,industry,notes`
+    );
+    contact = r.data?.[0];
+  }
+
+  if (!contact) {
+    return { ok: true, action: 'get_relationship_context', response: 'Contact not found.', contact: null };
+  }
+
+  // Fetch change log (interaction history)
+  const historyResult = await govContactQuery(
+    `contact_change_log?unified_id=eq.${encodeURIComponent(contact.unified_id)}&order=changed_at.desc&limit=20`
+  );
+
+  // Fetch linked entity activity if we can find one
+  let entityActivity = [];
+  if (workspaceId) {
+    const linkedEntities = await opsQuery('GET',
+      `external_identities?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_id=eq.${encodeURIComponent(contact.unified_id)}&limit=3`
+    );
+    if (linkedEntities.data?.length) {
+      const entityId = linkedEntities.data[0].entity_id;
+      const timeline = await opsQuery('GET',
+        `v_entity_timeline?entity_id=eq.${encodeURIComponent(entityId)}&limit=10&order=created_at.desc`
+      );
+      entityActivity = timeline.data || [];
+    }
+  }
+
+  // Compute relationship health
+  const now = Date.now();
+  const daysSinceCall = contact.last_call_date ? Math.floor((now - new Date(contact.last_call_date).getTime()) / 86400000) : null;
+  const daysSinceEmail = contact.last_email_date ? Math.floor((now - new Date(contact.last_email_date).getTime()) / 86400000) : null;
+  const daysSinceMeeting = contact.last_meeting_date ? Math.floor((now - new Date(contact.last_meeting_date).getTime()) / 86400000) : null;
+  const mostRecent = Math.min(...[daysSinceCall, daysSinceEmail, daysSinceMeeting].filter(d => d !== null));
+  const healthScore = mostRecent === Infinity ? 0 : mostRecent <= 7 ? 100 : mostRecent <= 14 ? 80 : mostRecent <= 30 ? 60 : mostRecent <= 60 ? 40 : mostRecent <= 90 ? 20 : 10;
+  const healthLabel = healthScore >= 80 ? 'strong' : healthScore >= 50 ? 'active' : healthScore >= 20 ? 'cooling' : 'cold';
+
+  const contactContext = {
+    name: contact.full_name,
+    company: contact.company_name,
+    title: contact.title,
+    location: [contact.city, contact.state].filter(Boolean).join(', '),
+    engagement_score: contact.engagement_score,
+    total_calls: contact.total_calls || 0,
+    total_emails: contact.total_emails_sent || 0,
+    last_call: contact.last_call_date || 'never',
+    last_email: contact.last_email_date || 'never',
+    last_meeting: contact.last_meeting_date || 'never',
+    days_since_last_touch: mostRecent === Infinity ? null : mostRecent,
+    relationship_health: { score: healthScore, label: healthLabel },
+    notes: contact.notes || null,
+    recent_changes: (historyResult.data || []).slice(0, 5).map(h => ({
+      date: h.changed_at,
+      field: h.field_changed,
+      action: h.change_type
+    })),
+    recent_entity_activity: entityActivity.slice(0, 5).map(e => ({
+      date: e.created_at?.split('T')[0],
+      type: e.event_type,
+      title: e.title
+    }))
+  };
+
+  // Generate AI summary
+  const prompt = `Provide a concise relationship briefing for a commercial real estate broker about to interact with this contact.\n\nContact: ${contact.full_name}\nCompany: ${contact.company_name || 'unknown'}\nTitle: ${contact.title || 'unknown'}\nLocation: ${contactContext.location || 'unknown'}\nEngagement Score: ${contact.engagement_score || 0}\nRelationship Health: ${healthLabel} (${healthScore}/100)\nTotal Calls: ${contactContext.total_calls} | Emails: ${contactContext.total_emails}\nLast Call: ${contactContext.last_call} | Last Email: ${contactContext.last_email} | Last Meeting: ${contactContext.last_meeting}\n${contact.notes ? 'Notes: ' + contact.notes : ''}\n\nProvide:\n1. **Relationship Status** — one sentence on where this relationship stands\n2. **Key Context** — what to remember before reaching out\n3. **Suggested Approach** — how to re-engage based on the pattern\n4. **Talking Points** — 2-3 specific conversation starters\n\nBe specific and actionable. If data is sparse, say so and suggest what to learn on the next interaction.`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'get_relationship_context' },
+    history: [], attachments: [], user, workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'get_relationship_context',
+    response: result.data?.response || '',
+    contact: contactContext,
+    provider: result.provider
+  };
+}
+
+// ---------------------------------------------------------------------------
+// PIPELINE INTELLIGENCE — stage velocity, bottlenecks, health (Wave 3)
+// ---------------------------------------------------------------------------
+
+async function handlePipelineIntelligence(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required' };
+
+  const domain = params?.domain;
+  const domainFilter = domain ? `&domain=eq.${encodeURIComponent(domain)}` : '';
+
+  // Parallel fetch: status distribution, overdue, velocity, type breakdown
+  const [statusDist, overduItems, recentCompleted, typeBreakdown, escalations] = await Promise.all([
+    opsQuery('GET', `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=neq.cancelled${domainFilter}&select=status,priority,action_type,domain&limit=500`),
+    opsQuery('GET', `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=in.(open,in_progress)&due_date=lt.${new Date().toISOString().split('T')[0]}${domainFilter}&select=id,title,status,priority,due_date,assigned_to,domain,action_type&order=due_date.asc&limit=25`),
+    opsQuery('GET', `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.completed&completed_at=gte.${new Date(Date.now() - 30 * 86400000).toISOString()}${domainFilter}&select=id,title,created_at,completed_at,action_type,domain&order=completed_at.desc&limit=50`),
+    opsQuery('GET', `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=neq.cancelled${domainFilter}&select=action_type,status&limit=500`),
+    opsQuery('GET', `escalations?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id,action_item_id,reason,escalated_by,created_at&order=created_at.desc&limit=10`)
+  ]);
+
+  // Status distribution
+  const statusCounts = {};
+  (statusDist.data || []).forEach(item => {
+    statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
+  });
+
+  // Priority distribution
+  const priorityCounts = {};
+  (statusDist.data || []).forEach(item => {
+    priorityCounts[item.priority || 'normal'] = (priorityCounts[item.priority || 'normal'] || 0) + 1;
+  });
+
+  // Action type distribution
+  const typeCounts = {};
+  (typeBreakdown.data || []).forEach(item => {
+    typeCounts[item.action_type || 'other'] = (typeCounts[item.action_type || 'other'] || 0) + 1;
+  });
+
+  // Domain distribution
+  const domainCounts = {};
+  (statusDist.data || []).forEach(item => {
+    domainCounts[item.domain || 'unclassified'] = (domainCounts[item.domain || 'unclassified'] || 0) + 1;
+  });
+
+  // Velocity: average days to complete (last 30 days)
+  const completedItems = recentCompleted.data || [];
+  let avgDaysToComplete = null;
+  if (completedItems.length >= 3) {
+    const durations = completedItems
+      .filter(i => i.created_at && i.completed_at)
+      .map(i => (new Date(i.completed_at) - new Date(i.created_at)) / 86400000);
+    if (durations.length) {
+      avgDaysToComplete = Number((durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1));
+    }
+  }
+
+  // Stale items: open/in_progress with no update in 14+ days
+  const staleThreshold = new Date(Date.now() - 14 * 86400000).toISOString();
+  const staleResult = await opsQuery('GET',
+    `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=in.(open,in_progress)&updated_at=lt.${encodeURIComponent(staleThreshold)}${domainFilter}&select=id,title,status,assigned_to,domain,updated_at&order=updated_at.asc&limit=15`
+  );
+
+  const pipeline = {
+    status_distribution: statusCounts,
+    priority_distribution: priorityCounts,
+    type_distribution: typeCounts,
+    domain_distribution: domainCounts,
+    total_active: (statusCounts.open || 0) + (statusCounts.in_progress || 0) + (statusCounts.waiting || 0),
+    total_completed_30d: completedItems.length,
+    avg_days_to_complete: avgDaysToComplete,
+    overdue: {
+      count: (overduItems.data || []).length,
+      items: (overduItems.data || []).slice(0, 10).map(i => ({
+        id: i.id, title: i.title, status: i.status, priority: i.priority,
+        due_date: i.due_date, domain: i.domain, type: i.action_type
+      }))
+    },
+    stale: {
+      count: (staleResult.data || []).length,
+      items: (staleResult.data || []).slice(0, 10).map(i => ({
+        id: i.id, title: i.title, status: i.status, domain: i.domain,
+        last_updated: i.updated_at
+      }))
+    },
+    escalations: {
+      open_count: (escalations.data || []).length,
+      items: (escalations.data || []).slice(0, 5)
+    }
+  };
+
+  // Generate AI summary
+  const prompt = `Analyze this pipeline data for a commercial real estate brokerage team and provide a concise intelligence brief.\n\nPipeline Status:\n${JSON.stringify(pipeline.status_distribution)}\n\nPriority Distribution:\n${JSON.stringify(pipeline.priority_distribution)}\n\nType Breakdown:\n${JSON.stringify(pipeline.type_distribution)}\n\nDomain Breakdown:\n${JSON.stringify(pipeline.domain_distribution)}\n\nKey Metrics:\n- Active items: ${pipeline.total_active}\n- Completed (30d): ${pipeline.total_completed_30d}\n- Avg days to complete: ${avgDaysToComplete || 'insufficient data'}\n- Overdue: ${pipeline.overdue.count}\n- Stale (14+ days no update): ${pipeline.stale.count}\n- Open escalations: ${pipeline.escalations.open_count}\n\nProvide:\n1. **Pipeline Health** — one-sentence assessment\n2. **Bottlenecks** — where work is stuck and why it matters\n3. **Velocity Trend** — is the team clearing work fast enough?\n4. **Top Risks** — what could cause deals or tasks to fall through\n5. **Recommended Actions** — 2-3 specific things to do this week\n\nBe direct and specific. Reference actual numbers.`;
+
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'get_pipeline_intelligence' },
+    history: [], attachments: [], user, workspaceId
+  });
+
+  return {
+    ok: true,
+    action: 'get_pipeline_intelligence',
+    response: result.data?.response || '',
+    pipeline,
+    provider: result.provider
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GUIDED ENTITY MERGE — surface duplicates and guide merge decision (Wave 2)
+// ---------------------------------------------------------------------------
+
+async function handleGuidedEntityMerge(params, user, workspaceId) {
+  if (!workspaceId) return { ok: false, error: 'Workspace context required' };
+
+  const { entity_id, source } = params || {};
+
+  // If entity_id provided, find its duplicates specifically
+  if (entity_id) {
+    const entityResult = await opsQuery('GET', `entities?id=eq.${encodeURIComponent(entity_id)}&workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`);
+    const entity = entityResult.data?.[0];
+    if (!entity) return { ok: false, error: 'Entity not found' };
+
+    // Find entities with matching canonical name
+    const canonical = entity.canonical_name || entity.name?.toLowerCase().trim();
+    const matches = await opsQuery('GET',
+      `entities?workspace_id=eq.${encodeURIComponent(workspaceId)}&canonical_name=eq.${encodeURIComponent(canonical)}&id=neq.${encodeURIComponent(entity_id)}&select=id,name,entity_type,domain,city,state,created_at&limit=10`
+    );
+
+    if (!matches.data?.length) {
+      return { ok: true, action: 'guided_entity_merge', duplicates_found: 0, message: `No duplicates found for "${entity.name}".`, entity };
+    }
+
+    return {
+      ok: true,
+      action: 'guided_entity_merge',
+      duplicates_found: matches.data.length,
+      target: { id: entity.id, name: entity.name, type: entity.entity_type, domain: entity.domain },
+      candidates: matches.data,
+      message: `Found ${matches.data.length} potential duplicate(s) for "${entity.name}". Review and use the entity merge action to consolidate.`,
+      merge_endpoint: 'POST /api/entities?action=merge',
+      merge_params: { target_id: entity.id, source_id: '<candidate_id>' }
+    };
+  }
+
+  // Otherwise, surface top duplicate groups and contact merge queue
+  const [entityDups, contactQueue] = await Promise.all([
+    opsQuery('GET', `v_duplicate_candidates?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=15`),
+    source !== 'entities_only' ? govContactQuery(`contact_merge_queue?status=eq.pending&order=match_score.desc&limit=15`) : Promise.resolve({ data: [] })
+  ]);
+
+  return {
+    ok: true,
+    action: 'guided_entity_merge',
+    entity_duplicates: {
+      groups: (entityDups.data || []).length,
+      items: entityDups.data || []
+    },
+    contact_merge_queue: {
+      pending: (contactQueue.data || []).length,
+      items: (contactQueue.data || []).slice(0, 10)
+    },
+    message: `Found ${(entityDups.data || []).length} entity duplicate group(s) and ${(contactQueue.data || []).length} pending contact merge(s).`
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Fetch operational context for Copilot enrichment
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
 async function fetchOpsContext(workspaceId, userId) {
