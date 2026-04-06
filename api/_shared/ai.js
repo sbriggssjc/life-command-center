@@ -44,6 +44,7 @@ When the user's intent maps to a specific action, suggest it clearly:
 - retry_sync_error_record — retry a failed sync (needs confirmation)
 - list_government_review_observations — gov evidence awaiting review
 - list_dialysis_review_queue — dialysis link review items
+- generate_document — create BOV, proposal, seller report, comp analysis, or pursuit summary (needs confirmation)
 - generate_listing_pursuit_dossier — assemble pursuit package for a property/entity
 - get_relationship_context — relationship briefing before a call or meeting
 - get_pipeline_intelligence — pipeline health, bottlenecks, velocity trends

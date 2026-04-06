@@ -478,10 +478,11 @@ const ACTION_REGISTRY = {
   // Tier 0: Teams card generation (Wave 2)
   generate_teams_card:         { tier: 0, handler: 'teams_card' },
 
-  // Tier 0: Wave 2-3 intelligence actions
+  // Tier 0-1: Wave 2-3 intelligence and document actions
   get_relationship_context:    { tier: 0, handler: 'relationship_context' },
   get_pipeline_intelligence:   { tier: 0, handler: 'pipeline_intelligence' },
   guided_entity_merge:         { tier: 0, handler: 'guided_entity_merge' },
+  generate_document:           { tier: 1, handler: 'document_assembly', confirm: 'explicit' },
 
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
@@ -527,6 +528,7 @@ async function dispatchAction(actionName, params, user, workspaceId) {
       case 'relationship_context':   return handleRelationshipContext(params, user, workspaceId);
       case 'pipeline_intelligence':  return handlePipelineIntelligence(params, user, workspaceId);
       case 'guided_entity_merge':    return handleGuidedEntityMerge(params, user, workspaceId);
+      case 'document_assembly':     return handleDocumentAssembly(params, user, workspaceId);
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
   }
@@ -1022,6 +1024,160 @@ function generateTeamsCard(params) {
   }
 
   return { ok: false, error: `Unknown card_type: ${card_type}. Supported: inbox_triage, action_review, escalation` };
+}
+
+// ---------------------------------------------------------------------------
+// DOCUMENT ASSEMBLY — generate BOVs, proposals, reports via Graph API (Wave 3)
+// ---------------------------------------------------------------------------
+
+async function handleDocumentAssembly(params, user, workspaceId) {
+  const { doc_type, entity_id, entity_name, title, additional_context } = params || {};
+  if (!doc_type) return { ok: false, error: 'doc_type is required. Options: bov, proposal, seller_report, comp_analysis, pursuit_summary' };
+
+  const graphToken = process.env.MS_GRAPH_TOKEN;
+
+  // Gather entity context
+  let entityContext = '';
+  let entityData = null;
+  if (entity_id) {
+    const r = await opsQuery('GET', `entities?id=eq.${encodeURIComponent(entity_id)}&limit=1`);
+    entityData = r.data?.[0];
+  } else if (entity_name) {
+    const r = await opsQuery('GET', `entities?name=ilike.*${encodeURIComponent(entity_name)}*&limit=3`);
+    entityData = r.data?.[0];
+  }
+
+  if (entityData) {
+    entityContext = `Property/Entity: ${entityData.name}\nType: ${entityData.entity_type || 'unknown'}\nDomain: ${entityData.domain || 'unknown'}`;
+    const timeline = await opsQuery('GET',
+      `v_entity_timeline?entity_id=eq.${encodeURIComponent(entityData.id)}&limit=10&order=created_at.desc`
+    );
+    if (timeline.data?.length) {
+      entityContext += '\n\nRecent Activity:\n' + timeline.data.map(e =>
+        `- ${e.created_at?.split('T')[0] || '?'}: ${e.title || e.description || '(activity)'}`
+      ).join('\n');
+    }
+  }
+
+  // Domain data enrichment
+  let domainContext = '';
+  if (entityData?.domain === 'government' && GOV_URL && GOV_KEY) {
+    try {
+      const r = await fetch(`${GOV_URL}/rest/v1/mv_gov_overview_stats?select=*&limit=1`, {
+        headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}` }
+      });
+      if (r.ok) {
+        const stats = await r.json();
+        if (stats?.[0]) domainContext = '\n\nGovernment Portfolio Context:\n' + JSON.stringify(stats[0], null, 2);
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // Document type prompts
+  const docPrompts = {
+    bov: `Generate a Broker's Opinion of Value (BOV) document for this commercial real estate property.\n\n${entityContext}${domainContext}\n${additional_context ? '\nAdditional Context: ' + additional_context : ''}\n\nStructure the BOV with these sections:\n1. **Executive Summary** — property overview and value conclusion\n2. **Property Description** — location, size, tenancy, lease terms\n3. **Market Analysis** — comparable sales, market conditions, cap rate environment\n4. **Valuation Approach** — methodology (income, sales comparison, or both)\n5. **Value Estimate** — estimated value range with supporting rationale\n6. **Assumptions & Limiting Conditions**\n\nUse professional valuation language. Where data is missing, note "[DATA NEEDED: description]" placeholders.`,
+
+    proposal: `Generate a listing proposal / pitch document for this commercial real estate property.\n\n${entityContext}${domainContext}\n${additional_context ? '\nAdditional Context: ' + additional_context : ''}\n\nStructure the proposal with these sections:\n1. **Cover Letter** — personalized to the owner\n2. **Team Qualifications** — Briggs CRE team overview and relevant experience\n3. **Market Overview** — current conditions for this property type/market\n4. **Marketing Strategy** — how the property will be positioned and marketed\n5. **Pricing Recommendation** — suggested list price with rationale\n6. **Timeline** — proposed marketing and closing timeline\n7. **Fee Structure** — standard commission terms\n\nMake it compelling and specific to this property.`,
+
+    seller_report: `Generate a weekly seller report for this active listing.\n\n${entityContext}${domainContext}\n${additional_context ? '\nAdditional Context: ' + additional_context : ''}\n\nStructure the report with:\n1. **Executive Summary** — one paragraph overview of the week\n2. **Marketing Activity** — inquiries, showings, OM downloads\n3. **Buyer Feedback** — summary of buyer responses and interest levels\n4. **Market Update** — any relevant market changes\n5. **Next Steps** — planned activities for the coming week\n6. **Key Metrics Table** — days on market, total inquiries, showings, offers\n\nKeep it concise and factual.`,
+
+    comp_analysis: `Generate a comparable sales analysis for this property.\n\n${entityContext}${domainContext}\n${additional_context ? '\nAdditional Context: ' + additional_context : ''}\n\nStructure the analysis with:\n1. **Subject Property Summary**\n2. **Comparable Sales** — list 3-5 comparable transactions with price, cap rate, date, SF, price/SF\n3. **Adjustment Grid** — adjustments for location, condition, lease terms, age\n4. **Indicated Value Range** — derived from adjusted comps\n5. **Market Observations** — trends in cap rates, pricing, demand\n\nWhere comp data is unavailable, note "[COMP NEEDED: criteria]" placeholders.`,
+
+    pursuit_summary: `Generate a one-page pursuit summary brief for this property/opportunity.\n\n${entityContext}${domainContext}\n${additional_context ? '\nAdditional Context: ' + additional_context : ''}\n\nStructure as a single concise page:\n1. **Opportunity** — what's the play?\n2. **Property** — key facts\n3. **Owner/Decision-Maker** — who to approach\n4. **Our Advantage** — why us\n5. **Risks** — what could go wrong\n6. **Next Action** — what to do this week\n\nKeep it tight — this is a quick-reference brief, not a full report.`
+  };
+
+  const prompt = docPrompts[doc_type];
+  if (!prompt) {
+    return { ok: false, error: `Unknown doc_type: ${doc_type}. Options: ${Object.keys(docPrompts).join(', ')}` };
+  }
+
+  // Generate document content via AI
+  const result = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'global_copilot', action: 'generate_document', doc_type },
+    history: [], attachments: [], user, workspaceId
+  });
+
+  const content = result.data?.response || '';
+  if (!content) {
+    return { ok: false, error: 'AI failed to generate document content' };
+  }
+
+  // Build HTML wrapper for Word-compatible document
+  const entityLabel = entityData?.name || entity_name || 'Property';
+  const docTitle = title || `${doc_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} — ${entityLabel}`;
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const htmlDoc = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${docTitle}</title>
+<style>body{font-family:Calibri,Arial,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#333;line-height:1.6}h1{color:#1a237e;border-bottom:2px solid #1a237e;padding-bottom:8px}h2{color:#283593;margin-top:24px}table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #ccc;padding:8px 12px;text-align:left}th{background:#f5f5f5;font-weight:600}.header{text-align:center;margin-bottom:32px}.header h1{border:none;margin-bottom:4px}.header .sub{color:#666;font-size:14px}.footer{margin-top:48px;padding-top:16px;border-top:1px solid #ccc;font-size:12px;color:#999;text-align:center}</style></head>
+<body>
+<div class="header"><h1>${docTitle}</h1><div class="sub">Prepared by Briggs CRE | ${dateStr}</div></div>
+${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/gm, '<h3>$1</h3>').replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/^# (.+)$/gm, '<h1>$1</h1>').replace(/^- (.+)$/gm, '<li>$1</li>').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}
+<div class="footer">Generated by Life Command Center | ${dateStr} | CONFIDENTIAL</div>
+</body></html>`;
+
+  // Try to save to OneDrive if Graph token is available
+  let savedFile = null;
+  if (graphToken) {
+    const fileName = `${doc_type}_${entityLabel.replace(/[^a-zA-Z0-9]/g, '_')}_${dateStr.replace(/[^a-zA-Z0-9]/g, '_')}.html`;
+    const folderPath = 'LCC Documents';
+
+    try {
+      const uploadRes = await fetch(
+        `${GRAPH_API_URL}/me/drive/root:/${folderPath}/${fileName}:/content`,
+        {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${graphToken}`,
+            'Content-Type': 'text/html'
+          },
+          body: htmlDoc
+        }
+      );
+      if (uploadRes.ok) {
+        const fileData = await uploadRes.json();
+        savedFile = {
+          id: fileData.id,
+          name: fileData.name,
+          web_url: fileData.webUrl,
+          size: fileData.size,
+          folder: folderPath
+        };
+      }
+    } catch (e) {
+      // Non-fatal — document was still generated
+      console.warn('[doc-assembly] OneDrive upload failed:', e.message);
+    }
+  }
+
+  // Log activity
+  if (workspaceId) {
+    opsQuery('POST', 'activity_events', {
+      workspace_id: workspaceId,
+      user_id: user?.id,
+      event_type: 'document_generated',
+      source: 'copilot',
+      title: `Generated ${doc_type}: ${entityLabel}`,
+      entity_id: entityData?.id || null,
+      metadata: { doc_type, saved_to_onedrive: !!savedFile, file_name: savedFile?.name }
+    }).catch(() => {});
+  }
+
+  return {
+    ok: true,
+    action: 'generate_document',
+    doc_type,
+    title: docTitle,
+    entity: entityData ? { id: entityData.id, name: entityData.name } : null,
+    response: content,
+    saved_file: savedFile,
+    html_available: true,
+    note: savedFile
+      ? `Document saved to OneDrive: ${savedFile.folder}/${savedFile.name}`
+      : 'Document generated. Set MS_GRAPH_TOKEN with Files.ReadWrite scope to auto-save to OneDrive.',
+    provider: result.provider
+  };
 }
 
 // ---------------------------------------------------------------------------
