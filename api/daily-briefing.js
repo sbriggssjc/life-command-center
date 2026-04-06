@@ -12,9 +12,16 @@ const MORNING_STRUCTURED_URL = process.env.MORNING_BRIEFING_STRUCTURED_URL || ''
 const MORNING_HTML_URL = process.env.MORNING_BRIEFING_HTML_URL || '';
 
 function pickRoleView(requested, membershipRole) {
-  if (requested === 'analyst_ops' || requested === 'broker') return requested;
+  if (requested === 'analyst_ops' || requested === 'broker' || requested === 'manager') return requested;
+  if (membershipRole === 'owner' || membershipRole === 'manager') return 'manager';
   if (membershipRole === 'operator' || membershipRole === 'viewer') return 'analyst_ops';
   return 'broker';
+}
+
+function pickAudience(roleView) {
+  if (roleView === 'manager') return 'manager';
+  if (roleView === 'analyst_ops') return 'team';
+  return 'user';
 }
 
 function toArray(value) {
@@ -232,7 +239,7 @@ function mapPriorityItems(items, limit = 5) {
   }));
 }
 
-function projectPriorities(roleView, myWork, inboxSummary, syncHealth) {
+function projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts) {
   const today = new Date();
   const weekEnd = new Date(today);
   weekEnd.setDate(today.getDate() + 7);
@@ -247,6 +254,69 @@ function projectPriorities(roleView, myWork, inboxSummary, syncHealth) {
   const callRegex = /call|owner|prospect|follow[- ]?up|outreach/i;
   const recommendedCalls = myWork.filter((item) => callRegex.test(item.title || '')).slice(0, 5);
   const recommendedFollowups = inboxSummary.items.slice(0, 5);
+
+  if (roleView === 'manager') {
+    // Manager view: team production posture, bottlenecks, escalations
+    const managerTop = [];
+    // Surface escalations first
+    if (workCounts.open_escalations > 0) {
+      managerTop.push({
+        id: '_escalations',
+        title: `${workCounts.open_escalations} open escalation${workCounts.open_escalations > 1 ? 's' : ''} need attention`,
+        status: 'needs_review',
+        priority: 'urgent',
+        due_date: null,
+        domain: 'ops',
+        source_type: 'escalation'
+      });
+    }
+    // Surface unassigned work
+    if (unassignedWork.length > 0) {
+      managerTop.push({
+        id: '_unassigned',
+        title: `${unassignedWork.length} unassigned item${unassignedWork.length > 1 ? 's' : ''} in team queue`,
+        status: 'needs_review',
+        priority: 'high',
+        due_date: null,
+        domain: 'ops',
+        source_type: 'unassigned'
+      });
+    }
+    // Surface overdue count
+    if (workCounts.overdue > 0) {
+      managerTop.push({
+        id: '_overdue',
+        title: `${workCounts.overdue} overdue item${workCounts.overdue > 1 ? 's' : ''} across team`,
+        status: 'needs_review',
+        priority: 'high',
+        due_date: null,
+        domain: 'ops',
+        source_type: 'overdue'
+      });
+    }
+    // Surface sync errors if significant
+    if (workCounts.sync_errors > 3) {
+      managerTop.push({
+        id: '_sync_errors',
+        title: `${workCounts.sync_errors} unresolved sync errors`,
+        status: 'needs_review',
+        priority: 'normal',
+        due_date: null,
+        domain: 'ops',
+        source_type: 'sync_error'
+      });
+    }
+    // Fill remaining slots with highest-priority team work
+    managerTop.push(...overdue.slice(0, 5 - managerTop.length));
+
+    return {
+      today_top_5: mapPriorityItems(managerTop, 5),
+      my_overdue: mapPriorityItems(overdue, 5),
+      my_due_this_week: mapPriorityItems(dueThisWeek, 5),
+      recommended_calls: [],
+      recommended_followups: mapPriorityItems(unassignedWork, 5)
+    };
+  }
 
   if (roleView === 'analyst_ops') {
     const opsTop = [
@@ -270,6 +340,7 @@ function projectPriorities(roleView, myWork, inboxSummary, syncHealth) {
     };
   }
 
+  // Broker view: personal production focus
   return {
     today_top_5: mapPriorityItems(myWork, 5),
     my_overdue: mapPriorityItems(overdue, 5),
@@ -285,8 +356,11 @@ function buildActions(roleView) {
     { label: 'Open Inbox Triage', type: 'link', target: '/?tab=inbox' },
     { label: 'View Sync Health', type: 'link', target: '/?tab=ops&view=sync-health' }
   ];
-  if (roleView === 'analyst_ops') {
+  if (roleView === 'analyst_ops' || roleView === 'manager') {
     base.push({ label: 'Review Unassigned Work', type: 'link', target: '/?tab=queue&view=team' });
+  }
+  if (roleView === 'manager') {
+    base.push({ label: 'View Escalations', type: 'link', target: '/?tab=ops&view=escalations' });
   }
   return base;
 }
@@ -390,14 +464,16 @@ export default withErrorHandler(async function handler(req, res) {
   const payload = {
     briefing_id: buildBriefingId(asOf, workspaceId, user.id, roleView),
     as_of: asOf,
+    timezone: 'America/Chicago',
     workspace_id: workspaceId,
+    audience: pickAudience(roleView),
     role_view: roleView,
     status: {
       completeness: missingSections.length > 0 ? 'degraded' : 'full',
       missing_sections: missingSections
     },
     global_market_intelligence: globalMarketIntelligence,
-    user_specific_priorities: projectPriorities(roleView, myWork, inboxSummary, syncHealth),
+    user_specific_priorities: projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts),
     team_level_production_signals: {
       work_counts: {
         open_actions: workCounts.open_actions,
