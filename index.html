@@ -372,12 +372,12 @@
     <div class="copilot-msg bot">
       Hey there! I'm your LCC Copilot. I can pull your daily briefing, find who to call, draft emails, check your queue, and more. What can I help with?
       <div class="copilot-suggestions" style="margin-top:10px">
-        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('Give me my daily briefing')">Daily briefing</button>
-        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('Who should I call today?')">Prospecting call sheet</button>
-        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('What\'s in my queue?')">My queue</button>
-        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('Any sync issues?')">Sync health</button>
-        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('What needs triage in the inbox?')">Inbox triage</button>
-        <button class="copilot-suggestion" onclick="sendCopilotSuggestion('What are today\'s priority tasks?')">Today's priorities</button>
+        <button class="copilot-suggestion" onclick="sendCopilotAction('get_daily_briefing_snapshot', {role_view:'broker'})">Daily briefing</button>
+        <button class="copilot-suggestion" onclick="sendCopilotAction('generate_prospecting_brief', {limit:10})">Prospecting call sheet</button>
+        <button class="copilot-suggestion" onclick="sendCopilotAction('get_my_execution_queue')">My queue</button>
+        <button class="copilot-suggestion" onclick="sendCopilotAction('get_sync_run_health')">Sync health</button>
+        <button class="copilot-suggestion" onclick="sendCopilotAction('list_staged_intake_inbox')">Inbox triage</button>
+        <button class="copilot-suggestion" onclick="sendCopilotAction('get_pipeline_intelligence')">Pipeline health</button>
       </div>
     </div>
   </div>
