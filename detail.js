@@ -481,7 +481,7 @@ function switchUnifiedTab(tabName) {
 }
 
 /** Lazy-load additional clinic data for the Operations tab, then render */
-let _opsExtraCache = null; // { medicare_id, patientHistory, trends, quality, financialDetail, costReports, lease }
+let _opsExtraCache = null; // { medicare_id, patientHistory, trends, quality, financialDetail, costReports, payerMix, lease }
 async function _udRenderOperationsAsync(bodyEl) {
   const fb = _udCache.fallback || {};
   const clinicId = fb.clinic_id || fb.medicare_id || fb.ccn;
@@ -506,6 +506,7 @@ async function _udRenderOperationsAsync(bodyEl) {
       promises.push(diaQuery('clinic_quality_metrics', '*', { filter: mFilter, order: 'snapshot_date.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter + '&is_primary=eq.true', limit: 1 }).catch(() => []));
       promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year.desc', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('v_clinic_payer_mix', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       // Lease via property_id
       const propId = _udCache.ids?.property_id || _udCache.property?.property_id;
       if (propId) {
@@ -514,9 +515,9 @@ async function _udRenderOperationsAsync(bodyEl) {
         promises.push(Promise.resolve([]));
       }
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, leaseData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, leaseData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], []];
+      : [[], [], [], [], [], [], []];
 
     _opsExtraCache = {
       medicare_id: clinicId,
@@ -525,11 +526,12 @@ async function _udRenderOperationsAsync(bodyEl) {
       quality: (quality || [])[0] || null,
       financialDetail: (financialDetail || [])[0] || null,
       costReports: (costReports || [])[0] || null,
+      payerMix: (payerMixData || [])[0] || null,
       lease: (leaseData || [])[0] || null,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, lease: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, lease: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -837,6 +839,7 @@ function _udTabOperations() {
   const quality = ext.quality || {};
   const finDetail = ext.financialDetail || {};
   const costRpt = ext.costReports || {};
+  const payerMixHcris = ext.payerMix || null;
   const lease = ext.lease || {};
   const patientHistory = ext.patientHistory || [];
   let html = '';
@@ -966,8 +969,11 @@ function _udTabOperations() {
   html += _rowMoney('Operating Profit', finDetail.estimated_operating_profit || r.ttm_operating_profit);
   html += _rowHtml('Operating Margin', margin != null ? _marginBadge(margin) : null);
 
-  // Revenue & cost per treatment — show precise dollar amounts
-  const annualTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  // Revenue & cost per treatment — use model treatments (patients×156) when HCRIS data looks partial
+  const rawTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  const modelTx = bestPatientCount ? bestPatientCount * 156 : null; // 3 tx/week × 52 weeks
+  const txLooksPartial = rawTx && modelTx && (rawTx / modelTx < 0.5);
+  const annualTx = txLooksPartial ? modelTx : (rawTx || modelTx);
   if (annualTx && estRevenue) {
     const revPerTx = Number(estRevenue) / Number(annualTx);
     html += _rowHtml('Revenue / Treatment', '$' + fmtN(Math.round(revPerTx)));
@@ -976,52 +982,87 @@ function _udTabOperations() {
     const costPerTx = Number(r.ttm_operating_costs) / Number(annualTx);
     html += _rowHtml('Cost / Treatment', '$' + fmtN(Math.round(costPerTx)));
   }
-  html += _row('Treatments / Year', annualTx ? fmtN(annualTx) : null);
+  html += _row('Treatments / Year', annualTx ? fmtN(annualTx) + (txLooksPartial ? ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>' : '') : null);
   html += '</div>';
 
-  // Payer Mix stacked bar + percentages
-  // Use rankings data, falling back to national defaults (65/20/11/4) when unavailable
-  let medPct = r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct) : null;
-  let mcdPct = r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct) : null;
-  let pvtPct = r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct) : null;
-  let payerMixIsDefault = false;
-  if (medPct == null && mcdPct == null && pvtPct == null) {
-    // Apply national default payer mix so the section always renders
-    medPct = 65; mcdPct = 20; pvtPct = 11;
-    payerMixIsDefault = true;
+  // Payer Mix — multi-level comparison: HCRIS Actual → Rankings → National Default
+  // Build up to 4 bar datasets: Clinic (HCRIS), Clinic (Rankings), State Avg, National Default
+  const payerBars = [];
+  const _natl = { label: 'National Default', med: 65, mcd: 20, pvt: 11 };
+  _natl.oth = Math.max(0, 100 - _natl.med - _natl.mcd - _natl.pvt);
+  payerBars.push(_natl);
+
+  // State average — use rankings county/state context to label
+  const clinicState = r.state || '';
+  const clinicCounty = r.county || '';
+
+  // HCRIS actual payer mix (revenue-based, from cost reports)
+  if (payerMixHcris && payerMixHcris.medicare_pct != null) {
+    const hMed = Number(payerMixHcris.medicare_pct);
+    const hMcd = Number(payerMixHcris.medicaid_pct || 0);
+    const hPvt = Number(payerMixHcris.private_pct || 0);
+    payerBars.push({ label: 'This Clinic (HCRIS)', med: hMed, mcd: hMcd, pvt: hPvt, oth: Math.max(0, 100 - hMed - hMcd - hPvt), source: 'revenue' });
   }
 
-  if (medPct != null || mcdPct != null || pvtPct != null) {
-    const otherPct = Math.max(0, 100 - (medPct || 0) - (mcdPct || 0) - (pvtPct || 0));
-    html += '<div style="margin-top:14px">';
-    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600">Payer Mix' + (payerMixIsDefault ? ' <span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--text3);color:var(--bg);font-weight:700;margin-left:4px;vertical-align:middle">National Defaults</span>' : '') + '</div>';
-    // Stacked bar
-    html += '<div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:8px">';
-    if (medPct) html += '<div style="width:' + medPct + '%;background:#3b82f6" title="Medicare ' + medPct.toFixed(1) + '%"></div>';
-    if (mcdPct) html += '<div style="width:' + mcdPct + '%;background:#8b5cf6" title="Medicaid ' + mcdPct.toFixed(1) + '%"></div>';
-    if (pvtPct) html += '<div style="width:' + pvtPct + '%;background:#10b981" title="Commercial ' + pvtPct.toFixed(1) + '%"></div>';
-    if (otherPct > 0.5) html += '<div style="width:' + otherPct + '%;background:var(--text3)" title="Other ' + otherPct.toFixed(1) + '%"></div>';
-    html += '</div>';
-    // Legend
-    html += '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px">';
-    if (medPct != null) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#3b82f6;margin-right:3px"></span>Medicare ' + medPct.toFixed(1) + '%</span>';
-    if (mcdPct != null) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#8b5cf6;margin-right:3px"></span>Medicaid ' + mcdPct.toFixed(1) + '%</span>';
-    if (pvtPct != null) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#10b981;margin-right:3px"></span>Commercial ' + pvtPct.toFixed(1) + '%</span>';
-    if (otherPct > 0.5) html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--text3);margin-right:3px"></span>Other ' + otherPct.toFixed(1) + '%</span>';
-    html += '</div>';
+  // Rankings payer mix (patient-based, if available)
+  if (r.payer_mix_medicare_pct != null) {
+    const rMed = Number(r.payer_mix_medicare_pct);
+    const rMcd = Number(r.payer_mix_medicaid_pct || 0);
+    const rPvt = Number(r.payer_mix_private_pct || 0);
+    payerBars.push({ label: 'This Clinic', med: rMed, mcd: rMcd, pvt: rPvt, oth: Math.max(0, 100 - rMed - rMcd - rPvt) });
+  }
 
-    // Payer mix dollar estimates
-    if (estRevenue) {
-      const rev = Number(estRevenue);
-      html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px 12px;margin-top:8px;font-size:12px;color:var(--text2)">';
-      if (medPct != null) html += '<div>Medicare</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * medPct / 100) + '</div>';
-      if (mcdPct != null) html += '<div>Medicaid</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * mcdPct / 100) + '</div>';
-      if (pvtPct != null) html += '<div>Commercial</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * pvtPct / 100) + '</div>';
-      if (otherPct > 0.5) html += '<div>Other</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * otherPct / 100) + '</div>';
-      html += '</div>';
-    }
+  // Determine the "active" payer mix for revenue estimates (prefer HCRIS > rankings > national)
+  const activePayer = payerBars.length > 1 ? payerBars[payerBars.length - 1] : _natl;
+  const payerIsDefault = payerBars.length === 1;
+
+  html += '<div style="margin-top:14px">';
+  html += '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;font-weight:600">Payer Mix Comparison</div>';
+
+  // Render each bar
+  payerBars.forEach(bar => {
+    const isNatl = bar === _natl;
+    html += '<div style="margin-bottom:10px">';
+    html += '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;display:flex;justify-content:space-between">';
+    html += '<span>' + esc(bar.label) + (bar.source === 'revenue' ? ' <span style="font-size:9px;opacity:0.7">revenue-based</span>' : '') + '</span>';
+    if (isNatl && payerIsDefault) html += '<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--text3);color:var(--bg);font-weight:700">In Use</span>';
+    if (!isNatl && bar === activePayer) html += '<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--green);color:var(--bg);font-weight:700">In Use</span>';
+    html += '</div>';
+    html += '<div style="display:flex;height:14px;border-radius:3px;overflow:hidden;font-size:0">';
+    if (bar.med) html += '<div style="width:' + bar.med + '%;background:#3b82f6" title="Medicare ' + bar.med.toFixed(1) + '%"></div>';
+    if (bar.mcd) html += '<div style="width:' + bar.mcd + '%;background:#8b5cf6" title="Medicaid ' + bar.mcd.toFixed(1) + '%"></div>';
+    if (bar.pvt) html += '<div style="width:' + bar.pvt + '%;background:#10b981" title="Commercial ' + bar.pvt.toFixed(1) + '%"></div>';
+    if (bar.oth > 0.5) html += '<div style="width:' + bar.oth + '%;background:var(--text3)" title="Other ' + bar.oth.toFixed(1) + '%"></div>';
+    html += '</div>';
+    // Inline percentages
+    html += '<div style="display:flex;gap:8px;font-size:10px;color:var(--text3);margin-top:2px">';
+    html += '<span>Med ' + bar.med.toFixed(0) + '%</span>';
+    html += '<span>Mcd ' + bar.mcd.toFixed(0) + '%</span>';
+    html += '<span>Pvt ' + bar.pvt.toFixed(0) + '%</span>';
+    if (bar.oth > 0.5) html += '<span>Oth ' + bar.oth.toFixed(0) + '%</span>';
+    html += '</div>';
+    html += '</div>';
+  });
+
+  // Legend (shared)
+  html += '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;margin-top:4px">';
+  html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#3b82f6;margin-right:3px"></span>Medicare</span>';
+  html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#8b5cf6;margin-right:3px"></span>Medicaid</span>';
+  html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#10b981;margin-right:3px"></span>Commercial</span>';
+  html += '<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--text3);margin-right:3px"></span>Other</span>';
+  html += '</div>';
+
+  // Payer mix dollar estimates using active payer
+  if (estRevenue) {
+    const rev = Number(estRevenue);
+    html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px 12px;margin-top:8px;font-size:12px;color:var(--text2)">';
+    html += '<div>Medicare</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * activePayer.med / 100) + '</div>';
+    html += '<div>Medicaid</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * activePayer.mcd / 100) + '</div>';
+    html += '<div>Commercial</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * activePayer.pvt / 100) + '</div>';
+    if (activePayer.oth > 0.5) html += '<div>Other</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(rev * activePayer.oth / 100) + '</div>';
     html += '</div>';
   }
+  html += '</div>';
 
   // HCRIS Modeled vs Actual comparison callout
   if (costRpt && costRpt.total_patient_revenue && estRevenue) {
@@ -1078,11 +1119,24 @@ function _udTabOperations() {
   if (trends.regression_r_squared != null) {
     html += _row('R\u00B2', Number(trends.regression_r_squared).toFixed(3));
   }
-  // Projections
-  if (trends.projected_patients_1yr != null) html += _row('Projected Patients (1yr)', fmtN(Math.round(Number(trends.projected_patients_1yr))));
-  if (trends.projected_patients_3yr != null) html += _row('Projected Patients (3yr)', fmtN(Math.round(Number(trends.projected_patients_3yr))));
-  if (trends.projected_revenue_1yr != null) html += _rowMoney('Projected Revenue (1yr)', trends.projected_revenue_1yr);
-  if (trends.projected_revenue_3yr != null) html += _rowMoney('Projected Revenue (3yr)', trends.projected_revenue_3yr);
+  // Projections — recalculate revenue from projected patients × per-patient revenue
+  // (database projected_revenue can be inconsistent with flat/declining patient trends)
+  const projPt1 = trends.projected_patients_1yr != null ? Math.round(Number(trends.projected_patients_1yr)) : null;
+  const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
+  if (projPt1 != null) html += _row('Projected Patients (1yr)', fmtN(projPt1));
+  if (projPt3 != null) html += _row('Projected Patients (3yr)', fmtN(projPt3));
+  // Revenue projections: derive from patient projections × current per-patient revenue (+ 3% annual inflation)
+  if (estRevenue && bestPatientCount && bestPatientCount > 0) {
+    const revenuePerPatient = Number(estRevenue) / bestPatientCount;
+    if (projPt1 != null) {
+      const projRev1 = projPt1 * revenuePerPatient * 1.03;
+      html += _rowMoney('Projected Revenue (1yr)', projRev1);
+    }
+    if (projPt3 != null) {
+      const projRev3 = projPt3 * revenuePerPatient * Math.pow(1.03, 3);
+      html += _rowMoney('Projected Revenue (3yr)', projRev3);
+    }
+  }
   html += '</div>';
 
   // Modality breakdown (if data available from rankings or medicare_clinics)
@@ -1126,9 +1180,13 @@ function _udTabOperations() {
   html += '<div class="detail-section-title">Quality Metrics</div>';
   html += '<div class="detail-grid">';
   html += _rowHtml('CMS Star Rating', starVal != null ? _stars(starVal) : null);
-  html += _row('Mortality Rate', quality.mortality_rate != null ? Number(quality.mortality_rate).toFixed(2) : (r.mortality_rate != null ? Number(r.mortality_rate).toFixed(2) : null));
-  html += _row('Hospitalization Rate', quality.hospitalization_rate != null ? Number(quality.hospitalization_rate).toFixed(2) : null);
-  html += _row('Readmission Rate', quality.readmission_rate != null ? Number(quality.readmission_rate).toFixed(2) : null);
+  // Quality metrics with national benchmarks (per 100 patient-years, CMS DFC benchmarks)
+  const mortRate = quality.mortality_rate != null ? Number(quality.mortality_rate) : (r.mortality_rate != null ? Number(r.mortality_rate) : null);
+  html += _rowHtml('Mortality Rate', mortRate != null ? _qualityBenchmark(mortRate, 15.0, 'lower') : null);
+  const hospRate = quality.hospitalization_rate != null ? Number(quality.hospitalization_rate) : null;
+  html += _rowHtml('Hospitalization Rate', hospRate != null ? _qualityBenchmark(hospRate, 150.0, 'lower') : null);
+  const readmRate = quality.readmission_rate != null ? Number(quality.readmission_rate) : null;
+  html += _rowHtml('Readmission Rate', readmRate != null ? _qualityBenchmark(readmRate, 25.0, 'lower') : null);
   html += _row('Infection Ratio', quality.infection_ratio != null ? Number(quality.infection_ratio).toFixed(2) : null);
   html += _row('Transplant Waitlist', quality.transplant_waitlist_ratio != null ? Number(quality.transplant_waitlist_ratio).toFixed(2) : null);
   html += _row('Deficiency Count', r.deficiency_count != null ? fmtN(r.deficiency_count) : null);
@@ -1208,7 +1266,14 @@ function _udTabOperations() {
 
   html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer model: Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). State-level payer mix baselines with demographic adjustments.</p>';
 
-  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Risk Score Weights:</strong> Patient Trend 30%, Financial Health 25%, Quality Metrics 20%, Lease Expiration 15%, Market Conditions 10%.</p>';
+  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Risk Score Components:</strong></p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Patient Trend (30%):</strong> Measures YoY patient growth/decline and regression trend direction. Declining census signals potential revenue erosion and operator dissatisfaction.</p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Financial Health (25%):</strong> Based on operating margin. Margins above 15% are healthy; below 3% indicate financial stress and higher risk of closure or relocation.</p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Quality Metrics (20%):</strong> CMS star rating (1-5). Lower ratings correlate with regulatory scrutiny, patient attrition, and potential operator exit.</p>';
+  html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Lease Expiration (15%):</strong> Remaining months on lease. Shorter terms increase vacancy risk and reduce investor certainty.</p>';
+  html += '<p style="margin:0 0 8px;padding-left:8px"><strong style="color:var(--text2)">Market Conditions (10%):</strong> Uses capacity utilization as a demand proxy. High utilization (85%+) signals strong market demand; low utilization suggests oversupply.</p>';
+
+  html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Quality Benchmarks:</strong> Mortality, hospitalization, and readmission rates are per 100 patient-years. Figures are compared against national CMS Dialysis Facility Compare averages (mortality ~15, hospitalization ~150, readmission ~25). Lower is better for all three metrics.</p>';
 
   // Data freshness
   const latestSnapshot = patientHistory.length > 0 ? patientHistory[patientHistory.length - 1].snapshot_date : null;
@@ -1324,6 +1389,24 @@ function _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin) {
     leaseExp: Math.round(leaseRisk),
     market: Math.round(mktRisk)
   };
+}
+
+/** Quality metric with national benchmark comparison */
+function _qualityBenchmark(value, natlAvg, direction) {
+  // direction: 'lower' = lower is better, 'higher' = higher is better
+  const v = Number(value);
+  const ratio = v / natlAvg;
+  let color, label;
+  if (direction === 'lower') {
+    color = ratio <= 0.9 ? 'var(--green)' : ratio <= 1.15 ? 'var(--yellow)' : 'var(--red)';
+    label = ratio <= 0.9 ? 'Better' : ratio <= 1.15 ? 'Near Avg' : 'Above Avg';
+  } else {
+    color = ratio >= 1.1 ? 'var(--green)' : ratio >= 0.85 ? 'var(--yellow)' : 'var(--red)';
+    label = ratio >= 1.1 ? 'Better' : ratio >= 0.85 ? 'Near Avg' : 'Below Avg';
+  }
+  return '<span style="font-weight:600">' + v.toFixed(1) + '</span>' +
+    ' <span style="font-size:10px;color:var(--text3)">vs ' + natlAvg.toFixed(0) + ' avg</span>' +
+    ' <span style="font-size:9px;padding:1px 5px;border-radius:6px;background:' + color + '22;color:' + color + ';font-weight:600">' + label + '</span>';
 }
 
 /** Format large numbers compactly ($1.2M, $450K) */
