@@ -841,6 +841,18 @@ function _udTabOperations() {
   const patientHistory = ext.patientHistory || [];
   let html = '';
 
+  // ── Reconcile patient census: prefer latest snapshot over rankings aggregate ──
+  const latestSnapshotPt = patientHistory.length > 0
+    ? Number(patientHistory[patientHistory.length - 1].total_patients || patientHistory[patientHistory.length - 1].patient_count || 0)
+    : 0;
+  const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
+
+  // ── Reconcile operating margin: compute from profit/revenue if stored value is 0 but profit exists ──
+  let margin = r.ttm_operating_margin != null ? Number(r.ttm_operating_margin) : null;
+  if ((margin === 0 || margin == null) && r.ttm_operating_profit && r.ttm_revenue && Number(r.ttm_revenue) > 0) {
+    margin = (Number(r.ttm_operating_profit) / Number(r.ttm_revenue)) * 100;
+  }
+
   // ════════════════════════════════════════════════════════════════════════════
   // 1. KEY METRICS BANNER — always visible at top
   // ════════════════════════════════════════════════════════════════════════════
@@ -857,7 +869,6 @@ function _udTabOperations() {
   });
 
   // Operating Margin KPI
-  const margin = r.ttm_operating_margin != null ? Number(r.ttm_operating_margin) : null;
   const marginColor = margin != null ? (margin > 12 ? 'var(--green)' : margin >= 5 ? 'var(--yellow)' : 'var(--red)') : 'var(--text3)';
   kpis.push({
     label: 'Operating Margin',
@@ -866,13 +877,13 @@ function _udTabOperations() {
     info: margin != null ? (margin > 12 ? 'Healthy' : margin >= 5 ? 'Caution' : 'Below target') : ''
   });
 
-  // Patient Census KPI
+  // Patient Census KPI — use reconciled best count
   kpis.push({
     label: 'Patient Census',
-    value: r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : 'N/A',
+    value: bestPatientCount ? fmtN(bestPatientCount) : 'N/A',
     color: '',
     trend: _trendArrow(r.patient_yoy_pct, 'YoY'),
-    info: 'Current total patients from latest CMS snapshot'
+    info: latestSnapshotPt > 0 ? 'From latest CMS snapshot' : 'From rankings aggregate'
   });
 
   // Star Rating KPI
@@ -947,26 +958,35 @@ function _udTabOperations() {
   html += _rowMoney('Operating Profit', finDetail.estimated_operating_profit || r.ttm_operating_profit);
   html += _rowHtml('Operating Margin', margin != null ? _marginBadge(margin) : null);
 
-  // Revenue & cost per treatment
+  // Revenue & cost per treatment — show precise dollar amounts
   const annualTx = r.estimated_annual_treatments || r.ttm_total_treatments;
   if (annualTx && estRevenue) {
-    html += _rowMoney('Revenue / Treatment', Math.round(Number(estRevenue) / Number(annualTx)));
+    const revPerTx = Number(estRevenue) / Number(annualTx);
+    html += _rowHtml('Revenue / Treatment', '$' + fmtN(Math.round(revPerTx)));
   }
   if (annualTx && r.ttm_operating_costs) {
-    html += _rowMoney('Cost / Treatment', Math.round(Number(r.ttm_operating_costs) / Number(annualTx)));
+    const costPerTx = Number(r.ttm_operating_costs) / Number(annualTx);
+    html += _rowHtml('Cost / Treatment', '$' + fmtN(Math.round(costPerTx)));
   }
   html += _row('Treatments / Year', annualTx ? fmtN(annualTx) : null);
   html += '</div>';
 
   // Payer Mix stacked bar + percentages
-  const medPct = r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct) : null;
-  const mcdPct = r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct) : null;
-  const pvtPct = r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct) : null;
+  // Use rankings data, falling back to national defaults (65/20/11/4) when unavailable
+  let medPct = r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct) : null;
+  let mcdPct = r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct) : null;
+  let pvtPct = r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct) : null;
+  let payerMixIsDefault = false;
+  if (medPct == null && mcdPct == null && pvtPct == null) {
+    // Apply national default payer mix so the section always renders
+    medPct = 65; mcdPct = 20; pvtPct = 11;
+    payerMixIsDefault = true;
+  }
 
   if (medPct != null || mcdPct != null || pvtPct != null) {
     const otherPct = Math.max(0, 100 - (medPct || 0) - (mcdPct || 0) - (pvtPct || 0));
     html += '<div style="margin-top:14px">';
-    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600">Payer Mix</div>';
+    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600">Payer Mix' + (payerMixIsDefault ? ' <span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--text3);color:var(--bg);font-weight:700;margin-left:4px;vertical-align:middle">National Defaults</span>' : '') + '</div>';
     // Stacked bar
     html += '<div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:8px">';
     if (medPct) html += '<div style="width:' + medPct + '%;background:#3b82f6" title="Medicare ' + medPct.toFixed(1) + '%"></div>';
@@ -1031,7 +1051,7 @@ function _udTabOperations() {
   html += '</div>';
 
   html += '<div class="detail-grid">';
-  html += _row('Current Patients', r.latest_estimated_patients ? fmtN(r.latest_estimated_patients) : null);
+  html += _row('Current Patients', bestPatientCount ? fmtN(bestPatientCount) : null);
   if (r.patients_last_year) html += _rowTrend('Last Year', fmtN(r.patients_last_year), r.patient_yoy_pct);
   if (r.patients_two_years_ago) html += _row('Two Years Ago', fmtN(r.patients_two_years_ago));
   if (r.patient_3yr_avg) html += _rowTrend('3-Year Average', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
@@ -1080,8 +1100,8 @@ function _udTabOperations() {
   html += _row('Dialysis Stations/Chairs', r.number_of_chairs ? fmtN(r.number_of_chairs) : (r.stations ? fmtN(r.stations) : null));
   html += _row('Estimated Capacity', r.estimated_capacity ? fmtN(r.estimated_capacity) + ' patients' : (r.max_patient_capacity ? fmtN(r.max_patient_capacity) + ' patients' : null));
   html += _rowHtml('Capacity Utilization', r.capacity_utilization_pct != null ? _utilBar(Number(r.capacity_utilization_pct)) : null);
-  if (r.latest_estimated_patients && r.number_of_chairs) {
-    html += _row('Patients / Chair', (Number(r.latest_estimated_patients) / Number(r.number_of_chairs)).toFixed(1));
+  if (bestPatientCount && r.number_of_chairs) {
+    html += _row('Patients / Chair', (bestPatientCount / Number(r.number_of_chairs)).toFixed(1));
   }
   html += _row('Operator', r.operator_name);
   html += _row('Chain', r.chain_organization);
