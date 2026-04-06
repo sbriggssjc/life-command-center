@@ -9,7 +9,7 @@ Currently AT the limit. A 13th file = broken deployment = production 404.
 
 ## Rules
 
-0. NEVER set LCC_API_KEY in Vercel env vars — no frontend auth exists yet; setting it causes 401s on all endpoints
+0. LCC_API_KEY is set in Vercel env vars for Power Automate auth. The frontend works without auth via dual-mode transitional fallback (dev env only). Do NOT change LCC_ENV to production/staging until frontend JWT auth is implemented.
 1. NEVER create new .js files directly in /api/
 2. Add new endpoints as sub-routes (use ?action= or ?_route= query param patterns)
 3. New utility/handler code goes in /api/_shared/ or /api/_handlers/

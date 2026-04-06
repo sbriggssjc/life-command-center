@@ -3,9 +3,14 @@
 // Life Command Center — Phase 1: Workspace, Roles, and Policy Foundation
 // ============================================================================
 //
-// Supports two auth modes:
+// Supports three auth modes:
 //   1. Supabase JWT (Authorization: Bearer <jwt>) — production mode
-//   2. API key (X-LCC-Key header) — development/internal mode
+//   2. API key (X-LCC-Key header) — Power Automate / external integrations
+//   3. Transitional dev fallback — unauthenticated frontend in development env
+//
+// DUAL MODE: LCC_API_KEY can be set while the frontend still works without auth.
+// Power Automate sends x-lcc-key header → validated via path 2.
+// Frontend sends no credentials → falls through to path 3 (dev only).
 //
 // Usage in serverless handlers:
 //   import { authenticate, requireRole, requireWorkspace } from './_shared/auth.js';
@@ -238,57 +243,75 @@ export async function authenticate(req, res) {
     return null;
   }
 
-  // 2. Try API key (dev/internal)
+  // 2. Try API key (dev/internal — used by Power Automate and other integrations)
   if (apiKey) {
     if (!verifyApiKey(apiKey)) {
       res.status(401).json({ error: 'Invalid API key' });
       return null;
     }
+    // Try to resolve user from identity headers (x-lcc-user-id / x-lcc-user-email)
     const user = await resolveDevUser(req);
     if (user) return user;
-    res.status(401).json({ error: 'Valid API key but user not found' });
-    return null;
-  }
-
-  // 3. Transitional: if LCC_API_KEY is not configured, no client-side auth
-  //    mechanism exists yet. Allow through with a default owner user so the
-  //    frontend (which sends no credentials) can load data.
-  //    Once LCC_API_KEY is set, this fallback stops and real auth is enforced.
-  //    HARDENED: Only permitted in development environment. Production and
-  //    staging always require real authentication.
-  if (!LCC_API_KEY) {
-    if (LCC_ENV === 'production' || LCC_ENV === 'staging') {
-      res.status(401).json({ error: 'Authentication required. LCC_API_KEY must be configured in production/staging.' });
-      return null;
-    }
-    res.setHeader('X-LCC-Auth-Warning', 'transitional-no-api-key');
-    // Try to resolve user from ops DB if headers are present
+    // No identity headers — fall back to first owner (typical for automation callers)
     if (OPS_SUPABASE_URL) {
-      const devUser = await resolveDevUser(req);
-      if (devUser) return devUser;
-      // No headers — look up the first owner in the ops DB (single-user setup)
-      const firstOwner = await resolveFirstOwner();
-      if (firstOwner) return firstOwner;
+      const owner = await resolveFirstOwner();
+      if (owner) {
+        owner._api_key_auth = true;
+        return owner;
+      }
     }
-    // Fall back to default owner user
+    // Last resort: synthetic automation user so the call doesn't fail
     return {
-      id: 'default-dev-user',
-      email: 'dev@local',
-      display_name: 'Dev User',
+      id: 'api-key-user',
+      email: 'automation@lcc',
+      display_name: 'API Automation',
       avatar_url: null,
       auth_id: null,
+      _api_key_auth: true,
       _transitional: true,
       memberships: [{
         workspace_id: 'default-workspace',
         workspace_name: 'Default',
         workspace_slug: 'default',
-        role: 'owner'
+        role: 'operator'
       }]
     };
   }
 
-  res.status(401).json({ error: 'Authentication required. Provide Authorization header or X-LCC-Key.' });
-  return null;
+  // 3. Transitional dev fallback — DUAL MODE
+  //    In development: allow unauthenticated frontend requests through even when
+  //    LCC_API_KEY is set (the key is needed for Power Automate / external callers).
+  //    Production and staging always require real authentication.
+  if (LCC_ENV === 'production' || LCC_ENV === 'staging') {
+    res.status(401).json({ error: 'Authentication required. Provide Authorization header or X-LCC-Key.' });
+    return null;
+  }
+
+  // Development mode — transitional passthrough for the frontend
+  res.setHeader('X-LCC-Auth-Warning', 'transitional-dev-fallback');
+  // Try to resolve user from ops DB if headers are present
+  if (OPS_SUPABASE_URL) {
+    const devUser = await resolveDevUser(req);
+    if (devUser) return devUser;
+    // No headers — look up the first owner in the ops DB (single-user setup)
+    const firstOwner = await resolveFirstOwner();
+    if (firstOwner) return firstOwner;
+  }
+  // Fall back to default owner user
+  return {
+    id: 'default-dev-user',
+    email: 'dev@local',
+    display_name: 'Dev User',
+    avatar_url: null,
+    auth_id: null,
+    _transitional: true,
+    memberships: [{
+      workspace_id: 'default-workspace',
+      workspace_name: 'Default',
+      workspace_slug: 'default',
+      role: 'owner'
+    }]
+  };
 }
 
 // ============================================================================
@@ -392,13 +415,4 @@ export function visibilityFilter(user, workspaceId) {
  */
 export function handleCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers',
-    'Content-Type, Authorization, Prefer, X-LCC-Key, X-LCC-User-Id, X-LCC-User-Email, X-LCC-Workspace'
-  );
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return true;
-  }
-  return false;
-}
+  res.setHe
