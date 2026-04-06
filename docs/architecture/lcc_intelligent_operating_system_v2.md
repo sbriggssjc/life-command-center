@@ -16,6 +16,66 @@ LCC is the **operating cockpit** for a net lease investment sales brokerage. It 
 - Every action you take feeds back into the system and makes it smarter
 - Microsoft 365 apps (Outlook, Teams, To Do, Calendar) become extensions of LCC — not separate tools you switch to
 
+---
+
+## 1.1 Business Model: How Revenue Is Produced
+
+All system design must be grounded in how this brokerage actually generates revenue. The production engine has two sides:
+
+### Seller Side (Primary Revenue Driver)
+
+The core business is **sell-side, listing-driven production** — winning exclusive assignments to sell net lease properties in government-leased and dialysis/kidney care categories.
+
+**Lead-to-Revenue Timeline:**
+- Average **38 months** from first email/touchpoint to first BOV or buy-need response
+- Business development is a **long-cycle nurture game** — years of consistent touchpoints that build familiarity and trust
+- Revenue events are triggered by the **client's inbound action** after receiving months/years of outbound BD — they call back with a problem, a disposition need, a request for a BOV or comps
+- The team does not cold-call aggressively — they build market authority through consistent presence and expertise delivery
+
+**Seller Touchpoint Cadence:**
+- **New leads (first 6 months):** 7 touchpoints minimum
+- **Active accounts (ongoing):** ~4 touchpoints per year average
+- **Top repeat developers/owners:** Monthly or bi-weekly touches
+- **One-off owners / prior owners:** Lower frequency, but still in the rotation
+
+**Touchpoint Types (Outbound BD):**
+- Capital markets update emails (personalized or segment-targeted)
+- Voicemails ("checking in" — designed to prompt inbound response)
+- Listing announcement emails (new assignments)
+- Closing announcement emails (proof of execution)
+- Quarterly capital markets update reports (by sector: government, dialysis)
+- Direct outreach when ownership research reveals an opportunity
+- BOV/valuation delivery when requested
+
+**Conversion Trigger:** The seller eventually responds — they have a problem, a portfolio rebalancing need, a 1031 deadline, a capital event, or they're simply ready. When they call back, the team must be ready to deliver a BOV within days, not weeks.
+
+### Buyer Side (Deal Velocity Driver)
+
+Buyers are cultivated by **showing them early looks at new listings** before or at market launch. This serves two purposes:
+1. Accelerates deal velocity on active listings (faster buyer, faster close, faster fee)
+2. Builds buyer relationships that generate repeat deal flow and market intelligence
+
+**Buyer BD Model:**
+- Active buyer list segmented by property type, geography, and cap rate tolerance
+- New listing announcements sent to targeted buyer segments
+- OM (Offering Memorandum) distribution to qualified buyers
+- Follow-up on OM downloads and inquiry responses
+- Showing coordination and offer management
+
+### What This Means for LCC
+
+**Strategic actions** = Anything that advances a BOV opportunity, secures a listing, or closes a deal. These are the revenue events.
+
+**Important actions** = Business development touchpoints that maintain the 38-month pipeline. Every skipped touchpoint is a future listing opportunity that goes to a competitor.
+
+**Urgent actions** = Day-to-day email responses, ad hoc deal requests, answering inbound questions on active listings, pipeline management. These feel urgent but are operational — they happen in response to work already in motion.
+
+**The fundamental design principle:** LCC must ensure the team is executing BD touchpoints and research pipeline work EVERY DAY — not just when the inbox is empty. The inbox will never be empty. The system must carve out time for strategic and important work by surfacing it above the reactive flow.
+
+---
+
+## 1.2 The Problem: 10+ Disconnected Windows
+
 The team currently works across **10+ disconnected windows** every day:
 
 | Window | What You Do There | Time Spent |
@@ -45,18 +105,29 @@ The team currently works across **10+ disconnected windows** every day:
 
 You open LCC. The homepage doesn't show you stats. It shows you **your day, structured by strategic value:**
 
-**STRATEGIC — Do First (Revenue Actions)**
-- "DaVita Palmdale: Craig Tomlinson responded to your offer. His counter questions the 10yr BTS metrics. [View email] [Draft response] [Call Craig]"
-- "GSA Federal Building, Dallas: Ownership research complete. Owner is Boyd Watterson Asset Mgmt (LLC). Engagement score: 72. Last call: 18 days ago. [View dossier] [Draft outreach] [Create pursuit]"
+**STRATEGIC — Do First (Securing & Executing Revenue)**
+These are active deal and listing pursuit actions. BOV delivery, listing commencement, offer response, closing execution. Revenue is on the line.
 
-**IMPORTANT — Do Second (Pipeline & Relationships)**
-- "Farhan Kabani (CBRE Debt) followed up on Fresenius debt questions. Last touch: 2 days ago. [View email] [Draft reply]"
-- "3 dialysis clinics in your target market gained 10%+ patients month-over-month. [View growth report] [Generate pursuit list]"
-- "Contact touchpoint overdue: Mike Reynolds (American Realty Capital) — 22 days since last call, engagement score 68. [Call] [Draft email]"
+- "DaVita Palmdale: Craig Tomlinson responded to your offer counter. 4 attachments. [View email] [Draft response] [Call Craig]"
+- "BOV Request: Boyd Watterson needs a valuation on the GSA Federal Building, Dallas by Friday. [Start BOV] [Pull comps] [View ownership research]"
+- "New listing assignment: Fresenius Dallas signed. Commence marketing. [Create listing launch sequence] [Generate buyer list] [Draft announcement]"
 
-**URGENT — Do Third (Operational)**
-- "5 inbox items need triage (2 flagged today)"
-- "Salesforce: 3 open tasks due this week"
+**IMPORTANT — Do Second (Business Development & Pipeline Building)**
+These are the touchpoints and research that feed the 38-month pipeline. Skipping these means future listings go to competitors.
+
+- "Seller BD: 4 top-tier accounts due for monthly touchpoint. [View list] [Draft capital markets updates] [Generate call sheet]"
+- "New leads: 3 new owners identified from research pipeline. 0 touchpoints. [Draft first-touch emails] [Create pursuit records]"
+- "Buyer outreach: 7 OM downloaders not yet called across 2 active listings. [Call list] [Draft follow-ups]"
+- "Research pipeline: 5 ownership research items older than 7 days. Completing these unlocks 3 pursuit candidates. [Review queue]"
+- "3 dialysis clinics in target market gained 10%+ patients MoM. [View growth report] [Research ownership]"
+
+**URGENT — Do Third (Respond & Process)**
+These are inbound responses, ad hoc requests, and operational items. They feel urgent but they're reactive — the system handles them AFTER strategic and important work is addressed.
+
+- "5 inbox items need triage — 2 are deal-related (flagged by scoring engine)"
+- "Farhan Kabani (CBRE Debt) followed up on Fresenius debt questions. [View email] [Draft reply]"
+- "Salesforce: 3 open tasks due this week. [View tasks]"
+- "Seller report for DaVita Palmdale due Friday. [Generate report]"
 
 Each item has **one-click actions** — not a chat prompt, but direct buttons that execute work.
 
@@ -73,15 +144,29 @@ LCC monitors all research pipelines (Gov ownership, Dia clinic, RCM leads, LoopN
 
 **Daily target surfaced:** "Lead generation: 2 new leads researched today (target: 3/day, 15/week)"
 
-#### 2. Business Development Calls & Touchpoints
-LCC tracks call/email cadence against targets and surfaces **who to call today** based on strategic value, not just recency:
+#### 2. Seller BD Touchpoints (The 38-Month Pipeline)
+LCC manages the long-cycle seller nurture engine. Every owner/seller contact has a touchpoint cadence target, and LCC ensures you never fall behind:
 
-- "BD Calls today: 0 of 5 target. Here are your recommended calls:"
-  1. "Boyd Watterson (GSA Federal Bldg owner) — ownership research just completed, warm introduction window. [Call] [Draft intro email]"
-  2. "Mike Reynolds (ARC) — engagement score 68, last call 22 days ago, historically responsive on Tuesdays. [Call] [View relationship brief]"
-  3. "Dr. James Chen (Fresenius regional) — 3 clinics in growth markets, no prior contact. [Research] [Draft cold outreach]"
+**New Leads (first 6 months — 7 touch target):**
+- "3 new seller leads added in last 30 days have 0 touchpoints. First touch overdue. [View leads] [Draft capital markets email] [Generate call list]"
+- "2 leads at touch 3 of 7 — next touch due this week. [View contacts] [Draft personalized email]"
 
-**Weekly cadence tracker:** "This week: 12/25 calls, 8/15 emails, 2/5 meetings. Pipeline touchpoints: 18 of 30 target."
+**Active Accounts (~4/year cadence):**
+- "12 accounts due for quarterly touchpoint. Last touch > 90 days. Sorted by engagement score:"
+  1. "Boyd Watterson Asset Mgmt — 3 government assets, last touch 95 days. [Draft capital markets update] [Call] [Send quarterly report]"
+  2. "American Realty Capital — prior buyer, 2 assets in target market, last touch 110 days. [Draft email] [Call]"
+
+**Top Repeat Developers (monthly/bi-weekly):**
+- "4 top-tier accounts due for monthly touch:"
+  1. "DaVita Corporate RE — active relationship, last touch 18 days. [Draft listing update] [Call]"
+  2. "Fresenius Medical — 12 clinics in pipeline, last touch 22 days. [Draft market update] [Call]"
+
+**Mass Marketing Queue:**
+- "Quarterly capital markets report (Government) ready to send. 145 contacts in segment. [Preview] [Send] [Schedule]"
+- "New listing announcement: [Property] — buyer list: 230 contacts. Seller list: 85 contacts. [Preview buyer blast] [Preview seller announcement] [Send both]"
+- "Closing announcement: [Property] — 310 contacts. [Preview] [Send]"
+
+**Cadence Dashboard:** "This week: 8/15 BD touchpoints completed. New leads: 2/3 daily target. Accounts overdue for touch: 12. Mass sends: quarterly report pending."
 
 #### 3. Research Pipeline Closure
 LCC tracks every research item from creation to completion to outreach, surfacing bottlenecks:
@@ -92,18 +177,30 @@ LCC tracks every research item from creation to completion to outreach, surfacin
 
 **Goal:** Zero research items older than 7 days. Every completed research item auto-generates a pursuit recommendation.
 
-#### 4. Listing Marketing & Outreach
-For active listings, LCC drives **outbound marketing cadence** to ensure enough buyer/broker eyes see every offering:
+#### 4. Listing Marketing & Buyer Outreach
+For active listings, LCC drives **outbound buyer/broker outreach** to maximize deal velocity. Buyers are cultivated by showing them early looks at new listings — this is the primary buyer BD mechanism.
 
-- "Active listings marketing status:"
-  - "DaVita Palmdale: 12 OM downloads, 3 showings, 1 offer. Buyer outreach this week: 8/20 target. [View buyer list] [Generate next outreach batch] [Draft broker blast]"
-  - "Fresenius Dallas: Listed 5 days ago. 4 OM downloads, 0 showings. Below pace. [Increase outreach] [Review buyer targeting] [Draft follow-up to OM downloaders]"
+**Listing Launch Sequence (automated by LCC):**
+1. Pre-market: Identify targeted buyer segment (by property type, geography, cap rate)
+2. Early look: Send preview to top 20 buyers before full market launch
+3. Full launch: OM distribution to full buyer list + broker community
+4. Follow-up: Track OM downloads → call downloaders within 48 hours
+5. Weekly: Follow up on non-responsive downloaders, report activity to seller
 
-- "Listing marketing tasks due:"
-  - "Weekly seller report for DaVita Palmdale due Friday. [Generate report] [Draft email]"
-  - "Follow up with 3 OM downloaders who haven't responded in 7 days. [View list] [Draft batch follow-up]"
+**Active Listings Dashboard:**
+- "DaVita Palmdale: 12 OM downloads, 3 showings, 1 offer. 8 downloaders not yet called. [Call list] [Draft follow-up batch] [Seller report due Friday]"
+- "Fresenius Dallas: Listed 5 days ago. 4 OM downloads, 0 showings. Below pace — only 35 of 150 target buyers contacted. [Send next batch] [Review targeting] [Draft broker blast]"
 
-**Weekly target:** Every active listing gets 20+ targeted broker/buyer contacts per week and a weekly seller report.
+**OM Downloader Follow-Up:**
+- "7 OM downloaders across 2 listings haven't been called. Sorted by buyer quality:"
+  1. "Marcus & Millichap (Investor) — downloaded DaVita Palmdale OM 3 days ago. [Call] [Draft email]"
+  2. "VEREIT (REIT) — downloaded both OMs, no response. [Call] [Draft email]"
+
+**Seller Communication:**
+- "Weekly seller report for DaVita Palmdale due Friday. Activity data ready. [Generate report] [Draft email to seller]"
+- "Closing announcement ready for [completed deal]. 310 contacts in distribution. [Preview] [Send]"
+
+**Target:** Every active listing gets 20+ targeted buyer/broker outreach contacts per week. Every OM download gets a follow-up call within 48 hours. Every seller gets a weekly report.
 
 #### 5. Deal Execution & Close Management
 For deals under contract, LCC tracks critical dates and ensures nothing falls through:
