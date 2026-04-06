@@ -359,8 +359,11 @@ export const contactsHandler = withErrorHandler(async function handler(req, res)
       case 'classify':                return classifyContact(req, res, user, id);
       case 'merge':                   return mergeContacts(req, res, user);
       case 'dismiss_merge':           return dismissMerge(req, res, user);
+      case 'send_teams':             return sendTeamsMessage(req, res, user, id);
+      case 'send_webex':             return sendWebexMessage(req, res, user, id);
+      case 'send_sms':               return sendSmsMessage(req, res, user, id);
       default:
-        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, ingest_calendar_contacts, detect_duplicates, classify, merge, dismiss_merge' });
+        return res.status(400).json({ error: 'POST action: ingest, ingest_webex_calls, ingest_calendar_contacts, detect_duplicates, classify, merge, dismiss_merge, send_teams, send_webex, send_sms' });
     }
   }
 

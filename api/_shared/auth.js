@@ -254,7 +254,13 @@ export async function authenticate(req, res) {
   //    mechanism exists yet. Allow through with a default owner user so the
   //    frontend (which sends no credentials) can load data.
   //    Once LCC_API_KEY is set, this fallback stops and real auth is enforced.
+  //    HARDENED: Only permitted in development environment. Production and
+  //    staging always require real authentication.
   if (!LCC_API_KEY) {
+    if (LCC_ENV === 'production' || LCC_ENV === 'staging') {
+      res.status(401).json({ error: 'Authentication required. LCC_API_KEY must be configured in production/staging.' });
+      return null;
+    }
     res.setHeader('X-LCC-Auth-Warning', 'transitional-no-api-key');
     // Try to resolve user from ops DB if headers are present
     if (OPS_SUPABASE_URL) {

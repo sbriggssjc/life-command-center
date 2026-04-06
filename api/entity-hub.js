@@ -35,7 +35,8 @@ export default async function handler(req, res) {
     'hot_leads', 'messages_teams', 'messages_webex', 'messages_sms',
     'message_templates', 'ingest', 'ingest_webex_calls',
     'ingest_calendar_contacts', 'detect_duplicates', 'classify',
-    'merge', 'dismiss_merge', 'update'
+    'merge', 'dismiss_merge', 'update',
+    'send_teams', 'send_webex', 'send_sms'
   ]);
 
   const entityActions = new Set([
