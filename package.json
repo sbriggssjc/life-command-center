@@ -16,7 +16,8 @@
     "ai:apply-low-cost": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_LOW_COST_PRESET.env.example --target .env.local",
     "ai:apply-manual": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example --target .env.local",
     "test": "node --test test/",
-    "test:watch": "node --test --watch test/"
+    "test:watch": "node --test --watch test/",
+    "check:functions": "node -e \"const c=require('fs').readdirSync('api').filter(f=>f.endsWith('.js')).length; console.log(c+'/12 serverless functions'); if(c>12){console.error('ERROR: exceeds Vercel Hobby 12-function limit');process.exit(1)}\""
   },
   "engines": {
     "node": ">=20.0.0"

@@ -2555,6 +2555,7 @@ async function loadHotLeads() {
     if (r.ok) {
       const d = await r.json();
       const leads = d.hot_leads || [];
+      hotLeadsCache = leads; // cache for Copilot context
       let html = '<div style="margin-bottom:12px"><h3 style="margin:0;color:var(--text)">Hot Leads</h3><div style="font-size:12px;color:var(--text3)">Business contacts ranked by engagement score (calls + emails + meetings)</div></div>';
       html += '<button class="act-btn" style="margin-bottom:12px" onclick="mktSource=\'unified\';ucPage=0;loadAndRenderUC()">&#x2190; Back to Contacts</button>';
       if (leads.length === 0) {
@@ -5789,6 +5790,7 @@ setTimeout(applySettings, 100);
 // AI COPILOT
 // ============================================================
 let copilotOpen = false;
+let hotLeadsCache = []; // populated by loadHotLeads, used by buildCopilotContext
 let copilotHistory = [];
 
 function toggleCopilot() {
@@ -5803,6 +5805,62 @@ function toggleCopilot() {
 function sendCopilotSuggestion(text) {
   const input = document.getElementById('copilotInput');
   if (input) { input.value = text; sendCopilotMessage(); }
+}
+
+/**
+ * Invoke a structured Copilot action via the action dispatcher.
+ * Used by UI buttons, suggestion chips, and programmatic triggers.
+ * @param {string} actionName - registered action from copilot_action_registry.json
+ * @param {object} params - action parameters
+ * @param {boolean} confirmed - if true, bypasses confirmation prompt for write actions
+ */
+async function sendCopilotAction(actionName, params = {}, confirmed = false) {
+  if (!copilotOpen) toggleCopilot();
+
+  const label = actionName.replace(/_/g, ' ');
+  appendCopilotMsg(`Run action: ${label}`, 'user');
+
+  const typingId = 'typing-' + Date.now();
+  appendCopilotMsg('Running...', 'bot typing', typingId);
+
+  try {
+    const res = await fetch(CHAT_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-LCC-Workspace': LCC_USER.workspace_id || '',
+      },
+      body: JSON.stringify({
+        copilot_action: actionName,
+        params: { ...params, _confirmed: confirmed },
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    const typingEl = document.getElementById(typingId);
+    if (typingEl) typingEl.remove();
+
+    if (data.requires_confirmation) {
+      // Show confirmation prompt with an action button
+      const msg = data.message || `Action "${actionName}" requires confirmation.`;
+      appendCopilotMsg(msg, 'bot');
+      appendCopilotMsg(
+        `<div class="copilot-suggestions" style="margin-top:6px"><button class="copilot-suggestion" onclick="sendCopilotAction('${actionName}', ${JSON.stringify(params).replace(/'/g, '\\\'')}, true)">Confirm and execute</button></div>`,
+        'bot html'
+      );
+      return;
+    }
+
+    // Format response based on action type
+    const reply = data.response || data.message || (data.data ? `Retrieved ${Array.isArray(data.data) ? data.data.length : 1} result(s).` : 'Done.');
+    appendCopilotMsg(reply, 'bot');
+    copilotHistory.push({ role: 'assistant', content: reply });
+
+  } catch (e) {
+    const typingEl = document.getElementById(typingId);
+    if (typingEl) typingEl.remove();
+    appendCopilotMsg(`Action failed: ${e.message}`, 'bot');
+  }
 }
 
 async function sendCopilotMessage() {
@@ -5862,9 +5920,10 @@ function appendCopilotMsg(text, cls, id) {
   const container = document.getElementById('copilotMessages');
   if (!container) return;
   const div = document.createElement('div');
-  div.className = 'copilot-msg ' + cls;
+  const isRawHtml = cls && cls.includes('html');
+  div.className = 'copilot-msg ' + cls.replace('html', '').trim();
   if (id) div.id = id;
-  div.innerHTML = formatCopilotText(text);
+  div.innerHTML = isRawHtml ? text : formatCopilotText(text);
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
@@ -6009,6 +6068,21 @@ function buildCopilotContext() {
       research_outcomes_count: (diaData.researchOutcomes || []).length,
       movers_up_count: (diaData.moversUp || []).length,
       movers_down_count: (diaData.moversDown || []).length
+    };
+  }
+
+  // Hot leads summary for prospecting context (loaded by contacts tab)
+  if (typeof hotLeadsCache !== 'undefined' && Array.isArray(hotLeadsCache) && hotLeadsCache.length) {
+    ctx.hot_leads_summary = {
+      count: hotLeadsCache.length,
+      top_5: hotLeadsCache.slice(0, 5).map(c => ({
+        name: c.full_name,
+        company: c.company_name,
+        score: c.engagement_score,
+        heat: c.heat || (c.engagement_score >= 60 ? 'hot' : c.engagement_score >= 30 ? 'warm' : 'cool'),
+        last_call: c.last_call_date || 'never',
+        last_email: c.last_email_date || 'never'
+      }))
     };
   }
 

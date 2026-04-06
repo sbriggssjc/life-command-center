@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pre-commit hook: verify Vercel Hobby plan 12-function limit
+# Install: cp .github/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or:      ln -sf ../../.github/hooks/pre-commit .git/hooks/pre-commit
+
+LIMIT=12
+COUNT=$(ls api/*.js 2>/dev/null | wc -l | tr -d ' ')
+
+if [ "$COUNT" -gt "$LIMIT" ]; then
+  echo ""
+  echo "ERROR: api/ has $COUNT .js files — exceeds Vercel Hobby limit of $LIMIT."
+  echo ""
+  echo "  Vercel will reject this deployment. Consolidate functions before committing."
+  echo "  See LCC_ARCHITECTURE_STRATEGY.md and .github/AI_INSTRUCTIONS.md for guidance."
+  echo ""
+  echo "  Current files:"
+  ls api/*.js
+  echo ""
+  exit 1
+fi

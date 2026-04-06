@@ -469,6 +469,9 @@ const ACTION_REGISTRY = {
   draft_outreach_email:        { tier: 1, handler: 'draft_outreach', confirm: 'explicit' },
   draft_seller_update_email:   { tier: 1, handler: 'draft_seller_update', confirm: 'explicit' },
 
+  // Tier 2: Microsoft To Do task creation (Wave 2)
+  create_todo_task:            { tier: 2, handler: 'create_todo_task', confirm: 'explicit' },
+
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
   triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
@@ -502,6 +505,7 @@ async function dispatchAction(actionName, params, user, workspaceId) {
       case 'prospecting_brief':   return handleProspectingBrief(params, user, workspaceId);
       case 'draft_outreach':      return handleDraftOutreachEmail(params, user, workspaceId);
       case 'draft_seller_update': return handleDraftSellerUpdate(params, user, workspaceId);
+      case 'create_todo_task':    return createTodoTask(params, user, workspaceId);
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
   }
@@ -550,6 +554,111 @@ async function executeReadAction(spec, params, user, workspaceId) {
     data: result.data,
     count: result.count || undefined
   };
+}
+
+// ---------------------------------------------------------------------------
+// MICROSOFT TO DO — create tasks via Graph API (Wave 2)
+// ---------------------------------------------------------------------------
+
+const GRAPH_API_URL = 'https://graph.microsoft.com/v1.0';
+
+async function createTodoTask(params, user, workspaceId) {
+  const graphToken = process.env.MS_GRAPH_TOKEN;
+  if (!graphToken) {
+    return { ok: false, error: 'MS_GRAPH_TOKEN not configured. Required for Microsoft To Do integration.' };
+  }
+
+  const { title, body, due_date, importance, list_name, lcc_action_id } = params || {};
+  if (!title) return { ok: false, error: 'title is required' };
+
+  // Resolve list ID — default to "Work" list, or find by name
+  let listId = null;
+  const targetList = list_name || 'Work';
+
+  try {
+    const listsRes = await fetch(`${GRAPH_API_URL}/me/todo/lists`, {
+      headers: { 'Authorization': `Bearer ${graphToken}` }
+    });
+    if (!listsRes.ok) {
+      return { ok: false, error: `Graph API error fetching lists: ${listsRes.status}` };
+    }
+    const listsData = await listsRes.json();
+    const lists = listsData.value || [];
+    const match = lists.find(l => l.displayName.toLowerCase() === targetList.toLowerCase());
+    listId = match?.id || lists[0]?.id;
+    if (!listId) {
+      return { ok: false, error: 'No To Do lists found. Create a list in Microsoft To Do first.' };
+    }
+  } catch (e) {
+    return { ok: false, error: `Failed to fetch To Do lists: ${e.message}` };
+  }
+
+  // Build the task payload
+  const taskBody = {
+    title,
+    importance: importance === 'urgent' ? 'high' : importance === 'low' ? 'low' : 'normal',
+  };
+
+  if (body || lcc_action_id) {
+    const bodyParts = [];
+    if (body) bodyParts.push(body);
+    if (lcc_action_id) bodyParts.push(`[LCC Action: ${lcc_action_id}]`);
+    taskBody.body = { content: bodyParts.join('\n\n'), contentType: 'text' };
+  }
+
+  if (due_date) {
+    taskBody.dueDateTime = {
+      dateTime: new Date(due_date).toISOString(),
+      timeZone: 'America/Chicago'
+    };
+  }
+
+  try {
+    const createRes = await fetch(`${GRAPH_API_URL}/me/todo/lists/${listId}/tasks`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${graphToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(taskBody)
+    });
+
+    if (!createRes.ok) {
+      const errBody = await createRes.text().catch(() => '');
+      return { ok: false, error: `Failed to create To Do task: ${createRes.status}`, detail: errBody };
+    }
+
+    const task = await createRes.json();
+
+    // Log activity if we have a linked LCC action
+    if (lcc_action_id && workspaceId) {
+      await opsQuery('POST', 'activity_events', {
+        workspace_id: workspaceId,
+        user_id: user?.id,
+        event_type: 'todo_task_created',
+        source: 'copilot',
+        title: `To Do task created: ${title}`,
+        metadata: { todo_task_id: task.id, list_name: targetList, lcc_action_id }
+      });
+    }
+
+    return {
+      ok: true,
+      action: 'create_todo_task',
+      task: {
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        importance: task.importance,
+        list: targetList,
+        due: task.dueDateTime?.dateTime || null,
+        web_url: task.webUrl || null
+      },
+      note: 'Task created in Microsoft To Do.'
+    };
+  } catch (e) {
+    return { ok: false, error: `Failed to create To Do task: ${e.message}` };
+  }
 }
 
 // ---------------------------------------------------------------------------
