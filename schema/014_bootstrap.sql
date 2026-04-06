@@ -12,8 +12,8 @@
 insert into workspaces (id, name, slug)
 values (
   'a0000000-0000-0000-0000-000000000001',
-  'Briggsland Capital',
-  'briggsland'
+  'Northmarq - Briggs',
+  'northmarq-briggs'
 )
 on conflict (slug) do nothing;
 
@@ -61,4 +61,4 @@ select 'Bootstrap complete' as status,
 from workspace_memberships wm
 join workspaces w on w.id = wm.workspace_id
 join users u on u.id = wm.user_id
-where w.slug = 'briggsland';
+where w.slug = 'northmarq-briggs';

@@ -709,6 +709,19 @@ function inboxItemHTML(item, idx) {
   html += `<span>${freshnessHTML(item.created_at)}</span>`;
   html += '</div>';
 
+  // Body preview — show excerpt when available
+  const bodyText = item.body || item.body_preview || '';
+  if (bodyText) {
+    const previewText = bodyText.substring(0, 160).replace(/\n/g, ' ');
+    html += `<div class="q-item-preview" style="font-size:12px;color:var(--text3);margin:4px 0 6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(previewText)}</div>`;
+  }
+
+  // Open in Outlook link
+  const emailLink = typeof outlookWebLink === 'function' ? outlookWebLink(item) : (item.external_url || '');
+  if (emailLink) {
+    html += `<a href="${typeof safeHref === 'function' ? safeHref(emailLink) : emailLink}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-bottom:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>`;
+  }
+
   // Normalized quick actions
   html += '<div class="q-actions">';
   if (item.status === 'new') {

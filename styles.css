@@ -288,6 +288,11 @@ tr.clickable-row:hover td { background: var(--s2); }
 .msg-tab { flex: 1; padding: 8px; text-align: center; font-size: 13px; font-weight: 500; color: var(--text2); border: none; background: none; border-radius: 8px; cursor: pointer; }
 .msg-tab.active { background: var(--s1); color: var(--text); }
 
+/* Pipeline tabs (My Work / Team Queue toggle) */
+.pipeline-tabs { display: flex; gap: 0; margin-bottom: 16px; background: var(--s2); border-radius: 10px; padding: 3px; }
+.pipeline-tab { flex: 1; padding: 10px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text2); border: none; background: none; border-radius: 8px; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.pipeline-tab.active { background: var(--accent); color: #fff; }
+
 /* AI Copilot */
 .copilot-fab { position: fixed; bottom: calc(70px + var(--safe-bottom)); right: 16px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--purple)); border: none; color: #fff; font-size: 22px; cursor: pointer; z-index: 150; box-shadow: 0 4px 16px rgba(108,140,255,0.4); display: flex; align-items: center; justify-content: center; transition: transform 0.2s, box-shadow 0.2s; }
 .copilot-fab:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(108,140,255,0.5); }

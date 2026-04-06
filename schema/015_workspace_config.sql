@@ -8,7 +8,7 @@
 alter table workspaces
   add column if not exists config jsonb not null default '{}';
 
--- Seed Stage 1 feature flags for Briggsland Capital
+-- Seed Stage 1 feature flags for Northmarq - Briggs
 update workspaces
 set config = jsonb_build_object(
   'feature_flags', jsonb_build_object(
@@ -18,7 +18,7 @@ set config = jsonb_build_object(
   )
 ),
 updated_at = now()
-where slug = 'briggsland';
+where slug = 'northmarq-briggs';
 
 -- Verify
-select slug, config from workspaces where slug = 'briggsland';
+select slug, config from workspaces where slug = 'northmarq-briggs';
