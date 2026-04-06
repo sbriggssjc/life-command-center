@@ -60,6 +60,60 @@ You open LCC. The homepage doesn't show you stats. It shows you **your day, stru
 
 Each item has **one-click actions** — not a chat prompt, but direct buttons that execute work.
 
+### Proactive Business Development Cadence
+
+The command queue is not just reactive (respond to emails, clear tasks). It **proactively structures the day** around production cadence targets — even when nothing is overdue and the inbox is empty. Every day, LCC ensures you are advancing these production engines:
+
+#### 1. New Lead Generation
+LCC monitors all research pipelines (Gov ownership, Dia clinic, RCM leads, LoopNet) and surfaces **new leads that need human review and outreach initiation:**
+
+- "3 new government properties identified with lease expirations in 12-18 months. Ownership research pending. [Start research] [View properties]"
+- "RCM pipeline: 5 new LoopNet saves matched to target criteria. 2 have owners in your contact database. [Review leads] [Generate call list]"
+- "CMS data refresh: 4 dialysis clinics in TX/OK added patients this quarter. Not in your pipeline yet. [Create pursuits] [Research ownership]"
+
+**Daily target surfaced:** "Lead generation: 2 new leads researched today (target: 3/day, 15/week)"
+
+#### 2. Business Development Calls & Touchpoints
+LCC tracks call/email cadence against targets and surfaces **who to call today** based on strategic value, not just recency:
+
+- "BD Calls today: 0 of 5 target. Here are your recommended calls:"
+  1. "Boyd Watterson (GSA Federal Bldg owner) — ownership research just completed, warm introduction window. [Call] [Draft intro email]"
+  2. "Mike Reynolds (ARC) — engagement score 68, last call 22 days ago, historically responsive on Tuesdays. [Call] [View relationship brief]"
+  3. "Dr. James Chen (Fresenius regional) — 3 clinics in growth markets, no prior contact. [Research] [Draft cold outreach]"
+
+**Weekly cadence tracker:** "This week: 12/25 calls, 8/15 emails, 2/5 meetings. Pipeline touchpoints: 18 of 30 target."
+
+#### 3. Research Pipeline Closure
+LCC tracks every research item from creation to completion to outreach, surfacing bottlenecks:
+
+- "Research pipeline: 14 ownership items open. 3 are older than 14 days. [View backlog] [Assign oldest 3]"
+- "Gov evidence review: 5 observations awaiting promotion. 2 have high-value ownership matches. [Review queue] [Prioritize by value]"
+- "Dialysis property-clinic linking: 8 pending reviews. Completing these unlocks 3 new pursuit candidates. [Review links]"
+
+**Goal:** Zero research items older than 7 days. Every completed research item auto-generates a pursuit recommendation.
+
+#### 4. Listing Marketing & Outreach
+For active listings, LCC drives **outbound marketing cadence** to ensure enough buyer/broker eyes see every offering:
+
+- "Active listings marketing status:"
+  - "DaVita Palmdale: 12 OM downloads, 3 showings, 1 offer. Buyer outreach this week: 8/20 target. [View buyer list] [Generate next outreach batch] [Draft broker blast]"
+  - "Fresenius Dallas: Listed 5 days ago. 4 OM downloads, 0 showings. Below pace. [Increase outreach] [Review buyer targeting] [Draft follow-up to OM downloaders]"
+
+- "Listing marketing tasks due:"
+  - "Weekly seller report for DaVita Palmdale due Friday. [Generate report] [Draft email]"
+  - "Follow up with 3 OM downloaders who haven't responded in 7 days. [View list] [Draft batch follow-up]"
+
+**Weekly target:** Every active listing gets 20+ targeted broker/buyer contacts per week and a weekly seller report.
+
+#### 5. Deal Execution & Close Management
+For deals under contract, LCC tracks critical dates and ensures nothing falls through:
+
+- "Deals in execution:"
+  - "DaVita Palmdale: PSA signed. Due diligence expires in 12 days. 4 open diligence items. [View checklist] [Draft buyer update]"
+  - "GSA Portland: Financing contingency expires in 5 days. Lender has not confirmed commitment. [Draft lender follow-up] [Escalate to manager]"
+
+**Goal:** Zero missed critical dates. Every deal has a weekly client/buyer update sent.
+
 ### During the Day
 
 As you work, LCC stays ahead of you:
