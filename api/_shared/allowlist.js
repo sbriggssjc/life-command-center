@@ -113,7 +113,6 @@ export const DIA_READ_TABLES = new Set([
   'facility_cost_reports',
   'leases',
   'v_clinic_payer_mix',
-  'v_payer_mix_geo_averages',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)

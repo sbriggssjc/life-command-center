@@ -507,7 +507,6 @@ async function _udRenderOperationsAsync(bodyEl) {
       promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter + '&is_primary=eq.true', limit: 1 }).catch(() => []));
       promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_clinic_payer_mix', '*', { filter: mFilter, limit: 1 }).catch(() => []));
-      promises.push(diaQuery('v_payer_mix_geo_averages', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       // Lease via property_id
       const propId = _udCache.ids?.property_id || _udCache.property?.property_id;
       if (propId) {
@@ -516,9 +515,9 @@ async function _udRenderOperationsAsync(bodyEl) {
         promises.push(Promise.resolve([]));
       }
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, leaseData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], []];
 
     _opsExtraCache = {
       medicare_id: clinicId,
@@ -528,12 +527,11 @@ async function _udRenderOperationsAsync(bodyEl) {
       financialDetail: (financialDetail || [])[0] || null,
       costReports: (costReports || [])[0] || null,
       payerMix: (payerMixData || [])[0] || null,
-      geoPayerMix: (geoPayerData || [])[0] || null,
       lease: (leaseData || [])[0] || null,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, lease: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -842,7 +840,6 @@ function _udTabOperations() {
   const finDetail = ext.financialDetail || {};
   const costRpt = ext.costReports || {};
   const payerMixHcris = ext.payerMix || null;
-  const geoPayerMix = ext.geoPayerMix || null;
   const lease = ext.lease || {};
   const patientHistory = ext.patientHistory || [];
   let html = '';
@@ -988,50 +985,36 @@ function _udTabOperations() {
   html += _rowHtml('Treatments / Year', annualTx ? fmtN(annualTx) + (txLooksPartial ? ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>' : '') : null);
   html += '</div>';
 
-  // Payer Mix — 4-level comparison: National → County Avg → State Avg → This Clinic
+  // Payer Mix — multi-level comparison: HCRIS Actual → Rankings → National Default
+  // Build up to 4 bar datasets: Clinic (HCRIS), Clinic (Rankings), State Avg, National Default
   const payerBars = [];
   const _natl = { label: 'National Default', med: 65, mcd: 20, pvt: 11 };
   _natl.oth = Math.max(0, 100 - _natl.med - _natl.mcd - _natl.pvt);
   payerBars.push(_natl);
 
-  const clinicState = geoPayerMix ? (geoPayerMix.state || r.state || '') : (r.state || '');
-  const clinicCounty = geoPayerMix ? (geoPayerMix.county || r.county || '') : (r.county || '');
+  // State average — use rankings county/state context to label
+  const clinicState = r.state || '';
+  const clinicCounty = r.county || '';
 
-  // County average (from geo view)
-  if (geoPayerMix && geoPayerMix.county_medicare_pct != null) {
-    const cMed = Number(geoPayerMix.county_medicare_pct);
-    const cMcd = Number(geoPayerMix.county_medicaid_pct || 0);
-    const cPvt = Number(geoPayerMix.county_private_pct || 0);
-    const cCount = Number(geoPayerMix.county_clinic_count || 0);
-    payerBars.push({ label: clinicCounty ? clinicCounty + ' Co. Avg' : 'County Avg', med: cMed, mcd: cMcd, pvt: cPvt, oth: Math.max(0, 100 - cMed - cMcd - cPvt), note: cCount + ' clinic' + (cCount !== 1 ? 's' : '') });
-  }
-
-  // State average (from geo view)
-  if (geoPayerMix && geoPayerMix.state_medicare_pct != null) {
-    const sMed = Number(geoPayerMix.state_medicare_pct);
-    const sMcd = Number(geoPayerMix.state_medicaid_pct || 0);
-    const sPvt = Number(geoPayerMix.state_private_pct || 0);
-    const sCount = Number(geoPayerMix.state_clinic_count || 0);
-    payerBars.push({ label: clinicState ? clinicState + ' State Avg' : 'State Avg', med: sMed, mcd: sMcd, pvt: sPvt, oth: Math.max(0, 100 - sMed - sMcd - sPvt), note: sCount + ' clinics' });
-  }
-
-  // HCRIS actual payer mix (revenue-based, from cost reports) — this clinic
+  // HCRIS actual payer mix (revenue-based, from cost reports)
   if (payerMixHcris && payerMixHcris.medicare_pct != null) {
     const hMed = Number(payerMixHcris.medicare_pct);
     const hMcd = Number(payerMixHcris.medicaid_pct || 0);
     const hPvt = Number(payerMixHcris.private_pct || 0);
     payerBars.push({ label: 'This Clinic (HCRIS)', med: hMed, mcd: hMcd, pvt: hPvt, oth: Math.max(0, 100 - hMed - hMcd - hPvt), source: 'revenue' });
-  } else if (r.payer_mix_medicare_pct != null) {
-    // Fallback: rankings payer mix (patient-based)
+  }
+
+  // Rankings payer mix (patient-based, if available)
+  if (r.payer_mix_medicare_pct != null) {
     const rMed = Number(r.payer_mix_medicare_pct);
     const rMcd = Number(r.payer_mix_medicaid_pct || 0);
     const rPvt = Number(r.payer_mix_private_pct || 0);
     payerBars.push({ label: 'This Clinic', med: rMed, mcd: rMcd, pvt: rPvt, oth: Math.max(0, 100 - rMed - rMcd - rPvt) });
   }
 
-  // Determine the "active" payer mix for revenue estimates (prefer clinic-specific > national)
+  // Determine the "active" payer mix for revenue estimates (prefer HCRIS > rankings > national)
   const activePayer = payerBars.length > 1 ? payerBars[payerBars.length - 1] : _natl;
-  const payerIsDefault = activePayer === _natl;
+  const payerIsDefault = payerBars.length === 1;
 
   html += '<div style="margin-top:14px">';
   html += '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;font-weight:600">Payer Mix Comparison</div>';
@@ -1041,9 +1024,9 @@ function _udTabOperations() {
     const isNatl = bar === _natl;
     html += '<div style="margin-bottom:10px">';
     html += '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;display:flex;justify-content:space-between">';
-    html += '<span>' + esc(bar.label) + (bar.source === 'revenue' ? ' <span style="font-size:9px;opacity:0.7">revenue-based</span>' : '') + (bar.note ? ' <span style="font-size:9px;opacity:0.6">(' + esc(bar.note) + ')</span>' : '') + '</span>';
-    if (bar === activePayer && payerIsDefault) html += '<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--text3);color:var(--bg);font-weight:700">In Use</span>';
-    if (bar === activePayer && !payerIsDefault) html += '<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--green);color:var(--bg);font-weight:700">In Use</span>';
+    html += '<span>' + esc(bar.label) + (bar.source === 'revenue' ? ' <span style="font-size:9px;opacity:0.7">revenue-based</span>' : '') + '</span>';
+    if (isNatl && payerIsDefault) html += '<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--text3);color:var(--bg);font-weight:700">In Use</span>';
+    if (!isNatl && bar === activePayer) html += '<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--green);color:var(--bg);font-weight:700">In Use</span>';
     html += '</div>';
     html += '<div style="display:flex;height:14px;border-radius:3px;overflow:hidden;font-size:0">';
     if (bar.med) html += '<div style="width:' + bar.med + '%;background:#3b82f6" title="Medicare ' + bar.med.toFixed(1) + '%"></div>';
