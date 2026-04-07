@@ -14,6 +14,7 @@ import {
   canTransitionAction, actionTransitionEffects, buildTransitionActivity,
   ACTION_TYPES, PRIORITIES, ACTIVITY_CATEGORIES, VISIBILITY_SCOPES, isValidEnum
 } from './_shared/lifecycle.js';
+import { writeTouchpointSignal, writeDealStageSignal } from './_shared/signals.js';
 
 // ── Activities sub-handler (routed via /api/activities → /api/actions?_route=activities) ──
 async function handleActivities(req, res, user, workspaceId) {
@@ -75,6 +76,9 @@ async function handleActivities(req, res, user, workspaceId) {
     if (!result.ok) {
       return res.status(result.status).json({ error: 'Failed to log activity', detail: result.data });
     }
+
+    // Fire-and-forget: write touchpoint signal for the learning loop
+    writeTouchpointSignal(event, user);
 
     return res.status(201).json({ activity: Array.isArray(result.data) ? result.data[0] : result.data });
   }
@@ -248,6 +252,20 @@ export default withErrorHandler(async function handler(req, res) {
         });
         await opsQuery('POST', 'activity_events', activity);
       }
+
+      // Fire-and-forget: write deal_stage_change signal for the learning loop
+      writeDealStageSignal({
+        entity_id: current.entity_id || id,
+        domain: current.domain,
+        user_id: user.id,
+        from_stage: current.status,
+        to_stage: status,
+        metadata: {
+          action_item_id: id,
+          action_type: current.action_type,
+          title: current.title
+        }
+      });
     }
 
     // Assignment change — log it

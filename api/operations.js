@@ -24,6 +24,13 @@
 //   GET  /api/operations?action=unassigned          — unassigned work items
 //   GET  /api/operations?action=watchers            — list watchers
 //
+// TEMPLATE DRAFTS:
+//   GET  /api/operations?_route=draft               — list templates
+//   GET  /api/operations?_route=draft&template_id=X  — get single template
+//   POST /api/operations?_route=draft&action=generate     — generate draft
+//   POST /api/operations?_route=draft&action=batch        — batch draft generation
+//   POST /api/operations?_route=draft&action=record_send  — record a sent draft
+//
 // CHAT:
 //   POST /api/operations?_route=chat               — AI copilot chat
 //
@@ -37,6 +44,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/o
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
+import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
 import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
@@ -53,6 +61,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Chat route (via vercel.json _route=chat)
   if (req.query._route === 'chat') {
     return handleChatRoute(req, res);
+  }
+
+  // Template draft route (via vercel.json _route=draft)
+  if (req.query._route === 'draft') {
+    return handleDraftRoute(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -486,6 +499,13 @@ const ACTION_REGISTRY = {
 
   // Tier 2: Microsoft To Do task creation (Wave 2)
   create_todo_task:            { tier: 2, handler: 'create_todo_task', confirm: 'explicit' },
+
+  // Tier 0: Template engine (Wave 2)
+  list_email_templates:          { method: 'GET', path: 'draft', tier: 0, alias: 'operations?_route=draft' },
+  get_email_template:            { method: 'GET', path: 'draft&template_id=', tier: 0, alias: 'operations?_route=draft&template_id=' },
+  generate_template_draft:       { method: 'POST', path: 'draft&action=generate', tier: 1, confirm: 'lightweight', alias: 'operations?_route=draft&action=generate' },
+  generate_batch_drafts:         { method: 'POST', path: 'draft&action=batch', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=batch' },
+  record_template_send:          { method: 'POST', path: 'draft&action=record_send', tier: 2, confirm: 'explicit', alias: 'operations?_route=draft&action=record_send' },
 
   // Tier 0: AI-powered listing pursuit (Wave 2)
   generate_listing_pursuit_dossier: { tier: 0, handler: 'listing_pursuit_dossier' },
@@ -1672,6 +1692,105 @@ async function fetchOpsContext(workspaceId, userId) {
 // ---------------------------------------------------------------------------
 // CHAT HANDLER
 // ---------------------------------------------------------------------------
+
+// ============================================================================
+// TEMPLATE DRAFT ENGINE — /api/draft → operations?_route=draft
+// ============================================================================
+
+async function handleDraftRoute(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || '';
+
+  // GET — list available templates or get a specific template
+  if (req.method === 'GET') {
+    const { template_id } = req.query;
+
+    if (template_id) {
+      const template = await loadTemplate(template_id);
+      if (!template) return res.status(404).json({ error: `Template "${template_id}" not found` });
+      return res.status(200).json({ template });
+    }
+
+    const templates = await listActiveTemplates();
+    return res.status(200).json({ templates, count: templates.length });
+  }
+
+  // POST — generate a draft from template + context
+  if (req.method === 'POST') {
+    const { action } = req.query;
+
+    // POST ?action=generate — generate a single draft
+    if (!action || action === 'generate') {
+      const { template_id, context, strict } = req.body || {};
+      if (!template_id) return res.status(400).json({ error: 'template_id is required' });
+      if (!context || typeof context !== 'object') {
+        return res.status(400).json({ error: 'context object is required (merged packet payload)' });
+      }
+
+      const result = await generateDraft(template_id, context, { strict: !!strict });
+      if (!result.ok) {
+        return res.status(422).json(result);
+      }
+      return res.status(200).json(result);
+    }
+
+    // POST ?action=batch — generate drafts for multiple contacts
+    if (action === 'batch') {
+      const { template_id, contacts, shared_context, strict } = req.body || {};
+      if (!template_id) return res.status(400).json({ error: 'template_id is required' });
+      if (!Array.isArray(contacts) || contacts.length === 0) {
+        return res.status(400).json({ error: 'contacts array is required and must not be empty' });
+      }
+
+      const result = await generateBatchDrafts(template_id, contacts, shared_context || {}, { strict: !!strict });
+      return res.status(200).json(result);
+    }
+
+    // POST ?action=record_send — record that a draft was sent
+    if (action === 'record_send') {
+      const { template_id, template_version, entity_id, domain,
+              context_packet_id, rendered_subject, rendered_body,
+              final_subject, final_body } = req.body || {};
+
+      if (!template_id) return res.status(400).json({ error: 'template_id is required' });
+
+      // Compute edit distance if both rendered and final versions provided
+      let edit_distance_pct = null;
+      if (rendered_body && final_body) {
+        edit_distance_pct = computeEditDistance(rendered_body, final_body);
+      }
+
+      const result = await recordTemplateSend({
+        template_id,
+        template_version: template_version || 1,
+        user_id: user.id,
+        entity_id: entity_id || null,
+        domain: domain || null,
+        context_packet_id: context_packet_id || null,
+        rendered_subject,
+        rendered_body,
+        final_subject: final_subject || rendered_subject,
+        final_body: final_body || rendered_body,
+        edit_distance_pct
+      });
+
+      if (!result.ok) return res.status(500).json(result);
+      return res.status(201).json(result);
+    }
+
+    return res.status(400).json({
+      error: 'Invalid draft action. Use: generate, batch, record_send'
+    });
+  }
+
+  return res.status(405).json({ error: `Method ${req.method} not allowed` });
+}
+
+// ============================================================================
+// AI COPILOT CHAT — /api/chat → operations?_route=chat
+// ============================================================================
 
 async function handleChatRoute(req, res) {
   if (req.method !== 'POST') {

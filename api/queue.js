@@ -24,6 +24,7 @@ import {
   canTransitionInbox, inboxTransitionEffects, buildTransitionActivity,
   INBOX_TRANSITIONS, PRIORITIES, VISIBILITY_SCOPES, INBOX_SOURCE_TYPES, isValidEnum
 } from './_shared/lifecycle.js';
+import { writeTriageSignal, writePromotionSignal } from './_shared/signals.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -761,6 +762,12 @@ async function handleInbox(req, res, user, workspaceId) {
           await opsQuery('POST', 'activity_events', activity);
         }
       }
+
+      // Write triage_decision signal to learning loop (fire-and-forget)
+      writeTriageSignal(current, status, user, {
+        ai_classification: current.metadata?.ai_classification || null,
+        ai_confidence: current.metadata?.ai_confidence || null,
+      });
     }
 
     if (priority && isValidEnum(priority, PRIORITIES)) updates.priority = priority;
@@ -847,6 +854,9 @@ async function inboxPromoteToAction(req, res, user, workspaceId) {
     domain: inbox.domain
   });
   await opsQuery('POST', 'activity_events', activity);
+
+  // Write promotion signal to learning loop (fire-and-forget)
+  writePromotionSignal(inbox, createdAction, user);
 
   return res.status(201).json({
     action: createdAction,

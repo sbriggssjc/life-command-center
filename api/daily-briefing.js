@@ -7,6 +7,7 @@
 
 import { authenticate, handleCors } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { writeSignal } from './_shared/signals.js';
 
 const MORNING_STRUCTURED_URL = process.env.MORNING_BRIEFING_STRUCTURED_URL || '';
 const MORNING_HTML_URL = process.env.MORNING_BRIEFING_HTML_URL || '';
@@ -684,6 +685,90 @@ function buildDomainSignals(myWork, inboxSummary, unassignedWork) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// DAILY BRIEFING PACKET BUILDER
+// Transforms the existing briefing data into the formal Daily Briefing Packet
+// schema defined in context_packet_schema.md
+// ---------------------------------------------------------------------------
+
+function buildPacketItem(item, rank, category) {
+  return {
+    priority_rank: rank,
+    category: category || item.type || 'general',
+    title: item.title || '(Untitled)',
+    entity_name: item.title || null,
+    entity_id: item.id || null,
+    context: item.metadata?.description || item.body || null,
+    suggested_actions: [],
+    tier: item._tier || null,
+    score: item._score || 0,
+    source: item._source || null,
+    domain: item.domain || null,
+  };
+}
+
+function buildProductionScore(workCounts, sfActivity) {
+  const calls = (sfActivity || []).filter(a => a.category === 'call').length;
+  const emails = (sfActivity || []).filter(a => a.category === 'email').length;
+  return {
+    bd_touchpoints: {
+      planned: 10,  // weekly target (configurable later)
+      completed_yesterday: 0,  // needs day-level filtering
+      weekly_target: 10,
+      weekly_completed: calls + emails,
+    },
+    new_leads_researched: {
+      daily_target: 2,
+      weekly_completed: workCounts.research_active || 0,
+    },
+    calls_logged: {
+      weekly_completed: calls,
+      weekly_target: 15,
+    },
+    om_follow_ups_completed: {
+      open: 0,       // will be populated when OM tracking is wired
+      overdue_48h: 0,
+    },
+    seller_reports_sent: {
+      due_this_week: 0,
+      sent: 0,
+    },
+  };
+}
+
+function buildOvernightSignals(morningStructured) {
+  if (!morningStructured || !morningStructured.sector_signals) return [];
+  return (morningStructured.sector_signals || []).slice(0, 5).map(s => ({
+    signal_type: 'market_intelligence',
+    description: typeof s === 'string' ? s : (s.description || s.text || JSON.stringify(s)),
+    entity_name: null,
+    recommended_action: null,
+  }));
+}
+
+async function writeBriefingPacket(userId, packetPayload) {
+  try {
+    const ttlHours = 18;
+    const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
+    const tokenEstimate = Math.ceil(JSON.stringify(packetPayload).length / 4);
+
+    await opsQuery('POST', 'context_packets', {
+      packet_type: 'daily_briefing',
+      entity_id: null,
+      entity_type: null,
+      requesting_user: userId,
+      surface_hint: 'daily_briefing',
+      payload: packetPayload,
+      token_count: tokenEstimate,
+      expires_at: expiresAt,
+      assembly_duration_ms: 0,
+      model_version: 'v1.0',
+    });
+  } catch (err) {
+    console.error('[Briefing packet write failed]', err?.message || err);
+  }
+}
+
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
@@ -753,6 +838,53 @@ export default withErrorHandler(async function handler(req, res) {
     globalMarketIntelligence.html_fragment = morningHtml.data;
   }
 
+  // Build strategic priorities (existing logic)
+  const strategicPriorities = roleView === 'broker'
+    ? buildStrategicPriorities(roleView, myWork, inboxSummary.items, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts)
+    : projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts);
+
+  // ── Build formal Daily Briefing Packet (context_packet_schema.md) ──
+  const todayItems = strategicPriorities.today_priorities || strategicPriorities.today_top_5 || [];
+  const strategicItems = todayItems.filter(i => i.tier === 'strategic' || i._tier === 'strategic');
+  const importantItems = todayItems.filter(i => i.tier === 'important' || i._tier === 'important');
+  const urgentItems = todayItems.filter(i => i.tier === 'urgent' || i._tier === 'urgent');
+
+  const dailyBriefingPacket = {
+    packet_type: 'daily_briefing',
+    generated_at: asOf,
+    date: safeDateOnly(asOf),
+    user_id: user.id,
+    strategic_items: strategicItems.map((item, i) => buildPacketItem(item, i + 1, 'deal_action')),
+    important_items: importantItems.map((item, i) => buildPacketItem(item, i + 1, 'touchpoint_due')),
+    urgent_items: urgentItems.map((item, i) => buildPacketItem(item, i + 1, 'inbox_triage')),
+    production_score: buildProductionScore(workCounts, sfActivity),
+    overnight_signals: buildOvernightSignals(globalMarketIntelligence),
+    carry_forward_from_yesterday: (strategicPriorities.my_overdue || []).map(item => ({
+      item: item.title || '(Untitled)',
+      days_carried: item.due_date
+        ? Math.max(0, Math.floor((Date.now() - new Date(item.due_date).getTime()) / 86400000))
+        : 0,
+    })),
+  };
+
+  // Write packet to context_packets table (fire-and-forget)
+  writeBriefingPacket(user.id, dailyBriefingPacket);
+
+  // Log briefing assembly signal
+  writeSignal({
+    signal_type: 'packet_assembled',
+    signal_category: 'intelligence',
+    user_id: user.id,
+    payload: {
+      packet_type: 'daily_briefing',
+      strategic_count: strategicItems.length,
+      important_count: importantItems.length,
+      urgent_count: urgentItems.length,
+      carry_forward_count: dailyBriefingPacket.carry_forward_from_yesterday.length,
+    },
+  });
+
+  // ── Return full response (backwards-compatible + packet) ──
   const payload = {
     briefing_id: buildBriefingId(asOf, workspaceId, user.id, roleView),
     as_of: asOf,
@@ -765,9 +897,10 @@ export default withErrorHandler(async function handler(req, res) {
       missing_sections: missingSections
     },
     global_market_intelligence: globalMarketIntelligence,
-    user_specific_priorities: roleView === 'broker'
-      ? buildStrategicPriorities(roleView, myWork, inboxSummary.items, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts)
-      : projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts),
+    // Formal packet (new — used by Copilot and AI surfaces)
+    daily_briefing_packet: dailyBriefingPacket,
+    // Legacy shape (preserved for existing frontend)
+    user_specific_priorities: strategicPriorities,
     team_level_production_signals: {
       work_counts: {
         open_actions: workCounts.open_actions,

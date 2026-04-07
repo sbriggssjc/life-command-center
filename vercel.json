@@ -19,6 +19,7 @@
     { "source": "/api/rcm-ingest", "destination": "/api/sync?_route=rcm-ingest" },
     { "source": "/api/rcm-backfill", "destination": "/api/sync?_route=rcm-backfill" },
     { "source": "/api/chat", "destination": "/api/operations?_route=chat" },
+    { "source": "/api/draft", "destination": "/api/operations?_route=draft" },
     { "source": "/api/live-ingest", "destination": "/api/sync?_route=live-ingest" },
     { "source": "/api/loopnet-ingest", "destination": "/api/sync?_route=loopnet-ingest" },
     { "source": "/api/lead-health", "destination": "/api/sync?_route=lead-health" },
