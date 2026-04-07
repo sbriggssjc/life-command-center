@@ -370,3 +370,43 @@ const LCC_AUTH = (() => {
     get accessToken() { return session?.access_token || null; }
   };
 })();
+
+// ============================================================================
+// Global Fetch Interceptor — Auto-attach JWT to all /api/ requests
+//
+// Patches window.fetch so every existing fetch('/api/...') call across all
+// frontend files (app.js, gov.js, dialysis.js, ops.js, etc.) automatically
+// gets the Authorization header when the user is authenticated.
+// This eliminates the need to update hundreds of individual fetch calls.
+// Only intercepts same-origin /api/ requests — external fetches are untouched.
+// ============================================================================
+(function() {
+  const _originalFetch = window.fetch;
+
+  window.fetch = function(input, init) {
+    // Determine the URL string
+    const url = (input instanceof Request) ? input.url : String(input);
+
+    // Only intercept /api/ calls (same-origin API requests)
+    if (url.startsWith('/api/') || url.startsWith(location.origin + '/api/')) {
+      // Only inject if LCC_AUTH is initialized and has a token
+      if (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.accessToken) {
+        init = init || {};
+        init.headers = init.headers || {};
+
+        // Don't override if Authorization is already set
+        if (init.headers instanceof Headers) {
+          if (!init.headers.has('Authorization')) {
+            init.headers.set('Authorization', 'Bearer ' + LCC_AUTH.accessToken);
+          }
+        } else {
+          if (!init.headers['Authorization'] && !init.headers['authorization']) {
+            init.headers['Authorization'] = 'Bearer ' + LCC_AUTH.accessToken;
+          }
+        }
+      }
+    }
+
+    return _originalFetch.call(window, input, init);
+  };
+})();
