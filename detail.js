@@ -3305,9 +3305,7 @@ window.navToProperty = function(propertyId, db) {
  * @param {string} db - Database: 'dialysis' or 'gov' (default: 'dialysis')
  */
 window.navToContact = function(contactId, db) {
-  db = db || 'dialysis';
-  // Open unified detail with contact focus
-  openUnifiedDetail(db, { contact_id: contactId }, null, 'ownership');
+  openContactDetail(String(contactId));
 };
 
 /**
@@ -3332,13 +3330,7 @@ window.navToTransaction = function(saleId) {
  * @param {string} operatorName - Operator name to filter by
  */
 window.navToOperator = function(operatorName) {
-  window._pendingOpFilter = { type: 'operator', value: operatorName };
-  if (typeof goToDiaTab === 'function') {
-    window.diaPlayersView = 'operators';
-    goToDiaTab('players');
-  } else {
-    showToast('Navigate to Dialysis → Players tab to view operator: ' + operatorName, 'info');
-  }
+  openEntityDetailByName(operatorName);
 };
 
 /**
@@ -3372,13 +3364,16 @@ window.entityLink = function(text, type, id, db) {
       if (!id) return esc(text);
       return '<span style="' + style + '" onclick="navToProperty(' + id + ',\'' + (db || 'dialysis') + '\')" title="View property details">' + esc(text) + '</span>';
     case 'contact':
-      if (!id) return esc(text);
-      return '<span style="' + style + '" onclick="navToContact(' + id + ',\'' + (db || 'dialysis') + '\')" title="View contact details">' + esc(text) + '</span>';
+      if (!id) return '<span style="' + style + '" onclick="openContactDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View contact">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="openContactDetail(' + JSON.stringify(String(id)) + ')" title="View contact details">' + esc(text) + '</span>';
+    case 'entity':
+      if (!id) return '<span style="' + style + '" onclick="openEntityDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="openEntityDetail(' + JSON.stringify(String(id)) + ')" title="View entity details">' + esc(text) + '</span>';
     case 'transaction':
       if (!id) return esc(text);
       return '<span style="' + style + '" onclick="navToTransaction(' + id + ')" title="View transaction details">' + esc(text) + '</span>';
     case 'operator':
-      return '<span style="' + style + '" onclick="navToOperator(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View operator properties">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="openEntityDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
     case 'state':
       return '<span style="' + style + '" onclick="navToState(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View state properties">' + esc(text) + '</span>';
     default:
@@ -4346,3 +4341,537 @@ window._udCopyAssistantReply = _udCopyAssistantReply;
 window._udApplyAssistantFields = _udApplyAssistantFields;
 window._udApplyAssistantReply = _udApplyAssistantReply;
 window._udSaveReviewedOwnership = _udSaveReviewedOwnership;
+
+// ============================================================================
+// ENTITY & CONTACT DETAIL VIEWS
+// ============================================================================
+
+let _entityDetailCache = null;
+
+/** Helper: build headers for ops API calls */
+function _entityApiHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) h['x-lcc-workspace'] = LCC_USER.workspace_id;
+  return h;
+}
+
+/** Helper: fetch JSON from ops API with error handling */
+async function _entityApiFetch(url) {
+  const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+  const res = await fetchFn(url, { headers: _entityApiHeaders() });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/**
+ * Open entity detail panel by entity ID (from ops DB).
+ */
+async function openEntityDetail(entityId) {
+  _entityDetailCache = null;
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+
+  // Loading state
+  if (headerEl) headerEl.innerHTML = `
+    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
+    <div class="detail-header-info">
+      <div style="flex:1;min-width:0">
+        <div class="detail-title">Loading entity...</div>
+        <div class="detail-subtitle"></div>
+      </div>
+      <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
+    </div>
+    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading entity details...</p></div>';
+
+  try {
+    // Fetch entity + contacts in parallel
+    const [entityData, contactsData] = await Promise.all([
+      _entityApiFetch('/api/entities?id=' + encodeURIComponent(entityId)),
+      _entityApiFetch('/api/contacts?action=list&entity_id=' + encodeURIComponent(entityId) + '&limit=50')
+    ]);
+
+    const entity = entityData?.entity || null;
+    if (!entity) {
+      if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Entity not found</div>';
+      return;
+    }
+
+    const contacts = contactsData?.contacts || [];
+
+    // Fetch portfolio and transactions in parallel (from Gov and Dia DBs)
+    const portfolioPromises = [];
+    const transactionPromises = [];
+    const entityName = entity.name || '';
+
+    // Search both DBs for properties owned by this entity
+    if (typeof govQuery === 'function') {
+      portfolioPromises.push(
+        govQuery('v_ownership_current', '*', { filter: 'true_owner=ilike.*' + encodeURIComponent(entityName) + '*', limit: 50 }).catch(() => ({ data: [] }))
+      );
+      transactionPromises.push(
+        govQuery('v_sales_comps', '*', { filter: 'or=(buyer_name.ilike.*' + encodeURIComponent(entityName) + '*,seller_name.ilike.*' + encodeURIComponent(entityName) + '*)', order: 'sale_date.desc', limit: 30 }).catch(() => ({ data: [] }))
+      );
+    }
+    if (typeof diaQuery === 'function') {
+      portfolioPromises.push(
+        diaQuery('v_ownership_current', '*', { filter: 'true_owner=ilike.*' + encodeURIComponent(entityName) + '*', limit: 50 }).catch(() => [])
+      );
+      transactionPromises.push(
+        diaQuery('v_sales_comps', '*', { filter: 'or=(buyer_name.ilike.*' + encodeURIComponent(entityName) + '*,seller_name.ilike.*' + encodeURIComponent(entityName) + '*)', order: 'sale_date.desc', limit: 30 }).catch(() => [])
+      );
+    }
+
+    const [portfolioResults, transactionResults] = await Promise.all([
+      Promise.allSettled(portfolioPromises),
+      Promise.allSettled(transactionPromises)
+    ]);
+
+    // Normalize results
+    const extractArr = (r) => {
+      if (!r || r.status !== 'fulfilled') return [];
+      const v = r.value;
+      return Array.isArray(v) ? v : (v?.data || []);
+    };
+
+    let portfolio = [];
+    for (const r of portfolioResults) portfolio = portfolio.concat(extractArr(r));
+    let transactions = [];
+    for (const r of transactionResults) transactions = transactions.concat(extractArr(r));
+
+    _entityDetailCache = { entity, contacts, portfolio, transactions, type: 'entity' };
+
+    // Render header
+    const typeBadge = (entity.entity_type || 'org').toUpperCase();
+    const statusColor = entity.status === 'active' ? 'var(--green)' : 'var(--text3)';
+    if (headerEl) headerEl.innerHTML = `
+      <div class="detail-header-info">
+        <div style="flex:1;min-width:0">
+          <div class="detail-title">${esc(entity.name)}</div>
+          <div class="detail-subtitle">${esc((entity.city || '') + (entity.city && entity.state ? ', ' : '') + (entity.state || ''))}</div>
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--accent);color:#fff;font-weight:600">${esc(typeBadge)}</span>
+            ${entity.domain ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2)">' + esc(entity.domain) + '</span>' : ''}
+            <span style="font-size:10px;padding:2px 8px;border-radius:10px;color:${statusColor};border:1px solid ${statusColor}">${esc(entity.status || 'active')}</span>
+          </div>
+        </div>
+        <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
+        <button class="detail-close" onclick="closeDetail()">&times;</button>
+      </div>`;
+
+    // Render tabs
+    const tabs = ['Overview', 'Portfolio', 'Transactions'];
+    if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
+      '<button class="detail-tab ' + (t === 'Overview' ? 'active' : '') + '" onclick="_switchEntityTab(\'' + t + '\')">' + t + '</button>'
+    ).join('');
+
+    if (bodyEl) bodyEl.innerHTML = _renderEntityTab('Overview');
+  } catch (err) {
+    console.error('Entity detail error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading entity: ' + esc(err.message) + '</div>';
+  }
+}
+
+/** Open entity detail by name search (when only name is available) */
+async function openEntityDetailByName(name) {
+  if (!name) return;
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const bodyEl = document.getElementById('detailBody');
+  const tabsEl = document.getElementById('detailTabs');
+
+  if (headerEl) headerEl.innerHTML = `
+    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
+    <div class="detail-header-info">
+      <div style="flex:1;min-width:0">
+        <div class="detail-title">${esc(name)}</div>
+        <div class="detail-subtitle">Searching...</div>
+      </div>
+      <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
+    </div>
+    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Looking up entity...</p></div>';
+  if (tabsEl) tabsEl.innerHTML = '';
+
+  try {
+    const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
+    const entities = data?.entities || [];
+
+    if (entities.length === 1) {
+      // Exact single match — open it
+      openEntityDetail(entities[0].id);
+      return;
+    }
+
+    if (entities.length > 1) {
+      // Multiple matches — show list to pick from
+      let html = '<div class="detail-section"><div class="detail-section-title">Multiple entities found for "' + esc(name) + '"</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">';
+      for (const e of entities) {
+        const loc = (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || '');
+        html += '<div onclick="openEntityDetail(\'' + esc(e.id) + '\')" style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer;display:flex;gap:12px;align-items:center">';
+        html += '<div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text)">' + esc(e.name) + '</div>';
+        html += '<div style="font-size:11px;color:var(--text2)">' + esc(e.entity_type || '') + (loc ? ' · ' + esc(loc) : '') + '</div></div>';
+        html += '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2)">' + esc(e.entity_type || 'org') + '</span>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+      if (bodyEl) bodyEl.innerHTML = html;
+      return;
+    }
+
+    // No matches — show not found with helpful message
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">No entity found matching "' + esc(name) + '".<br><span style="font-size:12px;color:var(--text3)">Try the Entities page to search or create one.</span></div>';
+  } catch (err) {
+    console.error('Entity lookup error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error searching entities: ' + esc(err.message) + '</div>';
+  }
+}
+
+/** Open contact detail panel by contact ID */
+async function openContactDetail(contactId) {
+  _entityDetailCache = null;
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+
+  if (headerEl) headerEl.innerHTML = `
+    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
+    <div class="detail-header-info">
+      <div style="flex:1;min-width:0">
+        <div class="detail-title">Loading contact...</div>
+      </div>
+      <span class="detail-badge" style="background:var(--purple);color:#fff">CONTACT</span>
+    </div>
+    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading contact details...</p></div>';
+
+  try {
+    const data = await _entityApiFetch('/api/contacts?action=get&id=' + encodeURIComponent(contactId));
+    const contact = data?.contact || null;
+    if (!contact) {
+      if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Contact not found</div>';
+      return;
+    }
+
+    _entityDetailCache = { contact, type: 'contact' };
+
+    // Render header
+    if (headerEl) headerEl.innerHTML = `
+      <div class="detail-header-info">
+        <div style="flex:1;min-width:0">
+          <div class="detail-title">${esc(contact.full_name || contact.display_name || 'Unknown')}</div>
+          <div class="detail-subtitle">${esc(contact.title || '')}${contact.title && contact.company_name ? ' at ' : ''}${esc(contact.company_name || '')}</div>
+        </div>
+        <span class="detail-badge" style="background:var(--purple);color:#fff">CONTACT</span>
+        <button class="detail-close" onclick="closeDetail()">&times;</button>
+      </div>`;
+
+    // Single tab for contacts
+    if (tabsEl) tabsEl.innerHTML = '<button class="detail-tab active">Details</button>';
+
+    if (bodyEl) bodyEl.innerHTML = _renderContactTab(contact);
+  } catch (err) {
+    console.error('Contact detail error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading contact: ' + esc(err.message) + '</div>';
+  }
+}
+
+/** Open contact detail by name search */
+async function openContactDetailByName(name) {
+  if (!name) return;
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const bodyEl = document.getElementById('detailBody');
+  const tabsEl = document.getElementById('detailTabs');
+
+  if (headerEl) headerEl.innerHTML = `
+    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
+    <div class="detail-header-info">
+      <div style="flex:1;min-width:0">
+        <div class="detail-title">${esc(name)}</div>
+        <div class="detail-subtitle">Searching...</div>
+      </div>
+      <span class="detail-badge" style="background:var(--purple);color:#fff">CONTACT</span>
+    </div>
+    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Looking up contact...</p></div>';
+  if (tabsEl) tabsEl.innerHTML = '';
+
+  try {
+    const data = await _entityApiFetch('/api/contacts?action=list&q=' + encodeURIComponent(name) + '&limit=10');
+    const contacts = data?.contacts || [];
+
+    if (contacts.length === 1) {
+      openContactDetail(contacts[0].id);
+      return;
+    }
+
+    if (contacts.length > 1) {
+      let html = '<div class="detail-section"><div class="detail-section-title">Multiple contacts found for "' + esc(name) + '"</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">';
+      for (const c of contacts) {
+        html += '<div onclick="openContactDetail(\'' + esc(c.id) + '\')" style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer">';
+        html += '<div style="font-weight:600;color:var(--text)">' + esc(c.full_name || c.display_name || 'Unknown') + '</div>';
+        html += '<div style="font-size:11px;color:var(--text2)">' + esc(c.title || '') + (c.company_name ? ' · ' + esc(c.company_name) : '') + '</div>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+      if (bodyEl) bodyEl.innerHTML = html;
+      return;
+    }
+
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">No contact found matching "' + esc(name) + '"</div>';
+  } catch (err) {
+    console.error('Contact lookup error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error searching contacts: ' + esc(err.message) + '</div>';
+  }
+}
+
+// ── Entity Tab Switching ──
+function _switchEntityTab(tabName) {
+  if (!_entityDetailCache || _entityDetailCache.type !== 'entity') return;
+  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+    t.classList.toggle('active', t.textContent.trim() === tabName);
+  });
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _renderEntityTab(tabName);
+}
+
+function _renderEntityTab(tab) {
+  if (!_entityDetailCache) return '<div class="detail-empty">No data loaded</div>';
+  switch (tab) {
+    case 'Overview': return _entityTabOverview();
+    case 'Portfolio': return _entityTabPortfolio();
+    case 'Transactions': return _entityTabTransactions();
+    default: return '<div class="detail-empty">Unknown tab</div>';
+  }
+}
+
+// ── Entity Overview Tab ──
+function _entityTabOverview() {
+  const c = _entityDetailCache;
+  const e = c.entity;
+  const contacts = c.contacts || [];
+
+  let html = '';
+
+  // Entity info section
+  html += '<div class="detail-section"><div class="detail-section-title">Entity Information</div><div class="detail-grid">';
+  html += _row('Name', e.name);
+  html += _row('Type', e.entity_type);
+  html += _row('Domain', e.domain);
+  html += _row('Org Type', e.org_type);
+  if (e.email) html += _rowLink('Email', e.email, 'mailto:' + e.email);
+  if (e.phone) html += _rowLink('Phone', e.phone, 'tel:' + e.phone);
+  if (e.address) html += _row('Address', e.address);
+  html += _row('City / State', (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || ''));
+  html += '</div></div>';
+
+  // External identities
+  const extIds = e.external_identities || [];
+  if (extIds.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">Linked Systems</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    for (const ext of extIds) {
+      html += '<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--s3);color:var(--text2);border:1px solid var(--border)">';
+      html += esc(ext.source_system || '') + (ext.source_type ? ' · ' + esc(ext.source_type) : '');
+      html += '</span>';
+    }
+    html += '</div></div>';
+  }
+
+  // Contacts section
+  if (contacts.length) {
+    html += '<div class="detail-section"><div class="detail-section-title">Contacts (' + contacts.length + ')</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    for (const ct of contacts) {
+      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContactDetail(\'' + esc(ct.id) + '\')">';
+      html += '<div style="display:flex;align-items:center;gap:8px">';
+      html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">';
+      html += esc((ct.full_name || ct.display_name || '?')[0].toUpperCase());
+      html += '</div>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-weight:600;color:var(--text)">' + esc(ct.full_name || ct.display_name || 'Unknown') + '</div>';
+      html += '<div style="font-size:11px;color:var(--text2)">' + esc(ct.title || '') + '</div>';
+      html += '</div>';
+      html += '<div style="text-align:right;font-size:11px;color:var(--text3)">';
+      if (ct.email) html += '<div>' + esc(ct.email) + '</div>';
+      if (ct.phone) html += '<div>' + esc(ct.phone) + '</div>';
+      html += '</div></div></div>';
+    }
+    html += '</div></div>';
+  } else {
+    html += '<div class="detail-section"><div class="detail-section-title">Contacts</div>';
+    html += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No contacts linked to this entity.</div></div>';
+  }
+
+  // Quick stats
+  html += '<div class="detail-section"><div class="detail-section-title">Summary</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px">';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.portfolio?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Properties</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + contacts.length + '</div><div style="font-size:11px;color:var(--text3)">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.transactions?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Transactions</div></div>';
+  html += '</div></div>';
+
+  return html;
+}
+
+// ── Entity Portfolio Tab ──
+function _entityTabPortfolio() {
+  const portfolio = _entityDetailCache?.portfolio || [];
+  if (!portfolio.length) return '<div class="detail-empty">No properties found for this entity.</div>';
+
+  let html = '<div class="detail-section"><div class="detail-section-title">Ownership Portfolio (' + portfolio.length + ')</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:6px">';
+
+  for (const p of portfolio) {
+    const addr = p.address || p.property_address || '(No address)';
+    const loc = (p.city || '') + (p.city && p.state ? ', ' : '') + (p.state || '');
+    const propType = p.property_type || p.asset_type || '';
+    const tenant = p.tenant_name || p.tenant_operator || p.facility_name || '';
+    const db = p.domain === 'government' ? 'gov' : 'dia';
+    const pid = p.property_id;
+
+    html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + (pid ? 'cursor:pointer' : '') + '"';
+    if (pid) html += ' onclick="openUnifiedDetail(\'' + esc(db) + '\', {property_id:' + pid + '})"';
+    html += '>';
+    html += '<div style="display:flex;gap:12px;align-items:flex-start">';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(addr) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + '</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;font-size:11px;flex-shrink:0">';
+    if (propType) html += '<div style="color:var(--text3)">' + esc(propType) + '</div>';
+    if (tenant) html += '<div style="color:var(--accent)">' + esc(tenant) + '</div>';
+    html += '</div></div></div>';
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+// ── Entity Transactions Tab ──
+function _entityTabTransactions() {
+  const transactions = _entityDetailCache?.transactions || [];
+  const entityName = _entityDetailCache?.entity?.name || '';
+  if (!transactions.length) return '<div class="detail-empty">No transactions found for this entity.</div>';
+
+  let html = '<div class="detail-section"><div class="detail-section-title">Transaction History (' + transactions.length + ')</div>';
+
+  // Table header
+  html += '<div style="display:flex;gap:8px;padding:6px 12px;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);letter-spacing:0.5px">';
+  html += '<div style="flex:0.7">Date</div>';
+  html += '<div style="flex:1.5">Address</div>';
+  html += '<div style="flex:0.8;text-align:right">Price</div>';
+  html += '<div style="flex:0.5;text-align:center">Role</div>';
+  html += '</div>';
+
+  for (const t of transactions) {
+    const date = _fmtDate(t.sale_date || t.transfer_date);
+    const addr = t.address || t.property_address || '(Unknown)';
+    const price = t.sale_price || t.price;
+    const buyerName = (t.buyer_name || '').toLowerCase();
+    const sellerName = (t.seller_name || '').toLowerCase();
+    const nameL = entityName.toLowerCase();
+    const role = buyerName.includes(nameL) ? 'Buyer' : (sellerName.includes(nameL) ? 'Seller' : '—');
+    const roleColor = role === 'Buyer' ? 'var(--green)' : (role === 'Seller' ? 'var(--red, #ef4444)' : 'var(--text3)');
+
+    html += '<div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--border);font-size:12px;align-items:center">';
+    html += '<div style="flex:0.7;color:var(--text2)">' + esc(date) + '</div>';
+    html += '<div style="flex:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">' + esc(addr) + '</div>';
+    html += '<div style="flex:0.8;text-align:right;color:var(--green);font-weight:600">' + (price ? fmt(price) : '—') + '</div>';
+    html += '<div style="flex:0.5;text-align:center"><span style="font-size:10px;padding:2px 6px;border-radius:8px;background:' + roleColor + '22;color:' + roleColor + ';font-weight:600">' + esc(role) + '</span></div>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ── Contact Detail Tab ──
+function _renderContactTab(contact) {
+  const c = contact;
+  let html = '';
+
+  // Contact info card
+  html += '<div class="detail-section"><div class="detail-section-title">Contact Information</div><div class="detail-grid">';
+  html += _row('Name', c.full_name || c.display_name);
+  html += _row('Title', c.title);
+  html += _row('Company', c.company_name);
+  if (c.contact_class) html += _row('Type', c.contact_class);
+  html += '</div></div>';
+
+  // Communication details
+  html += '<div class="detail-section"><div class="detail-section-title">Communication</div><div class="detail-grid">';
+  if (c.email) html += _rowLink('Email', c.email, 'mailto:' + c.email);
+  if (c.phone) html += _rowLink('Phone', c.phone, 'tel:' + c.phone);
+  if (c.mobile_phone) html += _rowLink('Mobile', c.mobile_phone, 'tel:' + c.mobile_phone);
+  if (c.linkedin_url) html += _rowLink('LinkedIn', 'Profile', c.linkedin_url);
+  html += '</div></div>';
+
+  // Address
+  if (c.city || c.state || c.address) {
+    html += '<div class="detail-section"><div class="detail-section-title">Address</div><div class="detail-grid">';
+    if (c.address) html += _row('Street', c.address);
+    html += _row('City / State', (c.city || '') + (c.city && c.state ? ', ' : '') + (c.state || ''));
+    if (c.zip) html += _row('Zip', c.zip);
+    html += '</div></div>';
+  }
+
+  // Linked entity
+  if (c.entity_id) {
+    html += '<div class="detail-section"><div class="detail-section-title">Linked Entity</div>';
+    html += '<div onclick="openEntityDetail(\'' + esc(c.entity_id) + '\')" style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:8px">';
+    html += '<span style="color:var(--accent);font-size:16px">🏢</span>';
+    html += '<div><div style="font-weight:600;color:var(--accent)">' + esc(c.company_name || c.entity_id) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text3)">Click to view entity details</div></div>';
+    html += '</div></div>';
+  }
+
+  // Source info
+  if (c.source_system || c.created_at) {
+    html += '<div class="detail-section"><div class="detail-section-title">Source</div><div class="detail-grid">';
+    if (c.source_system) html += _row('Source', c.source_system);
+    if (c.created_at) html += _row('Created', _fmtDate(c.created_at));
+    if (c.updated_at) html += _row('Updated', _fmtDate(c.updated_at));
+    if (c.last_activity_date) html += _row('Last Activity', _fmtDate(c.last_activity_date));
+    html += '</div></div>';
+  }
+
+  return html;
+}
+
+// Window exports for entity/contact detail functions
+window.openEntityDetail = openEntityDetail;
+window.openEntityDetailByName = openEntityDetailByName;
+window.openContactDetail = openContactDetail;
+window.openContactDetailByName = openContactDetailByName;
+window._switchEntityTab = _switchEntityTab;
