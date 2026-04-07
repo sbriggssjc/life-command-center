@@ -283,11 +283,19 @@
     </div>
   </div>
 
-  <!-- Bottom Nav — 5 primary tabs + More -->
+  <!-- Bottom Nav — 6 primary tabs + More -->
   <nav class="bottom-nav" role="navigation" aria-label="Main navigation">
     <button class="bnav active" data-page="pageHome">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       Today
+    </button>
+    <button class="bnav" data-page="pageDia">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="9"/></svg>
+      Dialysis
+    </button>
+    <button class="bnav" data-page="pageGov">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg>
+      Gov
     </button>
     <button class="bnav" data-page="pagePipeline">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
@@ -296,10 +304,6 @@
     <button class="bnav" data-page="pageInbox">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
       Inbox
-    </button>
-    <button class="bnav" data-page="pageContacts">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-      Contacts
     </button>
     <button class="bnav" id="moreNavBtn" onclick="toggleMoreDrawer()" aria-label="More navigation options" aria-haspopup="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
@@ -312,6 +316,10 @@
   <div class="more-drawer" id="moreDrawer" onclick="event.stopPropagation()">
     <div class="more-drawer-handle"></div>
     <div class="more-drawer-grid">
+      <button class="more-drawer-item" data-page="pageContacts" onclick="navToFromMore('pageContacts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Contacts
+      </button>
       <button class="more-drawer-item" data-page="pageBiz" onclick="navToFromMore('pageBiz')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
         Business
