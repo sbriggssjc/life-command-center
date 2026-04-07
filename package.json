@@ -5,6 +5,8 @@
   "description": "Full-stack operational platform — shared team queue, inbox triage, entity management, sync orchestration",
   "type": "module",
   "scripts": {
+    "start": "node server.js",
+    "start:railway": "NODE_ENV=production node server.js",
     "dev": "vercel dev",
     "lint": "eslint api/ --ext .js",
     "ai:routing": "node scripts/print-ai-chat-routing.mjs",
@@ -21,6 +23,10 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "eslint": "^9.0.0",
