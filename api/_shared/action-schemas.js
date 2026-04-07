@@ -385,6 +385,41 @@ export const ACTION_SCHEMAS = {
     }
   },
 
+  get_template_performance: {
+    description: 'Get template performance analytics — open rates, reply rates, deal advancement, and edit distances. Use to evaluate which templates are working and which need revision.',
+    category: 'outreach',
+    inputs: {
+      type: 'object',
+      properties: {
+        template_id: { type: 'string', description: 'Filter to a specific template ID (e.g., T-003). Omit for all templates.' },
+        days: { type: 'integer', minimum: 1, maximum: 365, description: 'Lookback window in days (default 90)' },
+        domain: { type: 'string', description: 'Filter by domain (e.g., briggscre.com)' }
+      }
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        lookback_days: { type: 'integer' },
+        total_sends: { type: 'integer' },
+        templates: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              template_id: { type: 'string' },
+              total_sends: { type: 'integer' },
+              open_rate_pct: { type: 'number' },
+              reply_rate_pct: { type: 'number' },
+              deal_advance_rate_pct: { type: 'number' },
+              avg_edit_distance_pct: { type: 'number', description: '0=no edits, 100=completely rewritten. High values suggest template needs revision.' }
+            }
+          }
+        },
+        _insight: { type: 'string', description: 'AI-generated summary of template performance' }
+      }
+    }
+  },
+
   run_listing_bd_pipeline: {
     description: 'Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (same asset type/state + geographic proximity) and queues draft candidates for review.',
     category: 'outreach',

@@ -55,6 +55,7 @@ import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, 
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeSignal } from './_shared/signals.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
+import { validateActionInput } from './_shared/schema-validator.js';
 import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
@@ -516,6 +517,7 @@ const ACTION_REGISTRY = {
   generate_template_draft:       { method: 'POST', path: 'draft&action=generate', tier: 1, confirm: 'lightweight', alias: 'operations?_route=draft&action=generate' },
   generate_batch_drafts:         { method: 'POST', path: 'draft&action=batch', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=batch' },
   record_template_send:          { method: 'POST', path: 'draft&action=record_send', tier: 2, confirm: 'explicit', alias: 'operations?_route=draft&action=record_send' },
+  get_template_performance:      { method: 'POST', path: 'draft&action=performance', tier: 0, alias: 'operations?_route=draft&action=performance' },
   run_listing_bd_pipeline:       { method: 'POST', path: 'draft&action=listing_bd', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=listing_bd' },
 
   // Tier 0: AI-powered listing pursuit (Wave 2)
@@ -548,6 +550,18 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
   const spec = ACTION_REGISTRY[actionName];
   if (!spec) {
     return { ok: false, error: `Unknown action: ${actionName}`, available_actions: Object.keys(ACTION_REGISTRY) };
+  }
+
+  // Validate inputs against schema (if defined)
+  const validation = validateActionInput(actionName, params || {}, ACTION_SCHEMAS);
+  if (!validation.valid) {
+    return {
+      ok: false,
+      error: 'Invalid action inputs',
+      validation_errors: validation.errors,
+      action: actionName,
+      expected_schema: ACTION_SCHEMAS[actionName]?.inputs || null
+    };
   }
 
   // Enforce confirmation for write/draft actions
@@ -1911,8 +1925,91 @@ async function handleDraftRoute(req, res) {
       });
     }
 
+    // POST ?action=performance — template performance analytics
+    if (action === 'performance') {
+      const { template_id, days, domain } = req.body || {};
+      const lookbackDays = days || 90;
+      const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
+
+      // Build filter
+      let filter = `sent_at=gte.${since}`;
+      if (template_id) filter += `&template_id=eq.${pgFilterVal(template_id)}`;
+      if (domain) filter += `&domain=eq.${pgFilterVal(domain)}`;
+
+      const result = await opsQuery('GET',
+        `template_sends?${filter}&select=template_id,template_version,edit_distance_pct,opened,replied,deal_advanced,sent_at,domain&order=sent_at.desc&limit=500`
+      );
+
+      if (!result.ok) {
+        return res.status(500).json({ error: 'Failed to query template_sends', detail: result.data });
+      }
+
+      const sends = result.data || [];
+
+      // Aggregate by template_id
+      const byTemplate = {};
+      for (const s of sends) {
+        const tid = s.template_id;
+        if (!byTemplate[tid]) {
+          byTemplate[tid] = {
+            template_id: tid,
+            total_sends: 0,
+            opened: 0,
+            replied: 0,
+            deal_advanced: 0,
+            avg_edit_distance_pct: 0,
+            edit_distances: [],
+            first_send: s.sent_at,
+            last_send: s.sent_at,
+            domains: new Set()
+          };
+        }
+        const t = byTemplate[tid];
+        t.total_sends++;
+        if (s.opened) t.opened++;
+        if (s.replied) t.replied++;
+        if (s.deal_advanced) t.deal_advanced++;
+        if (s.edit_distance_pct != null) t.edit_distances.push(s.edit_distance_pct);
+        if (s.sent_at < t.first_send) t.first_send = s.sent_at;
+        if (s.sent_at > t.last_send) t.last_send = s.sent_at;
+        if (s.domain) t.domains.add(s.domain);
+      }
+
+      // Compute final metrics
+      const templates = Object.values(byTemplate).map(t => {
+        const avgEdit = t.edit_distances.length > 0
+          ? Math.round(t.edit_distances.reduce((a, b) => a + b, 0) / t.edit_distances.length * 10) / 10
+          : null;
+        return {
+          template_id: t.template_id,
+          total_sends: t.total_sends,
+          opened: t.opened,
+          replied: t.replied,
+          deal_advanced: t.deal_advanced,
+          open_rate_pct: t.total_sends > 0 ? Math.round(t.opened / t.total_sends * 1000) / 10 : 0,
+          reply_rate_pct: t.total_sends > 0 ? Math.round(t.replied / t.total_sends * 1000) / 10 : 0,
+          deal_advance_rate_pct: t.total_sends > 0 ? Math.round(t.deal_advanced / t.total_sends * 1000) / 10 : 0,
+          avg_edit_distance_pct: avgEdit,
+          edit_sample_size: t.edit_distances.length,
+          first_send: t.first_send,
+          last_send: t.last_send,
+          domains: [...t.domains]
+        };
+      }).sort((a, b) => b.total_sends - a.total_sends);
+
+      return res.status(200).json({
+        ok: true,
+        lookback_days: lookbackDays,
+        total_sends: sends.length,
+        templates,
+        _insight: templates.length > 0
+          ? `${templates[0].template_id} is the most-used template (${templates[0].total_sends} sends). ${templates.filter(t => t.avg_edit_distance_pct != null && t.avg_edit_distance_pct > 40).map(t => t.template_id).join(', ') || 'No templates'} have high edit rates (>40%), suggesting the template may need revision.`
+          : 'No sends recorded in this period.'
+      });
+    }
+
     return res.status(400).json({
-      error: 'Invalid draft action. Use: generate, batch, record_send, listing_bd'
+      error: 'Invalid draft action. Use: generate, batch, record_send, listing_bd, performance'
     });
   }
 
