@@ -6432,19 +6432,46 @@ if (_greetEl) _greetEl.textContent = getGreeting();
 if (_greetDateEl) _greetDateEl.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
 
 // Initialize auth module, then load user context, flags, and data
-(typeof LCC_AUTH !== 'undefined' ? LCC_AUTH.init() : Promise.resolve()).then(() => {
-  console.info('[App] Auth mode:', typeof LCC_AUTH !== 'undefined' ? LCC_AUTH.authMode : 'no-auth-module');
-}).catch(e => console.warn('[App] Auth init error:', e.message));
-
-loadUserContext().then(() => {
-  loadFeatureFlags().then(() => {
-    applyFeatureFlags();
-    autoConnectCredentials().then(() => {
-      Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData()])
-        .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
-        .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+// IMPORTANT: Auth init must complete BEFORE data loading begins.
+// In production mode, unauthenticated users see a login modal instead of spinners.
+function bootApp() {
+  loadUserContext().then(() => {
+    loadFeatureFlags().then(() => {
+      applyFeatureFlags();
+      autoConnectCredentials().then(() => {
+        Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData()])
+          .then(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+          .catch(() => { updateGreeting(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+      });
     });
   });
+}
+
+(typeof LCC_AUTH !== 'undefined' ? LCC_AUTH.init() : Promise.resolve()).then(() => {
+  const mode = typeof LCC_AUTH !== 'undefined' ? LCC_AUTH.authMode : 'no-auth-module';
+  console.info('[App] Auth mode:', mode);
+
+  if (mode === 'unauthenticated') {
+    // Production/staging with no session — show login, don't load data
+    console.info('[App] No session — showing login modal');
+    LCC_AUTH.showLoginModal();
+    // Listen for successful sign-in to boot the app
+    const _origRender = LCC_AUTH._onAuthBoot;
+    const checkBoot = setInterval(() => {
+      if (LCC_AUTH.isAuthenticated || LCC_AUTH.isDevMode) {
+        clearInterval(checkBoot);
+        bootApp();
+      }
+    }, 500);
+    return;
+  }
+
+  // Authenticated (JWT) or dev-fallback — proceed normally
+  bootApp();
+}).catch(e => {
+  console.warn('[App] Auth init error:', e.message);
+  // On auth init failure, still try to load (dev mode safety net)
+  bootApp();
 });
 
 // ============================================================
