@@ -1053,12 +1053,44 @@ async function loadResearchQueue() {
 }
 
 // ──────────────────────────────────────────────────────────────
-// RESEARCH CARD STEP NAVIGATION
+// RESEARCH CARD STEP NAVIGATION (with draft state preservation)
 // ──────────────────────────────────────────────────────────────
 let govResearchStep = 0;
+window._govFormDraft = {};  // Holds unsaved form values across subtab switches
+
+/** Capture all visible ownership form field values into _govFormDraft */
+function captureOwnershipDraft() {
+  const fields = [
+    'res-own-sale-date', 'res-own-sale-price', 'res-own-cap-rate',
+    'res-own-price-source', 'res-own-buyer', 'res-own-seller',
+    'res-own-recorded-owner', 'res-own-incorporation', 'res-own-phone', 'res-own-mailing',
+    'res-own-true-owner', 'res-own-principal-names', 'res-own-principal-email',
+    'res-own-phone-2', 'res-own-mailing-2',
+    'res-own-rba', 'res-own-land-acres', 'res-own-year-built', 'res-own-year-renovated',
+    'res-own-lender', 'res-own-loan-amount', 'res-own-loan-type', 'res-own-loan-status',
+    'res-own-notes',
+    'res-ps-date', 'res-ps-price', 'res-ps-buyer', 'res-ps-seller', 'res-ps-cap', 'res-ps-source'
+  ];
+  fields.forEach(function(id) {
+    var el = q('#' + id);
+    if (el && el.value !== undefined && el.value !== '') {
+      window._govFormDraft[id] = el.value;
+    }
+  });
+}
+
 window.govStepNav = function(idx) {
+  // Capture form values before re-render so data survives subtab switches
+  if (researchMode === 'ownership') captureOwnershipDraft();
   govResearchStep = idx;
   renderGovTab();
+  // After render, restore any draft values that weren't in the record
+  requestAnimationFrame(function() {
+    Object.keys(window._govFormDraft).forEach(function(id) {
+      var el = q('#' + id);
+      if (el && !el.value) el.value = window._govFormDraft[id];
+    });
+  });
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -1076,10 +1108,11 @@ let govMonitorData = null;
 let govMonitorLoading = false;
 
 function renderOwnershipResearchCard(rec) {
-  // Track record changes to reset step
+  // Track record changes to reset step and clear draft
   if (window._govLastRecId !== (rec.property_id)) {
     govResearchStep = 0;
     window._govLastRecId = rec.property_id;
+    window._govFormDraft = {};
   }
 
   const snapshot = rec.gsa_snapshot || {};
@@ -1153,13 +1186,15 @@ function renderOwnershipResearchCard(rec) {
   const completeness = computeCompleteness(allFields.map((v, i) => ({ value: v, required: [0, 1, 2, 3].includes(i) })));
   html += renderCompletenessBar(completeness);
 
-  // Step navigation
+  // Step navigation (6 steps — added Prior Sales)
+  const _priorSales = window._govPriorSales || [];
   const steps = [
     {label: 'Sale Details', complete: !!rec.sale_price},
     {label: 'Entity', complete: !!rec.recorded_owner_name},
     {label: 'True Owner', complete: !!rec.true_owner_name},
     {label: 'Property', complete: !!rec.rba},
-    {label: 'Financing', complete: !!loan.index_name}
+    {label: 'Financing', complete: !!loan.index_name},
+    {label: 'Prior Sales', complete: _priorSales.length > 0}
   ];
   html += renderStepNav(govResearchStep, steps, 'window.govStepNav');
 
@@ -1216,6 +1251,38 @@ function renderOwnershipResearchCard(rec) {
   html += guidedField('res-own-notes', 'Research Notes', rec.research_notes || '', {type:'textarea', rows:4, placeholder:'Key findings...'});
   html += '</div>';
 
+  // ──── STEP 5: PRIOR SALES (bulk entry) ────
+  html += `<div class="form-step${govResearchStep === 5 ? ' active' : ''}">`;
+  html += '<div class="form-step-head"><span class="step-num">6</span> Prior Sales</div>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Add previous transactions for this property. Data dumps multiple sales while the record is open.</div>';
+
+  // Existing prior sales entries
+  if (!window._govPriorSales) window._govPriorSales = [];
+  if (window._govPriorSales.length > 0) {
+    html += '<div style="margin-bottom:12px">';
+    window._govPriorSales.forEach((ps, pi) => {
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:4px;background:var(--s2);border-radius:6px;font-size:12px">`;
+      html += `<span style="color:var(--text2)">${esc(ps.date || '—')}</span>`;
+      html += `<span style="color:var(--accent);font-weight:600">${ps.price ? '$' + Number(ps.price).toLocaleString() : '—'}</span>`;
+      html += `<span style="flex:1;color:var(--text)">${esc(ps.buyer || '')} ← ${esc(ps.seller || '')}</span>`;
+      html += `<button class="btn-action" onclick="window._govPriorSales.splice(${pi},1);renderGovTab()" style="padding:2px 6px;font-size:10px">✕</button>`;
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // Add new prior sale form
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
+  html += guidedField('res-ps-date', 'Sale Date', '', {type:'date'});
+  html += guidedField('res-ps-price', 'Sale Price', '', {type:'number', placeholder:'e.g. 4500000'});
+  html += guidedField('res-ps-buyer', 'Buyer', '', {placeholder:'Purchasing entity'});
+  html += guidedField('res-ps-seller', 'Seller', '', {placeholder:'Selling entity'});
+  html += guidedField('res-ps-cap', 'Cap Rate (%)', '', {type:'number', step:'0.1', placeholder:'e.g. 5.25'});
+  html += guidedField('res-ps-source', 'Source', '', {placeholder:'CoStar, County records, etc.'});
+  html += '</div>';
+  html += `<button class="btn-action" onclick="govAddPriorSale()" style="margin-bottom:8px">+ Add Prior Sale</button>`;
+  html += '</div>';
+
   html += '</div>';
 
   // ────────────────────────────────────────────────────────────
@@ -1225,10 +1292,11 @@ function renderOwnershipResearchCard(rec) {
   if (govResearchStep > 0) {
     html += `<button class="btn-action" onclick="govStepNav(${govResearchStep - 1})">← Back</button>`;
   }
-  if (govResearchStep < 4) {
+  if (govResearchStep < 5) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
-  html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
+  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
+  html += `<button class="btn-action${govResearchStep === 5 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
   html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
   html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'na')">N/A</button>`;
@@ -1427,6 +1495,7 @@ function renderLeadResearchCard(rec) {
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   } else {
+    html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
     html += `<button class="btn-action primary" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
   }
   html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
@@ -1439,10 +1508,11 @@ function renderLeadResearchCard(rec) {
 }
 
 function renderIntelResearchCard(rec) {
-  // Track record changes to reset step
+  // Track record changes to reset step and clear draft
   if (window._govLastRecId !== (rec.property_id)) {
     govResearchStep = 0;
     window._govLastRecId = rec.property_id;
+    window._govFormDraft = {};
   }
 
   const snapshot = rec.gsa_snapshot || {};
@@ -1639,6 +1709,7 @@ function renderIntelResearchCard(rec) {
   if (govResearchStep < 4) {
     html += `<button class="btn-action primary" onclick="govStepNav(${govResearchStep + 1})">Next →</button>`;
   }
+  html += `<button class="btn-action" onclick="_udBtnGuard(this, researchSaveInPlace)">Save</button>`;
   html += `<button class="btn-action${govResearchStep === 4 ? ' primary' : ''}" onclick="_udBtnGuard(this, researchSave)">Save & Next</button>`;
   html += `<button class="btn-action" onclick="researchNav(1,true)">Skip</button>`;
   html += `<button class="btn-action" onclick="_udActionBtnGuard(this, researchMark, 'spe_rename')">SPE Rename</button>`;
@@ -1666,7 +1737,7 @@ function renderResearchInner() {
   html += '<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:8px;font-size:10px;color:var(--text3)">';
   html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">N</kbd> Next</span>';
   html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">B</kbd> Back</span>';
-  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">S</kbd> Save</span>';
+  html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">S</kbd> Save (stay)</span>';
   html += '<span><kbd style="padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--s2);font-family:monospace">K</kbd> Skip</span>';
   html += '</div>';
 
@@ -1683,6 +1754,40 @@ function renderResearchInner() {
 }
 
 let _researchSaving = false;
+
+/** Save current record in-place (no advance). Used by "S" shortcut. */
+async function researchSaveInPlace() {
+  if (_researchSaving) { showToast('Save already in progress', 'info'); return; }
+  // Capture draft so values from all subtabs are available for save
+  if (researchMode === 'ownership') captureOwnershipDraft();
+  const rec = researchQueue[researchIdx];
+  if (!rec) { showToast('No record to save', 'error'); return; }
+  _researchSaving = true;
+
+  let success = true;
+  try {
+    if (researchMode === 'ownership') {
+      success = (await saveOwnership(rec)) !== false;
+    } else if (researchMode === 'intel') {
+      success = (await saveIntel(rec)) !== false;
+    } else {
+      success = (await saveLead(rec)) !== false;
+    }
+  } catch (err) {
+    console.error('researchSaveInPlace error:', err);
+    showToast('Save failed: ' + err.message, 'error');
+    _researchSaving = false;
+    return;
+  }
+
+  _researchSaving = false;
+  if (success) {
+    showToast('Saved — staying on current record', 'success');
+    window._govFormDraft = {};  // Clear draft after successful save
+  }
+}
+window.researchSaveInPlace = researchSaveInPlace;
+
 async function researchSave() {
   if (_researchSaving) { showToast('Save already in progress', 'info'); return; }
   const rec = researchQueue[researchIdx];
@@ -1726,15 +1831,19 @@ async function researchSave() {
 }
 
 async function saveOwnership(rec) {
-  const saleDate = q('#res-own-sale-date')?.value || null;
-  const salePrice = _pf(q('#res-own-sale-price'));
-  const capRate = _pf(q('#res-own-cap-rate'));
-  const buyer = q('#res-own-buyer')?.value || null;
-  const seller = q('#res-own-seller')?.value || null;
+  // Helper: get value from visible DOM or from draft state (for fields on non-visible subtabs)
+  var _d = window._govFormDraft || {};
+  function _fv(id) { var el = q('#' + id); return (el && el.value) ? el.value : (_d[id] || null); }
 
-  const recordedOwner = q('#res-own-recorded-owner')?.value || null;
-  const trueOwner = q('#res-own-true-owner')?.value || null;
-  const researchNotes = q('#res-own-notes')?.value || null;
+  const saleDate = _fv('res-own-sale-date');
+  const salePrice = _pf(q('#res-own-sale-price')) || (_d['res-own-sale-price'] ? parseFloat(_d['res-own-sale-price']) : null);
+  const capRate = _pf(q('#res-own-cap-rate')) || (_d['res-own-cap-rate'] ? parseFloat(_d['res-own-cap-rate']) : null);
+  const buyer = _fv('res-own-buyer');
+  const seller = _fv('res-own-seller');
+
+  const recordedOwner = _fv('res-own-recorded-owner');
+  const trueOwner = _fv('res-own-true-owner');
+  const researchNotes = _fv('res-own-notes');
 
   // Validate that at least one field is populated
   const _anyOwnField = [saleDate, salePrice, capRate, buyer, seller, recordedOwner, trueOwner, researchNotes].some(v => v !== null && v !== undefined && String(v).trim() !== '');
@@ -1768,17 +1877,17 @@ async function saveOwnership(rec) {
       buyer: buyer,
       seller: seller,
       recorded_owner_name: recordedOwner,
-      state_of_incorporation: q('#res-own-incorporation')?.value || null,
-      recorded_owner_phone: q('#res-own-phone')?.value || null,
-      recorded_owner_address: q('#res-own-mailing')?.value || null,
+      state_of_incorporation: _fv('res-own-incorporation'),
+      recorded_owner_phone: _fv('res-own-phone'),
+      recorded_owner_address: _fv('res-own-mailing'),
       true_owner_name: trueOwner,
-      principal_names: q('#res-own-principal-names')?.value || null,
-      phone_2: q('#res-own-phone-2')?.value || null,
-      mailing_address_2: q('#res-own-mailing-2')?.value || null,
-      rba: _pf(q('#res-own-rba')),
-      land_acres: _pf(q('#res-own-land-acres')),
-      year_built: _pi(q('#res-own-year-built')),
-      year_renovated: _pi(q('#res-own-year-renovated')),
+      principal_names: _fv('res-own-principal-names'),
+      phone_2: _fv('res-own-phone-2'),
+      mailing_address_2: _fv('res-own-mailing-2'),
+      rba: _pf(q('#res-own-rba')) || (_d['res-own-rba'] ? parseFloat(_d['res-own-rba']) : null),
+      land_acres: _pf(q('#res-own-land-acres')) || (_d['res-own-land-acres'] ? parseFloat(_d['res-own-land-acres']) : null),
+      year_built: _pi(q('#res-own-year-built')) || (_d['res-own-year-built'] ? parseInt(_d['res-own-year-built']) : null),
+      year_renovated: _pi(q('#res-own-year-renovated')) || (_d['res-own-year-renovated'] ? parseInt(_d['res-own-year-renovated']) : null),
       research_notes: researchNotes,
       research_status: 'completed',
       evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
@@ -1822,9 +1931,54 @@ async function saveOwnership(rec) {
   if (salePrice || capRate) {
     try { await saveLoanFields(rec); } catch (err) { console.error('Loan fields save error:', err); _partialWarnings.push('loan fields'); }
   }
+  // Save prior sales entries if any were added
+  if (window._govPriorSales && window._govPriorSales.length > 0) {
+    for (const ps of window._govPriorSales) {
+      try {
+        await govWriteService('ownership', {
+          property_id: propertyId,
+          recorded_owner: ps.buyer || null,
+          true_owner: null,
+          owner_type: 'prior_sale'
+        });
+      } catch (err) {
+        console.warn('Prior sale write error:', err);
+        _partialWarnings.push('prior sale ' + (ps.date || ''));
+      }
+    }
+    window._govPriorSales = [];  // Clear after saving
+  }
+
   if (_partialWarnings.length) { showToast('Saved with warnings — failed to update: ' + _partialWarnings.join(', '), 'error'); return true; }
   return true;
 }
+
+/** Add a prior sale entry from the bulk entry form */
+function govAddPriorSale() {
+  const date = q('#res-ps-date')?.value || null;
+  const price = q('#res-ps-price')?.value || null;
+  const buyer = q('#res-ps-buyer')?.value || null;
+  const seller = q('#res-ps-seller')?.value || null;
+  const cap = q('#res-ps-cap')?.value || null;
+  const source = q('#res-ps-source')?.value || null;
+
+  if (!date && !price && !buyer && !seller) {
+    showToast('Fill in at least one field to add a prior sale', 'info');
+    return;
+  }
+
+  if (!window._govPriorSales) window._govPriorSales = [];
+  window._govPriorSales.push({ date, price: price ? parseFloat(price) : null, buyer, seller, cap, source });
+
+  // Clear the form fields
+  ['res-ps-date', 'res-ps-price', 'res-ps-buyer', 'res-ps-seller', 'res-ps-cap', 'res-ps-source'].forEach(id => {
+    const el = q('#' + id); if (el) el.value = '';
+  });
+
+  showToast('Prior sale added (' + window._govPriorSales.length + ' total) — will save with record', 'success');
+  renderGovTab();
+}
+window.govAddPriorSale = govAddPriorSale;
 
 async function saveLead(rec) {
   const saleDate = q('#res-lead-sale-date')?.value || null;
@@ -2423,7 +2577,8 @@ function setResearchFilter(filter) {
     }
     if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
-      if (govResearchStep < 4) {
+      const _maxStep = researchMode === 'ownership' ? 5 : 4;
+      if (govResearchStep < _maxStep) {
         govStepNav(govResearchStep + 1);
       } else {
         researchSave();
@@ -2433,7 +2588,7 @@ function setResearchFilter(filter) {
       if (govResearchStep > 0) govStepNav(govResearchStep - 1);
     } else if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
-      if (!_researchSaving) researchSave();
+      if (!_researchSaving) researchSaveInPlace();
     } else if (e.key === 'k' || e.key === 'K') {
       e.preventDefault();
       if (!_researchSaving) {
@@ -5661,7 +5816,18 @@ let govAvailListings = null; // lazy-loaded from v_available_listings
 let govSalesLoading = false;
 let govSalesSearch = '';
 let govSalesPage = 0;
+let govSalesSort = { col: null, dir: 'desc' };
 const GOV_SALES_PAGE_SIZE = 50;
+
+window.govSalesSortBy = function(col) {
+  if (govSalesSort.col === col) {
+    govSalesSort.dir = govSalesSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    govSalesSort = { col: col, dir: 'desc' };
+  }
+  govSalesPage = 0;
+  renderGovSales();
+};
 
 async function renderGovSales() {
   const inner = document.getElementById('bizPageInner');
@@ -5776,6 +5942,19 @@ async function renderGovSales() {
     (r.listing_broker || '').toLowerCase().includes(q)
   ) : normalized;
 
+  // Sort
+  if (govSalesSort.col) {
+    const _sc = govSalesSort.col, _sd = govSalesSort.dir === 'asc' ? 1 : -1;
+    filtered.sort(function(a, b) {
+      var av = a[_sc], bv = b[_sc];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * _sd;
+      return String(av).localeCompare(String(bv)) * _sd;
+    });
+  }
+
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / GOV_SALES_PAGE_SIZE));
   if (govSalesPage >= totalPages) govSalesPage = totalPages - 1;
@@ -5840,55 +6019,59 @@ async function renderGovSales() {
 
   // Header
   html += '<thead><tr style="background: var(--s2); position: sticky; top: 0; z-index: 1;">';
-  const th = (label, w) => '<th style="padding: 10px 8px; text-align: left; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px;">' + label + '</th>';
-  const thr = (label, w) => '<th style="padding: 10px 8px; text-align: right; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px;">' + label + '</th>';
+  const _sortArrow = (col) => {
+    if (govSalesSort.col !== col) return ' <span style="opacity:0.3;font-size:9px">&#x25B2;&#x25BC;</span>';
+    return govSalesSort.dir === 'asc' ? ' <span style="color:var(--accent);font-size:9px">&#x25B2;</span>' : ' <span style="color:var(--accent);font-size:9px">&#x25BC;</span>';
+  };
+  const th = (label, w, col) => '<th onclick="govSalesSortBy(\'' + col + '\')" style="padding: 10px 8px; text-align: left; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px; cursor: pointer; user-select: none;">' + label + _sortArrow(col) + '</th>';
+  const thr = (label, w, col) => '<th onclick="govSalesSortBy(\'' + col + '\')" style="padding: 10px 8px; text-align: right; font-weight: 600; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text2); border-bottom: 2px solid var(--border); white-space: nowrap; min-width: ' + w + 'px; cursor: pointer; user-select: none;">' + label + _sortArrow(col) + '</th>';
 
   if (isComps) {
-    html += th('Agency', 160);
-    html += th('Address', 140);
-    html += th('City', 90);
-    html += th('State', 40);
-    html += thr('Land', 55);
-    html += thr('Built', 45);
-    html += thr('RBA', 60);
-    html += thr('NOI', 75);
-    html += thr('NOI/SF', 60);
-    html += th('Expiration', 85);
-    html += thr('Firm Term Rem', 80);
-    html += thr('Lease Term Rem', 80);
-    html += th('Expenses', 70);
-    html += th('Bumps', 90);
-    html += thr('Price', 85);
-    html += thr('Price/SF', 65);
-    html += thr('Cap', 55);
-    html += th('Sold Date', 80);
-    html += th('Seller', 110);
-    html += th('Listing Broker', 100);
-    html += th('Buyer', 110);
-    html += th('Procuring Broker', 110);
-    html += thr('Bid-Ask', 55);
-    html += thr('DOM', 45);
+    html += th('Agency', 160, 'agency');
+    html += th('Address', 140, 'address');
+    html += th('City', 90, 'city');
+    html += th('State', 40, 'state');
+    html += thr('Land', 55, 'land_acres');
+    html += thr('Built', 45, 'year_built');
+    html += thr('RBA', 60, 'rba');
+    html += thr('NOI', 75, 'noi');
+    html += thr('NOI/SF', 60, 'noi_psf');
+    html += th('Expiration', 85, 'lease_expiration');
+    html += thr('Firm Term Rem', 80, 'firm_term_remaining');
+    html += thr('Lease Term Rem', 80, 'term_remaining');
+    html += th('Expenses', 70, 'expenses');
+    html += th('Bumps', 90, 'bumps');
+    html += thr('Price', 85, 'price');
+    html += thr('Price/SF', 65, 'price_psf');
+    html += thr('Cap', 55, 'cap_rate');
+    html += th('Sold Date', 80, 'sold_date');
+    html += th('Seller', 110, 'seller');
+    html += th('Listing Broker', 100, 'listing_broker');
+    html += th('Buyer', 110, 'buyer');
+    html += th('Procuring Broker', 110, 'procuring_broker');
+    html += thr('Bid-Ask', 55, 'bid_ask_spread');
+    html += thr('DOM', 45, 'dom');
   } else {
-    html += th('Agency', 160);
-    html += th('Address', 140);
-    html += th('City', 90);
-    html += th('State', 40);
-    html += thr('Land', 55);
-    html += thr('Built', 45);
-    html += thr('RBA', 60);
-    html += thr('NOI', 75);
-    html += thr('NOI/SF', 60);
-    html += th('Expiration', 85);
-    html += thr('Firm Term Rem', 80);
-    html += thr('Lease Term Rem', 80);
-    html += th('Expenses', 70);
-    html += th('Bumps', 90);
-    html += thr('Ask Price', 85);
-    html += thr('Price/SF', 65);
-    html += thr('Ask Cap', 55);
-    html += th('Seller', 110);
-    html += th('Listing Broker', 100);
-    html += thr('DOM', 45);
+    html += th('Agency', 160, 'agency');
+    html += th('Address', 140, 'address');
+    html += th('City', 90, 'city');
+    html += th('State', 40, 'state');
+    html += thr('Land', 55, 'land_acres');
+    html += thr('Built', 45, 'year_built');
+    html += thr('RBA', 60, 'rba');
+    html += thr('NOI', 75, 'noi');
+    html += thr('NOI/SF', 60, 'noi_psf');
+    html += th('Expiration', 85, 'lease_expiration');
+    html += thr('Firm Term Rem', 80, 'firm_term_remaining');
+    html += thr('Lease Term Rem', 80, 'term_remaining');
+    html += th('Expenses', 70, 'expenses');
+    html += th('Bumps', 90, 'bumps');
+    html += thr('Ask Price', 85, 'ask_price');
+    html += thr('Price/SF', 65, 'price_psf');
+    html += thr('Ask Cap', 55, 'ask_cap');
+    html += th('Seller', 110, 'seller');
+    html += th('Listing Broker', 100, 'listing_broker');
+    html += thr('DOM', 45, 'dom');
   }
   html += '<th style="padding:10px 8px;text-align:center;font-weight:600;font-size:11px;letter-spacing:0.3px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;min-width:80px;position:sticky;right:0;background:var(--s2);z-index:2">Actions</th>';
   html += '</tr></thead>';
@@ -5905,9 +6088,10 @@ async function renderGovSales() {
   const fmtTerm = (v) => v != null ? (parseFloat(v) < 0 ? 'Exp.' : parseFloat(v).toFixed(1) + ' yr') : '—';
   const fmtDate = (v) => v || '—';
 
-  pageRows.forEach(r => {
+  pageRows.forEach((r, _ri) => {
     const rowData = JSON.stringify({ property_id: r.property_id, lease_number: r.lease_number, agency: r.agency, address: r.address, city: r.city, state: r.state }).replace(/'/g, '&#39;');
-    html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "gov-ownership")\' style="cursor: pointer;">';
+    const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "gov-ownership")\' style="cursor: pointer;' + _zebra + '">';
     html += td(r.agency, true);
     html += td(r.address, true);
     html += td(r.city);

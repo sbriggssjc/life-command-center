@@ -642,15 +642,15 @@ function projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncH
 
 function buildActions(roleView) {
   const base = [
-    { label: 'Open My Queue', type: 'link', target: '/?tab=queue' },
-    { label: 'Open Inbox Triage', type: 'link', target: '/?tab=inbox' },
-    { label: 'View Sync Health', type: 'link', target: '/?tab=ops&view=sync-health' }
+    { label: 'Open My Queue', type: 'nav', target: 'pageMyWork' },
+    { label: 'Open Inbox Triage', type: 'nav', target: 'pageInbox' },
+    { label: 'View Sync Health', type: 'nav', target: 'pageSyncHealth' }
   ];
   if (roleView === 'analyst_ops' || roleView === 'manager') {
-    base.push({ label: 'Review Unassigned Work', type: 'link', target: '/?tab=queue&view=team' });
+    base.push({ label: 'Review Unassigned Work', type: 'nav', target: 'pageTeamQueue' });
   }
   if (roleView === 'manager') {
-    base.push({ label: 'View Escalations', type: 'link', target: '/?tab=ops&view=escalations' });
+    base.push({ label: 'View Escalations', type: 'nav', target: 'pageMyWork' });
   }
   return base;
 }

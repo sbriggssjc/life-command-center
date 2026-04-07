@@ -296,24 +296,28 @@ function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replac
 function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
 
 // Build a reliable Outlook Web deep-link for a specific email.
-// The Microsoft Graph webLink often opens the desktop Outlook app or lands on
-// a generic inbox page.  This helper normalises the URL so it always opens in
-// the browser-based Outlook Web and targets the exact message.
+// Build a link that opens the message in the user's Desktop Outlook client.
+// Uses the outlook: protocol handler registered by Microsoft 365 / Outlook.
+// Falls back to Outlook Web if no suitable ID is available.
 function outlookWebLink(email) {
-  // 1. If we have a Graph-supplied webLink, rewrite it to the modern Outlook Web
-  //    domain so the browser handles it rather than a protocol-handler redirect.
+  // 1. Try to build an outlook: deep-link using the Graph REST id.
+  //    Format: outlook://mail/deeplink/read/<encodedId>
+  const restId = email.id || email.email_id || '';
+  if (restId) {
+    return `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(restId)}`;
+  }
+  // 2. If we have a Graph-supplied webLink, preserve its protocol-handler params
+  //    (popoutv2, exvsurl) so the OS routes to Desktop Outlook.
   const raw = email.web_link || email.outlook_link || email.external_url || '';
   if (raw) {
-    // Replace legacy OWA domain with modern Outlook Web domain
+    // Normalise legacy OWA domain but keep deep-link params intact
     let url = raw.replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/');
-    // Ensure it stays on the web by stripping deep-link params that trigger desktop
-    url = url.replace(/[?&]popoutv2=1/gi, '').replace(/[?&]exvsurl=1/gi, '');
     return url;
   }
-  // 2. Construct from the email's Graph id or internet_message_id
-  const msgId = email.id || email.email_id || email.internet_message_id || '';
-  if (msgId) {
-    return `https://outlook.office.com/mail/inbox/id/${encodeURIComponent(msgId)}`;
+  // 3. Last resort: internet_message_id → web search (less reliable for desktop)
+  const inetId = email.internet_message_id || '';
+  if (inetId) {
+    return `https://outlook.office.com/mail/inbox/id/${encodeURIComponent(inetId)}`;
   }
   return '';
 }
@@ -3760,9 +3764,15 @@ function closeDetail() {
   window._detailRecord = null;
   window._detailSource = null;
   window._detailTab = null;
+  window._saleRecord = null;
+  window._saleCurrentTab = null;
 
   _setDisplay('detailPanel', 'none');
-  document.getElementById('detailOverlay')?.classList.remove('open');
+  const overlay = document.getElementById('detailOverlay');
+  if (overlay) {
+    overlay.classList.remove('open');
+    overlay.style.display = '';  // clear inline display so CSS takes over
+  }
   _setHTML('detailHeader', '');
   _setHTML('detailTabs', '');
   _setHTML('detailBody', '');
@@ -4614,8 +4624,8 @@ async function fetchYieldHistory(numYears) {
 
 function filterByRange(data, range) {
   if (!data.length) return data;
-  // 1D: show last 10 trading days for context (Treasury only has daily closes)
-  if (range === '1D') return data.slice(-10);
+  // 1D: show last 2 trading days (today + previous close) — Treasury only has daily closes
+  if (range === '1D') return data.slice(-2);
   const now = new Date();
   let cutoff;
   switch (range) {
@@ -5070,7 +5080,7 @@ function renderRecentEmails() {
         <div class="email-subj">${title}</div>
         <div class="email-from"><span>${source}</span><span>${date}</span></div>
         ${bodyPreview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(bodyPreview)}</div>` : ''}
-        ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
+        ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
       </div>`;
     }
     const total = canonicalInbox.pagination?.total || 0;
@@ -5090,7 +5100,7 @@ function renderRecentEmails() {
       <div class="email-subj">${esc(e.subject || '(No subject)')}</div>
       <div class="email-from"><span>${esc(e.sender_name || e.sender_email || '')}</span><span>${formatDate(e.received_date)}</span></div>
       ${preview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(preview)}</div>` : ''}
-      ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
+      ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
     </div>`;
   }
   return html;
@@ -5263,7 +5273,9 @@ function renderDailyBriefingPanel() {
       const label = esc(action.label || 'Open');
       const target = String(action.target || '').trim();
       if (!target) return;
-      if (target.startsWith('/')) {
+      if (action.type === 'nav') {
+        html += `<a class="db-action" href="#" onclick="event.preventDefault();navTo('${esc(target)}')">${label}</a>`;
+      } else if (target.startsWith('/')) {
         html += `<a class="db-action" href="${esc(target)}">${label}</a>`;
       } else if (target.startsWith('http://') || target.startsWith('https://')) {
         html += `<a class="db-action" href="${safeHref(target)}" target="_blank" rel="noopener">${label}</a>`;
@@ -5655,7 +5667,7 @@ function renderMessages() {
       </div>
       <div class="msg-subject">${esc(m.subject)}</div>
       ${m.preview ? `<div class="msg-preview">${esc(m.preview)}</div>` : ''}
-      ${m.link ? `<a href="${safeHref(m.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>` : ''}
+      ${m.link ? `<a href="${safeHref(m.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
     </div>`;
   }
   if (items.length > 50) html += `<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 50 of ${items.length} messages</div>`;

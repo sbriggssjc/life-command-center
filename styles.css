@@ -527,10 +527,17 @@ body.compact .greeting { font-size: 18px; }
 
 .table-empty { text-align: center; padding: 32px; color: var(--text2); font-size: 14px; }
 .table-wrapper { overflow-x: auto; border-radius: 8px; }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.data-table th { text-align: left; padding: 12px; color: var(--text2); font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.data-table { width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px; }
+.data-table th { text-align: left; padding: 12px; color: var(--text2); font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer; user-select: none; position: relative; }
+.data-table th:hover { color: var(--text); }
+.data-table th .sort-arrow { margin-left: 4px; font-size: 9px; opacity: 0.4; }
+.data-table th .sort-arrow.active { opacity: 1; color: var(--accent); }
 .data-table td { padding: 12px; color: var(--text); border-bottom: 1px solid var(--border); }
 .data-table td code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+/* Zebra striping — alternating row bands for readability */
+.data-table tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+.data-table tbody tr:nth-child(odd) td { background: transparent; }
+.table-wrapper { overflow-x: auto; border-radius: 8px; }
 .table-row { display: flex; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); gap: 8px; }
 .table-row:hover { background: var(--s2); }
 .truncate { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -568,6 +575,8 @@ body.compact .greeting { font-size: 18px; }
 .search-card-meta .ml { color: var(--text3); font-size: 11px; }
 .clickable-tr { cursor: pointer; }
 .clickable-tr:hover td { background: var(--s2); }
+.clickable-tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+.clickable-tr:nth-child(even):hover td { background: var(--s2); }
 .search-empty { text-align: center; padding: 48px 16px; color: var(--text2); }
 .search-empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
 .search-empty p { font-size: 14px; }

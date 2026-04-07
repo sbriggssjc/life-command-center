@@ -323,16 +323,8 @@ async function renderMyWork(page) {
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   const perf = opsPerf('render:my_work');
 
-  // SYNC FIX: Use canonicalMyWork if available (same source as Dashboard widget)
-  // This ensures consistency between Dashboard and My Work page
-  if (typeof canonicalMyWork !== 'undefined' && canonicalMyWork && canonicalMyWork.items && canonicalMyWork.items.length > 0) {
-    opsMyWorkData = canonicalMyWork.items || [];
-    const cRes = await opsApi('/api/connectors?action=list');
-    const connectors = cRes.ok ? (cRes.data?.connectors || cRes.data || []) : [];
-    renderMyWorkList(el, connectors);
-    perf.end();
-    return;
-  }
+  // NOTE: canonicalMyWork is a 5-item dashboard preview — always fetch the full
+  // list below so the Pipeline tab shows all items, not just the preview subset.
 
   const pageParam = page ? `&page=${page}&per_page=25` : '&limit=100';
   const [qRes, cRes] = await Promise.all([
@@ -719,7 +711,7 @@ function inboxItemHTML(item, idx) {
   // Open in Outlook link
   const emailLink = typeof outlookWebLink === 'function' ? outlookWebLink(item) : (item.external_url || '');
   if (emailLink) {
-    html += `<a href="${typeof safeHref === 'function' ? safeHref(emailLink) : emailLink}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-bottom:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook &rarr;</a>`;
+    html += `<a href="${typeof safeHref === 'function' ? safeHref(emailLink) : emailLink}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-bottom:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>`;
   }
 
   // Normalized quick actions

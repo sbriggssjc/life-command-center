@@ -331,8 +331,13 @@ function renderDiaTab() {
 // OVERVIEW TAB — Infographic-Style Command Center
 // ============================================================================
 
-// Helper: navigate to a dia sub-tab
-function goToDiaTab(tabName) {
+// Helper: navigate to a dia sub-tab with optional pre-filter
+function goToDiaTab(tabName, preFilter) {
+  // Apply pre-filter if provided (e.g. searching CMS tab for "added" clinics)
+  if (preFilter && tabName === 'changes') {
+    diaCmsSearch = preFilter;
+    diaCmsPage = 0;
+  }
   currentDiaTab = tabName;
   if (typeof window.syncDomainTabGroup === 'function') {
     window.syncDomainTabGroup('dialysis', tabName);
@@ -549,7 +554,7 @@ function renderDiaOverview() {
       icon: '🆕', color: '#34d399', urgency: 'info',
       title: addedCount + ' new clinic' + (addedCount > 1 ? 's' : '') + ' added to CMS inventory',
       detail: 'New facilities — may need property linking and operator research',
-      action: 'View Changes', tab: 'changes'
+      action: 'View New Clinics', tab: 'changes', preFilter: 'added'
     });
   }
 
@@ -558,13 +563,14 @@ function renderDiaOverview() {
     html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px;padding-left:2px">Action Items</div>';
     for (const h of diaHighlights.slice(0, 5)) {
       const borderColor = h.urgency === 'urgent' ? h.color : h.urgency === 'warning' ? h.color : 'var(--border)';
-      html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="goToDiaTab(\'' + h.tab + '\')">';
+      const _pf = h.preFilter ? ",'" + h.preFilter + "'" : '';
+      html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;background:var(--s2);border-radius:10px;border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="goToDiaTab(\'' + h.tab + '\'' + _pf + ')">';
       html += '<span style="font-size:20px;flex-shrink:0">' + h.icon + '</span>';
       html += '<div style="flex:1;min-width:0">';
       html += '<div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(h.title) + '</div>';
       html += '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(h.detail) + '</div>';
       html += '</div>';
-      html += '<button class="gov-row-action accent" onclick="event.stopPropagation();goToDiaTab(\'' + h.tab + '\')" style="flex-shrink:0">' + esc(h.action) + '</button>';
+      html += '<button class="gov-row-action accent" onclick="event.stopPropagation();goToDiaTab(\'' + h.tab + '\'' + _pf + ')" style="flex-shrink:0">' + esc(h.action) + '</button>';
       html += '</div>';
     }
     html += '</div>';
@@ -2961,10 +2967,7 @@ function renderDiaPropertyResearch() {
   html += 'Hide reviewed (' + propReviewedCount + ')</label>';
   html += '</div>';
 
-  // Queue table
-  html += '<div class="table-wrapper" style="margin-bottom: 20px;">';
-  html += '<div class="data-table">';
-
+  // Pre-compute filter for operations card (show at top, before list)
   let filtered = diaData.propertyReviewQueue;
   if (diaPropertyFilter.hideReviewed) {
     const reviewedClinicIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'property_review').map(o => o.clinic_id));
@@ -2973,7 +2976,17 @@ function renderDiaPropertyResearch() {
   if (diaPropertyFilter.review_type) {
     filtered = filtered.filter(r => r.review_type === diaPropertyFilter.review_type);
   }
-  
+
+  // Operations card — render at the top so it's immediately visible
+  if (diaPropertyFilter.selectedIdx !== undefined && filtered[diaPropertyFilter.selectedIdx]) {
+    const item = filtered[diaPropertyFilter.selectedIdx];
+    html += renderDiaPropertyCard(item);
+  }
+
+  // Queue table
+  html += '<div class="table-wrapper" style="margin-bottom: 20px;">';
+  html += '<div class="data-table">';
+
   if (filtered.length === 0) {
     const totalPropItems = diaData.propertyReviewQueue.length;
     const reviewedPropItems = diaData.researchOutcomes.filter(o => o.queue_type === 'property_review').length;
@@ -3018,13 +3031,7 @@ function renderDiaPropertyResearch() {
   
   html += '</div>';
   html += '</div>';
-  
-  // Research card for selected item
-  if (diaPropertyFilter.selectedIdx !== undefined && filtered[diaPropertyFilter.selectedIdx]) {
-    const item = filtered[diaPropertyFilter.selectedIdx];
-    html += renderDiaPropertyCard(item);
-  }
-  
+
   // Attach handlers
   setTimeout(() => {
     document.querySelectorAll('[data-filter-type]').forEach(btn => {
@@ -3149,10 +3156,10 @@ function renderDiaPropertyCard(item) {
     ]
   });
 
-  // === PROPERTY RESOLUTION (if no property_id) ===
-  if (!item.property_id) {
-    html += renderPropertyResolution(item, 'v_clinic_property_link_review_queue', 'clinic_id');
-  }
+  // === PROPERTY RESOLUTION / SEARCH ===
+  // Always show search — for unlinked clinics it's the primary workflow;
+  // for linked clinics it lets users check for duplicates or re-link.
+  html += renderPropertyResolution(item, 'v_clinic_property_link_review_queue', 'clinic_id');
 
   // Property ID
   html += guidedField('propPropertyId', 'Property ID', item.property_id, {
@@ -4145,8 +4152,20 @@ window.diaClStepNav = function(idx) {
 function renderPropertyResolution(rec, sourceTable, sourceIdCol) {
   if (rec.property_id) {
     return `<div class="prop-linked" style="padding:8px;background:var(--bg2);border-radius:6px;margin:8px 0;">
-      <span style="color:var(--success);font-size:12px;">✓ Linked to Property #${rec.property_id}</span>
-      <button onclick="openUnifiedDetail('dialysis',{property_id:${rec.property_id}})" style="margin-left:8px;font-size:11px;padding:2px 8px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;">View Property</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="color:var(--success);font-size:12px;">✓ Linked to Property #${rec.property_id}</span>
+        <div style="display:flex;gap:4px;">
+          <button onclick="openUnifiedDetail('dialysis',{property_id:${rec.property_id}})" style="font-size:11px;padding:2px 8px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;">View</button>
+          <button onclick="document.getElementById('propResRelink').style.display=document.getElementById('propResRelink').style.display==='none'?'block':'none'" style="font-size:11px;padding:2px 8px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:4px;cursor:pointer;">Search / Re-link</button>
+        </div>
+      </div>
+      <div id="propResRelink" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);">
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <input type="text" id="propResSearch" placeholder="Search by address or name..." onkeydown="if(event.key==='Enter'){event.preventDefault();propResDoSearch('${sourceTable}','${sourceIdCol}',${rec[sourceIdCol]||'null'});}" style="flex:1;padding:5px 8px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);">
+          <button onclick="propResDoSearch('${sourceTable}','${sourceIdCol}',${rec[sourceIdCol]||'null'})" style="padding:5px 10px;font-size:11px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;">Search</button>
+        </div>
+        <div id="propResResults" style="max-height:150px;overflow-y:auto;"></div>
+      </div>
     </div>`;
   }
 
@@ -4973,7 +4992,10 @@ async function renderDiaSales() {
   }
 
   const isComps = diaSalesView === 'comps';
-  const data = isComps ? (diaSalesComps || []) : (diaAvailListings || []);
+  let data = isComps ? (diaSalesComps || []) : (diaAvailListings || []);
+
+  // Filter out blank/empty records — require at least an address or operator name
+  data = data.filter(r => (r.address && r.address.trim()) || (r.tenant_operator && r.tenant_operator.trim()) || (r.facility_name && r.facility_name.trim()));
 
   // Apply state filter
   let filtered = data;
@@ -5154,8 +5176,9 @@ async function renderDiaSales() {
   const fmtTerm = (v) => v != null ? (parseFloat(v) < 0 ? 'Exp.' : parseFloat(v).toFixed(1) + ' yr') : '—';
   const fmtDate = (v) => v || '—';
 
-  pageRows.forEach(r => {
-    html += '<tr class="clickable-row" onclick=\'showSaleDetail(' + safeJSON(r) + ')\' style="cursor: pointer;">';
+  pageRows.forEach((r, _ri) => {
+    const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    html += '<tr class="clickable-row" onclick=\'showSaleDetail(' + safeJSON(r) + ')\' style="cursor: pointer;' + _zebra + '">';
     html += td(r.tenant_operator, true);
     html += td(r.address, true);
     html += td(r.city);
@@ -6367,7 +6390,7 @@ async function showSaleDetail(record) {
   if (!panel || !header || !tabsContainer || !body) return;
 
   // Show panel
-  if (overlay) overlay.style.display = 'flex';
+  if (overlay) { overlay.classList.add('open'); overlay.style.display = ''; }
   panel.style.display = 'flex';
 
   // Render header
@@ -6957,8 +6980,9 @@ function _closeSaleDetailInner() {
   window._saleCurrentTab = null;
   const overlay = q('#detailOverlay');
   const panel = q('#detailPanel');
-  if (overlay) overlay.style.display = 'none';
+  if (overlay) { overlay.classList.remove('open'); overlay.style.display = ''; }
   if (panel) panel.style.display = 'none';
+  q('#detailHeader').innerHTML = '';
   q('#detailTabs').innerHTML = '';
   q('#detailBody').innerHTML = '';
 }
