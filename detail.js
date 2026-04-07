@@ -65,6 +65,7 @@ let _udIntakeState = {
 async function openUnifiedDetail(db, ids, fallback, initialTab) {
   _udCache = null;
   _opsExtraCache = null; // reset operations extra data for new clinic
+  _salesCache = null; // reset sales data for new property
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
   if (!panel || !overlay) return;
@@ -102,7 +103,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
   // Render tab bar — highlight initialTab if provided, else first tab
-  const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'Intel', 'History'];
+  const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'Sales', 'Intel', 'History'];
   const activeTab = (initialTab && tabs.includes(initialTab)) ? initialTab : tabs[0];
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
     `<button class="detail-tab ${t === activeTab ? 'active' : ''}" onclick="switchUnifiedTab('${t}')">${t}</button>`
@@ -475,6 +476,8 @@ function switchUnifiedTab(tabName) {
   // Operations tab may need async data loading
   if (tabName === 'Operations' && _udCache.db === 'dia') {
     _udRenderOperationsAsync(bodyEl);
+  } else if (tabName === 'Sales') {
+    _udRenderSalesAsync(bodyEl);
   } else {
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
   }
@@ -614,6 +617,7 @@ function _udRenderTab(tab) {
     case 'Operations': return _udTabOperations();
     case 'Ownership': return _udTabOwnership();
     case 'Intel': return _udTabIntel();
+    case 'Sales': return _udTabSales();
     case 'History': return _udTabHistory();
     default: return '<div class="detail-empty">Unknown tab</div>';
   }
@@ -1971,6 +1975,194 @@ function _udTabIntel() {
   html += '</div></div>';
 
   return html;
+}
+
+// ─── SALES TAB ──────────────────────────────────────────────────────────────
+
+let _salesCache = null; // { property_id, transactions: [] }
+
+async function _udRenderSalesAsync(bodyEl) {
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  const db = _udCache.db;
+
+  // If already loaded for this property, just render
+  if (_salesCache && _salesCache.property_id === propertyId && _salesCache.db === db) {
+    if (bodyEl) bodyEl.innerHTML = _udTabSales();
+    return;
+  }
+
+  // Show loading spinner
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales history...</p></div>';
+
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+  let transactions = [];
+
+  if (propertyId) {
+    try {
+      const res = await qFn('sales_comps', '*', {
+        filter: `property_id=eq.${encodeURIComponent(propertyId)}`,
+        order: 'sale_date.desc',
+        limit: 100
+      });
+      transactions = Array.isArray(res) ? res : (res?.data || []);
+    } catch (e) {
+      console.warn('Sales history fetch error:', e);
+    }
+  }
+
+  _salesCache = { property_id: propertyId, db, transactions };
+  if (bodyEl) bodyEl.innerHTML = _udTabSales();
+}
+
+function _udTabSales() {
+  const txns = _salesCache ? _salesCache.transactions : [];
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+
+  let html = '';
+
+  if (!txns || txns.length === 0) {
+    html += '<div class="detail-empty" style="text-align:center;padding:40px 20px">';
+    html += '<div style="font-size:18px;margin-bottom:8px;color:var(--text2)">No recorded transactions</div>';
+    html += '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Add a sales comp to start building the transaction history.</div>';
+    if (propertyId) {
+      html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:8px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add Transaction</button>`;
+    }
+    html += '</div>';
+    html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
+    return html;
+  }
+
+  html += '<div class="detail-section">';
+  html += `<div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between">`;
+  html += `<span>Sales History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${txns.length} transaction${txns.length !== 1 ? 's' : ''}</span></span>`;
+  if (propertyId) {
+    html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:5px 14px;border-radius:6px;font-size:12px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add</button>`;
+  }
+  html += '</div>';
+
+  // Timeline
+  html += '<div style="position:relative;padding-left:24px;margin-top:8px">';
+  // Vertical line
+  html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
+
+  txns.forEach((t, idx) => {
+    const isFirst = idx === 0;
+    const dotColor = isFirst ? 'var(--green)' : 'var(--text3)';
+
+    html += '<div style="position:relative;margin-bottom:16px">';
+    // Dot marker
+    html += `<div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:${dotColor};border:2px solid var(--bg)"></div>`;
+
+    // Card
+    html += '<div style="background:var(--s2);border-radius:10px;padding:14px;border:1px solid var(--border)">';
+
+    // Date header
+    const dateStr = _fmtDate(t.sale_date) || 'Unknown date';
+    html += `<div style="font-size:11px;color:var(--text3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${esc(dateStr)}</div>`;
+
+    // Price row
+    if (t.sale_price) {
+      html += `<div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:6px">${fmt(t.sale_price)}</div>`;
+    }
+
+    // Metrics row
+    const metrics = [];
+    if (t.price_psf) metrics.push(`$${Number(t.price_psf).toFixed(0)}/SF`);
+    if (t.cap_rate) metrics.push(`${Number(t.cap_rate).toFixed(2)}% Cap`);
+    if (metrics.length) {
+      html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
+    }
+
+    // Buyer / Seller
+    if (t.buyer || t.buyer_name) {
+      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(t.buyer || t.buyer_name)}</span></div>`;
+    }
+    if (t.seller || t.seller_name) {
+      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(t.seller || t.seller_name)}</span></div>`;
+    }
+
+    // Source
+    if (t.source) {
+      html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(t.source)}</div>`;
+    }
+
+    // Notes
+    if (t.notes) {
+      html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(t.notes)}</div>`;
+    }
+
+    html += '</div></div>';
+  });
+
+  html += '</div></div>';
+  html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
+  return html;
+}
+
+function _salesFormHtml() {
+  return `
+  <div class="detail-section" style="margin-top:12px">
+    <div class="detail-section-title">Add Transaction</div>
+    <div class="detail-grid" style="grid-template-columns:1fr 1fr;gap:10px">
+      <div><label style="font-size:11px;color:var(--text3)">Sale Date</label><input id="salesFDate" type="date" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label style="font-size:11px;color:var(--text3)">Sale Price ($)</label><input id="salesFPrice" type="number" placeholder="0" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label style="font-size:11px;color:var(--text3)">Buyer</label><input id="salesFBuyer" type="text" placeholder="Buyer name" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label style="font-size:11px;color:var(--text3)">Seller</label><input id="salesFSeller" type="text" placeholder="Seller name" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label style="font-size:11px;color:var(--text3)">Price/SF</label><input id="salesFPsf" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label style="font-size:11px;color:var(--text3)">Cap Rate (%)</label><input id="salesFCap" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div><label style="font-size:11px;color:var(--text3)">Source</label><input id="salesFSource" type="text" placeholder="CoStar, County Records, etc." style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px"></div>
+      <div style="grid-column:1/-1"><label style="font-size:11px;color:var(--text3)">Notes</label><textarea id="salesFNotes" rows="2" placeholder="Optional notes" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;resize:vertical"></textarea></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button onclick="_salesToggleForm()" style="padding:7px 16px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:var(--s2);color:var(--text)">Cancel</button>
+      <button onclick="_udBtnGuard(this, _salesSaveTransaction)" style="padding:7px 16px;border-radius:6px;font-size:12px;cursor:pointer;border:none;background:var(--accent);color:#fff">Save Transaction</button>
+    </div>
+  </div>`;
+}
+
+function _salesToggleForm() {
+  const el = document.getElementById('salesAddForm');
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function _salesSaveTransaction() {
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  if (!propertyId) { alert('No property ID — cannot save transaction.'); return; }
+
+  const db = _udCache.db;
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+
+  const payload = {
+    property_id: propertyId,
+    sale_date: document.getElementById('salesFDate')?.value || null,
+    sale_price: _dpf(document.getElementById('salesFPrice')?.value),
+    buyer: document.getElementById('salesFBuyer')?.value?.trim() || null,
+    seller: document.getElementById('salesFSeller')?.value?.trim() || null,
+    price_psf: _dpf(document.getElementById('salesFPsf')?.value),
+    cap_rate: _dpf(document.getElementById('salesFCap')?.value),
+    source: document.getElementById('salesFSource')?.value?.trim() || null,
+    notes: document.getElementById('salesFNotes')?.value?.trim() || null,
+  };
+
+  // Use the proxy to POST (insert) into sales_comps
+  const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+  const url = `${proxyBase}?table=sales_comps&method=POST`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    console.error('Save transaction failed:', errText);
+    alert('Failed to save transaction. Check console for details.');
+    return;
+  }
+
+  // Invalidate cache and reload
+  _salesCache = null;
+  const bodyEl = document.getElementById('detailBody');
+  _udRenderSalesAsync(bodyEl);
 }
 
 // ─── HISTORY TAB ─────────────────────────────────────────────────────────────
