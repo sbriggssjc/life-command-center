@@ -217,37 +217,35 @@ export const ACTION_SCHEMAS = {
   // =========================================================================
 
   generate_prospecting_brief: {
-    description: 'Generate an AI-powered prospecting brief for a target contact or entity with market context.',
+    description: 'Generate an AI-powered daily prospecting call sheet — ranks top contacts by engagement score with call prep notes and talking points.',
     category: 'outreach',
     inputs: {
       type: 'object',
       properties: {
-        entity_id: { type: 'string', format: 'uuid', description: 'Target entity UUID' },
-        domain: { type: 'string', enum: ['government', 'dialysis'] },
-        include_comps: { type: 'boolean', description: 'Include comparable sales analysis' }
-      },
-      required: ['entity_id']
+        limit: { type: 'integer', minimum: 1, maximum: 25, description: 'Number of top contacts to include (default 10)' }
+      }
     },
     outputs: {
       type: 'object',
       properties: {
-        brief: { type: 'object', description: 'Structured prospecting brief' },
+        response: { type: 'string', description: 'AI-generated call sheet with prep notes' },
+        contacts: { type: 'array', description: 'Ranked contacts with engagement data' },
         provider: { type: 'string' }
       }
     }
   },
 
   draft_outreach_email: {
-    description: 'Draft a personalized outreach email for a business development contact.',
+    description: 'Draft a personalized outreach email for a business development contact. Provide contact_id (unified_id from GOV contacts DB) or contact_name.',
     category: 'outreach',
     inputs: {
       type: 'object',
       properties: {
-        entity_id: { type: 'string', format: 'uuid', description: 'Contact entity UUID' },
-        domain: { type: 'string', enum: ['government', 'dialysis'] },
-        context: { type: 'string', description: 'Additional context or angle for the email' }
-      },
-      required: ['entity_id']
+        contact_id: { type: 'string', description: 'Contact unified_id from GOV contacts DB' },
+        contact_name: { type: 'string', description: 'Contact name (used if contact_id not available)' },
+        intent: { type: 'string', description: 'Purpose of the outreach (e.g., "reconnect", "listing pitch", "market update")' },
+        tone: { type: 'string', description: 'Desired tone (default: professional, warm, and concise)' }
+      }
     },
     outputs: {
       type: 'object',

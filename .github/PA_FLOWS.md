@@ -146,10 +146,18 @@ The webhook uses `sf_listing_id` and `sf_deal_id` stored in the entity's
 `external_identities` JSONB field. If a listing with the same SF ID already exists,
 it updates instead of creating a duplicate. This makes the flow safe to retry.
 
-### OM/Website Update (Future Enhancement)
-When the OM is uploaded or the property website goes live, a second PA flow can
-call the same endpoint with the updated `om_url` and `website_url` fields. The
-webhook will update the existing entity (matched by `sf_listing_id`).
+### OM/Website Update (Supported)
+When the OM is uploaded or the property website goes live, a second PA flow calls
+the same endpoint with the updated `om_url` and `website_url` fields. The webhook:
+- Matches the existing entity via `sf_listing_id` deduplication
+- Updates the entity metadata with the new URLs
+- Fires a `listing_collateral_updated` signal
+- Logs an activity event noting what changed
+- Does NOT re-run the BD pipeline (that only runs on initial creation)
+
+**Second PA Flow Trigger**: Salesforce — Listing record modified
+- Filter: `OM_URL__c ne null` OR `Website_URL__c ne null`
+- Payload: same schema, just include the updated `om_url` and/or `website_url`
 
 ---
 

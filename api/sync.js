@@ -2288,7 +2288,10 @@ async function handleListingWebhook(req, res) {
       }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
     }
 
-    // ---- Step 3: Fire listing_created signal ----
+    // ---- Step 3: Determine if this is a new listing or an update (OM/website/etc.) ----
+    const isNewListing = !existingEntity;
+    const isOmUpdate = existingEntity && (listing.om_url || listing.website_url);
+
     // Enrich with asset_type from listing payload for the signal
     const enrichedEntity = {
       ...listingEntity,
@@ -2299,16 +2302,20 @@ async function handleListingWebhook(req, res) {
       }
     };
 
-    if (userId) {
+    if (isNewListing && userId) {
       writeListingCreatedSignal(enrichedEntity, { id: userId });
     }
 
     // ---- Step 4: Log activity event ----
+    const activityTitle = isOmUpdate
+      ? `Listing updated: ${entityName} — ${[listing.om_url ? 'OM uploaded' : null, listing.website_url ? 'website added' : null].filter(Boolean).join(', ')}`
+      : `New listing activated: ${entityName} — ${listing.city || ''}, ${listing.state}`;
+
     await opsQuery('POST', 'activity_events', {
       workspace_id: workspaceId,
       actor_id: userId,
-      category: 'status_change',
-      title: `New listing activated: ${entityName} — ${listing.city || ''}, ${listing.state}`,
+      category: isNewListing ? 'status_change' : 'update',
+      title: activityTitle,
       entity_id: listingEntity.id,
       source_type: 'salesforce',
       domain: listing.domain || null,
@@ -2318,26 +2325,52 @@ async function handleListingWebhook(req, res) {
         deal_status: deal_status || 'ELA Executed',
         asset_type: listing.asset_type,
         list_price: listing.list_price,
-        trigger: 'listing_webhook'
+        trigger: 'listing_webhook',
+        update_type: isNewListing ? 'new_listing' : 'listing_update',
+        ...(isOmUpdate ? { om_url: listing.om_url, website_url: listing.website_url } : {})
       },
       occurred_at: now
     });
 
-    // ---- Step 5: Run listing-BD pipeline ----
-    const excludeIds = [];
-    if (seller_entity_id) excludeIds.push(seller_entity_id);
+    // ---- Step 5: Run listing-BD pipeline (only on new listings, not updates) ----
+    let pipelineResult = { total_queued: 0, skipped: true, reason: 'update_only' };
 
-    const pipelineResult = await runListingBdPipeline(
-      {
-        ...enrichedEntity,
-        asset_type: listing.asset_type || enrichedEntity.metadata?.asset_type
-      },
-      workspaceId,
-      userId,
-      { excludeEntityIds: excludeIds, triggerSource: 'listing_webhook', sfDealId: deal_id }
-    );
+    if (isNewListing) {
+      const excludeIds = [];
+      if (seller_entity_id) excludeIds.push(seller_entity_id);
 
-    // Fire summary signal for the learning loop
+      pipelineResult = await runListingBdPipeline(
+        {
+          ...enrichedEntity,
+          asset_type: listing.asset_type || enrichedEntity.metadata?.asset_type
+        },
+        workspaceId,
+        userId,
+        { excludeEntityIds: excludeIds, triggerSource: 'listing_webhook', sfDealId: deal_id }
+      );
+    }
+
+    // ---- Step 6: Fire OM/website update signal for the learning loop ----
+    if (isOmUpdate) {
+      writeSignal({
+        signal_type: 'listing_collateral_updated',
+        signal_category: 'prospecting',
+        entity_type: 'listing',
+        entity_id: listingEntity.id || null,
+        domain: listing.domain || null,
+        user_id: userId,
+        payload: {
+          deal_id,
+          listing_name: entityName,
+          om_url: listing.om_url || null,
+          website_url: listing.website_url || null,
+          update_source: 'listing_webhook'
+        },
+        outcome: 'positive'
+      });
+    }
+
+    // Fire summary signal
     writeSignal({
       signal_type: 'listing_webhook_processed',
       signal_category: 'prospecting',
@@ -2350,7 +2383,8 @@ async function handleListingWebhook(req, res) {
         deal_status,
         listing_name: entityName,
         listing_state: listing.state,
-        entity_created: !existingEntity,
+        entity_created: isNewListing,
+        is_collateral_update: isOmUpdate || false,
         t011_queued: pipelineResult.t011_same_asset?.queued || 0,
         t012_queued: pipelineResult.t012_geographic?.queued || 0,
         total_queued: pipelineResult.total_queued || 0
@@ -2361,12 +2395,15 @@ async function handleListingWebhook(req, res) {
     return res.status(200).json({
       ok: true,
       entity_id: listingEntity.id,
-      entity_created: !existingEntity,
+      action: isNewListing ? 'created' : 'updated',
       listing_name: entityName,
       listing_state: listing.state,
       domain: listing.domain,
-      pipeline: pipelineResult,
-      message: `Listing entity ${existingEntity ? 'updated' : 'created'} and ${pipelineResult.total_queued} BD drafts queued for review`
+      ...(isOmUpdate ? { collateral_updated: { om_url: listing.om_url || null, website_url: listing.website_url || null } } : {}),
+      listing_bd_pipeline: isNewListing ? pipelineResult : { skipped: true, reason: 'Entity already exists — BD pipeline ran on initial creation' },
+      message: isNewListing
+        ? `Listing entity created and ${pipelineResult.total_queued} BD drafts queued for review`
+        : `Listing entity updated${isOmUpdate ? ' with new collateral' : ''}`
     });
 
   } catch (err) {

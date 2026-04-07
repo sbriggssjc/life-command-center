@@ -14,6 +14,61 @@
 
 import { opsQuery } from './ops-db.js';
 
+// ============================================================================
+// DOMAIN DB QUERY — direct fetch to GOV/DIA Supabase instances
+// ============================================================================
+
+/**
+ * Query a domain-specific Supabase database directly (GOV or DIA).
+ * This bypasses data-proxy (which is an HTTP endpoint) for server-side use.
+ *
+ * @param {'gov'|'dia'} source - Which domain DB to query
+ * @param {string} path - PostgREST path with query params (e.g., 'sales_transactions?is_northmarq=eq.true&limit=10')
+ * @returns {Promise<{ ok: boolean, data: any[], count: number }>}
+ */
+async function domainQuery(source, path) {
+  const urlEnv = source === 'gov' ? 'GOV_SUPABASE_URL' : 'DIA_SUPABASE_URL';
+  const keyEnv = source === 'gov' ? 'GOV_SUPABASE_KEY' : 'DIA_SUPABASE_KEY';
+  const baseUrl = process.env[urlEnv];
+  const apiKey = process.env[keyEnv];
+
+  if (!baseUrl || !apiKey) {
+    console.warn(`[team-context] ${source.toUpperCase()} DB not configured (${urlEnv}/${keyEnv})`);
+    return { ok: false, data: [], count: 0 };
+  }
+
+  const url = `${baseUrl}/rest/v1/${path}`;
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'count=exact'
+      }
+    });
+
+    if (!resp.ok) {
+      console.warn(`[team-context] domainQuery ${source} failed: ${resp.status}`);
+      return { ok: false, data: [], count: 0 };
+    }
+
+    const data = await resp.json();
+    const contentRange = resp.headers.get('content-range');
+    let count = Array.isArray(data) ? data.length : 0;
+    if (contentRange) {
+      const m = contentRange.match(/\/(\d+)/);
+      if (m) count = parseInt(m[1], 10);
+    }
+
+    return { ok: true, data: Array.isArray(data) ? data : [], count };
+  } catch (err) {
+    console.error(`[team-context] domainQuery error:`, err.message);
+    return { ok: false, data: [], count: 0 };
+  }
+}
+
 // NorthMarq / Briggs team track record summaries by domain
 // These are firm-level marketing numbers from NorthMarq's internal production
 // reports — NOT derived from our CoStar-sourced DBs (which only capture public
@@ -65,29 +120,48 @@ export function getTrackRecordSummary(domain) {
 export async function buildRecentSalesTable(domain, options = {}) {
   const { limit = 10, state } = options;
 
-  // We need to query the domain DBs — these are accessed via data-proxy
-  // For now, use the opsQuery with the data-proxy route
-  let proxyRoute;
+  // Query domain DBs directly (GOV or DIA) for NorthMarq transactions
+  let path;
   if (domain === 'government') {
-    proxyRoute = `data-proxy?_source=gov&table=sales_transactions&select=address,city,state,agency,sf_leased,noi,noi_psf,firm_term_years,expenses,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer&is_northmarq=eq.true&order=sale_date.desc&limit=${limit}`;
+    path = `sales_transactions?select=address,city,state,agency,sf_leased,noi,noi_psf,firm_term_years,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer&is_northmarq=eq.true&order=sale_date.desc&limit=${limit}`;
   } else {
-    proxyRoute = `data-proxy?_source=dia&table=sales_transactions&select=address,city,state,tenant,building_size,noi,noi_psf,firm_term_years,expenses,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer&order=sale_date.desc&limit=${limit}`;
+    // Dialysis DB: query by listing_broker containing 'Briggs' or 'NorthMarq'
+    path = `sales_transactions?select=address,city,state,tenant,building_size,noi,noi_psf,firm_term_years,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer,listing_broker&or=(listing_broker.ilike.*briggs*,listing_broker.ilike.*northmarq*)&order=sale_date.desc&limit=${limit}`;
   }
 
   if (state) {
-    proxyRoute += `&state=eq.${state}`;
+    path += `&state=eq.${state}`;
   }
 
-  // Note: This queries through the LCC API data-proxy, not directly.
-  // In the Context Broker edge function, we query the domain DBs directly.
-  // This utility is for the Vercel-side template engine.
+  const source = domain === 'government' ? 'gov' : 'dia';
+  const result = await domainQuery(source, path);
 
-  // For now, return a structured format that can be used by the template engine
-  // The actual DB query happens in the Context Broker or via data-proxy
+  if (!result.ok || !result.data.length) {
+    // Fall back to TRACK_RECORD constants if DB query fails
+    const record = TRACK_RECORD[domain] || TRACK_RECORD.government;
+    return {
+      table: null,
+      count: record.fallback_count,
+      volume: record.fallback_volume,
+    };
+  }
+
+  const sales = result.data;
+  const table = formatSalesTable(sales, domain);
+
+  // Compute total volume from returned rows
+  const totalVolume = sales.reduce((sum, s) => sum + (Number(s.sold_price) || 0), 0);
+  const volumeStr = totalVolume >= 1e9
+    ? `$${(totalVolume / 1e9).toFixed(2)} billion`
+    : totalVolume >= 1e6
+    ? `$${(totalVolume / 1e6).toFixed(1)} million`
+    : `$${totalVolume.toLocaleString()}`;
+
   return {
-    table: null, // Will be populated by caller
-    count: 0,
-    volume: '$0',
+    table,
+    count: sales.length,
+    volume: volumeStr,
+    sales, // raw data for callers that need it
   };
 }
 
@@ -155,6 +229,31 @@ export function buildTeamContext(domain, recentSales) {
   return {
     track_record_summary: record.summary,
     recent_sales_table: recentSales ? formatSalesTable(recentSales, domain) : null,
+    transaction_count: record.fallback_count,
+    transaction_volume: record.fallback_volume,
+    track_record_last_updated: record.last_updated || null,
+  };
+}
+
+/**
+ * Build the full team context with live sales data from the domain DB.
+ * Async version that fetches recent sales automatically.
+ *
+ * @param {string} domain - 'government' or 'dialysis'
+ * @param {object} [options]
+ * @param {number} [options.limit=10] - Max sales to include
+ * @param {string} [options.state] - Filter by state
+ * @returns {Promise<object>} The team context with live sales table
+ */
+export async function buildTeamContextWithSales(domain, options = {}) {
+  const record = TRACK_RECORD[domain] || TRACK_RECORD.government;
+  const salesResult = await buildRecentSalesTable(domain, options);
+
+  return {
+    track_record_summary: record.summary,
+    recent_sales_table: salesResult.table,
+    recent_sales_count: salesResult.count,
+    recent_sales_volume: salesResult.volume,
     transaction_count: record.fallback_count,
     transaction_volume: record.fallback_volume,
     track_record_last_updated: record.last_updated || null,
