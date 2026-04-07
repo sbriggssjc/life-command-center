@@ -92,6 +92,7 @@ app.all('/api/rcm-backfill', (req, res) => { req.query._route = 'rcm-backfill'; 
 app.all('/api/live-ingest', (req, res) => { req.query._route = 'live-ingest'; syncHandler(req, res); });
 app.all('/api/loopnet-ingest', (req, res) => { req.query._route = 'loopnet-ingest'; syncHandler(req, res); });
 app.all('/api/lead-health', (req, res) => { req.query._route = 'lead-health'; syncHandler(req, res); });
+app.all('/api/cross-domain-match', (req, res) => { req.query._route = 'cross-domain-match'; syncHandler(req, res); });
 app.all('/api/listing-webhook', (req, res) => { req.query._route = 'listing-webhook'; syncHandler(req, res); });
 app.all('/api/connectors', (req, res) => { req.query._route = 'connectors'; syncHandler(req, res); });
 

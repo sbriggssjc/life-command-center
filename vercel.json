@@ -27,6 +27,7 @@
     { "source": "/api/live-ingest", "destination": "/api/sync?_route=live-ingest" },
     { "source": "/api/loopnet-ingest", "destination": "/api/sync?_route=loopnet-ingest" },
     { "source": "/api/lead-health", "destination": "/api/sync?_route=lead-health" },
+    { "source": "/api/cross-domain-match", "destination": "/api/sync?_route=cross-domain-match" },
     { "source": "/api/listing-webhook", "destination": "/api/sync?_route=listing-webhook" },
     { "source": "/api/connectors", "destination": "/api/sync?_route=connectors" },
     { "source": "/api/unified-contacts", "destination": "/api/entity-hub?_domain=contacts" },
