@@ -30,6 +30,13 @@
 //   POST /api/operations?_route=draft&action=generate     — generate draft
 //   POST /api/operations?_route=draft&action=batch        — batch draft generation
 //   POST /api/operations?_route=draft&action=record_send  — record a sent draft
+//   POST /api/operations?_route=draft&action=listing_bd   — run listing-as-BD pipeline
+//
+// COPILOT INTEGRATION:
+//   GET  /api/copilot-spec                          — OpenAPI 3.0 spec (no auth)
+//   GET  /api/copilot-manifest                      — Plugin manifest (no auth)
+//   POST /api/chat  { copilot_action, params, surface } — action dispatch gateway
+//   POST /api/chat  { copilot_followup }            — follow-up signal (learning loop)
 //
 // CHAT:
 //   POST /api/operations?_route=chat               — AI copilot chat
@@ -45,6 +52,9 @@ import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
+import { runListingBdPipeline } from './_shared/listing-bd.js';
+import { writeSignal } from './_shared/signals.js';
+import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
 import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
@@ -506,6 +516,7 @@ const ACTION_REGISTRY = {
   generate_template_draft:       { method: 'POST', path: 'draft&action=generate', tier: 1, confirm: 'lightweight', alias: 'operations?_route=draft&action=generate' },
   generate_batch_drafts:         { method: 'POST', path: 'draft&action=batch', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=batch' },
   record_template_send:          { method: 'POST', path: 'draft&action=record_send', tier: 2, confirm: 'explicit', alias: 'operations?_route=draft&action=record_send' },
+  run_listing_bd_pipeline:       { method: 'POST', path: 'draft&action=listing_bd', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=listing_bd' },
 
   // Tier 0: AI-powered listing pursuit (Wave 2)
   generate_listing_pursuit_dossier: { tier: 0, handler: 'listing_pursuit_dossier' },
@@ -1694,6 +1705,94 @@ async function fetchOpsContext(workspaceId, userId) {
 // ---------------------------------------------------------------------------
 
 // ============================================================================
+// COPILOT SIGNAL + SURFACE FORMATTERS
+// ============================================================================
+
+/**
+ * Write a copilot invocation signal for the learning loop.
+ * Tracks which actions are called, from which surface, latency, and result quality.
+ */
+function writeCopilotSignal(data, user) {
+  writeSignal({
+    signal_type: 'copilot_invocation',
+    signal_category: 'intelligence',
+    user_id: user?.id || null,
+    payload: {
+      action: data.action,
+      tier: data.tier,
+      surface: data.surface,
+      duration_ms: data.duration_ms,
+      ok: data.ok,
+      requires_confirmation: data.requires_confirmation,
+      result_count: data.result_count,
+      session_id: data.session_id
+    },
+    outcome: data.ok ? 'positive' : (data.requires_confirmation ? 'pending' : 'negative')
+  });
+}
+
+/**
+ * Format a copilot action result as a Teams adaptive card snippet.
+ * The full card rendering happens in generate_teams_card — this adds
+ * lightweight card metadata so Teams can render inline.
+ */
+function formatForTeams(actionId, result) {
+  const itemCount = result.data?.count
+    || result.data?.items?.length
+    || result.data?.templates?.length
+    || null;
+
+  return {
+    type: 'AdaptiveCard',
+    version: '1.4',
+    body: [
+      {
+        type: 'TextBlock',
+        text: actionId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        weight: 'Bolder',
+        size: 'Medium'
+      },
+      ...(itemCount != null ? [{
+        type: 'TextBlock',
+        text: `${itemCount} item${itemCount !== 1 ? 's' : ''} returned`,
+        isSubtle: true
+      }] : []),
+      {
+        type: 'TextBlock',
+        text: result.ok ? 'View details in Life Command Center' : 'Action requires confirmation',
+        wrap: true
+      }
+    ],
+    actions: [
+      {
+        type: 'Action.OpenUrl',
+        title: 'Open in LCC',
+        url: 'https://life-command-center.vercel.app'
+      }
+    ]
+  };
+}
+
+/**
+ * Format a copilot action result as a compact Outlook digest block.
+ * Used when Copilot surfaces LCC data in Outlook context.
+ */
+function formatForOutlookDigest(actionId, result) {
+  const itemCount = result.data?.count
+    || result.data?.items?.length
+    || null;
+
+  const title = actionId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+  return {
+    title,
+    summary: itemCount != null ? `${itemCount} item${itemCount !== 1 ? 's' : ''}` : 'Completed',
+    link: 'https://life-command-center.vercel.app',
+    timestamp: new Date().toISOString()
+  };
+}
+
+// ============================================================================
 // TEMPLATE DRAFT ENGINE — /api/draft → operations?_route=draft
 // ============================================================================
 
@@ -1780,8 +1879,40 @@ async function handleDraftRoute(req, res) {
       return res.status(201).json(result);
     }
 
+    // POST ?action=listing_bd — run listing-as-BD pipeline
+    if (action === 'listing_bd') {
+      const { listing_entity_id, exclude_entity_ids, limit: bdLimit } = req.body || {};
+      if (!listing_entity_id) {
+        return res.status(400).json({ error: 'listing_entity_id is required' });
+      }
+
+      // Fetch the listing entity
+      const listingResult = await opsQuery('GET',
+        `entities?id=eq.${pgFilterVal(listing_entity_id)}&workspace_id=eq.${workspaceId}&select=*`
+      );
+      if (!listingResult.ok || !listingResult.data?.length) {
+        return res.status(404).json({ error: 'Listing entity not found' });
+      }
+      const listing = listingResult.data[0];
+
+      if (!listing.state) {
+        return res.status(422).json({ error: 'Listing entity must have a state to run BD matching' });
+      }
+
+      const pipelineResult = await runListingBdPipeline(listing, workspaceId, user.id, {
+        excludeEntityIds: exclude_entity_ids || [],
+        limit: bdLimit || 50
+      });
+
+      return res.status(200).json({
+        ok: true,
+        ...pipelineResult,
+        message: `Queued ${pipelineResult.total_queued} listing-BD drafts for review`
+      });
+    }
+
     return res.status(400).json({
-      error: 'Invalid draft action. Use: generate, batch, record_send'
+      error: 'Invalid draft action. Use: generate, batch, record_send, listing_bd'
     });
   }
 
@@ -1793,6 +1924,19 @@ async function handleDraftRoute(req, res) {
 // ============================================================================
 
 async function handleChatRoute(req, res) {
+  // --- OpenAPI spec / plugin manifest (GET, no auth required) ---
+  if (req.query?.copilot_spec) {
+    const proto = req.headers?.['x-forwarded-proto'] || 'https';
+    const host = req.headers?.host || 'life-command-center.vercel.app';
+    const baseUrl = `${proto}://${host}`;
+
+    if (req.query.copilot_spec === 'manifest') {
+      return res.status(200).json(generatePluginManifest(baseUrl));
+    }
+    const spec = generateOpenApiSpec(ACTION_REGISTRY, baseUrl);
+    return res.status(200).json(spec);
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
@@ -1804,15 +1948,43 @@ async function handleChatRoute(req, res) {
 
   const { message, context, history, attachments } = req.body || {};
 
+  // --- Follow-up signal ---
+  // Copilot/frontend reports back which results the user acted on after
+  // receiving a copilot_action response. This feeds the learning loop.
+  if (req.body?.copilot_followup) {
+    const { original_action, entity_ids_acted_on, items_ignored_count,
+            session_id: fSessionId, surface: fSurface } = req.body.copilot_followup;
+
+    writeSignal({
+      signal_type: 'copilot_result_acted_on',
+      signal_category: 'intelligence',
+      user_id: user.id,
+      payload: {
+        original_action: original_action || null,
+        entity_ids_acted_on: entity_ids_acted_on || [],
+        acted_on_count: (entity_ids_acted_on || []).length,
+        items_ignored_count: items_ignored_count ?? null,
+        session_id: fSessionId || null,
+        surface: fSurface || 'copilot_chat'
+      },
+      outcome: (entity_ids_acted_on || []).length > 0 ? 'positive' : 'neutral'
+    });
+
+    return res.status(200).json({ ok: true, signal: 'copilot_result_acted_on' });
+  }
+
   // --- Structured action dispatch ---
   // If the request includes an action field, dispatch it directly instead of
   // routing through the LLM. This is the programmatic entry point for Copilot
   // agents, Teams cards, and Power Automate flows.
   if (req.body?.copilot_action) {
-    const { copilot_action, params } = req.body;
+    const { copilot_action, params, surface, session_id: copilotSessionId } = req.body;
     const startMs = Date.now();
     const result = await dispatchAction(copilot_action, params || {}, user, workspaceId, req);
     const durationMs = Date.now() - startMs;
+
+    // Resolve surface (which Microsoft entry point is calling)
+    const resolvedSurface = surface || 'copilot_chat';
 
     // Log activity for all non-confirmation dispatches
     if (workspaceId && !result.requires_confirmation) {
@@ -1828,15 +2000,41 @@ async function handleChatRoute(req, res) {
           ok: result.ok !== false,
           duration_ms: durationMs,
           tier: ACTION_REGISTRY[copilot_action]?.tier,
-          provider: result.provider || null
+          provider: result.provider || null,
+          surface: resolvedSurface,
+          session_id: copilotSessionId || null
         }
       }).catch(() => {}); // fire-and-forget
     }
 
-    return res.status(result.ok === false && result.requires_confirmation ? 200 : (result.ok ? 200 : 400)).json({
+    // Write copilot invocation signal for the learning loop
+    writeCopilotSignal({
+      action: copilot_action,
+      tier: ACTION_REGISTRY[copilot_action]?.tier,
+      surface: resolvedSurface,
+      duration_ms: durationMs,
+      ok: result.ok !== false,
+      requires_confirmation: !!result.requires_confirmation,
+      result_count: result.data?.count || result.data?.items?.length || null,
+      session_id: copilotSessionId || null
+    }, user);
+
+    // Format response based on surface
+    const response = {
       ...result,
-      source: 'copilot_action_dispatch'
-    });
+      source: 'copilot_action_dispatch',
+      _surface: resolvedSurface
+    };
+
+    // Surface-specific formatting
+    if (resolvedSurface === 'teams' && result.ok && !result.requires_confirmation) {
+      response._teams_card = formatForTeams(copilot_action, result);
+    }
+    if (resolvedSurface === 'outlook' && result.ok) {
+      response._digest = formatForOutlookDigest(copilot_action, result);
+    }
+
+    return res.status(result.ok === false && result.requires_confirmation ? 200 : (result.ok ? 200 : 400)).json(response);
   }
 
   if (!message) {

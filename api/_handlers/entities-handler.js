@@ -17,6 +17,7 @@
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
+import { writeListingCreatedSignal } from '../_shared/signals.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -448,7 +449,14 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(result.status).json({ error: 'Failed to create entity', detail: result.data });
     }
 
-    return res.status(201).json({ entity: Array.isArray(result.data) ? result.data[0] : result.data });
+    const created = Array.isArray(result.data) ? result.data[0] : result.data;
+
+    // Fire-and-forget: signal for listing-as-BD pipeline when an asset/listing is created
+    if (entity_type === 'asset' && created?.state) {
+      writeListingCreatedSignal(created, user);
+    }
+
+    return res.status(201).json({ entity: created });
   }
 
   // PATCH — update entity

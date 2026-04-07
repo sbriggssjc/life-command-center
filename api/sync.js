@@ -6,6 +6,9 @@
 // POST /api/sync?action=ingest_emails|ingest_calendar|ingest_sf_activities|outbound|retry|verify_connector
 // GET  /api/sync?action=health|jobs|isolation_check
 //
+// Listing Webhook (routed via vercel.json: /api/listing-webhook → /api/sync?_route=listing-webhook):
+// POST /api/listing-webhook — SF deal "ELA Executed" → entity + listing-BD pipeline
+//
 // Connectors (routed via vercel.json: /api/connectors → /api/sync?_route=connectors):
 // GET/POST/PATCH/DELETE /api/connectors
 //
@@ -22,6 +25,8 @@
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
 import { logPerfMetric, opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
+import { runListingBdPipeline } from './_shared/listing-bd.js';
+import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
 
 // Edge function base URL (existing ai-copilot deployment)
 const EDGE_FN_URL = process.env.EDGE_FUNCTION_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
@@ -104,6 +109,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to live-ingest normalize (merged from api/live-ingest.js)
   if (req.query._route === 'live-ingest') {
     return handleLiveIngest(req, res);
+  }
+
+  // Dispatch to listing webhook (SF deal "ELA Executed" → listing-BD pipeline)
+  if (req.query._route === 'listing-webhook') {
+    return handleListingWebhook(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -2084,4 +2094,286 @@ async function handleLiveIngest(req, res) {
     documents: normalized,
     count: normalized.length
   });
+}
+
+// ============================================================================
+// LISTING WEBHOOK — SF Deal "ELA Executed" → Entity + Listing-BD Pipeline
+// POST /api/listing-webhook → /api/sync?_route=listing-webhook
+//
+// Triggered by Power Automate when a Salesforce Deal record transitions to
+// "ELA Executed" status and a Listing is created. The PA flow sends:
+//
+//   {
+//     deal_id:        "SF Deal ID",
+//     deal_name:      "123 Main St - Dialysis",
+//     deal_status:    "ELA Executed",
+//     deal_owner:     "Team Briggs",
+//     listing: {
+//       sf_listing_id:  "SF Listing record ID",
+//       name:           "123 Main St NNN Dialysis",
+//       address:        "123 Main St",
+//       city:           "Tulsa",
+//       state:          "OK",
+//       zip:            "74101",
+//       asset_type:     "Dialysis",       // or "GSA", "MOB", etc.
+//       domain:         "dialysis",       // or "government"
+//       list_price:     4500000,
+//       cap_rate:       6.25,
+//       sf_size:        5400,
+//       tenant_name:    "DaVita Inc.",
+//       lease_expiration: "2035-06-30",
+//       om_url:         "https://...",    // optional: link to OM
+//       website_url:    "https://...",    // optional: property website
+//     },
+//     seller_entity_id: "uuid",           // optional: existing LCC entity for seller
+//   }
+//
+// The handler:
+//   1. Authenticates via PA webhook secret (same as RCM/LoopNet)
+//   2. Creates or updates the listing entity in entity-hub
+//   3. Fires listing_created signal
+//   4. Runs listing-BD pipeline → queues T-011 + T-012 inbox items
+//   5. Returns summary with pipeline results
+// ============================================================================
+
+async function handleListingWebhook(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  // Auth: either PA webhook secret OR authenticated user
+  let user = null;
+  const isWebhook = authenticateWebhook(req);
+
+  if (!isWebhook) {
+    user = await authenticate(req, res);
+    if (!user) return;
+  }
+
+  const {
+    deal_id, deal_name, deal_status, deal_owner,
+    listing, seller_entity_id
+  } = req.body || {};
+
+  // Validate required fields
+  if (!listing || !listing.state) {
+    return res.status(400).json({
+      error: 'listing object with at least state is required',
+      expected: '{ deal_id, deal_name, listing: { name, address, city, state, asset_type, domain, ... } }'
+    });
+  }
+
+  // Resolve workspace — webhook uses header or default, authenticated user uses their workspace
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user?.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+
+  if (!workspaceId) {
+    return res.status(400).json({ error: 'Could not resolve workspace. Set X-LCC-Workspace header.' });
+  }
+
+  const userId = user?.id || process.env.LCC_SYSTEM_USER_ID || null;
+  const now = new Date().toISOString();
+
+  try {
+    // ---- Step 1: Create or update the listing entity ----
+    const entityName = listing.name || listing.address || deal_name || 'New Listing';
+    const canonicalName = entityName.trim().toLowerCase()
+      .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Check for existing entity by SF listing ID (avoid duplicates)
+    let existingEntity = null;
+    if (listing.sf_listing_id) {
+      const extIdCheck = await opsQuery('GET',
+        `external_identities?source_system=eq.salesforce&source_type=eq.listing&external_id=eq.${listing.sf_listing_id}&select=entity_id`
+      );
+      if (extIdCheck.ok && extIdCheck.data?.length > 0) {
+        const entResult = await opsQuery('GET',
+          `entities?id=eq.${extIdCheck.data[0].entity_id}&select=*`
+        );
+        if (entResult.ok && entResult.data?.length > 0) {
+          existingEntity = entResult.data[0];
+        }
+      }
+    }
+
+    let listingEntity;
+
+    if (existingEntity) {
+      // Update existing entity with latest listing data
+      await opsQuery('PATCH', `entities?id=eq.${existingEntity.id}`, {
+        name: entityName,
+        canonical_name: canonicalName,
+        domain: listing.domain || existingEntity.domain,
+        address: listing.address || existingEntity.address,
+        city: listing.city || existingEntity.city,
+        state: listing.state || existingEntity.state,
+        metadata: {
+          ...(existingEntity.metadata || {}),
+          asset_type: listing.asset_type || existingEntity.metadata?.asset_type,
+          list_price: listing.list_price,
+          cap_rate: listing.cap_rate,
+          sf_size: listing.sf_size,
+          tenant_name: listing.tenant_name,
+          lease_expiration: listing.lease_expiration,
+          om_url: listing.om_url || null,
+          website_url: listing.website_url || null,
+          deal_id: deal_id || null,
+          deal_status: deal_status || 'ELA Executed',
+          deal_owner: deal_owner || null,
+          listing_activated_at: now
+        },
+        updated_at: now
+      });
+      listingEntity = { ...existingEntity, state: listing.state, domain: listing.domain || existingEntity.domain };
+    } else {
+      // Create new entity
+      const createResult = await opsQuery('POST', 'entities', {
+        workspace_id: workspaceId,
+        entity_type: 'asset',
+        name: entityName,
+        canonical_name: canonicalName,
+        domain: listing.domain || null,
+        address: listing.address || null,
+        city: listing.city || null,
+        state: listing.state,
+        created_by: userId,
+        metadata: {
+          asset_type: listing.asset_type || null,
+          list_price: listing.list_price || null,
+          cap_rate: listing.cap_rate || null,
+          sf_size: listing.sf_size || null,
+          tenant_name: listing.tenant_name || null,
+          lease_expiration: listing.lease_expiration || null,
+          om_url: listing.om_url || null,
+          website_url: listing.website_url || null,
+          deal_id: deal_id || null,
+          deal_status: deal_status || 'ELA Executed',
+          deal_owner: deal_owner || null,
+          listing_activated_at: now
+        }
+      });
+
+      if (!createResult.ok) {
+        return res.status(500).json({ error: 'Failed to create listing entity', detail: createResult.data });
+      }
+      listingEntity = Array.isArray(createResult.data) ? createResult.data[0] : createResult.data;
+    }
+
+    // ---- Step 2: Link SF external identity ----
+    if (listing.sf_listing_id && listingEntity?.id) {
+      await opsQuery('POST', 'external_identities', {
+        workspace_id: workspaceId,
+        entity_id: listingEntity.id,
+        source_system: 'salesforce',
+        source_type: 'listing',
+        external_id: listing.sf_listing_id,
+        external_url: listing.sf_url || null,
+        last_synced_at: now
+      }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+    }
+
+    // Also link the deal ID if provided
+    if (deal_id && listingEntity?.id) {
+      await opsQuery('POST', 'external_identities', {
+        workspace_id: workspaceId,
+        entity_id: listingEntity.id,
+        source_system: 'salesforce',
+        source_type: 'deal',
+        external_id: deal_id,
+        last_synced_at: now
+      }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+    }
+
+    // ---- Step 3: Fire listing_created signal ----
+    // Enrich with asset_type from listing payload for the signal
+    const enrichedEntity = {
+      ...listingEntity,
+      metadata: {
+        ...(listingEntity.metadata || {}),
+        asset_type: listing.asset_type || listingEntity.metadata?.asset_type,
+        listing_status: 'active'
+      }
+    };
+
+    if (userId) {
+      writeListingCreatedSignal(enrichedEntity, { id: userId });
+    }
+
+    // ---- Step 4: Log activity event ----
+    await opsQuery('POST', 'activity_events', {
+      workspace_id: workspaceId,
+      actor_id: userId,
+      category: 'status_change',
+      title: `New listing activated: ${entityName} — ${listing.city || ''}, ${listing.state}`,
+      entity_id: listingEntity.id,
+      source_type: 'salesforce',
+      domain: listing.domain || null,
+      visibility: 'shared',
+      metadata: {
+        deal_id,
+        deal_status: deal_status || 'ELA Executed',
+        asset_type: listing.asset_type,
+        list_price: listing.list_price,
+        trigger: 'listing_webhook'
+      },
+      occurred_at: now
+    });
+
+    // ---- Step 5: Run listing-BD pipeline ----
+    const excludeIds = [];
+    if (seller_entity_id) excludeIds.push(seller_entity_id);
+
+    const pipelineResult = await runListingBdPipeline(
+      {
+        ...enrichedEntity,
+        asset_type: listing.asset_type || enrichedEntity.metadata?.asset_type
+      },
+      workspaceId,
+      userId,
+      { excludeEntityIds: excludeIds, triggerSource: 'listing_webhook', sfDealId: deal_id }
+    );
+
+    // Fire summary signal for the learning loop
+    writeSignal({
+      signal_type: 'listing_webhook_processed',
+      signal_category: 'prospecting',
+      entity_type: 'listing',
+      entity_id: listingEntity.id || null,
+      domain: listing.domain || null,
+      user_id: userId,
+      payload: {
+        deal_id,
+        deal_status,
+        listing_name: entityName,
+        listing_state: listing.state,
+        entity_created: !existingEntity,
+        t011_queued: pipelineResult.t011_same_asset?.queued || 0,
+        t012_queued: pipelineResult.t012_geographic?.queued || 0,
+        total_queued: pipelineResult.total_queued || 0
+      },
+      outcome: 'positive'
+    });
+
+    return res.status(200).json({
+      ok: true,
+      entity_id: listingEntity.id,
+      entity_created: !existingEntity,
+      listing_name: entityName,
+      listing_state: listing.state,
+      domain: listing.domain,
+      pipeline: pipelineResult,
+      message: `Listing entity ${existingEntity ? 'updated' : 'created'} and ${pipelineResult.total_queued} BD drafts queued for review`
+    });
+
+  } catch (err) {
+    console.error('[Listing webhook error]', err);
+    return res.status(500).json({
+      error: 'Internal error processing listing webhook',
+      detail: err?.message || String(err)
+    });
+  }
 }

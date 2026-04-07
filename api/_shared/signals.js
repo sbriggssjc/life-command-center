@@ -139,6 +139,40 @@ export async function writeDealStageSignal({ entity_id, domain, user_id, from_st
  * @param {object} activity - The activity event
  * @param {object} user - The acting user
  */
+/**
+ * Write a listing_created signal when a new listing/asset entity is created.
+ * This signal is consumed by the listing-as-BD pipeline (or a scheduled task)
+ * to identify contacts for T-011 and T-012 template outreach.
+ *
+ * @param {object} entity - The created entity
+ * @param {object} user - The creating user
+ */
+export async function writeListingCreatedSignal(entity, user) {
+  await writeSignal({
+    signal_type: 'listing_created',
+    signal_category: 'prospecting',
+    entity_type: 'listing',
+    entity_id: entity.id || null,
+    domain: entity.domain || null,
+    user_id: user.id,
+    payload: {
+      entity_name: (entity.name || '').substring(0, 100),
+      entity_type: entity.entity_type,
+      state: entity.state || null,
+      city: entity.city || null,
+      asset_type: entity.metadata?.asset_type || entity.metadata?.property_type || null,
+      listing_status: entity.metadata?.listing_status || 'new',
+    },
+    outcome: 'pending',
+  });
+}
+
+/**
+ * Write a touchpoint_logged signal.
+ *
+ * @param {object} activity - The activity event
+ * @param {object} user - The acting user
+ */
 export async function writeTouchpointSignal(activity, user) {
   await writeSignal({
     signal_type: 'touchpoint_logged',
