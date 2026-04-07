@@ -462,6 +462,11 @@ function dotClass(status) {
 
 // Programmatic page navigation — supports both bottom nav and more drawer items
 function navTo(pageId) {
+  // Map pageBiz domain shortcuts to primary nav buttons
+  if (pageId === 'pageDia' || pageId === 'pageGov') {
+    const btn = document.querySelector(`.bnav[data-page="${pageId}"]`);
+    if (btn) { btn.click(); return; }
+  }
   // Try bottom nav button first
   const btn = document.querySelector(`.bnav[data-page="${pageId}"]`);
   if (btn) { btn.click(); return; }
@@ -814,19 +819,34 @@ function renderDiaTab(){
 // ============================================================
 document.querySelectorAll('.bnav[data-page]').forEach(btn => {
   btn.addEventListener('click', () => {
+    const targetPage = btn.dataset.page;
+    // Dialysis and Government primary nav shortcuts — navigate to pageBiz with domain tab
+    if (targetPage === 'pageDia' || targetPage === 'pageGov') {
+      document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      const bizPage_ = document.getElementById('pageBiz');
+      if (bizPage_) bizPage_.classList.add('active');
+      _setDisplay('bizSubTabs', 'flex');
+      const domainTab = targetPage === 'pageDia' ? 'dialysis' : 'government';
+      switchBizTab(domainTab);
+      handlePageLoad('pageBiz');
+      return;
+    }
     document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const page = document.getElementById(btn.dataset.page);
+    const page = document.getElementById(targetPage);
     if (page) page.classList.add('active');
     // Hide all secondary tab bars unless on Biz page
-    _setDisplay('bizSubTabs', btn.dataset.page === 'pageBiz' ? 'flex' : 'none');
+    _setDisplay('bizSubTabs', targetPage === 'pageBiz' ? 'flex' : 'none');
     _setDisplay('govTabGroups', 'none');
     _setDisplay('diaTabGroups', 'none');
     _setDisplay('govInnerTabs', 'none');
     _setDisplay('diaInnerTabs', 'none');
-    handlePageLoad(btn.dataset.page);
+    handlePageLoad(targetPage);
   });
 });
 
@@ -838,8 +858,19 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   if (bizPage_ && !bizPage_.classList.contains('active')) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     bizPage_.classList.add('active');
-    document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
+  }
+  // Sync primary nav active state for domain shortcuts
+  const tabBiz = tab.dataset.biz;
+  document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
+  if (tabBiz === 'dialysis') {
+    const diaBtn = document.querySelector('.bnav[data-page="pageDia"]');
+    if (diaBtn) diaBtn.classList.add('active');
+  } else if (tabBiz === 'government') {
+    const govBtn = document.querySelector('.bnav[data-page="pageGov"]');
+    if (govBtn) govBtn.classList.add('active');
+  } else {
+    // Other biz tabs (marketing, prospects, etc.) — highlight Business in More
     const moreItem = document.querySelector('.more-drawer-item[data-page="pageBiz"]');
     if (moreItem) moreItem.classList.add('active');
   }

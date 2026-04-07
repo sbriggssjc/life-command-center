@@ -41,9 +41,9 @@ input, select { font-family: inherit; }
 
 /* Bottom nav (mobile-first) */
 .bottom-nav { display: flex; background: var(--s1); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: var(--safe-bottom); }
-.bottom-nav .bnav { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 8px 4px 6px; font-size: 10px; color: var(--text3); gap: 3px; border: none; background: none; transition: color 0.15s; }
+.bottom-nav .bnav { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 6px 2px 4px; font-size: 9px; color: var(--text3); gap: 2px; border: none; background: none; transition: color 0.15s; }
 .bottom-nav .bnav.active { color: var(--accent); }
-.bottom-nav .bnav svg { width: 22px; height: 22px; }
+.bottom-nav .bnav svg { width: 20px; height: 20px; }
 
 /* Page container */
 .pages { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
@@ -348,10 +348,10 @@ body.compact .widget-grid { gap: 8px; margin-bottom: 8px; }
 body.compact .weather-temp { font-size: 28px; }
 body.compact .greeting { font-size: 18px; }
 
-/* Bottom nav — 5-button responsive fit */
+/* Bottom nav — 6-button responsive fit */
 @media (max-width: 374px) {
-  .bottom-nav .bnav { padding: 6px 2px 4px; font-size: 9px; gap: 2px; }
-  .bottom-nav .bnav svg { width: 18px; height: 18px; }
+  .bottom-nav .bnav { padding: 4px 1px 3px; font-size: 8px; gap: 1px; }
+  .bottom-nav .bnav svg { width: 16px; height: 16px; }
 }
 
 /* Toast */
@@ -948,7 +948,7 @@ body.compact .greeting { font-size: 18px; }
    Phase 5: Operational UX — Queue-first redesign
    ============================================================ */
 
-/* Bottom nav — now supports scrollable 5+more or swipe nav */
+/* Bottom nav — now supports scrollable 6+more or swipe nav */
 .bottom-nav { overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
 .bottom-nav::-webkit-scrollbar { display: none; }
 .bottom-nav .bnav { min-width: 56px; flex-shrink: 0; }
