@@ -41,6 +41,12 @@
 // CHAT:
 //   POST /api/operations?_route=chat               — AI copilot chat
 //
+// CONTEXT BROKER (intelligence layer):
+//   POST /api/context?action=assemble               — assemble/retrieve single packet
+//   POST /api/context?action=assemble-multi          — batch assemble multiple packets
+//   POST /api/context?action=invalidate              — invalidate cached packets
+//   (routed via vercel.json: /api/context → /api/operations?_route=context)
+//
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
 // See LCC_ARCHITECTURE_STRATEGY.md and .github/AI_INSTRUCTIONS.md
@@ -78,6 +84,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Template draft route (via vercel.json _route=draft)
   if (req.query._route === 'draft') {
     return handleDraftRoute(req, res);
+  }
+
+  // Context broker route (via vercel.json _route=context)
+  if (req.query._route === 'context') {
+    return handleContextRoute(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -2696,4 +2707,669 @@ async function logWorkflowActivity(user, workspaceId, { category, title, entity_
     visibility: 'shared',
     occurred_at: new Date().toISOString()
   });
+}
+
+// ============================================================================
+// CONTEXT BROKER — Assemble, cache, serve, and invalidate context packets
+//
+// Route: /api/context → /api/operations?_route=context
+//   POST ?action=assemble       — assemble or retrieve a single context packet
+//   POST ?action=assemble-multi — assemble multiple packets in one request
+//   POST ?action=invalidate     — invalidate cached packets for an entity
+// ============================================================================
+
+const VALID_PACKET_TYPES = new Set([
+  'contact', 'property', 'pursuit', 'deal',
+  'daily_briefing', 'listing_marketing', 'comp_analysis'
+]);
+
+const PACKET_TTL_HOURS = {
+  contact: 24,
+  property: 4,
+  pursuit: 12,
+  deal: 4,
+  daily_briefing: 1,
+  listing_marketing: 6,
+  comp_analysis: 72
+};
+
+async function handleContextRoute(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed. Context broker accepts POST only.` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  const action = req.query.action || req.body?.action;
+
+  switch (action) {
+    case 'assemble':       return handleAssemble(req, res, workspaceId, user.id);
+    case 'assemble-multi': return handleAssembleMulti(req, res, workspaceId, user.id);
+    case 'invalidate':     return handleInvalidate(req, res, workspaceId, user.id);
+    default:
+      return res.status(400).json({
+        error: 'Invalid context action. Use: assemble, assemble-multi, invalidate'
+      });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Assemble a single context packet
+// ---------------------------------------------------------------------------
+
+async function handleAssemble(req, res, workspaceId, userId) {
+  const {
+    packet_type, entity_id, entity_type,
+    surface_hint, force_refresh, max_tokens
+  } = req.body || {};
+
+  if (!packet_type || !VALID_PACKET_TYPES.has(packet_type)) {
+    return res.status(400).json({
+      error: `Invalid or missing packet_type. Use: ${[...VALID_PACKET_TYPES].join(', ')}`
+    });
+  }
+  if (packet_type !== 'daily_briefing' && !entity_id) {
+    return res.status(400).json({ error: 'entity_id is required for non-briefing packet types' });
+  }
+
+  const startMs = Date.now();
+
+  try {
+    const result = await assembleSinglePacket({
+      packet_type, entity_id, entity_type,
+      surface_hint, force_refresh, max_tokens,
+      workspaceId, userId
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error(`[context-broker] Assembly failed for ${packet_type}/${entity_id}:`, err.message);
+    return res.status(503).json({
+      error: 'Context packet assembly failed',
+      detail: process.env.LCC_ENV === 'development' ? err.message : undefined,
+      missing_fields: err.missingFields || []
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Assemble multiple context packets in one request
+// ---------------------------------------------------------------------------
+
+async function handleAssembleMulti(req, res, workspaceId, userId) {
+  const { requests, max_total_tokens } = req.body || {};
+
+  if (!Array.isArray(requests) || requests.length === 0) {
+    return res.status(400).json({ error: 'requests array is required and must not be empty' });
+  }
+  if (requests.length > 10) {
+    return res.status(400).json({ error: 'Maximum 10 packets per multi-assemble request' });
+  }
+
+  const startMs = Date.now();
+  let cacheHits = 0;
+  let assemblies = 0;
+
+  const results = await Promise.allSettled(
+    requests.map(r => assembleSinglePacket({
+      packet_type: r.packet_type,
+      entity_id: r.entity_id,
+      entity_type: r.entity_type,
+      surface_hint: r.surface_hint,
+      force_refresh: r.force_refresh,
+      max_tokens: r.max_tokens,
+      workspaceId,
+      userId
+    }))
+  );
+
+  const packets = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      packets.push(result.value);
+      if (result.value.cache_hit) cacheHits++;
+      else assemblies++;
+    } else {
+      packets.push({
+        error: 'Assembly failed',
+        detail: process.env.LCC_ENV === 'development' ? result.reason?.message : undefined
+      });
+    }
+  }
+
+  let totalTokens = packets.reduce((sum, p) => sum + (p.token_count || 0), 0);
+
+  return res.status(200).json({
+    packets,
+    total_token_count: totalTokens,
+    assembly_meta: {
+      total_duration_ms: Date.now() - startMs,
+      cache_hits: cacheHits,
+      assemblies
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Invalidate cached packets
+// ---------------------------------------------------------------------------
+
+async function handleInvalidate(req, res, workspaceId, userId) {
+  const { packet_type, entity_id, reason, force_rebuild } = req.body || {};
+
+  if (!entity_id) {
+    return res.status(400).json({ error: 'entity_id is required' });
+  }
+  if (!packet_type) {
+    return res.status(400).json({ error: 'packet_type is required (or "all")' });
+  }
+
+  let filter = `context_packets?entity_id=eq.${pgFilterVal(entity_id)}&invalidated=eq.false`;
+  if (packet_type !== 'all') {
+    filter += `&packet_type=eq.${pgFilterVal(packet_type)}`;
+  }
+
+  const patchResult = await opsQuery('PATCH', filter, {
+    invalidated: true,
+    invalidation_reason: reason || 'manual_invalidation'
+  });
+
+  const invalidatedCount = Array.isArray(patchResult.data) ? patchResult.data.length : 0;
+
+  writeSignal({
+    signal_type: 'packet_invalidated',
+    signal_category: 'intelligence',
+    entity_id,
+    user_id: userId,
+    payload: { packet_type, reason, invalidated_count: invalidatedCount }
+  });
+
+  let rebuildQueued = false;
+  if (force_rebuild && packet_type !== 'all') {
+    rebuildQueued = true;
+    // Fire-and-forget rebuild
+    assembleSinglePacket({
+      packet_type, entity_id, entity_type: null,
+      surface_hint: null, force_refresh: true,
+      workspaceId, userId
+    }).catch(err => console.error('[context-broker] Rebuild after invalidation failed:', err.message));
+  }
+
+  return res.status(200).json({
+    invalidated_count: invalidatedCount,
+    rebuild_queued: rebuildQueued
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Core assembly engine — used by both assemble and assemble-multi
+// ---------------------------------------------------------------------------
+
+async function assembleSinglePacket({ packet_type, entity_id, entity_type, surface_hint, force_refresh, max_tokens, workspaceId, userId }) {
+  const startMs = Date.now();
+
+  // Step 1 — Cache check (unless force_refresh)
+  if (!force_refresh && entity_id) {
+    const cacheFilter =
+      `context_packets?packet_type=eq.${pgFilterVal(packet_type)}` +
+      `&entity_id=eq.${pgFilterVal(entity_id)}` +
+      `&invalidated=eq.false` +
+      `&expires_at=gt.${pgFilterVal(new Date().toISOString())}` +
+      `&order=assembled_at.desc&limit=1`;
+
+    const cached = await opsQuery('GET', cacheFilter);
+    if (cached.ok && cached.data?.length > 0) {
+      const pkt = cached.data[0];
+      // Fire-and-forget cache hit signal
+      writeSignal({
+        signal_type: 'packet_cache_hit',
+        signal_category: 'intelligence',
+        entity_id, entity_type: entity_type || pkt.entity_type,
+        user_id: userId,
+        payload: { packet_type, surface_hint, token_count: pkt.token_count }
+      });
+
+      return {
+        packet_id: pkt.id,
+        packet_type: pkt.packet_type,
+        entity_id: pkt.entity_id,
+        assembled_at: pkt.assembled_at,
+        expires_at: pkt.expires_at,
+        cache_hit: true,
+        token_count: pkt.token_count,
+        payload: pkt.payload,
+        assembly_meta: {
+          sources_queried: [],
+          fields_missing: [],
+          compression_applied: false,
+          duration_ms: Date.now() - startMs
+        }
+      };
+    }
+  }
+
+  // For daily_briefing with no entity_id, also check by user
+  if (!force_refresh && packet_type === 'daily_briefing' && !entity_id) {
+    const briefingFilter =
+      `context_packets?packet_type=eq.daily_briefing` +
+      `&requesting_user=eq.${pgFilterVal(userId)}` +
+      `&invalidated=eq.false` +
+      `&expires_at=gt.${pgFilterVal(new Date().toISOString())}` +
+      `&order=assembled_at.desc&limit=1`;
+
+    const cached = await opsQuery('GET', briefingFilter);
+    if (cached.ok && cached.data?.length > 0) {
+      const pkt = cached.data[0];
+      writeSignal({
+        signal_type: 'packet_cache_hit',
+        signal_category: 'intelligence',
+        user_id: userId,
+        payload: { packet_type: 'daily_briefing', surface_hint }
+      });
+      return {
+        packet_id: pkt.id,
+        packet_type: pkt.packet_type,
+        entity_id: pkt.entity_id,
+        assembled_at: pkt.assembled_at,
+        expires_at: pkt.expires_at,
+        cache_hit: true,
+        token_count: pkt.token_count,
+        payload: pkt.payload,
+        assembly_meta: {
+          sources_queried: [],
+          fields_missing: [],
+          compression_applied: false,
+          duration_ms: Date.now() - startMs
+        }
+      };
+    }
+  }
+
+  // Step 2 — Assemble fresh packet
+  let payload;
+  let sourcesQueried = [];
+  let fieldsMissing = [];
+
+  switch (packet_type) {
+    case 'property':
+      ({ payload, sourcesQueried, fieldsMissing } = await assemblePropertyPacket(entity_id, workspaceId));
+      break;
+    case 'contact':
+      ({ payload, sourcesQueried, fieldsMissing } = await assembleContactPacket(entity_id, workspaceId));
+      break;
+    case 'daily_briefing':
+      ({ payload, sourcesQueried, fieldsMissing } = await assembleDailyBriefingPacket(workspaceId, userId));
+      break;
+    case 'pursuit':
+    case 'deal':
+    case 'listing_marketing':
+    case 'comp_analysis':
+      ({ payload, sourcesQueried, fieldsMissing } = await assembleGenericPacket(packet_type, entity_id, workspaceId));
+      break;
+    default: {
+      const err = new Error(`Unsupported packet_type: ${packet_type}`);
+      err.missingFields = [];
+      throw err;
+    }
+  }
+
+  const assembledAt = new Date().toISOString();
+  const ttlHours = PACKET_TTL_HOURS[packet_type] || 4;
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
+  const tokenCount = Math.ceil(JSON.stringify(payload).length / 4);
+  const durationMs = Date.now() - startMs;
+
+  // Step 3 — Write to cache (fire-and-forget — never blocks response)
+  opsQuery('POST', 'context_packets', {
+    packet_type,
+    entity_id: entity_id || null,
+    entity_type: entity_type || null,
+    requesting_user: userId,
+    surface_hint: surface_hint || null,
+    payload,
+    token_count: tokenCount,
+    assembled_at: assembledAt,
+    expires_at: expiresAt,
+    assembly_duration_ms: durationMs,
+    model_version: '1.0'
+  }).catch(err => console.error('[context-broker] Cache write failed:', err.message));
+
+  // Step 4 — Write signal (fire-and-forget)
+  writeSignal({
+    signal_type: 'packet_assembled',
+    signal_category: 'intelligence',
+    entity_id: entity_id || null,
+    entity_type: entity_type || null,
+    user_id: userId,
+    payload: {
+      packet_type,
+      token_count: tokenCount,
+      surface_hint: surface_hint || null,
+      sources_queried: sourcesQueried,
+      duration_ms: durationMs
+    }
+  });
+
+  // Step 5 — Return packet
+  return {
+    packet_id: null, // assigned by DB on cache write
+    packet_type,
+    entity_id: entity_id || null,
+    assembled_at: assembledAt,
+    expires_at: expiresAt,
+    cache_hit: false,
+    token_count: tokenCount,
+    payload,
+    assembly_meta: {
+      sources_queried: sourcesQueried,
+      fields_missing: fieldsMissing,
+      compression_applied: false,
+      duration_ms: durationMs
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Property packet assembly
+// ---------------------------------------------------------------------------
+
+async function assemblePropertyPacket(entityId, workspaceId) {
+  const sourcesQueried = ['lcc_db'];
+  const fieldsMissing = [];
+
+  // Parallel queries: entity record, external identities, activity events, related research
+  const [entityRes, identitiesRes, activityRes, researchRes] = await Promise.all([
+    opsQuery('GET',
+      `entities?id=eq.${pgFilterVal(entityId)}&select=*&limit=1`
+    ),
+    opsQuery('GET',
+      `external_identities?entity_id=eq.${pgFilterVal(entityId)}&select=*`
+    ),
+    opsQuery('GET',
+      `activity_events?entity_id=eq.${pgFilterVal(entityId)}&order=occurred_at.desc&limit=10&select=id,category,title,source_type,occurred_at,metadata`
+    ),
+    opsQuery('GET',
+      `action_items?entity_id=eq.${pgFilterVal(entityId)}&status=in.(open,in_progress)&select=id,title,status,priority,due_date,action_type&order=created_at.desc&limit=5`
+    )
+  ]);
+
+  const entity = entityRes.data?.[0] || null;
+  if (!entity) {
+    const err = new Error(`Entity ${entityId} not found`);
+    err.missingFields = ['entity'];
+    throw err;
+  }
+
+  const identities = Array.isArray(identitiesRes.data) ? identitiesRes.data : [];
+  const activityTimeline = Array.isArray(activityRes.data) ? activityRes.data : [];
+  const activeResearch = Array.isArray(researchRes.data) ? researchRes.data : [];
+
+  // Query domain DBs for lease data via linked source IDs
+  let leaseData = null;
+  const govIdentity = identities.find(i => i.source_system === 'gov_db' || i.source_system === 'government');
+  const diaIdentity = identities.find(i => i.source_system === 'dia_db' || i.source_system === 'dialysis');
+
+  if (govIdentity?.external_id && process.env.GOV_SUPABASE_URL && process.env.GOV_SUPABASE_KEY) {
+    sourcesQueried.push('gov_db');
+    try {
+      const govRes = await fetch(
+        `${process.env.GOV_SUPABASE_URL}/rest/v1/properties?id=eq.${encodeURIComponent(govIdentity.external_id)}&select=*&limit=1`,
+        { headers: { 'apikey': process.env.GOV_SUPABASE_KEY, 'Authorization': `Bearer ${process.env.GOV_SUPABASE_KEY}` } }
+      );
+      if (govRes.ok) {
+        const govData = await govRes.json();
+        leaseData = govData?.[0] || null;
+      }
+    } catch (err) {
+      console.error('[context-broker] Gov DB query failed:', err.message);
+      fieldsMissing.push('lease_data');
+    }
+  } else if (diaIdentity?.external_id && process.env.DIA_SUPABASE_URL && process.env.DIA_SUPABASE_KEY) {
+    sourcesQueried.push('dia_db');
+    try {
+      const diaRes = await fetch(
+        `${process.env.DIA_SUPABASE_URL}/rest/v1/properties?id=eq.${encodeURIComponent(diaIdentity.external_id)}&select=*&limit=1`,
+        { headers: { 'apikey': process.env.DIA_SUPABASE_KEY, 'Authorization': `Bearer ${process.env.DIA_SUPABASE_KEY}` } }
+      );
+      if (diaRes.ok) {
+        const diaData = await diaRes.json();
+        leaseData = diaData?.[0] || null;
+      }
+    } catch (err) {
+      console.error('[context-broker] Dia DB query failed:', err.message);
+      fieldsMissing.push('lease_data');
+    }
+  }
+
+  // Compute a simple investment score based on available data
+  let investmentScore = null;
+  if (leaseData) {
+    investmentScore = 50; // base
+    if (leaseData.remaining_lease_term_years > 10) investmentScore += 20;
+    else if (leaseData.remaining_lease_term_years > 5) investmentScore += 10;
+    if (leaseData.occupancy_status === 'occupied') investmentScore += 15;
+    if (leaseData.lease_type === 'NNN') investmentScore += 15;
+  }
+
+  const payload = {
+    entity,
+    lease_data: leaseData,
+    research_status: activeResearch,
+    activity_timeline: activityTimeline,
+    investment_score: investmentScore,
+    external_identities: identities.map(i => ({
+      source_system: i.source_system,
+      source_type: i.source_type,
+      external_id: i.external_id
+    }))
+  };
+
+  return { payload, sourcesQueried, fieldsMissing };
+}
+
+// ---------------------------------------------------------------------------
+// Contact packet assembly
+// ---------------------------------------------------------------------------
+
+async function assembleContactPacket(entityId, workspaceId) {
+  const sourcesQueried = ['lcc_db'];
+  const fieldsMissing = [];
+
+  // Parallel queries: entity, activity events, touchpoint signals, active pursuits
+  const [entityRes, activityRes, touchpointRes, pursuitsRes] = await Promise.all([
+    opsQuery('GET',
+      `entities?id=eq.${pgFilterVal(entityId)}&select=*&limit=1`
+    ),
+    opsQuery('GET',
+      `activity_events?entity_id=eq.${pgFilterVal(entityId)}&order=occurred_at.desc&limit=20&select=id,category,title,source_type,occurred_at,metadata`
+    ),
+    opsQuery('GET',
+      `signals?entity_id=eq.${pgFilterVal(entityId)}&signal_type=eq.touchpoint_logged&order=created_at.desc&limit=20&select=id,signal_type,payload,created_at`
+    ),
+    opsQuery('GET',
+      `action_items?entity_id=eq.${pgFilterVal(entityId)}&status=in.(open,in_progress)&select=id,title,status,priority,due_date,action_type&order=created_at.desc&limit=10`
+    )
+  ]);
+
+  const entity = entityRes.data?.[0] || null;
+  if (!entity) {
+    const err = new Error(`Entity ${entityId} not found`);
+    err.missingFields = ['entity'];
+    throw err;
+  }
+
+  const activityTimeline = Array.isArray(activityRes.data) ? activityRes.data : [];
+  const touchpoints = Array.isArray(touchpointRes.data) ? touchpointRes.data : [];
+  const activePursuits = Array.isArray(pursuitsRes.data) ? pursuitsRes.data : [];
+
+  // Derive touchpoint metrics
+  const touchpointCount = touchpoints.length;
+  const lastTouch = touchpoints[0]?.created_at || null;
+  const lastTouchDate = lastTouch ? lastTouch.split('T')[0] : null;
+  const daysSinceLastTouch = lastTouch
+    ? Math.floor((Date.now() - new Date(lastTouch).getTime()) / 86400000)
+    : null;
+
+  // Simple relationship score based on touchpoint recency and frequency
+  let relationshipScore = null;
+  if (touchpointCount > 0) {
+    relationshipScore = Math.min(100, Math.max(0,
+      Math.round(50 + (touchpointCount * 3) - (daysSinceLastTouch || 0))
+    ));
+  }
+
+  // Derive recommended action
+  let recommendedAction = null;
+  if (daysSinceLastTouch === null || daysSinceLastTouch > 30) {
+    recommendedAction = 'Reconnect — no recent touchpoints';
+  } else if (daysSinceLastTouch > 14) {
+    recommendedAction = 'Follow up — approaching cadence gap';
+  } else if (activePursuits.length > 0) {
+    recommendedAction = `Active pursuit: ${activePursuits[0].title}`;
+  }
+
+  const payload = {
+    entity,
+    touchpoint_history: touchpoints.map(t => ({
+      date: t.created_at,
+      type: t.payload?.activity_category || 'touchpoint',
+      title: t.payload?.title || null
+    })),
+    active_pursuits: activePursuits,
+    relationship_score: relationshipScore,
+    recommended_action: recommendedAction,
+    last_touch_date: lastTouchDate,
+    touchpoint_count: touchpointCount,
+    days_since_last_touch: daysSinceLastTouch,
+    activity_timeline: activityTimeline
+  };
+
+  return { payload, sourcesQueried, fieldsMissing };
+}
+
+// ---------------------------------------------------------------------------
+// Daily briefing packet assembly — delegates to existing daily-briefing logic
+// ---------------------------------------------------------------------------
+
+async function assembleDailyBriefingPacket(workspaceId, userId) {
+  const sourcesQueried = ['lcc_db'];
+  const fieldsMissing = [];
+
+  // Query the same data sources the daily-briefing.js uses
+  const [workCountsRes, myWorkRes, inboxRes, sfActivityRes] = await Promise.all([
+    opsQuery('GET', `mv_work_counts?workspace_id=eq.${pgFilterVal(workspaceId)}&limit=1`),
+    opsQuery('GET',
+      `v_my_work?workspace_id=eq.${pgFilterVal(workspaceId)}` +
+      `&or=(user_id.eq.${pgFilterVal(userId)},assigned_to.eq.${pgFilterVal(userId)})` +
+      `&limit=15&order=due_date.asc.nullslast,created_at.desc`
+    ),
+    opsQuery('GET',
+      `v_inbox_triage?workspace_id=eq.${pgFilterVal(workspaceId)}&limit=10&order=received_at.desc`
+    ),
+    opsQuery('GET',
+      `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}&source_type=eq.salesforce&order=occurred_at.desc&limit=30&select=id,category,title,body,source_type,metadata,occurred_at`
+    )
+  ]);
+
+  const workCounts = workCountsRes.data?.[0] || {};
+  const myWork = Array.isArray(myWorkRes.data) ? myWorkRes.data : [];
+  const inboxItems = Array.isArray(inboxRes.data) ? inboxRes.data : [];
+  const sfActivity = Array.isArray(sfActivityRes.data) ? sfActivityRes.data : [];
+
+  // Classify items into tiers using keyword heuristics
+  const DEAL_RE = /offer|under contract|loi|closing|escrow|due diligence|psa|purchase|disposition/i;
+  const PURSUIT_RE = /bov|proposal|valuation|pitch|pursuit|prospect|owner|seller/i;
+
+  const strategic = [];
+  const important = [];
+  const urgent = [];
+
+  const allItems = [...myWork, ...inboxItems];
+  for (const item of allItems) {
+    const text = ((item.title || '') + ' ' + (item.body || '')).toLowerCase();
+    if (DEAL_RE.test(text) || PURSUIT_RE.test(text)) {
+      strategic.push(item);
+    } else if (item.priority === 'high' || item.priority === 'urgent') {
+      important.push(item);
+    } else {
+      urgent.push(item);
+    }
+  }
+
+  const mapItem = (item, rank) => ({
+    priority_rank: rank,
+    category: item.source_type || item.item_type || 'general',
+    title: item.title || '(Untitled)',
+    entity_name: item.title || null,
+    entity_id: item.entity_id || item.id || null,
+    context: item.body || null,
+    suggested_actions: []
+  });
+
+  const calls = sfActivity.filter(a => a.category === 'call').length;
+  const emails = sfActivity.filter(a => a.category === 'email').length;
+
+  const payload = {
+    packet_type: 'daily_briefing',
+    generated_at: new Date().toISOString(),
+    date: new Date().toISOString().split('T')[0],
+    user_id: userId,
+    strategic_items: strategic.slice(0, 5).map((item, i) => mapItem(item, i + 1)),
+    important_items: important.slice(0, 5).map((item, i) => mapItem(item, i + 1)),
+    urgent_items: urgent.slice(0, 5).map((item, i) => mapItem(item, i + 1)),
+    production_score: {
+      bd_touchpoints: { planned: 10, completed_yesterday: 0, weekly_target: 10, weekly_completed: calls + emails },
+      calls_logged: { weekly_completed: calls, weekly_target: 15 },
+      om_follow_ups_completed: { open: 0, overdue_48h: 0 }
+    },
+    team_metrics: {
+      open_actions: workCounts.open_actions || 0,
+      inbox_new: workCounts.inbox_new || 0,
+      overdue: workCounts.overdue_actions || 0,
+      completed_week: workCounts.completed_week || 0
+    },
+    assembled_at: new Date().toISOString()
+  };
+
+  return { payload, sourcesQueried, fieldsMissing };
+}
+
+// ---------------------------------------------------------------------------
+// Generic packet assembly — for types not yet fully specialized
+// ---------------------------------------------------------------------------
+
+async function assembleGenericPacket(packetType, entityId, workspaceId) {
+  const sourcesQueried = ['lcc_db'];
+  const fieldsMissing = [];
+
+  const [entityRes, activityRes, relatedActionsRes] = await Promise.all([
+    opsQuery('GET',
+      `entities?id=eq.${pgFilterVal(entityId)}&select=*&limit=1`
+    ),
+    opsQuery('GET',
+      `activity_events?entity_id=eq.${pgFilterVal(entityId)}&order=occurred_at.desc&limit=15&select=id,category,title,source_type,occurred_at,metadata`
+    ),
+    opsQuery('GET',
+      `action_items?entity_id=eq.${pgFilterVal(entityId)}&status=in.(open,in_progress)&select=id,title,status,priority,due_date,action_type&order=created_at.desc&limit=10`
+    )
+  ]);
+
+  const entity = entityRes.data?.[0] || null;
+  if (!entity) {
+    const err = new Error(`Entity ${entityId} not found`);
+    err.missingFields = ['entity'];
+    throw err;
+  }
+
+  const payload = {
+    packet_type: packetType,
+    entity,
+    activity_timeline: Array.isArray(activityRes.data) ? activityRes.data : [],
+    active_items: Array.isArray(relatedActionsRes.data) ? relatedActionsRes.data : []
+  };
+
+  return { payload, sourcesQueried, fieldsMissing };
 }
