@@ -53,6 +53,7 @@ import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
+import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
@@ -518,6 +519,7 @@ const ACTION_REGISTRY = {
   generate_batch_drafts:         { method: 'POST', path: 'draft&action=batch', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=batch' },
   record_template_send:          { method: 'POST', path: 'draft&action=record_send', tier: 2, confirm: 'explicit', alias: 'operations?_route=draft&action=record_send' },
   get_template_performance:      { method: 'POST', path: 'draft&action=performance', tier: 0, alias: 'operations?_route=draft&action=performance' },
+  evaluate_template_health:      { method: 'POST', path: 'draft&action=health', tier: 0, alias: 'operations?_route=draft&action=health' },
   run_listing_bd_pipeline:       { method: 'POST', path: 'draft&action=listing_bd', tier: 1, confirm: 'explicit', alias: 'operations?_route=draft&action=listing_bd' },
 
   // Tier 0: AI-powered listing pursuit (Wave 2)
@@ -2008,8 +2010,42 @@ async function handleDraftRoute(req, res) {
       });
     }
 
+    // POST ?action=health — template voice refinement health check
+    if (action === 'health') {
+      const { template_id, lookback_days } = req.body || {};
+      const healthReport = await evaluateTemplateHealth({
+        template_id,
+        lookback_days: lookback_days || 120
+      });
+
+      // Auto-flag templates that need revision
+      const needsRevision = healthReport.evaluations?.filter(e => e.status === 'needs_revision') || [];
+      for (const t of needsRevision) {
+        await flagTemplateForRevision(
+          t.template_id,
+          t.issues.join('; '),
+          user.id
+        );
+      }
+
+      // For each flagged template, generate a revision suggestion
+      const revisionSuggestions = [];
+      for (const t of needsRevision) {
+        const suggestion = await generateRevisionSuggestion(t.template_id);
+        if (suggestion.ok && suggestion.analysis) {
+          revisionSuggestions.push(suggestion);
+        }
+      }
+
+      return res.status(200).json({
+        ...healthReport,
+        revisions_flagged: needsRevision.length,
+        revision_suggestions: revisionSuggestions
+      });
+    }
+
     return res.status(400).json({
-      error: 'Invalid draft action. Use: generate, batch, record_send, listing_bd, performance'
+      error: 'Invalid draft action. Use: generate, batch, record_send, listing_bd, performance, health'
     });
   }
 

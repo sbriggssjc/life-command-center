@@ -418,6 +418,29 @@ export const ACTION_SCHEMAS = {
     }
   },
 
+  evaluate_template_health: {
+    description: 'Evaluate the health of all email templates — identifies templates with high edit rates (needs revision), underperformance against targets, and stale templates. Auto-flags templates for revision and generates suggestions.',
+    category: 'outreach',
+    inputs: {
+      type: 'object',
+      properties: {
+        template_id: { type: 'string', description: 'Evaluate a specific template (e.g., T-001). Omit for all.' },
+        lookback_days: { type: 'integer', minimum: 7, maximum: 365, description: 'Analysis window in days (default 120)' }
+      }
+    },
+    outputs: {
+      type: 'object',
+      properties: {
+        total_templates: { type: 'integer' },
+        summary: { type: 'object', description: 'Counts by status: needs_revision, underperforming, stale, healthy' },
+        evaluations: { type: 'array', description: 'Per-template health evaluations with metrics and issues' },
+        revisions_flagged: { type: 'integer' },
+        revision_suggestions: { type: 'array', description: 'AI revision suggestions for flagged templates' },
+        _insight: { type: 'string' }
+      }
+    }
+  },
+
   run_listing_bd_pipeline: {
     description: 'Run the listing-as-BD pipeline for a listing entity. Finds matching contacts (same asset type/state + geographic proximity) and queues draft candidates for review.',
     category: 'outreach',

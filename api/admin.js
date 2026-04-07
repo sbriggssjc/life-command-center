@@ -40,9 +40,11 @@ export default withErrorHandler(async function handler(req, res) {
 
   const route = req.query._route;
   switch (route) {
-    case 'workspaces': return handleWorkspaces(req, res);
-    case 'members':    return handleMembers(req, res);
-    case 'flags':      return handleFlags(req, res);
+    case 'workspaces':  return handleWorkspaces(req, res);
+    case 'members':     return handleMembers(req, res);
+    case 'flags':       return handleFlags(req, res);
+    case 'auth-config': return handleAuthConfig(req, res);
+    case 'me':          return handleMe(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -335,4 +337,56 @@ async function handleFlags(req, res) {
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });
+}
+
+// ============================================================================
+// AUTH CONFIG — Public endpoint for frontend to discover auth settings
+// No authentication required (needed before the user can sign in)
+// ============================================================================
+
+function handleAuthConfig(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  // Return the public (anon) Supabase credentials — NEVER the service role key
+  const supabaseUrl = process.env.OPS_SUPABASE_URL || null;
+  const supabaseAnonKey = process.env.OPS_SUPABASE_ANON_KEY || null;
+  const env = process.env.LCC_ENV || 'development';
+
+  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  return res.status(200).json({
+    supabase_url: supabaseUrl,
+    supabase_anon_key: supabaseAnonKey,
+    env,
+    auth_modes: ['jwt', 'magic_link'],
+    _note: supabaseAnonKey
+      ? 'Supabase auth is configured. Frontend should use JWT authentication.'
+      : 'Supabase anon key not set (OPS_SUPABASE_ANON_KEY). Running in dev fallback mode.'
+  });
+}
+
+// ============================================================================
+// ME — Return the authenticated user's profile and workspace info
+// Requires authentication (JWT or API key)
+// ============================================================================
+
+async function handleMe(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  return res.status(200).json({
+    id: user.id,
+    email: user.email,
+    display_name: user.display_name,
+    avatar_url: user.avatar_url,
+    auth_id: user.auth_id || null,
+    _transitional: user._transitional || false,
+    _api_key_auth: user._api_key_auth || false,
+    memberships: user.memberships || []
+  });
 }
