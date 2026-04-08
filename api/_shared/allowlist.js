@@ -31,6 +31,12 @@ export const GOV_READ_TABLES = new Set([
   'v_property_history',
   // Overview pre-computed stats
   'mv_gov_overview_stats',
+  // Research & Sales tables
+  'sales_comps',
+  'research_queue_outcomes',
+  'pending_updates',
+  'ingestion_tracker',
+  'ingestion_log',
   // Unified Contact Hub
   'unified_contacts',
   'contact_change_log',
