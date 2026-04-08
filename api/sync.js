@@ -26,7 +26,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
-import { logPerfMetric, opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { logPerfMetric, opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
@@ -142,7 +142,8 @@ export default withErrorHandler(async function handler(req, res) {
     if (action === 'health') return await handleHealth(req, res, user, workspaceId);
     if (action === 'jobs') return await handleJobs(req, res, user, workspaceId);
     if (action === 'isolation_check') return await handleIsolationCheck(req, res, user, workspaceId);
-    return res.status(400).json({ error: 'Invalid GET action. Use: health, jobs, isolation_check' });
+    if (action === 'flagged_emails') return await handleFlaggedEmails(req, res, user, workspaceId);
+    return res.status(400).json({ error: 'Invalid GET action. Use: health, jobs, isolation_check, flagged_emails' });
   }
 
   // ---- POST endpoints ----
@@ -251,6 +252,64 @@ async function resolveConnector(userId, workspaceId, connectorType) {
 }
 
 // ============================================================================
+// READ: FLAGGED EMAILS from inbox_items (database-backed, accurate total)
+// ============================================================================
+
+async function handleFlaggedEmails(req, res, user, workspaceId) {
+  const { count_only } = req.query;
+
+  // Count-only mode: fast path for stat cards
+  if (count_only === 'true') {
+    const countResult = await opsQuery('GET',
+      `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
+      `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
+    );
+    const total = countResult.data?.length || 0;
+    return res.status(200).json({ emails: [], total });
+  }
+
+  // Full query with pagination
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 200, 1), 2000);
+  const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
+  // Get total count (all active flagged emails)
+  const countResult = await opsQuery('GET',
+    `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
+    `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
+  );
+  const total = countResult.data?.length || 0;
+
+  // Get paginated results
+  const result = await opsQuery('GET',
+    `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
+    `&status=in.(new,triaged)&flag_removed_at=is.null` +
+    `&select=id,external_id,internet_message_id,title,body,status,priority,external_url,received_at,flag_removed_at,metadata` +
+    `&order=received_at.desc&limit=${limit}&offset=${offset}`
+  );
+
+  // Map inbox_items fields to the email format the frontend expects
+  const emails = (result.data || []).map(item => ({
+    id: item.id,
+    external_id: item.external_id,
+    internet_message_id: item.internet_message_id,
+    subject: item.title,
+    body_preview: item.body,
+    sender_name: item.metadata?.sender_name || null,
+    sender_email: item.metadata?.sender_email || null,
+    received_date: item.received_at,
+    received_date_time: item.metadata?.received_at || item.received_at,
+    has_attachments: item.metadata?.has_attachments || false,
+    importance: item.metadata?.importance || 'normal',
+    web_link: item.external_url,
+    outlook_link: item.external_url,
+    status: item.status,
+    flag_removed_at: item.flag_removed_at
+  }));
+
+  return res.status(200).json({ emails, total, limit, offset });
+}
+
+// ============================================================================
 // INGEST: FLAGGED EMAILS → inbox_items
 // ============================================================================
 
@@ -265,14 +324,29 @@ async function ingestEmails(req, res, user, workspaceId) {
   let processed = 0, failed = 0, resolved = 0, reactivated = 0, errors = [];
 
   try {
-    // Fetch from existing edge function with per-user connector context
-    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/flagged-emails?limit=500`, {
-      headers: connectorHeaders(connector)
-    });
-    if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
+    // Fetch from existing edge function with per-user connector context.
+    // Paginate: request up to 999 per page (Graph API max $top), loop with
+    // skip parameter until we get fewer results than requested.
+    const PAGE_LIMIT = 999;
+    const MAX_PAGES = 10; // Safety cap: 10 pages × 999 = ~10k emails max
+    const emailList = [];
+    const hdrs = connectorHeaders(connector);
 
-    const data = await edgeRes.json();
-    const emailList = data.emails || [];
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const skip = page * PAGE_LIMIT;
+      const edgeRes = await fetch(
+        `${EDGE_FN_URL}/sync/flagged-emails?limit=${PAGE_LIMIT}&skip=${skip}`,
+        { headers: hdrs }
+      );
+      if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
+
+      const data = await edgeRes.json();
+      const pageEmails = data.emails || [];
+      emailList.push(...pageEmails);
+
+      // Stop if this page returned fewer than requested (no more data)
+      if (pageEmails.length < PAGE_LIMIT) break;
+    }
 
     // ---- Pre-fetch all existing flagged_email items for this workspace ----
     // This avoids N+1 queries and lets us do explicit check-then-upsert

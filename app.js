@@ -4497,15 +4497,16 @@ async function loadActivities() {
 
 async function loadEmails() {
   try {
-    const res = await fetch(`${API}/sync/flagged-emails?limit=500`);
+    // Use the Vercel API which reads from inbox_items (accurate total count,
+    // not capped by edge function pagination limits)
+    const res = await fetch('/api/sync?action=flagged_emails&limit=2000');
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Emails API returned non-JSON'); return; }
     let rawEmails = (data && data.emails) || [];
-    // Filter out resolved/archived flags and deduplicate by internet_message_id
+    // Deduplicate by internet_message_id (DB already filters archived/resolved)
     const seen = new Set();
     rawEmails = rawEmails.filter(e => {
-      // Skip items whose flags have been resolved in Outlook
       if (e.flag_removed_at || e.status === 'archived' || e.status === 'dismissed') return false;
       const key = e.internet_message_id || e.external_id || `${e.subject||''}|${e.sender_email||e.sender_name||''}|${e.received_date||''}`;
       if (seen.has(key)) return false;
@@ -5624,7 +5625,7 @@ async function loadMessages() {
     if (emails.length > 0) {
       msgData.flagged = emails;
     } else {
-      const res = await fetch(`${API}/sync/flagged-emails?limit=500`);
+      const res = await fetch('/api/sync?action=flagged_emails&limit=500');
       if (!res.ok) throw new Error('API returned ' + res.status);
       const data = await res.json();
       msgData.flagged = data.emails || [];
