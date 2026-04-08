@@ -613,7 +613,8 @@ app.use(
     credentials: true,
   })
 );
-
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
 function authenticate(req, res, next) {
@@ -667,6 +668,24 @@ app.post("/messages", async (req, res) => {
 });
 
 
+// ── PKCE verification ─────────────────────────────────────────────────────
+async function verifyPKCE(codeVerifier, codeChallenge, method = 'S256') {
+  if (!codeVerifier || !codeChallenge) return false;
+  if (method === 'plain') return codeVerifier === codeChallenge;
+  if (method === 'S256') {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(codeVerifier);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = new Uint8Array(hashBuffer);
+    const base64 = btoa(String.fromCharCode(...hashArray))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+    return base64 === codeChallenge;
+  }
+  return false;
+}
+
 // ── In-memory authorization code store (auto-expires after 5 minutes) ────
 const authCodes = new Map();
 function generateCode() {
@@ -684,10 +703,33 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     issuer: base,
     authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/oauth/token`,
+    registration_endpoint: `${base}/register`,
     grant_types_supported: ['authorization_code'],
     response_types_supported: ['code'],
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
     code_challenge_methods_supported: ['S256', 'plain'],
+    scopes_supported: ['read'],
+  });
+});
+
+// ── Dynamic Client Registration (RFC 7591) ────────────────────────────────
+// Claude.ai may attempt to register before the OAuth flow.
+// We accept any registration and return LCC_API_KEY as the client_secret.
+app.post('/register', (req, res) => {
+  const apiKey = LCC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'server_error' });
+  }
+  const clientId = `lcc-${Date.now()}`;
+  console.log(`[OAuth] DCR registration → client_id: ${clientId}`);
+  res.status(201).json({
+    client_id: clientId,
+    client_secret: apiKey,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    client_secret_expires_at: 0,
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'client_secret_post',
   });
 });
 
@@ -695,10 +737,18 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
 // Claude.ai redirects the user here. We auto-approve and redirect back
 // immediately — no login page needed for an internal personal tool.
 app.get('/authorize', (req, res) => {
-  const { response_type, client_id, redirect_uri, state, scope,
-          code_challenge, code_challenge_method } = req.query;
+  const {
+    response_type, client_id, redirect_uri, state,
+    code_challenge, code_challenge_method,
+  } = req.query;
 
-  // Validate required params
+  console.log('[OAuth] /authorize called:', {
+    response_type, client_id,
+    redirect_uri: redirect_uri?.substring(0, 60),
+    has_pkce: !!code_challenge,
+    state: state?.substring(0, 10),
+  });
+
   if (response_type !== 'code') {
     return res.status(400).send('unsupported_response_type');
   }
@@ -706,106 +756,146 @@ app.get('/authorize', (req, res) => {
     return res.status(400).send('missing redirect_uri');
   }
 
-  // Generate a short-lived authorization code
   const code = generateCode();
-  const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
+  const expires = Date.now() + 5 * 60 * 1000;
 
-  // Store code with everything needed to validate it at /token
   authCodes.set(code, {
     client_id,
     redirect_uri,
-    code_challenge,
-    code_challenge_method,
+    code_challenge: code_challenge || null,
+    code_challenge_method: code_challenge_method || 'S256',
     expires,
   });
 
-  // Clean up expired codes (housekeeping)
+  // Housekeeping: remove expired codes
   for (const [k, v] of authCodes.entries()) {
     if (v.expires < Date.now()) authCodes.delete(k);
   }
 
-  // Auto-approve: redirect immediately back to Claude with the code
   const redirectUrl = new URL(redirect_uri);
   redirectUrl.searchParams.set('code', code);
   if (state) redirectUrl.searchParams.set('state', state);
 
-  console.log(`[OAuth] Authorized → redirecting to ${redirectUrl.origin}`);
+  console.log(`[OAuth] Redirecting to ${redirectUrl.origin} with code`);
   return res.redirect(302, redirectUrl.toString());
 });
 
 // ── Step 2: Token endpoint ────────────────────────────────────────────────
 // Claude.ai exchanges the authorization code for an access token.
 // Handles both application/x-www-form-urlencoded and application/json.
-app.post('/oauth/token',
-  (req, res, next) => {
-    const ct = req.get('content-type') || '';
-    if (ct.includes('application/x-www-form-urlencoded')) {
-      express.urlencoded({ extended: false })(req, res, next);
-    } else {
-      express.json()(req, res, next);
-    }
-  },
-  (req, res) => {
-    const {
-      grant_type,
-      code,
-      client_id,
-      client_secret,
-      redirect_uri,
-      code_verifier,
-    } = req.body;
+app.post('/oauth/token', async (req, res) => {
+  const {
+    grant_type,
+    code,
+    client_id,
+    client_secret,
+    redirect_uri,
+    code_verifier,
+  } = req.body || {};
 
-    const apiKey = LCC_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        error: 'server_error',
-        error_description: 'LCC_API_KEY not configured on server',
-      });
-    }
+  console.log('[OAuth] /oauth/token called:', {
+    grant_type,
+    has_code: !!code,
+    has_client_secret: !!client_secret,
+    has_code_verifier: !!code_verifier,
+    content_type: req.get('content-type'),
+    body_keys: Object.keys(req.body || {}),
+  });
 
-    // Only support authorization_code grant
-    if (grant_type !== 'authorization_code') {
-      return res.status(400).json({ error: 'unsupported_grant_type' });
-    }
-
-    // Validate the authorization code
-    const stored = authCodes.get(code);
-    if (!stored) {
-      return res.status(400).json({
-        error: 'invalid_grant',
-        error_description: 'Authorization code not found or expired',
-      });
-    }
-    if (stored.expires < Date.now()) {
-      authCodes.delete(code);
-      return res.status(400).json({
-        error: 'invalid_grant',
-        error_description: 'Authorization code expired',
-      });
-    }
-
-    // Validate client_secret = LCC_API_KEY
-    if (client_secret !== apiKey) {
-      return res.status(401).json({
-        error: 'invalid_client',
-        error_description: 'client_secret does not match',
-      });
-    }
-
-    // One-time use: delete the code
-    authCodes.delete(code);
-
-    console.log('[OAuth] Token issued successfully');
-
-    // Return LCC_API_KEY as the access token
-    return res.json({
-      access_token: apiKey,
-      token_type: 'bearer',
-      expires_in: 315360000,
-      scope: 'read',
+  const apiKey = LCC_API_KEY;
+  if (!apiKey) {
+    console.error('[OAuth] LCC_API_KEY not set');
+    return res.status(500).json({
+      error: 'server_error',
+      error_description: 'LCC_API_KEY not configured on server',
     });
   }
-);
+
+  if (grant_type !== 'authorization_code') {
+    console.warn('[OAuth] Bad grant_type:', grant_type);
+    return res.status(400).json({ error: 'unsupported_grant_type' });
+  }
+
+  if (!code) {
+    console.warn('[OAuth] Missing code in request body. Body:', req.body);
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'Missing authorization code',
+    });
+  }
+
+  const stored = authCodes.get(code);
+  if (!stored) {
+    console.warn('[OAuth] Code not found in store. Active codes:', authCodes.size);
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'Authorization code not found or already used',
+    });
+  }
+
+  if (stored.expires < Date.now()) {
+    authCodes.delete(code);
+    console.warn('[OAuth] Code expired');
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'Authorization code expired',
+    });
+  }
+
+  // Validate credentials: accept if client_secret matches LCC_API_KEY
+  // OR if no client_secret provided but PKCE validates (public client)
+  let credentialsValid = false;
+
+  if (client_secret && client_secret === apiKey) {
+    // Confidential client: secret matches
+    credentialsValid = true;
+    console.log('[OAuth] Validated via client_secret match');
+  } else if (!client_secret && code_verifier && stored.code_challenge) {
+    // Public client: validate PKCE
+    const valid = await verifyPKCE(
+      code_verifier,
+      stored.code_challenge,
+      stored.code_challenge_method
+    );
+    if (valid) {
+      credentialsValid = true;
+      console.log('[OAuth] Validated via PKCE');
+    } else {
+      console.warn('[OAuth] PKCE validation failed');
+    }
+  } else if (!client_secret && !stored.code_challenge) {
+    // No secret, no PKCE — allow for development/loose mode
+    // Comment this out to require authentication
+    credentialsValid = true;
+    console.warn('[OAuth] No credentials provided — allowing (no PKCE stored)');
+  } else {
+    console.warn('[OAuth] Credential validation failed:', {
+      has_secret: !!client_secret,
+      secret_matches: client_secret === apiKey,
+      has_verifier: !!code_verifier,
+      has_challenge: !!stored.code_challenge,
+    });
+  }
+
+  if (!credentialsValid) {
+    return res.status(401).json({
+      error: 'invalid_client',
+      error_description: 'Client authentication failed',
+    });
+  }
+
+  // One-time use: consume the code
+  authCodes.delete(code);
+
+  console.log('[OAuth] Token issued successfully');
+
+  return res.json({
+    access_token: apiKey,
+    token_type: 'bearer',
+    expires_in: 315360000,
+    scope: 'read',
+  });
+});
 
 // ── Health check ─────────────────────────────────────────────────────────
 
