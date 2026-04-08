@@ -9,6 +9,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -102,6 +103,7 @@ app.all('/api/copilot-manifest', (req, res) => { req.query._route = 'chat'; req.
 app.all('/api/chat', (req, res) => { req.query._route = 'chat'; operationsHandler(req, res); });
 app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHandler(req, res); });
 app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.query.action = 'preassemble-nightly'; operationsHandler(req, res); });
+app.all('/api/context', (req, res) => { req.query._route = 'context'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 
@@ -135,6 +137,40 @@ app.get('/privacy', (req, res) => res.type('text/plain').send(
 app.get('/terms', (req, res) => res.type('text/plain').send(
   'Life Command Center — internal tool for Team Briggs use only. Not for public distribution.'
 ));
+
+// ── Serve Office Add-in files ──────────────────────────────────────────────
+// Manifest and taskpane HTML for Outlook, Excel, and Word sideloadable add-ins.
+// RAILWAY_URL placeholder is replaced at serve time with the actual base URL.
+
+app.get('/office-addins/:addin/taskpane.html', (req, res) => {
+  const { addin } = req.params;
+  const allowed = ['outlook', 'excel', 'word'];
+  if (!allowed.includes(addin)) return res.status(404).send('Not found');
+  try {
+    const html = readFileSync(
+      join(__dirname, 'office-addins', addin, 'taskpane.html'), 'utf8'
+    );
+    const baseUrl = process.env.LCC_BASE_URL || req.protocol + '://' + req.get('host');
+    const injected = html.replace(/RAILWAY_URL/g, baseUrl);
+    // Office Add-ins load in a WebView/iframe — allow framing
+    res.removeHeader('X-Frame-Options');
+    res.type('text/html').send(injected);
+  } catch { res.status(404).send('Add-in not found'); }
+});
+
+app.get('/office-addins/:addin/manifest.xml', (req, res) => {
+  const { addin } = req.params;
+  const allowed = ['outlook', 'excel', 'word'];
+  if (!allowed.includes(addin)) return res.status(404).send('Not found');
+  try {
+    const xml = readFileSync(
+      join(__dirname, 'office-addins', addin, 'manifest.xml'), 'utf8'
+    ).replace(/RAILWAY_URL/g,
+      process.env.LCC_BASE_URL || req.protocol + '://' + req.get('host')
+    );
+    res.type('application/xml').send(xml);
+  } catch { res.status(404).send('Manifest not found'); }
+});
 
 // ── Static files ────────────────────────────────────────────────────────────
 app.use(express.static(__dirname, {
