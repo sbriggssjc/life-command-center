@@ -4519,6 +4519,8 @@ async function loadEmails() {
     _setHTML('recentEmails', renderRecentEmails());
   } catch (e) {
     console.error('Emails load error:', e);
+    // Re-render stats so canonical inbox fallback can display
+    renderHomeStats();
     _setHTML('recentEmails', '<div class="widget-error"><div class="err-msg">Unable to load emails</div><button class="retry-btn" onclick="loadEmails()">Retry</button></div>');
   }
 }
@@ -4892,10 +4894,12 @@ function renderHomeStats() {
   }
   // Don't write 0 — keep the "-" placeholder until real data arrives
 
-  // --- Emails stat — always use edge function count when available ---
+  // --- Emails stat — prefer flagged email count, fall back to canonical inbox ---
   if (elEmails) {
     if (emailTotalCount > 0 || emails.length > 0) {
       elEmails.textContent = (emailTotalCount || emails.length).toLocaleString();
+    } else if (canonicalInbox && canonicalInbox.pagination?.total > 0) {
+      elEmails.textContent = canonicalInbox.pagination.total.toLocaleString();
     } else if (canonicalCounts && canonicalCounts.inbox_new > 0) {
       elEmails.textContent = canonicalCounts.inbox_new.toLocaleString();
     }
