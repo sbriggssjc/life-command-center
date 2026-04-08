@@ -42,6 +42,16 @@ let diaSalesStateFilter = ''; // state filter
 let diaFilteredSalesData = [];
 const DIA_SALES_PAGE_SIZE = 50;
 
+// Properties tab state
+let diaPropertiesData = null;
+let diaPropertiesLoading = false;
+let diaPropertiesSearch = '';
+let diaPropertiesPage = 0;
+let diaPropertiesSort = { col: 'address', dir: 'asc' };
+let diaPropertiesStateFilter = '';
+let diaFilteredPropertiesData = [];
+const DIA_PROPERTIES_PAGE_SIZE = 25;
+
 // Pipeline/Ops Research Modes
 let diaUnmatchedQueue = null;
 let diaUnmatchedLoading = false;
@@ -291,6 +301,9 @@ function renderDiaTab() {
     case 'npi':
       inner.innerHTML = renderDiaNpi();
       break;
+    case 'properties':
+      renderDiaProperties(); // async — renders directly to DOM
+      return;
     case 'sales':
       renderDiaSales(); // async — renders directly to DOM
       return;
@@ -4956,6 +4969,264 @@ async function saveDiaDetailResearch() {
 window.diaQuery = diaQuery;
 window.loadDiaData = loadDiaData;
 // ============================================================================
+// PROPERTIES TAB — Full property inventory browser
+// ============================================================================
+
+window.diaPropertiesSortBy = function(col) {
+  if (diaPropertiesSort.col === col) {
+    diaPropertiesSort.dir = diaPropertiesSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    diaPropertiesSort = { col: col, dir: 'desc' };
+  }
+  diaPropertiesPage = 0;
+  renderDiaProperties();
+};
+
+async function renderDiaProperties() {
+  const inner = q('#bizPageInner');
+  if (!inner) return;
+
+  // Lazy-load all properties on first visit
+  if (diaPropertiesData === null && !diaPropertiesLoading) {
+    diaPropertiesLoading = true;
+    inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading properties...</p></div>';
+    try {
+      let all = [], pg = 0;
+      while (true) {
+        const batch = await diaQuery('properties', '*', { order: 'address.asc', limit: 1000, offset: pg * 1000 });
+        all = all.concat(batch || []);
+        if (!batch || batch.length < 1000) break;
+        pg++;
+      }
+      diaPropertiesData = all;
+    } catch (e) {
+      console.error('Properties load error:', e);
+      showToast('Properties load failed', 'error');
+      diaPropertiesData = [];
+    }
+    diaPropertiesLoading = false;
+  }
+
+  let data = diaPropertiesData || [];
+
+  // Apply state filter
+  let filtered = data;
+  if (diaPropertiesStateFilter) {
+    filtered = filtered.filter(r => r.state === diaPropertiesStateFilter);
+  }
+
+  // Apply search filter
+  if (diaPropertiesSearch) {
+    const sq = diaPropertiesSearch.toLowerCase();
+    filtered = filtered.filter(r =>
+      (r.address || '').toLowerCase().includes(sq) ||
+      (r.property_name || '').toLowerCase().includes(sq) ||
+      (r.city || '').toLowerCase().includes(sq) ||
+      (r.state || '').toLowerCase().includes(sq) ||
+      (r.owner || '').toLowerCase().includes(sq)
+    );
+  }
+
+  // Apply sort
+  if (diaPropertiesSort.col) {
+    const col = diaPropertiesSort.col;
+    const dir = diaPropertiesSort.dir === 'asc' ? 1 : -1;
+    const numericCols = ['building_sf', 'year_built', 'clinics_linked'];
+    const isNumeric = numericCols.indexOf(col) >= 0;
+    filtered = filtered.slice().sort(function(a, b) {
+      let va = a[col], vb = b[col];
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (isNumeric) {
+        return (parseFloat(va) - parseFloat(vb)) * dir;
+      }
+      return String(va).localeCompare(String(vb)) * dir;
+    });
+  }
+
+  diaFilteredPropertiesData = filtered;
+
+  const totalPages = Math.ceil(filtered.length / DIA_PROPERTIES_PAGE_SIZE);
+  const pageRows = filtered.slice(diaPropertiesPage * DIA_PROPERTIES_PAGE_SIZE, (diaPropertiesPage + 1) * DIA_PROPERTIES_PAGE_SIZE);
+
+  let html = '<div class="biz-section">';
+
+  // Action guidance banner
+  html += '<div style="padding:10px 14px;background:rgba(108,140,255,0.08);border-radius:8px;border-left:3px solid #6c8cff;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Properties</strong> — Browse the full dialysis property inventory. Click any row to view property details, ownership, and linked clinics.</div>';
+  html += '</div>';
+
+  // Summary metrics
+  const uniqueStates = [...new Set(data.map(r => r.state).filter(Boolean))];
+  const withSF = data.filter(r => r.building_sf > 0);
+  const avgSF = withSF.length > 0 ? Math.round(withSF.reduce((s, r) => s + parseFloat(r.building_sf), 0) / withSF.length) : 0;
+  const withClinics = data.filter(r => r.clinics_linked > 0);
+
+  html += '<div class="dia-grid dia-grid-4" style="margin-bottom:16px;">';
+  html += infoCard({ title: 'Total Properties', value: fmtN(data.length), sub: 'in database', color: 'blue' });
+  html += infoCard({ title: 'States Represented', value: fmtN(uniqueStates.length), sub: uniqueStates.slice(0, 5).join(', ') + (uniqueStates.length > 5 ? '...' : ''), color: 'green' });
+  html += infoCard({ title: 'Avg Building SF', value: avgSF > 0 ? fmtN(avgSF) : '—', sub: withSF.length + ' with SF data', color: 'purple' });
+  html += infoCard({ title: 'Clinics Linked', value: fmtN(withClinics.length), sub: 'properties with clinics', color: 'cyan' });
+  html += '</div>';
+
+  // Search bar + State filter
+  const allStates = [...new Set(data.map(r => r.state).filter(Boolean))].sort();
+  html += '<div style="margin:16px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+  html += '<input type="text" id="diaPropsSearchInput" placeholder="Search address, name, city, state, owner..." value="' + esc(diaPropertiesSearch) + '" style="flex:1;min-width:200px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;" />';
+  html += '<select id="diaPropsStateSelect" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;">';
+  html += '<option value="">All States</option>';
+  allStates.forEach(function(st) {
+    html += '<option value="' + esc(st) + '"' + (diaPropertiesStateFilter === st ? ' selected' : '') + '>' + esc(st) + '</option>';
+  });
+  html += '</select>';
+  if (diaPropertiesSort.col && diaPropertiesSort.col !== 'address') {
+    html += '<button class="pill active" id="diaPropsClearSort" style="font-size:11px;padding:4px 10px;">Clear Sort</button>';
+  }
+  html += '<span style="font-size:12px;color:var(--text3);">' + fmtN(filtered.length) + ' results</span>';
+  html += '</div>';
+
+  // Scrollable table
+  html += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;max-height:70vh;">';
+  html += '<table class="data-table" style="width:100%;min-width:1100px;border-collapse:collapse;font-size:12px;">';
+
+  // Sortable header
+  const sortArrow = function(col) {
+    if (diaPropertiesSort.col !== col) return ' <span style="opacity:0.3;font-size:9px">&#x21C5;</span>';
+    return diaPropertiesSort.dir === 'asc' ? ' <span style="color:var(--accent)">&#x25B2;</span>' : ' <span style="color:var(--accent)">&#x25BC;</span>';
+  };
+  const thBase = 'padding:10px 8px;font-weight:600;font-size:11px;letter-spacing:0.3px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;';
+  const th = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:left;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
+  const thr = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:right;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
+
+  html += '<thead><tr style="background:var(--s2);position:sticky;top:0;z-index:1;">';
+  html += th('Property Name', 160, 'property_name');
+  html += th('Address', 160, 'address');
+  html += th('City', 100, 'city');
+  html += th('State', 50, 'state');
+  html += thr('SF', 70, 'building_sf');
+  html += thr('Year Built', 70, 'year_built');
+  html += th('Owner', 150, 'owner');
+  html += th('Tenant/Operator', 150, 'tenant');
+  html += thr('Clinics Linked', 80, 'clinics_linked');
+  html += '</tr></thead>';
+
+  // Body
+  html += '<tbody>';
+  const td = function(val, trunc) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;' + (trunc ? 'max-width:180px;overflow:hidden;text-overflow:ellipsis;' : '') + '">' + esc(val || '—') + '</td>'; };
+  const tdr = function(val) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:11px;">' + (val || '—') + '</td>'; };
+
+  pageRows.forEach(function(r, _ri) {
+    const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    html += '<tr class="clickable-row" data-prop-idx="' + _ri + '" style="cursor:pointer;' + _zebra + '">';
+    html += td(r.property_name, true);
+    html += td(r.address, true);
+    html += td(r.city);
+    html += td(r.state);
+    html += tdr(r.building_sf > 0 ? fmtN(Math.round(parseFloat(r.building_sf))) : '—');
+    html += tdr(r.year_built || '—');
+    html += td(r.owner, true);
+    html += td(r.tenant, true);
+    html += tdr(r.clinics_linked > 0 ? r.clinics_linked : '—');
+    html += '</tr>';
+  });
+
+  if (pageRows.length === 0) {
+    html += '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text3);">No properties to display</td></tr>';
+  }
+  html += '</tbody></table></div>';
+
+  // Pagination
+  if (totalPages > 1) {
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;color:var(--text2);">';
+    html += '<span>Page ' + (diaPropertiesPage + 1) + ' of ' + totalPages + ' (' + fmtN(filtered.length) + ' total)</span>';
+    html += '<div style="display:flex;gap:6px;">';
+    html += '<button class="pill' + (diaPropertiesPage === 0 ? '' : ' active') + '" data-props-page="prev"' + (diaPropertiesPage === 0 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>&laquo; Prev</button>';
+    html += '<button class="pill' + (diaPropertiesPage >= totalPages - 1 ? '' : ' active') + '" data-props-page="next"' + (diaPropertiesPage >= totalPages - 1 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>Next &raquo;</button>';
+    html += '</div></div>';
+  }
+
+  html += '</div>';
+
+  // Render to DOM
+  inner.innerHTML = html;
+
+  // Bind row click — open unified detail sidebar
+  document.querySelectorAll('[data-prop-idx]').forEach(function(tr) {
+    tr.addEventListener('click', function() {
+      const idx = parseInt(this.dataset.propIdx, 10);
+      const row = pageRows[idx];
+      if (row && row.property_id) {
+        openUnifiedDetail('dialysis', { property_id: row.property_id }, row);
+      }
+    });
+  });
+
+  // Pagination handlers
+  document.querySelectorAll('[data-props-page]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (this.dataset.propsPage === 'prev' && diaPropertiesPage > 0) diaPropertiesPage--;
+      else if (this.dataset.propsPage === 'next') diaPropertiesPage++;
+      renderDiaProperties();
+    });
+  });
+
+  // Search input
+  const searchInput = document.getElementById('diaPropsSearchInput');
+  if (searchInput) {
+    let debounce;
+    searchInput.addEventListener('input', function(e) {
+      clearTimeout(debounce);
+      debounce = setTimeout(function() {
+        diaPropertiesSearch = e.target.value.trim();
+        diaPropertiesPage = 0;
+        renderDiaProperties();
+        var restored = document.getElementById('diaPropsSearchInput');
+        if (restored) {
+          restored.focus();
+          restored.setSelectionRange(restored.value.length, restored.value.length);
+        }
+      }, 300);
+    });
+    searchInput.focus();
+    searchInput.selectionStart = searchInput.selectionEnd = searchInput.value.length;
+  }
+
+  // State filter
+  var stateSelect = document.getElementById('diaPropsStateSelect');
+  if (stateSelect) {
+    stateSelect.addEventListener('change', function() {
+      diaPropertiesStateFilter = this.value;
+      diaPropertiesPage = 0;
+      renderDiaProperties();
+    });
+  }
+
+  // Clear sort button
+  var clearSortBtn = document.getElementById('diaPropsClearSort');
+  if (clearSortBtn) {
+    clearSortBtn.addEventListener('click', function() {
+      diaPropertiesSort = { col: 'address', dir: 'asc' };
+      diaPropertiesPage = 0;
+      renderDiaProperties();
+    });
+  }
+
+  // Column sort handlers
+  document.querySelectorAll('[data-prop-sort-col]').forEach(function(thEl) {
+    thEl.addEventListener('click', function() {
+      var col = this.dataset.propSortCol;
+      if (diaPropertiesSort.col === col) {
+        diaPropertiesSort.dir = diaPropertiesSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        diaPropertiesSort = { col: col, dir: 'desc' };
+      }
+      diaPropertiesPage = 0;
+      renderDiaProperties();
+    });
+  });
+}
+
+// ============================================================================
 // DIALYSIS SALES (Facility Transfers / Market Activity)
 // ============================================================================
 
@@ -7095,6 +7366,7 @@ window.saveDiaDetailResearch = saveDiaDetailResearch;
 window.renderDiaSearch = renderDiaSearch;
 window.execDiaSearch = execDiaSearch;
 window._diaSearchExpanded = _diaSearchExpanded;
+window.renderDiaProperties = renderDiaProperties;
 window.renderDiaSales = renderDiaSales;
 window.renderDiaPlayers = renderDiaPlayers;
 window.renderDiaLeases = renderDiaLeases;
