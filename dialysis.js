@@ -43,14 +43,16 @@ let diaSalesStateFilter = ''; // state filter
 let diaFilteredSalesData = [];
 const DIA_SALES_PAGE_SIZE = 50;
 
-// Properties tab state
-let diaPropertiesData = null;
+// Properties tab state — server-side paginated
+let diaPropertiesData = null;        // current page rows only
+let diaPropertiesTotalCount = 0;     // server-side filtered count
 let diaPropertiesLoading = false;
 let diaPropertiesSearch = '';
 let diaPropertiesPage = 0;
 let diaPropertiesSort = { col: 'address', dir: 'asc' };
 let diaPropertiesStateFilter = '';
-let diaFilteredPropertiesData = [];
+let diaPropertiesSummary = null;     // { states, withSFCount, avgSF, total }
+let diaPropertiesRequestId = 0;      // race-condition guard
 const DIA_PROPERTIES_PAGE_SIZE = 25;
 
 // Pipeline/Ops Research Modes
@@ -131,6 +133,39 @@ async function diaQueryAll(table, select, params = {}) {
     offset += pageSize;
   }
   return all;
+}
+
+// Single-page fetch with count — for server-side pagination
+async function diaQueryPage(table, select, params = {}) {
+  const { filter, filter2, order, limit = 25, offset = 0 } = params;
+  const url = new URL('/api/dia-query', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('select', select);
+  if (filter) url.searchParams.set('filter', filter);
+  if (filter2) url.searchParams.set('filter2', filter2);
+  if (order) url.searchParams.set('order', order);
+  url.searchParams.set('limit', limit);
+  url.searchParams.set('offset', offset);
+  // Don't set count=false — backend will send Prefer: count=exact for total row count
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error('diaQueryPage ' + table + ': HTTP ' + response.status, errBody);
+      return { data: [], count: 0 };
+    }
+    const result = await response.json();
+    return { data: result.data || [], count: result.count || 0 };
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') console.warn('diaQueryPage ' + table + ' timed out (30s)');
+    else console.error('diaQueryPage error:', err);
+    return { data: [], count: 0 };
+  }
 }
 
 // ============================================================================
@@ -379,7 +414,7 @@ function goToDiaTab(tabName, preFilter) {
 
 // Helper: build a clickable infographic card
 function infoCard(opts) {
-  const { title, value, sub, trend, trendLabel, color, icon, tab, span } = opts;
+  const { title, value, sub, trend, trendLabel, color, icon, tab, span, id, subId } = opts;
   const colors = { blue:'#6c8cff', green:'#34d399', yellow:'#fbbf24', red:'#f87171', purple:'#a78bfa', cyan:'#22d3ee', white:'var(--text1)', orange:'#fb923c' };
   const c = colors[color] || colors.blue;
   const trendColor = trend > 0 ? '#34d399' : trend < 0 ? '#f87171' : 'var(--text3)';
@@ -390,8 +425,8 @@ function infoCard(opts) {
   return `<div class="dia-info-card"${click} style="${spanStyle}">
     ${icon ? `<div style="font-size:20px;margin-bottom:4px">${icon}</div>` : ''}
     <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
-    <div style="font-size:28px;font-weight:800;color:${c};line-height:1">${value}</div>
-    ${sub ? `<div style="font-size:11px;color:var(--text2);margin-top:4px">${sub}</div>` : ''}
+    <div${id ? ' id="' + id + '"' : ''} style="font-size:28px;font-weight:800;color:${c};line-height:1">${value}</div>
+    ${sub != null ? `<div${subId ? ' id="' + subId + '"' : ''} style="font-size:11px;color:var(--text2);margin-top:4px">${sub}</div>` : ''}
     ${trendStr}
   </div>`;
 }
@@ -5247,7 +5282,7 @@ async function saveDiaDetailResearch() {
 window.diaQuery = diaQuery;
 window.loadDiaData = loadDiaData;
 // ============================================================================
-// PROPERTIES TAB — Full property inventory browser
+// PROPERTIES TAB — Server-side paginated property inventory browser
 // ============================================================================
 
 window.diaPropertiesSortBy = function(col) {
@@ -5260,121 +5295,170 @@ window.diaPropertiesSortBy = function(col) {
   renderDiaProperties();
 };
 
+// Build PostgREST order string from current sort state
+function _diaPropsOrder() {
+  var col = diaPropertiesSort.col || 'address';
+  var dir = diaPropertiesSort.dir || 'asc';
+  var nulls = (col === 'address' || col === 'property_name' || col === 'city' || col === 'state' || col === 'owner' || col === 'tenant') ? '' : '.nullslast';
+  return col + '.' + dir + nulls;
+}
+
+// Build server-side filter + filter2 from search + state inputs
+function _diaPropsFilters() {
+  var filter = null, filter2 = null;
+  if (diaPropertiesStateFilter) {
+    filter = 'state=eq.' + diaPropertiesStateFilter;
+  }
+  if (diaPropertiesSearch) {
+    var sq = diaPropertiesSearch.replace(/%/g, '').replace(/\\/g, '');
+    var searchFilter = 'or(address.ilike.*' + sq + '*,property_name.ilike.*' + sq + '*,city.ilike.*' + sq + '*,state.ilike.*' + sq + '*,owner.ilike.*' + sq + '*)';
+    if (filter) { filter2 = searchFilter; } else { filter = searchFilter; }
+  }
+  return { filter: filter, filter2: filter2 };
+}
+
+// Background-load summary stats (states, avg SF) without blocking page render
+async function _loadDiaPropertiesSummary() {
+  if (diaPropertiesSummary) return;
+  try {
+    var rows = await diaQueryAll('properties', 'state,building_sf', {});
+    var states = [];
+    var seen = {};
+    for (var i = 0; i < rows.length; i++) {
+      var st = rows[i].state;
+      if (st && !seen[st]) { seen[st] = true; states.push(st); }
+    }
+    states.sort();
+    var withSFCount = 0, sfSum = 0;
+    for (var j = 0; j < rows.length; j++) {
+      var sf = parseFloat(rows[j].building_sf);
+      if (sf > 0) { withSFCount++; sfSum += sf; }
+    }
+    var avgSF = withSFCount > 0 ? Math.round(sfSum / withSFCount) : 0;
+    diaPropertiesSummary = { states: states, withSFCount: withSFCount, avgSF: avgSF, total: rows.length };
+    // Update DOM in-place without full re-render
+    var statesValEl = document.getElementById('diaPropStatesValue');
+    var statesSubEl = document.getElementById('diaPropStatesSub');
+    if (statesValEl) statesValEl.textContent = fmtN(states.length);
+    if (statesSubEl) statesSubEl.textContent = states.slice(0, 5).join(', ') + (states.length > 5 ? '...' : '');
+    var sfValEl = document.getElementById('diaPropSFValue');
+    var sfSubEl = document.getElementById('diaPropSFSub');
+    if (sfValEl) sfValEl.textContent = avgSF > 0 ? fmtN(avgSF) : '\u2014';
+    if (sfSubEl) sfSubEl.textContent = withSFCount + ' with SF data';
+    // Populate state dropdown if not yet populated
+    var sel = document.getElementById('diaPropsStateSelect');
+    if (sel && sel.options.length <= 1) {
+      states.forEach(function(s) {
+        var opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s;
+        if (diaPropertiesStateFilter === s) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+  } catch (e) {
+    console.error('Properties summary error:', e);
+  }
+}
+
 async function renderDiaProperties() {
-  const inner = q('#bizPageInner');
+  var inner = q('#bizPageInner');
   if (!inner) return;
 
-  // Lazy-load all properties on first visit
-  if (diaPropertiesData === null && !diaPropertiesLoading) {
-    diaPropertiesLoading = true;
+  // Build server-side query params
+  var order = _diaPropsOrder();
+  var filters = _diaPropsFilters();
+  var offset = diaPropertiesPage * DIA_PROPERTIES_PAGE_SIZE;
+
+  // Show loading spinner on first render only
+  if (diaPropertiesData === null) {
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading properties...</p></div>';
-    try {
-      let all = [], pg = 0;
-      while (true) {
-        const batch = await diaQuery('properties', '*', { order: 'address.asc', limit: 1000, offset: pg * 1000 });
-        all = all.concat(batch || []);
-        if (!batch || batch.length < 1000) break;
-        pg++;
-      }
-      diaPropertiesData = all;
-    } catch (e) {
-      console.error('Properties load error:', e);
-      showToast('Properties load failed', 'error');
-      diaPropertiesData = [];
-    }
-    diaPropertiesLoading = false;
   }
 
-  let data = diaPropertiesData || [];
+  // Race-condition guard: ignore responses from stale requests
+  var requestId = ++diaPropertiesRequestId;
+  diaPropertiesLoading = true;
 
-  // Apply state filter
-  let filtered = data;
-  if (diaPropertiesStateFilter) {
-    filtered = filtered.filter(r => r.state === diaPropertiesStateFilter);
-  }
-
-  // Apply search filter
-  if (diaPropertiesSearch) {
-    const sq = diaPropertiesSearch.toLowerCase();
-    filtered = filtered.filter(r =>
-      (r.address || '').toLowerCase().includes(sq) ||
-      (r.property_name || '').toLowerCase().includes(sq) ||
-      (r.city || '').toLowerCase().includes(sq) ||
-      (r.state || '').toLowerCase().includes(sq) ||
-      (r.owner || '').toLowerCase().includes(sq)
-    );
-  }
-
-  // Apply sort
-  if (diaPropertiesSort.col) {
-    const col = diaPropertiesSort.col;
-    const dir = diaPropertiesSort.dir === 'asc' ? 1 : -1;
-    const numericCols = ['building_sf', 'year_built', 'clinics_linked'];
-    const isNumeric = numericCols.indexOf(col) >= 0;
-    filtered = filtered.slice().sort(function(a, b) {
-      let va = a[col], vb = b[col];
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      if (isNumeric) {
-        return (parseFloat(va) - parseFloat(vb)) * dir;
-      }
-      return String(va).localeCompare(String(vb)) * dir;
+  try {
+    var result = await diaQueryPage('properties', '*', {
+      order: order,
+      filter: filters.filter,
+      filter2: filters.filter2,
+      limit: DIA_PROPERTIES_PAGE_SIZE,
+      offset: offset
     });
+    if (requestId !== diaPropertiesRequestId) return; // stale
+    diaPropertiesData = result.data;
+    diaPropertiesTotalCount = result.count;
+  } catch (e) {
+    if (requestId !== diaPropertiesRequestId) return;
+    console.error('Properties load error:', e);
+    showToast('Properties load failed', 'error');
+    diaPropertiesData = [];
+    diaPropertiesTotalCount = 0;
   }
+  diaPropertiesLoading = false;
 
-  diaFilteredPropertiesData = filtered;
+  var pageRows = diaPropertiesData;
+  var totalCount = diaPropertiesTotalCount;
+  var totalPages = Math.max(1, Math.ceil(totalCount / DIA_PROPERTIES_PAGE_SIZE));
 
-  const totalPages = Math.ceil(filtered.length / DIA_PROPERTIES_PAGE_SIZE);
-  const pageRows = filtered.slice(diaPropertiesPage * DIA_PROPERTIES_PAGE_SIZE, (diaPropertiesPage + 1) * DIA_PROPERTIES_PAGE_SIZE);
+  // Kick off background summary load (states, avg SF) — runs once
+  if (!diaPropertiesSummary) { _loadDiaPropertiesSummary(); }
+  var summary = diaPropertiesSummary; // may be null on first render
 
-  let html = '<div class="biz-section">';
+  var html = '<div class="biz-section">';
 
   // Action guidance banner
   html += '<div style="padding:10px 14px;background:rgba(108,140,255,0.08);border-radius:8px;border-left:3px solid #6c8cff;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Properties</strong> — Browse the full dialysis property inventory. Click any row to view property details, ownership, and linked clinics.</div>';
+  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Properties</strong> \u2014 Browse the full dialysis property inventory. Click any row to view property details, ownership, and linked clinics.</div>';
   html += '</div>';
 
-  // Summary metrics
-  const uniqueStates = [...new Set(data.map(r => r.state).filter(Boolean))];
-  const withSF = data.filter(r => r.building_sf > 0);
-  const avgSF = withSF.length > 0 ? Math.round(withSF.reduce((s, r) => s + parseFloat(r.building_sf), 0) / withSF.length) : 0;
-  const withClinics = data.filter(r => r.clinics_linked > 0);
-
-  html += '<div class="dia-grid dia-grid-4" style="margin-bottom:16px;">';
-  html += infoCard({ title: 'Total Properties', value: fmtN(data.length), sub: 'in database', color: 'blue' });
-  html += infoCard({ title: 'States Represented', value: fmtN(uniqueStates.length), sub: uniqueStates.slice(0, 5).join(', ') + (uniqueStates.length > 5 ? '...' : ''), color: 'green' });
-  html += infoCard({ title: 'Avg Building SF', value: avgSF > 0 ? fmtN(avgSF) : '—', sub: withSF.length + ' with SF data', color: 'purple' });
-  html += infoCard({ title: 'Clinics Linked', value: fmtN(withClinics.length), sub: 'properties with clinics', color: 'cyan' });
+  // Summary metrics — total count from server, others from background summary
+  html += '<div class="dia-grid dia-grid-3" style="margin-bottom:16px;">';
+  html += infoCard({ title: 'Total Properties', value: fmtN(totalCount), sub: 'in database', color: 'blue' });
+  html += infoCard({
+    title: 'States Represented',
+    value: summary ? fmtN(summary.states.length) : '...',
+    sub: summary ? summary.states.slice(0, 5).join(', ') + (summary.states.length > 5 ? '...' : '') : 'loading',
+    color: 'green', id: 'diaPropStatesValue', subId: 'diaPropStatesSub'
+  });
+  html += infoCard({
+    title: 'Avg Building SF',
+    value: summary ? (summary.avgSF > 0 ? fmtN(summary.avgSF) : '\u2014') : '...',
+    sub: summary ? summary.withSFCount + ' with SF data' : 'loading',
+    color: 'purple', id: 'diaPropSFValue', subId: 'diaPropSFSub'
+  });
   html += '</div>';
 
   // Search bar + State filter
-  const allStates = [...new Set(data.map(r => r.state).filter(Boolean))].sort();
+  var summaryStates = summary ? summary.states : [];
   html += '<div style="margin:16px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
   html += '<input type="text" id="diaPropsSearchInput" placeholder="Search address, name, city, state, owner..." value="' + esc(diaPropertiesSearch) + '" style="flex:1;min-width:200px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;" />';
   html += '<select id="diaPropsStateSelect" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:13px;">';
   html += '<option value="">All States</option>';
-  allStates.forEach(function(st) {
+  summaryStates.forEach(function(st) {
     html += '<option value="' + esc(st) + '"' + (diaPropertiesStateFilter === st ? ' selected' : '') + '>' + esc(st) + '</option>';
   });
   html += '</select>';
   if (diaPropertiesSort.col && diaPropertiesSort.col !== 'address') {
     html += '<button class="pill active" id="diaPropsClearSort" style="font-size:11px;padding:4px 10px;">Clear Sort</button>';
   }
-  html += '<span style="font-size:12px;color:var(--text3);">' + fmtN(filtered.length) + ' results</span>';
+  html += '<span style="font-size:12px;color:var(--text3);">' + fmtN(totalCount) + ' results</span>';
   html += '</div>';
 
   // Scrollable table
   html += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;max-height:70vh;">';
-  html += '<table class="data-table" style="width:100%;min-width:1100px;border-collapse:collapse;font-size:12px;">';
+  html += '<table class="data-table" style="width:100%;min-width:1000px;border-collapse:collapse;font-size:12px;">';
 
   // Sortable header
-  const sortArrow = function(col) {
+  var sortArrow = function(col) {
     if (diaPropertiesSort.col !== col) return ' <span style="opacity:0.3;font-size:9px">&#x21C5;</span>';
     return diaPropertiesSort.dir === 'asc' ? ' <span style="color:var(--accent)">&#x25B2;</span>' : ' <span style="color:var(--accent)">&#x25BC;</span>';
   };
-  const thBase = 'padding:10px 8px;font-weight:600;font-size:11px;letter-spacing:0.3px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;';
-  const th = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:left;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
-  const thr = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:right;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
+  var thBase = 'padding:10px 8px;font-weight:600;font-size:11px;letter-spacing:0.3px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;';
+  var th = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:left;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
+  var thr = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:right;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
 
   html += '<thead><tr style="background:var(--s2);position:sticky;top:0;z-index:1;">';
   html += th('Property Name', 160, 'property_name');
@@ -5385,38 +5469,36 @@ async function renderDiaProperties() {
   html += thr('Year Built', 70, 'year_built');
   html += th('Owner', 150, 'owner');
   html += th('Tenant/Operator', 150, 'tenant');
-  html += thr('Clinics Linked', 80, 'clinics_linked');
   html += '</tr></thead>';
 
   // Body
   html += '<tbody>';
-  const td = function(val, trunc) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;' + (trunc ? 'max-width:180px;overflow:hidden;text-overflow:ellipsis;' : '') + '">' + esc(val || '—') + '</td>'; };
-  const tdr = function(val) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:11px;">' + (val || '—') + '</td>'; };
+  var td = function(val, trunc) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;' + (trunc ? 'max-width:180px;overflow:hidden;text-overflow:ellipsis;' : '') + '">' + esc(val || '\u2014') + '</td>'; };
+  var tdr = function(val) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:11px;">' + (val || '\u2014') + '</td>'; };
 
   pageRows.forEach(function(r, _ri) {
-    const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
+    var _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
     html += '<tr class="clickable-row" data-prop-idx="' + _ri + '" style="cursor:pointer;' + _zebra + '">';
     html += td(r.property_name, true);
     html += td(r.address, true);
     html += td(r.city);
     html += td(r.state);
-    html += tdr(r.building_sf > 0 ? fmtN(Math.round(parseFloat(r.building_sf))) : '—');
-    html += tdr(r.year_built || '—');
+    html += tdr(r.building_sf > 0 ? fmtN(Math.round(parseFloat(r.building_sf))) : '\u2014');
+    html += tdr(r.year_built || '\u2014');
     html += td(r.owner, true);
     html += td(r.tenant, true);
-    html += tdr(r.clinics_linked > 0 ? r.clinics_linked : '—');
     html += '</tr>';
   });
 
   if (pageRows.length === 0) {
-    html += '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text3);">No properties to display</td></tr>';
+    html += '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text3);">No properties to display</td></tr>';
   }
   html += '</tbody></table></div>';
 
   // Pagination
   if (totalPages > 1) {
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;color:var(--text2);">';
-    html += '<span>Page ' + (diaPropertiesPage + 1) + ' of ' + totalPages + ' (' + fmtN(filtered.length) + ' total)</span>';
+    html += '<span>Page ' + (diaPropertiesPage + 1) + ' of ' + fmtN(totalPages) + ' (' + fmtN(totalCount) + ' total)</span>';
     html += '<div style="display:flex;gap:6px;">';
     html += '<button class="pill' + (diaPropertiesPage === 0 ? '' : ' active') + '" data-props-page="prev"' + (diaPropertiesPage === 0 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>&laquo; Prev</button>';
     html += '<button class="pill' + (diaPropertiesPage >= totalPages - 1 ? '' : ' active') + '" data-props-page="next"' + (diaPropertiesPage >= totalPages - 1 ? ' disabled style="opacity:0.4;pointer-events:none"' : '') + '>Next &raquo;</button>';
@@ -5431,8 +5513,8 @@ async function renderDiaProperties() {
   // Bind row click — open unified detail sidebar
   document.querySelectorAll('[data-prop-idx]').forEach(function(tr) {
     tr.addEventListener('click', function() {
-      const idx = parseInt(this.dataset.propIdx, 10);
-      const row = pageRows[idx];
+      var idx = parseInt(this.dataset.propIdx, 10);
+      var row = pageRows[idx];
       if (row && row.property_id) {
         openUnifiedDetail('dialysis', { property_id: row.property_id }, row);
       }
@@ -5448,10 +5530,10 @@ async function renderDiaProperties() {
     });
   });
 
-  // Search input
-  const searchInput = document.getElementById('diaPropsSearchInput');
+  // Search input — debounced server-side search
+  var searchInput = document.getElementById('diaPropsSearchInput');
   if (searchInput) {
-    let debounce;
+    var debounce;
     searchInput.addEventListener('input', function(e) {
       clearTimeout(debounce);
       debounce = setTimeout(function() {
@@ -5463,7 +5545,7 @@ async function renderDiaProperties() {
           restored.focus();
           restored.setSelectionRange(restored.value.length, restored.value.length);
         }
-      }, 300);
+      }, 400);
     });
     searchInput.focus();
     searchInput.selectionStart = searchInput.selectionEnd = searchInput.value.length;
