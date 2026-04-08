@@ -95,7 +95,11 @@ async function handleOutlookMessage(req, res) {
   }
 
   const payload = req.body || {};
-  const messageId = firstNonEmpty(payload.message_id, payload.id, payload.internet_message_id);
+  // Prefer internet_message_id as canonical dedup key — stable across folder moves.
+  // Graph REST id changes when the message moves between folders.
+  const internetMsgId = firstNonEmpty(payload.internet_message_id, payload.internetMessageId, null);
+  const graphRestId = firstNonEmpty(payload.message_id, payload.id, null);
+  const messageId = internetMsgId || graphRestId;
   const subject = firstNonEmpty(payload.subject, '(No subject)');
   const bodyPreview = firstNonEmpty(payload.body_preview, payload.bodyPreview, payload.body, '');
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
@@ -110,6 +114,10 @@ async function handleOutlookMessage(req, res) {
 
   const correlationId = deterministicCorrelationId(workspaceId, String(messageId), receivedAtIso);
 
+  // Build deeplink: prefer Graph webLink (survives moves), fall back to REST id link
+  const deepLink = webLink
+    || (graphRestId ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(graphRestId)}` : null);
+
   const result = await opsQuery('POST', 'inbox_items', {
     workspace_id: workspaceId,
     source_user_id: user.id,
@@ -119,7 +127,7 @@ async function handleOutlookMessage(req, res) {
     source_type: 'flagged_email',
     source_connector_id: null,
     external_id: String(messageId),
-    external_url: webLink,
+    external_url: deepLink,
     status: 'new',
     priority: 'normal',
     visibility: 'private',
@@ -129,6 +137,8 @@ async function handleOutlookMessage(req, res) {
       received_at: receivedAtIso,
       has_attachments: hasAttachments,
       attachment_count: attachmentCount,
+      graph_rest_id: graphRestId || null,
+      internet_message_id: internetMsgId || null,
       event_source: 'outlook_power_automate',
       correlation_id: correlationId
     },

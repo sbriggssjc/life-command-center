@@ -295,27 +295,24 @@ function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replac
 // Safe URL for href attributes — blocks javascript: and data: schemes
 function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
 
-// Build a reliable Outlook Web deep-link for a specific email.
-// Build a link that opens the message in the user's Desktop Outlook client.
-// Uses the outlook: protocol handler registered by Microsoft 365 / Outlook.
-// Falls back to Outlook Web if no suitable ID is available.
+// Build a reliable Outlook deep-link for a specific email.
+// Priority: Graph webLink (stable) → REST id deeplink → internet_message_id fallback.
+// Graph REST IDs change when emails move between folders, so we prefer the
+// canonical webLink provided by the Graph API which survives folder moves.
 function outlookWebLink(email) {
-  // 1. Try to build an outlook: deep-link using the Graph REST id.
-  //    Format: outlook://mail/deeplink/read/<encodedId>
-  const restId = email.id || email.email_id || '';
+  // 1. Prefer Graph-supplied webLink / external_url — most reliable, survives moves.
+  //    Normalise legacy OWA domain but keep deep-link params intact.
+  const raw = email.external_url || email.web_link || email.outlook_link || '';
+  if (raw) {
+    return raw.replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/');
+  }
+  // 2. Fall back to Graph REST id deeplink (breaks if email is moved).
+  const restId = email.id || email.email_id || (email.metadata && email.metadata.graph_rest_id) || '';
   if (restId) {
     return `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(restId)}`;
   }
-  // 2. If we have a Graph-supplied webLink, preserve its protocol-handler params
-  //    (popoutv2, exvsurl) so the OS routes to Desktop Outlook.
-  const raw = email.web_link || email.outlook_link || email.external_url || '';
-  if (raw) {
-    // Normalise legacy OWA domain but keep deep-link params intact
-    let url = raw.replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/');
-    return url;
-  }
-  // 3. Last resort: internet_message_id → web search (less reliable for desktop)
-  const inetId = email.internet_message_id || '';
+  // 3. Last resort: internet_message_id search (least reliable)
+  const inetId = email.internet_message_id || (email.metadata && email.metadata.internet_message_id) || '';
   if (inetId) {
     return `https://outlook.office.com/mail/inbox/id/${encodeURIComponent(inetId)}`;
   }
@@ -4505,10 +4502,12 @@ async function loadEmails() {
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Emails API returned non-JSON'); return; }
     let rawEmails = (data && data.emails) || [];
-    // Deduplicate by internet_message_id or subject+sender+date composite key
+    // Filter out resolved/archived flags and deduplicate by internet_message_id
     const seen = new Set();
     rawEmails = rawEmails.filter(e => {
-      const key = e.internet_message_id || `${e.subject||''}|${e.sender_email||e.sender_name||''}|${e.received_date||''}`;
+      // Skip items whose flags have been resolved in Outlook
+      if (e.flag_removed_at || e.status === 'archived' || e.status === 'dismissed') return false;
+      const key = e.internet_message_id || e.external_id || `${e.subject||''}|${e.sender_email||e.sender_name||''}|${e.received_date||''}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -5111,10 +5110,11 @@ function renderCategoryMetrics() {
 function renderRecentEmails() {
   // Prefer canonical inbox items when available
   if (canonicalInbox && canonicalInbox.items && canonicalInbox.items.length > 0) {
-    // Deduplicate by title+source composite key
+    // Filter resolved flags and deduplicate by external_id or title+source composite
     const _inboxSeen = new Set();
     const _dedupedInbox = canonicalInbox.items.filter(item => {
-      const key = `${item.title||''}|${item.source_ref||item.source_type||''}|${(item.received_at||'').substring(0,10)}`;
+      if (item.flag_removed_at || item.status === 'archived' || item.status === 'dismissed') return false;
+      const key = item.external_id || `${item.title||''}|${item.source_ref||item.source_type||''}|${(item.received_at||'').substring(0,10)}`;
       if (_inboxSeen.has(key)) return false;
       _inboxSeen.add(key);
       return true;

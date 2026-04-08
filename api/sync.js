@@ -262,7 +262,7 @@ async function ingestEmails(req, res, user, workspaceId) {
   const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'flagged_email', correlationId, connector);
   if (!job) return res.status(500).json({ error: 'Could not create sync job' });
 
-  let processed = 0, failed = 0, errors = [];
+  let processed = 0, failed = 0, resolved = 0, errors = [];
 
   try {
     // Fetch from existing edge function with per-user connector context
@@ -274,10 +274,25 @@ async function ingestEmails(req, res, user, workspaceId) {
     const data = await edgeRes.json();
     const emailList = data.emails || [];
 
+    // Build a set of external_ids currently flagged in Outlook for stale-flag detection
+    const activeFlagIds = new Set();
+
     for (const email of emailList) {
       try {
-        // Upsert into inbox_items using external_id for dedup
-        const externalId = email.id || email.internet_message_id || `email-${email.subject}-${email.received_date_time}`;
+        // Prefer internet_message_id as the canonical dedup key — it is stable
+        // across folder moves, unlike the Graph REST id which changes.
+        const internetMsgId = email.internet_message_id || email.internetMessageId;
+        const graphRestId = email.id;
+        const externalId = internetMsgId || graphRestId || `email-${email.subject}-${email.received_date_time}`;
+
+        activeFlagIds.add(externalId);
+
+        // Build the best available deeplink URL:
+        // 1. Graph-supplied webLink (canonical, survives folder moves)
+        // 2. Constructed from Graph REST id (works but breaks on move)
+        const webLink = email.web_link || email.webLink;
+        const deepLink = webLink
+          || (graphRestId ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(graphRestId)}` : null);
 
         await opsQuery('POST', 'inbox_items', {
           workspace_id: workspaceId,
@@ -288,7 +303,7 @@ async function ingestEmails(req, res, user, workspaceId) {
           source_type: 'flagged_email',
           source_connector_id: connector.id,
           external_id: externalId,
-          external_url: email.web_link || null,
+          external_url: deepLink,
           status: 'new',
           priority: 'normal',
           visibility: 'private',
@@ -298,6 +313,8 @@ async function ingestEmails(req, res, user, workspaceId) {
             received_at: email.received_date_time || email.receivedDateTime,
             has_attachments: email.has_attachments || false,
             importance: email.importance,
+            graph_rest_id: graphRestId || null,
+            internet_message_id: internetMsgId || null,
             correlation_id: correlationId
           },
           received_at: email.received_date_time || email.receivedDateTime || new Date().toISOString()
@@ -311,6 +328,30 @@ async function ingestEmails(req, res, user, workspaceId) {
       }
     }
 
+    // ---- Resolve stale flags ----
+    // Find inbox_items that were previously flagged but are no longer in Outlook's
+    // flagged list. Mark them with flag_removed_at so the UI hides them.
+    try {
+      const existingResult = await opsQuery('GET',
+        `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email&status=in.(new,triaged)&flag_removed_at=is.null&select=id,external_id`
+      );
+      const existing = existingResult.data || [];
+      const staleIds = existing
+        .filter(item => item.external_id && !activeFlagIds.has(item.external_id))
+        .map(item => item.id);
+
+      if (staleIds.length > 0) {
+        // Mark stale items — batch PATCH via PostgREST "in" filter
+        await opsQuery('PATCH',
+          `inbox_items?id=in.(${staleIds.join(',')})`,
+          { flag_removed_at: new Date().toISOString(), status: 'archived' }
+        );
+        resolved = staleIds.length;
+      }
+    } catch (resolveErr) {
+      console.warn('[sync] Stale flag resolution failed (non-fatal):', resolveErr.message);
+    }
+
     const status = failed === 0 ? 'completed' : (processed > 0 ? 'partial' : 'failed');
     await completeSyncJob(job.id, status, processed, failed, failed > 0 ? `${failed} emails failed to ingest` : null);
     await updateConnectorStatus(connector.id, failed === 0 ? 'healthy' : 'degraded', new Date().toISOString(), failed > 0 ? `${failed} errors` : null);
@@ -321,6 +362,7 @@ async function ingestEmails(req, res, user, workspaceId) {
       status,
       processed,
       failed,
+      resolved,
       errors: errors.slice(0, 10)
     });
   } catch (e) {

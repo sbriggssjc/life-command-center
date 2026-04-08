@@ -590,9 +590,12 @@ async function renderInboxTriage() {
           const emailData = await emailRes.json();
           const flaggedEmails = emailData.emails || [];
           if (flaggedEmails.length > 0) {
-            opsInboxData = flaggedEmails.map(function(e) {
+            opsInboxData = flaggedEmails
+              .filter(function(e) { return !e.flag_removed_at && e.status !== 'archived' && e.status !== 'dismissed'; })
+              .map(function(e) {
               return {
-                id: e.id || e.internet_message_id || ('email-' + Math.random().toString(36).slice(2)),
+                id: e.internet_message_id || e.id || ('email-' + Math.random().toString(36).slice(2)),
+                external_id: e.internet_message_id || e.id || null,
                 title: e.subject || '(No subject)',
                 body: e.body_preview || '',
                 sender: e.sender_name || e.sender_email || '',
@@ -602,6 +605,7 @@ async function renderInboxTriage() {
                 created_at: e.received_date || e.received_datetime || new Date().toISOString(),
                 received_at: e.received_date || e.received_datetime || new Date().toISOString(),
                 external_url: e.web_link || e.outlook_link || '',
+                metadata: { graph_rest_id: e.id || null, internet_message_id: e.internet_message_id || null },
                 domain: null,
                 _edge_source: true
               };
