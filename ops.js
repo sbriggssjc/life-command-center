@@ -579,13 +579,10 @@ async function renderInboxTriage() {
 
   opsInboxData = res.data?.items || res.data || [];
 
-  // Fallback: if canonical inbox is empty, load flagged emails from the edge function
-  // (same source the Today dashboard uses to show 1,050+ emails)
+  // Fallback: if canonical inbox is empty, load flagged emails from inbox_items DB
   if (opsInboxData.length === 0 && opsInboxFilter !== 'triaged') {
     try {
-      const edgeApi = typeof API !== 'undefined' ? API : '';
-      if (edgeApi) {
-        const emailRes = await fetch(`${edgeApi}/sync/flagged-emails?limit=100`);
+        const emailRes = await fetch('/api/sync?action=flagged_emails&limit=100');
         if (emailRes.ok) {
           const emailData = await emailRes.json();
           const flaggedEmails = emailData.emails || [];
@@ -613,7 +610,6 @@ async function renderInboxTriage() {
             window._inboxEmailTotal = emailData.total || flaggedEmails.length;
           }
         }
-      }
     } catch (emailErr) {
       console.warn('[Inbox] Flagged email fallback failed:', emailErr.message);
     }
