@@ -191,28 +191,28 @@ const TOOL_HANDLERS = {
         });
       }
 
-      // Fallback: build from queue/action_items by priority_class
-      const [strategic, important, urgent] = await Promise.all([
+      // Fallback: build from queue/action_items by priority
+      const [urgent, high, normal] = await Promise.all([
         opsQuery(
           "GET",
-          `action_items?workspace_id=eq.${enc(workspace_id)}&priority_class=eq.strategic&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority_class&order=due_date.asc.nullslast&limit=10`
+          `action_items?workspace_id=eq.${enc(workspace_id)}&priority=eq.urgent&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
         ),
         opsQuery(
           "GET",
-          `action_items?workspace_id=eq.${enc(workspace_id)}&priority_class=eq.important&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority_class&order=due_date.asc.nullslast&limit=10`
+          `action_items?workspace_id=eq.${enc(workspace_id)}&priority=eq.high&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
         ),
         opsQuery(
           "GET",
-          `action_items?workspace_id=eq.${enc(workspace_id)}&priority_class=eq.urgent&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority_class&order=due_date.asc.nullslast&limit=10`
+          `action_items?workspace_id=eq.${enc(workspace_id)}&priority=eq.normal&status=in.(open,in_progress)&select=id,title,status,due_date,entity_id,priority&order=due_date.asc.nullslast&limit=10`
         ),
       ]);
 
       return textResult({
         source: "action_items_fallback",
         date: new Date().toISOString().split("T")[0],
-        strategic: strategic.data || [],
-        important: important.data || [],
         urgent: urgent.data || [],
+        high: high.data || [],
+        normal: normal.data || [],
       });
     });
   },
@@ -294,7 +294,7 @@ const TOOL_HANDLERS = {
       promises.push(
         opsQuery(
           "GET",
-          `action_items?entity_id=eq.${enc(eid)}&status=in.(open,in_progress,waiting)&select=id,title,status,priority_class,due_date,action_type&order=due_date.asc.nullslast&limit=20`
+          `action_items?entity_id=eq.${enc(eid)}&status=in.(open,in_progress,waiting)&select=id,title,status,priority,due_date,action_type&order=due_date.asc.nullslast&limit=20`
         )
       );
 
@@ -402,7 +402,7 @@ const TOOL_HANDLERS = {
         // Active deals (action_items linked to this entity)
         opsQuery(
           "GET",
-          `action_items?entity_id=eq.${enc(eid)}&status=in.(open,in_progress,waiting)&select=id,title,status,priority_class,due_date,action_type&order=due_date.asc.nullslast&limit=10`
+          `action_items?entity_id=eq.${enc(eid)}&status=in.(open,in_progress,waiting)&select=id,title,status,priority,due_date,action_type&order=due_date.asc.nullslast&limit=10`
         ),
       ]);
 
@@ -456,7 +456,7 @@ const TOOL_HANDLERS = {
       }
 
       let path =
-        `action_items?select=id,title,status,priority_class,due_date,action_type,entity_id,domain,created_at,assigned_to`;
+        `action_items?select=id,title,status,priority,due_date,action_type,entity_id,domain,created_at,assigned_to`;
 
       // Status filter
       if (status === "pending") {
@@ -472,7 +472,7 @@ const TOOL_HANDLERS = {
         path += `&domain=eq.${enc(domain)}`;
       }
 
-      path += `&order=priority_class.asc,due_date.asc.nullslast&limit=${Math.min(limit || 20, 50)}`;
+      path += `&order=priority.asc,due_date.asc.nullslast&limit=${Math.min(limit || 20, 50)}`;
 
       const result = await opsQuery("GET", path);
 
@@ -508,7 +508,15 @@ const TOOL_HANDLERS = {
         `ingestion_tracker?select=id,source,status,started_at,completed_at,records_processed,records_failed,error_message&order=started_at.desc&limit=50`
       );
 
-      const runs = trackerRes.data || [];
+      if (!trackerRes.ok || !Array.isArray(trackerRes.data)) {
+        const errMsg = trackerRes.data?.message || trackerRes.data?.error || 'No pipeline data available';
+        return textResult({
+          status: 'unavailable',
+          message: `Pipeline health data not yet available: ${errMsg}`,
+          recommendation: 'Run the GSA pipeline at least once to populate pipeline health data. Use the trigger server at /trigger/gsa-diff.',
+        });
+      }
+      const runs = trackerRes.data;
 
       // Group by source
       const bySource = {};
