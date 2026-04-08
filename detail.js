@@ -233,9 +233,11 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Render active tab (preserve on refresh) or default to Property
     const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
     const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Property';
-    // Operations tab needs async data loading
+    // Operations and Sales tabs need async data loading
     if (activeTab === 'Operations' && db === 'dia') {
       _udRenderOperationsAsync(bodyEl);
+    } else if (activeTab === 'Sales') {
+      _udRenderSalesAsync(bodyEl);
     } else {
       if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
     }
@@ -1979,7 +1981,7 @@ function _udTabIntel() {
 
 // ─── SALES TAB ──────────────────────────────────────────────────────────────
 
-let _salesCache = null; // { property_id, transactions: [] }
+let _salesCache = null; // { property_id, transactions: [], listings: [] }
 
 async function _udRenderSalesAsync(bodyEl) {
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
@@ -1996,21 +1998,30 @@ async function _udRenderSalesAsync(bodyEl) {
 
   const qFn = db === 'gov' ? govQuery : diaQuery;
   let transactions = [];
+  let listings = [];
 
   if (propertyId) {
     try {
-      const res = await qFn('sales_comps', '*', {
-        filter: `property_id=eq.${encodeURIComponent(propertyId)}`,
-        order: 'sale_date.desc',
-        limit: 100
-      });
-      transactions = Array.isArray(res) ? res : (res?.data || []);
+      const [txnRes, listRes] = await Promise.all([
+        qFn('sales_comps', '*', {
+          filter: `property_id=eq.${encodeURIComponent(propertyId)}`,
+          order: 'sale_date.desc',
+          limit: 100
+        }).catch(() => []),
+        qFn('available_listings', '*', {
+          filter: `property_id=eq.${encodeURIComponent(propertyId)}`,
+          order: 'listing_date.desc.nullslast',
+          limit: 50
+        }).catch(() => [])
+      ]);
+      transactions = Array.isArray(txnRes) ? txnRes : (txnRes?.data || []);
+      listings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
     } catch (e) {
       console.warn('Sales history fetch error:', e);
     }
   }
 
-  _salesCache = { property_id: propertyId, db, transactions };
+  _salesCache = { property_id: propertyId, db, transactions, listings };
   if (bodyEl) bodyEl.innerHTML = _udTabSales();
 }
 
@@ -2028,6 +2039,7 @@ function _udTabSales() {
       html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:8px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add Transaction</button>`;
     }
     html += '</div>';
+    html += _salesListingsHtml();
     html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
     return html;
   }
@@ -2095,7 +2107,66 @@ function _udTabSales() {
   });
 
   html += '</div></div>';
+
+  // Active / For Sale listings section
+  html += _salesListingsHtml();
+
   html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
+  return html;
+}
+
+function _salesListingsHtml() {
+  const listings = _salesCache ? _salesCache.listings : [];
+  if (!listings || listings.length === 0) return '';
+
+  let html = '<div class="detail-section" style="margin-top:16px">';
+  html += `<div class="detail-section-title">Active Listings <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${listings.length} listing${listings.length !== 1 ? 's' : ''}</span></div>`;
+
+  listings.forEach(l => {
+    const status = l.listing_status || 'available';
+    const statusColor = status === 'active' || status === 'available' ? 'var(--green)' : 'var(--yellow)';
+
+    html += '<div style="background:var(--s2);border-radius:10px;padding:14px;border:1px solid var(--border);margin-bottom:10px">';
+
+    // Status badge + listing date
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
+    html += `<span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:${statusColor}">${esc(status)}</span>`;
+    if (l.listing_date) {
+      html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(l.listing_date))}</span>`;
+    }
+    html += '</div>';
+
+    // Ask price
+    if (l.asking_price) {
+      html += `<div style="font-size:18px;font-weight:700;color:var(--accent);margin-bottom:6px">${fmt(l.asking_price)}</div>`;
+    }
+
+    // Metrics row
+    const metrics = [];
+    if (l.asking_price_psf) metrics.push(`$${Number(l.asking_price_psf).toFixed(0)}/SF`);
+    if (l.asking_cap_rate) metrics.push(`${Number(l.asking_cap_rate).toFixed(2)}% Cap`);
+    if (l.days_on_market != null) metrics.push(`${l.days_on_market} DOM`);
+    if (metrics.length) {
+      html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
+    }
+
+    // Broker
+    if (l.listing_broker) {
+      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(l.listing_broker)}</span></div>`;
+    }
+    if (l.seller) {
+      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(l.seller)}</span></div>`;
+    }
+
+    // Source
+    if (l.listing_source) {
+      html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(l.listing_source)}</div>`;
+    }
+
+    html += '</div>';
+  });
+
+  html += '</div>';
   return html;
 }
 
