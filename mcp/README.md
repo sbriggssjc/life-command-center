@@ -116,3 +116,13 @@ Claude.ai ──SSE──→ /mcp/server.js ──fetch──→ OPS Supabase (e
 All database calls use the same fetch-based PostgREST pattern as the main LCC API (`api/_shared/ops-db.js`). No database drivers — just HTTP to Supabase REST endpoints.
 
 All tools are **read-only**. The MCP server cannot create, update, or delete any data.
+
+## AI Surface Comparison
+
+| Feature | Claude (MCP) | ChatGPT (GPT Actions) | Copilot (Copilot Studio) |
+|---|---|---|---|
+| Real-time LCC data | Yes | Yes | Yes |
+| Setup required | Connect MCP in settings | Create GPT + add action | Copilot Studio agent |
+| Best for | Deep research sessions | Quick lookups, data analysis | M365 workflow (Outlook, Teams) |
+| Auth | Bearer token | API Key bearer | Bearer token |
+| Read/Write | Read-only | Read-only | Read + Tier 1/2 actions |
