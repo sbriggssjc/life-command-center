@@ -426,7 +426,7 @@ function scoreItem(item, hotContactMap) {
   return { score, tier };
 }
 
-function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts) {
+async function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts) {
   const today = new Date();
   const weekEnd = new Date(today);
   weekEnd.setDate(today.getDate() + 7);
@@ -926,135 +926,160 @@ export default withErrorHandler(async function handler(req, res) {
   const roleView = pickRoleView(req.query.role_view, membership.role);
   const asOf = new Date().toISOString();
 
+  // Each fetch is individually guarded so a single source failure
+  // doesn't crash the entire briefing — we return degraded data instead.
+  const defaultWorkCounts = { my_actions: 0, my_overdue: 0, my_inbox: 0, my_research: 0, my_completed_week: 0, open_actions: 0, inbox_new: 0, inbox_triaged: 0, research_active: 0, sync_errors: 0, overdue: 0, due_this_week: 0, completed_week: 0, open_escalations: 0, refreshed_at: null };
+  const defaultInbox = { total_new: 0, total_triaged: 0, items: [] };
+  const defaultSyncHealth = { summary: { total_connectors: 0, healthy: 0, degraded: 0, error: 0, disconnected: 0, pending: 0, outbound_success_rate_24h: null }, unresolved_errors: [], queue_drift: { source: 'salesforce', salesforce_open_task_count: 0, last_sf_records_processed: 0, estimated_gap: 0, drift_flag: false, last_inbound_completed_at: null } };
+
+  const safe = (fn, fallback) => fn().catch((err) => { console.error(`[Briefing fetch failed] ${fn.name || 'anonymous'}:`, err.message || err); return fallback; });
+
   const [morningStructured, morningHtml, workCounts, myWork, inboxSummary, unassignedWork, syncHealth, sfActivity, hotContacts, diaPipeline, crossDomainHighlights] = await Promise.all([
     fetchMorningStructured(),
     fetchMorningHtml(),
-    fetchWorkCounts(workspaceId, user.id),
-    fetchMyWork(workspaceId, user.id, 15),
-    fetchInboxSummary(workspaceId, 10),
-    fetchUnassignedWork(workspaceId, 10),
-    fetchSyncHealthSnapshot(workspaceId),
-    fetchRecentSfActivity(workspaceId, 30),
+    safe(() => fetchWorkCounts(workspaceId, user.id), defaultWorkCounts),
+    safe(() => fetchMyWork(workspaceId, user.id, 15), []),
+    safe(() => fetchInboxSummary(workspaceId, 10), defaultInbox),
+    safe(() => fetchUnassignedWork(workspaceId, 10), []),
+    safe(() => fetchSyncHealthSnapshot(workspaceId), defaultSyncHealth),
+    safe(() => fetchRecentSfActivity(workspaceId, 30), []),
     fetchHotContacts(15),
     fetchDiaPipeline(),
-    fetchCrossDomainOwnersDueForTouch(workspaceId, 5)
+    safe(() => fetchCrossDomainOwnersDueForTouch(workspaceId, 5), [])
   ]);
 
-  const missingSections = [];
-  let globalMarketIntelligence = morningStructured.ok ? morningStructured.data : null;
+  // Inner try/catch: if assembly fails, return a degraded partial response
+  // instead of crashing the function (which causes FUNCTION_INVOCATION_FAILED).
+  try {
+    const missingSections = [];
+    let globalMarketIntelligence = morningStructured.ok ? morningStructured.data : null;
 
-  if (!morningStructured.ok) {
-    missingSections.push('global_market_intelligence.structured_payload');
-    if (morningHtml.ok) {
-      globalMarketIntelligence = {
-        source_system: 'morning_briefing',
-        summary: null,
-        highlights: [],
-        sector_signals: [],
-        watchlist: [],
-        html_fragment: morningHtml.data,
-        source_links: []
-      };
-    } else {
-      missingSections.push('global_market_intelligence.html_fragment');
-      globalMarketIntelligence = {
-        source_system: 'morning_briefing',
-        summary: null,
-        highlights: [],
-        sector_signals: [],
-        watchlist: [],
-        html_fragment: null,
-        source_links: []
-      };
+    if (!morningStructured.ok) {
+      missingSections.push('global_market_intelligence.structured_payload');
+      if (morningHtml.ok) {
+        globalMarketIntelligence = {
+          source_system: 'morning_briefing',
+          summary: null,
+          highlights: [],
+          sector_signals: [],
+          watchlist: [],
+          html_fragment: morningHtml.data,
+          source_links: []
+        };
+      } else {
+        missingSections.push('global_market_intelligence.html_fragment');
+        globalMarketIntelligence = {
+          source_system: 'morning_briefing',
+          summary: null,
+          highlights: [],
+          sector_signals: [],
+          watchlist: [],
+          html_fragment: null,
+          source_links: []
+        };
+      }
+    } else if (!globalMarketIntelligence.html_fragment && morningHtml.ok) {
+      globalMarketIntelligence.html_fragment = morningHtml.data;
     }
-  } else if (!globalMarketIntelligence.html_fragment && morningHtml.ok) {
-    globalMarketIntelligence.html_fragment = morningHtml.data;
-  }
 
-  // Build strategic priorities (existing logic)
-  const strategicPriorities = roleView === 'broker'
-    ? buildStrategicPriorities(roleView, myWork, inboxSummary.items, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts)
-    : projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts);
+    // Build strategic priorities (existing logic)
+    const strategicPriorities = roleView === 'broker'
+      ? await buildStrategicPriorities(roleView, myWork, inboxSummary.items, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts)
+      : projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncHealth, workCounts);
 
-  // ── Build formal Daily Briefing Packet (context_packet_schema.md) ──
-  const todayItems = strategicPriorities.today_priorities || strategicPriorities.today_top_5 || [];
-  const strategicItems = todayItems.filter(i => i.tier === 'strategic' || i._tier === 'strategic');
-  const importantItems = todayItems.filter(i => i.tier === 'important' || i._tier === 'important');
-  const urgentItems = todayItems.filter(i => i.tier === 'urgent' || i._tier === 'urgent');
+    // ── Build formal Daily Briefing Packet (context_packet_schema.md) ──
+    const todayItems = strategicPriorities.today_priorities || strategicPriorities.today_top_5 || [];
+    const strategicItems = todayItems.filter(i => i.tier === 'strategic' || i._tier === 'strategic');
+    const importantItems = todayItems.filter(i => i.tier === 'important' || i._tier === 'important');
+    const urgentItems = todayItems.filter(i => i.tier === 'urgent' || i._tier === 'urgent');
 
-  const dailyBriefingPacket = {
-    packet_type: 'daily_briefing',
-    generated_at: asOf,
-    date: safeDateOnly(asOf),
-    user_id: user.id,
-    strategic_items: strategicItems.map((item, i) => buildPacketItem(item, i + 1, 'deal_action')),
-    important_items: importantItems.map((item, i) => buildPacketItem(item, i + 1, 'touchpoint_due')),
-    urgent_items: urgentItems.map((item, i) => buildPacketItem(item, i + 1, 'inbox_triage')),
-    production_score: buildProductionScore(workCounts, sfActivity),
-    overnight_signals: buildOvernightSignals(globalMarketIntelligence),
-    carry_forward_from_yesterday: (strategicPriorities.my_overdue || []).map(item => ({
-      item: item.title || '(Untitled)',
-      days_carried: item.due_date
-        ? Math.max(0, Math.floor((Date.now() - new Date(item.due_date).getTime()) / 86400000))
-        : 0,
-    })),
-  };
-
-  // Write packet to context_packets table (fire-and-forget)
-  writeBriefingPacket(user.id, dailyBriefingPacket);
-
-  // Log briefing assembly signal
-  writeSignal({
-    signal_type: 'packet_assembled',
-    signal_category: 'intelligence',
-    user_id: user.id,
-    payload: {
+    const dailyBriefingPacket = {
       packet_type: 'daily_briefing',
-      strategic_count: strategicItems.length,
-      important_count: importantItems.length,
-      urgent_count: urgentItems.length,
-      carry_forward_count: dailyBriefingPacket.carry_forward_from_yesterday.length,
-    },
-  });
+      generated_at: asOf,
+      date: safeDateOnly(asOf),
+      user_id: user.id,
+      strategic_items: strategicItems.map((item, i) => buildPacketItem(item, i + 1, 'deal_action')),
+      important_items: importantItems.map((item, i) => buildPacketItem(item, i + 1, 'touchpoint_due')),
+      urgent_items: urgentItems.map((item, i) => buildPacketItem(item, i + 1, 'inbox_triage')),
+      production_score: buildProductionScore(workCounts, sfActivity),
+      overnight_signals: buildOvernightSignals(globalMarketIntelligence),
+      carry_forward_from_yesterday: (strategicPriorities.my_overdue || []).map(item => ({
+        item: item.title || '(Untitled)',
+        days_carried: item.due_date
+          ? Math.max(0, Math.floor((Date.now() - new Date(item.due_date).getTime()) / 86400000))
+          : 0,
+      })),
+    };
 
-  // ── Return full response (backwards-compatible + packet) ──
-  const payload = {
-    briefing_id: buildBriefingId(asOf, workspaceId, user.id, roleView),
-    as_of: asOf,
-    timezone: 'America/Chicago',
-    workspace_id: workspaceId,
-    audience: pickAudience(roleView),
-    role_view: roleView,
-    status: {
-      completeness: missingSections.length > 0 ? 'degraded' : 'full',
-      missing_sections: missingSections
-    },
-    global_market_intelligence: globalMarketIntelligence,
-    // Formal packet (new — used by Copilot and AI surfaces)
-    daily_briefing_packet: dailyBriefingPacket,
-    // Legacy shape (preserved for existing frontend)
-    user_specific_priorities: strategicPriorities,
-    team_level_production_signals: {
-      work_counts: {
-        open_actions: workCounts.open_actions,
-        inbox_new: workCounts.inbox_new,
-        inbox_triaged: workCounts.inbox_triaged,
-        research_active: workCounts.research_active,
-        sync_errors: workCounts.sync_errors,
-        overdue: workCounts.overdue,
-        due_this_week: workCounts.due_this_week,
-        completed_week: workCounts.completed_week,
-        open_escalations: workCounts.open_escalations,
-        refreshed_at: workCounts.refreshed_at
+    // Write packet to context_packets table (fire-and-forget)
+    writeBriefingPacket(user.id, dailyBriefingPacket);
+
+    // Log briefing assembly signal
+    writeSignal({
+      signal_type: 'packet_assembled',
+      signal_category: 'intelligence',
+      user_id: user.id,
+      payload: {
+        packet_type: 'daily_briefing',
+        strategic_count: strategicItems.length,
+        important_count: importantItems.length,
+        urgent_count: urgentItems.length,
+        carry_forward_count: dailyBriefingPacket.carry_forward_from_yesterday.length,
       },
-      inbox_summary: inboxSummary,
-      unassigned_work: unassignedWork,
-      sync_health: syncHealth
-    },
-    domain_specific_alerts_highlights: buildDomainSignals(myWork, inboxSummary, unassignedWork),
-    cross_domain_highlights: crossDomainHighlights,
-    actions: buildActions(roleView)
-  };
+    });
 
-  return res.status(200).json(payload);
+    // ── Return full response (backwards-compatible + packet) ──
+    const payload = {
+      briefing_id: buildBriefingId(asOf, workspaceId, user.id, roleView),
+      as_of: asOf,
+      timezone: 'America/Chicago',
+      workspace_id: workspaceId,
+      audience: pickAudience(roleView),
+      role_view: roleView,
+      status: {
+        completeness: missingSections.length > 0 ? 'degraded' : 'full',
+        missing_sections: missingSections
+      },
+      global_market_intelligence: globalMarketIntelligence,
+      // Formal packet (new — used by Copilot and AI surfaces)
+      daily_briefing_packet: dailyBriefingPacket,
+      // Legacy shape (preserved for existing frontend)
+      user_specific_priorities: strategicPriorities,
+      team_level_production_signals: {
+        work_counts: {
+          open_actions: workCounts.open_actions,
+          inbox_new: workCounts.inbox_new,
+          inbox_triaged: workCounts.inbox_triaged,
+          research_active: workCounts.research_active,
+          sync_errors: workCounts.sync_errors,
+          overdue: workCounts.overdue,
+          due_this_week: workCounts.due_this_week,
+          completed_week: workCounts.completed_week,
+          open_escalations: workCounts.open_escalations,
+          refreshed_at: workCounts.refreshed_at
+        },
+        inbox_summary: inboxSummary,
+        unassigned_work: unassignedWork,
+        sync_health: syncHealth
+      },
+      domain_specific_alerts_highlights: buildDomainSignals(myWork, inboxSummary, unassignedWork),
+      cross_domain_highlights: crossDomainHighlights,
+      actions: buildActions(roleView)
+    };
+
+    return res.status(200).json(payload);
+  } catch (assemblyErr) {
+    console.error('[Briefing assembly failed]', assemblyErr.message || assemblyErr, assemblyErr.stack);
+    return res.status(500).json({
+      error: 'Briefing build failed',
+      partial: true,
+      briefing_id: buildBriefingId(asOf, workspaceId, user.id, roleView),
+      as_of: asOf,
+      workspace_id: workspaceId,
+      role_view: roleView,
+      status: { completeness: 'failed', missing_sections: ['assembly_error'] },
+      work_counts: workCounts,
+      actions: buildActions(roleView)
+    });
+  }
 });
