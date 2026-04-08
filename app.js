@@ -4878,7 +4878,7 @@ function renderHomeStats() {
   // Prefer canonical work_counts when non-zero
   if (elAct) {
     if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0)) {
-      elAct.textContent = (canonicalCounts.my_actions || 0).toLocaleString();
+      elAct.textContent = (canonicalCounts.open_actions || canonicalCounts.my_actions || 0).toLocaleString();
     } else if (mktLoaded && mktData.length > 0) {
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const myTasks = mktData.filter(d => d.assigned_to === userName);

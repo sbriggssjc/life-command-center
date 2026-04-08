@@ -302,20 +302,38 @@ create or replace view v_work_counts as
     (select count(*) from action_items
      where action_items.workspace_id = w.id
        and status in ('open', 'in_progress', 'waiting')) as open_actions,
-    (select count(*) from inbox_items
-     where inbox_items.workspace_id = w.id
-       and status = 'new') as new_inbox,
-    (select count(*) from inbox_items
-     where inbox_items.workspace_id = w.id
-       and status = 'triaged') as triaged_inbox,
-    (select count(*) from research_tasks
-     where research_tasks.workspace_id = w.id
-       and status in ('queued', 'in_progress')) as active_research,
-    (select count(*) from sync_errors
-     where sync_errors.workspace_id = w.id
-       and resolved_at is null) as unresolved_sync_errors,
+    (select count(*) from action_items
+     where action_items.workspace_id = w.id
+       and status = 'in_progress') as in_progress_actions,
+    (select count(*) from action_items
+     where action_items.workspace_id = w.id
+       and status = 'completed'
+       and completed_at > now() - interval '7 days') as completed_week,
     (select count(*) from action_items
      where action_items.workspace_id = w.id
        and status in ('open', 'in_progress')
-       and due_date <= current_date) as overdue_actions
+       and due_date < current_date) as overdue_actions,
+    (select count(*) from action_items
+     where action_items.workspace_id = w.id
+       and status in ('open', 'in_progress', 'waiting')
+       and due_date between current_date and current_date + interval '7 days') as due_this_week,
+    (select count(*) from inbox_items
+     where inbox_items.workspace_id = w.id
+       and status = 'new') as inbox_new,
+    (select count(*) from inbox_items
+     where inbox_items.workspace_id = w.id
+       and status = 'triaged') as inbox_triaged,
+    (select count(*) from research_tasks
+     where research_tasks.workspace_id = w.id
+       and status in ('queued', 'in_progress')) as research_active,
+    (select count(*) from sync_errors se
+     join connector_accounts ca on ca.id = se.connector_account_id
+     where ca.workspace_id = w.id
+       and se.resolved_at is null) as sync_errors,
+    (select count(*) from entities e
+     where e.workspace_id = w.id) as total_entities,
+    (select count(*) from escalations es
+     where es.workspace_id = w.id
+       and es.resolved_at is null) as open_escalations,
+    now() as refreshed_at
   from workspaces w;
