@@ -666,60 +666,146 @@ app.post("/messages", async (req, res) => {
   await transport.handlePostMessage(req, res);
 });
 
-// ── Health check ─────────────────────────────────────────────────────────────
 
-// ── OAuth metadata discovery ──────────────────────────────────────────────
-// Required by Claude.ai to discover the token endpoint
-app.get('/.well-known/oauth-authorization-server', (_req, res) => {
-  const base = process.env.MCP_BASE_URL || `https://${_req.get('host')}`;
+// ── In-memory authorization code store (auto-expires after 5 minutes) ────
+const authCodes = new Map();
+function generateCode() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(24)))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+// Use Web Crypto API (available in Node 20 without import)
+const crypto = globalThis.crypto;
+
+// ── OAuth discovery metadata ──────────────────────────────────────────────
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  const base = process.env.MCP_BASE_URL ||
+    `${req.protocol}://${req.get('host')}`;
   res.json({
     issuer: base,
+    authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/oauth/token`,
-    grant_types_supported: ['client_credentials'],
+    grant_types_supported: ['authorization_code'],
+    response_types_supported: ['code'],
     token_endpoint_auth_methods_supported: ['client_secret_post'],
-    response_types_supported: ['token'],
+    code_challenge_methods_supported: ['S256', 'plain'],
   });
 });
 
-// ── OAuth token endpoint (client credentials grant) ───────────────────────
-// Claude POSTs here with client_id + client_secret to get an access token.
-// The client_secret IS the LCC_API_KEY — no separate credential needed.
-app.post('/oauth/token', express.urlencoded({ extended: false }), (req, res) => {
-  const { grant_type, client_id, client_secret } = req.body;
+// ── Step 1: Authorization endpoint ───────────────────────────────────────
+// Claude.ai redirects the user here. We auto-approve and redirect back
+// immediately — no login page needed for an internal personal tool.
+app.get('/authorize', (req, res) => {
+  const { response_type, client_id, redirect_uri, state, scope,
+          code_challenge, code_challenge_method } = req.query;
 
-  // Also accept JSON body (some clients send JSON)
-  const bodyClientSecret = client_secret || req.body?.client_secret;
-  const bodyGrantType = grant_type || req.body?.grant_type;
-
-  if (bodyGrantType !== 'client_credentials') {
-    return res.status(400).json({ error: 'unsupported_grant_type' });
+  // Validate required params
+  if (response_type !== 'code') {
+    return res.status(400).send('unsupported_response_type');
+  }
+  if (!redirect_uri) {
+    return res.status(400).send('missing redirect_uri');
   }
 
-  // Validate: client_secret must match LCC_API_KEY
-  // If LCC_API_KEY is not set, reject all requests
-  const apiKey = LCC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'server_error', error_description: 'LCC_API_KEY not configured' });
-  }
-  if (bodyClientSecret !== apiKey) {
-    return res.status(401).json({ error: 'invalid_client', error_description: 'Invalid client credentials' });
-  }
+  // Generate a short-lived authorization code
+  const code = generateCode();
+  const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
 
-  // Return the API key as the access token (static — never expires)
-  res.json({
-    access_token: apiKey,
-    token_type: 'bearer',
-    expires_in: 315360000,  // 10 years — effectively never expires
-    scope: 'read',
+  // Store code with everything needed to validate it at /token
+  authCodes.set(code, {
+    client_id,
+    redirect_uri,
+    code_challenge,
+    code_challenge_method,
+    expires,
   });
+
+  // Clean up expired codes (housekeeping)
+  for (const [k, v] of authCodes.entries()) {
+    if (v.expires < Date.now()) authCodes.delete(k);
+  }
+
+  // Auto-approve: redirect immediately back to Claude with the code
+  const redirectUrl = new URL(redirect_uri);
+  redirectUrl.searchParams.set('code', code);
+  if (state) redirectUrl.searchParams.set('state', state);
+
+  console.log(`[OAuth] Authorized → redirecting to ${redirectUrl.origin}`);
+  return res.redirect(302, redirectUrl.toString());
 });
 
-// ── OAuth JSON body support ────────────────────────────────────────────────
-// Some clients POST JSON instead of form-encoded — handle both
-app.post('/oauth/token', express.json(), (req, res) => {
-  // Handled above via urlencoded — this is a fallback catch
-  res.status(400).json({ error: 'invalid_request' });
-});
+// ── Step 2: Token endpoint ────────────────────────────────────────────────
+// Claude.ai exchanges the authorization code for an access token.
+// Handles both application/x-www-form-urlencoded and application/json.
+app.post('/oauth/token',
+  (req, res, next) => {
+    const ct = req.get('content-type') || '';
+    if (ct.includes('application/x-www-form-urlencoded')) {
+      express.urlencoded({ extended: false })(req, res, next);
+    } else {
+      express.json()(req, res, next);
+    }
+  },
+  (req, res) => {
+    const {
+      grant_type,
+      code,
+      client_id,
+      client_secret,
+      redirect_uri,
+      code_verifier,
+    } = req.body;
+
+    const apiKey = LCC_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({
+        error: 'server_error',
+        error_description: 'LCC_API_KEY not configured on server',
+      });
+    }
+
+    // Only support authorization_code grant
+    if (grant_type !== 'authorization_code') {
+      return res.status(400).json({ error: 'unsupported_grant_type' });
+    }
+
+    // Validate the authorization code
+    const stored = authCodes.get(code);
+    if (!stored) {
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: 'Authorization code not found or expired',
+      });
+    }
+    if (stored.expires < Date.now()) {
+      authCodes.delete(code);
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: 'Authorization code expired',
+      });
+    }
+
+    // Validate client_secret = LCC_API_KEY
+    if (client_secret !== apiKey) {
+      return res.status(401).json({
+        error: 'invalid_client',
+        error_description: 'client_secret does not match',
+      });
+    }
+
+    // One-time use: delete the code
+    authCodes.delete(code);
+
+    console.log('[OAuth] Token issued successfully');
+
+    // Return LCC_API_KEY as the access token
+    return res.json({
+      access_token: apiKey,
+      token_type: 'bearer',
+      expires_in: 315360000,
+      scope: 'read',
+    });
+  }
+);
 
 // ── Health check ─────────────────────────────────────────────────────────
 
