@@ -46,8 +46,10 @@
 //   POST /api/context?action=assemble-multi          — batch assemble multiple packets
 //   POST /api/context?action=invalidate              — invalidate cached packets
 //   POST /api/context?action=preassemble-nightly     — nightly batch pre-assembly of context packets
+//   POST /api/context?action=weekly-intelligence-report — weekly signal feedback report
 //   (routed via vercel.json: /api/context → /api/operations?_route=context)
 //   (routed via vercel.json: /api/preassemble → /api/operations?_route=context&action=preassemble-nightly)
+//   (routed via vercel.json: /api/weekly-report → /api/operations?_route=context&action=weekly-intelligence-report)
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -1880,7 +1882,8 @@ async function handleDraftRoute(req, res) {
     if (action === 'record_send') {
       const { template_id, template_version, entity_id, domain,
               context_packet_id, rendered_subject, rendered_body,
-              final_subject, final_body } = req.body || {};
+              final_subject, final_body,
+              original_draft, sent_text, duration_ms } = req.body || {};
 
       if (!template_id) return res.status(400).json({ error: 'template_id is required' });
 
@@ -1903,6 +1906,74 @@ async function handleDraftRoute(req, res) {
         final_body: final_body || rendered_body,
         edit_distance_pct
       });
+
+      // -------------------------------------------------------------------
+      // Template voice diff capture — NEVER blocks the send response
+      // Only runs when frontend sends both original_draft AND sent_text
+      // -------------------------------------------------------------------
+      try {
+        const diffOriginal = original_draft || rendered_body;
+        const diffSent = sent_text || final_body;
+
+        if (diffOriginal && diffSent) {
+          const charDelta = diffSent.length - diffOriginal.length;
+          const wasEdited = diffSent !== diffOriginal && Math.abs(charDelta) > 10;
+
+          // Paragraph-level diff: find first changed paragraph
+          let firstChangedLine = -1;
+          if (wasEdited) {
+            const origParas = diffOriginal.split('\n\n');
+            const sentParas = diffSent.split('\n\n');
+            const minParas = Math.min(origParas.length, sentParas.length);
+            for (let i = 0; i < minParas; i++) {
+              if (origParas[i] !== sentParas[i]) { firstChangedLine = i; break; }
+            }
+            if (firstChangedLine === -1 && origParas.length !== sentParas.length) {
+              firstChangedLine = minParas;
+            }
+          }
+
+          const editSummary = wasEdited ? {
+            original_length: diffOriginal.length,
+            sent_length: diffSent.length,
+            char_delta: charDelta,
+            first_changed_line: firstChangedLine
+          } : null;
+
+          // Fire-and-forget: write to template_refinements (no await, no error propagation)
+          opsQuery('POST', 'template_refinements', {
+            workspace_id: workspaceId,
+            template_id,
+            original_draft: diffOriginal,
+            sent_text: diffSent,
+            was_edited: wasEdited,
+            edit_summary: editSummary,
+            entity_id: entity_id || null,
+            domain: domain || null,
+            created_at: new Date().toISOString()
+          }).catch(err => console.error('[Template refinement write failed]', err?.message || err));
+
+          // Fire-and-forget: write template_edited signal with diff data
+          writeSignal({
+            signal_type: 'template_edited',
+            signal_category: 'communication',
+            entity_type: 'contact',
+            entity_id: entity_id || null,
+            domain: domain || null,
+            user_id: user.id,
+            payload: {
+              template_id,
+              template_name: template_id,
+              was_edited: wasEdited,
+              edit_summary: editSummary,
+              duration_ms: duration_ms || null
+            }
+          });
+        }
+      } catch (err) {
+        // Voice diff capture must NEVER block the send response
+        console.error('[Voice diff capture failed]', err?.message || err);
+      }
 
       if (!result.ok) return res.status(500).json(result);
       return res.status(201).json(result);
@@ -2753,11 +2824,72 @@ async function handleContextRoute(req, res) {
     case 'assemble-multi':        return handleAssembleMulti(req, res, workspaceId, user.id);
     case 'invalidate':            return handleInvalidate(req, res, workspaceId, user.id);
     case 'preassemble-nightly':   return handlePreassembleNightly(req, res, workspaceId, user.id);
+    case 'weekly-intelligence-report': return handleWeeklyReport(req, res, workspaceId);
     default:
       return res.status(400).json({
-        error: 'Invalid context action. Use: assemble, assemble-multi, invalidate, preassemble-nightly'
+        error: 'Invalid context action. Use: assemble, assemble-multi, invalidate, preassemble-nightly, weekly-intelligence-report'
       });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Weekly Intelligence Report — queries schema/027 feedback views
+// ---------------------------------------------------------------------------
+
+async function handleWeeklyReport(req, res, workspaceId) {
+  const [ignoredResult, templatesResult, slowResult] = await Promise.all([
+    opsQuery('GET', 'ignored_recommendation_contacts?order=ignored_count.desc&limit=25'),
+    opsQuery('GET', 'high_performing_templates?order=response_rate_pct.desc&limit=10'),
+    opsQuery('GET', 'slow_action_report?order=avg_duration_ms.desc&limit=20')
+  ]);
+
+  const ignoredContacts = Array.isArray(ignoredResult.data) ? ignoredResult.data : [];
+  const topTemplates = Array.isArray(templatesResult.data) ? templatesResult.data : [];
+  const slowActions = Array.isArray(slowResult.data) ? slowResult.data : [];
+
+  // Enrich ignored contacts with names from entities table
+  const enrichedIgnored = await Promise.all(
+    ignoredContacts.slice(0, 15).map(async (row) => {
+      let name = null;
+      if (row.entity_id) {
+        try {
+          const entityResult = await opsQuery('GET',
+            `entities?id=eq.${pgFilterVal(row.entity_id)}&select=name&limit=1`
+          );
+          name = entityResult.data?.[0]?.name || null;
+        } catch { /* best-effort name lookup */ }
+      }
+      return {
+        entity_id: row.entity_id,
+        name: name || '(unknown)',
+        ignored_count: row.ignored_count
+      };
+    })
+  );
+
+  const weekEnding = new Date().toISOString().split('T')[0];
+  const bestRate = topTemplates.length > 0 ? `${topTemplates[0].response_rate_pct}%` : 'N/A';
+  const slowestAvg = slowActions.length > 0 ? Number(slowActions[0].avg_duration_ms) : 0;
+
+  return res.status(200).json({
+    week_ending: weekEnding,
+    ignored_recommendations: enrichedIgnored,
+    top_performing_templates: topTemplates.map(t => ({
+      template_name: t.template_name || t.template_id,
+      response_rate_pct: t.response_rate_pct,
+      sent_count: t.sent_count
+    })),
+    slowest_actions: slowActions.map(s => ({
+      signal_type: s.signal_type,
+      avg_duration_ms: Number(s.avg_duration_ms),
+      occurrence_count: s.occurrence_count
+    })),
+    summary: {
+      contacts_consistently_ignored: ignoredContacts.length,
+      best_template_response_rate: bestRate,
+      slowest_avg_action_ms: slowestAvg
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

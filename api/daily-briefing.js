@@ -513,8 +513,9 @@ function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotC
   ].slice(0, 7);
 
   // Contacts who need a touchpoint (haven't been called in 14+ days, high engagement)
+  // Take a larger pool (10) so recommendation weight can reorder before slicing to 5
   const now = Date.now();
-  const staleTouchpoints = (hotContacts || [])
+  const touchpointCandidates = (hotContacts || [])
     .filter(c => {
       const lastTouch = Math.max(
         c.last_call_date ? new Date(c.last_call_date).getTime() : 0,
@@ -524,7 +525,7 @@ function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotC
       return lastTouch > 0 && (now - lastTouch) > 14 * 86400000;
     })
     .sort((a, b) => (b.engagement_score || 0) - (a.engagement_score || 0))
-    .slice(0, 5)
+    .slice(0, 10)
     .map(c => ({
       id: c.unified_id,
       name: c.full_name,
@@ -537,6 +538,36 @@ function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotC
       )) / 86400000),
       reason: 'High engagement contact overdue for touchpoint'
     }));
+
+  // Apply recommendation weight from signal feedback loop (schema/027)
+  // get_contact_recommendation_weight() returns 0.5 | 1.0 | 1.5
+  // 500ms timeout guard — if Supabase is slow, fall back to weight = 1.0
+  const weightedCandidates = await Promise.all(
+    touchpointCandidates.map(async (contact) => {
+      let weight = 1.0;
+      try {
+        const weightResult = await Promise.race([
+          opsQuery('POST', 'rpc/get_contact_recommendation_weight', { p_entity_id: contact.id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 500))
+        ]);
+        if (weightResult.ok && weightResult.data != null) {
+          const parsed = typeof weightResult.data === 'number' ? weightResult.data : parseFloat(weightResult.data);
+          if (!isNaN(parsed)) weight = parsed;
+        }
+      } catch { /* timeout or query error — keep default weight 1.0 */ }
+
+      const recommendation_note = weight === 0.5 ? 'Previously dismissed — lower priority'
+        : weight === 1.5 ? 'High engagement history — prioritize'
+        : '';
+
+      return { ...contact, recommendation_weight: weight, recommendation_note };
+    })
+  );
+
+  // Sort by (days_since_touch * weight) DESC — ignored contacts float down, engaged float up
+  const staleTouchpoints = weightedCandidates
+    .sort((a, b) => ((b.days_since_touch || 0) * b.recommendation_weight) - ((a.days_since_touch || 0) * a.recommendation_weight))
+    .slice(0, 5);
 
   // Overdue items (across all sources)
   const overdue = allItems.filter(i => i.due_date && new Date(i.due_date) < today);
