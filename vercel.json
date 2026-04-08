@@ -38,6 +38,7 @@
     { "source": "/api/intake-outlook-message", "destination": "/api/intake?_route=outlook-message" },
     { "source": "/api/intake-summary", "destination": "/api/intake?_route=summary" },
     { "source": "/api/inbox", "destination": "/api/queue?_route=inbox" },
+    { "source": "/api/preassemble", "destination": "/api/operations?_route=context&action=preassemble-nightly" },
     { "source": "/api/context", "destination": "/api/operations?_route=context" },
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],

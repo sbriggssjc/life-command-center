@@ -101,6 +101,7 @@ app.all('/api/copilot-spec', (req, res) => { req.query._route = 'chat'; req.quer
 app.all('/api/copilot-manifest', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'manifest'; operationsHandler(req, res); });
 app.all('/api/chat', (req, res) => { req.query._route = 'chat'; operationsHandler(req, res); });
 app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHandler(req, res); });
+app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.query.action = 'preassemble-nightly'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 

@@ -45,7 +45,9 @@
 //   POST /api/context?action=assemble               — assemble/retrieve single packet
 //   POST /api/context?action=assemble-multi          — batch assemble multiple packets
 //   POST /api/context?action=invalidate              — invalidate cached packets
+//   POST /api/context?action=preassemble-nightly     — nightly batch pre-assembly of context packets
 //   (routed via vercel.json: /api/context → /api/operations?_route=context)
+//   (routed via vercel.json: /api/preassemble → /api/operations?_route=context&action=preassemble-nightly)
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -2747,12 +2749,13 @@ async function handleContextRoute(req, res) {
   const action = req.query.action || req.body?.action;
 
   switch (action) {
-    case 'assemble':       return handleAssemble(req, res, workspaceId, user.id);
-    case 'assemble-multi': return handleAssembleMulti(req, res, workspaceId, user.id);
-    case 'invalidate':     return handleInvalidate(req, res, workspaceId, user.id);
+    case 'assemble':              return handleAssemble(req, res, workspaceId, user.id);
+    case 'assemble-multi':        return handleAssembleMulti(req, res, workspaceId, user.id);
+    case 'invalidate':            return handleInvalidate(req, res, workspaceId, user.id);
+    case 'preassemble-nightly':   return handlePreassembleNightly(req, res, workspaceId, user.id);
     default:
       return res.status(400).json({
-        error: 'Invalid context action. Use: assemble, assemble-multi, invalidate'
+        error: 'Invalid context action. Use: assemble, assemble-multi, invalidate, preassemble-nightly'
       });
   }
 }
@@ -2902,6 +2905,171 @@ async function handleInvalidate(req, res, workspaceId, userId) {
     invalidated_count: invalidatedCount,
     rebuild_queued: rebuildQueued
   });
+}
+
+// ---------------------------------------------------------------------------
+// Nightly pre-assembly — warm context packet cache for high-priority entities
+// POST /api/preassemble → /api/operations?_route=context&action=preassemble-nightly
+// ---------------------------------------------------------------------------
+
+async function handlePreassembleNightly(req, res, workspaceId, userId) {
+  const startMs = Date.now();
+
+  // Step 1 — Identify high-priority entities (candidates for pre-assembly)
+  const [propsRes, contactsRes, crossDomainRes] = await Promise.all([
+    // Query 1: Properties with high investment scores
+    opsQuery('GET',
+      `entities?entity_type=eq.asset` +
+      `&metadata->>investment_score=gt.60` +
+      `&workspace_id=eq.${pgFilterVal(workspaceId)}` +
+      `&select=id,entity_type,domain` +
+      `&limit=100`
+    ),
+    // Query 2: Contacts active in last 90 days (two-step via fetchActiveContacts)
+    fetchActiveContacts(workspaceId),
+    // Query 3: Cross-domain owner entities
+    opsQuery('GET',
+      `entities?tags=cs.{cross_domain_owner}` +
+      `&workspace_id=eq.${pgFilterVal(workspaceId)}` +
+      `&select=id,entity_type,domain`
+    )
+  ]);
+
+  // Merge and deduplicate all three lists
+  const entityMap = new Map();
+  for (const list of [propsRes, contactsRes, crossDomainRes]) {
+    const rows = Array.isArray(list.data) ? list.data : (list.data ? [list.data] : []);
+    for (const row of rows) {
+      if (row.id && !entityMap.has(row.id)) {
+        entityMap.set(row.id, row);
+      }
+    }
+  }
+  const candidates = [...entityMap.values()];
+
+  // Step 2 — For each entity, check if a fresh packet already exists
+  const assemblyQueue = [];
+  let alreadyFresh = 0;
+  const fourHoursFromNow = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+
+  for (const entity of candidates) {
+    const packetType = entity.entity_type === 'asset' ? 'property' : 'contact';
+    const freshCheck = await opsQuery('GET',
+      `context_packets?entity_id=eq.${pgFilterVal(entity.id)}` +
+      `&packet_type=eq.${pgFilterVal(packetType)}` +
+      `&invalidated=eq.false` +
+      `&expires_at=gt.${pgFilterVal(fourHoursFromNow)}` +
+      `&limit=1`
+    );
+    if (freshCheck.ok && freshCheck.data?.length > 0) {
+      alreadyFresh++;
+    } else {
+      assemblyQueue.push({ ...entity, packet_type: packetType });
+    }
+  }
+
+  // Step 3 — Assemble packets in batches of 10 with 500ms delay between batches
+  let assembled = 0;
+  let failed = 0;
+  const BATCH_SIZE = 10;
+
+  for (let i = 0; i < assemblyQueue.length; i += BATCH_SIZE) {
+    const batch = assemblyQueue.slice(i, i + BATCH_SIZE);
+
+    const results = await Promise.allSettled(
+      batch.map(entity =>
+        assembleSinglePacket({
+          packet_type: entity.packet_type,
+          entity_id: entity.id,
+          entity_type: entity.entity_type,
+          surface_hint: 'preassembly',
+          force_refresh: true,
+          max_tokens: null,
+          workspaceId,
+          userId
+        })
+      )
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') assembled++;
+      else {
+        failed++;
+        console.error('[preassemble-nightly] Entity assembly failed:', result.reason?.message);
+      }
+    }
+
+    // 500ms delay between batches (skip after last batch)
+    if (i + BATCH_SIZE < assemblyQueue.length) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  // Step 4 — Also assemble daily_briefing packet (no entity_id)
+  try {
+    await assembleSinglePacket({
+      packet_type: 'daily_briefing',
+      entity_id: null,
+      entity_type: null,
+      surface_hint: 'preassembly',
+      force_refresh: true,
+      max_tokens: null,
+      workspaceId,
+      userId
+    });
+    assembled++;
+  } catch (err) {
+    failed++;
+    console.error('[preassemble-nightly] daily_briefing assembly failed:', err.message);
+  }
+
+  const durationMs = Date.now() - startMs;
+
+  // Step 5 — Return summary
+  return res.status(200).json({
+    total_candidates: candidates.length,
+    already_fresh: alreadyFresh,
+    assembled,
+    failed,
+    duration_ms: durationMs
+  });
+}
+
+/**
+ * Fetch contacts (entity_type=person) that have activity events in the last 90 days.
+ * PostgREST doesn't support JOINs directly, so we query activity_events first,
+ * then fetch matching entities.
+ */
+async function fetchActiveContacts(workspaceId) {
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Get distinct entity_ids from recent activity events
+  const activityRes = await opsQuery('GET',
+    `activity_events?occurred_at=gt.${pgFilterVal(ninetyDaysAgo)}` +
+    `&select=entity_id` +
+    `&limit=500`
+  );
+
+  const entityIds = [...new Set(
+    (Array.isArray(activityRes.data) ? activityRes.data : [])
+      .map(r => r.entity_id)
+      .filter(Boolean)
+  )];
+
+  if (entityIds.length === 0) {
+    return { ok: true, data: [] };
+  }
+
+  // Fetch person entities matching those IDs
+  const entitiesRes = await opsQuery('GET',
+    `entities?entity_type=eq.person` +
+    `&workspace_id=eq.${pgFilterVal(workspaceId)}` +
+    `&id=in.(${entityIds.map(id => pgFilterVal(id)).join(',')})` +
+    `&select=id,entity_type,domain` +
+    `&limit=200`
+  );
+
+  return entitiesRes;
 }
 
 // ---------------------------------------------------------------------------
