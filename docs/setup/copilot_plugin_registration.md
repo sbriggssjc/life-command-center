@@ -1,5 +1,15 @@
 # MS Copilot Plugin Registration — Life Command Center
 
+## Recommended Path: Copilot Studio (No Admin Required)
+
+If you do not have M365 Global Admin or Teams Admin access, use Copilot Studio instead. Any licensed M365 user can create and publish a personal Copilot agent with external API connections — no admin approval required.
+
+See **[COPILOT_STUDIO_SETUP.md](./COPILOT_STUDIO_SETUP.md)** for the complete step-by-step guide.
+
+---
+
+## Alternative Path: M365 Admin Center (Requires Global/Teams Admin Role)
+
 This guide walks through registering the LCC Copilot plugin so Microsoft 365 Copilot can discover and invoke LCC actions directly from Teams, Outlook, and the M365 Chat surface.
 
 ## Prerequisites

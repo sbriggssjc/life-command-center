@@ -127,6 +127,14 @@ app.all('/api/operations', operationsHandler);
 app.all('/api/queue', queueHandler);
 app.all('/api/sync', syncHandler);
 
+// ── Legal pages (required by Teams manifest) ──────────────────────────────
+app.get('/privacy', (req, res) => res.type('text/plain').send(
+  'Life Command Center — Team Briggs, Northmarq Net Lease Investment Sales. Internal tool.'
+));
+app.get('/terms', (req, res) => res.type('text/plain').send(
+  'Life Command Center — internal tool for Team Briggs use only. Not for public distribution.'
+));
+
 // ── Static files ────────────────────────────────────────────────────────────
 app.use(express.static(__dirname, {
   index: 'index.html',
