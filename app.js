@@ -4877,7 +4877,7 @@ function renderHomeStats() {
   // --- Activities stat ---
   // Prefer canonical work_counts when non-zero
   if (elAct) {
-    if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0)) {
+    if (canonicalCounts) {
       elAct.textContent = (canonicalCounts.open_actions || canonicalCounts.my_actions || 0).toLocaleString();
     } else if (mktLoaded && mktData.length > 0) {
       const userName = LCC_USER.display_name || 'Scott Briggs';
@@ -4902,8 +4902,8 @@ function renderHomeStats() {
 
   // --- Due This Week stat ---
   if (elDue) {
-    if (canonicalCounts && canonicalCounts.due_this_week > 0) {
-      elDue.textContent = canonicalCounts.due_this_week.toLocaleString();
+    if (canonicalCounts) {
+      elDue.textContent = (canonicalCounts.due_this_week || 0).toLocaleString();
     } else if (mktLoaded && mktData.length > 0) {
       const now = Date.now(); const week = 7 * 86400000;
       const due = mktData.filter(d => { if (!d.due_date) return false; var t = new Date(d.due_date).getTime(); return t >= now && t <= now + week; });
@@ -5058,8 +5058,8 @@ function renderPriorityTasks() {
 }
 
 function renderCategoryMetrics() {
-  // Prefer canonical counts when available AND has meaningful data
-  if (canonicalCounts && (canonicalCounts.my_actions > 0 || canonicalCounts.open_actions > 0 || canonicalCounts.completed_week > 0 || canonicalCounts.overdue > 0)) {
+  // Prefer canonical counts when available (zero is valid — means no open work)
+  if (canonicalCounts) {
     let html = '<div class="cat-metrics">';
     html += `<div class="cat-metric clickable" onclick="navTo('pageMyWork')"><div class="cat-metric-val" style="color:var(--accent)">${canonicalCounts.my_actions || 0}</div><div class="cat-metric-lbl">My Actions</div></div>`;
     html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${canonicalCounts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
