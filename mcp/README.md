@@ -43,7 +43,7 @@ Alternatively, Railway's nixpacks will auto-detect `package.json` and run `npm s
 1. Open Claude.ai → Settings → Integrations
 2. Click "Add MCP Server"
 3. Enter:
-   - **URL:** `https://your-railway-domain.up.railway.app/sse`
+   - **URL:** `https://your-railway-domain.up.railway.app/mcp`
    - **Authentication:** Header → `Authorization: Bearer YOUR_LCC_API_KEY`
 4. Claude will discover all 6 tools automatically
 
@@ -102,15 +102,14 @@ Check the status of all data pipelines — last run times, success rates, and an
 
 | Path | Method | Description |
 |---|---|---|
-| `/sse` | GET | SSE connection for MCP clients |
-| `/messages` | POST | Message endpoint for MCP protocol |
+| `/mcp` | GET/POST | Streamable HTTP endpoint for MCP clients |
 | `/health` | GET | Health check with tool list and config status |
 | `/` | GET | Server info |
 
 ## Architecture
 
 ```
-Claude.ai ──SSE──→ /mcp/server.js ──fetch──→ OPS Supabase (entities, actions, events)
+Claude.ai ──HTTP──→ /mcp/server.js ──fetch──→ OPS Supabase (entities, actions, events)
                                     ──fetch──→ GOV Supabase (leases, ownership, pipelines)
 ```
 
