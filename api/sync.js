@@ -262,7 +262,7 @@ async function ingestEmails(req, res, user, workspaceId) {
   const job = await createSyncJob(workspaceId, connector.id, 'inbound', 'flagged_email', correlationId, connector);
   if (!job) return res.status(500).json({ error: 'Could not create sync job' });
 
-  let processed = 0, failed = 0, resolved = 0, errors = [];
+  let processed = 0, failed = 0, resolved = 0, reactivated = 0, errors = [];
 
   try {
     // Fetch from existing edge function with per-user connector context
@@ -273,6 +273,17 @@ async function ingestEmails(req, res, user, workspaceId) {
 
     const data = await edgeRes.json();
     const emailList = data.emails || [];
+
+    // ---- Pre-fetch all existing flagged_email items for this workspace ----
+    // This avoids N+1 queries and lets us do explicit check-then-upsert
+    // instead of relying on PostgREST merge-duplicates (unreliable with partial indexes).
+    const existingResult = await opsQuery('GET',
+      `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email&select=id,external_id,status,flag_removed_at,metadata`
+    );
+    const existingByExtId = new Map();
+    for (const item of (existingResult.data || [])) {
+      if (item.external_id) existingByExtId.set(item.external_id, item);
+    }
 
     // Build a set of external_ids currently flagged in Outlook for stale-flag detection
     const activeFlagIds = new Set();
@@ -294,31 +305,61 @@ async function ingestEmails(req, res, user, workspaceId) {
         const deepLink = webLink
           || (graphRestId ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(graphRestId)}` : null);
 
-        await opsQuery('POST', 'inbox_items', {
-          workspace_id: workspaceId,
-          source_user_id: user.id,
-          assigned_to: user.id,
-          title: email.subject || '(No subject)',
-          body: email.body_preview || email.body || null,
-          source_type: 'flagged_email',
-          source_connector_id: connector.id,
-          external_id: externalId,
-          external_url: deepLink,
-          status: 'new',
-          priority: 'normal',
-          visibility: 'private',
-          metadata: {
-            sender_name: email.sender_name || email.from?.emailAddress?.name,
-            sender_email: email.sender_email || email.from?.emailAddress?.address,
-            received_at: email.received_date_time || email.receivedDateTime,
-            has_attachments: email.has_attachments || false,
-            importance: email.importance,
-            graph_rest_id: graphRestId || null,
+        const emailMetadata = {
+          sender_name: email.sender_name || email.from?.emailAddress?.name,
+          sender_email: email.sender_email || email.from?.emailAddress?.address,
+          received_at: email.received_date_time || email.receivedDateTime,
+          has_attachments: email.has_attachments || false,
+          importance: email.importance,
+          graph_rest_id: graphRestId || null,
+          internet_message_id: internetMsgId || null,
+          correlation_id: correlationId
+        };
+
+        const existingItem = existingByExtId.get(externalId);
+
+        if (existingItem) {
+          // ---- UPDATE existing item ----
+          // Refresh metadata and deep-link but do NOT reset user-set status.
+          // This prevents overwriting triage decisions made between syncs.
+          const patch = {
+            title: email.subject || '(No subject)',
+            body: email.body_preview || email.body || null,
+            external_url: deepLink,
+            internet_message_id: internetMsgId || existingItem.internet_message_id || null,
+            metadata: { ...(existingItem.metadata || {}), ...emailMetadata },
+            updated_at: new Date().toISOString()
+          };
+
+          // If the item was previously resolved (flag removed), re-activate it —
+          // the user re-flagged the email in Outlook.
+          if (existingItem.flag_removed_at) {
+            patch.flag_removed_at = null;
+            patch.status = 'new';
+            reactivated++;
+          }
+
+          await opsQuery('PATCH', `inbox_items?id=eq.${existingItem.id}`, patch);
+        } else {
+          // ---- INSERT new item ----
+          await opsQuery('POST', 'inbox_items', {
+            workspace_id: workspaceId,
+            source_user_id: user.id,
+            assigned_to: user.id,
+            title: email.subject || '(No subject)',
+            body: email.body_preview || email.body || null,
+            source_type: 'flagged_email',
+            source_connector_id: connector.id,
+            external_id: externalId,
+            external_url: deepLink,
             internet_message_id: internetMsgId || null,
-            correlation_id: correlationId
-          },
-          received_at: email.received_date_time || email.receivedDateTime || new Date().toISOString()
-        }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+            status: 'new',
+            priority: 'normal',
+            visibility: 'private',
+            metadata: emailMetadata,
+            received_at: email.received_date_time || email.receivedDateTime || new Date().toISOString()
+          });
+        }
 
         processed++;
       } catch (e) {
@@ -329,16 +370,17 @@ async function ingestEmails(req, res, user, workspaceId) {
     }
 
     // ---- Resolve stale flags ----
-    // Find inbox_items that were previously flagged but are no longer in Outlook's
-    // flagged list. Mark them with flag_removed_at so the UI hides them.
+    // Items that were previously flagged but are no longer in Outlook's flagged list.
+    // Uses the pre-fetched existingByExtId map — no extra query needed.
     try {
-      const existingResult = await opsQuery('GET',
-        `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email&status=in.(new,triaged)&flag_removed_at=is.null&select=id,external_id`
-      );
-      const existing = existingResult.data || [];
-      const staleIds = existing
-        .filter(item => item.external_id && !activeFlagIds.has(item.external_id))
-        .map(item => item.id);
+      const staleIds = [];
+      for (const [extId, item] of existingByExtId) {
+        if (!activeFlagIds.has(extId)
+            && !item.flag_removed_at
+            && (item.status === 'new' || item.status === 'triaged')) {
+          staleIds.push(item.id);
+        }
+      }
 
       if (staleIds.length > 0) {
         // Mark stale items — batch PATCH via PostgREST "in" filter
@@ -363,6 +405,7 @@ async function ingestEmails(req, res, user, workspaceId) {
       processed,
       failed,
       resolved,
+      reactivated,
       errors: errors.slice(0, 10)
     });
   } catch (e) {
