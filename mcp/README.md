@@ -25,6 +25,7 @@ The server starts on `http://localhost:3100` with hot-reload via `--watch`.
 | `GOV_SUPABASE_URL` | For pipeline tools | Government domain Supabase URL |
 | `GOV_SUPABASE_KEY` | For pipeline tools | Government domain service role key |
 | `LCC_API_KEY` | Recommended | Bearer token for authentication (if blank, auth is disabled) |
+| `MCP_BASE_URL` | Recommended | Public URL of this MCP server (used in OAuth metadata). If not set, derived from request host header. |
 | `PORT` | No | Server port (default: 3100) |
 
 ## Deploy to Railway

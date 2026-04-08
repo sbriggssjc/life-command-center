@@ -668,6 +668,61 @@ app.post("/messages", async (req, res) => {
 
 // ── Health check ─────────────────────────────────────────────────────────────
 
+// ── OAuth metadata discovery ──────────────────────────────────────────────
+// Required by Claude.ai to discover the token endpoint
+app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+  const base = process.env.MCP_BASE_URL || `https://${_req.get('host')}`;
+  res.json({
+    issuer: base,
+    token_endpoint: `${base}/oauth/token`,
+    grant_types_supported: ['client_credentials'],
+    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    response_types_supported: ['token'],
+  });
+});
+
+// ── OAuth token endpoint (client credentials grant) ───────────────────────
+// Claude POSTs here with client_id + client_secret to get an access token.
+// The client_secret IS the LCC_API_KEY — no separate credential needed.
+app.post('/oauth/token', express.urlencoded({ extended: false }), (req, res) => {
+  const { grant_type, client_id, client_secret } = req.body;
+
+  // Also accept JSON body (some clients send JSON)
+  const bodyClientSecret = client_secret || req.body?.client_secret;
+  const bodyGrantType = grant_type || req.body?.grant_type;
+
+  if (bodyGrantType !== 'client_credentials') {
+    return res.status(400).json({ error: 'unsupported_grant_type' });
+  }
+
+  // Validate: client_secret must match LCC_API_KEY
+  // If LCC_API_KEY is not set, reject all requests
+  const apiKey = LCC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'server_error', error_description: 'LCC_API_KEY not configured' });
+  }
+  if (bodyClientSecret !== apiKey) {
+    return res.status(401).json({ error: 'invalid_client', error_description: 'Invalid client credentials' });
+  }
+
+  // Return the API key as the access token (static — never expires)
+  res.json({
+    access_token: apiKey,
+    token_type: 'bearer',
+    expires_in: 315360000,  // 10 years — effectively never expires
+    scope: 'read',
+  });
+});
+
+// ── OAuth JSON body support ────────────────────────────────────────────────
+// Some clients POST JSON instead of form-encoded — handle both
+app.post('/oauth/token', express.json(), (req, res) => {
+  // Handled above via urlencoded — this is a fallback catch
+  res.status(400).json({ error: 'invalid_request' });
+});
+
+// ── Health check ─────────────────────────────────────────────────────────
+
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
