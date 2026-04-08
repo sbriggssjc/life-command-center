@@ -1,0 +1,41 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "LCC — Error",
+      "weight": "Bolder",
+      "color": "Attention",
+      "size": "Medium"
+    },
+    {
+      "type": "TextBlock",
+      "text": "Something went wrong processing your request.",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "${error_message}",
+      "wrap": true,
+      "color": "Attention",
+      "spacing": "Small"
+    },
+    {
+      "type": "TextBlock",
+      "text": "Try again or check the LCC dashboard for system health.",
+      "wrap": true,
+      "size": "Small",
+      "isSubtle": true,
+      "spacing": "Medium"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open LCC",
+      "url": "${lcc_base_url}"
+    }
+  ]
+}

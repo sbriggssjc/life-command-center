@@ -4,47 +4,36 @@
 
 ---
 
-## PHASE 1 — Azure AD App Registration (15 min)
+## PHASE 1 — Authentication Setup (NO AZURE APP REGISTRATION NEEDED)
 
-> Skip this phase if you only need bearer-token (API key) auth. Come back to it when you want OAuth/SSO.
+LCC uses API Key bearer token authentication — a static key in the Authorization
+header. This does NOT require Azure AD, App Registrations, or admin consent.
 
-1. Go to **portal.azure.com** and sign in with your M365 account.
-2. Navigate to **Azure Active Directory** > **App Registrations** > **+ New registration**.
-3. Configure the registration:
-   - **Name:** `LCC Copilot Plugin`
-   - **Supported account types:** Single tenant (this organization only)
-   - **Redirect URI:** Platform = Web, URI = `RAILWAY_URL/auth/callback`
-4. Click **Register**.
-5. On the app overview page, copy and save:
-   - **Application (client) ID**
-   - **Directory (tenant) ID**
-6. In the left nav, go to **Certificates & secrets** > **+ New client secret**:
-   - Description: `LCC Copilot`
-   - Expiry: 24 months (or per your org policy)
-   - Click **Add** and **copy the secret value immediately** (it won't be shown again).
-7. In the left nav, go to **Expose an API**:
-   - Click **Set** next to Application ID URI — accept the default `api://<client-id>` or customize.
-   - Click **+ Add a scope**:
-     - Scope name: `lcc.access`
-     - Who can consent: Admins and users
-     - Admin consent display name: `Access Life Command Center`
-     - Admin consent description: `Allows the Copilot agent to call LCC APIs on behalf of the user.`
-     - State: Enabled
-   - Click **Add scope**.
+You only need: the **LCC_API_KEY** value from your Railway environment variables.
+
+**To get it:**
+1. Go to your **Railway dashboard** → your LCC project → **Variables**.
+2. Copy the `LCC_API_KEY` value.
+3. This is the only credential needed for all Copilot Studio, ChatGPT, and
+   Power Automate integrations.
+
+> **Note:** The Azure AD App Registration steps previously documented here are
+> NOT required. Bearer token auth is sufficient for all current LCC integrations.
+> If you need OAuth/SSO in the future, see the Azure AD documentation separately.
 
 ---
 
-## PHASE 2 — Update Railway Environment Variables
+## PHASE 2 — Verify Railway Environment Variables
 
-In the **Railway dashboard** for your LCC deployment, add these environment variables:
+In the **Railway dashboard** for your LCC deployment, confirm these variables are set:
 
-| Variable | Value | Notes |
-|----------|-------|-------|
-| `AZURE_CLIENT_ID` | Application (client) ID from Phase 1 | Only needed if using OAuth |
-| `AZURE_TENANT_ID` | Directory (tenant) ID from Phase 1 | Only needed if using OAuth |
-| `AZURE_CLIENT_SECRET` | Client secret value from Phase 1 | Only needed if using OAuth |
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `LCC_API_KEY` | Bearer token for API auth | Used by Copilot Studio, Power Automate, and ChatGPT |
+| `OPS_SUPABASE_URL` | OPS database connection | Required for all LCC data |
+| `OPS_SUPABASE_KEY` | OPS database auth | Required for all LCC data |
 
-> **Note:** Bearer token auth (using `LCC_API_KEY`) works without the Azure AD variables. You can skip Phase 1 and Phase 2 entirely if you configure Copilot Studio with a bearer token in Phase 3.
+> **Note:** No Azure AD variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`) are needed. LCC uses bearer token auth exclusively.
 
 ---
 
@@ -65,8 +54,9 @@ In the **Railway dashboard** for your LCC deployment, add these environment vari
 2. Click **Upload an OpenAPI description** and select `docs/setup/lcc-copilot-openapi-core.json` from your repo.
 3. Copilot Studio will parse the spec and list the available operations.
 4. Configure **Authentication**:
-   - Type: **Bearer token**
-   - Token value: Enter the `LCC_API_KEY` value from your Railway/Vercel environment variables.
+   - Select **API Key** → Auth Type: **Bearer**
+   - API Key: Paste the `LCC_API_KEY` value from Railway (see Phase 1).
+   - No Azure AD setup required.
 5. Click **Save**.
 
 ### 3.3 — Test Each Action
