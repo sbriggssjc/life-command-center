@@ -463,7 +463,7 @@ function dotClass(status) {
 // Programmatic page navigation — supports both bottom nav and more drawer items
 function navTo(pageId) {
   // Map pageBiz domain shortcuts to primary nav buttons
-  if (pageId === 'pageDia' || pageId === 'pageGov' || pageId === 'pageMkt') {
+  if (pageId === 'pageDia' || pageId === 'pageGov') {
     const btn = document.querySelector(`.bnav[data-page="${pageId}"]`);
     if (btn) { btn.click(); return; }
   }
@@ -821,7 +821,7 @@ document.querySelectorAll('.bnav[data-page]').forEach(btn => {
   btn.addEventListener('click', () => {
     const targetPage = btn.dataset.page;
     // Dialysis, Government, Marketing primary nav shortcuts — navigate to pageBiz with domain tab
-    const domainShortcuts = { pageDia: 'dialysis', pageGov: 'government', pageMkt: 'marketing' };
+    const domainShortcuts = { pageDia: 'dialysis', pageGov: 'government' };
     if (domainShortcuts[targetPage]) {
       document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
@@ -863,7 +863,7 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   const tabBiz = tab.dataset.biz;
   document.querySelectorAll('.bnav').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.more-drawer-item').forEach(i => i.classList.remove('active'));
-  const primaryNavMap = { dialysis: 'pageDia', government: 'pageGov', marketing: 'pageMkt' };
+  const primaryNavMap = { dialysis: 'pageDia', government: 'pageGov' };
   if (primaryNavMap[tabBiz]) {
     const navBtn = document.querySelector('.bnav[data-page="' + primaryNavMap[tabBiz] + '"]');
     if (navBtn) navBtn.classList.add('active');
