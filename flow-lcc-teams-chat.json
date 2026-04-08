@@ -1,0 +1,279 @@
+{
+  "name": "flow-lcc-teams-chat",
+  "description": "Teams keyword-triggered chat bot — posts @LCC questions to LCC /api/chat and replies with adaptive card. No Copilot Studio, no Azure AD, no admin access required.",
+  "trigger": {
+    "type": "When a keyword is mentioned (Teams)",
+    "connector": "Microsoft Teams",
+    "keywords": ["@LCC", "@lcc", "!lcc"],
+    "team_id": "@{parameters('TEAMS_TEAM_ID')}",
+    "channel_id": "@{parameters('TEAMS_CHANNEL_ID')}",
+    "outputs": {
+      "messageId": "@{triggerOutputs()?['body/messageId']}",
+      "messageBody": "@{triggerOutputs()?['body/messageBody/content']}",
+      "senderDisplayName": "@{triggerOutputs()?['body/from/user/displayName']}",
+      "channelId": "@{triggerOutputs()?['body/channelIdentity/channelId']}",
+      "teamId": "@{triggerOutputs()?['body/channelIdentity/teamId']}"
+    }
+  },
+  "parameters": {
+    "LCC_RAILWAY_URL": {
+      "type": "string",
+      "description": "Base URL of your LCC deployment (e.g. https://your-lcc-app.up.railway.app)",
+      "example": "https://<LCC_RAILWAY_URL>"
+    },
+    "LCC_API_KEY": {
+      "type": "securestring",
+      "description": "Bearer token for LCC API authentication — copy from Railway env vars"
+    },
+    "TEAMS_TEAM_ID": {
+      "type": "string",
+      "description": "ID of the Teams team to monitor"
+    },
+    "TEAMS_CHANNEL_ID": {
+      "type": "string",
+      "description": "ID of the Teams channel to monitor"
+    }
+  },
+  "steps": [
+    {
+      "name": "Step1_ExtractUserMessage",
+      "type": "Compose",
+      "description": "Strip the trigger keyword from the message and extract sender info for threading.",
+      "outputs_template": {
+        "userMessage": "@{trim(replace(replace(replace(triggerOutputs()?['body/messageBody/content'], '@LCC', ''), '@lcc', ''), '!lcc', ''))}",
+        "senderName": "@{coalesce(triggerOutputs()?['body/from/user/displayName'], 'Unknown')}",
+        "messageId": "@{triggerOutputs()?['body/messageId']}"
+      }
+    },
+    {
+      "name": "Step2_DetermineActionRouting",
+      "type": "Switch",
+      "description": "Route the user's message to the appropriate copilot_action based on keyword matching. All comparisons use toLower() for case-insensitive matching.",
+      "switch_on": "toLower(outputs('Step1_ExtractUserMessage')?['userMessage'])",
+      "cases": {
+        "briefing_match": {
+          "condition": "@{or(contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'briefing'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'today'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'focus'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'priorities'))}",
+          "outputs": {
+            "copilot_action": "get_daily_briefing_snapshot",
+            "params": {},
+            "action_label": "Daily Briefing"
+          }
+        },
+        "search_match": {
+          "condition": "@{or(contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'search'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'find'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'look up'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'who is'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'what is'))}",
+          "outputs": {
+            "copilot_action": "search_entity_targets",
+            "params": {
+              "query": "@{outputs('Step1_ExtractUserMessage')?['userMessage']}"
+            },
+            "action_label": "Entity Search"
+          }
+        },
+        "contact_match": {
+          "condition": "@{or(contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'contact'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'call'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'relationship'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'touch'))}",
+          "outputs": {
+            "copilot_action": "get_relationship_context",
+            "params": {
+              "query": "@{outputs('Step1_ExtractUserMessage')?['userMessage']}"
+            },
+            "action_label": "Relationship Context"
+          }
+        },
+        "pipeline_match": {
+          "condition": "@{or(contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'pipeline'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'queue'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'research'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'backlog'))}",
+          "outputs": {
+            "copilot_action": "get_pipeline_intelligence",
+            "params": {},
+            "action_label": "Pipeline Intelligence"
+          }
+        },
+        "prospect_match": {
+          "condition": "@{or(contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'prospect'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'call sheet'), contains(toLower(outputs('Step1_ExtractUserMessage')?['userMessage']), 'outreach targets'))}",
+          "outputs": {
+            "copilot_action": "generate_prospecting_brief",
+            "params": {},
+            "action_label": "Prospecting Brief"
+          }
+        }
+      },
+      "default": {
+        "outputs": {
+          "copilot_action": "get_daily_briefing_snapshot",
+          "params": {
+            "freeform_query": "@{outputs('Step1_ExtractUserMessage')?['userMessage']}"
+          },
+          "action_label": "LCC Chat"
+        }
+      }
+    },
+    {
+      "name": "Step3_CallLccChat",
+      "type": "HTTP",
+      "method": "POST",
+      "uri": "@{concat(parameters('LCC_RAILWAY_URL'), '/api/chat')}",
+      "headers": {
+        "Authorization": "Bearer @{parameters('LCC_API_KEY')}",
+        "Content-Type": "application/json",
+        "X-LCC-Surface": "teams_chat_bot"
+      },
+      "body": {
+        "copilot_action": "@{outputs('Step2_DetermineActionRouting')?['copilot_action']}",
+        "params": "@{outputs('Step2_DetermineActionRouting')?['params']}",
+        "surface": "teams",
+        "freeform_query": "@{outputs('Step1_ExtractUserMessage')?['userMessage']}"
+      },
+      "timeout": "PT30S",
+      "retryPolicy": {
+        "type": "fixed",
+        "count": 2,
+        "interval": "PT5S"
+      }
+    },
+    {
+      "name": "Step4_ParseLccResponse",
+      "type": "ParseJSON",
+      "description": "Parse the HTTP response body and extract the text response, handling multiple response shapes.",
+      "content": "@{body('Step3_CallLccChat')}",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": { "type": "string" }
+              }
+            }
+          },
+          "message": { "type": "string" },
+          "summary": { "type": "string" },
+          "response": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      },
+      "outputs_template": {
+        "responseText": "@{coalesce(body('Step4_ParseLccResponse')?['content']?[0]?['text'], body('Step4_ParseLccResponse')?['response'], body('Step4_ParseLccResponse')?['message'], body('Step4_ParseLccResponse')?['summary'], 'No response content returned.')}",
+        "errorMessage": "@{body('Step4_ParseLccResponse')?['error']}",
+        "hasError": "@{not(equals(body('Step4_ParseLccResponse')?['error'], null))}"
+      }
+    },
+    {
+      "name": "Step5_BuildAndPostResponse",
+      "type": "Condition",
+      "description": "If error is present, post an error card. Otherwise post a results card with the LCC response.",
+      "condition": "@{equals(outputs('Step4_ParseLccResponse')?['hasError'], true)}",
+      "if_true": {
+        "name": "Step5a_PostErrorCard",
+        "type": "Teams",
+        "action": "Reply with a message in a channel",
+        "team_id": "@{parameters('TEAMS_TEAM_ID')}",
+        "channel_id": "@{parameters('TEAMS_CHANNEL_ID')}",
+        "message_id": "@{outputs('Step1_ExtractUserMessage')?['messageId']}",
+        "card": {
+          "type": "message",
+          "attachments": [
+            {
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                  {
+                    "type": "TextBlock",
+                    "text": "LCC — Error",
+                    "weight": "Bolder",
+                    "color": "Attention",
+                    "size": "Medium"
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "Something went wrong processing your request.",
+                    "wrap": true
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "@{outputs('Step4_ParseLccResponse')?['errorMessage']}",
+                    "wrap": true,
+                    "color": "Attention",
+                    "spacing": "Small"
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "Try again or check the LCC dashboard for system health.",
+                    "wrap": true,
+                    "size": "Small",
+                    "isSubtle": true,
+                    "spacing": "Medium"
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "Open LCC",
+                    "url": "@{parameters('LCC_RAILWAY_URL')}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "if_false": {
+        "name": "Step5b_PostResultsCard",
+        "type": "Teams",
+        "action": "Reply with a message in a channel",
+        "team_id": "@{parameters('TEAMS_TEAM_ID')}",
+        "channel_id": "@{parameters('TEAMS_CHANNEL_ID')}",
+        "message_id": "@{outputs('Step1_ExtractUserMessage')?['messageId']}",
+        "card": {
+          "type": "message",
+          "attachments": [
+            {
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                  {
+                    "type": "TextBlock",
+                    "text": "LCC — @{outputs('Step2_DetermineActionRouting')?['action_label']}",
+                    "weight": "Bolder",
+                    "color": "Accent",
+                    "size": "Medium"
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "@{if(greater(length(outputs('Step4_ParseLccResponse')?['responseText']), 500), concat(substring(outputs('Step4_ParseLccResponse')?['responseText'], 0, 500), '…'), outputs('Step4_ParseLccResponse')?['responseText'])}",
+                    "wrap": true
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "Asked by @{outputs('Step1_ExtractUserMessage')?['senderName']}",
+                    "size": "Small",
+                    "isSubtle": true,
+                    "spacing": "Medium"
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "Open LCC",
+                    "url": "@{parameters('LCC_RAILWAY_URL')}"
+                  },
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "Open My Queue",
+                    "url": "@{concat(parameters('LCC_RAILWAY_URL'), '/?page=pageMyWork')}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
