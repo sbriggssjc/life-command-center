@@ -422,7 +422,12 @@ function renderDiaOverview() {
           if (!batch || batch.length < 1000) break;
           pg++;
         }
-        diaAvailListings = all;
+        // Filter out blank records — require at least an address or property name
+        diaAvailListings = all.filter(r =>
+          (r.address && r.address.trim()) ||
+          (r.property_name && r.property_name.trim()) ||
+          (r.facility_name && r.facility_name.trim())
+        );
       } catch(e) { diaAvailListings = []; }
       const mktEl = document.getElementById('diaOverviewMarket');
       if (mktEl) mktEl.innerHTML = renderOnMarketInner();
@@ -5183,7 +5188,7 @@ async function renderDiaSales() {
 
   pageRows.forEach((r, _ri) => {
     const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
-    html += '<tr class="clickable-row" onclick=\'showSaleDetail(' + safeJSON(r) + ')\' style="cursor: pointer;' + _zebra + '">';
+    html += '<tr class="clickable-row" onclick=\'openDiaSaleOrProperty(' + safeJSON(r) + ')\' style="cursor: pointer;' + _zebra + '">';
     html += td(r.tenant_operator, true);
     html += td(r.address, true);
     html += td(r.city);
@@ -7097,6 +7102,15 @@ window.renderDiaLoans = renderDiaLoans;
 window.goToDiaTab = goToDiaTab;
 window.infoCard = infoCard;
 window.showSaleDetail = showSaleDetail;
+window.openDiaSaleOrProperty = function(record) {
+  // If the sale comp has a property_id, open the full property sidebar
+  if (record && record.property_id) {
+    openUnifiedDetail('dialysis', { property_id: record.property_id }, record, 'sales');
+  } else {
+    // Fallback to the dedicated sale detail form
+    showSaleDetail(record);
+  }
+};
 window.switchSaleTab = switchSaleTab;
 window.saveSaleTransaction = saveSaleTransaction;
 window.saveSaleProperty = saveSaleProperty;

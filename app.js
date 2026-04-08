@@ -3796,7 +3796,11 @@ function closeDetail() {
   window._saleRecord = null;
   window._saleCurrentTab = null;
 
-  _setDisplay('detailPanel', 'none');
+  const panel = document.getElementById('detailPanel');
+  if (panel) {
+    panel.style.display = 'none';
+    panel.classList.remove('open');
+  }
   const overlay = document.getElementById('detailOverlay');
   if (overlay) {
     overlay.classList.remove('open');
@@ -4500,7 +4504,16 @@ async function loadEmails() {
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Emails API returned non-JSON'); return; }
-    emails = (data && data.emails) || [];
+    let rawEmails = (data && data.emails) || [];
+    // Deduplicate by internet_message_id or subject+sender+date composite key
+    const seen = new Set();
+    rawEmails = rawEmails.filter(e => {
+      const key = e.internet_message_id || `${e.subject||''}|${e.sender_email||e.sender_name||''}|${e.received_date||''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    emails = rawEmails;
     emailTotalCount = (data && data.total) || emails.length;
     renderHomeStats();
     _setHTML('recentEmails', renderRecentEmails());
@@ -5098,8 +5111,16 @@ function renderCategoryMetrics() {
 function renderRecentEmails() {
   // Prefer canonical inbox items when available
   if (canonicalInbox && canonicalInbox.items && canonicalInbox.items.length > 0) {
+    // Deduplicate by title+source composite key
+    const _inboxSeen = new Set();
+    const _dedupedInbox = canonicalInbox.items.filter(item => {
+      const key = `${item.title||''}|${item.source_ref||item.source_type||''}|${(item.received_at||'').substring(0,10)}`;
+      if (_inboxSeen.has(key)) return false;
+      _inboxSeen.add(key);
+      return true;
+    });
     let html = '';
-    for (const item of canonicalInbox.items) {
+    for (const item of _dedupedInbox) {
       const title = esc(item.title || '(No subject)');
       const source = esc(item.source_ref || item.source_type || '');
       const date = item.received_at ? formatDate(item.received_at) : '';
@@ -5245,11 +5266,12 @@ function renderDailyBriefingPanel() {
   let html = '';
   html += '<div class="db-meta-row">';
   html += `<span class="db-asof">As of ${esc(formatBriefingAsOf(snap.as_of))}</span>`;
-  html += `<span class="db-status ${degraded ? 'degraded' : 'full'}">${degraded ? 'Degraded' : 'Complete'}</span>`;
+  html += `<span style="margin:0 6px;color:var(--text3)">·</span>`;
+  html += `<span class="db-status ${degraded ? 'degraded' : 'full'}">${degraded ? 'Partial' : 'Complete'}</span>`;
   html += '</div>';
 
   if (degraded && missing.length > 0) {
-    html += `<div class="db-missing">Missing: ${missing.slice(0, 4).map((m) => esc(m)).join(', ')}</div>`;
+    html += `<div class="db-missing" style="font-size:11px;color:var(--text3);margin-top:2px">Some briefing sections are still loading</div>`;
   }
 
   html += '<div class="db-section">';

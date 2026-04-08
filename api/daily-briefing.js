@@ -703,15 +703,15 @@ function projectPriorities(roleView, myWork, inboxSummary, unassignedWork, syncH
 
 function buildActions(roleView) {
   const base = [
-    { label: 'Open My Queue', type: 'nav', target: 'pageMyWork' },
+    { label: 'Open My Queue', type: 'nav', target: 'pagePipeline' },
     { label: 'Open Inbox Triage', type: 'nav', target: 'pageInbox' },
     { label: 'View Sync Health', type: 'nav', target: 'pageSyncHealth' }
   ];
   if (roleView === 'analyst_ops' || roleView === 'manager') {
-    base.push({ label: 'Review Unassigned Work', type: 'nav', target: 'pageTeamQueue' });
+    base.push({ label: 'Review Unassigned Work', type: 'nav', target: 'pagePipeline' });
   }
   if (roleView === 'manager') {
-    base.push({ label: 'View Escalations', type: 'nav', target: 'pageMyWork' });
+    base.push({ label: 'View Escalations', type: 'nav', target: 'pagePipeline' });
   }
   return base;
 }
