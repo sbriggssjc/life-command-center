@@ -188,8 +188,20 @@ app.get('*', (req, res) => {
 });
 
 // ── Start server ────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+process.on('uncaughtException', (err) => {
+  console.error('[LCC] FATAL uncaughtException:', err.message);
+  console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[LCC] FATAL unhandledRejection:', reason);
+});
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`[LCC] Server running on port ${PORT}`);
+  console.log(`[LCC] Bound to 0.0.0.0:${PORT}`);
+  console.log(`[LCC] Health: http://0.0.0.0:${PORT}/health`);
   console.log(`[LCC] Environment: ${process.env.LCC_ENV || 'development'}`);
 });
