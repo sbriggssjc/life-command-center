@@ -339,6 +339,16 @@ async function renderMyWork(page) {
   }
 
   opsMyWorkData = qRes.data?.items || qRes.data || [];
+  // Deduplicate inbox items by title + source_type + date composite key
+  {
+    const seen = new Set();
+    opsMyWorkData = opsMyWorkData.filter(item => {
+      const key = (item.title || '') + '|' + (item.source_type || '') + '|' + (item.received_at || '').substring(0, 10);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
   const connectors = cRes.ok ? (cRes.data?.connectors || cRes.data || []) : [];
 
   // Fallback: if canonical queue is empty, show CRM tasks from mktData
