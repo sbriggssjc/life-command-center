@@ -665,7 +665,7 @@ function renderDiaOverview() {
   html += infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avgPatients), sub: fmtN(totalPatients) + ' total across ' + fmtN(clinicsWithPatients.length) + ' clinics', color: 'blue', tab: 'changes' });
   html += infoCard({ title: 'Inventory Changes', value: fmtN(addedCount + removedCount), sub: '+' + fmtN(addedCount) + ' added · -' + fmtN(removedCount) + ' removed', color: addedCount > removedCount ? 'green' : 'red', tab: 'changes' });
   html += infoCard({ title: 'NPI Signals', value: fmtN(npiSignalCount), sub: 'provider changes detected', color: 'orange', tab: 'npi' });
-  html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name || '').substring(0,30) : 'no data', color: 'green', tab: 'changes' });
+  html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name && diaData.moversUp[0].facility_name !== 'null' ? diaData.moversUp[0].facility_name : diaData.moversUp[0].clinic_name || diaData.moversUp[0].address || 'Unknown Clinic').substring(0,30) : 'no data', color: 'green', tab: 'changes' });
   html += '</div>';
 
   // Top Movers mini-charts
@@ -677,7 +677,7 @@ function renderDiaOverview() {
     const barW = Math.round((r.delta_patients / maxDelta) * 100);
     html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
       <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
-      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name||'').substring(0,25))}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name && r.facility_name !== 'null' ? r.facility_name : r.clinic_name || r.address || 'Unknown Clinic').substring(0,25))}</div>
       <div style="width:80px;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#34d399;border-radius:4px"></div></div>
       <div style="width:36px;font-size:10px;color:#34d399;text-align:right;font-weight:600">+${r.delta_patients}</div>
     </div>`;
@@ -691,7 +691,7 @@ function renderDiaOverview() {
     const barW = Math.round((Math.abs(r.delta_patients) / maxDelta) * 100);
     html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
       <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
-      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name||'').substring(0,25))}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name && r.facility_name !== 'null' ? r.facility_name : r.clinic_name || r.address || 'Unknown Clinic').substring(0,25))}</div>
       <div style="width:80px;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#f87171;border-radius:4px"></div></div>
       <div style="width:36px;font-size:10px;color:#f87171;text-align:right;font-weight:600">${r.delta_patients}</div>
     </div>`;

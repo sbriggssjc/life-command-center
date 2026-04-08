@@ -4997,8 +4997,16 @@ function renderTodaySchedule() {
 function renderPriorityTasks() {
   // Prefer canonical my_work items when available
   if (canonicalMyWork && canonicalMyWork.items && canonicalMyWork.items.length > 0) {
+    // Deduplicate by title + source_type + date (same logic as Pipeline dedup)
+    const _mwSeen = new Set();
+    const dedupedItems = canonicalMyWork.items.filter(item => {
+      const key = `${item.title||''}|${item.source_type||''}|${(item.received_at||'').substring(0,10)}`;
+      if (_mwSeen.has(key)) return false;
+      _mwSeen.add(key);
+      return true;
+    });
     let html = '';
-    for (const item of canonicalMyWork.items) {
+    for (const item of dedupedItems) {
       const title = esc(item.title || '(Untitled)');
       const statusCls = `status-${(item.status || '').replace(/ /g, '_')}`;
       const statusLabel = (item.status || '').replace(/_/g, ' ');
