@@ -5817,6 +5817,7 @@ let govSalesLoading = false;
 let govSalesSearch = '';
 let govSalesPage = 0;
 let govSalesSort = { col: null, dir: 'desc' };
+let govFilteredSalesData = [];
 const GOV_SALES_PAGE_SIZE = 50;
 
 window.govSalesSortBy = function(col) {
@@ -5955,6 +5956,9 @@ async function renderGovSales() {
     });
   }
 
+  // Store filtered data for export
+  govFilteredSalesData = filtered;
+
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / GOV_SALES_PAGE_SIZE));
   if (govSalesPage >= totalPages) govSalesPage = totalPages - 1;
@@ -6011,6 +6015,7 @@ async function renderGovSales() {
   html += '<div style="margin: 16px 0; display: flex; gap: 8px; align-items: center;">';
   html += '<input type="text" id="govSalesSearchInput" placeholder="Search agency, address, city, broker..." value="' + esc(govSalesSearch) + '" style="flex:1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--s2); color: var(--text); font-size: 13px;" />';
   html += '<span style="font-size: 12px; color: var(--text3);">' + fmtN(filtered.length) + ' results</span>';
+  html += '<button onclick="exportCompsToXlsx(govFilteredSalesData, \'' + (isComps ? 'sales' : 'sales') + '\')" style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:4px;" title="Export all ' + fmtN(filtered.length) + ' filtered results to Excel">&#x1F4E5; Export</button>';
   html += '</div>';
 
   // Scrollable table

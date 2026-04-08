@@ -9675,6 +9675,79 @@ window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
 window.parseLiveIngestOutcomeNotes = parseLiveIngestOutcomeNotes;
 window.renderLiveIngestOutcomeProvenance = renderLiveIngestOutcomeProvenance;
 
+// === Export Comps to Excel (Briggs CRE Template) ===
+function exportCompsToXlsx(data, type) {
+  if (typeof XLSX === 'undefined') { showToast('Excel export library not loaded yet — please try again', 'error'); return; }
+  if (!data || data.length === 0) { showToast('No data to export', 'error'); return; }
+
+  var sheetName = type === 'lease' ? 'Lease Comps' : 'Sales Comps';
+  var fileType = type === 'lease' ? 'Lease' : 'Sales';
+
+  var rows = data.map(function(r) {
+    return {
+      'Address': r.address || '',
+      'City': r.city || '',
+      'State': r.state || '',
+      'Sale Date': r.sold_date || r.sale_date || '',
+      'Sale Price': r.price || r.sale_price || r.ask_price || null,
+      'Price/SF': r.price_psf || r.price_per_sf || null,
+      'Cap Rate': r.cap_rate || r.ask_cap || null,
+      'SF': r.rba || r.building_sf || r.sf || null,
+      'Year Built': r.year_built || null,
+      'Buyer': r.buyer || r.buyer_name || '',
+      'Seller': r.seller || r.seller_name || '',
+      'Tenant': r.agency || r.tenant_operator || r.tenant || r.tenant_name || '',
+      'Property Type': r.property_type || '',
+      'Source': r.source || r.data_source || ''
+    };
+  });
+
+  var ws = XLSX.utils.json_to_sheet(rows);
+
+  // Column widths for readability
+  ws['!cols'] = [
+    { wch: 30 }, // Address
+    { wch: 15 }, // City
+    { wch: 8 },  // State
+    { wch: 12 }, // Sale Date
+    { wch: 15 }, // Sale Price
+    { wch: 12 }, // Price/SF
+    { wch: 10 }, // Cap Rate
+    { wch: 10 }, // SF
+    { wch: 10 }, // Year Built
+    { wch: 25 }, // Buyer
+    { wch: 25 }, // Seller
+    { wch: 25 }, // Tenant
+    { wch: 15 }, // Property Type
+    { wch: 15 }  // Source
+  ];
+
+  // Apply number formats to data cells
+  var range = XLSX.utils.decode_range(ws['!ref']);
+  for (var R = range.s.r + 1; R <= range.e.r; R++) {
+    // Sale Price (col 4) — currency
+    var priceCell = ws[XLSX.utils.encode_cell({ r: R, c: 4 })];
+    if (priceCell && typeof priceCell.v === 'number') { priceCell.t = 'n'; priceCell.z = '$#,##0'; }
+    // Price/SF (col 5) — currency
+    var psfCell = ws[XLSX.utils.encode_cell({ r: R, c: 5 })];
+    if (psfCell && typeof psfCell.v === 'number') { psfCell.t = 'n'; psfCell.z = '$#,##0.00'; }
+    // Cap Rate (col 6) — percentage
+    var capCell = ws[XLSX.utils.encode_cell({ r: R, c: 6 })];
+    if (capCell && typeof capCell.v === 'number') { capCell.t = 'n'; capCell.z = '0.00%'; }
+    // SF (col 7) — comma-separated number
+    var sfCell = ws[XLSX.utils.encode_cell({ r: R, c: 7 })];
+    if (sfCell && typeof sfCell.v === 'number') { sfCell.t = 'n'; sfCell.z = '#,##0'; }
+  }
+
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+  var today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, 'LCC_' + fileType + '_Comps_' + today + '.xlsx');
+  showToast('Exported ' + data.length + ' records to Excel', 'success');
+}
+window.exportCompsToXlsx = exportCompsToXlsx;
+
 // Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {
   if (!localStorage.getItem('lcc-install-dismissed')) {

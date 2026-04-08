@@ -39,6 +39,7 @@ let diaSalesSearch = '';
 let diaSalesPage = 0;
 let diaSalesSort = { col: null, dir: 'desc' }; // column sort state
 let diaSalesStateFilter = ''; // state filter
+let diaFilteredSalesData = [];
 const DIA_SALES_PAGE_SIZE = 50;
 
 // Pipeline/Ops Research Modes
@@ -5034,6 +5035,9 @@ async function renderDiaSales() {
     });
   }
 
+  // Store filtered data for export
+  diaFilteredSalesData = filtered;
+
   const totalPages = Math.ceil(filtered.length / DIA_SALES_PAGE_SIZE);
   const pageRows = filtered.slice(diaSalesPage * DIA_SALES_PAGE_SIZE, (diaSalesPage + 1) * DIA_SALES_PAGE_SIZE);
 
@@ -5100,6 +5104,7 @@ async function renderDiaSales() {
     html += '<button class="pill active" id="diaSalesClearSort" style="font-size:11px;padding:4px 10px;">Clear Sort</button>';
   }
   html += '<span style="font-size: 12px; color: var(--text3);">' + fmtN(filtered.length) + ' results</span>';
+  html += '<button onclick="exportCompsToXlsx(diaFilteredSalesData, \'sales\')" style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:4px;" title="Export all ' + fmtN(filtered.length) + ' filtered results to Excel">&#x1F4E5; Export</button>';
   html += '</div>';
 
   // Scrollable table
