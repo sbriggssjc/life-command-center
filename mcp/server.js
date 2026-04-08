@@ -2,15 +2,12 @@
 // LCC MCP Server — Model Context Protocol server for Life Command Center
 // Standalone service (NOT a Vercel function) — deploy to Railway or similar
 //
-// Exposes read-only LCC tools to Claude.ai via Streamable HTTP transport.
+// Exposes read-only LCC tools to Claude.ai via direct JSON-RPC over HTTP.
+// No SDK transport layer — maximum compatibility with Claude.ai.
 // ============================================================================
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { randomUUID } from "crypto";
 import express from "express";
 import cors from "cors";
-import { z } from "zod";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
@@ -102,25 +99,80 @@ function textResult(data) {
   };
 }
 
-// ── MCP Server Factory ──────────────────────────────────────────────────────
-// Creates a fresh McpServer instance with all tools registered.
-// Called once per session to avoid "Already connected to a transport".
-
-function createMcpServer() {
-  const s = new McpServer({
-    name: "Life Command Center",
-    version: "1.0.0",
-  });
-
-// ── TOOL 1: get_daily_briefing ───────────────────────────────────────────────
-
-s.tool(
-  "get_daily_briefing",
-  "Get today's strategic, important, and urgent priorities for the team",
-  {
-    workspace_id: z.string().describe("LCC workspace ID"),
+// ── Tool definitions for direct JSON-RPC dispatch ─────────────────────────
+const TOOL_DEFINITIONS = {
+  get_daily_briefing: {
+    name: 'get_daily_briefing',
+    description: "Get today's strategic, important, and urgent priorities for the team",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: { type: 'string', description: 'LCC workspace ID' }
+      }
+    }
   },
-  async ({ workspace_id }) => {
+  search_entities: {
+    name: 'search_entities',
+    description: 'Search for properties, contacts, or organizations in the LCC database',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Name, address, or keyword to search' },
+        entity_type: { type: 'string', enum: ['person', 'organization', 'asset'], description: 'Optional filter by entity type' },
+        domain: { type: 'string', enum: ['government', 'dialysis', 'both'], description: 'Optional domain filter' },
+        limit: { type: 'number', description: 'Max results to return' }
+      }
+    }
+  },
+  get_property_context: {
+    name: 'get_property_context',
+    description: 'Get full context for a specific property: lease details, ownership history, comps, investment score, research status, and related contacts',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity_id: { type: 'string', description: 'LCC entity UUID' },
+        address: { type: 'string', description: 'Property address (alternative to entity_id)' }
+      }
+    }
+  },
+  get_contact_context: {
+    name: 'get_contact_context',
+    description: 'Get relationship context for a contact: touchpoint history, active deals, last interaction, outreach recommendations',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity_id: { type: 'string', description: 'LCC entity UUID' },
+        name: { type: 'string', description: 'Contact name (alternative to entity_id)' },
+        email: { type: 'string', description: 'Email address (alternative to entity_id)' }
+      }
+    }
+  },
+  get_queue_summary: {
+    name: 'get_queue_summary',
+    description: 'Get the current research and action queue — what needs to be done, in priority order',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', enum: ['government', 'dialysis', 'all'], description: 'Filter by domain' },
+        status: { type: 'string', enum: ['pending', 'in_progress', 'all'], description: 'Filter by status' },
+        limit: { type: 'number', description: 'Max items to return' }
+      }
+    }
+  },
+  get_pipeline_health: {
+    name: 'get_pipeline_health',
+    description: 'Check the status of all data pipelines — last run times, success rates, and any failures',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+};
+
+// ── Tool handlers ─────────────────────────────────────────────────────────
+// These are the exact same async functions from the former s.tool() calls.
+const TOOL_HANDLERS = {
+  get_daily_briefing: async ({ workspace_id }) => {
     return withTiming("get_daily_briefing", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
@@ -163,27 +215,9 @@ s.tool(
         urgent: urgent.data || [],
       });
     });
-  }
-);
-
-// ── TOOL 2: search_entities ──────────────────────────────────────────────────
-
-s.tool(
-  "search_entities",
-  "Search for properties, contacts, or organizations in the LCC database",
-  {
-    query: z.string().describe("Name, address, or keyword to search"),
-    entity_type: z
-      .enum(["person", "organization", "asset"])
-      .optional()
-      .describe("Optional filter by entity type"),
-    domain: z
-      .enum(["government", "dialysis", "both"])
-      .optional()
-      .describe("Optional domain filter"),
-    limit: z.number().default(10).describe("Max results to return"),
   },
-  async ({ query, entity_type, domain, limit }) => {
+
+  search_entities: async ({ query, entity_type, domain, limit }) => {
     return withTiming("search_entities", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
@@ -214,25 +248,9 @@ s.tool(
         entities: result.data || [],
       });
     });
-  }
-);
-
-// ── TOOL 3: get_property_context ─────────────────────────────────────────────
-
-s.tool(
-  "get_property_context",
-  "Get full context for a specific property: lease details, ownership history, comps, investment score, research status, and related contacts",
-  {
-    entity_id: z
-      .string()
-      .optional()
-      .describe("LCC entity UUID"),
-    address: z
-      .string()
-      .optional()
-      .describe("Property address (alternative to entity_id)"),
   },
-  async ({ entity_id, address }) => {
+
+  get_property_context: async ({ entity_id, address }) => {
     return withTiming("get_property_context", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
@@ -328,29 +346,9 @@ s.tool(
 
       return textResult(result);
     });
-  }
-);
-
-// ── TOOL 4: get_contact_context ──────────────────────────────────────────────
-
-s.tool(
-  "get_contact_context",
-  "Get relationship context for a contact: touchpoint history, active deals, last interaction, outreach recommendations",
-  {
-    entity_id: z
-      .string()
-      .optional()
-      .describe("LCC entity UUID"),
-    name: z
-      .string()
-      .optional()
-      .describe("Contact name (alternative to entity_id)"),
-    email: z
-      .string()
-      .optional()
-      .describe("Email address (alternative to entity_id)"),
   },
-  async ({ entity_id, name, email }) => {
+
+  get_contact_context: async ({ entity_id, name, email }) => {
     return withTiming("get_contact_context", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
@@ -449,26 +447,9 @@ s.tool(
         recommended_next_action: recommendedNextAction,
       });
     });
-  }
-);
-
-// ── TOOL 5: get_queue_summary ────────────────────────────────────────────────
-
-s.tool(
-  "get_queue_summary",
-  "Get the current research and action queue — what needs to be done, in priority order",
-  {
-    domain: z
-      .enum(["government", "dialysis", "all"])
-      .default("all")
-      .describe("Filter by domain"),
-    status: z
-      .enum(["pending", "in_progress", "all"])
-      .default("all")
-      .describe("Filter by status"),
-    limit: z.number().default(20).describe("Max items to return"),
   },
-  async ({ domain, status, limit }) => {
+
+  get_queue_summary: async ({ domain, status, limit }) => {
     return withTiming("get_queue_summary", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
@@ -513,16 +494,9 @@ s.tool(
         total_matching: result.count || (result.data || []).length,
       });
     });
-  }
-);
+  },
 
-// ── TOOL 6: get_pipeline_health ──────────────────────────────────────────────
-
-s.tool(
-  "get_pipeline_health",
-  "Check the status of all data pipelines — last run times, success rates, and any failures",
-  {},
-  async () => {
+  get_pipeline_health: async () => {
     return withTiming("get_pipeline_health", async () => {
       if (!GOV_SUPABASE_URL || !GOV_SUPABASE_KEY) {
         return textResult({ error: "GOV database not configured — pipeline health unavailable" });
@@ -602,11 +576,8 @@ s.tool(
             : "All pipelines healthy",
       });
     });
-  }
-);
-
-  return s;
-}
+  },
+};
 
 // ── Express HTTP Transport ──────────────────────────────────────────────────
 
@@ -642,51 +613,119 @@ function authenticate(req, res, next) {
   next();
 }
 
-// ── Per-session transport store ──────────────────────────────────────────
-const transports = new Map();
-
-// ── Auth middleware for /mcp ──────────────────────────────────────────────
+// ── Auth middleware for /mcp ─────────────────────────────────────────────
 app.use('/mcp', authenticate);
 
-// ── Streamable HTTP MCP endpoint ─────────────────────────────────────────
-// Handles both GET (SSE stream) and POST (JSON-RPC messages) on one endpoint.
-// Creates a fresh McpServer per session to avoid "Already connected" errors.
-app.all('/mcp', async (req, res) => {
-  try {
-    // Reuse existing transport if client sends a session ID
-    const existingId = req.headers['mcp-session-id'];
-    if (existingId && transports.has(existingId)) {
-      const existing = transports.get(existingId);
-      await existing.handleRequest(req, res, req.body);
-      return;
-    }
+// ── MCP JSON-RPC endpoint ────────────────────────────────────────────────
+// Implements the MCP protocol directly over HTTP JSON-RPC.
+// No SDK transport layer — maximum compatibility with Claude.ai.
+app.post('/mcp', async (req, res) => {
+  const body = req.body;
 
-    // New session: create transport + server
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sessionId) => {
-        transports.set(sessionId, transport);
-        console.log(`[MCP] Session started: ${sessionId}`);
-      },
+  console.log('[MCP] Request method:', body?.method, 'id:', body?.id);
+
+  // Validate JSON-RPC structure
+  if (!body || body.jsonrpc !== '2.0') {
+    return res.status(400).json({
+      jsonrpc: '2.0', id: null,
+      error: { code: -32600, message: 'Invalid Request' }
     });
-
-    transport.onclose = () => {
-      if (transport.sessionId) {
-        transports.delete(transport.sessionId);
-        console.log(`[MCP] Session closed: ${transport.sessionId}`);
-      }
-    };
-
-    const sessionServer = createMcpServer();
-    await sessionServer.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-
-  } catch (err) {
-    console.error('[MCP] Request error:', err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'MCP request failed', detail: err.message });
-    }
   }
+
+  const { method, id, params } = body;
+  const isNotification = id === undefined || id === null;
+
+  try {
+    switch (method) {
+
+      // ── MCP Lifecycle ──────────────────────────────────────────────────
+      case 'initialize':
+        console.log('[MCP] Initializing with protocol version:',
+          params?.protocolVersion);
+        return res.json({
+          jsonrpc: '2.0', id,
+          result: {
+            protocolVersion: '2024-11-05',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'LCC MCP Server', version: '1.0.0' }
+          }
+        });
+
+      case 'notifications/initialized':
+      case 'initialized':
+        console.log('[MCP] Client initialized');
+        if (isNotification) return res.status(200).end();
+        return res.json({ jsonrpc: '2.0', id, result: {} });
+
+      // ── Tools ──────────────────────────────────────────────────────────
+      case 'tools/list':
+        return res.json({
+          jsonrpc: '2.0', id,
+          result: {
+            tools: Object.values(TOOL_DEFINITIONS)
+          }
+        });
+
+      case 'tools/call': {
+        const toolName = params?.name;
+        const toolArgs = params?.arguments || {};
+
+        console.log('[MCP] Tool call:', toolName, 'args:', JSON.stringify(toolArgs).substring(0, 100));
+
+        const handler = TOOL_HANDLERS[toolName];
+        if (!handler) {
+          return res.json({
+            jsonrpc: '2.0', id,
+            error: { code: -32601, message: `Tool not found: ${toolName}` }
+          });
+        }
+
+        const result = await handler(toolArgs);
+
+        // Normalize result to MCP content format
+        // The handlers return various shapes — normalize to text content
+        let content;
+        if (typeof result === 'string') {
+          content = [{ type: 'text', text: result }];
+        } else if (result && result.content) {
+          content = result.content; // already in MCP format
+        } else {
+          content = [{ type: 'text', text: JSON.stringify(result, null, 2) }];
+        }
+
+        return res.json({
+          jsonrpc: '2.0', id,
+          result: { content }
+        });
+      }
+
+      // ── Ping / misc ────────────────────────────────────────────────────
+      case 'ping':
+        return res.json({ jsonrpc: '2.0', id, result: {} });
+
+      default:
+        console.log('[MCP] Unknown method:', method);
+        if (isNotification) return res.status(200).end();
+        return res.json({
+          jsonrpc: '2.0', id,
+          error: { code: -32601, message: `Method not found: ${method}` }
+        });
+    }
+  } catch (err) {
+    console.error('[MCP] Tool error:', err.message);
+    return res.json({
+      jsonrpc: '2.0', id: id || null,
+      error: { code: -32000, message: err.message }
+    });
+  }
+});
+
+// DELETE /mcp — session cleanup (Streamable HTTP spec requirement)
+app.delete('/mcp', (req, res) => res.status(200).end());
+
+// GET /mcp — not supported (no server-push needed for these tools)
+app.get('/mcp', (req, res) => {
+  res.status(405).json({ error: 'Use POST for MCP requests' });
 });
 
 
@@ -942,7 +981,7 @@ app.get("/health", (_req, res) => {
 app.get("/", (_req, res) => {
   res.json({
     name: "Life Command Center MCP Server",
-    description: "Connect Claude.ai to LCC — search entities, get briefings, check pipelines",
+    description: "Connect Claude.ai to LCC via direct JSON-RPC — search entities, get briefings, check pipelines",
     endpoints: {
       mcp: "/mcp",
       health: "/health",
