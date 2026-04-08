@@ -3,7 +3,7 @@
   "build": { "builder": "NIXPACKS" },
   "deploy": {
     "startCommand": "node server.js",
-    "healthcheckPath": "/api/diag",
+    "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5

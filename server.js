@@ -131,6 +131,10 @@ app.all('/api/queue', queueHandler);
 app.all('/api/sync', syncHandler);
 
 // ── Legal pages (required by Teams manifest) ──────────────────────────────
+// ── Health check — no auth, no DB, used by Railway deployment healthcheck ──
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
+app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
+
 app.get('/privacy', (req, res) => res.type('text/plain').send(
   'Life Command Center — Team Briggs, Northmarq Net Lease Investment Sales. Internal tool.'
 ));
