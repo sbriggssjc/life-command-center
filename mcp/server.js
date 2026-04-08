@@ -101,16 +101,19 @@ function textResult(data) {
   };
 }
 
-// ── MCP Server Setup ─────────────────────────────────────────────────────────
+// ── MCP Server Factory ──────────────────────────────────────────────────────
+// Creates a fresh McpServer instance with all tools registered.
+// Called once per SSE connection to avoid "Already connected to a transport".
 
-const server = new McpServer({
-  name: "Life Command Center",
-  version: "1.0.0",
-});
+function createMcpServer() {
+  const s = new McpServer({
+    name: "Life Command Center",
+    version: "1.0.0",
+  });
 
 // ── TOOL 1: get_daily_briefing ───────────────────────────────────────────────
 
-server.tool(
+s.tool(
   "get_daily_briefing",
   "Get today's strategic, important, and urgent priorities for the team",
   {
@@ -164,7 +167,7 @@ server.tool(
 
 // ── TOOL 2: search_entities ──────────────────────────────────────────────────
 
-server.tool(
+s.tool(
   "search_entities",
   "Search for properties, contacts, or organizations in the LCC database",
   {
@@ -215,7 +218,7 @@ server.tool(
 
 // ── TOOL 3: get_property_context ─────────────────────────────────────────────
 
-server.tool(
+s.tool(
   "get_property_context",
   "Get full context for a specific property: lease details, ownership history, comps, investment score, research status, and related contacts",
   {
@@ -329,7 +332,7 @@ server.tool(
 
 // ── TOOL 4: get_contact_context ──────────────────────────────────────────────
 
-server.tool(
+s.tool(
   "get_contact_context",
   "Get relationship context for a contact: touchpoint history, active deals, last interaction, outreach recommendations",
   {
@@ -450,7 +453,7 @@ server.tool(
 
 // ── TOOL 5: get_queue_summary ────────────────────────────────────────────────
 
-server.tool(
+s.tool(
   "get_queue_summary",
   "Get the current research and action queue — what needs to be done, in priority order",
   {
@@ -514,7 +517,7 @@ server.tool(
 
 // ── TOOL 6: get_pipeline_health ──────────────────────────────────────────────
 
-server.tool(
+s.tool(
   "get_pipeline_health",
   "Check the status of all data pipelines — last run times, success rates, and any failures",
   {},
@@ -601,6 +604,9 @@ server.tool(
   }
 );
 
+  return s;
+}
+
 // ── Express HTTP+SSE Transport ───────────────────────────────────────────────
 
 const app = express();
@@ -647,15 +653,23 @@ const transports = {};
 
 app.get("/sse", async (req, res) => {
   console.log("[MCP] New SSE connection");
-  const transport = new SSEServerTransport("/messages", res);
-  transports[transport.sessionId] = transport;
+  try {
+    const transport = new SSEServerTransport("/messages", res);
+    const sessionServer = createMcpServer();
+    transports[transport.sessionId] = transport;
 
-  res.on("close", () => {
-    console.log(`[MCP] SSE connection closed: ${transport.sessionId}`);
-    delete transports[transport.sessionId];
-  });
+    res.on("close", () => {
+      console.log(`[MCP] SSE connection closed: ${transport.sessionId}`);
+      delete transports[transport.sessionId];
+    });
 
-  await server.connect(transport);
+    await sessionServer.connect(transport);
+  } catch (err) {
+    console.error("[MCP] SSE connection error:", err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to establish MCP connection" });
+    }
+  }
 });
 
 app.post("/messages", async (req, res) => {
