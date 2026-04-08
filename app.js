@@ -5071,13 +5071,31 @@ function renderPriorityTasks() {
 }
 
 function renderCategoryMetrics() {
-  // Prefer canonical counts when available (zero is valid — means no open work)
+  // Prefer canonical counts when available
   if (canonicalCounts) {
+    // Detect stale materialized view: counts all zero but we have actual loaded data
+    const allZero = !canonicalCounts.my_actions && !canonicalCounts.open_actions &&
+                    !canonicalCounts.completed_week && !canonicalCounts.overdue &&
+                    !canonicalCounts.inbox_new;
+    const hasLoadedData = (canonicalMyWork && canonicalMyWork.pagination?.total > 0) ||
+                          (canonicalInbox && canonicalInbox.pagination?.total > 0);
+
+    let counts = canonicalCounts;
+    if (allZero && hasLoadedData) {
+      counts = {
+        my_actions: canonicalMyWork?.pagination?.total || 0,
+        open_actions: canonicalCounts.open_actions || 0,
+        completed_week: canonicalCounts.completed_week || 0,
+        overdue: canonicalCounts.overdue || 0,
+        inbox_new: canonicalInbox?.pagination?.total || 0
+      };
+    }
+
     let html = '<div class="cat-metrics">';
-    html += `<div class="cat-metric clickable" onclick="navTo('pageMyWork')"><div class="cat-metric-val" style="color:var(--accent)">${canonicalCounts.my_actions || 0}</div><div class="cat-metric-lbl">My Actions</div></div>`;
-    html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${canonicalCounts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
-    html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--green)">${canonicalCounts.completed_week || 0}</div><div class="cat-metric-lbl">Done This Week</div></div>`;
-    html += `<div class="cat-metric${(canonicalCounts.overdue || 0) > 0 ? ' overdue' : ''}"><div class="cat-metric-val" style="color:${(canonicalCounts.overdue || 0) > 0 ? 'var(--red)' : 'var(--yellow)'}">${canonicalCounts.overdue || 0}</div><div class="cat-metric-lbl">Overdue</div></div>`;
+    html += `<div class="cat-metric clickable" onclick="navTo('pageMyWork')"><div class="cat-metric-val" style="color:var(--accent)">${counts.my_actions || 0}</div><div class="cat-metric-lbl">My Actions</div></div>`;
+    html += `<div class="cat-metric clickable" onclick="navTo('pageTeamQueue')"><div class="cat-metric-val" style="color:var(--cyan)">${counts.open_actions || 0}</div><div class="cat-metric-lbl">Team Open</div></div>`;
+    html += `<div class="cat-metric"><div class="cat-metric-val" style="color:var(--green)">${counts.completed_week || 0}</div><div class="cat-metric-lbl">Done This Week</div></div>`;
+    html += `<div class="cat-metric${(counts.overdue || 0) > 0 ? ' overdue' : ''}"><div class="cat-metric-val" style="color:${(counts.overdue || 0) > 0 ? 'var(--red)' : 'var(--yellow)'}">${counts.overdue || 0}</div><div class="cat-metric-lbl">Overdue</div></div>`;
     html += '</div>';
     return html;
   }
