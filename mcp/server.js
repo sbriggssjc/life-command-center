@@ -756,6 +756,18 @@ function generateCode() {
 // Use Web Crypto API (available in Node 20 without import)
 const crypto = globalThis.crypto;
 
+// ── OAuth Protected Resource Metadata (RFC 9396 / MCP OAuth June 2025) ──
+// Required by Claude.ai to discover the authorization server for /mcp.
+// Without this, Claude.ai cannot find OAuth endpoints and reports auth failure.
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  const base = process.env.MCP_BASE_URL ||
+    `${req.protocol}://${req.get('host')}`;
+  res.json({
+    resource: `${base}/mcp`,
+    authorization_servers: [base],
+  });
+});
+
 // ── OAuth discovery metadata ──────────────────────────────────────────────
 app.get('/.well-known/oauth-authorization-server', (req, res) => {
   const base = process.env.MCP_BASE_URL ||
