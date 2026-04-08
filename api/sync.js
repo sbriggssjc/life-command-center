@@ -256,57 +256,71 @@ async function resolveConnector(userId, workspaceId, connectorType) {
 // ============================================================================
 
 async function handleFlaggedEmails(req, res, user, workspaceId) {
-  const { count_only } = req.query;
+  try {
+    const { count_only } = req.query;
 
-  // Count-only mode: fast path for stat cards
-  if (count_only === 'true') {
+    // Count-only mode: fast path for stat cards
+    if (count_only === 'true') {
+      const countResult = await opsQuery('GET',
+        `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
+        `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
+      );
+      if (!countResult.ok) {
+        console.error('[flagged_emails] count query failed:', countResult.status, countResult.data);
+        return res.status(200).json({ emails: [], total: 0, error: 'db_query_failed' });
+      }
+      const total = countResult.data?.length || 0;
+      return res.status(200).json({ emails: [], total });
+    }
+
+    // Full query with pagination
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 200, 1), 2000);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
+    // Get total count (all active flagged emails)
     const countResult = await opsQuery('GET',
       `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
       `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
     );
-    const total = countResult.data?.length || 0;
-    return res.status(200).json({ emails: [], total });
+    const total = countResult.ok ? (countResult.data?.length || 0) : 0;
+
+    // Get paginated results
+    const result = await opsQuery('GET',
+      `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
+      `&status=in.(new,triaged)&flag_removed_at=is.null` +
+      `&select=id,external_id,internet_message_id,title,body,status,priority,external_url,received_at,flag_removed_at,metadata` +
+      `&order=received_at.desc&limit=${limit}&offset=${offset}`
+    );
+
+    if (!result.ok) {
+      console.error('[flagged_emails] query failed:', result.status, result.data);
+      return res.status(200).json({ emails: [], total, limit, offset, error: 'db_query_failed' });
+    }
+
+    // Map inbox_items fields to the email format the frontend expects
+    const emails = (result.data || []).map(item => ({
+      id: item.id,
+      external_id: item.external_id,
+      internet_message_id: item.internet_message_id,
+      subject: item.title,
+      body_preview: item.body,
+      sender_name: item.metadata?.sender_name || null,
+      sender_email: item.metadata?.sender_email || null,
+      received_date: item.received_at,
+      received_date_time: item.metadata?.received_at || item.received_at,
+      has_attachments: item.metadata?.has_attachments || false,
+      importance: item.metadata?.importance || 'normal',
+      web_link: item.external_url,
+      outlook_link: item.external_url,
+      status: item.status,
+      flag_removed_at: item.flag_removed_at
+    }));
+
+    return res.status(200).json({ emails, total, limit, offset });
+  } catch (err) {
+    console.error('[flagged_emails] unexpected error:', err.message);
+    return res.status(200).json({ emails: [], total: 0, error: 'fetch_failed' });
   }
-
-  // Full query with pagination
-  const limit = Math.min(Math.max(parseInt(req.query.limit) || 200, 1), 2000);
-  const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-
-  // Get total count (all active flagged emails)
-  const countResult = await opsQuery('GET',
-    `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
-    `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
-  );
-  const total = countResult.data?.length || 0;
-
-  // Get paginated results
-  const result = await opsQuery('GET',
-    `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
-    `&status=in.(new,triaged)&flag_removed_at=is.null` +
-    `&select=id,external_id,internet_message_id,title,body,status,priority,external_url,received_at,flag_removed_at,metadata` +
-    `&order=received_at.desc&limit=${limit}&offset=${offset}`
-  );
-
-  // Map inbox_items fields to the email format the frontend expects
-  const emails = (result.data || []).map(item => ({
-    id: item.id,
-    external_id: item.external_id,
-    internet_message_id: item.internet_message_id,
-    subject: item.title,
-    body_preview: item.body,
-    sender_name: item.metadata?.sender_name || null,
-    sender_email: item.metadata?.sender_email || null,
-    received_date: item.received_at,
-    received_date_time: item.metadata?.received_at || item.received_at,
-    has_attachments: item.metadata?.has_attachments || false,
-    importance: item.metadata?.importance || 'normal',
-    web_link: item.external_url,
-    outlook_link: item.external_url,
-    status: item.status,
-    flag_removed_at: item.flag_removed_at
-  }));
-
-  return res.status(200).json({ emails, total, limit, offset });
 }
 
 // ============================================================================
