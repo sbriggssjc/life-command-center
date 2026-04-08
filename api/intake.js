@@ -15,6 +15,7 @@ import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import { writeSignal } from './_shared/signals.js';
+import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 
 // ============================================================================
@@ -589,6 +590,24 @@ async function runEntityExtraction(workspaceId, user, inboxItem, subject, body, 
         }
       }
     );
+  }
+
+  // Fire Teams alert for deal-classified emails (listing OM or deal inquiry)
+  const financialSignals = extraction.financial_signals || {};
+  if (financialSignals.is_listing_om || financialSignals.is_deal_inquiry) {
+    const extractedDomain = extraction.domain || 'Unknown';
+    sendTeamsAlert({
+      title: 'New Deal Email Received',
+      summary: subject,
+      severity: 'high',
+      facts: [
+        ['From', sender.name || sender.email || 'Unknown'],
+        ['Classified as', financialSignals.is_listing_om ? 'Listing OM' : 'Deal Inquiry'],
+        ['Domain', extractedDomain],
+        ['Properties found', propertyIds.length]
+      ],
+      actions: [{ label: 'View in LCC', url: `${process.env.LCC_BASE_URL || ''}/ops` }]
+    }).catch(() => {});
   }
 
   console.log(`[Intake extraction] Done: inbox=${inboxItemId}, properties=${propertyIds.length}, contacts=${contactIds.length}`);

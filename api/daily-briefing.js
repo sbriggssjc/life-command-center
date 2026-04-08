@@ -8,6 +8,7 @@
 import { authenticate, handleCors } from './_shared/auth.js';
 import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { writeSignal } from './_shared/signals.js';
+import { sendTeamsAlert } from './_shared/teams-alert.js';
 
 const MORNING_STRUCTURED_URL = process.env.MORNING_BRIEFING_STRUCTURED_URL || '';
 const MORNING_HTML_URL = process.env.MORNING_BRIEFING_HTML_URL || '';
@@ -568,6 +569,45 @@ function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotC
   const staleTouchpoints = weightedCandidates
     .sort((a, b) => ((b.days_since_touch || 0) * b.recommendation_weight) - ((a.days_since_touch || 0) * a.recommendation_weight))
     .slice(0, 5);
+
+  // Going-cold contact alerts — opt-in via TEAMS_COLD_ALERTS_ENABLED=true
+  if (process.env.TEAMS_COLD_ALERTS_ENABLED === 'true') {
+    const goingCold = (hotContacts || [])
+      .filter(c => {
+        const lastTouch = Math.max(
+          c.last_call_date ? new Date(c.last_call_date).getTime() : 0,
+          c.last_email_date ? new Date(c.last_email_date).getTime() : 0,
+          c.last_meeting_date ? new Date(c.last_meeting_date).getTime() : 0
+        );
+        const daysSince = lastTouch > 0 ? Math.floor((now - lastTouch) / 86400000) : 0;
+        return lastTouch > 0 && daysSince > 60 && (c.engagement_score || 0) > 40;
+      })
+      .slice(0, 3); // max 3 per day to avoid noise
+
+    for (const c of goingCold) {
+      const lastTouch = Math.max(
+        c.last_call_date ? new Date(c.last_call_date).getTime() : 0,
+        c.last_email_date ? new Date(c.last_email_date).getTime() : 0,
+        c.last_meeting_date ? new Date(c.last_meeting_date).getTime() : 0
+      );
+      const daysSince = Math.floor((now - lastTouch) / 86400000);
+      const lastTouchDate = new Date(lastTouch).toISOString().split('T')[0];
+
+      sendTeamsAlert({
+        title: 'Warm Contact Going Cold',
+        summary: `${c.full_name || 'Unknown'} \u2014 ${daysSince} days since last touch`,
+        severity: 'high',
+        facts: [
+          ['Contact', c.full_name || 'Unknown'],
+          ['Company', c.company_name || 'Unknown'],
+          ['Last Touch', lastTouchDate],
+          ['Relationship Score', c.engagement_score || 0],
+          ['Active Pursuits', c.total_calls || 0]
+        ],
+        actions: [{ label: 'View Contact', url: `${process.env.LCC_BASE_URL || ''}/contacts` }]
+      }).catch(() => {});
+    }
+  }
 
   // Overdue items (across all sources)
   const overdue = allItems.filter(i => i.due_date && new Date(i.due_date) < today);
