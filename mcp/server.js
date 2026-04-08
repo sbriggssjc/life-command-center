@@ -2,11 +2,12 @@
 // LCC MCP Server — Model Context Protocol server for Life Command Center
 // Standalone service (NOT a Vercel function) — deploy to Railway or similar
 //
-// Exposes read-only LCC tools to Claude.ai via HTTP+SSE transport.
+// Exposes read-only LCC tools to Claude.ai via Streamable HTTP transport.
 // ============================================================================
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { randomUUID } from "crypto";
 import express from "express";
 import cors from "cors";
 import { z } from "zod";
@@ -103,7 +104,7 @@ function textResult(data) {
 
 // ── MCP Server Factory ──────────────────────────────────────────────────────
 // Creates a fresh McpServer instance with all tools registered.
-// Called once per SSE connection to avoid "Already connected to a transport".
+// Called once per session to avoid "Already connected to a transport".
 
 function createMcpServer() {
   const s = new McpServer({
@@ -607,7 +608,7 @@ s.tool(
   return s;
 }
 
-// ── Express HTTP+SSE Transport ───────────────────────────────────────────────
+// ── Express HTTP Transport ──────────────────────────────────────────────────
 
 const app = express();
 
@@ -641,44 +642,51 @@ function authenticate(req, res, next) {
   next();
 }
 
-// Apply auth to all /mcp routes
-app.use("/sse", authenticate);
-app.use("/message", authenticate);
-app.use("/messages", authenticate);
+// ── Per-session transport store ──────────────────────────────────────────
+const transports = new Map();
 
-// ── SSE transport setup ──────────────────────────────────────────────────────
+// ── Auth middleware for /mcp ──────────────────────────────────────────────
+app.use('/mcp', authenticate);
 
-// Track active transports by session
-const transports = {};
-
-app.get("/sse", async (req, res) => {
-  console.log("[MCP] New SSE connection");
+// ── Streamable HTTP MCP endpoint ─────────────────────────────────────────
+// Handles both GET (SSE stream) and POST (JSON-RPC messages) on one endpoint.
+// Creates a fresh McpServer per session to avoid "Already connected" errors.
+app.all('/mcp', async (req, res) => {
   try {
-    const transport = new SSEServerTransport("/messages", res);
-    const sessionServer = createMcpServer();
-    transports[transport.sessionId] = transport;
+    // Reuse existing transport if client sends a session ID
+    const existingId = req.headers['mcp-session-id'];
+    if (existingId && transports.has(existingId)) {
+      const existing = transports.get(existingId);
+      await existing.handleRequest(req, res, req.body);
+      return;
+    }
 
-    res.on("close", () => {
-      console.log(`[MCP] SSE connection closed: ${transport.sessionId}`);
-      delete transports[transport.sessionId];
+    // New session: create transport + server
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sessionId) => {
+        transports.set(sessionId, transport);
+        console.log(`[MCP] Session started: ${sessionId}`);
+      },
     });
 
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        transports.delete(transport.sessionId);
+        console.log(`[MCP] Session closed: ${transport.sessionId}`);
+      }
+    };
+
+    const sessionServer = createMcpServer();
     await sessionServer.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+
   } catch (err) {
-    console.error("[MCP] SSE connection error:", err.message);
+    console.error('[MCP] Request error:', err.message);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Failed to establish MCP connection" });
+      res.status(500).json({ error: 'MCP request failed', detail: err.message });
     }
   }
-});
-
-app.post("/messages", async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports[sessionId];
-  if (!transport) {
-    return res.status(400).json({ error: "No active SSE connection for this session" });
-  }
-  await transport.handlePostMessage(req, res);
 });
 
 
@@ -936,8 +944,7 @@ app.get("/", (_req, res) => {
     name: "Life Command Center MCP Server",
     description: "Connect Claude.ai to LCC — search entities, get briefings, check pipelines",
     endpoints: {
-      sse: "/sse",
-      messages: "/messages",
+      mcp: "/mcp",
       health: "/health",
     },
   });
@@ -947,7 +954,7 @@ app.get("/", (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[MCP] Life Command Center MCP server running on port ${PORT}`);
-  console.log(`[MCP] SSE endpoint: http://localhost:${PORT}/sse`);
+  console.log(`[MCP] MCP endpoint: http://localhost:${PORT}/mcp`);
   console.log(`[MCP] Health check: http://localhost:${PORT}/health`);
   console.log(`[MCP] Auth: ${LCC_API_KEY ? "ENABLED" : "DISABLED (dev mode)"}`);
   console.log(`[MCP] OPS DB: ${OPS_SUPABASE_URL ? "configured" : "NOT configured"}`);
