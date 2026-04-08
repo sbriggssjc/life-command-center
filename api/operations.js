@@ -65,6 +65,7 @@ import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, 
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
+import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import {
@@ -236,6 +237,30 @@ async function bridgeCompleteResearch(req, res, user, workspaceId) {
   if (!closure.ok) {
     return res.status(closure.status || 500).json({ error: closure.error, detail: closure.detail });
   }
+
+  // Fire Teams alert for research completion
+  const entityName = closure.entity?.name || entity_fields?.name || null;
+  const address = closure.entity?.address || entity_fields?.address || entityName;
+  const ownerName = entity_fields?.true_owner_name || entity_fields?.owner_name || metadata?.true_owner_name || null;
+  const sfOpportunityId = metadata?.sf_opportunity_id || null;
+  const sfUrl = sfOpportunityId
+    ? `https://northmarq.lightning.force.com/lightning/r/Opportunity/${sfOpportunityId}/view`
+    : null;
+  sendTeamsAlert({
+    title: 'Ownership Research Complete',
+    summary: entityName || address || research_type,
+    severity: 'success',
+    facts: [
+      ['Property', address || entityName || 'See record'],
+      ['Owner found', ownerName || 'See record'],
+      ['SF Opportunity', sfOpportunityId ? 'Created' : 'Pending'],
+      ['Next action', 'Review and initiate outreach']
+    ],
+    actions: [
+      { label: 'View in LCC', url: `${process.env.LCC_BASE_URL || ''}/gov` },
+      { label: 'Open in Salesforce', url: sfUrl || '#' }
+    ]
+  }).catch(() => {});
 
   return res.status(201).json({
     logged: true,

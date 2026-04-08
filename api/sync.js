@@ -30,6 +30,7 @@ import { logPerfMetric, opsQuery, requireOps, withErrorHandler } from './_shared
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
+import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 
 // Edge function base URL (existing ai-copilot deployment)
@@ -2400,6 +2401,28 @@ async function handleListingWebhook(req, res) {
       },
       outcome: 'positive'
     });
+
+    // Fire Teams alert for new government/GSA listings matching target criteria
+    if (isNewListing && (listing.domain === 'government' || listing.asset_type === 'GSA')) {
+      const leaseTermYears = listing.lease_term_years || listing.lease_expiration
+        ? Math.max(0, Math.floor((new Date(listing.lease_expiration).getTime() - Date.now()) / (365.25 * 86400000)))
+        : 0;
+      const annualRent = listing.annual_rent || (listing.list_price && listing.cap_rate ? Math.round(listing.list_price * listing.cap_rate / 100) : null);
+
+      sendTeamsAlert({
+        title: 'New GSA Lease Award Detected',
+        summary: `${listing.tenant_name || 'Government tenant'} — listing at ${listing.address || entityName}`,
+        severity: 'high',
+        facts: [
+          ['Address', listing.address || entityName || 'Unknown'],
+          ['Agency/Tenant', listing.tenant_name || 'See record'],
+          ['Lease Term', leaseTermYears ? `${leaseTermYears} years` : 'TBD'],
+          ['Annual Rent', annualRent ? `$${annualRent.toLocaleString()}` : 'TBD'],
+          ['Expiration', listing.lease_expiration || 'TBD']
+        ],
+        actions: [{ label: 'Research Ownership', url: `${process.env.LCC_BASE_URL || ''}/gov` }]
+      }).catch(() => {});
+    }
 
     return res.status(200).json({
       ok: true,
