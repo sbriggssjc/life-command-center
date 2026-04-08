@@ -244,6 +244,67 @@ function mapPriorityItems(items, limit = 5) {
   }));
 }
 
+async function fetchCrossDomainOwnersDueForTouch(workspaceId, limit = 5) {
+  // Find cross_domain_owner entities with no recent activity (90+ days)
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString();
+
+  // Get cross-domain owner entities
+  const entitiesResult = await opsQuery('GET',
+    `entities?workspace_id=eq.${encodeURIComponent(workspaceId)}&tags=cs.{cross_domain_owner}&select=id,name,email,phone,tags,updated_at&limit=50`
+  );
+  const entities = Array.isArray(entitiesResult.data) ? entitiesResult.data : [];
+  if (!entities.length) return [];
+
+  // For each entity, check last activity and gather external identity counts
+  const highlights = [];
+  for (const entity of entities) {
+    // Check last activity
+    const activityResult = await opsQuery('GET',
+      `activity_events?entity_id=eq.${entity.id}&order=occurred_at.desc&limit=1&select=occurred_at`
+    );
+    const lastActivity = activityResult.data?.[0]?.occurred_at;
+    const lastActivityDate = lastActivity ? new Date(lastActivity) : null;
+
+    // Skip if touched within 90 days
+    if (lastActivityDate && lastActivityDate.getTime() > new Date(ninetyDaysAgo).getTime()) continue;
+
+    const daysSinceTouch = lastActivityDate
+      ? Math.floor((Date.now() - lastActivityDate.getTime()) / 86400000)
+      : null;
+
+    // Count assets per domain
+    const extIds = await opsQuery('GET',
+      `external_identities?entity_id=eq.${entity.id}&select=source_system`
+    );
+    const sources = Array.isArray(extIds.data) ? extIds.data : [];
+    const govAssets = sources.filter(s => s.source_system === 'gov_db').length;
+    const diaAssets = sources.filter(s => s.source_system === 'dia_db').length;
+
+    highlights.push({
+      entity_id: entity.id,
+      name: entity.name,
+      gov_assets: govAssets,
+      dia_assets: diaAssets,
+      days_since_touch: daysSinceTouch,
+      recommended_action: daysSinceTouch
+        ? `Cross-domain owner not touched in ${daysSinceTouch} days — prime candidate for compound outreach`
+        : 'Cross-domain owner with no recorded activity — prime candidate for initial outreach'
+    });
+
+    if (highlights.length >= limit) break;
+  }
+
+  // Sort by days since touch descending (null = never touched = highest priority)
+  highlights.sort((a, b) => {
+    if (a.days_since_touch === null && b.days_since_touch === null) return 0;
+    if (a.days_since_touch === null) return -1;
+    if (b.days_since_touch === null) return 1;
+    return b.days_since_touch - a.days_since_touch;
+  });
+
+  return highlights.slice(0, limit);
+}
+
 // ---------------------------------------------------------------------------
 // STRATEGIC DATA FETCHERS — pull from all business-critical sources
 // ---------------------------------------------------------------------------
@@ -794,7 +855,7 @@ export default withErrorHandler(async function handler(req, res) {
   const roleView = pickRoleView(req.query.role_view, membership.role);
   const asOf = new Date().toISOString();
 
-  const [morningStructured, morningHtml, workCounts, myWork, inboxSummary, unassignedWork, syncHealth, sfActivity, hotContacts, diaPipeline] = await Promise.all([
+  const [morningStructured, morningHtml, workCounts, myWork, inboxSummary, unassignedWork, syncHealth, sfActivity, hotContacts, diaPipeline, crossDomainHighlights] = await Promise.all([
     fetchMorningStructured(),
     fetchMorningHtml(),
     fetchWorkCounts(workspaceId, user.id),
@@ -804,7 +865,8 @@ export default withErrorHandler(async function handler(req, res) {
     fetchSyncHealthSnapshot(workspaceId),
     fetchRecentSfActivity(workspaceId, 30),
     fetchHotContacts(15),
-    fetchDiaPipeline()
+    fetchDiaPipeline(),
+    fetchCrossDomainOwnersDueForTouch(workspaceId, 5)
   ]);
 
   const missingSections = [];
@@ -919,6 +981,7 @@ export default withErrorHandler(async function handler(req, res) {
       sync_health: syncHealth
     },
     domain_specific_alerts_highlights: buildDomainSignals(myWork, inboxSummary, unassignedWork),
+    cross_domain_highlights: crossDomainHighlights,
     actions: buildActions(roleView)
   };
 

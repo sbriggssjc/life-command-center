@@ -20,6 +20,9 @@
 //
 // Lead Health (routed via vercel.json: /api/lead-health → /api/sync?_route=lead-health):
 // GET /api/lead-health — health check for lead ingestion pipeline
+//
+// Cross-Domain Match (routed via vercel.json: /api/cross-domain-match → /api/sync?_route=cross-domain-match):
+// POST /api/cross-domain-match — nightly batch: match contacts across Gov + Dia databases
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
@@ -27,6 +30,7 @@ import { logPerfMetric, opsQuery, requireOps, withErrorHandler } from './_shared
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
+import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 
 // Edge function base URL (existing ai-copilot deployment)
 const EDGE_FN_URL = process.env.EDGE_FUNCTION_URL || 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
@@ -114,6 +118,11 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to listing webhook (SF deal "ELA Executed" → listing-BD pipeline)
   if (req.query._route === 'listing-webhook') {
     return handleListingWebhook(req, res);
+  }
+
+  // Dispatch to cross-domain contact matcher (nightly batch job)
+  if (req.query._route === 'cross-domain-match' || req.query.action === 'cross-domain-match') {
+    return handleCrossDomainMatch(req, res);
   }
 
   const user = await authenticate(req, res);
@@ -2413,4 +2422,273 @@ async function handleListingWebhook(req, res) {
       detail: err?.message || String(err)
     });
   }
+}
+
+// ============================================================================
+// Cross-Domain Contact Matcher — nightly batch job
+//
+// Identifies contacts present in BOTH the Gov and Dia domain databases,
+// creates unified canonical entities in LCC, and writes intelligence signals.
+// Triggered via: POST /api/cross-domain-match (or ?action=cross-domain-match)
+// ============================================================================
+
+const GOV_SUPABASE_URL = process.env.GOV_SUPABASE_URL;
+const GOV_SUPABASE_KEY = process.env.GOV_SUPABASE_KEY;
+
+async function handleCrossDomainMatch(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'POST required for cross-domain-match' });
+  }
+
+  // Authenticate — this is a scheduled job, uses standard auth or webhook secret
+  if (!authenticateWebhook(req)) {
+    const user = await authenticate(req, res);
+    if (!user) return;
+  }
+
+  // Resolve workspace — from header, body, or default
+  const workspaceId = req.headers['x-lcc-workspace']
+    || req.body?.workspace_id
+    || (await resolveDefaultWorkspace());
+  if (!workspaceId) {
+    return res.status(400).json({ error: 'No workspace context. Provide X-LCC-Workspace header or workspace_id in body.' });
+  }
+
+  try {
+    const result = await executeCrossDomainMatch(workspaceId);
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[Cross-domain match error]', err);
+    return res.status(500).json({ error: 'Cross-domain match failed', detail: err?.message || String(err) });
+  }
+}
+
+async function resolveDefaultWorkspace() {
+  const result = await opsQuery('GET', 'workspaces?is_active=eq.true&limit=1&select=id');
+  return result.ok && result.data?.length ? result.data[0].id : null;
+}
+
+async function fetchDomainContacts(baseUrl, apiKey) {
+  if (!baseUrl || !apiKey) return [];
+  const fields = 'id,first_name,last_name,email,company,phone';
+  // Fetch contacts with email OR (first_name AND last_name)
+  const url = `${baseUrl}/rest/v1/contacts?or=(email.not.is.null,and(first_name.not.is.null,last_name.not.is.null))&select=${fields}&limit=5000`;
+  try {
+    const resp = await fetch(url, {
+      headers: { 'apikey': apiKey, 'Authorization': `Bearer ${apiKey}` }
+    });
+    if (!resp.ok) {
+      console.error(`[Cross-domain] Failed to fetch contacts from ${baseUrl}: ${resp.status}`);
+      return [];
+    }
+    return await resp.json();
+  } catch (err) {
+    console.error(`[Cross-domain] Error fetching contacts from ${baseUrl}:`, err?.message);
+    return [];
+  }
+}
+
+function normalizeName(first, last) {
+  const raw = [first, last].filter(Boolean).join(' ');
+  return normalizeCanonicalName(raw);
+}
+
+function normalizePhone(phone) {
+  if (!phone) return null;
+  return phone.replace(/[^0-9]/g, '').slice(-10);
+}
+
+function findMatches(govContacts, diaContacts) {
+  const matches = [];
+
+  // Build dia lookup indexes
+  const diaByEmail = new Map();
+  const diaByName = new Map();
+  const diaByPhone = new Map();
+
+  for (const dc of diaContacts) {
+    if (dc.email) {
+      diaByEmail.set(dc.email.trim().toLowerCase(), dc);
+    }
+    const normalizedName = normalizeName(dc.first_name, dc.last_name);
+    if (normalizedName) {
+      // Multiple dia contacts could share a name — store as array
+      if (!diaByName.has(normalizedName)) diaByName.set(normalizedName, []);
+      diaByName.get(normalizedName).push(dc);
+    }
+    const normalizedPhone = normalizePhone(dc.phone);
+    if (normalizedPhone) {
+      diaByPhone.set(normalizedPhone, dc);
+    }
+  }
+
+  const matchedPairs = new Set(); // track gov_id:dia_id to avoid duplicates
+
+  for (const gc of govContacts) {
+    // 1. Exact email match → HIGH confidence
+    if (gc.email) {
+      const diaMatch = diaByEmail.get(gc.email.trim().toLowerCase());
+      if (diaMatch) {
+        const key = `${gc.id}:${diaMatch.id}`;
+        if (!matchedPairs.has(key)) {
+          matchedPairs.add(key);
+          matches.push({ gov: gc, dia: diaMatch, confidence: 'high', match_type: 'email' });
+        }
+        continue; // email match is definitive, skip further checks for this contact
+      }
+    }
+
+    // 2. Normalized name match → MEDIUM confidence
+    const govNormalizedName = normalizeName(gc.first_name, gc.last_name);
+    if (govNormalizedName) {
+      const nameMatches = diaByName.get(govNormalizedName) || [];
+      for (const diaMatch of nameMatches) {
+        const key = `${gc.id}:${diaMatch.id}`;
+        if (!matchedPairs.has(key)) {
+          matchedPairs.add(key);
+          matches.push({ gov: gc, dia: diaMatch, confidence: 'medium', match_type: 'name' });
+        }
+      }
+    }
+
+    // 3. Phone match → MEDIUM confidence
+    const govPhone = normalizePhone(gc.phone);
+    if (govPhone) {
+      const diaMatch = diaByPhone.get(govPhone);
+      if (diaMatch) {
+        const key = `${gc.id}:${diaMatch.id}`;
+        if (!matchedPairs.has(key)) {
+          matchedPairs.add(key);
+          matches.push({ gov: gc, dia: diaMatch, confidence: 'medium', match_type: 'phone' });
+        }
+      }
+    }
+  }
+
+  return matches;
+}
+
+async function executeCrossDomainMatch(workspaceId) {
+  const startTime = Date.now();
+
+  // Step 1 & 2 — Pull contacts from both domain databases in parallel
+  const [govContacts, diaContacts] = await Promise.all([
+    fetchDomainContacts(GOV_SUPABASE_URL, GOV_SUPABASE_KEY),
+    fetchDomainContacts(DIA_SUPABASE_URL, DIA_SUPABASE_KEY)
+  ]);
+
+  if (!govContacts.length || !diaContacts.length) {
+    return {
+      matched: 0, new_entities: 0, existing_updated: 0, high_confidence: 0,
+      gov_contacts_fetched: govContacts.length,
+      dia_contacts_fetched: diaContacts.length,
+      skipped: true,
+      reason: !govContacts.length ? 'No gov contacts fetched' : 'No dia contacts fetched'
+    };
+  }
+
+  // Step 3 — Match
+  const matches = findMatches(govContacts, diaContacts);
+
+  // Step 4 — Create/update entities and links
+  let newEntities = 0;
+  let existingUpdated = 0;
+  let highConfidence = 0;
+
+  for (const match of matches) {
+    if (match.confidence === 'high') highConfidence++;
+
+    const fullName = [match.gov.first_name, match.gov.last_name].filter(Boolean).join(' ') || match.gov.email;
+
+    // Use ensureEntityLink for the gov side — it checks for existing entity
+    const govLink = await ensureEntityLink({
+      workspaceId,
+      sourceSystem: 'gov_db',
+      sourceType: 'contact',
+      externalId: String(match.gov.id),
+      domain: 'both',
+      seedFields: {
+        name: fullName,
+        first_name: match.gov.first_name,
+        last_name: match.gov.last_name,
+        email: match.gov.email,
+        phone: match.gov.phone,
+        domain: 'both'
+      }
+    });
+
+    if (!govLink.ok) {
+      console.error('[Cross-domain] Failed to link gov contact:', match.gov.id, govLink.error);
+      continue;
+    }
+
+    if (govLink.createdEntity) {
+      newEntities++;
+    } else {
+      existingUpdated++;
+    }
+
+    const entityId = govLink.entityId;
+
+    // Link dia side to the same entity
+    await ensureEntityLink({
+      workspaceId,
+      entityId,
+      sourceSystem: 'dia_db',
+      sourceType: 'contact',
+      externalId: String(match.dia.id),
+      domain: 'both',
+      seedFields: {
+        name: fullName,
+        first_name: match.dia.first_name || match.gov.first_name,
+        last_name: match.dia.last_name || match.gov.last_name,
+        email: match.dia.email || match.gov.email,
+        phone: match.dia.phone || match.gov.phone,
+        domain: 'both'
+      }
+    });
+
+    // Tag entity with 'cross_domain_owner'
+    const existingEntity = await opsQuery('GET',
+      `entities?id=eq.${entityId}&select=tags`
+    );
+    const currentTags = existingEntity.data?.[0]?.tags || [];
+    if (!currentTags.includes('cross_domain_owner')) {
+      await opsQuery('PATCH',
+        `entities?id=eq.${entityId}`,
+        { tags: [...currentTags, 'cross_domain_owner'], domain: 'both', updated_at: new Date().toISOString() }
+      );
+    }
+
+    // Write intelligence signal
+    writeSignal({
+      signal_type: 'cross_domain_link_created',
+      signal_category: 'intelligence',
+      entity_type: 'person',
+      entity_id: entityId,
+      domain: 'both',
+      payload: {
+        gov_contact_id: match.gov.id,
+        dia_contact_id: match.dia.id,
+        match_confidence: match.confidence,
+        match_type: match.match_type,
+        contact_name: fullName
+      },
+      outcome: 'positive'
+    });
+  }
+
+  const durationMs = Date.now() - startTime;
+  console.log(`[Cross-domain match] Completed in ${durationMs}ms: ${matches.length} matched, ${newEntities} new, ${existingUpdated} updated`);
+
+  // Step 5 — Return summary
+  return {
+    matched: matches.length,
+    new_entities: newEntities,
+    existing_updated: existingUpdated,
+    high_confidence: highConfidence,
+    gov_contacts_fetched: govContacts.length,
+    dia_contacts_fetched: diaContacts.length,
+    duration_ms: durationMs
+  };
 }
