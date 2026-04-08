@@ -186,7 +186,7 @@ async function loadDiaData() {
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
-      diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 500 }).catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
+      diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 10000 }).catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
       diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=gt.0', order: 'delta_patients.desc', limit: 10 }).catch(function() { return []; }),
       diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=lt.0', order: 'delta_patients.asc', limit: 10 }).catch(function() { return []; }),
       diaQuery('v_npi_inventory_signal_summary', '*').catch(function() { return []; }),
@@ -203,6 +203,18 @@ async function loadDiaData() {
       invSummary.forEach(function(row) { diaData.inventorySummary[row.change_type] = row; });
     }
     diaData.inventoryChanges = invChanges || [];
+
+    // Fallback: if v_counts_freshness returned empty, estimate from loaded data
+    if (!diaData.freshness || !diaData.freshness.total_clinics) {
+      const ic = diaData.inventoryChanges;
+      const withCounts = ic.filter(function(c) { return c.latest_total_patients > 0; });
+      diaData.freshness = {
+        total_clinics: ic.length,
+        clinics_with_counts: withCounts.length,
+        coverage_pct: ic.length > 0 ? Math.round(withCounts.length / ic.length * 1000) / 10 : 0,
+        _fallback: true
+      };
+    }
 
     // Assign NPI + research data
     if (npiSignalSummary && npiSignalSummary.length > 0) {
@@ -600,8 +612,11 @@ function renderDiaOverview() {
   // SECTION 1: DATABASE HEALTH
   // ═══════════════════════════════════════════════
   html += sectionHeader('Database Health', '🏥', 'search');
+  if (f._fallback) {
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;padding:6px 10px;background:var(--s2);border-radius:6px;border-left:3px solid #fbbf24">⚠ View not available — using estimates from inventory data (' + fmtN(totalClinics) + ' clinics loaded)</div>';
+  }
   html += '<div class="dia-grid dia-grid-4">';
-  html += infoCard({ title: 'Total Clinics', value: fmtN(totalClinics), sub: 'tracked nationwide', color: 'blue', tab: 'search' });
+  html += infoCard({ title: 'Total Clinics', value: fmtN(totalClinics), sub: f._fallback ? 'from inventory data' : 'tracked nationwide', color: 'blue', tab: 'search' });
   html += infoCard({ title: 'Data Coverage', value: coveragePct.toFixed(1) + '%', sub: fmtN(clinicsWithCounts) + ' clinics with patient data', color: coveragePct > 50 ? 'green' : 'yellow', tab: 'search' });
   html += infoCard({ title: 'Property Linked', value: linkedPct + '%', sub: fmtN(totalClinics - propQueueLen) + ' of ' + fmtN(totalClinics) + ' matched', color: 'cyan', tab: 'research' });
   html += infoCard({ title: 'Lease Coverage', value: leaseBackfillPct + '%', sub: fmtN(leaseBackfillLen) + ' need backfill', color: 'purple', tab: 'research' });
@@ -882,11 +897,16 @@ function renderFinancialMetricsInner() {
     sources[src]++;
   });
 
-  const coveragePct = best.length > 0 && typeof diaData !== 'undefined' && diaData.freshness?.total_clinics > 0
-    ? (best.length / diaData.freshness.total_clinics * 100).toFixed(1) : '—';
+  const totalClinicUniverse = typeof diaData !== 'undefined' && diaData.freshness?.total_clinics > 0
+    ? diaData.freshness.total_clinics : 0;
+  const coveragePct = best.length > 0 && totalClinicUniverse > 0
+    ? (best.length / totalClinicUniverse * 100).toFixed(1) : '—';
+  const coverageSub = totalClinicUniverse > 0
+    ? fmtN(best.length) + ' of ' + fmtN(totalClinicUniverse) + ' clinics (' + coveragePct + '%)'
+    : fmtN(best.length) + ' clinics estimated';
 
   let h = '<div class="dia-grid dia-grid-5">';
-  h += infoCard({ title: 'Clinics Estimated', value: fmtN(best.length), sub: coveragePct + '% of database', color: 'blue', tab: 'search' });
+  h += infoCard({ title: 'Clinics Estimated', value: fmtN(best.length), sub: coverageSub, color: 'blue', tab: 'search' });
   h += infoCard({ title: 'Avg Revenue / Clinic', value: '$' + fmtN(Math.round(avgRev / 1000)) + 'K', sub: fmtN(withRev.length) + ' with revenue data', color: 'green', tab: 'search' });
   h += infoCard({ title: 'Avg Profit / Clinic', value: '$' + fmtN(Math.round(avgProfit / 1000)) + 'K', sub: avgMargin + '% avg margin', color: 'cyan', tab: 'search' });
   h += infoCard({ title: 'Avg EBITDA', value: '$' + fmtN(Math.round(avgEbitda / 1000)) + 'K', sub: fmtN(withEbitda.length) + ' with EBITDA', color: 'purple', tab: 'search' });
