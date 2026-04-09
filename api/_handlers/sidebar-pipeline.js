@@ -17,7 +17,7 @@
 // ============================================================================
 
 import { ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
-import { opsQuery } from '../_shared/ops-db.js';
+import { fetchWithTimeout, opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 
@@ -578,12 +578,13 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
  */
 async function propagateToDomainDb(entity, metadata, domain) {
   if (!domain) return { propagated: false, reason: 'no_domain' };
-  if (!getDomainCredentials(domain)) return { propagated: false, reason: 'domain_db_not_configured' };
 
   try {
     if (domain === 'dialysis') {
+      // Dialysis uses the centralized ingest endpoint (no direct PostgREST)
       return await propagateToDialysisDb(entity, metadata);
     } else if (domain === 'government') {
+      if (!getDomainCredentials(domain)) return { propagated: false, reason: 'domain_db_not_configured' };
       return await propagateToGovernmentDb(entity, metadata);
     }
     return { propagated: false, reason: 'unknown_domain' };
@@ -593,38 +594,252 @@ async function propagateToDomainDb(entity, metadata, domain) {
   }
 }
 
-// ── Dialysis DB propagation ────────────────────────────────────────────────
+// ── Dialysis DB propagation (via centralized ingest endpoint) ──────────────
 
+const DIALYSIS_INGEST_URL = process.env.DIALYSIS_INGEST_URL;
+const LCC_INGEST_SECRET = process.env.LCC_INGEST_SECRET;
+
+/**
+ * Build the ingest payload from CoStar sidebar metadata and POST it to the
+ * Dialysis Flask ingestion pipeline. This replaces the previous approach of
+ * making many individual PostgREST calls — the Python pipeline handles
+ * entity resolution, ownership propagation, broker linking, etc.
+ */
 async function propagateToDialysisDb(entity, metadata) {
-  const domain = 'dialysis';
-  const results = { domain, property_id: null, records: {} };
-
-  // Step 5a: Upsert property record
-  const propertyId = await upsertDomainProperty(domain, entity, metadata);
-  if (!propertyId) {
-    console.error('[Sidebar pipeline] Dialysis property upsert failed for:', entity.address);
-    return { propagated: false, reason: 'property_upsert_failed', ...results };
+  if (!DIALYSIS_INGEST_URL || !LCC_INGEST_SECRET) {
+    return { propagated: false, reason: 'dialysis_ingest_not_configured' };
   }
-  results.property_id = propertyId;
 
-  // Step 5b: Upsert lease records
-  results.records.leases = await upsertDialysisLeases(propertyId, metadata);
+  const payload = buildIngestPayload(entity, metadata);
 
-  // Step 5c: Upsert sales transactions
-  results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
+  try {
+    const resp = await fetchWithTimeout(DIALYSIS_INGEST_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-LCC-Secret': LCC_INGEST_SECRET,
+      },
+      body: JSON.stringify(payload),
+    }, 30000);
 
-  // Step 5d: Upsert loans
-  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata);
+    const contentType = resp.headers.get('content-type') || '';
+    const body = contentType.includes('application/json')
+      ? await resp.json()
+      : await resp.text();
 
-  // Step 5e: Upsert recorded owners + ownership history
-  const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata);
-  results.records.owners = ownerResults.owners;
-  results.records.ownership_history = ownerResults.history;
+    if (!resp.ok) {
+      console.error('[Sidebar pipeline] Dialysis ingest error:', resp.status, body);
+      return {
+        propagated: false,
+        reason: 'ingest_endpoint_error',
+        status: resp.status,
+        upstream_errors: typeof body === 'object' ? body.errors : [body],
+      };
+    }
 
-  // Step 5f: Upsert brokers
-  results.records.brokers = await upsertDomainBrokers(domain, propertyId, metadata);
+    const result = typeof body === 'object' ? body : {};
+    return {
+      propagated: true,
+      domain: 'dialysis',
+      property_id: result.property_id || null,
+      records: {
+        sales: result.sales_transactions?.ingested || 0,
+        leases: result.leases?.ingested || 0,
+        loans: result.loans?.ingested || 0,
+        owners: result.recorded_owners?.resolved || 0,
+        ownership_history: result.ownership_history?.ingested || 0,
+        brokers: result.brokers?.resolved || 0,
+        listings: result.available_listings?.ingested || 0,
+      },
+      developer_flags: result.developer_flags || [],
+      upstream_errors: result.errors || [],
+    };
+  } catch (err) {
+    console.error('[Sidebar pipeline] Dialysis ingest fetch error:', err?.message || err);
+    return { propagated: false, reason: 'ingest_fetch_error', error: err?.message };
+  }
+}
 
-  return { propagated: true, ...results };
+/**
+ * Transform CoStar sidebar metadata into the Dialysis ingest payload format.
+ */
+function buildIngestPayload(entity, metadata) {
+  const payload = {};
+
+  // property_id — pass through CoStar ID if available (avoids fuzzy matching)
+  if (metadata.property_id || metadata.costar_property_id) {
+    payload.property_id = metadata.property_id || metadata.costar_property_id;
+  }
+
+  // property object
+  const primaryTenant = metadata.tenants?.[0]?.name || metadata.tenant_name || metadata.primary_tenant || null;
+  payload.property = stripNulls({
+    address: entity.address || metadata.address || null,
+    city: entity.city || null,
+    state: entity.state || null,
+    zip_code: entity.zip || null,
+    county: metadata.county || entity.county || null,
+    building_size: parseSF(metadata.square_footage),
+    year_built: parseIntSafe(metadata.year_built),
+    tenant: primaryTenant,
+    property_type: metadata.property_type || metadata.asset_type || null,
+    zoning: metadata.zoning || null,
+    occupancy_percent: parsePercent(metadata.occupancy),
+    parking_ratio: parseParkingRatio(metadata.parking),
+    lot_sf: parseSF(metadata.land_sf) || parseSF(metadata.lot_size),
+  });
+
+  // current_owner — from contacts with role=owner
+  const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
+  if (ownerContact) {
+    payload.current_owner = stripNulls({ name: ownerContact.name });
+  }
+
+  // recorded_owners — all contacts with role=owner + buyers/sellers from sales
+  const ownerNames = new Set();
+  const owners = [];
+  for (const c of (metadata.contacts || [])) {
+    if (c.role === 'owner' && c.name && !ownerNames.has(c.name)) {
+      ownerNames.add(c.name);
+      owners.push(stripNulls({
+        name: c.name,
+        address: c.address || null,
+        city: c.city || null,
+        state: c.state || null,
+      }));
+    }
+  }
+  for (const sale of (metadata.sales_history || [])) {
+    if (sale.buyer && !ownerNames.has(sale.buyer)) {
+      ownerNames.add(sale.buyer);
+      const o = { name: sale.buyer };
+      if (sale.buyer_address) o.address = sale.buyer_address;
+      owners.push(stripNulls(o));
+    }
+    if (sale.seller && !ownerNames.has(sale.seller)) {
+      ownerNames.add(sale.seller);
+      owners.push(stripNulls({ name: sale.seller }));
+    }
+  }
+  if (owners.length) payload.recorded_owners = owners;
+
+  // sales_transactions
+  const salesHistory = metadata.sales_history || [];
+  if (salesHistory.length) {
+    payload.sales_transactions = salesHistory
+      .filter(s => s.sale_date)
+      .map(sale => {
+        const saleDate = parseDate(sale.sale_date);
+        const datePart = saleDate ? saleDate.split('T')[0] : null;
+        const listingBroker = (metadata.contacts || []).find(c => c.role === 'listing_broker');
+        const buyerBroker = (metadata.contacts || []).find(c => c.role === 'buyer_broker');
+        return stripNulls({
+          sale_date: datePart,
+          sold_price: parseCurrency(sale.sale_price),
+          buyer_name: sale.buyer || null,
+          seller_name: sale.seller || null,
+          cap_rate: parsePercent(sale.cap_rate || metadata.cap_rate),
+          listing_broker: listingBroker?.name || null,
+          procuring_broker: buyerBroker?.name || null,
+          notes: [
+            sale.deed_type ? `Deed: ${sale.deed_type}` : null,
+            sale.transaction_type ? `Type: ${sale.transaction_type}` : null,
+            sale.is_current ? 'Active listing' : null,
+          ].filter(Boolean).join('; ') || null,
+        });
+      });
+  }
+
+  // available_listings — from sales with is_current flag
+  const currentListings = salesHistory.filter(s => s.is_current);
+  if (currentListings.length) {
+    const listingBroker = (metadata.contacts || []).find(c => c.role === 'listing_broker');
+    payload.available_listings = currentListings.map(l => stripNulls({
+      listing_date: parseDate(l.sale_date) ? parseDate(l.sale_date).split('T')[0] : null,
+      cap_rate: parsePercent(l.cap_rate || metadata.cap_rate),
+      listing_broker: listingBroker?.name || null,
+      seller_name: l.seller || ownerContact?.name || null,
+      status: 'Active',
+    }));
+  }
+
+  // ownership_history — built from chronologically sorted sales
+  const sortedSales = [...salesHistory]
+    .filter(s => s.sale_date)
+    .sort((a, b) => new Date(a.sale_date) - new Date(b.sale_date));
+  if (sortedSales.length) {
+    const history = [];
+    for (let i = 0; i < sortedSales.length; i++) {
+      const sale = sortedSales[i];
+      const saleDate = parseDate(sale.sale_date);
+      const datePart = saleDate ? saleDate.split('T')[0] : null;
+      const nextDate = i < sortedSales.length - 1
+        ? parseDate(sortedSales[i + 1].sale_date)?.split('T')[0] || null
+        : null;
+
+      if (sale.buyer) {
+        history.push(stripNulls({
+          owner_name: sale.buyer,
+          start_date: datePart,
+          end_date: nextDate,
+        }));
+      }
+    }
+    if (history.length) payload.ownership_history = history;
+  }
+
+  // loans — from sales with lender/loan data
+  const loanEntries = salesHistory.filter(s => s.lender && s.loan_amount);
+  if (loanEntries.length) {
+    payload.loans = loanEntries.map(sale => {
+      const loanType = sale.loan_type === 'Commercial' ? 'Acquisition' : (sale.loan_type || null);
+      return stripNulls({
+        loan_amount: parseCurrency(sale.loan_amount),
+        loan_type: loanType,
+        origination_date: parseDate(sale.loan_origination_date)?.split('T')[0] || null,
+        maturity_date: parseDate(sale.maturity_date)?.split('T')[0] || null,
+        lender_name: sale.lender,
+        interest_rate_percent: parsePercent(sale.interest_rate),
+      });
+    });
+  }
+
+  // leases — from tenants array
+  const tenants = metadata.tenants || [];
+  if (tenants.length) {
+    payload.leases = tenants.filter(t => t.name).map(t => stripNulls({
+      tenant: t.name,
+      leased_area: parseSF(t.sf || metadata.sf_leased),
+      lease_start: parseDate(t.lease_start || metadata.lease_commencement)?.split('T')[0] || null,
+      lease_expiration: parseDate(t.lease_expiration || metadata.lease_expiration)?.split('T')[0] || null,
+      lease_type: t.lease_type || metadata.expense_structure || null,
+      status: 'active',
+    }));
+  }
+
+  // brokers — from contacts with broker roles
+  const brokerContacts = (metadata.contacts || []).filter(c =>
+    c.role === 'listing_broker' || c.role === 'buyer_broker'
+  );
+  if (brokerContacts.length) {
+    payload.brokers = brokerContacts.filter(b => b.name).map(b => stripNulls({
+      broker_name: b.name,
+      company: b.company || null,
+    }));
+  }
+
+  // deed_records — from sales with document_number
+  const deedSales = salesHistory.filter(s => s.document_number);
+  if (deedSales.length) {
+    payload.deed_records = deedSales.map(sale => stripNulls({
+      doc_number: sale.document_number,
+      recorded_date: parseDate(sale.recordation_date)?.split('T')[0] || null,
+      grantor: sale.seller || null,
+      grantee: sale.buyer || null,
+    }));
+  }
+
+  return payload;
 }
 
 // ── Government DB propagation ──────────────────────────────────────────────
@@ -713,75 +928,6 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
   return null;
-}
-
-/**
- * Upsert lease records in the dialysis database.
- * Matches by property_id + tenant name for deduplication.
- */
-async function upsertDialysisLeases(propertyId, metadata) {
-  const tenants = metadata.tenants;
-  if (!Array.isArray(tenants) || tenants.length === 0) return 0;
-
-  let count = 0;
-  for (const tenant of tenants) {
-    if (!tenant.name) continue;
-
-    const tenantName = tenant.name;
-    const encodedTenant = encodeURIComponent(tenantName);
-    const lookup = await domainQuery('dialysis', 'GET',
-      `leases?property_id=eq.${propertyId}&tenant=ilike.${encodedTenant}&select=id&limit=1`
-    );
-
-    const leaseData = stripNulls({
-      property_id: propertyId,
-      tenant: tenantName,
-      leased_area: parseSF(tenant.sf || metadata.sf_leased),
-      status: 'active',
-      expense_structure: tenant.lease_type || metadata.expense_structure || null,
-      rent_psf: parseCurrency(tenant.rent_per_sf || metadata.rent_per_sf),
-      annual_rent: parseCurrency(metadata.annual_rent),
-      lease_start: parseDate(tenant.lease_start || metadata.lease_commencement),
-      lease_expiration: parseDate(tenant.lease_expiration || metadata.lease_expiration),
-      renewal_options: metadata.renewal_options || null,
-      guarantor: metadata.guarantor || null,
-    });
-
-    if (lookup.ok && lookup.data?.length) {
-      await domainQuery('dialysis', 'PATCH',
-        `leases?id=eq.${lookup.data[0].id}`, leaseData);
-    } else {
-      const result = await domainQuery('dialysis', 'POST', 'leases', leaseData);
-      if (result.ok) count++;
-    }
-  }
-
-  // Also create a lease from top-level metadata if no tenants array match
-  if (tenants.length === 0 && metadata.lease_expiration) {
-    const primaryTenant = metadata.tenants?.[0]?.name || metadata.tenant_name || metadata.primary_tenant;
-    if (primaryTenant) {
-      const lookup = await domainQuery('dialysis', 'GET',
-        `leases?property_id=eq.${propertyId}&tenant=ilike.${encodeURIComponent(primaryTenant)}&select=id&limit=1`
-      );
-      if (!lookup.ok || !lookup.data?.length) {
-        const leaseData = stripNulls({
-          property_id: propertyId,
-          tenant: primaryTenant,
-          expense_structure: metadata.expense_structure || metadata.lease_type || null,
-          rent_psf: parseCurrency(metadata.rent_per_sf),
-          annual_rent: parseCurrency(metadata.annual_rent),
-          lease_start: parseDate(metadata.lease_commencement),
-          lease_expiration: parseDate(metadata.lease_expiration),
-          renewal_options: metadata.renewal_options || null,
-          guarantor: metadata.guarantor || null,
-        });
-        const result = await domainQuery('dialysis', 'POST', 'leases', leaseData);
-        if (result.ok) count++;
-      }
-    }
-  }
-
-  return count;
 }
 
 /**
@@ -1014,91 +1160,6 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
   }
 
   return results;
-}
-
-/**
- * Upsert broker records in the dialysis database.
- * Created from contacts[] with role=listing_broker.
- */
-async function upsertDomainBrokers(domain, propertyId, metadata) {
-  const contacts = metadata.contacts || [];
-  const brokerContacts = contacts.filter(c =>
-    c.role === 'listing_broker' || c.role === 'buyer_broker'
-  );
-
-  if (brokerContacts.length === 0) return 0;
-
-  let count = 0;
-  for (const broker of brokerContacts) {
-    if (!broker.name) continue;
-
-    const normalizedName = broker.name.trim().toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    // Dedup by normalized name or email
-    let lookupPath = `brokers?normalized_name=eq.${encodeURIComponent(normalizedName)}&select=broker_id&limit=1`;
-    let lookup = await domainQuery(domain, 'GET', lookupPath);
-
-    // Fallback to email match
-    if ((!lookup.ok || !lookup.data?.length) && broker.email) {
-      lookup = await domainQuery(domain, 'GET',
-        `brokers?email=eq.${encodeURIComponent(broker.email)}&select=broker_id&limit=1`
-      );
-    }
-
-    const brokerData = stripNulls({
-      broker_name: broker.name.trim(),
-      normalized_name: normalizedName,
-      company: broker.company || null,
-      email: broker.email || null,
-      phone: broker.phones?.[0] || null,
-    });
-
-    let brokerId;
-    if (lookup.ok && lookup.data?.length) {
-      brokerId = lookup.data[0].broker_id;
-      // Update with any new contact details
-      await domainQuery(domain, 'PATCH',
-        `brokers?broker_id=eq.${brokerId}`, brokerData);
-    } else {
-      const result = await domainQuery(domain, 'POST', 'brokers', brokerData);
-      if (result.ok && result.data) {
-        const created = Array.isArray(result.data) ? result.data[0] : result.data;
-        brokerId = created?.broker_id;
-        count++;
-      }
-    }
-
-    // Link broker to the most recent sale via sale_brokers junction table
-    if (brokerId && metadata.sales_history?.length) {
-      const recentSale = metadata.sales_history[0]; // First entry is most recent
-      const saleDate = parseDate(recentSale.sale_date);
-      if (saleDate) {
-        const datePart = saleDate.split('T')[0];
-        const saleLookup = await domainQuery(domain, 'GET',
-          `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`
-        );
-        if (saleLookup.ok && saleLookup.data?.length) {
-          const saleId = saleLookup.data[0].sale_id;
-          // Check if junction already exists
-          const junctionLookup = await domainQuery(domain, 'GET',
-            `sale_brokers?sale_id=eq.${saleId}&broker_id=eq.${brokerId}&select=id&limit=1`
-          );
-          if (!junctionLookup.ok || !junctionLookup.data?.length) {
-            await domainQuery(domain, 'POST', 'sale_brokers', {
-              sale_id: saleId,
-              broker_id: brokerId,
-              role: broker.role || 'listing_broker',
-            });
-          }
-        }
-      }
-    }
-  }
-
-  return count;
 }
 
 // ── Main pipeline entry point ───────────────────────────────────────────────
