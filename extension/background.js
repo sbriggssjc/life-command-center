@@ -3,6 +3,16 @@
 // Proxies API calls, manages page context detection, badge updates
 // ============================================================================
 
+// Suppress stale-tab promise rejections from Chrome APIs (tab closed between
+// event dispatch and async API call). Our code already has .catch() guards,
+// but Chrome sometimes rejects internally before our handler runs.
+self.addEventListener('unhandledrejection', (event) => {
+  const msg = String(event.reason?.message || event.reason || '');
+  if (msg.includes('No tab with id') || msg.includes('No current window')) {
+    event.preventDefault();
+  }
+});
+
 // ── Install / startup ───────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -160,8 +170,29 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   }
 
   if (msg.type === 'OPEN_SIDE_PANEL') {
-    chrome.sidePanel.open({ tabId: sender.tab?.id }).catch(() => {});
+    const tabId = sender.tab?.id;
+    if (tabId) {
+      chrome.sidePanel.open({ tabId }).catch(() => {});
+    }
     respond({ ok: true });
     return false;
+  }
+
+  if (msg.type === 'SCAN_PAGE') {
+    // Inject the public-records scanner into the active tab on demand
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) { respond({ ok: false, error: 'No active tab' }); return; }
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content/public-records.js'],
+        });
+        respond({ ok: true });
+      } catch (err) {
+        respond({ ok: false, error: err.message });
+      }
+    })();
+    return true; // async response
   }
 });
