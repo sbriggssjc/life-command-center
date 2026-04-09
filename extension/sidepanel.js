@@ -313,8 +313,9 @@ async function loadPropertyTab() {
     html += renderLccFields(lccEntity, responseData);
   }
 
-  // Assessor/recorder extra fields (not in the standard CRE field set)
-  if (ctx && domain === 'public-records') {
+  // Assessor/recorder extra fields (parcel, assessed value, etc.)
+  // These can come from public records OR from CoStar's embedded public records section
+  if (ctx && ASSESSOR_FIELDS.some(([key]) => ctx[key])) {
     html += renderAssessorFields(ctx);
   }
 
@@ -434,6 +435,11 @@ function wirePropertyActions(ctx, lccEntity) {
         updateBtn.disabled = false;
         updateBtn.textContent = 'Update Failed — Retry';
         updateBtn.className = 'btn btn-sm btn-danger';
+        const errMsg = result.error || result.data?.error || result.data?.message || `HTTP ${result.status || 'error'}`;
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = errMsg;
+        $('#propertyActions').prepend(toast);
       }
     });
   }
@@ -467,6 +473,11 @@ function wirePropertyActions(ctx, lccEntity) {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
         saveBtn.className = 'btn btn-sm btn-danger';
+        const errMsg = result.error || result.data?.error || result.data?.message || `HTTP ${result.status || 'error'}`;
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = errMsg;
+        $('#propertyActions').prepend(toast);
       }
     });
   }
@@ -628,6 +639,11 @@ function loadOrgView(source, domainLabel) {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
         saveBtn.className = 'btn btn-sm btn-danger';
+        const errMsg = result.error || result.data?.error || result.data?.message || `HTTP ${result.status || 'error'}`;
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = errMsg;
+        saveBtn.parentElement?.prepend(toast);
       }
     });
   }
