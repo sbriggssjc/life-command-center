@@ -89,17 +89,19 @@
     mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
     if (location.state) accumulated.state = location.state;
+    if (location.zip) accumulated.zip = location.zip;
 
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 11,
+        _version: 12,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
         state: accumulated.state,
+        zip: accumulated.zip,
         ...accumulated,
         contacts: accumulated.contacts,
         sales_history: accumulated.sales_history,
@@ -174,9 +176,9 @@
   function findLocationInLines(lines) {
     for (const line of lines) {
       const m = line.match(/^([A-Za-z][A-Za-z\s.]{1,35}),\s*([A-Z]{2})\s*(\d{5})?/);
-      if (m) return { city: m[1].trim(), state: m[2] };
+      if (m) return { city: m[1].trim(), state: m[2], zip: m[3] || null };
     }
-    return { city: null, state: null };
+    return { city: null, state: null, zip: null };
   }
 
   // ── Property field extraction ─────────────────────────────────────────
@@ -312,9 +314,190 @@
       if (!data.annual_rent && /^annual\s+rent$/i.test(line)) {
         if (next && /^\$?[\d,.]+/.test(next)) data.annual_rent = next;
       }
+
+      // ── Additional property fields ────────────────────────────
+
+      // County (from public records or property details)
+      if (!data.county && /^county$/i.test(line) && next && next.length < 40) {
+        data.county = next;
+      }
+
+      // Year renovated
+      if (!data.year_renovated && /^(year\s+)?renovated$/i.test(line)) {
+        if (/^\d{4}$/.test(next)) data.year_renovated = next;
+        else if (/^\d{4}$/.test(prev)) data.year_renovated = prev;
+      }
+
+      // Construction start date
+      if (!data.construction_start && /^construction\s+start$/i.test(line) && next) {
+        data.construction_start = next;
+      }
+
+      // Location type (Urban, Suburban, etc.)
+      if (!data.location_type && /^location$/i.test(line)) {
+        if (next && /^(urban|suburban|rural|cbd)/i.test(next)) data.location_type = next;
+      }
+
+      // Typical floor size
+      if (!data.typical_floor_sf && /^typical\s+floor$/i.test(line)) {
+        if (next && /[\d,]+\s*sf/i.test(next)) data.typical_floor_sf = next;
+      }
+
+      // Floor Area Ratio
+      if (!data.far && /^bldg\s+far$/i.test(line) && next) {
+        data.far = next;
+      }
+
+      // Land SF (separate from acres)
+      if (!data.land_sf && /^land\s+sf$/i.test(line) && next && /[\d,]+\s*sf/i.test(next)) {
+        data.land_sf = next;
+      }
+
+      // Days on market (stat card: "102 days" above "On Market")
+      if (!data.days_on_market && /^on\s+market$/i.test(line)) {
+        if (/^\d+\s*days?$/i.test(prev)) data.days_on_market = prev;
+        else if (/^\d+\s*days?$/i.test(next)) data.days_on_market = next;
+      }
+
+      // Building name / marketing name
+      if (!data.building_name && /^building\s+name$/i.test(line) && next && next.length < 80) {
+        data.building_name = next;
+      }
+
+      // Property subtype (e.g., "Medical Office" from submarket line)
+      if (!data.property_subtype && /submarket$/i.test(line) && line.length < 60) {
+        // "Medical Office - Midway Submarket" → "Medical Office"
+        const sub = line.split(/\s*[-–]\s*/)[0].trim();
+        if (sub && sub.length < 40) data.property_subtype = sub;
+      }
+
+      // Comp status
+      if (!data.comp_status && /^comp\s+status$/i.test(line) && next) {
+        data.comp_status = next;
+      }
+
+      // Price status
+      if (!data.price_status && /^price\s+status$/i.test(line) && next) {
+        data.price_status = next;
+      }
+
+      // ── Lease detail fields ───────────────────────────────────
+
+      // Expense structure (NNN, Full Service, Modified Gross)
+      if (!data.expense_structure && /^expense\s+(structure|type)$/i.test(line) && next) {
+        data.expense_structure = next;
+      }
+
+      // Renewal options
+      if (!data.renewal_options && /^renewal\s+option/i.test(line) && next) {
+        data.renewal_options = next;
+      }
+
+      // Lease guarantor
+      if (!data.guarantor && /^guarantor$/i.test(line) && next && next.length < 80) {
+        data.guarantor = next;
+      }
+
+      // Rent escalations
+      if (!data.rent_escalations && /^(rent\s+)?escalation/i.test(line) && next) {
+        data.rent_escalations = next;
+      }
+
+      // Lease commencement
+      if (!data.lease_commencement && /^(lease\s+)?(commencement|start)\s*(date)?$/i.test(line) && next) {
+        data.lease_commencement = next;
+      }
+
+      // SF leased (government or multi-tenant)
+      if (!data.sf_leased && /^(sf\s+)?leased$/i.test(line)) {
+        if (/^[\d,]+(\s*sf)?$/i.test(next)) data.sf_leased = next;
+      }
+
+      // ── Market data (from "Market at Sale" section) ───────────
+
+      if (/^submarket\s+\d/i.test(line) || /^market\s+overall$/i.test(line)) {
+        // These appear as headers; the vacancy/rent data follows
+        // Handled by the market section parser below
+      }
+
+      // Submarket vacancy
+      if (!data.submarket_vacancy && /^submarket\s+\d.*star$/i.test(line) && next) {
+        if (/[\d.]+%/.test(next)) data.submarket_vacancy = next;
+      }
+
+      // Market vacancy
+      if (!data.market_vacancy && /^market\s+overall$/i.test(line) && next) {
+        if (/[\d.]+%/.test(next)) data.market_vacancy = next;
+      }
     }
 
+    // ── Parse market data sections separately ───────────────────
+    parseMarketData(lines, data);
+
     return data;
+  }
+
+  function parseMarketData(lines, data) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const next = i + 1 < lines.length ? lines[i + 1] : '';
+
+      // Market Asking Rent section
+      if (/^market\s+asking\s+rent/i.test(line)) {
+        // Look for "Subject Property" and "Market Overall" rows
+        for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+          if (/^subject\s+property$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.subject_rent_psf) data.subject_rent_psf = lines[j + 1];
+          }
+          if (/^market\s+overall$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.market_rent_psf) data.market_rent_psf = lines[j + 1];
+          }
+        }
+        continue;
+      }
+
+      // Submarket Leasing Activity
+      if (/^submarket\s+leasing\s+activity/i.test(line)) {
+        for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+          if (/^12\s*mo\.?\s+leased$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.submarket_12mo_leased) data.submarket_12mo_leased = lines[j + 1];
+          }
+          if (/^months\s+on\s+market$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.submarket_avg_months_on_market) data.submarket_avg_months_on_market = lines[j + 1];
+          }
+        }
+        continue;
+      }
+
+      // Submarket Sales Activity
+      if (/^submarket\s+sales\s+activity/i.test(line)) {
+        for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+          if (/^12\s*mo\.?\s+sales\s+volume$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.submarket_12mo_sales_volume) data.submarket_12mo_sales_volume = lines[j + 1];
+          }
+          if (/^market\s+sale\s+price/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.market_sale_price_psf) data.market_sale_price_psf = lines[j + 1];
+          }
+        }
+        continue;
+      }
+
+      // Vacancy Rates section
+      if (/^vacancy\s+rates$/i.test(line)) {
+        for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+          if (/^subject\s+property$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.subject_vacancy && /[\d.]+%/.test(lines[j + 1])) data.subject_vacancy = lines[j + 1];
+          }
+          if (/^submarket\s+\d/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.submarket_vacancy && /[\d.]+%/.test(lines[j + 1])) data.submarket_vacancy = lines[j + 1];
+          }
+          if (/^market\s+overall$/i.test(lines[j]) && lines[j + 1]) {
+            if (!data.market_vacancy && /[\d.]+%/.test(lines[j + 1])) data.market_vacancy = lines[j + 1];
+          }
+        }
+        continue;
+      }
+    }
   }
 
   // ── Tenant extraction ──────────────────────────────────────────────────
@@ -659,11 +842,11 @@
 
   function parseTransactionBlock(lines, startIdx) {
     const sale = {};
-    for (let j = startIdx; j < Math.min(startIdx + 30, lines.length); j++) {
+    for (let j = startIdx; j < Math.min(startIdx + 40, lines.length); j++) {
       const line = lines[j];
       const next = j + 1 < lines.length ? lines[j + 1] : '';
 
-      if (/^(public\s+record|building|land\b|market|tenants?|seller|buyer|listing)/i.test(line)) break;
+      if (/^(public\s+record|building|land\b|market|tenants?|seller|buyer\s*$|listing)/i.test(line)) break;
 
       if (/^sale\s+date$/i.test(line) && next) sale.sale_date = next;
       if (/^sale\s+price$/i.test(line) && next) sale.sale_price = next;
@@ -672,6 +855,12 @@
       if (/^sale\s+type$/i.test(line) && next) sale.sale_type = next;
       if (/^sale\s+condition$/i.test(line) && next) sale.sale_condition = next;
       if (/^hold\s+period$/i.test(line) && next) sale.hold_period = next;
+      if (/^time\s+on\s+market$/i.test(line) && next) sale.time_on_market = next;
+      if (/^leased\s+at\s+sale$/i.test(line) && next && /\d+%/.test(next)) sale.leased_at_sale = next;
+      if (/^price\s+status$/i.test(line) && next) sale.price_status = next;
+      if (/^comp\s+status$/i.test(line) && next) sale.comp_status = next;
+      if (/^buyer\s+type$/i.test(line) && next) sale.buyer_type = next;
+      if (/^financing\s+type$/i.test(line) && next) sale.financing_type = next;
     }
     return sale;
   }

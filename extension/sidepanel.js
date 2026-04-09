@@ -452,42 +452,7 @@ function wirePropertyActions(ctx, lccEntity) {
 
       // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(ctx);
-      const metadata = {
-        ...(lccEntity.metadata || {}),
-        source: domain || 'extension',
-        source_url: ctx.page_url || null,
-        updated_at: new Date().toISOString(),
-        asking_price: ctx.asking_price || null,
-        cap_rate: ctx.cap_rate || null,
-        noi: ctx.noi || null,
-        price_per_sf: ctx.price_per_sf || null,
-        sale_price: ctx.sale_price || null,
-        sale_date: ctx.sale_date || null,
-        building_class: ctx.building_class || null,
-        year_built: ctx.year_built || null,
-        square_footage: ctx.square_footage || null,
-        lot_size: ctx.lot_size || null,
-        stories: ctx.stories || null,
-        parking: ctx.parking || null,
-        zoning: ctx.zoning || null,
-        occupancy: ctx.occupancy || null,
-        ownership_type: ctx.ownership_type || null,
-        parcel_number: ctx.parcel_number || null,
-        assessed_value: ctx.assessed_value || null,
-        land_value: ctx.land_value || null,
-        improvement_value: ctx.improvement_value || null,
-        tenancy_type: ctx.tenancy_type || null,
-        owner_occupied: ctx.owner_occupied || null,
-        est_rent: ctx.est_rent || null,
-        lease_type: ctx.lease_type || null,
-        lease_term: ctx.lease_term || null,
-        lease_expiration: ctx.lease_expiration || null,
-        rent_per_sf: ctx.rent_per_sf || null,
-        annual_rent: ctx.annual_rent || null,
-        tenants: ctx.tenants || [],
-        contacts: ctx.contacts || [],
-        sales_history: ctx.sales_history || [],
-      };
+      const metadata = { ...(lccEntity.metadata || {}), ...buildMetadata(ctx, domain) };
       const result = await apiCall(`/api/entities?id=${lccEntity.id}`, {
         ...fields,
         metadata,
@@ -519,39 +484,8 @@ function wirePropertyActions(ctx, lccEntity) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
-      // Pack all extracted CRE data into metadata for the cleaning pipeline
       const fields = extractSourceFields(ctx);
-      const metadata = {
-        source: domain || 'extension',
-        source_url: ctx.page_url || null,
-        extracted_at: new Date().toISOString(),
-        // Financials
-        asking_price: ctx.asking_price || null,
-        cap_rate: ctx.cap_rate || null,
-        noi: ctx.noi || null,
-        price_per_sf: ctx.price_per_sf || null,
-        sale_price: ctx.sale_price || null,
-        sale_date: ctx.sale_date || null,
-        // Building
-        building_class: ctx.building_class || null,
-        year_built: ctx.year_built || null,
-        square_footage: ctx.square_footage || null,
-        lot_size: ctx.lot_size || null,
-        stories: ctx.stories || null,
-        parking: ctx.parking || null,
-        zoning: ctx.zoning || null,
-        occupancy: ctx.occupancy || null,
-        ownership_type: ctx.ownership_type || null,
-        // Public records
-        parcel_number: ctx.parcel_number || null,
-        assessed_value: ctx.assessed_value || null,
-        land_value: ctx.land_value || null,
-        improvement_value: ctx.improvement_value || null,
-        // Contacts (brokers, owner, seller, buyer, lender)
-        contacts: ctx.contacts || [],
-        // Sales history with deed records, lender, buyer/seller addresses
-        sales_history: ctx.sales_history || [],
-      };
+      const metadata = buildMetadata(ctx, domain);
 
       const result = await apiCall('/api/entities', {
         entity_type: 'asset',
@@ -559,7 +493,9 @@ function wirePropertyActions(ctx, lccEntity) {
         address: ctx.address,
         city: ctx.city,
         state: ctx.state,
-        asset_type: fields.property_type || 'property',
+        zip: ctx.zip || null,
+        county: ctx.county || null,
+        asset_type: fields.property_type || ctx.property_subtype || 'property',
         description: `Imported from ${domainLabel}`,
         metadata,
       });
@@ -601,15 +537,91 @@ function wirePropertyActions(ctx, lccEntity) {
 
 function extractSourceFields(ctx) {
   const fields = {};
-  // Standard CRE fields
   for (const [key] of PROPERTY_FIELDS) {
     if (ctx[key]) fields[key] = ctx[key];
   }
-  // Assessor/recorder fields
   for (const [key] of ASSESSOR_FIELDS) {
     if (ctx[key]) fields[key] = ctx[key];
   }
   return fields;
+}
+
+function buildMetadata(ctx, domain) {
+  // Capture ALL extracted data for the cleaning/propagation pipeline.
+  // Keys match database column names where possible.
+  const m = {
+    source: domain || 'extension',
+    source_url: ctx.page_url || null,
+    extracted_at: new Date().toISOString(),
+    // Financials
+    asking_price: ctx.asking_price || null,
+    cap_rate: ctx.cap_rate || null,
+    noi: ctx.noi || null,
+    price_per_sf: ctx.price_per_sf || null,
+    sale_price: ctx.sale_price || null,
+    sale_date: ctx.sale_date || null,
+    // Building
+    building_class: ctx.building_class || null,
+    year_built: ctx.year_built || null,
+    year_renovated: ctx.year_renovated || null,
+    construction_start: ctx.construction_start || null,
+    square_footage: ctx.square_footage || null,
+    typical_floor_sf: ctx.typical_floor_sf || null,
+    lot_size: ctx.lot_size || null,
+    land_sf: ctx.land_sf || null,
+    far: ctx.far || null,
+    stories: ctx.stories || null,
+    parking: ctx.parking || null,
+    zoning: ctx.zoning || null,
+    occupancy: ctx.occupancy || null,
+    ownership_type: ctx.ownership_type || null,
+    location_type: ctx.location_type || null,
+    building_name: ctx.building_name || null,
+    property_subtype: ctx.property_subtype || null,
+    days_on_market: ctx.days_on_market || null,
+    comp_status: ctx.comp_status || null,
+    price_status: ctx.price_status || null,
+    // Public records
+    parcel_number: ctx.parcel_number || null,
+    county: ctx.county || null,
+    assessed_value: ctx.assessed_value || null,
+    land_value: ctx.land_value || null,
+    improvement_value: ctx.improvement_value || null,
+    // Tenant / Lease
+    tenancy_type: ctx.tenancy_type || null,
+    owner_occupied: ctx.owner_occupied || null,
+    est_rent: ctx.est_rent || null,
+    lease_type: ctx.lease_type || null,
+    lease_term: ctx.lease_term || null,
+    lease_expiration: ctx.lease_expiration || null,
+    lease_commencement: ctx.lease_commencement || null,
+    rent_per_sf: ctx.rent_per_sf || null,
+    annual_rent: ctx.annual_rent || null,
+    expense_structure: ctx.expense_structure || null,
+    renewal_options: ctx.renewal_options || null,
+    guarantor: ctx.guarantor || null,
+    rent_escalations: ctx.rent_escalations || null,
+    sf_leased: ctx.sf_leased || null,
+    // Market data
+    subject_vacancy: ctx.subject_vacancy || null,
+    submarket_vacancy: ctx.submarket_vacancy || null,
+    market_vacancy: ctx.market_vacancy || null,
+    subject_rent_psf: ctx.subject_rent_psf || null,
+    market_rent_psf: ctx.market_rent_psf || null,
+    submarket_12mo_leased: ctx.submarket_12mo_leased || null,
+    submarket_avg_months_on_market: ctx.submarket_avg_months_on_market || null,
+    submarket_12mo_sales_volume: ctx.submarket_12mo_sales_volume || null,
+    market_sale_price_psf: ctx.market_sale_price_psf || null,
+    // Arrays
+    tenants: ctx.tenants || [],
+    contacts: ctx.contacts || [],
+    sales_history: ctx.sales_history || [],
+  };
+  // Strip null values to keep metadata clean
+  for (const key of Object.keys(m)) {
+    if (m[key] === null) delete m[key];
+  }
+  return m;
 }
 
 // ── Assessor / public records extra fields ──────────────────────────────────
