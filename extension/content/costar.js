@@ -1,71 +1,55 @@
 // ============================================================================
 // LCC Assistant — Content Script: CoStar
-// Detects property detail / sale comp pages and extracts CRE data
+// Extracts property data from sale comp / property detail pages.
+// Uses page-text scanning (innerText) because CoStar's React DOM is too
+// deeply nested for reliable sibling/parent traversal.
 // ============================================================================
 
 (function () {
   'use strict';
 
   let lastDetectedId = null;
+  let extractionTimer = null;
 
   const observer = new MutationObserver(() => {
+    // Debounce: wait 1s after last DOM mutation for page to settle
+    clearTimeout(extractionTimer);
+    extractionTimer = setTimeout(extract, 1000);
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Also run once after initial load in case observer misses the final render
+  setTimeout(extract, 2500);
+
+  // ── Main extraction ───────────────────────────────────────────────────
+
+  function extract() {
     const url = window.location.href;
 
-    // Find the property heading — this is our entry signal
-    const headingEl = findHeading();
-    if (!headingEl) return;
+    // Step 1: Find address from h1 element (lightweight DOM check)
+    const h1 = document.querySelector('h1');
+    const rawTitle = h1?.textContent?.trim() || '';
+    let address = parseAddress(rawTitle);
 
-    const rawTitle = headingEl.textContent?.trim();
-    if (!rawTitle || rawTitle.length < 3) return;
+    // Fallback: scan visible text for first street-address-like line
+    let lines = null;
+    if (!address) {
+      lines = getPageLines();
+      address = findAddressInLines(lines);
+    }
 
-    // Parse address from heading (handles "586 Rice St - Fresenius Medical Care")
-    const address = parseAddress(rawTitle);
     if (!address) return;
 
-    // De-duplicate using address + URL
+    // De-duplicate: don't re-extract the same page
     const pageId = address + '|' + url;
     if (pageId === lastDetectedId) return;
     lastDetectedId = pageId;
 
-    // Extract city/state from subtitle near heading
-    const locationInfo = findLocation(headingEl);
-
-    const val = (el) => el?.textContent?.trim() || null;
-
-    // Financial
-    const priceEl = findField('Asking Price', 'Sale Price', 'Price', 'List Price');
-    const capRateEl = findField('Cap Rate', 'Actual Cap Rate');
-    const noiEl = findField('NOI', 'Net Operating Income');
-    const psfEl = findField('Price/SF', 'Price Per SF', 'Price / SF');
-
-    // Property details
-    const propertyTypeEl = findField('Property Type', 'Property Subtype', 'Asset Type');
-    const buildingClassEl = findField('Building Class', 'Class');
-    const yearBuiltEl = findField('Year Built', 'Built');
-    const sqftEl = findField('RBA', 'SF RBA', 'Building Size', 'Rentable SF', 'GLA', 'Total SF');
-    const lotSizeEl = findField('Land Acres', 'Land Area', 'Lot Size', 'Acres', 'Land SF');
-    const storiesEl = findField('Stories', 'Number of Stories', 'Floors');
-    const unitsEl = findField('Number of Units', 'Total Units');
-    const parkingEl = findField('Parking Spaces', 'Parking Ratio', 'Parking');
-    const zoningEl = findField('Zoning', 'Zone');
-
-    // Occupancy
-    const occupancyEl = findField('Leased at Sale', 'Occupancy', 'Percent Leased', '% Leased');
-    const leaseTermEl = findField('Lease Term', 'Remaining Term');
-
-    // Tenancy, ownership, broker
-    const tenantEl = findField('Tenants at Sale', 'Tenant', 'Primary Tenant', 'Major Tenant');
-    const ownerEl = findField('Recorded Seller', 'Seller', 'True Owner', 'Record Owner', 'Owner');
-    const brokerEl = findField('Listing Broker', 'Listing Agent', 'Broker', 'Listed By');
-    const brokerCoEl = findField('Brokerage', 'Listing Company');
-
-    // Sale
-    const salePriceEl = findField('Sale Price', 'Last Sale Price');
-    const saleDateEl = findField('Sale Date', 'Last Sale Date');
-
-    // Location fallback
-    const cityEl = findField('City', 'Municipality');
-    const stateEl = findField('State');
+    // Step 2: Full text extraction (only runs once per page)
+    if (!lines) lines = getPageLines();
+    const data = extractFields(lines);
+    const location = findLocationInLines(lines);
 
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
@@ -74,165 +58,260 @@
         entity_type: 'property',
         address,
         page_url: url,
-        asking_price: val(priceEl),
-        cap_rate: val(capRateEl),
-        noi: val(noiEl),
-        price_per_sf: val(psfEl),
-        property_type: val(propertyTypeEl),
-        building_class: val(buildingClassEl),
-        year_built: val(yearBuiltEl),
-        square_footage: val(sqftEl),
-        lot_size: val(lotSizeEl),
-        stories: val(storiesEl),
-        units: val(unitsEl),
-        parking: val(parkingEl),
-        zoning: val(zoningEl),
-        occupancy: val(occupancyEl),
-        lease_term: val(leaseTermEl),
-        tenant_name: val(tenantEl),
-        owner_name: val(ownerEl),
-        broker_name: val(brokerEl),
-        broker_company: val(brokerCoEl),
-        sale_price: val(salePriceEl),
-        sale_date: val(saleDateEl),
-        city: locationInfo.city || val(cityEl),
-        state: locationInfo.state || val(stateEl),
+        city: location.city,
+        state: location.state,
+        ...data,
       },
     });
 
-    injectLccButton(headingEl);
-  });
-
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // ── Heading & address extraction ──────────────────────────────────────
-
-  function findHeading() {
-    // Try CoStar-specific selectors first, then fall back to generic h1
-    return document.querySelector('h1[class*="property"]') ||
-      document.querySelector('[data-testid="property-name"]') ||
-      document.querySelector('.property-header h1') ||
-      document.querySelector('[class*="propertyName"]') ||
-      document.querySelector('[class*="address"]') ||
-      document.querySelector('h1');
+    if (h1) injectLccButton(h1);
   }
 
-  function parseAddress(rawTitle) {
-    if (!rawTitle) return null;
+  // ── Page text helpers ─────────────────────────────────────────────────
 
-    // Split on " - " or " – " to separate "586 Rice St - Fresenius Medical Care"
-    let addr = rawTitle.split(/\s+[-–—]\s+/)[0].trim();
+  function getPageLines() {
+    return document.body.innerText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+  }
 
-    // Validate: looks like a street address (starts with number, or has street words)
+  function parseAddress(raw) {
+    if (!raw || raw.length < 3) return null;
+    // "586 Rice St - Fresenius Medical Care" → "586 Rice St"
+    let addr = raw.split(/\s+[-–—]\s+/)[0].trim();
     if (/^\d+\s/.test(addr) ||
-      /\b(st|ave|blvd|dr|rd|ln|ct|pl|way|hwy|pkwy|pike|cir|loop|terr?)\b/i.test(addr)) {
+      /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|trail)\b/i.test(addr)) {
       return addr;
     }
-
-    // Fallback: use the full title if short enough
-    if (rawTitle.length < 100) return rawTitle;
+    if (raw.length < 100) return raw;
     return null;
   }
 
-  function findLocation(headingEl) {
-    const result = { city: null, state: null };
-
-    // Gather candidates: siblings and nearby elements
-    const candidates = [];
-    let sibling = headingEl.nextElementSibling;
-    for (let i = 0; i < 5 && sibling; i++) {
-      candidates.push(sibling);
-      sibling = sibling.nextElementSibling;
-    }
-    if (headingEl.parentElement) {
-      for (const child of headingEl.parentElement.children) {
-        if (child !== headingEl) candidates.push(child);
+  function findAddressInLines(lines) {
+    for (const line of lines) {
+      if (line.length > 120 || line.length < 5) continue;
+      if (/^\d+\s+\w+/.test(line) &&
+        /\b(st|street|ave|avenue|blvd|dr|drive|rd|road|ln|lane|ct|way|hwy|pkwy)\b/i.test(line)) {
+        return line.split(/\s+[-–—]\s+/)[0].trim();
       }
     }
-
-    for (const el of candidates) {
-      const text = el.textContent?.trim() || '';
-      // Match "Saint Paul, MN 55103" or "Saint Paul, MN"
-      const match = text.match(/^([A-Za-z\s.]+),\s*([A-Z]{2})\s*(\d{5})?/);
-      if (match) {
-        result.city = match[1].trim();
-        result.state = match[2];
-        break;
-      }
-    }
-
-    return result;
+    return null;
   }
 
-  // ── Field extraction (multi-strategy) ─────────────────────────────────
-  //
-  // CoStar uses multiple layout patterns:
-  //   1. Label-above-value: "Sale Date" / "Mar 27, 2026"
-  //   2. Value-above-label (stat cards): "6.76%" / "Cap Rate"
-  //   3. Inline label/value in table cells or definition lists
-  //
-  // The function tries all patterns and returns the first match.
+  function findLocationInLines(lines) {
+    for (const line of lines) {
+      // Match "Saint Paul, MN 55103" or "Dallas, TX"
+      const m = line.match(/^([A-Za-z][A-Za-z\s.]{1,35}),\s*([A-Z]{2})\s*(\d{5})?/);
+      if (m) return { city: m[1].trim(), state: m[2] };
+    }
+    return { city: null, state: null };
+  }
 
-  function findField(...keywords) {
-    const kwLower = keywords.map((k) => k.toLowerCase());
+  // ── Field extraction from page text lines ─────────────────────────────
+  //
+  // CoStar uses two main patterns visible in innerText:
+  //   Stat cards:        "6.76%"  then  "Cap Rate"   (value ABOVE label)
+  //   Detail sections:   "Sale Date"  then  "Mar 27, 2026"  (label ABOVE value)
+  //   Tab-separated:     "Improvements\t$2,839,200\t$324.48/SF"
+  //
+  // We scan all lines and match labels, then look prev/next for the value.
 
-    // Strategy 1: Semantic label elements (dt, th, label, .label, etc.)
-    const labelSelectors = 'label, dt, th, .label, [class*="label"], [class*="Label"]';
-    const labelEls = document.querySelectorAll(labelSelectors);
-    for (const el of labelEls) {
-      const text = el.textContent?.trim().toLowerCase() || '';
-      if (text.length > 80) continue;
-      if (kwLower.some((kw) => text.includes(kw))) {
-        const sibling = el.nextElementSibling;
-        if (sibling?.textContent?.trim()) return sibling;
-        const parent = el.parentElement;
-        if (parent) {
-          const value = parent.querySelector('dd, td, .value, [class*="value"], [class*="Value"]');
-          if (value && value !== el) return value;
+  function extractFields(lines) {
+    const data = {};
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const prev = i > 0 ? lines[i - 1] : '';
+      const next = i < lines.length - 1 ? lines[i + 1] : '';
+
+      // ── Cap Rate ──────────────────────────────────────────────
+      if (!data.cap_rate) {
+        if (/^(actual\s+)?cap\s+rate$/i.test(line)) {
+          if (/[\d.]+%/.test(prev)) data.cap_rate = prev;
+          else if (/[\d.]+%/.test(next)) data.cap_rate = next;
+          // Handle blank line between label and value
+          else if (i < lines.length - 2 && /[\d.]+%/.test(lines[i + 2])) data.cap_rate = lines[i + 2];
         }
       }
-    }
 
-    // Strategy 2: Scan all compact elements (handles SPA card/tile layouts)
-    // This catches both label-above-value AND value-above-label patterns.
-    const allEls = document.querySelectorAll('div, span, p, td, li');
-    for (const el of allEls) {
-      const text = el.textContent?.trim() || '';
-      if (text.length < 2 || text.length > 60) continue;
-      // Skip containers with many children (those hold sections, not labels)
-      if (el.children.length > 3) continue;
-
-      const textLower = text.toLowerCase();
-      if (!kwLower.some((kw) => textLower.includes(kw))) continue;
-
-      // Label-above-value: next sibling holds the value
-      const next = el.nextElementSibling;
-      if (next) {
-        const nText = next.textContent?.trim();
-        if (nText && nText.length < 200 && nText.length > 0) return next;
+      // ── Sale Date ─────────────────────────────────────────────
+      if (!data.sale_date) {
+        if (/^sale\s+date$/i.test(line)) {
+          if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(prev)) data.sale_date = prev;
+          else if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(next)) data.sale_date = next;
+        }
       }
 
-      // Value-above-label (stat cards): previous sibling holds the value
-      const prev = el.previousElementSibling;
-      if (prev) {
-        const pText = prev.textContent?.trim();
-        if (pText && pText.length < 200 && pText.length > 0) return prev;
+      // ── Asking Price ──────────────────────────────────────────
+      if (!data.asking_price) {
+        if (/^asking\s+price$/i.test(line)) {
+          if (/^\$[\d,]+/.test(next)) data.asking_price = next;
+          else if (/^\$[\d,]+/.test(prev)) data.asking_price = prev;
+        }
       }
 
-      // Parent's other children (card with 2-3 children: icon, value, label)
-      const parent = el.parentElement;
-      if (parent && parent.children.length <= 5) {
-        for (const child of parent.children) {
-          if (child === el) continue;
-          const cText = child.textContent?.trim();
-          if (cText && cText.length < 200 && cText.toLowerCase() !== textLower) {
-            return child;
+      // ── Sale Price ────────────────────────────────────────────
+      if (!data.sale_price) {
+        if (/^sale\s+price$/i.test(line)) {
+          if (next && next.length < 60) data.sale_price = next;
+        }
+      }
+
+      // ── Square Footage (stat card: "8,750" above "SF RBA") ───
+      if (!data.square_footage) {
+        if (/^sf\s+rba$/i.test(line)) {
+          if (/^[\d,]+$/.test(prev)) data.square_footage = prev + ' SF';
+        }
+        // Detail section: "RBA" above "8,750 SF"
+        if (/^rba$/i.test(line)) {
+          if (/^[\d,]+\s*sf/i.test(next)) data.square_footage = next;
+        }
+      }
+
+      // ── Year Built ────────────────────────────────────────────
+      if (!data.year_built) {
+        if (/^(year\s+)?built$/i.test(line)) {
+          if (/^\d{4}$/.test(prev)) data.year_built = prev;
+          else if (/^\d{4}$/.test(next)) data.year_built = next;
+        }
+      }
+
+      // ── Stories ───────────────────────────────────────────────
+      if (!data.stories) {
+        if (/^stories$/i.test(line)) {
+          if (/^\d+$/.test(next)) data.stories = next;
+          else if (/^\d+$/.test(prev)) data.stories = prev;
+        }
+      }
+
+      // ── Building Class ────────────────────────────────────────
+      if (!data.building_class) {
+        if (/^class$/i.test(line)) {
+          if (/^[A-C]$/i.test(next)) data.building_class = next;
+          else if (/^[A-C]$/i.test(prev)) data.building_class = prev;
+        }
+      }
+
+      // ── Occupancy / Leased ────────────────────────────────────
+      if (!data.occupancy) {
+        if (/^leased(\s+at\s+sale)?$/i.test(line) || /^(percent\s+)?leased$/i.test(line) || /^occupancy$/i.test(line)) {
+          if (/^\d+%$/.test(prev)) data.occupancy = prev;
+          else if (/^\d+%$/.test(next)) data.occupancy = next;
+        }
+      }
+
+      // ── Zoning ────────────────────────────────────────────────
+      if (!data.zoning) {
+        if (/^zoning$/i.test(line)) {
+          if (next && next.length < 20 && !/^(market|land|parking)/i.test(next)) {
+            data.zoning = next;
           }
         }
       }
+
+      // ── Lot Size ──────────────────────────────────────────────
+      if (!data.lot_size) {
+        if (/^land\s+acres$/i.test(line)) {
+          if (/[\d.]+\s*ac/i.test(next)) data.lot_size = next;
+        } else if (/^land\s+sf$/i.test(line)) {
+          if (/[\d,]+\s*sf/i.test(next)) data.lot_size = next;
+        }
+      }
+
+      // ── Parking ───────────────────────────────────────────────
+      if (!data.parking) {
+        if (/^parking\s+ratio$/i.test(line)) {
+          if (next && next.length < 30) data.parking = next;
+        }
+      }
+
+      // ── Property Type ─────────────────────────────────────────
+      if (!data.property_type) {
+        if (/^type$/i.test(line)) {
+          // Must be in Building section — check that the value looks like a property type
+          if (next && next.length < 50 && !/^\d/.test(next) && !/^(investment|sale)/i.test(next)) {
+            data.property_type = next;
+          }
+        }
+      }
+
+      // ── NOI ───────────────────────────────────────────────────
+      if (!data.noi) {
+        if (/^noi$/i.test(line)) {
+          if (/^\$?[\d,]+/.test(next)) data.noi = next;
+          else if (/^\$?[\d,]+/.test(prev)) data.noi = prev;
+        }
+      }
+
+      // ── Price/SF ──────────────────────────────────────────────
+      if (!data.price_per_sf) {
+        if (/^price\/?sf$/i.test(line) || /^price\s+per\s+sf$/i.test(line)) {
+          if (/^\$?[\d,.]+/.test(next)) data.price_per_sf = next;
+          else if (/^\$?[\d,.]+/.test(prev)) data.price_per_sf = prev;
+        }
+      }
+
+      // ── Owner / Seller ────────────────────────────────────────
+      if (!data.owner_name) {
+        if (/^recorded\s+seller$/i.test(line)) {
+          if (next && next.length > 2 && next.length < 80) data.owner_name = next;
+        }
+      }
+
+      // ── Tenant ────────────────────────────────────────────────
+      if (!data.tenant_name) {
+        if (/^tenants?\s+at\s+sale$/i.test(line)) {
+          // Scan ahead: skip header lines like "Name", "Source:"
+          for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+            const t = lines[j];
+            if (!t || /^(name|source:|logo)$/i.test(t)) continue;
+            if (t.length > 2 && t.length < 80 && !/^\d+$/.test(t)) {
+              data.tenant_name = t;
+              break;
+            }
+          }
+        }
+      }
+
+      // ── Listing Broker ────────────────────────────────────────
+      if (!data.broker_name) {
+        if (/^listing\s+broker$/i.test(line)) {
+          for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+            const b = lines[j];
+            if (!b || /^(logo|no\s+)$/i.test(b)) continue;
+            if (b.startsWith('(') || b.includes('@')) continue;
+            if (b.length > 3 && b.length < 60) {
+              data.broker_name = b;
+              break;
+            }
+          }
+        }
+      }
+
+      // ── Tab-separated assessment table ────────────────────────
+      // "Improvements\t$2,839,200\t$324.48/SF"
+      // "Total Value\t$3,122,800\t$356.89/SF"
+      if (line.includes('\t')) {
+        const parts = line.split('\t').map((p) => p.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          const label = parts[0].toLowerCase();
+          const value = parts[1];
+          if (!data.improvement_value && label === 'improvements') data.improvement_value = value;
+          if (!data.assessed_value && label === 'total value') data.assessed_value = value;
+          if (!data.land_value && label === 'land') data.land_value = value;
+        }
+      }
+
+      // ── Parcels ───────────────────────────────────────────────
+      if (!data.parcel_number) {
+        if (/^parcels?$/i.test(line)) {
+          if (next && /^[\d-]+$/.test(next)) data.parcel_number = next;
+        }
+      }
     }
 
-    return null;
+    return data;
   }
 
   // ── LCC Button injection ──────────────────────────────────────────────
