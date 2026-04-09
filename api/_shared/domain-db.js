@@ -50,7 +50,7 @@ export async function domainQuery(domain, method, path, body, extraHeaders = {})
     'apikey': creds.key,
     'Authorization': `Bearer ${creds.key}`,
     'Content-Type': 'application/json',
-    'Prefer': method === 'GET' ? 'count=exact' : 'return=representation',
+    'Prefer': 'return=representation',
     ...extraHeaders,
   };
 

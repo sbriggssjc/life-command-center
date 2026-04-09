@@ -1111,30 +1111,44 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
 async function upsertDomainOwners(domain, propertyId, entity, metadata) {
   const results = { owners: 0, history: 0 };
   const ownerIds = new Map(); // name → recorded_owner_id
+  const nameCol = domain === 'government' ? 'canonical_name' : 'normalized_name';
 
-  // Helper to find-or-create a recorded owner by name
-  async function ensureRecordedOwner(name, address) {
-    if (!name) return null;
-    const normalizedName = name.trim().toLowerCase()
+  // Normalize an owner name for dedup matching
+  function normalizeOwnerName(n) {
+    return n.trim().toLowerCase()
       .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
       .replace(/[^a-z0-9\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  // Bulk-prefetch existing recorded_owners to avoid per-owner round-trips
+  const allOwnerNames = new Set();
+  for (const c of (metadata.contacts || []).filter(c => c.role === 'owner')) {
+    if (c.name) allOwnerNames.add(normalizeOwnerName(c.name));
+  }
+  for (const s of (metadata.sales_history || [])) {
+    if (s.buyer) allOwnerNames.add(normalizeOwnerName(s.buyer));
+    if (s.seller) allOwnerNames.add(normalizeOwnerName(s.seller));
+  }
+  if (allOwnerNames.size > 0) {
+    const nameList = [...allOwnerNames].map(n => encodeURIComponent(n)).join(',');
+    const prefetch = await domainQuery(domain, 'GET',
+      `recorded_owners?${nameCol}=in.(${nameList})&select=recorded_owner_id,${nameCol}&limit=50`
+    );
+    if (prefetch.ok && Array.isArray(prefetch.data)) {
+      for (const row of prefetch.data) {
+        ownerIds.set(row[nameCol], row.recorded_owner_id);
+      }
+    }
+  }
+
+  // Helper to find-or-create a recorded owner by name
+  async function ensureRecordedOwner(name, address) {
+    if (!name) return null;
+    const normalizedName = normalizeOwnerName(name);
 
     if (ownerIds.has(normalizedName)) return ownerIds.get(normalizedName);
-
-    // Domain-aware name column: dialysis=normalized_name, gov=canonical_name
-    const nameCol = domain === 'government' ? 'canonical_name' : 'normalized_name';
-
-    const lookup = await domainQuery(domain, 'GET',
-      `recorded_owners?${nameCol}=eq.${encodeURIComponent(normalizedName)}&select=recorded_owner_id&limit=1`
-    );
-
-    if (lookup.ok && lookup.data?.length) {
-      const id = lookup.data[0].recorded_owner_id;
-      ownerIds.set(normalizedName, id);
-      return id;
-    }
 
     // Parse address if provided — domain-aware storage
     // Dialysis: flat address/city/state columns
@@ -1244,13 +1258,7 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
   // Link the current owner to the property record
   const currentOwner = ownerContacts[0];
   if (currentOwner) {
-    const ownerId = ownerIds.get(
-      currentOwner.name.trim().toLowerCase()
-        .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    );
+    const ownerId = ownerIds.get(normalizeOwnerName(currentOwner.name));
     if (ownerId) {
       await domainQuery(domain, 'PATCH',
         `properties?property_id=eq.${propertyId}`,
@@ -1318,6 +1326,15 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     });
   }
 
+  // Fetch all existing leases for this property once
+  const existing = await domainQuery(
+    domain, 'GET',
+    `leases?property_id=eq.${propertyId}&select=lease_id,tenant&limit=50`
+  );
+  const existingTenants = new Set(
+    (existing.data || []).map(l => l.tenant?.toLowerCase().trim())
+  );
+
   let count = 0;
   for (const record of leaseRecords) {
     const cleaned = stripNulls(record);
@@ -1326,21 +1343,20 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     cleaned.status = 'active';
     cleaned.is_active = true;
 
-    // Dedup: look up existing lease by property_id + tenant (case-insensitive)
-    const encodedTenant = encodeURIComponent(record.tenant);
-    const lookup = await domainQuery(domain, 'GET',
-      `leases?property_id=eq.${propertyId}&tenant=ilike.${encodedTenant}&select=id&limit=1`
-    );
-
-    if (lookup.ok && lookup.data?.length) {
-      // PATCH existing lease
+    const tenantKey = record.tenant.toLowerCase().trim();
+    if (existingTenants.has(tenantKey)) {
+      // PATCH existing lease — find its lease_id and update
+      const existingLease = existing.data.find(
+        l => l.tenant?.toLowerCase().trim() === tenantKey
+      );
       const { property_id: _pid, ...patchData } = cleaned;
       await domainQuery(domain, 'PATCH',
-        `leases?id=eq.${lookup.data[0].id}`, patchData);
+        `leases?lease_id=eq.${existingLease.lease_id}`, patchData);
     } else {
       // INSERT new lease
       const result = await domainQuery(domain, 'POST', 'leases', cleaned);
       if (result.ok) count++;
+      existingTenants.add(tenantKey); // prevent double-insert within same run
     }
   }
 
