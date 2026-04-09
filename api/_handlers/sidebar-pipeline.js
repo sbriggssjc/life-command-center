@@ -607,6 +607,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   // Step 5b: Upsert sales transactions
   results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
 
+  // Step 5b1.5: Upsert available_listings (government only)
+  if (domain === 'government') {
+    results.records.listings = await upsertGovListings(propertyId, entity, metadata);
+  }
+
   // Step 5b2: Upsert broker links (dialysis only)
   if (domain === 'dialysis') {
     results.records.brokers = await upsertDialysisBrokerLinks(propertyId, results.records.sales, metadata);
@@ -1215,6 +1220,94 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   }
 
   return count;
+}
+
+// ── Step 5f: Upsert available_listings (government only) ──────────────────
+
+/**
+ * Upsert a listing record in the government available_listings table.
+ * Trigger: only writes if metadata.asking_price is present OR any
+ *          sales_history entry has is_current: true.
+ * Dedup: property_id + listing_status='Active' — one active listing per property.
+ *        If one already exists, PATCH it; otherwise INSERT.
+ */
+async function upsertGovListings(propertyId, entity, metadata) {
+  // Trigger guard
+  const hasAskingPrice = !!metadata.asking_price;
+  const hasCurrentSale = Array.isArray(metadata.sales_history)
+    && metadata.sales_history.some(s => s.is_current === true);
+  if (!hasAskingPrice && !hasCurrentSale) return 0;
+
+  // Derive listing_date from the most recent is_current sale, else today
+  let listingDate = new Date().toISOString().split('T')[0];
+  if (Array.isArray(metadata.sales_history)) {
+    const currentSale = metadata.sales_history.find(s => s.is_current === true);
+    if (currentSale?.sale_date) {
+      const parsed = parseDate(currentSale.sale_date);
+      if (parsed) listingDate = parsed.split('T')[0];
+    }
+  }
+
+  // Find broker / seller contacts
+  const contacts = metadata.contacts || [];
+  const brokerContact = contacts.find(c => c.role === 'listing_broker') || null;
+  const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
+
+  // Compute firm_term_remaining from lease_expiration
+  let firmTermRemaining = null;
+  const leaseExp = parseDate(metadata.lease_expiration);
+  if (leaseExp) {
+    const diffMs = new Date(leaseExp).getTime() - Date.now();
+    if (diffMs > 0) {
+      firmTermRemaining = Math.round((diffMs / (365.25 * 24 * 60 * 60 * 1000)) * 10) / 10;
+    }
+  }
+
+  const sfInt = parseSF(metadata.square_footage);
+
+  const record = stripNulls({
+    property_id: propertyId,
+    listing_source: 'costar_sidebar',
+    address: entity.address || null,
+    city: entity.city || null,
+    state: entity.state || null,
+    square_feet: sfInt != null ? Math.round(sfInt) : null,
+    asking_price: parseCurrency(metadata.asking_price),
+    asking_cap_rate: parsePercent(metadata.cap_rate),
+    asking_price_psf: parseCurrency(metadata.price_per_sf),
+    listing_date: listingDate,
+    listing_status: 'Active',
+    days_on_market: parseIntSafe(metadata.days_on_market),
+    tenant_agency: metadata.tenant_name || metadata.primary_tenant
+      || metadata.tenants?.[0]?.name || null,
+    annual_rent: parseCurrency(metadata.annual_rent),
+    lease_expiration: parseDate(metadata.lease_expiration)?.split('T')[0] || null,
+    firm_term_remaining: firmTermRemaining,
+    listing_broker: brokerContact?.name || null,
+    listing_firm: brokerContact?.company || null,
+    broker_phone: brokerContact?.phones?.[0] || null,
+    broker_email: brokerContact?.email || null,
+    seller_name: sellerContact?.name || null,
+  });
+
+  // Always keep property_id and listing_status even after stripNulls
+  record.property_id = propertyId;
+  record.listing_status = 'Active';
+
+  // Dedup: one active listing per property
+  const lookup = await domainQuery('government', 'GET',
+    `available_listings?property_id=eq.${propertyId}&listing_status=eq.Active&select=id&limit=1`
+  );
+
+  if (lookup.ok && lookup.data?.length) {
+    const { property_id: _pid, ...patchData } = record;
+    await domainQuery('government', 'PATCH',
+      `available_listings?id=eq.${lookup.data[0].id}`, patchData);
+    return 0; // updated, not newly created
+  }
+
+  const result = await domainQuery('government', 'POST', 'available_listings', record);
+  return result.ok ? 1 : 0;
 }
 
 // ── Main pipeline entry point ───────────────────────────────────────────────
