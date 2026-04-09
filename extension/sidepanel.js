@@ -304,24 +304,39 @@ async function loadPropertyTab() {
     </div>`;
   }
 
-  // Render fields — compare table if matched, simple list if not
-  if (matched && ctx && ctx.address) {
-    html += renderCompareTable(ctx, lccEntity, domainLabel);
-  } else if (ctx && ctx.address) {
-    html += renderDetectedFields(ctx, domainLabel);
-  } else if (matched) {
+  // ── SECTION 1: Existing LCC data (shown first when matched) ───────
+  if (matched) {
+    html += '<div class="lcc-section">';
+    html += '<div class="lcc-section-header">In LCC Database</div>';
     html += renderLccFields(lccEntity, responseData);
+    html += renderRelatedLccData(responseData, lccEntity);
+    html += '</div>';
   }
 
-  // Assessor/recorder extra fields (parcel, assessed value, etc.)
-  // These can come from public records OR from CoStar's embedded public records section
+  // ── SECTION 2: Source data / proposed changes ─────────────────────
+  if (ctx && ctx.address) {
+    if (matched) {
+      html += renderCompareTable(ctx, lccEntity, domainLabel);
+    } else {
+      html += renderDetectedFields(ctx, domainLabel);
+    }
+  }
+
+  // Assessor/recorder extra fields
   if (ctx && ASSESSOR_FIELDS.some(([key]) => ctx[key])) {
     html += renderAssessorFields(ctx);
   }
 
-  // Related data from LCC (leases, ownership, tasks)
-  if (matched) {
-    html += renderRelatedLccData(responseData, lccEntity);
+  // ── SECTION 3: Contacts from source ───────────────────────────────
+  const contacts = ctx?.contacts || [];
+  if (contacts.length) {
+    html += renderContacts(contacts);
+  }
+
+  // ── SECTION 4: Sales history from source ──────────────────────────
+  const salesHistory = ctx?.sales_history || [];
+  if (salesHistory.length) {
+    html += renderSalesHistory(salesHistory);
   }
 
   body.innerHTML = html;
@@ -355,14 +370,16 @@ function renderDetectedFields(ctx, sourceLabel) {
 }
 
 function renderCompareTable(ctx, lccEntity, sourceLabel) {
+  // Only show fields where source has data that's new or different from LCC
   const rows = PROPERTY_FIELDS.filter(([srcKey, , lccKey]) =>
-    ctx[srcKey] || lccEntity[lccKey]
+    ctx[srcKey] && (!lccEntity[lccKey] || ctx[srcKey] !== String(lccEntity[lccKey]))
   );
 
-  if (!rows.length) return '<div class="empty-state">No comparable fields found</div>';
+  if (!rows.length) return `<div class="section-label">No new data from ${escapeHtml(sourceLabel || 'source')}</div>`;
 
-  let html = '<table class="compare-table">';
-  html += `<tr><th>Field</th><th>${escapeHtml(sourceLabel || 'Source')}</th><th>LCC</th></tr>`;
+  let html = `<div class="section-label">Proposed Updates from ${escapeHtml(sourceLabel || 'Source')}</div>`;
+  html += '<table class="compare-table">';
+  html += `<tr><th>Field</th><th>${escapeHtml(sourceLabel || 'Source')}</th><th>Current LCC</th></tr>`;
 
   for (const [srcKey, label, lccKey] of rows) {
     const srcVal = ctx[srcKey] || '';
@@ -560,6 +577,60 @@ function renderRelatedLccData(responseData, lccEntity) {
     html += `<div class="context-field" style="margin-top:8px;"><span class="context-label">Research Status</span><span class="context-value">${escapeHtml(lccEntity.research_status)}</span></div>`;
   }
 
+  return html;
+}
+
+// ── Contacts display ────────────────────────────────────────────────────────
+
+function renderContacts(contacts) {
+  if (!contacts.length) return '';
+  const roleLabels = {
+    listing_broker: 'Listing Broker',
+    buyer_broker: 'Buyer Broker',
+    seller: 'Seller',
+    buyer: 'Buyer',
+    lender: 'Lender',
+  };
+
+  let html = '<div class="section-label">Contacts</div>';
+  for (const c of contacts) {
+    html += '<div class="contact-card">';
+    html += `<div class="contact-role">${escapeHtml(roleLabels[c.role] || c.role || '')}</div>`;
+    html += `<div class="contact-name">${escapeHtml(c.name || '')}</div>`;
+    if (c.title) html += `<div class="contact-detail">${escapeHtml(c.title)}</div>`;
+    if (c.company) html += `<div class="contact-detail">${escapeHtml(c.company)}</div>`;
+    if (c.email) html += `<div class="contact-detail"><a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a></div>`;
+    if (c.phones && c.phones.length) {
+      html += `<div class="contact-detail">${c.phones.map((p) => escapeHtml(p)).join(' &middot; ')}</div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+// ── Sales history display ───────────────────────────────────────────────────
+
+function renderSalesHistory(sales) {
+  if (!sales.length) return '';
+  let html = '<div class="section-label">Sales History</div>';
+  for (const s of sales) {
+    html += '<div class="sale-row">';
+    html += '<div class="sale-row-header">';
+    html += `<span class="sale-date">${escapeHtml(s.sale_date || '—')}</span>`;
+    html += `<span class="sale-price">${escapeHtml(s.sale_price || s.asking_price || '—')}</span>`;
+    html += '</div>';
+    const details = [];
+    if (s.cap_rate) details.push(`Cap: ${s.cap_rate}`);
+    if (s.sale_type) details.push(s.sale_type);
+    if (s.sale_condition) details.push(s.sale_condition);
+    if (s.hold_period) details.push(`Hold: ${s.hold_period}`);
+    if (s.seller) details.push(`Seller: ${s.seller}`);
+    if (s.buyer) details.push(`Buyer: ${s.buyer}`);
+    if (details.length) {
+      html += `<div class="sale-detail">${details.map((d) => escapeHtml(d)).join(' &middot; ')}</div>`;
+    }
+    html += '</div>';
+  }
   return html;
 }
 
