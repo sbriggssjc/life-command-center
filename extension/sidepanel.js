@@ -476,12 +476,9 @@ function wirePropertyActions(ctx, lccEntity) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
-      // Use action=link: auto-matches by canonical name, creates if no match
+      // Create new entity via POST /api/entities
       const fields = extractSourceFields(ctx);
-      const result = await apiCall('/api/entities?action=link', {
-        source_system: domain || 'extension',
-        source_type: 'property',
-        external_id: ctx.parcel_number || ctx.page_url || ctx.address,
+      const result = await apiCall('/api/entities', {
         entity_type: 'asset',
         name: ctx.address,
         address: ctx.address,
@@ -489,16 +486,27 @@ function wirePropertyActions(ctx, lccEntity) {
         state: ctx.state,
         asset_type: fields.property_type || 'property',
         description: `Imported from ${domainLabel}`,
-        ...fields,
       });
 
+      // If created, link the external identity (CoStar parcel/URL)
+      const newEntityId = result.data?.entity?.id;
+      if (result.ok && newEntityId) {
+        const extId = ctx.parcel_number || ctx.page_url || ctx.address;
+        await apiCall('/api/entities?action=link', {
+          entity_id: newEntityId,
+          source_system: domain || 'extension',
+          source_type: 'property',
+          external_id: extId,
+          external_url: ctx.page_url || null,
+        }).catch(() => {}); // linking is best-effort
+      }
+
       if (result.ok) {
-        const linked = result.data?.linked || result.data?.entity?.id;
         saveBtn.className = 'btn btn-sm btn-success';
-        saveBtn.textContent = linked ? 'Linked!' : 'Saved!';
+        saveBtn.textContent = 'Saved!';
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
-        toast.textContent = linked ? 'Matched and linked to existing LCC entity' : 'Property added to LCC';
+        toast.textContent = 'Property added to LCC';
         $('#propertyActions').prepend(toast);
         setTimeout(() => loadPropertyTab(), 1500);
       } else {
@@ -708,15 +716,11 @@ function loadOrgView(source, domainLabel) {
         if (source[key]) fields[key] = source[key];
       }
 
-      const result = await apiCall('/api/entities?action=link', {
-        source_system: source.domain || 'public-records',
-        source_type: 'organization',
-        external_id: fields.filing_number || name,
+      const result = await apiCall('/api/entities', {
         entity_type: 'organization',
         name,
         org_type: fields.entity_type_detail || null,
         description: `Imported from ${source.domain || 'public-records'}`,
-        ...fields,
       });
 
       if (result.ok) {
