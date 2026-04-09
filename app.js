@@ -5017,6 +5017,14 @@ function renderPriorityTasks() {
       _mwSeen.add(key);
       return true;
     });
+    // Sort: overdue first, then by received_at descending (newest first)
+    const _now = new Date();
+    dedupedItems.sort((a, b) => {
+      const aOverdue = a.due_date && new Date(a.due_date) < _now ? 1 : 0;
+      const bOverdue = b.due_date && new Date(b.due_date) < _now ? 1 : 0;
+      if (aOverdue !== bOverdue) return bOverdue - aOverdue;
+      return (b.received_at || '').localeCompare(a.received_at || '');
+    });
     let html = '';
     for (const item of dedupedItems) {
       const title = esc(item.title || '(Untitled)');
