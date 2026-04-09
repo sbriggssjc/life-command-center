@@ -607,9 +607,12 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   // Step 5b: Upsert sales transactions
   results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
 
-  // Step 5b1.5: Upsert available_listings (government only)
+  // Step 5b1.5: Upsert available_listings
   if (domain === 'government') {
     results.records.listings = await upsertGovListings(propertyId, entity, metadata);
+  }
+  if (domain === 'dialysis') {
+    results.records.listings = await upsertDialysisListings(propertyId, metadata);
   }
 
   // Step 5b2: Upsert broker links
@@ -1299,7 +1302,68 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   return count;
 }
 
-// ── Step 5f: Upsert available_listings (government only) ──────────────────
+// ── Step 5f: Upsert available_listings ─────────────────────────────────────
+
+/**
+ * Upsert a listing record in the dialysis available_listings table.
+ * Trigger: only writes if metadata.asking_price is present OR any
+ *          sales_history entry has is_current: true.
+ * Dedup: property_id + is_active=true — one active listing per property.
+ *        If one already exists, PATCH price/cap_rate; otherwise INSERT.
+ * Returns 1 if a record was created or updated, 0 if skipped.
+ */
+async function upsertDialysisListings(propertyId, metadata) {
+  // Trigger guard
+  const hasAskingPrice = !!metadata.asking_price;
+  const hasCurrentSale = Array.isArray(metadata.sales_history)
+    && metadata.sales_history.some(s => s.is_current === true);
+  if (!hasAskingPrice && !hasCurrentSale) return 0;
+
+  const contacts = metadata.contacts || [];
+  const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
+  const brokerContact = contacts.find(c => c.role === 'listing_broker') || null;
+
+  const record = stripNulls({
+    property_id: propertyId,
+    initial_price: parseCurrency(metadata.asking_price),
+    last_price: parseCurrency(metadata.asking_price),
+    current_cap_rate: parsePercent(metadata.cap_rate),
+    cap_rate: parsePercent(metadata.cap_rate),
+    listing_date: new Date().toISOString().split('T')[0],
+    status: 'Active',
+    is_active: true,
+    seller_name: sellerContact?.name || null,
+    listing_broker: brokerContact?.name || null,
+    broker_email: brokerContact?.email || null,
+    price_per_sf: parseCurrency(metadata.price_per_sf),
+  });
+
+  // Always keep property_id, status, and is_active even after stripNulls
+  record.property_id = propertyId;
+  record.status = 'Active';
+  record.is_active = true;
+
+  // Dedup: one active listing per property
+  const lookup = await domainQuery('dialysis', 'GET',
+    `available_listings?property_id=eq.${propertyId}&is_active=is.true&select=property_id&limit=1`
+  );
+
+  if (lookup.ok && lookup.data?.length) {
+    // Update price and cap rate on existing active listing
+    const patchData = stripNulls({
+      last_price: parseCurrency(metadata.asking_price),
+      current_cap_rate: parsePercent(metadata.cap_rate),
+      cap_rate: parsePercent(metadata.cap_rate),
+      price_per_sf: parseCurrency(metadata.price_per_sf),
+    });
+    await domainQuery('dialysis', 'PATCH',
+      `available_listings?property_id=eq.${propertyId}&is_active=is.true`, patchData);
+    return 1;
+  }
+
+  const result = await domainQuery('dialysis', 'POST', 'available_listings', record);
+  return result.ok ? 1 : 0;
+}
 
 /**
  * Upsert a listing record in the government available_listings table.
