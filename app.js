@@ -1290,12 +1290,13 @@ let mktExpandedDeal = null;    // deal name currently expanded to show call hist
 function classifyTaskDomain(subject, notes) {
   var text = ((subject || '') + ' ' + (notes || '')).trim();
   if (!text) return 'all_other';
+  // Dialysis patterns — checked FIRST because dialysis operators are more specific
+  // and some property text (e.g., "Medical Office") could false-match government patterns
+  if (/(dialysis|DaVita|Fresenius|\bFMC\b|kidney|renal|nephrology|Innovative Renal|\bDCI\b|Satellite Dial|U\.?S\.?\s*Renal|American Renal|Greenfield Renal)/i.test(text)) return 'dialysis';
   // Government patterns
   if (/(\bVA\b|veterans affairs|\bGSA\b|USDA|\bFBI\b|\bCBP\b|\bIRS\b|\bSSA\b|\bDOJ\b|\bDEA\b|\bUSPS\b|\bHHS\b|\bHUD\b|\bDOL\b|\bEPA\b|\bFAA\b|\bFEMA\b|\bFWS\b|Army|Navy|Air Force|Coast Guard|\bDHS\b|Homeland Security|\bACOE\b|Bureau of|Census|Customs|Federal |USCIS|\bICE\b|Secret Service|Marshal|Corps of Eng|Reclamation|\bBLM\b|Fish.*Wildlife|Forest Service|National Guard|National Preserve|\bNPS\b)/i.test(text)) return 'government';
   if (/(Dept\.?\s*of|Department of|County\s|City of\s|State of\s|Municipal|Probation|Corrections|\bDMV\b|Motor Vehicles|State Police|\bDOT\b|Dept of Health|\bDCFS\b|Public Safety|Sheriff|District Attorney)/i.test(text)) return 'government';
   if (/^[A-Z]{2}\s+Dept/i.test(subject || '')) return 'government';
-  // Dialysis patterns
-  if (/(dialysis|DaVita|Fresenius|\bFMC\b|kidney|renal|nephrology|Innovative Renal|\bDCI\b|Satellite Dial|U\.?S\.?\s*Renal|American Renal|Greenfield Renal)/i.test(text)) return 'dialysis';
   return 'all_other';
 }
 
