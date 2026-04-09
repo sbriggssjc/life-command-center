@@ -9,7 +9,11 @@
   'use strict';
 
   let lastDetectedId = null;
+  let lastContentLen = 0;
   let extractionTimer = null;
+
+  // Accumulated data: merges across CoStar tab switches and popups
+  let accumulated = { contacts: [], sales_history: [] };
 
   const observer = new MutationObserver(() => {
     clearTimeout(extractionTimer);
@@ -52,9 +56,22 @@
     }
 
     const identifier = address || document.title || url;
+
+    // Detect if page content actually changed (tab switch, popup, etc.)
+    const contentLen = document.body.textContent.length;
+    const contentChanged = Math.abs(contentLen - lastContentLen) > 50;
     const pageId = identifier + '|' + url;
-    if (pageId === lastDetectedId) return;
+
+    // Skip if same page and content hasn't changed
+    if (pageId === lastDetectedId && !contentChanged) return;
     lastDetectedId = pageId;
+    lastContentLen = contentLen;
+
+    // If address changed (navigated to different property), reset accumulation
+    if (accumulated._address && accumulated._address !== identifier) {
+      accumulated = { contacts: [], sales_history: [] };
+    }
+    accumulated._address = identifier;
 
     if (!lines) lines = getPageLines();
     const data = extractFields(lines);
@@ -62,22 +79,51 @@
     const salesHistory = extractSalesHistory(lines);
     const location = findLocationInLines(lines);
 
+    // Merge new data into accumulated (preserves data from prior tab views)
+    for (const [key, val] of Object.entries(data)) {
+      if (val) accumulated[key] = val;
+    }
+    mergeContacts(accumulated.contacts, contacts);
+    mergeSales(accumulated.sales_history, salesHistory);
+    if (location.city) accumulated.city = location.city;
+    if (location.state) accumulated.state = location.state;
+
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
       data: {
         domain: 'costar',
         entity_type: 'property',
+        _version: 7,
         address: address || document.title,
         page_url: url,
-        city: location.city,
-        state: location.state,
-        contacts,
-        sales_history: salesHistory,
-        ...data,
+        city: accumulated.city,
+        state: accumulated.state,
+        ...accumulated,
+        contacts: accumulated.contacts,
+        sales_history: accumulated.sales_history,
       },
     });
 
     if (headingEl) injectLccButton(headingEl);
+  }
+
+  function mergeContacts(existing, newContacts) {
+    for (const c of newContacts) {
+      const dup = existing.some((e) =>
+        e.name === c.name && e.role === c.role
+      );
+      if (!dup) existing.push(c);
+    }
+  }
+
+  function mergeSales(existing, newSales) {
+    for (const s of newSales) {
+      const dup = existing.some((e) =>
+        e.sale_date === s.sale_date && e.sale_price === s.sale_price &&
+        e.buyer === s.buyer && e.seller === s.seller
+      );
+      if (!dup) existing.push(s);
+    }
   }
 
   // ── Page text helpers ─────────────────────────────────────────────────

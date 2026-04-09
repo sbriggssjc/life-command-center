@@ -273,7 +273,7 @@ async function loadPropertyTab() {
   header.innerHTML = `
     <div class="property-title">${escapeHtml(address)}</div>
     ${city || state ? `<div class="property-subtitle">${escapeHtml([city, state].filter(Boolean).join(', '))}</div>` : ''}
-    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}</div>
+    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}${source._version ? ` v${source._version}` : ''}</div>
   `;
 
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
