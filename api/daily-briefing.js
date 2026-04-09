@@ -6,7 +6,7 @@
 // ============================================================================
 
 import { authenticate, handleCors } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { fetchWithTimeout, opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 
@@ -77,7 +77,7 @@ function buildBriefingId(asOf, workspaceId, userId, roleView) {
 async function fetchMorningStructured() {
   if (!MORNING_STRUCTURED_URL) return { ok: false, missing: true, reason: 'structured_url_not_configured' };
   try {
-    const res = await fetch(MORNING_STRUCTURED_URL, { headers: { Accept: 'application/json' } });
+    const res = await fetchWithTimeout(MORNING_STRUCTURED_URL, { headers: { Accept: 'application/json' } }, 5000);
     if (!res.ok) return { ok: false, missing: true, reason: `structured_http_${res.status}` };
     const payload = await res.json();
     const normalized = normalizeMorningStructured(payload);
@@ -91,7 +91,7 @@ async function fetchMorningStructured() {
 async function fetchMorningHtml() {
   if (!MORNING_HTML_URL) return { ok: false, missing: true, reason: 'html_url_not_configured' };
   try {
-    const res = await fetch(MORNING_HTML_URL, { headers: { Accept: 'text/html,application/json;q=0.9,*/*;q=0.8' } });
+    const res = await fetchWithTimeout(MORNING_HTML_URL, { headers: { Accept: 'text/html,application/json;q=0.9,*/*;q=0.8' } }, 5000);
     if (!res.ok) return { ok: false, missing: true, reason: `html_http_${res.status}` };
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
@@ -321,9 +321,10 @@ async function fetchRecentSfActivity(workspaceId, limit = 30) {
 async function fetchHotContacts(limit = 15) {
   if (!GOV_URL || !GOV_KEY) return [];
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${GOV_URL}/rest/v1/unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`,
-      { headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}` } }
+      { headers: { 'apikey': GOV_KEY, 'Authorization': `Bearer ${GOV_KEY}` } },
+      5000
     );
     return res.ok ? await res.json() : [];
   } catch { return []; }
@@ -333,12 +334,12 @@ async function fetchDiaPipeline() {
   if (!DIA_URL || !DIA_KEY) return { deals: [], leads: [] };
   try {
     const [dealsRes, leadsRes] = await Promise.all([
-      fetch(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&is_closed=eq.false&order=activity_date.desc&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
+      fetchWithTimeout(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Opportunity&is_closed=eq.false&order=activity_date.desc&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
         headers: { 'apikey': DIA_KEY, 'Authorization': `Bearer ${DIA_KEY}` }
-      }),
-      fetch(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Task&is_closed=eq.false&order=due_date.asc.nullslast&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
+      }, 5000),
+      fetchWithTimeout(`${DIA_URL}/rest/v1/salesforce_activities?nm_type=eq.Task&is_closed=eq.false&order=due_date.asc.nullslast&limit=20&select=id,subject,who_name,what_name,status,activity_date,due_date,priority,description`, {
         headers: { 'apikey': DIA_KEY, 'Authorization': `Bearer ${DIA_KEY}` }
-      })
+      }, 5000)
     ]);
     return {
       deals: dealsRes.ok ? await dealsRes.json() : [],
@@ -935,16 +936,16 @@ export default withErrorHandler(async function handler(req, res) {
   const safe = (fn, fallback) => fn().catch((err) => { console.error(`[Briefing fetch failed] ${fn.name || 'anonymous'}:`, err.message || err); return fallback; });
 
   const [morningStructured, morningHtml, workCounts, myWork, inboxSummary, unassignedWork, syncHealth, sfActivity, hotContacts, diaPipeline, crossDomainHighlights] = await Promise.all([
-    fetchMorningStructured(),
-    fetchMorningHtml(),
+    safe(fetchMorningStructured, { ok: false, missing: true, reason: 'structured_fetch_timeout' }),
+    safe(fetchMorningHtml, { ok: false, missing: true, reason: 'html_fetch_timeout' }),
     safe(() => fetchWorkCounts(workspaceId, user.id), defaultWorkCounts),
     safe(() => fetchMyWork(workspaceId, user.id, 15), []),
     safe(() => fetchInboxSummary(workspaceId, 10), defaultInbox),
     safe(() => fetchUnassignedWork(workspaceId, 10), []),
     safe(() => fetchSyncHealthSnapshot(workspaceId), defaultSyncHealth),
     safe(() => fetchRecentSfActivity(workspaceId, 30), []),
-    fetchHotContacts(15),
-    fetchDiaPipeline(),
+    safe(() => fetchHotContacts(15), []),
+    safe(fetchDiaPipeline, { deals: [], leads: [] }),
     safe(() => fetchCrossDomainOwnersDueForTouch(workspaceId, 5), [])
   ]);
 

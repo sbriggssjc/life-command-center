@@ -26,7 +26,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
-import { logPerfMetric, opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { fetchWithTimeout, logPerfMetric, opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
@@ -348,9 +348,10 @@ async function ingestEmails(req, res, user, workspaceId) {
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const skip = page * PAGE_LIMIT;
-      const edgeRes = await fetch(
+      const edgeRes = await fetchWithTimeout(
         `${EDGE_FN_URL}/sync/flagged-emails?limit=${PAGE_LIMIT}&skip=${skip}`,
-        { headers: hdrs }
+        { headers: hdrs },
+        7000
       );
       if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
@@ -521,9 +522,11 @@ async function ingestCalendar(req, res, user, workspaceId) {
   let processed = 0, failed = 0;
 
   try {
-    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=${calendarParam}`, {
-      headers: connectorHeaders(connector)
-    });
+    const edgeRes = await fetchWithTimeout(
+      `${EDGE_FN_URL}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=${calendarParam}`,
+      { headers: connectorHeaders(connector) },
+      7000
+    );
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
@@ -593,9 +596,11 @@ async function ingestSfActivities(req, res, user, workspaceId) {
   let processed = 0, failed = 0;
 
   try {
-    const edgeRes = await fetch(`${EDGE_FN_URL}/sync/sf-activities?limit=2000&sort_dir=desc&assigned_to=all`, {
-      headers: connectorHeaders(connector)
-    });
+    const edgeRes = await fetchWithTimeout(
+      `${EDGE_FN_URL}/sync/sf-activities?limit=2000&sort_dir=desc&assigned_to=all`,
+      { headers: connectorHeaders(connector) },
+      7000
+    );
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
@@ -756,11 +761,11 @@ async function handleOutbound(req, res, user, workspaceId) {
         await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
       }
 
-      const edgeRes = await fetch(endpoint, {
+      const edgeRes = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: connectorHeaders(connector),
         body: JSON.stringify({ ...payload, correlation_id: correlationId })
-      });
+      }, 7000);
 
       if (edgeRes.ok) {
         const data = await edgeRes.json();
@@ -1117,9 +1122,9 @@ async function handleVerifyConnector(req, res, user, workspaceId) {
   }
 
   try {
-    const probeRes = await fetch(`${EDGE_FN_URL}${probeEndpoint}`, {
+    const probeRes = await fetchWithTimeout(`${EDGE_FN_URL}${probeEndpoint}`, {
       headers: connectorHeaders(connector)
-    });
+    }, 5000);
     checks.edge_function_reachable = probeRes.ok || probeRes.status < 500;
     checks.edge_function_status = probeRes.status;
 
