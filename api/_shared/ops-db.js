@@ -44,7 +44,7 @@ export async function opsQuery(method, path, body, extraHeaders = {}) {
     opts.body = JSON.stringify(body);
   }
 
-  const res = await fetch(url, opts);
+  const res = await fetchWithTimeout(url, opts, 8000);
   const text = await res.text();
 
   let data = null;
@@ -114,6 +114,21 @@ export function requireOps(res) {
  *   import { withErrorHandler } from './_shared/ops-db.js';
  *   export default withErrorHandler(async (req, res) => { ... });
  */
+/**
+ * Fetch with an AbortController-based timeout.
+ * Prevents serverless functions from hanging past Vercel's execution limit.
+ * @param {string} url
+ * @param {object} [opts] - fetch options
+ * @param {number} [timeoutMs=8000] - timeout in milliseconds (default 8s, under Vercel Hobby 10s limit)
+ * @returns {Promise<Response>}
+ */
+export function fetchWithTimeout(url, opts = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
 export function withErrorHandler(handler) {
   return async (req, res) => {
     try {
