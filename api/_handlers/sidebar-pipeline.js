@@ -826,16 +826,30 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     // Look up existing broker by normalized_name
     const encodedNorm = encodeURIComponent(normalized);
     const lookup = await domainQuery('dialysis', 'GET',
-      `brokers?normalized_name=eq.${encodedNorm}&select=broker_id&limit=1`
+      `brokers?normalized_name=eq.${encodedNorm}&select=broker_id,email,phone&limit=1`
     );
 
     let brokerId;
     if (lookup.ok && lookup.data?.length) {
       brokerId = lookup.data[0].broker_id;
+
+      // Patch null contact fields if we now have data
+      const existing = lookup.data[0];
+      const patch = stripNulls({
+        email: existing.email == null && contact.email ? contact.email : null,
+        phone: existing.phone == null && contact.phones?.[0] ? contact.phones[0] : null,
+      });
+      if (Object.keys(patch).length) {
+        await domainQuery('dialysis', 'PATCH',
+          `brokers?broker_id=eq.${brokerId}`, patch
+        );
+      }
     } else {
       // Insert new broker
       const brokerData = stripNulls({
         broker_name: name,
+        email: contact.email || null,
+        phone: contact.phones?.[0] || null,
         company: contact.company || null,
         normalized_name: normalized,
       });
