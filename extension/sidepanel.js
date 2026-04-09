@@ -149,7 +149,7 @@ async function loadBriefing() {
   const container = $('#briefingContent');
   container.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading briefing...</div>';
 
-  const result = await apiCall('/api/chat', { action: 'get_daily_briefing_snapshot' });
+  const result = await apiCall('/api/chat', { copilot_action: 'get_daily_briefing_snapshot' });
 
   if (!result.ok) {
     container.innerHTML = `<div class="error-state">${escapeHtml(result.error || 'Failed to load briefing')}</div>`;
@@ -220,7 +220,7 @@ async function doSearch() {
   container.innerHTML = '<div class="loading"><div class="spinner"></div><br>Searching...</div>';
 
   const result = await apiCall('/api/chat', {
-    action: 'search_entity_targets',
+    copilot_action: 'search_entity_targets',
     params: { query },
   });
 
@@ -323,7 +323,7 @@ async function loadContextTab() {
 
 async function loadContactContext(params, body) {
   const result = await apiCall('/api/chat', {
-    action: 'get_relationship_context',
+    copilot_action: 'get_relationship_context',
     params,
   });
 
@@ -391,7 +391,7 @@ async function loadContactContext(params, body) {
 
 async function loadPropertyContext(params, body) {
   const result = await apiCall('/api/chat', {
-    action: 'fetch_listing_activity_context',
+    copilot_action: 'fetch_listing_activity_context',
     params,
   });
 
@@ -528,7 +528,7 @@ async function sendChat() {
   const action = routeMessage(message);
 
   const result = await apiCall('/api/chat', {
-    action,
+    copilot_action: action,
     message,
     history: chatHistory.slice(-8),
   });
