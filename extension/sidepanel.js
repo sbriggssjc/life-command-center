@@ -304,15 +304,15 @@ async function loadPropertyTab() {
   let html = '';
 
   // Match status banner
-  if (result.ok) {
+  if (searchResult.ok) {
     html += `<div class="match-status ${matched ? 'found' : 'not-found'}">
       <span class="match-dot ${matched ? 'found' : 'not-found'}"></span>
       ${matched ? 'Found in LCC database' : 'Not yet in LCC database'}
     </div>`;
-  } else if (result.error) {
+  } else if (searchResult.error) {
     html += `<div class="match-status not-found">
       <span class="match-dot not-found"></span>
-      LCC lookup: ${escapeHtml(result.error)}
+      LCC lookup: ${escapeHtml(searchResult.error)}
     </div>`;
   }
 
