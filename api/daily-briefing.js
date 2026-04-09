@@ -330,6 +330,36 @@ async function fetchHotContacts(limit = 15) {
   } catch { return []; }
 }
 
+async function fetchDomainTransactionCounts() {
+  const ttmDate = new Date(Date.now() - 365 * 86400000).toISOString().split('T')[0];
+  const queryDomain = async (url, key, label) => {
+    if (!url || !key) return { count: 0, label };
+    try {
+      const res = await fetchWithTimeout(
+        `${url}/rest/v1/sales_transactions?select=sale_id&sale_date=gte.${ttmDate}`,
+        { headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Prefer': 'count=exact' } },
+        5000
+      );
+      if (!res.ok) return { count: 0, label };
+      const contentRange = res.headers.get('content-range');
+      let count = 0;
+      if (contentRange) {
+        const m = contentRange.match(/\/(\d+)/);
+        if (m) count = parseInt(m[1], 10);
+      } else {
+        const data = await res.json();
+        count = Array.isArray(data) ? data.length : 0;
+      }
+      return { count, label };
+    } catch { return { count: 0, label }; }
+  };
+  const [gov, dia] = await Promise.all([
+    queryDomain(GOV_URL, GOV_KEY, 'government'),
+    queryDomain(DIA_URL, DIA_KEY, 'dialysis')
+  ]);
+  return { gov, dia };
+}
+
 async function fetchDiaPipeline() {
   if (!DIA_URL || !DIA_KEY) return { deals: [], leads: [] };
   try {
@@ -969,10 +999,30 @@ export default withErrorHandler(async function handler(req, res) {
         };
       } else {
         missingSections.push('global_market_intelligence.html_fragment');
+        // Fallback: build basic market summary from domain transaction data
+        let fallbackSummary = null;
+        let fallbackHighlights = [];
+        try {
+          const txCounts = await fetchDomainTransactionCounts();
+          const parts = [];
+          if (txCounts.dia.count > 0) parts.push(`${txCounts.dia.count} dialysis transaction${txCounts.dia.count !== 1 ? 's' : ''}`);
+          if (txCounts.gov.count > 0) parts.push(`${txCounts.gov.count} government transaction${txCounts.gov.count !== 1 ? 's' : ''}`);
+          if (parts.length > 0) {
+            fallbackSummary = `Trailing 12-month activity: ${parts.join(' and ')} tracked.`;
+          }
+          if (txCounts.dia.count > 0) {
+            fallbackHighlights.push({ text: `Dialysis TTM volume: ${txCounts.dia.count} transactions`, category: 'dialysis' });
+          }
+          if (txCounts.gov.count > 0) {
+            fallbackHighlights.push({ text: `Government TTM volume: ${txCounts.gov.count} transactions`, category: 'government' });
+          }
+        } catch (err) {
+          console.error('[Briefing] domain transaction fallback failed:', err.message);
+        }
         globalMarketIntelligence = {
-          source_system: 'morning_briefing',
-          summary: null,
-          highlights: [],
+          source_system: 'domain_fallback',
+          summary: fallbackSummary,
+          highlights: fallbackHighlights,
           sector_signals: [],
           watchlist: [],
           html_fragment: null,
