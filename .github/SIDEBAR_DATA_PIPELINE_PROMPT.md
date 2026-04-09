@@ -79,6 +79,31 @@ POST /api/entities?action=link
   "land_value": "$283,600",
   "improvement_value": "$2,839,200",
 
+  // ── Tenant / lease data ────────────────────────────────────────
+  "tenancy_type": "Single",            // "Single", "Multi"
+  "owner_occupied": "No",              // "Yes" or "No"
+  "est_rent": "$18 - 22/FS (Office)",  // CoStar estimated rent
+  "lease_type": "NNN",                 // "NNN", "Full Service", "Modified Gross", etc.
+  "lease_term": "10 Years",
+  "lease_expiration": "12/31/2029",
+  "rent_per_sf": "$22.00",
+  "annual_rent": "$192,500",
+
+  // ── Tenants array ────────────────────────────────────────────
+  // Each entry is a tenant occupying space in the property.
+  // From "Tenants at Sale" section, tenant detail tabs, or stacking plan.
+  "tenants": [
+    {
+      "name": "Fresenius Medical Care-Mid",
+      "sf": "8,750 SF",
+      "lease_type": "NNN",
+      "lease_start": "Jan 2019",
+      "lease_expiration": "Dec 2029",
+      "rent_per_sf": "$22.00"
+    }
+    // Multi-tenant properties will have multiple entries
+  ],
+
   // ── Contacts array ────────────────────────────────────────────
   // Each contact is a person or entity extracted from the property record.
   // Roles: owner, seller, buyer, listing_broker, buyer_broker, lender
