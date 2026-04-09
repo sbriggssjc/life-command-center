@@ -4878,10 +4878,21 @@ function renderHomeStats() {
   const elEvents = document.getElementById('statEvents');
 
   // --- Activities stat ---
-  // Prefer canonical work_counts when non-zero
+  // Prefer canonical work_counts, with stale-MV fallback matching renderCategoryMetrics()
   if (elAct) {
     if (canonicalCounts) {
-      elAct.textContent = (canonicalCounts.open_actions || canonicalCounts.my_actions || 0).toLocaleString();
+      let actCount = canonicalCounts.open_actions || canonicalCounts.my_actions || 0;
+      // Detect stale materialized view: counts all zero but live data available
+      if (!actCount) {
+        const allZero = !canonicalCounts.my_actions && !canonicalCounts.open_actions &&
+                        !canonicalCounts.completed_week && !canonicalCounts.overdue &&
+                        !canonicalCounts.inbox_new;
+        const liveTotal = canonicalMyWork?.pagination?.total || 0;
+        if (allZero && liveTotal > 0) {
+          actCount = liveTotal;
+        }
+      }
+      elAct.textContent = actCount.toLocaleString();
     } else if (mktLoaded && mktData.length > 0) {
       const userName = LCC_USER.display_name || 'Scott Briggs';
       const myTasks = mktData.filter(d => d.assigned_to === userName);
