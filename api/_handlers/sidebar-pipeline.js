@@ -809,9 +809,37 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
 
   let created = 0;
 
+  // Regex to detect firm/company names vs. actual person names
+  const firmPattern = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
+
+  // Track the most recently processed person broker so firm entries can
+  // back-fill the company field on the preceding person record.
+  let lastPersonBrokerId = null;
+
   for (const contact of brokerContacts) {
     const name = (contact.name || '').trim();
     if (!name) continue;
+
+    const isFirm = firmPattern.test(name);
+
+    // ── Firm entry: attach as company to the preceding person broker ──
+    if (isFirm) {
+      if (lastPersonBrokerId) {
+        // Only patch company if the person broker doesn't already have one
+        const personLookup = await domainQuery('dialysis', 'GET',
+          `brokers?broker_id=eq.${lastPersonBrokerId}&select=broker_id,company&limit=1`
+        );
+        if (personLookup.ok && personLookup.data?.length && personLookup.data[0].company == null) {
+          await domainQuery('dialysis', 'PATCH',
+            `brokers?broker_id=eq.${lastPersonBrokerId}`, { company: name }
+          );
+        }
+      }
+      // Skip creating a broker record or sale_brokers entries for the firm
+      continue;
+    }
+
+    // ── Person entry: existing broker upsert logic ──
 
     // Normalize: lowercase, strip common suffixes, collapse whitespace
     const normalized = name
@@ -858,6 +886,9 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       brokerId = ins.data[0].broker_id;
       created++;
     }
+
+    // Remember this person broker for potential firm back-fill
+    lastPersonBrokerId = brokerId;
 
     // Link broker to each sale for this property written in this pipeline run
     const sales = metadata.sales_history;
