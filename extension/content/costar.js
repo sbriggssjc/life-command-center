@@ -28,6 +28,7 @@
   // ── Main extraction ───────────────────────────────────────────────────
 
   function extract() {
+    try {
     const url = window.location.href;
 
     let address = null;
@@ -69,7 +70,7 @@
 
     // If address changed (navigated to different property), reset accumulation
     if (accumulated._address && accumulated._address !== identifier) {
-      accumulated = { contacts: [], sales_history: [] };
+      accumulated = { contacts: [], sales_history: [], tenants: [] };
     }
     accumulated._address = identifier;
 
@@ -96,7 +97,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 12,
+        _version: 13,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -110,6 +111,10 @@
     });
 
     if (headingEl) injectLccButton(headingEl);
+    } catch (err) {
+      // Log error but don't crash — still send whatever we have
+      console.error('[LCC CoStar] extraction error:', err);
+    }
   }
 
   function mergeContacts(existing, newContacts) {
