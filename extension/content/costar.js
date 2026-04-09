@@ -239,8 +239,9 @@
       }
 
       if (!data.building_class && /^class$/i.test(line)) {
-        if (/^[A-C]$/i.test(next)) data.building_class = next;
-        else if (/^[A-C]$/i.test(prev)) data.building_class = prev;
+        const headerRe = /^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i;
+        if (/^[A-C]$/i.test(next) && !headerRe.test(next)) data.building_class = next;
+        else if (/^[A-C]$/i.test(prev) && !headerRe.test(prev)) data.building_class = prev;
       }
 
       if (!data.occupancy && (/^leased(\s+at\s+sale)?$/i.test(line) || /^occupancy$/i.test(line))) {
@@ -260,7 +261,7 @@
       if (!data.parking && /^parking\s+ratio$/i.test(line) && next) data.parking = next;
 
       if (!data.property_type && /^type$/i.test(line)) {
-        if (next && next.length < 50 && !/^\d/.test(next) && !/^(investment|sale)/i.test(next)) data.property_type = next;
+        if (next && next.length < 50 && !/^\d/.test(next) && !/^(investment|sale)/i.test(next) && !/^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i.test(next)) data.property_type = next;
       }
 
       if (!data.noi && /^noi$/i.test(line)) {
@@ -383,7 +384,8 @@
       if (!data.property_subtype && /submarket$/i.test(line) && line.length < 60) {
         // "Medical Office - Midway Submarket" → "Medical Office"
         const sub = line.split(/\s*[-–]\s*/)[0].trim();
-        if (sub && sub.length < 40) data.property_subtype = sub;
+        const headerRe = /^(size|type|class|use|status|source|subtype|sf|rba|year|stories|floors|land|lot|parking|zoning|occupancy|tenancy|market|submarket|building|property)$/i;
+        if (sub && sub.length < 40 && !headerRe.test(sub)) data.property_subtype = sub;
       }
 
       // Comp status
