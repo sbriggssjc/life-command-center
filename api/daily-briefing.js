@@ -120,12 +120,38 @@ async function fetchWorkCounts(workspaceId, userId) {
   if (!team.ok || !team.data?.length) {
     team = await opsQuery('GET', `v_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`);
   }
-  const t = team.data?.[0] || {};
+  let t = team.data?.[0] || {};
+
+  // Direct-count fallback: if materialized + regular views return all zeros,
+  // query action_items and inbox_items tables directly
+  const wsEnc = encodeURIComponent(workspaceId);
+  if (!t.open_actions && !t.inbox_new && !t.overdue_actions) {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const [openRes, inboxNewRes, syncErrRes, overdueRes] = await Promise.all([
+        opsQuery('GET', `action_items?workspace_id=eq.${wsEnc}&status=in.(open,in_progress,waiting,assigned)&select=id&limit=0`),
+        opsQuery('GET', `inbox_items?workspace_id=eq.${wsEnc}&status=eq.new&select=id&limit=0`),
+        opsQuery('GET', `action_items?workspace_id=eq.${wsEnc}&status=eq.sync_error&select=id&limit=0`),
+        opsQuery('GET', `action_items?workspace_id=eq.${wsEnc}&status=in.(open,in_progress)&due_date=lt.${today}&select=id&limit=0`)
+      ]);
+      t = {
+        ...t,
+        open_actions: openRes.count || 0,
+        inbox_new: inboxNewRes.count || 0,
+        sync_errors: (syncErrRes.count || 0) + (t.sync_errors || 0),
+        overdue_actions: overdueRes.count || 0,
+        _source: 'direct_count_fallback'
+      };
+      console.log('[Briefing] team signals direct-count fallback used:', { open: t.open_actions, inbox: t.inbox_new, overdue: t.overdue_actions, sync: t.sync_errors });
+    } catch (err) {
+      console.error('[Briefing] direct-count fallback failed:', err.message);
+    }
+  }
 
   let user = userMv;
   if (!user.ok || !user.data?.length) {
     const myActions = await opsQuery('GET',
-      `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&or=(owner_id.eq.${encodeURIComponent(userId)},assigned_to.eq.${encodeURIComponent(userId)})&status=in.(open,in_progress,waiting)&select=id&limit=0`
+      `action_items?workspace_id=eq.${wsEnc}&or=(owner_id.eq.${encodeURIComponent(userId)},assigned_to.eq.${encodeURIComponent(userId)})&status=in.(open,in_progress,waiting)&select=id&limit=0`
     );
     user = { data: [{ my_actions: myActions.count || 0, my_overdue: 0, my_inbox: 0, my_research: 0, my_completed_week: 0 }] };
   }
