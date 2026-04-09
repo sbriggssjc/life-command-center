@@ -614,6 +614,7 @@ function renderContacts(contacts) {
     seller: 'Seller',
     buyer: 'Buyer',
     lender: 'Lender',
+    owner: 'Current Owner',
   };
 
   let html = '<div class="section-label">Contacts</div>';
@@ -621,12 +622,15 @@ function renderContacts(contacts) {
     html += '<div class="contact-card">';
     html += `<div class="contact-role">${escapeHtml(roleLabels[c.role] || c.role || '')}</div>`;
     html += `<div class="contact-name">${escapeHtml(c.name || '')}</div>`;
+    if (c.ownership_type) html += `<div class="contact-detail">${escapeHtml(c.ownership_type)}</div>`;
     if (c.title) html += `<div class="contact-detail">${escapeHtml(c.title)}</div>`;
     if (c.company) html += `<div class="contact-detail">${escapeHtml(c.company)}</div>`;
+    if (c.address) html += `<div class="contact-detail" style="color:var(--text-secondary);">${escapeHtml(c.address)}</div>`;
     if (c.email) html += `<div class="contact-detail"><a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a></div>`;
     if (c.phones && c.phones.length) {
       html += `<div class="contact-detail">${c.phones.map((p) => escapeHtml(p)).join(' &middot; ')}</div>`;
     }
+    if (c.website) html += `<div class="contact-detail" style="color:var(--text-secondary);font-size:10px;">${escapeHtml(c.website)}</div>`;
     html += '</div>';
   }
   return html;
@@ -700,11 +704,13 @@ function renderSalesHistory(sales, ctx) {
     }
 
     // Lender/Loan
-    if (s.lender) {
-      let lenderLine = `<strong>Lender:</strong> ${escapeHtml(s.lender)}`;
+    if (s.lender || s.loan_amount) {
+      let lenderLine = s.lender ? `<strong>Lender:</strong> ${escapeHtml(s.lender)}` : '<strong>Loan:</strong>';
       if (s.loan_amount) lenderLine += ` — ${escapeHtml(s.loan_amount)}`;
       if (s.loan_type) lenderLine += ` (${escapeHtml(s.loan_type)})`;
       if (s.interest_rate) lenderLine += ` @ ${escapeHtml(s.interest_rate)}`;
+      if (s.loan_origination_date) lenderLine += ` — originated ${escapeHtml(s.loan_origination_date)}`;
+      if (s.maturity_date) lenderLine += `, matures ${escapeHtml(s.maturity_date)}`;
       if (s.lender_address) lenderLine += `<br><span style="color:var(--text-secondary);font-size:10px;">${escapeHtml(s.lender_address)}</span>`;
       html += `<div class="sale-detail">${lenderLine}</div>`;
     }

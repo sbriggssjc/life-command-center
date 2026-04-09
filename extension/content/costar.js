@@ -93,7 +93,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 9,
+        _version: 10,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -264,6 +264,11 @@
       if (!data.parcel_number && /^parcels?\t?$/i.test(line)) {
         if (next && /[\d-]{5,}/.test(next)) data.parcel_number = next;
       }
+
+      // Ownership type from Owner tab
+      if (!data.ownership_type && /^ownership\s+type$/i.test(line) && next) {
+        data.ownership_type = next;
+      }
     }
 
     return data;
@@ -286,6 +291,24 @@
 
       // ── STOP at end-of-content sections ───────────────────────
       if (/^(my\s+notes|sources|verification|sale\s+comp\s+id|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
+
+      // ── Recorded Owner → entity with mailing address ────────
+      if (/^recorded\s+owner$/i.test(line)) {
+        const next = lines[i + 1];
+        if (next && next.length > 2 && next.length < 80) {
+          const owner = { role: 'owner', name: next, type: 'entity' };
+          // Look ahead for ownership type and mailing address
+          for (let k = i + 2; k < Math.min(i + 8, lines.length); k++) {
+            const ol = lines[k];
+            if (/^ownership\s+type$/i.test(ol) && lines[k + 1]) { owner.ownership_type = lines[k + 1]; }
+            if (/^mailing\s+address$/i.test(ol)) {
+              owner.address = findEntityAddress(lines, k + 1);
+            }
+          }
+          contacts.push(owner);
+        }
+        continue;
+      }
 
       // ── Recorded Seller → entity name ─────────────────────────
       if (/^recorded\s+seller$/i.test(line)) {
@@ -508,25 +531,36 @@
     return sale;
   }
 
-  // Parse deed/loan history from CoStar's Public Records popup
+  // Parse deed/loan history from CoStar's Public Records popup/tab.
+  // Structure per record:
+  //   Transaction → Transaction Date, Sale Price, Transaction Type, Deed Type, ...
+  //   Sale Contact Details → Buyer (+ Address), Seller (+ Address), Title Company
+  //   Loan Details → Origination Date, Loan Amount, Loan Type, Originator, ...
   function parseDeedHistory(lines, startIdx) {
     const sales = [];
     let current = null;
+
+    function pushCurrent() {
+      if (current && (current.sale_date || current.sale_price || current.loan_amount)) {
+        sales.push(current);
+      }
+      current = null;
+    }
 
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
       const next = j + 1 < lines.length ? lines[j + 1] : '';
 
-      // "Transaction" label often marks the start of a new deed record
-      if (/^transaction$/i.test(line)) {
-        if (current && (current.sale_date || current.sale_price)) sales.push(current);
+      // "Transaction" or truncated "ransaction" marks new record
+      if (/^r?transaction$/i.test(line) && !/date|type|details/i.test(next || '____')) {
+        pushCurrent();
         current = {};
         continue;
       }
 
-      // If no current record started, start one on first meaningful data
       if (!current) current = {};
 
+      // ── Core transaction fields ───────────────────────────────
       if (/^transaction\s+date$/i.test(line) && next) { current.sale_date = next; continue; }
       if (/^recordation\s+date$/i.test(line) && next) { current.recordation_date = next; continue; }
       if (/^sale\s+price$/i.test(line) && next) { current.sale_price = next; continue; }
@@ -535,46 +569,59 @@
       if (/^sale\s+type$/i.test(line) && next) { current.sale_type = next; continue; }
       if (/^document\s+#$/i.test(line) && next) { current.document_number = next; continue; }
 
-      // Buyer/Seller within deed record — capture name + address
-      if (/^buyer$/i.test(line) && next && next.length < 80 && !/^(address|seller|title)/i.test(next)) {
-        current.buyer = next;
-        // Look ahead for buyer address
-        current.buyer_address = findEntityAddress(lines, j + 2);
-        continue;
-      }
-      if (/^seller$/i.test(line) && next && next.length < 80 && !/^(title|buyer|address|lender)/i.test(next)) {
-        current.seller = next;
-        current.seller_address = findEntityAddress(lines, j + 2);
-        continue;
-      }
-      if (/^title\s+company$/i.test(line) && next) { current.title_company = next; continue; }
+      // ── Sale Contact Details sub-section ──────────────────────
+      if (/^sale\s+contact\s+details$/i.test(line)) continue; // just a header
 
-      // Lender and loan data
-      if (/^lender$/i.test(line) && next && next.length < 80) {
-        current.lender = next;
-        current.lender_address = findEntityAddress(lines, j + 2);
+      if (/^buyer$/i.test(line)) {
+        // Next line could be the buyer name or "Address"
+        if (next && next.length < 80 && !/^(address|seller|title|loan|originator)/i.test(next)) {
+          current.buyer = next;
+          current.buyer_address = findEntityAddress(lines, j + 2);
+        }
         continue;
       }
-      if (/^loan\s+amount$/i.test(line) && next && /^\$/.test(next)) { current.loan_amount = next; continue; }
+      if (/^(borrower)$/i.test(line)) {
+        if (next && next.length < 80) current.buyer = next;
+        continue;
+      }
+      if (/^seller$/i.test(line)) {
+        if (next && next.length < 80 && !/^(title|buyer|address|lender|loan|originator)/i.test(next)) {
+          current.seller = next;
+          current.seller_address = findEntityAddress(lines, j + 2);
+        }
+        continue;
+      }
+      if (/^title\s+company$/i.test(line) && next && next.length < 80) {
+        current.title_company = next;
+        continue;
+      }
+
+      // ── Loan Details sub-section ──────────────────────────────
+      if (/^loan\s+details$/i.test(line)) continue; // just a header
+      if (/^(last\s+loan)$/i.test(line)) continue; // section label on owner tab
+
+      if (/^origination\s+date$/i.test(line) && next) { current.loan_origination_date = next; continue; }
+      if (/^loan\s+amount$/i.test(line) && next) { current.loan_amount = next; continue; }
       if (/^loan\s+type$/i.test(line) && next) { current.loan_type = next; continue; }
+      if (/^originator$/i.test(line) && next && next.length < 80) { current.lender = next; continue; }
       if (/^interest\s+rate$/i.test(line) && next) { current.interest_rate = next; continue; }
       if (/^loan\s+term$/i.test(line) && next) { current.loan_term = next; continue; }
       if (/^maturity\s+date$/i.test(line) && next) { current.maturity_date = next; continue; }
     }
 
-    if (current && (current.sale_date || current.sale_price)) sales.push(current);
+    pushCurrent();
     return sales;
   }
 
   // Look ahead from a position for an address block (street + city/state)
   function findEntityAddress(lines, startIdx) {
     const parts = [];
-    for (let k = startIdx; k < Math.min(startIdx + 4, lines.length); k++) {
+    for (let k = startIdx; k < Math.min(startIdx + 5, lines.length); k++) {
       const l = lines[k];
-      // Stop at next label or section
-      if (/^(seller|buyer|title|lender|loan|transaction|address$)/i.test(l)) break;
       // Skip "Address" label if present
       if (/^address$/i.test(l)) continue;
+      // Stop at next section label
+      if (/^(seller|buyer|title\s+company|lender|loan|transaction|sale\s+contact|originator|borrower|document)/i.test(l)) break;
       // Collect address lines (street, city/state/zip)
       if (/^\d+\s+\w+/.test(l) || /^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(l) ||
           /^(po\s+box|p\.?o\.?\s+box)/i.test(l)) {
