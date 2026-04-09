@@ -19,6 +19,7 @@
 import { ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
+import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 
 // ── Role → relationship_type mapping ────────────────────────────────────────
 
@@ -42,9 +43,10 @@ const GOV_TENANT_KEYWORDS = [
 ];
 
 const DIALYSIS_TENANT_KEYWORDS = [
-  'fresenius', 'davita', 'dialysis', 'dci ', 'dialysis clinic',
-  'us renal care', 'american renal', 'satellite healthcare',
-  'northwest kidney', 'kidney center', 'renal',
+  'fresenius', 'fmc', 'davita', 'dialysis', 'dci ', 'dialysis clinic',
+  'us renal care', 'american renal', 'greenfield renal', 'innovative renal',
+  'satellite healthcare', 'satellite dialysis',
+  'northwest kidney', 'kidney center', 'renal', 'nephrology',
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -68,6 +70,56 @@ function parseCurrency(val) {
   const cleaned = val.replace(/[$,\s]/g, '');
   const num = parseFloat(cleaned);
   return isNaN(num) ? null : num;
+}
+
+/** Parse SF string: "8,750 SF" → 8750 */
+function parseSF(val) {
+  if (val == null) return null;
+  if (typeof val === 'number') return val;
+  const cleaned = String(val).replace(/,/g, '').replace(/\s*SF\s*/gi, '').trim();
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+/** Parse percentage string: "6.76%" → 6.76, "100%" → 100 */
+function parsePercent(val) {
+  if (val == null) return null;
+  if (typeof val === 'number') return val;
+  const cleaned = String(val).replace(/[%\s]/g, '');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+/** Parse acres string: "0.54 AC" → 0.54 */
+function parseAcres(val) {
+  if (val == null) return null;
+  if (typeof val === 'number') return val;
+  const cleaned = String(val).replace(/,/g, '').replace(/\s*AC\s*/gi, '').trim();
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+/** Parse parking ratio: "2.28/1,000 SF" → 2.28 */
+function parseParkingRatio(val) {
+  if (val == null) return null;
+  const match = String(val).match(/([\d.]+)/);
+  return match ? parseFloat(match[1]) : null;
+}
+
+/** Safely parse integer: "2019" → 2019, "1" → 1 */
+function parseIntSafe(val) {
+  if (val == null) return null;
+  const num = parseInt(String(val), 10);
+  return isNaN(num) ? null : num;
+}
+
+/** Strip null/undefined values from an object (for PATCH — avoids overwriting with null) */
+function stripNulls(obj) {
+  const result = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== null && v !== undefined) result[k] = v;
+  }
+  return result;
 }
 
 /**
@@ -122,28 +174,48 @@ function contactSeedFields(contact, entityType) {
 
 /**
  * Classify domain based on property metadata.
- * Returns 'government', 'dialysis', or null.
+ * Checks DIALYSIS first (more specific) to avoid misclassifying dialysis
+ * properties with "Medical Office" subtypes as government.
+ * Returns 'dialysis', 'government', or null.
  */
 function classifyDomain(metadata, entityFields) {
-  const searchText = [
+  const textParts = [
     metadata.tenant_name,
     metadata.primary_tenant,
+    metadata.building_name,
     entityFields.description,
     entityFields.name,
     metadata.asset_type,
     metadata.property_type,
+    metadata.property_subtype,
     metadata.occupancy_details,
-  ].filter(Boolean).join(' ').toLowerCase();
+  ];
 
-  // Check government first
+  // Include tenant names from tenants[] array
+  if (Array.isArray(metadata.tenants)) {
+    for (const t of metadata.tenants) {
+      if (t.name) textParts.push(t.name);
+    }
+  }
+
+  // Include contact names from contacts[] array
+  if (Array.isArray(metadata.contacts)) {
+    for (const c of metadata.contacts) {
+      if (c.name) textParts.push(c.name);
+    }
+  }
+
+  const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
+
+  // Check DIALYSIS FIRST — more specific domain, prevents misclassification
+  for (const kw of DIALYSIS_TENANT_KEYWORDS) {
+    if (searchText.includes(kw)) return 'dialysis';
+  }
+
+  // Then check government
   if (entityFields.asset_type === 'government_leased') return 'government';
   for (const kw of GOV_TENANT_KEYWORDS) {
     if (searchText.includes(kw)) return 'government';
-  }
-
-  // Check dialysis
-  for (const kw of DIALYSIS_TENANT_KEYWORDS) {
-    if (searchText.includes(kw)) return 'dialysis';
   }
 
   return null;
@@ -495,6 +567,540 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
   return entity.domain || null;
 }
 
+// ── Step 5: Domain database propagation ────────────────────────────────────
+//
+// After unpacking into LCC Ops relational records, propagate the structured
+// data into the correct domain-specific Supabase backend (dialysis or gov).
+
+/**
+ * Main domain propagation dispatcher.
+ * Routes to the correct domain backend based on classified domain.
+ */
+async function propagateToDomainDb(entity, metadata, domain) {
+  if (!domain) return { propagated: false, reason: 'no_domain' };
+  if (!getDomainCredentials(domain)) return { propagated: false, reason: 'domain_db_not_configured' };
+
+  try {
+    if (domain === 'dialysis') {
+      return await propagateToDialysisDb(entity, metadata);
+    } else if (domain === 'government') {
+      return await propagateToGovernmentDb(entity, metadata);
+    }
+    return { propagated: false, reason: 'unknown_domain' };
+  } catch (err) {
+    console.error(`[Sidebar pipeline] Domain propagation error (${domain}):`, err?.message || err);
+    return { propagated: false, reason: 'propagation_error', error: err?.message };
+  }
+}
+
+// ── Dialysis DB propagation ────────────────────────────────────────────────
+
+async function propagateToDialysisDb(entity, metadata) {
+  const domain = 'dialysis';
+  const results = { domain, property_id: null, records: {} };
+
+  // Step 5a: Upsert property record
+  const propertyId = await upsertDomainProperty(domain, entity, metadata);
+  if (!propertyId) {
+    console.error('[Sidebar pipeline] Dialysis property upsert failed for:', entity.address);
+    return { propagated: false, reason: 'property_upsert_failed', ...results };
+  }
+  results.property_id = propertyId;
+
+  // Step 5b: Upsert lease records
+  results.records.leases = await upsertDialysisLeases(propertyId, metadata);
+
+  // Step 5c: Upsert sales transactions
+  results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
+
+  // Step 5d: Upsert loans
+  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata);
+
+  // Step 5e: Upsert recorded owners + ownership history
+  const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata);
+  results.records.owners = ownerResults.owners;
+  results.records.ownership_history = ownerResults.history;
+
+  // Step 5f: Upsert brokers
+  results.records.brokers = await upsertDomainBrokers(domain, propertyId, metadata);
+
+  return { propagated: true, ...results };
+}
+
+// ── Government DB propagation ──────────────────────────────────────────────
+
+async function propagateToGovernmentDb(entity, metadata) {
+  const domain = 'government';
+  const results = { domain, property_id: null, records: {} };
+
+  // Step 5a: Upsert property record
+  const propertyId = await upsertDomainProperty(domain, entity, metadata);
+  if (!propertyId) {
+    console.error('[Sidebar pipeline] Government property upsert failed for:', entity.address);
+    return { propagated: false, reason: 'property_upsert_failed', ...results };
+  }
+  results.property_id = propertyId;
+
+  // Step 5c: Upsert sales transactions
+  results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
+
+  // Step 5d: Upsert loans
+  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata);
+
+  // Step 5e: Upsert recorded owners
+  const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata);
+  results.records.owners = ownerResults.owners;
+  results.records.ownership_history = ownerResults.history;
+
+  return { propagated: true, ...results };
+}
+
+// ── Shared domain DB upsert helpers ────────────────────────────────────────
+
+/**
+ * Find or create a property record in the domain database.
+ * Matches by address + state for deduplication.
+ * Returns the property_id (UUID) or null on failure.
+ */
+async function upsertDomainProperty(domain, entity, metadata) {
+  const address = entity.address || metadata.address;
+  if (!address) return null;
+
+  // Try to find existing property by address
+  const encodedAddr = encodeURIComponent(address);
+  let lookupPath = `properties?address=ilike.${encodedAddr}&select=property_id&limit=1`;
+  if (entity.state) lookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
+
+  const lookup = await domainQuery(domain, 'GET', lookupPath);
+
+  const primaryTenant = metadata.tenants?.[0]?.name || null;
+  const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
+
+  // Build property data from CoStar metadata
+  const propertyData = stripNulls({
+    address,
+    city: entity.city || null,
+    state: entity.state || null,
+    zip_code: entity.zip || null,
+    county: metadata.county || entity.county || null,
+    building_sf: parseSF(metadata.square_footage),
+    year_built: parseIntSafe(metadata.year_built),
+    tenant: primaryTenant,
+    zoning: metadata.zoning || null,
+    occupancy_percent: parsePercent(metadata.occupancy),
+    parking_ratio: parseParkingRatio(metadata.parking),
+    lot_sf: parseSF(metadata.land_sf) || parseSF(metadata.lot_size),
+    assessed_value: parseCurrency(metadata.assessed_value),
+    is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
+    property_ownership_type: metadata.ownership_type || null,
+    recorded_owner_name: ownerContact?.name || null,
+    land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
+  });
+
+  if (lookup.ok && lookup.data?.length) {
+    // Update existing property
+    const propertyId = lookup.data[0].property_id;
+    await domainQuery(domain, 'PATCH', `properties?property_id=eq.${propertyId}`, propertyData);
+    return propertyId;
+  }
+
+  // Create new property
+  const result = await domainQuery(domain, 'POST', 'properties', propertyData);
+  if (result.ok && result.data) {
+    const created = Array.isArray(result.data) ? result.data[0] : result.data;
+    return created?.property_id || null;
+  }
+
+  console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
+  return null;
+}
+
+/**
+ * Upsert lease records in the dialysis database.
+ * Matches by property_id + tenant name for deduplication.
+ */
+async function upsertDialysisLeases(propertyId, metadata) {
+  const tenants = metadata.tenants;
+  if (!Array.isArray(tenants) || tenants.length === 0) return 0;
+
+  let count = 0;
+  for (const tenant of tenants) {
+    if (!tenant.name) continue;
+
+    const tenantName = tenant.name;
+    const encodedTenant = encodeURIComponent(tenantName);
+    const lookup = await domainQuery('dialysis', 'GET',
+      `leases?property_id=eq.${propertyId}&tenant=ilike.${encodedTenant}&select=id&limit=1`
+    );
+
+    const leaseData = stripNulls({
+      property_id: propertyId,
+      tenant: tenantName,
+      leased_area: parseSF(tenant.sf || metadata.sf_leased),
+      status: 'active',
+      expense_structure: tenant.lease_type || metadata.expense_structure || null,
+      rent_psf: parseCurrency(tenant.rent_per_sf || metadata.rent_per_sf),
+      annual_rent: parseCurrency(metadata.annual_rent),
+      lease_start: parseDate(tenant.lease_start || metadata.lease_commencement),
+      lease_expiration: parseDate(tenant.lease_expiration || metadata.lease_expiration),
+      renewal_options: metadata.renewal_options || null,
+      guarantor: metadata.guarantor || null,
+    });
+
+    if (lookup.ok && lookup.data?.length) {
+      await domainQuery('dialysis', 'PATCH',
+        `leases?id=eq.${lookup.data[0].id}`, leaseData);
+    } else {
+      const result = await domainQuery('dialysis', 'POST', 'leases', leaseData);
+      if (result.ok) count++;
+    }
+  }
+
+  // Also create a lease from top-level metadata if no tenants array match
+  if (tenants.length === 0 && metadata.lease_expiration) {
+    const primaryTenant = metadata.tenants?.[0]?.name || metadata.tenant_name || metadata.primary_tenant;
+    if (primaryTenant) {
+      const lookup = await domainQuery('dialysis', 'GET',
+        `leases?property_id=eq.${propertyId}&tenant=ilike.${encodeURIComponent(primaryTenant)}&select=id&limit=1`
+      );
+      if (!lookup.ok || !lookup.data?.length) {
+        const leaseData = stripNulls({
+          property_id: propertyId,
+          tenant: primaryTenant,
+          expense_structure: metadata.expense_structure || metadata.lease_type || null,
+          rent_psf: parseCurrency(metadata.rent_per_sf),
+          annual_rent: parseCurrency(metadata.annual_rent),
+          lease_start: parseDate(metadata.lease_commencement),
+          lease_expiration: parseDate(metadata.lease_expiration),
+          renewal_options: metadata.renewal_options || null,
+          guarantor: metadata.guarantor || null,
+        });
+        const result = await domainQuery('dialysis', 'POST', 'leases', leaseData);
+        if (result.ok) count++;
+      }
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Upsert sales transactions in the domain database.
+ * Matches by property_id + sale_date + sold_price for deduplication.
+ */
+async function upsertDomainSales(domain, propertyId, metadata) {
+  const sales = metadata.sales_history;
+  if (!Array.isArray(sales) || sales.length === 0) return 0;
+
+  let count = 0;
+  for (const sale of sales) {
+    const saleDate = parseDate(sale.sale_date);
+    if (!saleDate) continue;
+
+    const soldPrice = parseCurrency(sale.sale_price);
+
+    // Check for existing sale by property_id + sale_date
+    const datePart = saleDate.split('T')[0]; // YYYY-MM-DD
+    let lookupPath = `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`;
+    const lookup = await domainQuery(domain, 'GET', lookupPath);
+
+    // Find listing broker from contacts
+    const listingBroker = (metadata.contacts || []).find(c => c.role === 'listing_broker');
+
+    const saleData = stripNulls({
+      property_id: propertyId,
+      sale_date: datePart,
+      sold_price: soldPrice,
+      cap_rate: parsePercent(sale.cap_rate || metadata.cap_rate),
+      buyer_name: sale.buyer || null,
+      seller_name: sale.seller || null,
+      listing_broker: listingBroker?.name || null,
+      recorded_date: parseDate(sale.recordation_date) ? parseDate(sale.recordation_date).split('T')[0] : null,
+      notes: [
+        sale.deed_type ? `Deed: ${sale.deed_type}` : null,
+        sale.transaction_type ? `Type: ${sale.transaction_type}` : null,
+        sale.document_number ? `Doc#: ${sale.document_number}` : null,
+        sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
+      ].filter(Boolean).join('; ') || null,
+    });
+
+    if (lookup.ok && lookup.data?.length) {
+      // Update existing
+      await domainQuery(domain, 'PATCH',
+        `sales_transactions?sale_id=eq.${lookup.data[0].sale_id}`, saleData);
+    } else {
+      // Create new
+      const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
+      if (result.ok) count++;
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Upsert loan records in the domain database.
+ * Created from sales_history entries that have lender/loan_amount data.
+ */
+async function upsertDomainLoans(domain, propertyId, metadata) {
+  const sales = metadata.sales_history;
+  if (!Array.isArray(sales) || sales.length === 0) return 0;
+
+  let count = 0;
+  for (const sale of sales) {
+    if (!sale.lender || !sale.loan_amount) continue;
+
+    const lenderName = sale.lender;
+    const loanAmount = parseCurrency(sale.loan_amount);
+    if (!loanAmount) continue;
+
+    // Dedup by property_id + lender_name + loan_amount
+    const encodedLender = encodeURIComponent(lenderName);
+    const lookup = await domainQuery(domain, 'GET',
+      `loans?property_id=eq.${propertyId}&lender_name=ilike.${encodedLender}&loan_amount=eq.${loanAmount}&select=loan_id&limit=1`
+    );
+
+    // Map loan_type: "Commercial" → "Acquisition", else keep as-is
+    const loanType = sale.loan_type === 'Commercial' ? 'Acquisition' : (sale.loan_type || null);
+
+    const loanData = stripNulls({
+      property_id: propertyId,
+      lender_name: lenderName,
+      loan_amount: loanAmount,
+      loan_type: loanType,
+      origination_date: parseDate(sale.loan_origination_date) ? parseDate(sale.loan_origination_date).split('T')[0] : null,
+      interest_rate_percent: parsePercent(sale.interest_rate),
+      loan_term: parseIntSafe(sale.loan_term),
+      maturity_date: parseDate(sale.maturity_date) ? parseDate(sale.maturity_date).split('T')[0] : null,
+    });
+
+    if (lookup.ok && lookup.data?.length) {
+      await domainQuery(domain, 'PATCH',
+        `loans?loan_id=eq.${lookup.data[0].loan_id}`, loanData);
+    } else {
+      const result = await domainQuery(domain, 'POST', 'loans', loanData);
+      if (result.ok) count++;
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Upsert recorded owners and build ownership history chain.
+ * Sources: contacts[] with role=owner, plus buyers/sellers from sales_history[].
+ */
+async function upsertDomainOwners(domain, propertyId, entity, metadata) {
+  const results = { owners: 0, history: 0 };
+  const ownerIds = new Map(); // name → recorded_owner_id
+
+  // Helper to find-or-create a recorded owner by name
+  async function ensureRecordedOwner(name, address) {
+    if (!name) return null;
+    const normalizedName = name.trim().toLowerCase()
+      .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (ownerIds.has(normalizedName)) return ownerIds.get(normalizedName);
+
+    const lookup = await domainQuery(domain, 'GET',
+      `recorded_owners?normalized_name=eq.${encodeURIComponent(normalizedName)}&select=recorded_owner_id&limit=1`
+    );
+
+    if (lookup.ok && lookup.data?.length) {
+      const id = lookup.data[0].recorded_owner_id;
+      ownerIds.set(normalizedName, id);
+      return id;
+    }
+
+    // Parse address if provided
+    const addrFields = {};
+    if (address) {
+      const parts = address.split(',').map(s => s.trim());
+      addrFields.address = parts[0] || null;
+      if (parts.length >= 2) addrFields.city = parts[1] || null;
+      if (parts.length >= 3) {
+        const stateZip = parts[2].split(/\s+/);
+        if (stateZip[0]) addrFields.state = stateZip[0];
+      }
+    }
+
+    const ownerData = stripNulls({
+      name: name.trim(),
+      normalized_name: normalizedName,
+      ...addrFields,
+    });
+
+    const result = await domainQuery(domain, 'POST', 'recorded_owners', ownerData);
+    if (result.ok && result.data) {
+      const created = Array.isArray(result.data) ? result.data[0] : result.data;
+      const id = created?.recorded_owner_id || null;
+      if (id) {
+        ownerIds.set(normalizedName, id);
+        results.owners++;
+      }
+      return id;
+    }
+    return null;
+  }
+
+  // Process contacts with role=owner
+  const ownerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  for (const contact of ownerContacts) {
+    await ensureRecordedOwner(contact.name, contact.address);
+  }
+
+  // Process buyers and sellers from sales history to build ownership chain
+  const sales = metadata.sales_history || [];
+  // Sort chronologically (oldest first) for ownership chain
+  const sortedSales = [...sales].sort((a, b) => {
+    const da = new Date(a.sale_date), db = new Date(b.sale_date);
+    return da.getTime() - db.getTime();
+  });
+
+  for (let i = 0; i < sortedSales.length; i++) {
+    const sale = sortedSales[i];
+    const saleDate = parseDate(sale.sale_date);
+    if (!saleDate) continue;
+    const saleDateStr = saleDate.split('T')[0];
+
+    // Ensure buyer owner record
+    const buyerId = sale.buyer ? await ensureRecordedOwner(sale.buyer, sale.buyer_address) : null;
+
+    // Ensure seller owner record
+    const sellerId = sale.seller ? await ensureRecordedOwner(sale.seller, sale.seller_address) : null;
+
+    // Build ownership_history entry for the buyer (they own from this sale forward)
+    if (buyerId) {
+      const nextSaleDate = i < sortedSales.length - 1 ? parseDate(sortedSales[i + 1].sale_date) : null;
+
+      // Dedup ownership_history by property_id + recorded_owner_id + ownership_start
+      const ohLookup = await domainQuery(domain, 'GET',
+        `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${buyerId}&ownership_start=eq.${saleDateStr}&select=id&limit=1`
+      );
+
+      if (!ohLookup.ok || !ohLookup.data?.length) {
+        const ohData = stripNulls({
+          property_id: propertyId,
+          recorded_owner_id: buyerId,
+          ownership_start: saleDateStr,
+          ownership_end: nextSaleDate ? nextSaleDate.split('T')[0] : null,
+          sold_price: parseCurrency(sale.sale_price),
+        });
+        const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
+        if (result.ok) results.history++;
+      }
+    }
+  }
+
+  // Link the current owner to the property record
+  const currentOwner = ownerContacts[0];
+  if (currentOwner) {
+    const ownerId = ownerIds.get(
+      currentOwner.name.trim().toLowerCase()
+        .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+    if (ownerId) {
+      await domainQuery(domain, 'PATCH',
+        `properties?property_id=eq.${propertyId}`,
+        { recorded_owner_id: ownerId }
+      );
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Upsert broker records in the dialysis database.
+ * Created from contacts[] with role=listing_broker.
+ */
+async function upsertDomainBrokers(domain, propertyId, metadata) {
+  const contacts = metadata.contacts || [];
+  const brokerContacts = contacts.filter(c =>
+    c.role === 'listing_broker' || c.role === 'buyer_broker'
+  );
+
+  if (brokerContacts.length === 0) return 0;
+
+  let count = 0;
+  for (const broker of brokerContacts) {
+    if (!broker.name) continue;
+
+    const normalizedName = broker.name.trim().toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Dedup by normalized name or email
+    let lookupPath = `brokers?normalized_name=eq.${encodeURIComponent(normalizedName)}&select=broker_id&limit=1`;
+    let lookup = await domainQuery(domain, 'GET', lookupPath);
+
+    // Fallback to email match
+    if ((!lookup.ok || !lookup.data?.length) && broker.email) {
+      lookup = await domainQuery(domain, 'GET',
+        `brokers?email=eq.${encodeURIComponent(broker.email)}&select=broker_id&limit=1`
+      );
+    }
+
+    const brokerData = stripNulls({
+      broker_name: broker.name.trim(),
+      normalized_name: normalizedName,
+      company: broker.company || null,
+      email: broker.email || null,
+      phone: broker.phones?.[0] || null,
+    });
+
+    let brokerId;
+    if (lookup.ok && lookup.data?.length) {
+      brokerId = lookup.data[0].broker_id;
+      // Update with any new contact details
+      await domainQuery(domain, 'PATCH',
+        `brokers?broker_id=eq.${brokerId}`, brokerData);
+    } else {
+      const result = await domainQuery(domain, 'POST', 'brokers', brokerData);
+      if (result.ok && result.data) {
+        const created = Array.isArray(result.data) ? result.data[0] : result.data;
+        brokerId = created?.broker_id;
+        count++;
+      }
+    }
+
+    // Link broker to the most recent sale via sale_brokers junction table
+    if (brokerId && metadata.sales_history?.length) {
+      const recentSale = metadata.sales_history[0]; // First entry is most recent
+      const saleDate = parseDate(recentSale.sale_date);
+      if (saleDate) {
+        const datePart = saleDate.split('T')[0];
+        const saleLookup = await domainQuery(domain, 'GET',
+          `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`
+        );
+        if (saleLookup.ok && saleLookup.data?.length) {
+          const saleId = saleLookup.data[0].sale_id;
+          // Check if junction already exists
+          const junctionLookup = await domainQuery(domain, 'GET',
+            `sale_brokers?sale_id=eq.${saleId}&broker_id=eq.${brokerId}&select=id&limit=1`
+          );
+          if (!junctionLookup.ok || !junctionLookup.data?.length) {
+            await domainQuery(domain, 'POST', 'sale_brokers', {
+              sale_id: saleId,
+              broker_id: brokerId,
+              role: broker.role || 'listing_broker',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return count;
+}
+
 // ── Main pipeline entry point ───────────────────────────────────────────────
 
 /**
@@ -520,23 +1126,27 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
   const metadata = entity.metadata || {};
 
   // Only process if there's sidebar extraction data worth unpacking
-  if (!metadata.contacts && !metadata.sales_history && !metadata.tenant_name && !metadata.primary_tenant) {
-    return { ok: true, skipped: true, reason: 'No contacts, sales_history, or tenant in metadata' };
+  if (!metadata.contacts && !metadata.sales_history && !metadata.tenants
+      && !metadata.tenant_name && !metadata.primary_tenant) {
+    return { ok: true, skipped: true, reason: 'No contacts, sales_history, tenants, or tenant in metadata' };
   }
 
-  // Step 4 first: classify domain (needed for entity creation in steps 1-2)
+  // Step 1 — classify domain (needed for entity creation in steps 2-3)
   const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId);
 
-  // Step 1a: Unpack contacts → entities + relationships
+  // Step 2 — Unpack contacts → entities + relationships
   const contactCount = await unpackContacts(entityId, metadata, workspaceId, userId, domain);
 
-  // Step 1b: Unpack tenant → entity + lease relationship
+  // Step 2b — Unpack tenant → entity + lease relationship
   const tenantCount = await unpackTenant(entityId, metadata, workspaceId, userId, domain);
 
-  // Step 2: Unpack sales history → activity events + buyer/seller/lender entities
+  // Step 3 — Unpack sales history → activity events + buyer/seller/lender entities
   const salesCount = await unpackSalesHistory(entityId, metadata, workspaceId, userId, domain);
 
-  // Step 3: Write signal for learning loop
+  // Step 4 — Propagate to domain database (dialysis or government)
+  const propagation = await propagateToDomainDb(entity, metadata, domain);
+
+  // Step 5 — Write signal for learning loop
   const totalContacts = contactCount + tenantCount;
   await writeExtractionSignal(entityId, metadata, domain, userId, totalContacts, salesCount);
 
@@ -549,12 +1159,17 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
       tenant_created: tenantCount,
       sales_recorded: salesCount,
       domain,
+      domain_propagated: propagation.propagated || false,
+      domain_property_id: propagation.property_id || null,
+      domain_records: propagation.records || null,
     },
   };
   await opsQuery('PATCH',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
     { metadata: updatedMeta, updated_at: new Date().toISOString() }
   );
+
+  console.log(`[Sidebar pipeline] Done: entity=${entityId}, domain=${domain}, contacts=${totalContacts}, sales=${salesCount}, propagated=${propagation.propagated}`);
 
   return {
     ok: true,
@@ -563,6 +1178,9 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
     contacts_created: contactCount,
     tenant_created: tenantCount,
     sales_recorded: salesCount,
+    domain_propagated: propagation.propagated || false,
+    domain_property_id: propagation.property_id || null,
+    domain_records: propagation.records || null,
     processed_at: new Date().toISOString(),
   };
 }
@@ -576,6 +1194,7 @@ export function hasSidebarData(metadata) {
   return !!(
     metadata.contacts?.length ||
     metadata.sales_history?.length ||
+    metadata.tenants?.length ||
     metadata.tenant_name ||
     metadata.primary_tenant
   );
