@@ -46,10 +46,6 @@ const PA_COMPLETE_TASK_URL = process.env.PA_COMPLETE_TASK_URL;
 const DIA_SUPABASE_URL = process.env.DIA_SUPABASE_URL;
 const DIA_SUPABASE_KEY = process.env.DIA_SUPABASE_KEY;
 
-// Dialysis ingest endpoint (Render Flask app — centralized property pipeline)
-const DIALYSIS_INGEST_URL = process.env.DIALYSIS_INGEST_URL;
-const LCC_INGEST_SECRET = process.env.LCC_INGEST_SECRET;
-
 // Webhook secret for Power Automate ingestion endpoints (RCM, LoopNet, etc.)
 // Bypasses user auth — PA flows send this in X-PA-Webhook-Secret header
 const PA_WEBHOOK_SECRET = process.env.PA_WEBHOOK_SECRET;
@@ -126,11 +122,6 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to listing webhook (SF deal "ELA Executed" → listing-BD pipeline)
   if (req.query._route === 'listing-webhook') {
     return handleListingWebhook(req, res);
-  }
-
-  // Dispatch to LCC ingest proxy (forwards property bundle to Dialysis Flask pipeline)
-  if (req.query._route === 'lcc-ingest') {
-    return handleLccIngest(req, res);
   }
 
   // Dispatch to cross-domain contact matcher (nightly batch job)
@@ -2913,75 +2904,4 @@ async function executeCrossDomainMatch(workspaceId) {
     dia_contacts_fetched: diaContacts.length,
     duration_ms: durationMs
   };
-}
-
-// ============================================================================
-// LCC INGEST — Proxy property bundles to Dialysis Flask ingestion pipeline
-// POST /api/lcc-ingest — forwards JSON payload to DIALYSIS_INGEST_URL
-// Auth: webhook secret (X-PA-Webhook-Secret / X-LCC-Secret) or user auth
-// ============================================================================
-
-async function handleLccIngest(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: `Method ${req.method} not allowed` });
-  }
-
-  // Auth: accept PA webhook secret, LCC ingest secret, or user auth
-  const lccSecret = req.headers['x-lcc-secret'] || '';
-  let authed = authenticateWebhook(req);
-  if (!authed && LCC_INGEST_SECRET && lccSecret) {
-    // Constant-time comparison for LCC ingest secret
-    if (lccSecret.length === LCC_INGEST_SECRET.length) {
-      let mismatch = 0;
-      for (let i = 0; i < LCC_INGEST_SECRET.length; i++) {
-        mismatch |= lccSecret.charCodeAt(i) ^ LCC_INGEST_SECRET.charCodeAt(i);
-      }
-      authed = mismatch === 0;
-    }
-  }
-  if (!authed) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-  }
-
-  if (!DIALYSIS_INGEST_URL) {
-    return res.status(503).json({ error: 'DIALYSIS_INGEST_URL not configured' });
-  }
-  if (!LCC_INGEST_SECRET) {
-    return res.status(503).json({ error: 'LCC_INGEST_SECRET not configured' });
-  }
-
-  const payload = req.body;
-  if (!payload || typeof payload !== 'object') {
-    return res.status(400).json({ error: 'Request body must be a JSON object' });
-  }
-  if (!payload.property_id && !payload.property?.address) {
-    return res.status(400).json({ error: 'Either property_id or property.address is required' });
-  }
-
-  try {
-    const upstream = await fetchWithTimeout(DIALYSIS_INGEST_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-LCC-Secret': LCC_INGEST_SECRET,
-      },
-      body: JSON.stringify(payload),
-    }, 30000);
-
-    const contentType = upstream.headers.get('content-type') || '';
-    const body = contentType.includes('application/json')
-      ? await upstream.json()
-      : await upstream.text();
-
-    return res.status(upstream.status).json(
-      typeof body === 'string' ? { raw: body } : body
-    );
-  } catch (err) {
-    console.error('[LCC ingest] Upstream error:', err?.message || err);
-    return res.status(502).json({
-      error: 'Failed to reach Dialysis ingest endpoint',
-      detail: err?.message || 'Unknown error',
-    });
-  }
 }
