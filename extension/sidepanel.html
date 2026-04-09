@@ -225,6 +225,43 @@
       background: #ECFDF5; color: #065F46; border-color: #A7F3D0;
     }
 
+    /* Contact cards */
+    .contact-card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .contact-name { font-weight: 600; font-size: 12px; }
+    .contact-role {
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.3px; color: var(--accent); margin-bottom: 2px;
+    }
+    .contact-detail { color: var(--text-secondary); margin-top: 1px; }
+    .contact-detail a { color: var(--accent); text-decoration: none; }
+
+    /* Sale history rows */
+    .sale-row {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .sale-row-header {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .sale-date { font-weight: 600; font-size: 12px; }
+    .sale-price { font-weight: 700; color: var(--navy); }
+    .sale-detail { color: var(--text-secondary); margin-top: 2px; }
+
+    /* LCC existing data section */
+    .lcc-section {
+      background: #F0F7FF; border: 1px solid #BFDBFE;
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 8px;
+    }
+    .lcc-section-header {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.3px; color: #1E40AF; margin-bottom: 4px;
+    }
+
     /* Chat */
     .chat-container {
       display: flex;
