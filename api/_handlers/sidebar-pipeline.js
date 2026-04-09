@@ -612,9 +612,12 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     results.records.listings = await upsertGovListings(propertyId, entity, metadata);
   }
 
-  // Step 5b2: Upsert broker links (dialysis only)
+  // Step 5b2: Upsert broker links
   if (domain === 'dialysis') {
     results.records.brokers = await upsertDialysisBrokerLinks(propertyId, results.records.sales, metadata);
+  }
+  if (domain === 'government') {
+    results.records.brokers = await upsertGovBrokers(propertyId, metadata);
   }
 
   // Step 5b3: Upsert deed records (dialysis only)
@@ -867,6 +870,80 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
         broker_id: brokerId,
         role: roleMap[contact.role] || contact.role,
       });
+    }
+  }
+
+  return created;
+}
+
+// ── Step 5b2-gov: Upsert brokers (government) ────────────────────────────
+
+/**
+ * Upsert broker records in the government brokers table.
+ * Gov brokers table has a different schema than Dialysis — no sale_brokers
+ * junction table exists in gov, so we only upsert broker records themselves.
+ *
+ * For each listing_broker / buyer_broker contact:
+ *   - Build canonical_name (lowercase, strip punctuation, collapse spaces)
+ *   - Look up by canonical_name (ilike match)
+ *   - INSERT if not found; PATCH email/phone/firm only if previously null
+ *
+ * Returns count of broker records created.
+ */
+async function upsertGovBrokers(propertyId, metadata) {
+  const contacts = metadata.contacts;
+  if (!Array.isArray(contacts)) return 0;
+
+  const brokerContacts = contacts.filter(
+    c => c.role === 'listing_broker' || c.role === 'buyer_broker'
+  );
+  if (brokerContacts.length === 0) return 0;
+
+  let created = 0;
+
+  for (const contact of brokerContacts) {
+    const name = (contact.name || '').trim();
+    if (!name) continue;
+
+    // Build canonical_name: lowercase, strip punctuation, collapse spaces
+    const canonicalName = name
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!canonicalName) continue;
+
+    // Look up existing broker by canonical_name (case-insensitive)
+    const encodedName = encodeURIComponent(canonicalName);
+    const lookup = await domainQuery('government', 'GET',
+      `brokers?canonical_name=ilike.${encodedName}&select=broker_id,email,phone,firm&limit=1`
+    );
+
+    if (lookup.ok && lookup.data?.length) {
+      // PATCH only null fields — don't overwrite existing data
+      const existing = lookup.data[0];
+      const patchData = {};
+      if (!existing.email && contact.email) patchData.email = contact.email;
+      if (!existing.phone && contact.phones?.[0]) patchData.phone = contact.phones[0];
+      if (!existing.firm && contact.company) patchData.firm = contact.company;
+
+      if (Object.keys(patchData).length > 0) {
+        await domainQuery('government', 'PATCH',
+          `brokers?broker_id=eq.${existing.broker_id}`, patchData);
+      }
+    } else {
+      // INSERT new broker record
+      const brokerData = stripNulls({
+        name,
+        firm: contact.company || null,
+        email: contact.email || null,
+        phone: contact.phones?.[0] || null,
+        canonical_name: canonicalName,
+        active: true,
+      });
+      const ins = await domainQuery('government', 'POST', 'brokers', brokerData);
+      if (ins.ok) created++;
     }
   }
 
