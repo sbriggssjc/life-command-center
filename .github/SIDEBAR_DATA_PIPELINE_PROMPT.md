@@ -331,7 +331,15 @@ await writeSignal({
 
 The property entity needs domain classification:
 
-1. **Check if the property matches a government domain**:
+1. **Check if the property matches dialysis domain FIRST** (more specific):
+   - Is the tenant a dialysis operator? (Fresenius, FMC, DaVita, DCI, US Renal,
+     American Renal, Greenfield Renal, Innovative Renal, Satellite Dialysis)
+   - Does "dialysis", "kidney", "renal", or "nephrology" appear in tenant name,
+     property type, or building name?
+   - IMPORTANT: Check dialysis BEFORE government — "Medical Office" properties
+     with dialysis tenants must not be misclassified as government
+
+2. **Then check if the property matches a government domain**:
    - Is the tenant a government agency? (GSA, VA, SSA, etc.)
    - Is the asset_type "government_leased"?
    - Does the address match a known government property in the gov database?
@@ -340,9 +348,11 @@ The property entity needs domain classification:
    - Is the tenant a dialysis operator? (Fresenius, DaVita, etc.)
    - Does "dialysis" or "medical" appear in property type or tenant name?
 
-3. **Set entity.domain** accordingly:
+3. **Check if the property matches dialysis domain** — see above
+
+4. **Set entity.domain** accordingly:
+   - `'dialysis'` → sync to DIA_SUPABASE (check this FIRST)
    - `'government'` → sync to GOV_SUPABASE
-   - `'dialysis'` → sync to DIA_SUPABASE
    - `null` → cross-domain or unclassified (general CRE)
 
 4. **Trigger cross-domain sync** if classified:
