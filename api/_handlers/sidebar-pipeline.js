@@ -612,6 +612,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     results.records.brokers = await upsertDialysisBrokerLinks(propertyId, results.records.sales, metadata);
   }
 
+  // Step 5b3: Upsert deed records (dialysis only)
+  if (domain === 'dialysis') {
+    results.records.deed_records = await upsertDialysisDeedRecords(propertyId, entity, metadata);
+  }
+
   // Step 5c: Upsert loans
   results.records.loans = await upsertDomainLoans(domain, propertyId, metadata);
 
@@ -849,6 +854,58 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
   }
 
   return created;
+}
+
+/**
+ * Upsert deed records in the Dialysis database from sales_history entries.
+ * Only processes entries that have a document_number.
+ * Deduplicates by data_hash (document_number + state + recording_date).
+ * Deed records are immutable — existing records are never updated.
+ * Returns count of records inserted.
+ */
+async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
+  const sales = metadata.sales_history;
+  if (!Array.isArray(sales) || sales.length === 0) return 0;
+
+  let inserted = 0;
+
+  for (const sale of sales) {
+    if (!sale.document_number) continue;
+
+    const datePart = parseDate(sale.recordation_date)?.split('T')[0] || null;
+
+    // Build deterministic dedup hash: document_number|state|recording_date
+    const hashSource = `${sale.document_number}|${entity.state || ''}|${datePart || ''}`;
+    const dataHash = Buffer.from(hashSource).toString('base64');
+
+    // Check if a deed_record with this hash already exists — skip if so (immutable)
+    const lookup = await domainQuery('dialysis', 'GET',
+      `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=id&limit=1`
+    );
+    if (lookup.ok && lookup.data?.length) continue;
+
+    const deedRecord = stripNulls({
+      county: entity.county || metadata.county || null,
+      state: entity.state || null,
+      recording_date: datePart,
+      document_number: sale.document_number,
+      deed_type: sale.deed_type || null,
+      grantor: sale.seller || null,
+      grantee: sale.buyer || null,
+      consideration: parseCurrency(sale.sale_price),
+      raw_payload: sale,
+      data_hash: dataHash,
+      fetched_at: metadata.extracted_at || new Date().toISOString(),
+    });
+
+    // data_hash is NOT NULL, ensure it's always present after stripNulls
+    deedRecord.data_hash = dataHash;
+
+    const result = await domainQuery('dialysis', 'POST', 'deed_records', deedRecord);
+    if (result.ok) inserted++;
+  }
+
+  return inserted;
 }
 
 /**
