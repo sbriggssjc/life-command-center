@@ -461,26 +461,35 @@ async function ingestEmails(req, res, user, workspaceId) {
     // ---- Resolve stale flags ----
     // Items that were previously flagged but are no longer in Outlook's flagged list.
     // Uses the pre-fetched existingByExtId map — no extra query needed.
-    try {
-      const staleIds = [];
-      for (const [extId, item] of existingByExtId) {
-        if (!activeFlagIds.has(extId)
-            && !item.flag_removed_at
-            && (item.status === 'new' || item.status === 'triaged')) {
-          staleIds.push(item.id);
+    //
+    // SAFETY: Only run stale detection when the source returned at least one email.
+    // An empty response typically means an upstream issue (auth token expiry, timeout,
+    // rate limit) — not that the user unflagged every email. Without this guard, a
+    // single empty response would archive all existing flagged_email items.
+    if (emailList.length > 0) {
+      try {
+        const staleIds = [];
+        for (const [extId, item] of existingByExtId) {
+          if (!activeFlagIds.has(extId)
+              && !item.flag_removed_at
+              && (item.status === 'new' || item.status === 'triaged')) {
+            staleIds.push(item.id);
+          }
         }
-      }
 
-      if (staleIds.length > 0) {
-        // Mark stale items — batch PATCH via PostgREST "in" filter
-        await opsQuery('PATCH',
-          `inbox_items?id=in.(${staleIds.join(',')})`,
-          { flag_removed_at: new Date().toISOString(), status: 'archived' }
-        );
-        resolved = staleIds.length;
+        if (staleIds.length > 0) {
+          // Mark stale items — batch PATCH via PostgREST "in" filter
+          await opsQuery('PATCH',
+            `inbox_items?id=in.(${staleIds.join(',')})`,
+            { flag_removed_at: new Date().toISOString(), status: 'archived' }
+          );
+          resolved = staleIds.length;
+        }
+      } catch (resolveErr) {
+        console.warn('[sync] Stale flag resolution failed (non-fatal):', resolveErr.message);
       }
-    } catch (resolveErr) {
-      console.warn('[sync] Stale flag resolution failed (non-fatal):', resolveErr.message);
+    } else if (existingByExtId.size > 0) {
+      console.warn(`[sync] Edge function returned 0 emails but ${existingByExtId.size} existing items found — skipping stale flag resolution to prevent data loss`);
     }
 
     const status = failed === 0 ? 'completed' : (processed > 0 ? 'partial' : 'failed');
