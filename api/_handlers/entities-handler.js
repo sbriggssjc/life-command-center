@@ -523,7 +523,15 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     );
     if (!result.ok) return res.status(result.status).json({ error: 'Failed to update entity' });
 
-    return res.status(200).json({ entity: Array.isArray(result.data) ? result.data[0] : result.data });
+    const updated = Array.isArray(result.data) ? result.data[0] : result.data;
+
+    // Fire-and-forget: if metadata was updated with new sidebar data, run the pipeline
+    if (metadata && updated?.id && updated?.entity_type === 'asset' && hasSidebarData(metadata)) {
+      processSidebarExtraction(updated.id, workspaceId, user.id)
+        .catch(err => console.error('[Sidebar pipeline async error on PATCH]', err?.message || err));
+    }
+
+    return res.status(200).json({ entity: updated });
   }
 
   return res.status(405).json({ error: `Method ${req.method} not allowed` });

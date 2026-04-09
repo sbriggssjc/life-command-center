@@ -246,6 +246,46 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
   return created;
 }
 
+// ── Step 1b: Unpack Tenant → Entity + Lease Relationship ────────────────────
+
+async function unpackTenant(propertyEntityId, metadata, workspaceId, userId, domain) {
+  const tenantName = metadata.tenant_name || metadata.primary_tenant;
+  if (!tenantName) return 0;
+
+  const source = metadata.source || 'costar';
+  const entityType = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|AGENCY|ADMINISTRATION|DEPARTMENT)\b/i.test(tenantName)
+    ? 'organization' : 'organization'; // Tenants are almost always orgs
+
+  const tenantLink = await ensureEntityLink({
+    workspaceId,
+    userId,
+    sourceSystem: source,
+    sourceType: 'company',
+    externalId: normalizeCanonicalName(tenantName),
+    domain,
+    seedFields: { name: tenantName, org_type: 'tenant' },
+  });
+
+  if (!tenantLink.ok) return 0;
+
+  // Create lease relationship with term details
+  await opsQuery('POST', 'entity_relationships', {
+    workspace_id: workspaceId,
+    from_entity_id: tenantLink.entityId,
+    to_entity_id: propertyEntityId,
+    relationship_type: 'leases',
+    metadata: {
+      role: 'tenant',
+      source: `${source}_sidebar`,
+      lease_term: metadata.lease_term || null,
+      occupancy: metadata.occupancy || null,
+      extracted_at: metadata.extracted_at || new Date().toISOString(),
+    },
+  }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+
+  return tenantLink.createdEntity ? 1 : 0;
+}
+
 // ── Step 2: Unpack Sales History ────────────────────────────────────────────
 
 async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userId, domain) {
@@ -290,6 +330,9 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
         loan_amount: sale.loan_amount || null,
         loan_type: sale.loan_type || null,
         loan_origination_date: sale.loan_origination_date || null,
+        interest_rate: sale.interest_rate || null,
+        loan_term: sale.loan_term || null,
+        maturity_date: sale.maturity_date || null,
         deed_type: sale.deed_type || null,
         transaction_type: sale.transaction_type || null,
         sale_type: sale.sale_type || null,
@@ -398,6 +441,9 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
             loan_amount: sale.loan_amount || null,
             loan_type: sale.loan_type || null,
             loan_origination_date: sale.loan_origination_date || null,
+            interest_rate: sale.interest_rate || null,
+            loan_term: sale.loan_term || null,
+            maturity_date: sale.maturity_date || null,
             document_number: sale.document_number || null,
           },
           effective_from: parseDate(sale.loan_origination_date) || saleDate || null,
@@ -473,28 +519,37 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
   const entity = entityResult.data[0];
   const metadata = entity.metadata || {};
 
-  // Only process if there's sidebar extraction data
-  if (!metadata.contacts && !metadata.sales_history) {
-    return { ok: true, skipped: true, reason: 'No contacts or sales_history in metadata' };
+  // Only process if there's sidebar extraction data worth unpacking
+  if (!metadata.contacts && !metadata.sales_history && !metadata.tenant_name && !metadata.primary_tenant) {
+    return { ok: true, skipped: true, reason: 'No contacts, sales_history, or tenant in metadata' };
   }
 
   // Step 4 first: classify domain (needed for entity creation in steps 1-2)
   const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId);
 
-  // Step 1: Unpack contacts → entities + relationships
+  // Step 1a: Unpack contacts → entities + relationships
   const contactCount = await unpackContacts(entityId, metadata, workspaceId, userId, domain);
+
+  // Step 1b: Unpack tenant → entity + lease relationship
+  const tenantCount = await unpackTenant(entityId, metadata, workspaceId, userId, domain);
 
   // Step 2: Unpack sales history → activity events + buyer/seller/lender entities
   const salesCount = await unpackSalesHistory(entityId, metadata, workspaceId, userId, domain);
 
   // Step 3: Write signal for learning loop
-  await writeExtractionSignal(entityId, metadata, domain, userId, contactCount, salesCount);
+  const totalContacts = contactCount + tenantCount;
+  await writeExtractionSignal(entityId, metadata, domain, userId, totalContacts, salesCount);
 
   // Mark metadata as processed so we don't re-process
   const updatedMeta = {
     ...metadata,
     _pipeline_processed_at: new Date().toISOString(),
-    _pipeline_summary: { contacts_created: contactCount, sales_recorded: salesCount, domain },
+    _pipeline_summary: {
+      contacts_created: contactCount,
+      tenant_created: tenantCount,
+      sales_recorded: salesCount,
+      domain,
+    },
   };
   await opsQuery('PATCH',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
@@ -506,6 +561,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
     entity_id: entityId,
     domain,
     contacts_created: contactCount,
+    tenant_created: tenantCount,
     sales_recorded: salesCount,
     processed_at: new Date().toISOString(),
   };
@@ -517,5 +573,10 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
 export function hasSidebarData(metadata) {
   if (!metadata) return false;
   if (metadata._pipeline_processed_at) return false; // Already processed
-  return !!(metadata.contacts?.length || metadata.sales_history?.length);
+  return !!(
+    metadata.contacts?.length ||
+    metadata.sales_history?.length ||
+    metadata.tenant_name ||
+    metadata.primary_tenant
+  );
 }
