@@ -93,7 +93,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 7,
+        _version: 8,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -336,85 +336,108 @@
     return contacts;
   }
 
+  // Parse person/company blocks. Does NOT rely on "logo" separators (they
+  // get concatenated in innerText). Instead detects a new person when a
+  // name-like line appears after the current person already has contact info.
   function parsePersonBlocks(lines, startIdx) {
     const people = [];
     let current = null;
 
     function pushCurrent() {
-      if (current && current.name) {
-        // Don't add entries that are just company names without contact info
-        if (current.email || (current.phones && current.phones.length) || current.type === 'entity') {
-          people.push(current);
-        } else if (current.title) {
-          people.push(current);
-        }
-      }
+      if (current && current.name) people.push(current);
       current = null;
+    }
+
+    function isPhone(s) { return /^\(?\d{3}\)?\s*[-.]?\s*\d{3}[-.]?\d{4}/.test(s); }
+    function isEmail(s) { return /@/.test(s) && /\.\w{2,}$/.test(s) && !s.startsWith('http'); }
+    function isURL(s) { return /^https?:\/\//i.test(s) || /^www\./i.test(s); }
+    function isAddress(s) { return /^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{5}/.test(s); }
+    function isStreet(s) { return /^\d+\s+\w+.*\b(st|street|ave|blvd|rd|dr|suite|ste|pkwy)\b/i.test(s); }
+    function hasContactInfo(p) { return p && (p.email || (p.phones && p.phones.length)); }
+
+    function isNameLine(s) {
+      if (s.length < 3 || s.length > 60) return false;
+      if (/^\(/.test(s) || /@/.test(s) || /^\d/.test(s)) return false;
+      if (isURL(s) || isPhone(s) || isEmail(s)) return false;
+      if (/^(no\s+|source:|add\s+notes|name$|united states)/i.test(s)) return false;
+      if (/^[a-z]/.test(s)) return false; // must start with capital
+      return true;
+    }
+
+    function isTitleLine(s) {
+      return /director|manager|analyst|advisor|associate|vp\b|president|officer|agent|broker|partner|principal|senior|managing|consultant/i.test(s);
     }
 
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
 
-      // Stop at next major section header
-      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources\s+&|sale\s+comp|comparable|seller|buyer(?!\s+broker)|recorded\s+seller|lender|listing\s+(broker|agent))/i.test(line)) {
-        // "Buyer Broker" should NOT stop a Listing Broker section
-        if (/^buyer\s+broker$/i.test(line)) break;
-        if (/^(seller|buyer|recorded|lender|listing)/i.test(line)) break;
-        if (/^(transaction|building|land\b|market|tenants|public|my\s+notes|sources|sale\s+comp|comparable)/i.test(line)) break;
-      }
+      // Stop at section boundaries
+      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources\s+&|sale\s+comp|comparable|recorded\s+(seller|buyer)|lender)/i.test(line)) break;
+      // Stop at other contact section headers (but not sub-labels within)
+      if (/^(seller|buyer\s+broker|listing\s+(broker|agent))$/i.test(line) && j > startIdx) break;
 
-      // "logo" = separator between person/company blocks
-      if (/^logo$/i.test(line)) {
+      // Handle "logo" as separator — both standalone and concatenated
+      if (/^logo$/i.test(line)) { pushCurrent(); continue; }
+      if (/^logo[A-Z]/i.test(line)) {
         pushCurrent();
+        const afterLogo = line.replace(/^logo\s*/i, '').trim();
+        if (afterLogo.length > 2) current = { name: afterLogo, type: 'person' };
         continue;
       }
 
-      // Email
-      if (/@/.test(line) && /\.\w{2,}$/.test(line)) {
-        if (current) current.email = line.trim();
+      // Skip non-content lines
+      if (isURL(line)) { if (current) current.website = line.trim(); continue; }
+      if (/^United States$/i.test(line)) continue;
+      if (isAddress(line)) continue;
+      if (isStreet(line)) continue;
+
+      // Email — assign to current person
+      if (isEmail(line)) {
+        if (current && !current.email) current.email = line.trim();
         continue;
       }
 
-      // Phone: (XXX) XXX-XXXX or similar, strip (p)/(m) suffix
-      if (/^\(?\d{3}\)?\s*[-.]?\s*\d{3}[-.]?\d{4}/.test(line)) {
+      // Phone — assign to current person
+      if (isPhone(line)) {
         if (current) {
           if (!current.phones) current.phones = [];
-          current.phones.push(line.replace(/\s*\([pmw]\)\s*$/i, '').trim());
+          current.phones.push(line.replace(/\s*\([pmwf]\)\s*$/i, '').trim());
         }
         continue;
       }
 
-      // URL — skip
-      if (/^https?:\/\//i.test(line)) continue;
-
-      // Full address line (city, state zip) — skip
-      if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{5}/.test(line)) continue;
-      if (/^United States$/i.test(line)) continue;
-      // Street address line for company — skip
-      if (/^\d+\s+\w+.*\b(st|ave|blvd|rd|dr|suite|ste)\b/i.test(line)) continue;
-
-      // If no current person, this line starts a new person or company
-      if (!current) {
-        if (line.length > 2 && line.length < 60 &&
-            !/^\(/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
-            !/^(logo|no\s+|source:|name$|add\s+notes)/i.test(line)) {
+      // Name-like line
+      if (isNameLine(line)) {
+        // Current person already has contact info → they're complete, start new
+        if (hasContactInfo(current)) {
+          pushCurrent();
           current = { name: line, type: 'person' };
+          continue;
         }
-        continue;
-      }
 
-      // After name: detect title
-      if (current && !current.title && line.length > 3 && line.length < 80 &&
-          !/^\(/.test(line) && !/@/.test(line) && !/^\d+\s/.test(line)) {
-        if (/director|manager|analyst|advisor|associate|vp|president|officer|agent|broker|partner|principal|senior|managing/i.test(line)) {
+        // No current person → start new
+        if (!current) {
+          current = { name: line, type: 'person' };
+          continue;
+        }
+
+        // Current person has name but no contact info yet → title or new person?
+        if (!current.title && isTitleLine(line)) {
           current.title = line;
           continue;
         }
-        // Short non-numeric line after name could be title
-        if (line.length < 50 && !/^[A-Z]{2}\s+\d/.test(line) && !/^\d/.test(line)) {
-          current.title = line;
+
+        // Has name + title already → probably a new person (or company)
+        if (current.title) {
+          pushCurrent();
+          current = { name: line, type: 'person' };
           continue;
         }
+
+        // Name but no title, and this line doesn't look like a title → new person
+        pushCurrent();
+        current = { name: line, type: 'person' };
+        continue;
       }
     }
 
@@ -510,20 +533,53 @@
       if (/^sale\s+type$/i.test(line) && next) { current.sale_type = next; continue; }
       if (/^document\s+#$/i.test(line) && next) { current.document_number = next; continue; }
 
-      // Buyer/Seller within deed record
-      if (/^buyer$/i.test(line) && next && next.length < 80 && !/^(address|seller)/i.test(next)) {
+      // Buyer/Seller within deed record — capture name + address
+      if (/^buyer$/i.test(line) && next && next.length < 80 && !/^(address|seller|title)/i.test(next)) {
         current.buyer = next;
+        // Look ahead for buyer address
+        current.buyer_address = findEntityAddress(lines, j + 2);
         continue;
       }
-      if (/^seller$/i.test(line) && next && next.length < 80 && !/^(title|buyer|address)/i.test(next)) {
+      if (/^seller$/i.test(line) && next && next.length < 80 && !/^(title|buyer|address|lender)/i.test(next)) {
         current.seller = next;
+        current.seller_address = findEntityAddress(lines, j + 2);
         continue;
       }
       if (/^title\s+company$/i.test(line) && next) { current.title_company = next; continue; }
+
+      // Lender and loan data
+      if (/^lender$/i.test(line) && next && next.length < 80) {
+        current.lender = next;
+        current.lender_address = findEntityAddress(lines, j + 2);
+        continue;
+      }
+      if (/^loan\s+amount$/i.test(line) && next && /^\$/.test(next)) { current.loan_amount = next; continue; }
+      if (/^loan\s+type$/i.test(line) && next) { current.loan_type = next; continue; }
+      if (/^interest\s+rate$/i.test(line) && next) { current.interest_rate = next; continue; }
+      if (/^loan\s+term$/i.test(line) && next) { current.loan_term = next; continue; }
+      if (/^maturity\s+date$/i.test(line) && next) { current.maturity_date = next; continue; }
     }
 
     if (current && (current.sale_date || current.sale_price)) sales.push(current);
     return sales;
+  }
+
+  // Look ahead from a position for an address block (street + city/state)
+  function findEntityAddress(lines, startIdx) {
+    const parts = [];
+    for (let k = startIdx; k < Math.min(startIdx + 4, lines.length); k++) {
+      const l = lines[k];
+      // Stop at next label or section
+      if (/^(seller|buyer|title|lender|loan|transaction|address$)/i.test(l)) break;
+      // Skip "Address" label if present
+      if (/^address$/i.test(l)) continue;
+      // Collect address lines (street, city/state/zip)
+      if (/^\d+\s+\w+/.test(l) || /^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(l) ||
+          /^(po\s+box|p\.?o\.?\s+box)/i.test(l)) {
+        parts.push(l);
+      }
+    }
+    return parts.length ? parts.join(', ') : null;
   }
 
   function parseHistoricSalesSection(lines, startIdx) {

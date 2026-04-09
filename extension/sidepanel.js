@@ -643,16 +643,41 @@ function renderSalesHistory(sales) {
     html += `<span class="sale-date">${escapeHtml(s.sale_date || '—')}</span>`;
     html += `<span class="sale-price">${escapeHtml(s.sale_price || s.asking_price || '—')}</span>`;
     html += '</div>';
+
+    // Transaction details line
     const details = [];
     if (s.cap_rate) details.push(`Cap: ${s.cap_rate}`);
     if (s.sale_type) details.push(s.sale_type);
     if (s.sale_condition) details.push(s.sale_condition);
+    if (s.transaction_type) details.push(s.transaction_type);
+    if (s.deed_type) details.push(s.deed_type);
     if (s.hold_period) details.push(`Hold: ${s.hold_period}`);
-    if (s.seller) details.push(`Seller: ${s.seller}`);
-    if (s.buyer) details.push(`Buyer: ${s.buyer}`);
     if (details.length) {
       html += `<div class="sale-detail">${details.map((d) => escapeHtml(d)).join(' &middot; ')}</div>`;
     }
+
+    // Buyer/Seller with addresses
+    if (s.seller) {
+      html += `<div class="sale-detail"><strong>Seller:</strong> ${escapeHtml(s.seller)}${s.seller_address ? ` — ${escapeHtml(s.seller_address)}` : ''}</div>`;
+    }
+    if (s.buyer) {
+      html += `<div class="sale-detail"><strong>Buyer:</strong> ${escapeHtml(s.buyer)}${s.buyer_address ? ` — ${escapeHtml(s.buyer_address)}` : ''}</div>`;
+    }
+
+    // Lender/Loan
+    if (s.lender) {
+      let lenderLine = `<strong>Lender:</strong> ${escapeHtml(s.lender)}`;
+      if (s.loan_amount) lenderLine += ` — ${escapeHtml(s.loan_amount)}`;
+      if (s.loan_type) lenderLine += ` (${escapeHtml(s.loan_type)})`;
+      if (s.interest_rate) lenderLine += ` @ ${escapeHtml(s.interest_rate)}`;
+      if (s.lender_address) lenderLine += `<br><span style="color:var(--text-secondary);font-size:10px;">${escapeHtml(s.lender_address)}</span>`;
+      html += `<div class="sale-detail">${lenderLine}</div>`;
+    }
+
+    // Title company & document
+    if (s.title_company) html += `<div class="sale-detail" style="color:var(--text-secondary);">Title: ${escapeHtml(s.title_company)}</div>`;
+    if (s.document_number) html += `<div class="sale-detail" style="color:var(--text-secondary);">Doc #${escapeHtml(s.document_number)}</div>`;
+
     html += '</div>';
   }
   return html;
