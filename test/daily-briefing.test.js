@@ -7,7 +7,11 @@ const ENV_KEYS = [
   'OPS_SUPABASE_KEY',
   'LCC_API_KEY',
   'MORNING_BRIEFING_STRUCTURED_URL',
-  'MORNING_BRIEFING_HTML_URL'
+  'MORNING_BRIEFING_HTML_URL',
+  'GOV_SUPABASE_URL',
+  'GOV_SUPABASE_KEY',
+  'DIA_SUPABASE_URL',
+  'DIA_SUPABASE_KEY'
 ];
 const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -263,5 +267,73 @@ describe('daily briefing snapshot endpoint', () => {
     assert.ok(res._json.status.missing_sections.includes('global_market_intelligence.structured_payload'));
     assert.equal(res._json.global_market_intelligence.html_fragment, '<div>Fallback morning html only</div>');
     assert.ok(res._json.domain_specific_alerts_highlights);
+  });
+
+  it('returns domain fallback market summary when both morning URLs fail', async () => {
+    process.env.GOV_SUPABASE_URL = 'https://gov.example.com';
+    process.env.GOV_SUPABASE_KEY = 'gov-key';
+    process.env.DIA_SUPABASE_URL = 'https://dia.example.com';
+    process.env.DIA_SUPABASE_KEY = 'dia-key';
+    delete process.env.MORNING_BRIEFING_STRUCTURED_URL;
+    delete process.env.MORNING_BRIEFING_HTML_URL;
+
+    global.fetch = async (url, opts = {}) => {
+      const target = String(url);
+      const method = opts.method || 'GET';
+
+      if (target.includes('gov.example.com/rest/v1/sales_transactions')) {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/42' });
+      }
+      if (target.includes('dia.example.com/rest/v1/sales_transactions')) {
+        return jsonResponse([], true, 200, { 'content-range': '0-0/17' });
+      }
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-3',
+          email: 'test@example.com',
+          display_name: 'Test User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'operator', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      if (target.includes('/rest/v1/mv_work_counts?workspace_id=eq.ws-1')) return jsonResponse([{}]);
+      if (target.includes('/rest/v1/mv_user_work_counts?workspace_id=eq.ws-1&user_id=eq.user-3')) return jsonResponse([{}]);
+      if (target.includes('/rest/v1/v_my_work?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/v_inbox_triage?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/inbox_items?workspace_id=eq.ws-1&status=eq.new')) return jsonResponse([], true, 200, { 'content-range': '*/0' });
+      if (target.includes('/rest/v1/inbox_items?workspace_id=eq.ws-1&status=eq.triaged')) return jsonResponse([], true, 200, { 'content-range': '*/0' });
+      if (target.includes('/rest/v1/v_unassigned_work?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/connector_accounts?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/sync_jobs?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/sync_errors?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/inbox_items?workspace_id=eq.ws-1&source_type=eq.sf_task')) return jsonResponse([], true, 200, { 'content-range': '*/0' });
+
+      // Allow other domain queries to pass through silently
+      if (target.includes('gov.example.com') || target.includes('dia.example.com')) return jsonResponse([]);
+
+      throw new Error(`Unexpected fetch: ${method} ${target}`);
+    };
+
+    const handler = await loadHandler();
+    const req = {
+      method: 'GET',
+      query: { action: 'snapshot', role_view: 'broker' },
+      headers: { 'x-lcc-user-id': 'user-3', 'x-lcc-workspace': 'ws-1' }
+    };
+    const res = mockRes();
+
+    await handler(req, res);
+
+    assert.equal(res._status, 200);
+    assert.equal(res._json.status.completeness, 'degraded');
+    assert.ok(res._json.status.missing_sections.includes('global_market_intelligence.structured_payload'));
+    assert.ok(res._json.status.missing_sections.includes('global_market_intelligence.html_fragment'));
+    const gmi = res._json.global_market_intelligence;
+    assert.equal(gmi.source_system, 'domain_fallback');
+    assert.ok(gmi.summary.includes('17 dialysis'));
+    assert.ok(gmi.summary.includes('42 government'));
+    assert.equal(gmi.highlights.length, 2);
+    assert.equal(gmi.highlights[0].category, 'dialysis');
+    assert.equal(gmi.highlights[1].category, 'government');
   });
 });
