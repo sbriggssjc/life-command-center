@@ -575,7 +575,11 @@ function wirePropertyActions(ctx, lccEntity) {
         state: ctx.state,
         zip: ctx.zip || null,
         county: ctx.county || null,
-        asset_type: fields.property_type || ctx.property_subtype || 'property',
+        asset_type: (() => {
+          const rawType = fields.property_type || ctx.property_subtype || null;
+          const INVALID_TYPES = ['size', 'type', 'class', 'sf', 'rba', 'stories'];
+          return (rawType && !INVALID_TYPES.includes(rawType.toLowerCase())) ? rawType : 'property';
+        })(),
         description: `Imported from ${domainLabel}`,
         metadata,
       });
