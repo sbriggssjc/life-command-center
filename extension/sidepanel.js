@@ -297,6 +297,11 @@ async function loadPropertyTab() {
       <span class="match-dot ${matched ? 'found' : 'not-found'}"></span>
       ${matched ? 'Found in LCC database' : 'Not yet in LCC database'}
     </div>`;
+  } else if (result.error) {
+    html += `<div class="match-status not-found">
+      <span class="match-dot not-found"></span>
+      LCC lookup: ${escapeHtml(result.error)}
+    </div>`;
   }
 
   // Render fields — compare table if matched, simple list if not

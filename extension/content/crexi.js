@@ -120,19 +120,53 @@
   observer.observe(document.body, { childList: true, subtree: true });
 
   function findTextElement(...keywords) {
-    const labels = document.querySelectorAll('label, dt, th, .label, [class*="label"], [class*="Label"], span[class*="key"], span[class*="title"]');
-    for (const el of labels) {
-      const text = el.textContent?.toLowerCase() || '';
-      if (keywords.some((kw) => text.includes(kw.toLowerCase()))) {
+    const kwLower = keywords.map((k) => k.toLowerCase());
+
+    // Strategy 1: Semantic label elements
+    const labelEls = document.querySelectorAll(
+      'label, dt, th, .label, [class*="label"], [class*="Label"], ' +
+      'span[class*="key"], span[class*="title"]'
+    );
+    for (const el of labelEls) {
+      const text = el.textContent?.trim().toLowerCase() || '';
+      if (text.length > 80) continue;
+      if (kwLower.some((kw) => text.includes(kw))) {
         const sibling = el.nextElementSibling;
-        if (sibling) return sibling;
+        if (sibling?.textContent?.trim()) return sibling;
         const parent = el.parentElement;
         if (parent) {
-          const value = parent.querySelector('dd, td, .value, [class*="value"], [class*="Value"], span:last-child');
+          const value = parent.querySelector(
+            'dd, td, .value, [class*="value"], [class*="Value"], span:last-child'
+          );
           if (value && value !== el) return value;
         }
       }
     }
+
+    // Strategy 2: Scan compact elements (SPA card/tile layouts)
+    const allEls = document.querySelectorAll('div, span, p, td, li');
+    for (const el of allEls) {
+      const text = el.textContent?.trim() || '';
+      if (text.length < 2 || text.length > 60 || el.children.length > 3) continue;
+      if (!kwLower.some((kw) => text.toLowerCase().includes(kw))) continue;
+
+      const next = el.nextElementSibling;
+      if (next?.textContent?.trim()?.length > 0 && next.textContent.trim().length < 200) return next;
+
+      const prev = el.previousElementSibling;
+      if (prev?.textContent?.trim()?.length > 0 && prev.textContent.trim().length < 200) return prev;
+
+      const parent = el.parentElement;
+      if (parent && parent.children.length <= 5) {
+        for (const child of parent.children) {
+          if (child !== el) {
+            const ct = child.textContent?.trim();
+            if (ct && ct.length < 200 && ct.toLowerCase() !== text.toLowerCase()) return child;
+          }
+        }
+      }
+    }
+
     return null;
   }
 
