@@ -97,7 +97,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 14,
+        _version: 15,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -523,7 +523,7 @@
   //   "Stacking Plan" tabs: floor-by-floor tenant breakdown
 
   // CoStar UI elements that appear in tenant sections but are NOT tenant names
-  const COSTAR_UI_REJECT = /^(name|source:|costar|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed)$/i;
+  const COSTAR_UI_REJECT = /^(name|source:.*|costar.*research|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed)$/i;
 
   function extractTenants(lines) {
     const tenants = [];
