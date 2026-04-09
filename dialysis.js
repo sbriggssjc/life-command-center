@@ -210,6 +210,7 @@ async function loadDiaData() {
       propertyReviewQueue: [],
       leaseBackfillRows: [],
       researchOutcomes: [],
+      sfActivities: [],
       reconciliation: {}
     };
     
@@ -217,7 +218,8 @@ async function loadDiaData() {
     // Previously split into sequential Batch 1 → movers enrichment → Batch 2
     // Now merged into single Promise.all — cuts load time roughly in half
     var [freshness, invSummary, invChanges, moversUpRaw, moversDownRaw,
-         npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon
+         npiSignalSummary, npiSignals, propQueue, leaseQueue, outcomes, recon,
+         sfActivities
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
@@ -227,9 +229,15 @@ async function loadDiaData() {
       diaQuery('v_npi_inventory_signal_summary', '*').catch(function() { return []; }),
       diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(function() { return []; }),
       diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(function() { return []; }),
-      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 200 }).catch(function() { return []; }),
-      diaQuery('research_queue_outcomes', '*', { limit: 500 }).catch(function() { return []; }),
-      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(function() { return []; })
+      diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 1000 }).catch(function() { return []; }),
+      diaQuery('research_queue_outcomes', 'clinic_id,queue_type,status,assigned_to,assigned_at,created_at', { limit: 2000 }).catch(function() { return []; }),
+      diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(function() { return []; }),
+      // Team touchpoints — query DIA Supabase directly so all team members are included
+      diaQuery('salesforce_activities', 'assigned_to,activity_date,company_name', {
+        filter: 'or(assigned_to.ilike.*largent*,assigned_to.ilike.*martin*,assigned_to.ilike.*briggs*,assigned_to.ilike.*berwaldt*)',
+        order: 'activity_date.desc',
+        limit: 5000
+      }).catch(function() { return []; })
     ]);
 
     // Assign core data
@@ -259,6 +267,7 @@ async function loadDiaData() {
     diaData.propertyReviewQueue = propQueue || [];
     diaData.leaseBackfillRows = leaseQueue || [];
     diaData.researchOutcomes = outcomes || [];
+    diaData.sfActivities = sfActivities || [];
     if (recon && recon.length > 0) {
       diaData.reconciliation = recon[0];
     }
@@ -301,6 +310,7 @@ async function loadDiaData() {
       propertyQueue: diaData.propertyReviewQueue.length,
       leaseBackfill: diaData.leaseBackfillRows.length,
       outcomes: diaData.researchOutcomes.length,
+      sfActivities: diaData.sfActivities.length,
       recon: diaData.reconciliation
     });
     var _diaLoadSec = ((Date.now() - _diaLoadStart) / 1000).toFixed(1);
@@ -548,13 +558,9 @@ function renderDiaOverview() {
   const totalPatients = clinicsWithPatients.reduce((s,c) => s + (c.latest_total_patients || 0), 0);
   const avgPatients = clinicsWithPatients.length > 0 ? Math.round(totalPatients / clinicsWithPatients.length) : 0;
 
-  // Touchpoint metrics from SF activities — full Northmarq IS team
+  // Touchpoint metrics from DIA Supabase salesforce_activities — full Northmarq IS team
   const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
-  const allActivities = (typeof activities !== 'undefined' ? activities : []);
-  const diaActivities = allActivities.filter(a => {
-    const who = (a.assigned_to || '').toLowerCase();
-    return NM_TEAM.some(name => who.includes(name));
-  });
+  const diaActivities = diaData.sfActivities || [];
   const now = new Date();
   const sixMonthsAgo = new Date(now); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
   const oneMonthAgo = new Date(now); oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
@@ -721,7 +727,8 @@ function renderDiaOverview() {
   html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   const memberColors = { 'kelly largent': 'green', 'sarah martin': 'purple', 'scott briggs': 'blue', 'nathanael berwaldt': 'cyan' };
   NM_TEAM.forEach(name => {
-    const memberActs = diaActivities.filter(a => (a.assigned_to || '').toLowerCase().includes(name));
+    const lastName = name.split(' ').pop();
+    const memberActs = diaActivities.filter(a => (a.assigned_to || '').toLowerCase().includes(lastName));
     const ytd = memberActs.filter(a => a.activity_date && new Date(a.activity_date) >= yearStart).length;
     const displayName = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     html += infoCard({ title: displayName, value: fmtN(ytd), sub: 'YTD touchpoints', color: memberColors[name] || 'blue', tab: 'activity' });
@@ -950,8 +957,8 @@ function renderFinancialMetricsInner() {
 
   // Source breakdown row
   h += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
-  const srcLabels = { ttm_reported: 'TTM Reported', cms_patient_count: 'CMS Patient Count', google_hours: 'Google Hours', cms_chair_count: 'CMS Chair Count' };
-  const srcColors = { ttm_reported: 'green', cms_patient_count: 'blue', google_hours: 'cyan', cms_chair_count: 'yellow' };
+  const srcLabels = { ttm_reported: 'TTM Reported', cms_patient_count: 'CMS Patient Count', google_hours: 'Google Hours', cms_chair_count: 'CMS Chair Count', '10k_filing': '10-K Filing' };
+  const srcColors = { ttm_reported: 'green', cms_patient_count: 'blue', google_hours: 'cyan', cms_chair_count: 'yellow', '10k_filing': 'orange' };
   Object.entries(sources).forEach(([src, cnt]) => {
     h += infoCard({ title: srcLabels[src] || src, value: fmtN(cnt), sub: 'estimates', color: srcColors[src] || 'blue' });
   });
