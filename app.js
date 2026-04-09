@@ -198,6 +198,7 @@ let diaData = {
   propertyReviewQueue: [],
   leaseBackfillRows: [],
   researchOutcomes: [],
+  sfActivities: [],
   reconciliation: {}
 };
 let diaDataLoaded = false;
