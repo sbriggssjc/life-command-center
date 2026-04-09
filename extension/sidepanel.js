@@ -49,6 +49,43 @@ async function getLCCConfig() {
   });
 }
 
+async function pollPipelineStatus(entityId, container) {
+  try {
+    await new Promise((r) => setTimeout(r, 3500));
+    const config = await getLCCConfig();
+    const baseUrl = config.LCC_RAILWAY_URL;
+    if (!baseUrl) return;
+    const url = `${baseUrl.replace(/\/+$/, '')}/api/entities?id=${entityId}&fields=metadata`;
+    const headers = {};
+    if (config.LCC_API_KEY) headers['X-LCC-Key'] = config.LCC_API_KEY;
+    const res = await fetch(url, { method: 'GET', headers });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    const meta = data?.entity?.metadata || data?.metadata || {};
+    const summary = meta._pipeline_summary;
+    const status = meta._pipeline_status;
+    const lastError = meta._pipeline_last_error;
+
+    const line = document.createElement('div');
+    if (status === 'failed') {
+      line.className = 'update-toast';
+      line.textContent = `→ Pipeline error: ${lastError || 'unknown'}`;
+    } else if (summary) {
+      line.className = 'update-toast updated';
+      line.textContent = `→ ${summary}`;
+    } else {
+      line.className = 'update-toast';
+      line.style.background = '#F3F4F6';
+      line.style.color = '#6B7280';
+      line.style.borderColor = '#D1D5DB';
+      line.textContent = '→ Domain: not matched (dialysis/government keywords not found)';
+    }
+    container.prepend(line);
+  } catch (_) {
+    // best-effort — silently skip on failure
+  }
+}
+
 async function apiCall(endpoint, body, method = 'POST') {
   try {
     const config = await getLCCConfig();
@@ -461,11 +498,14 @@ function wirePropertyActions(ctx, lccEntity) {
 
       if (result.ok) {
         updateBtn.className = 'btn btn-sm btn-success';
-        updateBtn.textContent = 'Updated!';
+        updateBtn.textContent = 'Updated! Checking pipeline...';
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
         toast.textContent = `Property data synced from ${domainLabel}`;
         $('#propertyActions').prepend(toast);
+        pollPipelineStatus(lccEntity.id, $('#propertyActions')).then(() => {
+          updateBtn.textContent = 'Updated!';
+        });
       } else {
         updateBtn.disabled = false;
         updateBtn.textContent = 'Update Failed — Retry';
@@ -515,12 +555,15 @@ function wirePropertyActions(ctx, lccEntity) {
 
       if (result.ok) {
         saveBtn.className = 'btn btn-sm btn-success';
-        saveBtn.textContent = 'Saved!';
+        saveBtn.textContent = 'Saved! Checking pipeline...';
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
         toast.textContent = 'Property added to LCC';
         $('#propertyActions').prepend(toast);
-        setTimeout(() => loadPropertyTab(), 1500);
+        pollPipelineStatus(newEntityId, $('#propertyActions')).then(() => {
+          saveBtn.textContent = 'Saved!';
+          setTimeout(() => loadPropertyTab(), 1500);
+        });
       } else {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
