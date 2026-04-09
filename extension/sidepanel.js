@@ -444,10 +444,38 @@ function wirePropertyActions(ctx, lccEntity) {
       updateBtn.disabled = true;
       updateBtn.textContent = 'Updating...';
 
-      // PATCH the existing entity via entities API
+      // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(ctx);
+      const metadata = {
+        ...(lccEntity.metadata || {}),
+        source: domain || 'extension',
+        source_url: ctx.page_url || null,
+        updated_at: new Date().toISOString(),
+        asking_price: ctx.asking_price || null,
+        cap_rate: ctx.cap_rate || null,
+        noi: ctx.noi || null,
+        price_per_sf: ctx.price_per_sf || null,
+        sale_price: ctx.sale_price || null,
+        sale_date: ctx.sale_date || null,
+        building_class: ctx.building_class || null,
+        year_built: ctx.year_built || null,
+        square_footage: ctx.square_footage || null,
+        lot_size: ctx.lot_size || null,
+        stories: ctx.stories || null,
+        parking: ctx.parking || null,
+        zoning: ctx.zoning || null,
+        occupancy: ctx.occupancy || null,
+        ownership_type: ctx.ownership_type || null,
+        parcel_number: ctx.parcel_number || null,
+        assessed_value: ctx.assessed_value || null,
+        land_value: ctx.land_value || null,
+        improvement_value: ctx.improvement_value || null,
+        contacts: ctx.contacts || [],
+        sales_history: ctx.sales_history || [],
+      };
       const result = await apiCall(`/api/entities?id=${lccEntity.id}`, {
         ...fields,
+        metadata,
         description: `Updated from ${domainLabel} on ${new Date().toLocaleDateString()}`,
       }, 'PATCH');
 
@@ -476,8 +504,40 @@ function wirePropertyActions(ctx, lccEntity) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
-      // Create new entity via POST /api/entities
+      // Pack all extracted CRE data into metadata for the cleaning pipeline
       const fields = extractSourceFields(ctx);
+      const metadata = {
+        source: domain || 'extension',
+        source_url: ctx.page_url || null,
+        extracted_at: new Date().toISOString(),
+        // Financials
+        asking_price: ctx.asking_price || null,
+        cap_rate: ctx.cap_rate || null,
+        noi: ctx.noi || null,
+        price_per_sf: ctx.price_per_sf || null,
+        sale_price: ctx.sale_price || null,
+        sale_date: ctx.sale_date || null,
+        // Building
+        building_class: ctx.building_class || null,
+        year_built: ctx.year_built || null,
+        square_footage: ctx.square_footage || null,
+        lot_size: ctx.lot_size || null,
+        stories: ctx.stories || null,
+        parking: ctx.parking || null,
+        zoning: ctx.zoning || null,
+        occupancy: ctx.occupancy || null,
+        ownership_type: ctx.ownership_type || null,
+        // Public records
+        parcel_number: ctx.parcel_number || null,
+        assessed_value: ctx.assessed_value || null,
+        land_value: ctx.land_value || null,
+        improvement_value: ctx.improvement_value || null,
+        // Contacts (brokers, owner, seller, buyer, lender)
+        contacts: ctx.contacts || [],
+        // Sales history with deed records, lender, buyer/seller addresses
+        sales_history: ctx.sales_history || [],
+      };
+
       const result = await apiCall('/api/entities', {
         entity_type: 'asset',
         name: ctx.address,
@@ -486,6 +546,7 @@ function wirePropertyActions(ctx, lccEntity) {
         state: ctx.state,
         asset_type: fields.property_type || 'property',
         description: `Imported from ${domainLabel}`,
+        metadata,
       });
 
       // If created, link the external identity (CoStar parcel/URL)
