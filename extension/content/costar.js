@@ -11,7 +11,14 @@
   const observer = new MutationObserver(() => {
     // CoStar property detail pages typically have /property/ or /lease/ in URL
     const url = window.location.href;
-    if (!url.includes('/property/') && !url.includes('/lease/') && !url.includes('/detail/')) return;
+    if (
+      !url.includes('/property') &&
+      !url.includes('/lease') &&
+      !url.includes('/detail') &&
+      !url.includes('/comp') &&
+      !url.includes('/listing') &&
+      !url.includes('/asset')
+    ) return;
 
     // Extract property address from heading or page title
     const headingEl =

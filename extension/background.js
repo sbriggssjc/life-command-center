@@ -89,7 +89,6 @@ async function callLCCApi(endpoint, body) {
     'Content-Type': 'application/json',
   };
   if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
     headers['X-LCC-Key'] = apiKey;
   }
 
@@ -118,7 +117,7 @@ async function testConnection() {
 
   const headers = {};
   if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers['X-LCC-Key'] = apiKey;
   }
 
   try {
