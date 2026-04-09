@@ -14,9 +14,6 @@
       --text: #1A1A2E;
       --text-secondary: #6B7280;
       --border: #E5E7EB;
-      --strategic: #DC2626;
-      --important: #D97706;
-      --urgent: #6B7280;
       --green: #059669;
       --yellow: #D97706;
       --red: #DC2626;
@@ -116,33 +113,6 @@
       color: var(--text-secondary);
     }
 
-    /* Priority sections */
-    .priority-section {
-      border-left: 3px solid var(--urgent);
-      padding-left: 10px;
-      margin-bottom: 12px;
-    }
-    .priority-section.strategic { border-left-color: var(--strategic); }
-    .priority-section.important { border-left-color: var(--important); }
-    .priority-section.urgent { border-left-color: var(--urgent); }
-    .priority-label {
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 6px;
-    }
-    .priority-section.strategic .priority-label { color: var(--strategic); }
-    .priority-section.important .priority-label { color: var(--important); }
-    .priority-section.urgent .priority-label { color: var(--urgent); }
-    .priority-item {
-      padding: 6px 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .priority-item:last-child { border-bottom: none; }
-    .priority-item-title { font-weight: 600; font-size: 12px; }
-    .priority-item-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
-
     /* Domain badge */
     .domain-badge {
       display: inline-block;
@@ -188,21 +158,7 @@
     .result-name { font-weight: 600; font-size: 12px; }
     .result-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 
-    /* Context pane */
-    .context-header {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin-bottom: 10px;
-      flex-shrink: 0;
-    }
-    .context-detected {
-      font-size: 11px;
-      color: var(--accent);
-      margin-bottom: 4px;
-    }
-    .context-body { flex: 1; overflow-y: auto; }
+    /* Context fields (reused in property tab) */
     .context-field {
       display: flex;
       justify-content: space-between;
@@ -213,36 +169,61 @@
     .context-label { color: var(--text-secondary); font-weight: 500; }
     .context-value { font-weight: 600; text-align: right; }
 
-    .score-badge {
-      display: inline-block;
-      padding: 1px 8px;
-      border-radius: 10px;
-      font-size: 11px;
-      font-weight: 700;
-      color: white;
+    /* Property tab */
+    .property-header-section {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+      flex-shrink: 0;
     }
-    .score-green { background: var(--green); }
-    .score-yellow { background: var(--yellow); }
-    .score-red { background: var(--red); }
+    .property-title { font-weight: 700; font-size: 14px; color: var(--navy); }
+    .property-subtitle { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+    .property-source { font-size: 10px; color: var(--accent); margin-top: 4px; }
+    .property-body { flex: 1; overflow-y: auto; }
+    .property-actions { flex-shrink: 0; padding-top: 8px; }
 
-    .touch-badge {
-      font-size: 11px;
-      font-weight: 600;
+    .match-status {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; border-radius: 6px;
+      font-size: 11px; font-weight: 600; margin-bottom: 8px;
     }
-    .touch-green { color: var(--green); }
-    .touch-yellow { color: var(--yellow); }
-    .touch-red { color: var(--red); }
+    .match-status.found { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; }
+    .match-status.not-found { background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; }
+    .match-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .match-dot.found { background: var(--green); }
+    .match-dot.not-found { background: var(--yellow); }
 
-    .activity-list {
-      list-style: none;
-      margin-top: 8px;
+    .compare-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .compare-table th {
+      text-align: left; padding: 4px 6px; font-size: 10px;
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+      color: var(--text-secondary); border-bottom: 2px solid var(--border);
     }
-    .activity-item {
-      padding: 4px 0;
-      border-bottom: 1px solid var(--border);
-      font-size: 11px;
+    .compare-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+    .compare-table .field-label { font-weight: 500; color: var(--text-secondary); }
+    .compare-new { color: var(--accent); font-weight: 600; }
+    .compare-diff { color: var(--yellow); font-weight: 600; }
+
+    .related-section { margin-top: 12px; }
+    .related-entity {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; background: var(--card-bg);
+      border: 1px solid var(--border); border-radius: 6px;
+      margin-bottom: 4px; cursor: pointer; font-size: 12px;
+      transition: border-color 0.15s;
     }
-    .activity-date { color: var(--text-secondary); font-size: 10px; }
+    .related-entity:hover { border-color: var(--accent); }
+    .related-type { font-size: 10px; color: var(--text-secondary); }
+
+    .update-toast {
+      padding: 8px 12px; border-radius: 6px; font-size: 11px;
+      background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
+    }
+    .update-toast.updated {
+      background: #ECFDF5; color: #065F46; border-color: #A7F3D0;
+    }
 
     /* Chat */
     .chat-container {
@@ -318,9 +299,13 @@
       transition: opacity 0.15s;
     }
     .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
     .btn-primary { background: var(--navy); color: white; }
     .btn-secondary { background: var(--border); color: var(--text); }
     .btn-sm { padding: 4px 10px; font-size: 11px; }
+    .btn-confirm { background: #D97706; color: white; }
+    .btn-success { background: var(--green); color: white; }
+    .btn-danger { background: var(--red); color: white; }
 
     /* Status bar */
     .status-bar {
@@ -373,17 +358,9 @@
       font-size: 12px;
     }
 
-    /* Refresh row */
-    .refresh-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-      flex-shrink: 0;
-    }
-    .refresh-row .timestamp {
-      font-size: 10px;
-      color: var(--text-secondary);
+    .section-label {
+      font-weight: 600; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.3px; color: var(--text-secondary); margin: 8px 0 4px;
     }
   </style>
 </head>
@@ -399,23 +376,18 @@
 
   <!-- Tab bar -->
   <div class="tab-bar">
-    <button class="tab-btn active" data-tab="briefing">Briefing</button>
+    <button class="tab-btn active" data-tab="property">Property</button>
     <button class="tab-btn" data-tab="search">Search</button>
-    <button class="tab-btn" data-tab="context">Context</button>
     <button class="tab-btn" data-tab="chat">Chat</button>
   </div>
 
   <!-- Tab content -->
   <div class="tab-content">
-    <!-- BRIEFING TAB -->
-    <div class="tab-pane active" id="tab-briefing">
-      <div class="refresh-row">
-        <span id="briefingTimestamp" class="timestamp"></span>
-        <button class="btn btn-sm btn-secondary" id="refreshBriefing">Refresh</button>
-      </div>
-      <div id="briefingContent">
-        <div class="loading"><div class="spinner"></div><br>Loading briefing...</div>
-      </div>
+    <!-- PROPERTY TAB -->
+    <div class="tab-pane active" id="tab-property">
+      <div id="propertyHeader" class="property-header-section"></div>
+      <div id="propertyBody" class="property-body"></div>
+      <div id="propertyActions" class="property-actions"></div>
     </div>
 
     <!-- SEARCH TAB -->
@@ -429,22 +401,14 @@
       </div>
     </div>
 
-    <!-- CONTEXT TAB -->
-    <div class="tab-pane" id="tab-context">
-      <div class="context-header" id="contextHeader">
-        <div class="empty-state">No context loaded. Search for an entity or browse a supported site.</div>
-      </div>
-      <div class="context-body" id="contextBody"></div>
-    </div>
-
     <!-- CHAT TAB -->
     <div class="tab-pane" id="tab-chat">
       <div class="chat-container">
         <div class="chat-messages" id="chatMessages">
-          <div class="empty-state">Ask anything about your pipeline, contacts, or deals.</div>
+          <div class="empty-state">Ask about this property or anything in your pipeline.</div>
         </div>
         <div class="chat-input-row">
-          <input type="text" id="chatInput" placeholder="Ask LCC...">
+          <input type="text" id="chatInput" placeholder="Ask about this property...">
           <button class="btn btn-sm btn-primary" id="chatSend">Send</button>
         </div>
         <div class="chat-clear-btn" id="chatClear">Clear chat</div>
