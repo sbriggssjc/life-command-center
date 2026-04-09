@@ -407,6 +407,46 @@ async function loadPropertyTab() {
     wirePropertyActions(ctx, lccEntity);
   }
 
+  // Re-run Pipeline button for assets that failed or were never processed
+  if (matched && lccEntity.entity_type === 'asset') {
+    const meta = lccEntity.metadata || {};
+    if (meta._pipeline_status === 'failed' || !meta._pipeline_processed_at) {
+      const rerunBtn = document.createElement('button');
+      rerunBtn.className = 'btn btn-sm btn-secondary';
+      rerunBtn.id = 'rerunPipelineBtn';
+      rerunBtn.textContent = 'Re-run Pipeline';
+      actions.appendChild(rerunBtn);
+
+      rerunBtn.addEventListener('click', async () => {
+        rerunBtn.disabled = true;
+        rerunBtn.textContent = 'Running...';
+
+        const result = await apiCall('/api/entities?action=process_sidebar_extraction', {
+          entity_id: lccEntity.id,
+        });
+
+        if (result.ok) {
+          const toast = document.createElement('div');
+          toast.className = 'update-toast updated';
+          toast.textContent = 'Pipeline re-ran successfully';
+          actions.prepend(toast);
+          pollPipelineStatus(lccEntity.id, actions).then(() => {
+            rerunBtn.textContent = 'Re-run Pipeline';
+            rerunBtn.disabled = false;
+          });
+        } else {
+          const errMsg = result.data?.error || result.error || 'Unknown error';
+          const toast = document.createElement('div');
+          toast.className = 'update-toast';
+          toast.textContent = errMsg;
+          actions.prepend(toast);
+          rerunBtn.textContent = 'Re-run Pipeline';
+          rerunBtn.disabled = false;
+        }
+      });
+    }
+  }
+
   $('#lastUpdated').textContent = `Property: ${new Date().toLocaleTimeString()}`;
 }
 
