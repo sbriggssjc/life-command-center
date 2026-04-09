@@ -279,15 +279,27 @@ async function loadPropertyTab() {
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
   actions.innerHTML = '';
 
-  // Query LCC to see if this property exists
-  const result = await apiCall('/api/chat', {
-    copilot_action: 'fetch_listing_activity_context',
-    params: { address },
+  // Query LCC to see if this property already exists (search by address)
+  const searchResult = await apiCall('/api/chat', {
+    copilot_action: 'search_entity_targets',
+    params: { query: address, entity_type: 'asset' },
   });
 
-  const responseData = result.ok ? (result.data?.data || result.data || {}) : {};
-  const lccEntity = responseData.entity || null;
+  const entities = searchResult.ok
+    ? (searchResult.data?.entities || searchResult.data?.data?.entities || searchResult.data?.results || [])
+    : [];
+  const lccEntity = entities.length ? entities[0] : null;
   const matched = lccEntity && lccEntity.id;
+
+  // If matched, fetch full context for that entity
+  let responseData = {};
+  if (matched) {
+    const ctxResult = await apiCall('/api/chat', {
+      copilot_action: 'fetch_listing_activity_context',
+      params: { entity_id: lccEntity.id },
+    });
+    responseData = ctxResult.ok ? (ctxResult.data?.data || ctxResult.data || {}) : {};
+  }
 
   let html = '';
 
@@ -464,9 +476,12 @@ function wirePropertyActions(ctx, lccEntity) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
-      // POST to entities API directly to create the asset
+      // Use action=link: auto-matches by canonical name, creates if no match
       const fields = extractSourceFields(ctx);
-      const result = await apiCall('/api/entities', {
+      const result = await apiCall('/api/entities?action=link', {
+        source_system: domain || 'extension',
+        source_type: 'property',
+        external_id: ctx.parcel_number || ctx.page_url || ctx.address,
         entity_type: 'asset',
         name: ctx.address,
         address: ctx.address,
@@ -478,11 +493,12 @@ function wirePropertyActions(ctx, lccEntity) {
       });
 
       if (result.ok) {
+        const linked = result.data?.linked || result.data?.entity?.id;
         saveBtn.className = 'btn btn-sm btn-success';
-        saveBtn.textContent = 'Saved!';
+        saveBtn.textContent = linked ? 'Linked!' : 'Saved!';
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
-        toast.textContent = 'Property added to LCC';
+        toast.textContent = linked ? 'Matched and linked to existing LCC entity' : 'Property added to LCC';
         $('#propertyActions').prepend(toast);
         setTimeout(() => loadPropertyTab(), 1500);
       } else {
@@ -692,7 +708,10 @@ function loadOrgView(source, domainLabel) {
         if (source[key]) fields[key] = source[key];
       }
 
-      const result = await apiCall('/api/entities', {
+      const result = await apiCall('/api/entities?action=link', {
+        source_system: source.domain || 'public-records',
+        source_type: 'organization',
+        external_id: fields.filing_number || name,
         entity_type: 'organization',
         name,
         org_type: fields.entity_type_detail || null,

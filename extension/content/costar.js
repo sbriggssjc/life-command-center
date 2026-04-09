@@ -225,49 +225,65 @@
 
   // ── Contact extraction ────────────────────────────────────────────────
   //
-  // Parses people from sections like "Listing Broker", "Seller",
-  // "Buyer Broker", "Buyer", etc. Each person block has:
-  //   Name, Title, phone(s), email, then sometimes company info.
+  // CoStar page structure:
+  //   Seller section:      "Seller" → "Recorded Seller" → "Entity Name"
+  //   Buyer section:       "Buyer" → info or "Buyer information not available"
+  //   Listing Broker:      "Listing Broker" → [logo, Name, Title, phones, email] × N
+  //   Buyer Broker:        "Buyer Broker" → people or "No Buyer Broker on Deal"
+  //   After brokers:       "My Notes" / "Sources & Research" (STOP here)
 
   function extractContacts(lines) {
     const contacts = [];
-    const sectionPatterns = [
-      { re: /^listing\s+broker$/i, role: 'listing_broker' },
-      { re: /^buyer\s+broker$/i, role: 'buyer_broker' },
-      { re: /^recorded\s+seller$/i, role: 'seller' },
-      { re: /^seller$/i, role: 'seller' },
-      { re: /^buyer$/i, role: 'buyer' },
-      { re: /^lender$/i, role: 'lender' },
-      { re: /^listing\s+agent$/i, role: 'listing_broker' },
-    ];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      for (const { re, role } of sectionPatterns) {
-        if (!re.test(line)) continue;
+      // ── STOP at end-of-content sections ───────────────────────
+      if (/^(my\s+notes|sources\s+&\s+research|sale\s+comp\s+id)/i.test(line)) break;
 
-        // Special: "Recorded Seller" → single entity name on next line
-        if (role === 'seller' && /^recorded\s+seller$/i.test(line)) {
-          const next = lines[i + 1];
-          if (next && next.length > 2 && next.length < 80) {
-            contacts.push({ role: 'seller', name: next, type: 'entity' });
-          }
-          break;
+      // ── Recorded Seller → entity name ─────────────────────────
+      if (/^recorded\s+seller$/i.test(line)) {
+        const next = lines[i + 1];
+        if (next && next.length > 2 && next.length < 80 && !/^buyer/i.test(next)) {
+          contacts.push({ role: 'seller', name: next, type: 'entity' });
         }
+        continue;
+      }
 
-        // Skip "No Buyer Broker on Deal" etc.
+      // ── Recorded Buyer → entity name ──────────────────────────
+      if (/^recorded\s+buyer$/i.test(line)) {
+        const next = lines[i + 1];
+        if (next && next.length > 2 && next.length < 80 && !/^(buyer|no\s+|not\s+)/i.test(next)) {
+          contacts.push({ role: 'buyer', name: next, type: 'entity' });
+        }
+        continue;
+      }
+
+      // ── Listing Broker section → parse person blocks ──────────
+      if (/^listing\s+broker$/i.test(line)) {
         const peek = lines[i + 1];
-        if (peek && /^no\s+/i.test(peek)) break;
-        if (peek && /not\s+available/i.test(peek)) break;
-
-        // Parse person blocks after section header
+        if (peek && /^(no\s+|not\s+available)/i.test(peek)) continue;
         const people = parsePersonBlocks(lines, i + 1);
-        for (const person of people) {
-          person.role = role;
-          contacts.push(person);
-        }
-        break;
+        for (const p of people) { p.role = 'listing_broker'; contacts.push(p); }
+        continue;
+      }
+
+      // ── Buyer Broker section → parse person blocks ────────────
+      if (/^buyer\s+broker$/i.test(line)) {
+        const peek = lines[i + 1];
+        if (peek && /^(no\s+|not\s+available)/i.test(peek)) continue;
+        const people = parsePersonBlocks(lines, i + 1);
+        for (const p of people) { p.role = 'buyer_broker'; contacts.push(p); }
+        continue;
+      }
+
+      // ── Lender section ────────────────────────────────────────
+      if (/^lender$/i.test(line)) {
+        const peek = lines[i + 1];
+        if (peek && /^(no\s+|not\s+available)/i.test(peek)) continue;
+        const people = parsePersonBlocks(lines, i + 1);
+        for (const p of people) { p.role = 'lender'; contacts.push(p); }
+        continue;
       }
     }
 
@@ -278,26 +294,42 @@
     const people = [];
     let current = null;
 
+    function pushCurrent() {
+      if (current && current.name) {
+        // Don't add entries that are just company names without contact info
+        if (current.email || (current.phones && current.phones.length) || current.type === 'entity') {
+          people.push(current);
+        } else if (current.title) {
+          people.push(current);
+        }
+      }
+      current = null;
+    }
+
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
 
-      // Stop at next major section
-      if (/^(transaction\s+details|building|land|market|tenants?\s+at|public\s+record|my\s+notes|sources|sale\s+comp|comparable)/i.test(line)) break;
+      // Stop at next major section header
+      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources\s+&|sale\s+comp|comparable|seller|buyer(?!\s+broker)|recorded\s+seller|lender|listing\s+(broker|agent))/i.test(line)) {
+        // "Buyer Broker" should NOT stop a Listing Broker section
+        if (/^buyer\s+broker$/i.test(line)) break;
+        if (/^(seller|buyer|recorded|lender|listing)/i.test(line)) break;
+        if (/^(transaction|building|land\b|market|tenants|public|my\s+notes|sources|sale\s+comp|comparable)/i.test(line)) break;
+      }
 
-      // Skip "logo" lines
+      // "logo" = separator between person/company blocks
       if (/^logo$/i.test(line)) {
-        // If we have a current person, push it and start fresh
-        if (current) { people.push(current); current = null; }
+        pushCurrent();
         continue;
       }
 
-      // Detect email
+      // Email
       if (/@/.test(line) && /\.\w{2,}$/.test(line)) {
         if (current) current.email = line.trim();
         continue;
       }
 
-      // Detect phone: (XXX) XXX-XXXX or XXX-XXX-XXXX with optional suffix
+      // Phone: (XXX) XXX-XXXX or similar, strip (p)/(m) suffix
       if (/^\(?\d{3}\)?\s*[-.]?\s*\d{3}[-.]?\d{4}/.test(line)) {
         if (current) {
           if (!current.phones) current.phones = [];
@@ -306,96 +338,80 @@
         continue;
       }
 
-      // Detect URL (company website) — skip
+      // URL — skip
       if (/^https?:\/\//i.test(line)) continue;
 
-      // Detect company address pattern (city, state zip) — skip
+      // Full address line (city, state zip) — skip
       if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{5}/.test(line)) continue;
       if (/^United States$/i.test(line)) continue;
+      // Street address line for company — skip
+      if (/^\d+\s+\w+.*\b(st|ave|blvd|rd|dr|suite|ste)\b/i.test(line)) continue;
 
-      // Detect a person name: short line, no special chars, not a section header
-      if (!current && line.length > 2 && line.length < 60 &&
-          !/^\(/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
-          !/^(logo|no\s+|source:|name$)/i.test(line)) {
-        current = { name: line, type: 'person' };
+      // If no current person, this line starts a new person or company
+      if (!current) {
+        if (line.length > 2 && line.length < 60 &&
+            !/^\(/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
+            !/^(logo|no\s+|source:|name$|add\s+notes)/i.test(line)) {
+          current = { name: line, type: 'person' };
+        }
         continue;
       }
 
-      // Detect title (comes right after name): contains keywords or is short
+      // After name: detect title
       if (current && !current.title && line.length > 3 && line.length < 80 &&
-          !/^\(/.test(line) && !/@/.test(line)) {
-        // Likely a title: "Senior Managing Director", "Research Analyst", etc.
-        if (/director|manager|analyst|advisor|associate|vp|president|officer|agent|broker|partner|principal/i.test(line) ||
-            (line.length < 60 && !/^\d/.test(line) && !/^[A-Z]{2}\s+\d/.test(line))) {
+          !/^\(/.test(line) && !/@/.test(line) && !/^\d+\s/.test(line)) {
+        if (/director|manager|analyst|advisor|associate|vp|president|officer|agent|broker|partner|principal|senior|managing/i.test(line)) {
           current.title = line;
           continue;
         }
-      }
-
-      // If we hit a company name (often after contacts block)
-      if (current && line.length > 3 && line.length < 80 &&
-          /^[A-Z]/.test(line) && !/^\(/.test(line) && !/@/.test(line)) {
-        // Could be a company name — check if next line is an address
-        const nextLine = j + 1 < lines.length ? lines[j + 1] : '';
-        if (/^\d+\s/.test(nextLine) || /^[A-Z][a-z]+.*,\s*[A-Z]{2}/.test(nextLine)) {
-          if (current) current.company = line;
+        // Short non-numeric line after name could be title
+        if (line.length < 50 && !/^[A-Z]{2}\s+\d/.test(line) && !/^\d/.test(line)) {
+          current.title = line;
           continue;
         }
       }
     }
 
-    if (current) people.push(current);
+    pushCurrent();
     return people;
   }
 
   // ── Sales history extraction ──────────────────────────────────────────
-  //
-  // CoStar shows sale history in various formats. We look for repeated
-  // patterns of Sale Date + Sale Price entries.
 
   function extractSalesHistory(lines) {
     const sales = [];
-    let inSalesSection = false;
 
+    // Parse Transaction Details block (current sale)
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Detect sales history section headers
-      if (/^(sales?\s+history|prior\s+sales?|transaction\s+history|comparable\s+sales)/i.test(line)) {
-        inSalesSection = true;
-        continue;
-      }
-
-      // Also capture the current/primary transaction from Transaction Details
-      if (/^transaction\s+details$/i.test(line)) {
+      if (/^transaction\s+details$/i.test(lines[i])) {
         const sale = parseTransactionBlock(lines, i + 1);
         if (sale && (sale.sale_date || sale.sale_price)) {
           sale.is_current = true;
           sales.push(sale);
         }
-        continue;
+        break;
       }
+    }
 
-      // In sales history section, look for individual sale entries
-      if (inSalesSection) {
-        // Stop at next major section
-        if (/^(building|land|market|tenants?|public\s+record|my\s+notes|sources)/i.test(line)) {
-          inSalesSection = false;
-          continue;
-        }
+    // Parse Sale/Loan History from Public Records popup
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
 
-        // Date pattern starts a new sale entry
-        if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(line) || /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line)) {
-          const sale = { sale_date: line };
-          // Look ahead for price and details
-          for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
-            const sl = lines[j];
-            if (/^\$[\d,]+/.test(sl) && !sale.sale_price) sale.sale_price = sl;
-            if (/[\d.]+%/.test(sl) && !sale.cap_rate) sale.cap_rate = sl;
-            if (/^(investment|owner.?user|1031|build.?to.?suit)/i.test(sl)) sale.sale_type = sl;
-          }
-          if (sale.sale_price || sale.sale_date) sales.push(sale);
-        }
+      if (/^sale\/?loan\s+history/i.test(line) || /historic\s+sale\s+loan\s+records/i.test(line)) {
+        const deedSales = parseDeedHistory(lines, i + 1);
+        sales.push(...deedSales);
+        break;
+      }
+    }
+
+    // Also check for Prior Sales / Sales History section
+    for (let i = 0; i < lines.length; i++) {
+      if (/^(sales?\s+history|prior\s+sales?|transaction\s+history)$/i.test(lines[i])) {
+        // Skip if we already captured deed history
+        if (sales.some((s) => !s.is_current)) break;
+        const historicSales = parseHistoricSalesSection(lines, i + 1);
+        sales.push(...historicSales);
+        break;
       }
     }
 
@@ -408,10 +424,9 @@
       const line = lines[j];
       const next = j + 1 < lines.length ? lines[j + 1] : '';
 
-      // Stop at next major section
-      if (/^(public\s+record|building|land|market|tenants?|seller|buyer|listing)/i.test(line)) break;
+      if (/^(public\s+record|building|land\b|market|tenants?|seller|buyer|listing)/i.test(line)) break;
 
-      if (/^sale\s+date$/i.test(line) && /\w{3}\s+\d/.test(next)) sale.sale_date = next;
+      if (/^sale\s+date$/i.test(line) && next) sale.sale_date = next;
       if (/^sale\s+price$/i.test(line) && next) sale.sale_price = next;
       if (/^asking\s+price$/i.test(line) && /^\$/.test(next)) sale.asking_price = next;
       if (/^(actual\s+)?cap\s+rate$/i.test(line) && /[\d.]+%/.test(next)) sale.cap_rate = next;
@@ -420,6 +435,70 @@
       if (/^hold\s+period$/i.test(line) && next) sale.hold_period = next;
     }
     return sale;
+  }
+
+  // Parse deed/loan history from CoStar's Public Records popup
+  function parseDeedHistory(lines, startIdx) {
+    const sales = [];
+    let current = null;
+
+    for (let j = startIdx; j < lines.length; j++) {
+      const line = lines[j];
+      const next = j + 1 < lines.length ? lines[j + 1] : '';
+
+      // "Transaction" label often marks the start of a new deed record
+      if (/^transaction$/i.test(line)) {
+        if (current && (current.sale_date || current.sale_price)) sales.push(current);
+        current = {};
+        continue;
+      }
+
+      // If no current record started, start one on first meaningful data
+      if (!current) current = {};
+
+      if (/^transaction\s+date$/i.test(line) && next) { current.sale_date = next; continue; }
+      if (/^recordation\s+date$/i.test(line) && next) { current.recordation_date = next; continue; }
+      if (/^sale\s+price$/i.test(line) && next) { current.sale_price = next; continue; }
+      if (/^transaction\s+type$/i.test(line) && next) { current.transaction_type = next; continue; }
+      if (/^deed\s+type$/i.test(line) && next) { current.deed_type = next; continue; }
+      if (/^sale\s+type$/i.test(line) && next) { current.sale_type = next; continue; }
+      if (/^document\s+#$/i.test(line) && next) { current.document_number = next; continue; }
+
+      // Buyer/Seller within deed record
+      if (/^buyer$/i.test(line) && next && next.length < 80 && !/^(address|seller)/i.test(next)) {
+        current.buyer = next;
+        continue;
+      }
+      if (/^seller$/i.test(line) && next && next.length < 80 && !/^(title|buyer|address)/i.test(next)) {
+        current.seller = next;
+        continue;
+      }
+      if (/^title\s+company$/i.test(line) && next) { current.title_company = next; continue; }
+    }
+
+    if (current && (current.sale_date || current.sale_price)) sales.push(current);
+    return sales;
+  }
+
+  function parseHistoricSalesSection(lines, startIdx) {
+    const sales = [];
+    for (let j = startIdx; j < lines.length; j++) {
+      const line = lines[j];
+      if (/^(building|land\b|market|tenants?|public\s+record|my\s+notes)/i.test(line)) break;
+
+      // Date pattern starts a new sale entry
+      if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(line) || /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line)) {
+        const sale = { sale_date: line };
+        for (let k = j + 1; k < Math.min(j + 8, lines.length); k++) {
+          const sl = lines[k];
+          if (/^\$[\d,]+/.test(sl) && !sale.sale_price) sale.sale_price = sl;
+          if (/[\d.]+%/.test(sl) && !sale.cap_rate) sale.cap_rate = sl;
+          if (/^(investment|owner.?user|1031|build.?to.?suit)/i.test(sl)) sale.sale_type = sl;
+        }
+        sales.push(sale);
+      }
+    }
+    return sales;
   }
 
   // ── LCC Button injection ──────────────────────────────────────────────
