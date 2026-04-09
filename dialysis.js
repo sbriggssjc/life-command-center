@@ -683,7 +683,7 @@ function renderDiaOverview() {
     const barW = Math.round((r.delta_patients / maxDelta) * 100);
     html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
       <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
-      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name && r.facility_name !== 'null' ? r.facility_name : r.clinic_name || r.address || 'Unknown Clinic').substring(0,25))}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name && !(/\bnull\b/i.test(r.facility_name)) ? r.facility_name : r.clinic_name && !(/\bnull\b/i.test(r.clinic_name)) ? r.clinic_name : r.address || 'Unknown Clinic').substring(0,25))}</div>
       <div style="width:80px;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#34d399;border-radius:4px"></div></div>
       <div style="width:36px;font-size:10px;color:#34d399;text-align:right;font-weight:600">+${r.delta_patients}</div>
     </div>`;
@@ -697,7 +697,7 @@ function renderDiaOverview() {
     const barW = Math.round((Math.abs(r.delta_patients) / maxDelta) * 100);
     html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
       <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
-      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name && r.facility_name !== 'null' ? r.facility_name : r.clinic_name || r.address || 'Unknown Clinic').substring(0,25))}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(norm(r.facility_name && !(/\bnull\b/i.test(r.facility_name)) ? r.facility_name : r.clinic_name && !(/\bnull\b/i.test(r.clinic_name)) ? r.clinic_name : r.address || 'Unknown Clinic').substring(0,25))}</div>
       <div style="width:80px;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#f87171;border-radius:4px"></div></div>
       <div style="width:36px;font-size:10px;color:#f87171;text-align:right;font-weight:600">${r.delta_patients}</div>
     </div>`;
