@@ -46,6 +46,19 @@
       "matches": ["https://*.salesforce.com/*"],
       "js": ["content/salesforce.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://loopnet.com/*",
+        "https://*.loopnet.com/*"
+      ],
+      "js": ["content/loopnet.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.crexi.com/*"],
+      "js": ["content/crexi.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {

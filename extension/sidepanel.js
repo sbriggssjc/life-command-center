@@ -26,8 +26,22 @@ function domainBadge(domain) {
   const d = domain.toLowerCase();
   if (d === 'government' || d === 'gov') return '<span class="domain-badge gov">GOV</span>';
   if (d === 'dialysis' || d === 'dia') return '<span class="domain-badge dia">DIA</span>';
+  if (d === 'costar') return '<span class="domain-badge" style="background:#1A5276;color:white;">CS</span>';
+  if (d === 'loopnet') return '<span class="domain-badge" style="background:#E67E22;color:white;">LN</span>';
+  if (d === 'crexi') return '<span class="domain-badge" style="background:#27AE60;color:white;">CX</span>';
+  if (d === 'salesforce') return '<span class="domain-badge" style="background:#00A1E0;color:white;">SF</span>';
+  if (d === 'public-records') return '<span class="domain-badge" style="background:#7D3C98;color:white;">PR</span>';
   return '';
 }
+
+const DOMAIN_LABELS = {
+  costar: 'CoStar',
+  loopnet: 'LoopNet',
+  crexi: 'CREXi',
+  salesforce: 'Salesforce',
+  outlook: 'Outlook',
+  'public-records': 'Public Records',
+};
 
 async function getLCCConfig() {
   return new Promise((resolve) => {
@@ -137,7 +151,7 @@ async function updatePageContextBadge() {
   const ctx = await getPageContext();
   const badge = $('#pageContextBadge');
   if (ctx && ctx.domain) {
-    badge.textContent = ctx.domain.charAt(0).toUpperCase() + ctx.domain.slice(1);
+    badge.textContent = DOMAIN_LABELS[ctx.domain] || ctx.domain.charAt(0).toUpperCase() + ctx.domain.slice(1);
     badge.style.display = 'inline';
   } else {
     badge.style.display = 'none';
@@ -173,6 +187,36 @@ const PROPERTY_FIELDS = [
   ['sale_date', 'Last Sale Date', 'sale_date'],
 ];
 
+// Extra fields from county assessor / recorder sites
+const ASSESSOR_FIELDS = [
+  ['parcel_number', 'Parcel / APN'],
+  ['assessed_value', 'Assessed Value'],
+  ['market_value', 'Market Value'],
+  ['land_value', 'Land Value'],
+  ['improvement_value', 'Improvement Value'],
+  ['tax_amount', 'Tax Amount'],
+  ['mailing_address', 'Mailing Address'],
+  ['document_type', 'Document Type'],
+  ['grantor', 'Grantor'],
+  ['grantee', 'Grantee'],
+  ['book_page', 'Book/Page'],
+  ['legal_description', 'Legal Description'],
+];
+
+// Fields for SOS / business entity lookups
+const ORG_FIELDS = [
+  ['name', 'Entity Name'],
+  ['filing_number', 'Filing Number'],
+  ['status', 'Status'],
+  ['entity_type_detail', 'Entity Type'],
+  ['formation_date', 'Formation Date'],
+  ['state_of_formation', 'Jurisdiction'],
+  ['registered_agent', 'Registered Agent'],
+  ['agent_address', 'Agent Address'],
+  ['principal_address', 'Principal Address'],
+  ['officers', 'Officers / Members'],
+];
+
 async function loadPropertyTab() {
   const header = $('#propertyHeader');
   const body = $('#propertyBody');
@@ -180,24 +224,56 @@ async function loadPropertyTab() {
 
   // Determine data source: page context or selected entity from search
   const ctx = await getPageContext();
-  const source = ctx && ctx.address ? ctx : selectedEntity;
+  const source = ctx && (ctx.address || ctx.name) ? ctx : selectedEntity;
 
   if (!source) {
-    header.innerHTML = '<div class="empty-state">Browse a property on CoStar to see details here, or search for one.</div>';
-    body.innerHTML = '';
+    header.innerHTML = '';
+    body.innerHTML = `<div class="empty-state">
+      Browse a property on CoStar, LoopNet, CREXi, or any supported site.<br><br>
+      On an unsupported site?<br>
+      <button class="btn btn-sm btn-primary" id="scanPageBtn" style="margin-top:8px;">Scan This Page</button>
+      <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">
+        Works on county assessors, recorders, SOS sites, and more
+      </div>
+    </div>`;
     actions.innerHTML = '';
+    wireScanButton();
     return;
   }
 
+  // Handle scan-result-empty (scanner found nothing)
+  if (source.scan_result === 'empty') {
+    header.innerHTML = `<div class="property-title">${escapeHtml(source.page_title || 'Unknown Page')}</div>
+      <div class="property-source">Scanned page — no structured data detected</div>`;
+    body.innerHTML = `<div class="empty-state">
+      The scanner couldn't find structured property or entity data on this page.<br><br>
+      <button class="btn btn-sm btn-primary" id="scanPageBtn" style="margin-top:6px;">Retry Scan</button>
+    </div>`;
+    actions.innerHTML = '';
+    wireScanButton();
+    return;
+  }
+
+  const entityType = source.entity_type || 'property';
+  const domain = source.domain || '';
+  const domainLabel = DOMAIN_LABELS[domain] || domain || 'Page';
+  const siteType = source.site_type || '';
+
+  // Organization entities (SOS / business search)
+  if (entityType === 'organization') {
+    loadOrgView(source, domainLabel);
+    return;
+  }
+
+  // Property entities (CRE sites, assessor, recorder, search results)
   const address = source.address || source.name || '';
   const city = source.city || '';
   const state = source.state || '';
-  const domain = source.domain || '';
 
   header.innerHTML = `
     <div class="property-title">${escapeHtml(address)}</div>
     ${city || state ? `<div class="property-subtitle">${escapeHtml([city, state].filter(Boolean).join(', '))}</div>` : ''}
-    ${domain ? `<div class="property-source">Detected from ${escapeHtml(domain)}</div>` : ''}
+    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}</div>
   `;
 
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
@@ -225,68 +301,30 @@ async function loadPropertyTab() {
 
   // Render fields — compare table if matched, simple list if not
   if (matched && ctx && ctx.address) {
-    html += renderCompareTable(ctx, lccEntity);
+    html += renderCompareTable(ctx, lccEntity, domainLabel);
   } else if (ctx && ctx.address) {
-    html += renderDetectedFields(ctx);
+    html += renderDetectedFields(ctx, domainLabel);
   } else if (matched) {
     html += renderLccFields(lccEntity, responseData);
   }
 
+  // Assessor/recorder extra fields (not in the standard CRE field set)
+  if (ctx && domain === 'public-records') {
+    html += renderAssessorFields(ctx);
+  }
+
   // Related data from LCC (leases, ownership, tasks)
   if (matched) {
-    const govData = responseData.gov_data || {};
-
-    // GSA Leases
-    const leases = govData.gsa_leases || [];
-    if (leases.length) {
-      html += '<div class="section-label">Lease Details</div>';
-      const lease = leases[0];
-      if (lease.tenant || lease.agency) {
-        html += `<div class="context-field"><span class="context-label">Tenant</span><span class="context-value">${escapeHtml(lease.tenant || lease.agency)}</span></div>`;
-      }
-      if (lease.lease_expiration || lease.expiration_date) {
-        html += `<div class="context-field"><span class="context-label">Lease Expires</span><span class="context-value">${formatDate(lease.lease_expiration || lease.expiration_date)}</span></div>`;
-      }
-      if (lease.annual_rent) {
-        html += `<div class="context-field"><span class="context-label">Annual Rent</span><span class="context-value">$${Number(lease.annual_rent).toLocaleString()}</span></div>`;
-      }
-    }
-
-    // Ownership
-    const ownership = govData.ownership_history || [];
-    if (ownership.length) {
-      html += '<div class="section-label">Ownership</div>';
-      const latest = ownership[0];
-      html += `<div class="context-field"><span class="context-label">Owner</span><span class="context-value">${escapeHtml(latest.owner_name || latest.grantee || '—')}</span></div>`;
-      if (latest.entity_type || latest.owner_type) {
-        html += `<div class="context-field"><span class="context-label">Entity Type</span><span class="context-value">${escapeHtml(latest.entity_type || latest.owner_type)}</span></div>`;
-      }
-    }
-
-    // Active tasks
-    const tasks = (responseData.active_tasks || []).slice(0, 5);
-    if (tasks.length) {
-      html += '<div class="section-label">Active Tasks</div>';
-      tasks.forEach((task) => {
-        html += `<div class="related-entity">
-          <div><span style="font-weight:600;">${escapeHtml(task.title || '')}</span>
-          <div class="related-type">${escapeHtml(task.status || '')}</div></div>
-        </div>`;
-      });
-    }
-
-    // Research status
-    if (lccEntity.research_status) {
-      html += `<div class="context-field" style="margin-top:8px;"><span class="context-label">Research Status</span><span class="context-value">${escapeHtml(lccEntity.research_status)}</span></div>`;
-    }
+    html += renderRelatedLccData(responseData, lccEntity);
   }
 
   body.innerHTML = html;
 
   // Action buttons
   if (ctx && ctx.address) {
+    const sourceLabel = escapeHtml(domainLabel);
     if (matched) {
-      actions.innerHTML = `<button class="btn btn-sm btn-confirm" id="updateLccBtn">Update LCC with CoStar Data</button>`;
+      actions.innerHTML = `<button class="btn btn-sm btn-confirm" id="updateLccBtn">Update LCC with ${sourceLabel} Data</button>`;
     } else {
       actions.innerHTML = `<button class="btn btn-sm btn-success" id="saveLccBtn">Save Property to LCC</button>`;
     }
@@ -296,8 +334,8 @@ async function loadPropertyTab() {
   $('#lastUpdated').textContent = `Property: ${new Date().toLocaleTimeString()}`;
 }
 
-function renderDetectedFields(ctx) {
-  let html = '<div class="section-label">Detected Data</div>';
+function renderDetectedFields(ctx, sourceLabel) {
+  let html = `<div class="section-label">${escapeHtml(sourceLabel || 'Detected')} Data</div>`;
   for (const [key, label] of PROPERTY_FIELDS) {
     const val = ctx[key];
     if (val) {
@@ -310,31 +348,29 @@ function renderDetectedFields(ctx) {
   return html;
 }
 
-function renderCompareTable(ctx, lccEntity) {
-  // Only show fields that have data from either source
-  const rows = PROPERTY_FIELDS.filter(([costarKey, , lccKey]) =>
-    ctx[costarKey] || lccEntity[lccKey]
+function renderCompareTable(ctx, lccEntity, sourceLabel) {
+  const rows = PROPERTY_FIELDS.filter(([srcKey, , lccKey]) =>
+    ctx[srcKey] || lccEntity[lccKey]
   );
 
   if (!rows.length) return '<div class="empty-state">No comparable fields found</div>';
 
   let html = '<table class="compare-table">';
-  html += '<tr><th>Field</th><th>CoStar</th><th>LCC</th></tr>';
+  html += `<tr><th>Field</th><th>${escapeHtml(sourceLabel || 'Source')}</th><th>LCC</th></tr>`;
 
-  for (const [costarKey, label, lccKey] of rows) {
-    const costarVal = ctx[costarKey] || '';
+  for (const [srcKey, label, lccKey] of rows) {
+    const srcVal = ctx[srcKey] || '';
     const lccVal = lccEntity[lccKey] || '';
-    const costarDisplay = costarVal || '—';
+    const srcDisplay = srcVal || '—';
     const lccDisplay = lccVal || '—';
 
-    // Highlight differences
-    let costarCls = '';
-    if (costarVal && !lccVal) costarCls = 'compare-new';
-    else if (costarVal && lccVal && costarVal !== lccVal) costarCls = 'compare-diff';
+    let srcCls = '';
+    if (srcVal && !lccVal) srcCls = 'compare-new';
+    else if (srcVal && lccVal && srcVal !== lccVal) srcCls = 'compare-diff';
 
     html += `<tr>
       <td class="field-label">${escapeHtml(label)}</td>
-      <td class="${costarCls}">${escapeHtml(costarDisplay)}</td>
+      <td class="${srcCls}">${escapeHtml(srcDisplay)}</td>
       <td>${escapeHtml(lccDisplay)}</td>
     </tr>`;
   }
@@ -365,6 +401,8 @@ function renderLccFields(entity, data) {
 function wirePropertyActions(ctx, lccEntity) {
   const updateBtn = $('#updateLccBtn');
   const saveBtn = $('#saveLccBtn');
+  const domain = ctx.domain || 'source';
+  const domainLabel = DOMAIN_LABELS[domain] || domain;
 
   if (updateBtn) {
     updateBtn.addEventListener('click', async () => {
@@ -375,8 +413,8 @@ function wirePropertyActions(ctx, lccEntity) {
         copilot_action: 'update_entity',
         params: {
           entity_id: lccEntity.id,
-          source: 'costar',
-          fields: extractCostarFields(ctx),
+          source: domain,
+          fields: extractSourceFields(ctx),
         },
       });
 
@@ -385,7 +423,7 @@ function wirePropertyActions(ctx, lccEntity) {
         updateBtn.textContent = 'Updated!';
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
-        toast.textContent = 'Property data synced from CoStar';
+        toast.textContent = `Property data synced from ${domainLabel}`;
         $('#propertyActions').prepend(toast);
       } else {
         updateBtn.disabled = false;
@@ -404,11 +442,11 @@ function wirePropertyActions(ctx, lccEntity) {
         copilot_action: 'create_entity',
         params: {
           entity_type: 'asset',
-          source: 'costar',
+          source: domain,
           address: ctx.address,
           city: ctx.city,
           state: ctx.state,
-          fields: extractCostarFields(ctx),
+          fields: extractSourceFields(ctx),
         },
       });
 
@@ -419,7 +457,6 @@ function wirePropertyActions(ctx, lccEntity) {
         toast.className = 'update-toast updated';
         toast.textContent = 'Property added to LCC';
         $('#propertyActions').prepend(toast);
-        // Reload to show matched state
         setTimeout(() => loadPropertyTab(), 1500);
       } else {
         saveBtn.disabled = false;
@@ -430,12 +467,200 @@ function wirePropertyActions(ctx, lccEntity) {
   }
 }
 
-function extractCostarFields(ctx) {
+function extractSourceFields(ctx) {
   const fields = {};
+  // Standard CRE fields
   for (const [key] of PROPERTY_FIELDS) {
     if (ctx[key]) fields[key] = ctx[key];
   }
+  // Assessor/recorder fields
+  for (const [key] of ASSESSOR_FIELDS) {
+    if (ctx[key]) fields[key] = ctx[key];
+  }
   return fields;
+}
+
+// ── Assessor / public records extra fields ──────────────────────────────────
+
+function renderAssessorFields(ctx) {
+  const hasAssessor = ASSESSOR_FIELDS.some(([key]) => ctx[key]);
+  if (!hasAssessor) return '';
+
+  let html = '<div class="section-label">Public Records Data</div>';
+  for (const [key, label] of ASSESSOR_FIELDS) {
+    const val = ctx[key];
+    if (val) {
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value">${escapeHtml(val)}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+// ── Related LCC data (leases, ownership, tasks) ────────────────────────────
+
+function renderRelatedLccData(responseData, lccEntity) {
+  let html = '';
+  const govData = responseData.gov_data || {};
+
+  const leases = govData.gsa_leases || [];
+  if (leases.length) {
+    html += '<div class="section-label">Lease Details</div>';
+    const lease = leases[0];
+    if (lease.tenant || lease.agency) {
+      html += `<div class="context-field"><span class="context-label">Tenant</span><span class="context-value">${escapeHtml(lease.tenant || lease.agency)}</span></div>`;
+    }
+    if (lease.lease_expiration || lease.expiration_date) {
+      html += `<div class="context-field"><span class="context-label">Lease Expires</span><span class="context-value">${formatDate(lease.lease_expiration || lease.expiration_date)}</span></div>`;
+    }
+    if (lease.annual_rent) {
+      html += `<div class="context-field"><span class="context-label">Annual Rent</span><span class="context-value">$${Number(lease.annual_rent).toLocaleString()}</span></div>`;
+    }
+  }
+
+  const ownership = govData.ownership_history || [];
+  if (ownership.length) {
+    html += '<div class="section-label">Ownership</div>';
+    const latest = ownership[0];
+    html += `<div class="context-field"><span class="context-label">Owner</span><span class="context-value">${escapeHtml(latest.owner_name || latest.grantee || '—')}</span></div>`;
+    if (latest.entity_type || latest.owner_type) {
+      html += `<div class="context-field"><span class="context-label">Entity Type</span><span class="context-value">${escapeHtml(latest.entity_type || latest.owner_type)}</span></div>`;
+    }
+  }
+
+  const tasks = (responseData.active_tasks || []).slice(0, 5);
+  if (tasks.length) {
+    html += '<div class="section-label">Active Tasks</div>';
+    tasks.forEach((task) => {
+      html += `<div class="related-entity">
+        <div><span style="font-weight:600;">${escapeHtml(task.title || '')}</span>
+        <div class="related-type">${escapeHtml(task.status || '')}</div></div>
+      </div>`;
+    });
+  }
+
+  if (lccEntity.research_status) {
+    html += `<div class="context-field" style="margin-top:8px;"><span class="context-label">Research Status</span><span class="context-value">${escapeHtml(lccEntity.research_status)}</span></div>`;
+  }
+
+  return html;
+}
+
+// ── Organization view (SOS / business entity lookups) ───────────────────────
+
+function loadOrgView(source, domainLabel) {
+  const header = $('#propertyHeader');
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
+
+  const name = source.name || 'Unknown Entity';
+  const siteType = source.site_type || 'business-search';
+
+  header.innerHTML = `
+    <div class="property-title">${escapeHtml(name)}</div>
+    <div class="property-source">${domainBadge(source.domain)} ${escapeHtml(domainLabel)} (${escapeHtml(siteType)})</div>
+  `;
+
+  let html = '<div class="section-label">Entity Details</div>';
+  for (const [key, label] of ORG_FIELDS) {
+    const val = source[key];
+    if (val) {
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value">${escapeHtml(val)}</span>
+      </div>`;
+    }
+  }
+
+  if (!ORG_FIELDS.some(([key]) => source[key])) {
+    html += '<div class="empty-state">No entity details found</div>';
+  }
+
+  body.innerHTML = html;
+
+  // Action: save org to LCC or search for it
+  actions.innerHTML = `
+    <button class="btn btn-sm btn-primary" id="searchOrgBtn">Search in LCC</button>
+    <button class="btn btn-sm btn-success" id="saveOrgBtn" style="margin-left:6px;">Save to LCC</button>
+  `;
+
+  const searchBtn = $('#searchOrgBtn');
+  if (searchBtn) {
+    searchBtn.addEventListener('click', () => {
+      $('#searchInput').value = name;
+      switchTab('search');
+      doSearch();
+    });
+  }
+
+  const saveBtn = $('#saveOrgBtn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      const fields = {};
+      for (const [key] of ORG_FIELDS) {
+        if (source[key]) fields[key] = source[key];
+      }
+
+      const result = await apiCall('/api/chat', {
+        copilot_action: 'create_entity',
+        params: {
+          entity_type: 'organization',
+          source: source.domain || 'public-records',
+          name,
+          fields,
+        },
+      });
+
+      if (result.ok) {
+        saveBtn.className = 'btn btn-sm btn-success';
+        saveBtn.textContent = 'Saved!';
+      } else {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Failed — Retry';
+        saveBtn.className = 'btn btn-sm btn-danger';
+      }
+    });
+  }
+
+  $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
+}
+
+// ── Scan This Page ──────────────────────────────────────────────────────────
+
+function wireScanButton() {
+  const scanBtn = $('#scanPageBtn');
+  if (!scanBtn) return;
+
+  scanBtn.addEventListener('click', async () => {
+    scanBtn.disabled = true;
+    scanBtn.textContent = 'Scanning...';
+
+    try {
+      const response = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'SCAN_PAGE' }, resolve);
+      });
+
+      if (!response?.ok) {
+        scanBtn.textContent = 'Scan Failed';
+        scanBtn.className = 'btn btn-sm btn-danger';
+        setTimeout(() => {
+          scanBtn.disabled = false;
+          scanBtn.textContent = 'Scan This Page';
+          scanBtn.className = 'btn btn-sm btn-primary';
+        }, 2000);
+      }
+      // If successful, the scanner will send CONTEXT_DETECTED → storage update
+      // → storage listener will call loadPropertyTab() automatically
+    } catch {
+      scanBtn.disabled = false;
+      scanBtn.textContent = 'Scan This Page';
+    }
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

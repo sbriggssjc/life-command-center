@@ -45,21 +45,47 @@
       Opportunity: 'deal',
     };
 
-    chrome.runtime.sendMessage({
-      type: 'CONTEXT_DETECTED',
-      data: {
-        domain: 'salesforce',
-        entity_type: entityTypeMap[objectType] || 'contact',
-        sf_object_type: objectType,
-        sf_record_id: recordId,
-        name,
-        email: email || null,
-        company: company || null,
-        title: title || null,
-        phone: phone || null,
-        page_url: url,
-      },
-    });
+    // Detect property/asset records (standard or custom objects)
+    const isPropertyRecord = /property|asset|listing|parcel|building|real_estate/i.test(objectType);
+    const entityType = isPropertyRecord ? 'property' : (entityTypeMap[objectType] || 'contact');
+
+    const data = {
+      domain: 'salesforce',
+      entity_type: entityType,
+      sf_object_type: objectType,
+      sf_record_id: recordId,
+      name,
+      email: email || null,
+      company: company || null,
+      title: title || null,
+      phone: phone || null,
+      page_url: url,
+    };
+
+    // For property-like records, extract additional CRE fields
+    if (isPropertyRecord || objectType === 'Opportunity') {
+      data.address = extractField('Address') || extractField('Property_Address__c') ||
+        extractField('Street') || extractField('Site_Address__c') || null;
+      data.city = extractField('City') || extractField('Property_City__c') || null;
+      data.state = extractField('State') || extractField('Property_State__c') || null;
+      data.asking_price = extractField('Price') || extractField('Asking_Price__c') ||
+        extractField('Amount') || extractField('List_Price__c') || null;
+      data.property_type = extractField('Property_Type__c') || extractField('Asset_Type__c') ||
+        extractField('Type') || null;
+      data.square_footage = extractField('Square_Footage__c') || extractField('Building_Size__c') ||
+        extractField('Size__c') || null;
+      data.cap_rate = extractField('Cap_Rate__c') || null;
+      data.noi = extractField('NOI__c') || extractField('Net_Operating_Income__c') || null;
+      data.year_built = extractField('Year_Built__c') || null;
+      data.owner_name = extractField('Owner') || extractField('Owner_Name__c') || null;
+
+      // If we found an address, use it as the name for the property tab
+      if (data.address && isPropertyRecord) {
+        data.name = data.address;
+      }
+    }
+
+    chrome.runtime.sendMessage({ type: 'CONTEXT_DETECTED', data });
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
