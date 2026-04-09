@@ -49,7 +49,7 @@ async function getLCCConfig() {
   });
 }
 
-async function apiCall(endpoint, body) {
+async function apiCall(endpoint, body, method = 'POST') {
   try {
     const config = await getLCCConfig();
     const baseUrl = config.LCC_RAILWAY_URL;
@@ -64,7 +64,7 @@ async function apiCall(endpoint, body) {
     if (apiKey) headers['X-LCC-Key'] = apiKey;
 
     const res = await fetch(url, {
-      method: 'POST',
+      method,
       headers,
       body: JSON.stringify(body || {}),
     });
@@ -415,14 +415,12 @@ function wirePropertyActions(ctx, lccEntity) {
       updateBtn.disabled = true;
       updateBtn.textContent = 'Updating...';
 
-      const result = await apiCall('/api/chat', {
-        copilot_action: 'update_entity',
-        params: {
-          entity_id: lccEntity.id,
-          source: domain,
-          fields: extractSourceFields(ctx),
-        },
-      });
+      // PATCH the existing entity via entities API
+      const fields = extractSourceFields(ctx);
+      const result = await apiCall(`/api/entities?id=${lccEntity.id}`, {
+        ...fields,
+        description: `Updated from ${domainLabel} on ${new Date().toLocaleDateString()}`,
+      }, 'PATCH');
 
       if (result.ok) {
         updateBtn.className = 'btn btn-sm btn-success';
@@ -449,16 +447,17 @@ function wirePropertyActions(ctx, lccEntity) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
-      const result = await apiCall('/api/chat', {
-        copilot_action: 'create_entity',
-        params: {
-          entity_type: 'asset',
-          source: domain,
-          address: ctx.address,
-          city: ctx.city,
-          state: ctx.state,
-          fields: extractSourceFields(ctx),
-        },
+      // POST to entities API directly to create the asset
+      const fields = extractSourceFields(ctx);
+      const result = await apiCall('/api/entities', {
+        entity_type: 'asset',
+        name: ctx.address,
+        address: ctx.address,
+        city: ctx.city,
+        state: ctx.state,
+        asset_type: fields.property_type || 'property',
+        description: `Imported from ${domainLabel}`,
+        ...fields,
       });
 
       if (result.ok) {
@@ -622,14 +621,12 @@ function loadOrgView(source, domainLabel) {
         if (source[key]) fields[key] = source[key];
       }
 
-      const result = await apiCall('/api/chat', {
-        copilot_action: 'create_entity',
-        params: {
-          entity_type: 'organization',
-          source: source.domain || 'public-records',
-          name,
-          fields,
-        },
+      const result = await apiCall('/api/entities', {
+        entity_type: 'organization',
+        name,
+        org_type: fields.entity_type_detail || null,
+        description: `Imported from ${source.domain || 'public-records'}`,
+        ...fields,
       });
 
       if (result.ok) {

@@ -12,37 +12,57 @@
   let extractionTimer = null;
 
   const observer = new MutationObserver(() => {
-    // Debounce: wait 1s after last DOM mutation for page to settle
+    // Debounce: wait 500ms after last DOM mutation for page to settle
     clearTimeout(extractionTimer);
-    extractionTimer = setTimeout(extract, 1000);
+    extractionTimer = setTimeout(extract, 500);
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Also run once after initial load in case observer misses the final render
-  setTimeout(extract, 2500);
+  // Also run at fixed intervals to catch late-rendering content
+  setTimeout(extract, 1500);
+  setTimeout(extract, 4000);
 
   // ── Main extraction ───────────────────────────────────────────────────
 
   function extract() {
     const url = window.location.href;
 
-    // Step 1: Find address from h1 element (lightweight DOM check)
-    const h1 = document.querySelector('h1');
-    const rawTitle = h1?.textContent?.trim() || '';
-    let address = parseAddress(rawTitle);
+    // Step 1: Find address from multiple sources
+    let address = null;
+    let headingEl = null;
 
-    // Fallback: scan visible text for first street-address-like line
+    // Try headings (h1, h2, h3)
+    for (const sel of ['h1', 'h2', 'h3']) {
+      const el = document.querySelector(sel);
+      if (el) {
+        const parsed = parseAddress(el.textContent?.trim());
+        if (parsed) {
+          address = parsed;
+          headingEl = el;
+          break;
+        }
+      }
+    }
+
+    // Fallback: scan visible text for street addresses
     let lines = null;
     if (!address) {
       lines = getPageLines();
       address = findAddressInLines(lines);
     }
 
-    if (!address) return;
+    // Final fallback: parse document.title ("586 Rice St - CoStar")
+    if (!address) {
+      address = parseAddress(document.title);
+    }
+
+    // ALWAYS send context on a CoStar domain, even if address is imperfect.
+    // Use whatever we have — address, page title, or URL
+    const identifier = address || document.title || url;
 
     // De-duplicate: don't re-extract the same page
-    const pageId = address + '|' + url;
+    const pageId = identifier + '|' + url;
     if (pageId === lastDetectedId) return;
     lastDetectedId = pageId;
 
@@ -56,7 +76,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        address,
+        address: address || document.title,
         page_url: url,
         city: location.city,
         state: location.state,
@@ -64,37 +84,39 @@
       },
     });
 
-    if (h1) injectLccButton(h1);
+    if (headingEl) injectLccButton(headingEl);
   }
 
   // ── Page text helpers ─────────────────────────────────────────────────
 
   function getPageLines() {
-    return document.body.innerText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+    try {
+      return document.body.innerText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+    } catch {
+      return [];
+    }
   }
 
   function parseAddress(raw) {
     if (!raw || raw.length < 3) return null;
     // "586 Rice St - Fresenius Medical Care" → "586 Rice St"
-    let addr = raw.split(/\s+[-–—]\s+/)[0].trim();
+    // "586 Rice St | CoStar" → "586 Rice St"
+    let addr = raw.split(/\s+[-–—|]\s+/)[0].trim();
     if (/^\d+\s/.test(addr) ||
       /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|trail)\b/i.test(addr)) {
       return addr;
     }
-    if (raw.length < 100) return raw;
     return null;
   }
 
   function findAddressInLines(lines) {
     for (const line of lines) {
       if (line.length > 120 || line.length < 5) continue;
-      if (/^\d+\s+\w+/.test(line) &&
-        /\b(st|street|ave|avenue|blvd|dr|drive|rd|road|ln|lane|ct|way|hwy|pkwy)\b/i.test(line)) {
-        return line.split(/\s+[-–—]\s+/)[0].trim();
-      }
+      const parsed = parseAddress(line);
+      if (parsed) return parsed;
     }
     return null;
   }
@@ -109,13 +131,6 @@
   }
 
   // ── Field extraction from page text lines ─────────────────────────────
-  //
-  // CoStar uses two main patterns visible in innerText:
-  //   Stat cards:        "6.76%"  then  "Cap Rate"   (value ABOVE label)
-  //   Detail sections:   "Sale Date"  then  "Mar 27, 2026"  (label ABOVE value)
-  //   Tab-separated:     "Improvements\t$2,839,200\t$324.48/SF"
-  //
-  // We scan all lines and match labels, then look prev/next for the value.
 
   function extractFields(lines) {
     const data = {};
@@ -130,7 +145,6 @@
         if (/^(actual\s+)?cap\s+rate$/i.test(line)) {
           if (/[\d.]+%/.test(prev)) data.cap_rate = prev;
           else if (/[\d.]+%/.test(next)) data.cap_rate = next;
-          // Handle blank line between label and value
           else if (i < lines.length - 2 && /[\d.]+%/.test(lines[i + 2])) data.cap_rate = lines[i + 2];
         }
       }
@@ -163,7 +177,6 @@
         if (/^sf\s+rba$/i.test(line)) {
           if (/^[\d,]+$/.test(prev)) data.square_footage = prev + ' SF';
         }
-        // Detail section: "RBA" above "8,750 SF"
         if (/^rba$/i.test(line)) {
           if (/^[\d,]+\s*sf/i.test(next)) data.square_footage = next;
         }
@@ -195,7 +208,7 @@
 
       // ── Occupancy / Leased ────────────────────────────────────
       if (!data.occupancy) {
-        if (/^leased(\s+at\s+sale)?$/i.test(line) || /^(percent\s+)?leased$/i.test(line) || /^occupancy$/i.test(line)) {
+        if (/^leased(\s+at\s+sale)?$/i.test(line) || /^occupancy$/i.test(line)) {
           if (/^\d+%$/.test(prev)) data.occupancy = prev;
           else if (/^\d+%$/.test(next)) data.occupancy = next;
         }
@@ -229,7 +242,6 @@
       // ── Property Type ─────────────────────────────────────────
       if (!data.property_type) {
         if (/^type$/i.test(line)) {
-          // Must be in Building section — check that the value looks like a property type
           if (next && next.length < 50 && !/^\d/.test(next) && !/^(investment|sale)/i.test(next)) {
             data.property_type = next;
           }
@@ -262,7 +274,6 @@
       // ── Tenant ────────────────────────────────────────────────
       if (!data.tenant_name) {
         if (/^tenants?\s+at\s+sale$/i.test(line)) {
-          // Scan ahead: skip header lines like "Name", "Source:"
           for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
             const t = lines[j];
             if (!t || /^(name|source:|logo)$/i.test(t)) continue;
@@ -279,7 +290,7 @@
         if (/^listing\s+broker$/i.test(line)) {
           for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
             const b = lines[j];
-            if (!b || /^(logo|no\s+)$/i.test(b)) continue;
+            if (!b || /^(logo|no\s+)/i.test(b)) continue;
             if (b.startsWith('(') || b.includes('@')) continue;
             if (b.length > 3 && b.length < 60) {
               data.broker_name = b;
@@ -290,8 +301,6 @@
       }
 
       // ── Tab-separated assessment table ────────────────────────
-      // "Improvements\t$2,839,200\t$324.48/SF"
-      // "Total Value\t$3,122,800\t$356.89/SF"
       if (line.includes('\t')) {
         const parts = line.split('\t').map((p) => p.trim()).filter(Boolean);
         if (parts.length >= 2) {
@@ -305,8 +314,8 @@
 
       // ── Parcels ───────────────────────────────────────────────
       if (!data.parcel_number) {
-        if (/^parcels?$/i.test(line)) {
-          if (next && /^[\d-]+$/.test(next)) data.parcel_number = next;
+        if (/^parcels?\t?$/i.test(line)) {
+          if (next && /[\d-]{5,}/.test(next)) data.parcel_number = next;
         }
       }
     }
