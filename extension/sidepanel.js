@@ -173,6 +173,59 @@ async function updatePageContextBadge() {
   }
 }
 
+// ── Markdown rendering ─────────────────────────────────────────────────────
+
+function inlineBold(text) {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderBriefingMarkdown(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  let html = '';
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // ## Headers
+    if (trimmed.startsWith('## ')) {
+      html += `<div style="font-weight:700;font-size:13px;margin:8px 0 6px;">${inlineBold(trimmed.slice(3))}</div>`;
+      continue;
+    }
+
+    // Standalone bold line as section header (e.g. **STRATEGIC:**)
+    const sectionMatch = trimmed.match(/^\*\*(.+?)\*\*\s*$/);
+    if (sectionMatch) {
+      const label = sectionMatch[1].toLowerCase();
+      let cls = '';
+      if (label.includes('strategic')) cls = 'strategic';
+      else if (label.includes('important')) cls = 'important';
+      else if (label.includes('urgent')) cls = 'urgent';
+      const color = cls ? `var(--${cls})` : 'var(--navy)';
+      html += `<div style="font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin:10px 0 4px;color:${color};">${escapeHtml(sectionMatch[1])}</div>`;
+      continue;
+    }
+
+    // Bullet list items
+    if (/^[-*]\s/.test(trimmed)) {
+      html += `<div style="font-size:12px;padding:3px 0 3px 10px;">${inlineBold(trimmed.replace(/^[-*]\s+/, '\u2022 '))}</div>`;
+      continue;
+    }
+
+    // Numbered list items
+    if (/^\d+\.\s/.test(trimmed)) {
+      html += `<div style="font-size:12px;padding:3px 0 3px 10px;">${inlineBold(trimmed)}</div>`;
+      continue;
+    }
+
+    // Regular text
+    html += `<div style="font-size:12px;padding:2px 0;">${inlineBold(trimmed)}</div>`;
+  }
+
+  return html;
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // TAB 1: BRIEFING
 // ══════════════════════════════════════════════════════════════════════════════
@@ -186,13 +239,21 @@ async function loadBriefing() {
   const result = await apiCall('/api/chat', { copilot_action: 'get_daily_briefing_snapshot' });
 
   if (!result.ok) {
-    container.innerHTML = `<div class="error-state">${escapeHtml(result.error || 'Failed to load briefing')}</div>`;
+    container.innerHTML = `<div class="error-state">${escapeHtml(result.error || result.data?.error || 'Failed to load briefing')}</div>`;
     return;
   }
 
   const data = result.data;
 
-  // Extract items — handle both snapshot format and fallback format
+  // Handle AI text response format (markdown string from copilot_action dispatch)
+  if (data?.response) {
+    container.innerHTML = renderBriefingMarkdown(data.response);
+    $('#briefingTimestamp').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    $('#lastUpdated').textContent = `Briefing: ${new Date().toLocaleTimeString()}`;
+    return;
+  }
+
+  // Fallback: structured priority arrays
   const briefing = data?.briefing || data?.data?.briefing || data;
   const payload = briefing?.payload || briefing;
 
