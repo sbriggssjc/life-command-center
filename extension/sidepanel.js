@@ -1,6 +1,6 @@
 // ============================================================================
 // LCC Assistant — Side Panel Logic
-// Manages 4 tabs: Briefing, Search, Context, Chat
+// Manages 3 tabs: Property, Search, Chat
 // API calls made directly via fetch (no background.js dependency)
 // ============================================================================
 
@@ -21,37 +21,12 @@ function formatDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function timeAgo(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
 function domainBadge(domain) {
   if (!domain) return '';
   const d = domain.toLowerCase();
   if (d === 'government' || d === 'gov') return '<span class="domain-badge gov">GOV</span>';
   if (d === 'dialysis' || d === 'dia') return '<span class="domain-badge dia">DIA</span>';
   return '';
-}
-
-function scoreBadge(score) {
-  if (score == null) return '—';
-  const cls = score > 70 ? 'score-green' : score >= 40 ? 'score-yellow' : 'score-red';
-  return `<span class="score-badge ${cls}">${score}</span>`;
-}
-
-function touchColor(days) {
-  if (days == null) return '';
-  if (days < 30) return 'touch-green';
-  if (days <= 90) return 'touch-yellow';
-  return 'touch-red';
 }
 
 async function getLCCConfig() {
@@ -97,7 +72,7 @@ async function getPageContext() {
 
 // ── State ───────────────────────────────────────────────────────────────────
 
-let currentTab = 'briefing';
+let currentTab = 'property';
 let chatHistory = [];
 let selectedEntity = null;
 
@@ -105,8 +80,7 @@ let selectedEntity = null;
 
 $$('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    const tab = btn.dataset.tab;
-    switchTab(tab);
+    switchTab(btn.dataset.tab);
   });
 });
 
@@ -115,11 +89,8 @@ function switchTab(tab) {
   $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $$('.tab-pane').forEach((p) => p.classList.toggle('active', p.id === `tab-${tab}`));
 
-  if (tab === 'briefing' && !$('#briefingContent .priority-section')) {
-    loadBriefing();
-  }
-  if (tab === 'context') {
-    loadContextTab();
+  if (tab === 'property') {
+    loadPropertyTab();
   }
 }
 
@@ -173,129 +144,298 @@ async function updatePageContextBadge() {
   }
 }
 
-// ── Markdown rendering ─────────────────────────────────────────────────────
-
-function inlineBold(text) {
-  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-}
-
-function renderBriefingMarkdown(text) {
-  if (!text) return '';
-  const lines = text.split('\n');
-  let html = '';
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    // ## Headers
-    if (trimmed.startsWith('## ')) {
-      html += `<div style="font-weight:700;font-size:13px;margin:8px 0 6px;">${inlineBold(trimmed.slice(3))}</div>`;
-      continue;
-    }
-
-    // Standalone bold line as section header (e.g. **STRATEGIC:**)
-    const sectionMatch = trimmed.match(/^\*\*(.+?)\*\*\s*$/);
-    if (sectionMatch) {
-      const label = sectionMatch[1].toLowerCase();
-      let cls = '';
-      if (label.includes('strategic')) cls = 'strategic';
-      else if (label.includes('important')) cls = 'important';
-      else if (label.includes('urgent')) cls = 'urgent';
-      const color = cls ? `var(--${cls})` : 'var(--navy)';
-      html += `<div style="font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;margin:10px 0 4px;color:${color};">${escapeHtml(sectionMatch[1])}</div>`;
-      continue;
-    }
-
-    // Bullet list items
-    if (/^[-*]\s/.test(trimmed)) {
-      html += `<div style="font-size:12px;padding:3px 0 3px 10px;">${inlineBold(trimmed.replace(/^[-*]\s+/, '\u2022 '))}</div>`;
-      continue;
-    }
-
-    // Numbered list items
-    if (/^\d+\.\s/.test(trimmed)) {
-      html += `<div style="font-size:12px;padding:3px 0 3px 10px;">${inlineBold(trimmed)}</div>`;
-      continue;
-    }
-
-    // Regular text
-    html += `<div style="font-size:12px;padding:2px 0;">${inlineBold(trimmed)}</div>`;
-  }
-
-  return html;
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
-// TAB 1: BRIEFING
+// TAB 1: PROPERTY
 // ══════════════════════════════════════════════════════════════════════════════
 
-$('#refreshBriefing').addEventListener('click', loadBriefing);
+// Field display config: [costarKey, label, lccEntityKey]
+const PROPERTY_FIELDS = [
+  ['asking_price', 'Asking Price', 'asking_price'],
+  ['cap_rate', 'Cap Rate', 'cap_rate'],
+  ['noi', 'NOI', 'noi'],
+  ['price_per_sf', 'Price/SF', 'price_per_sf'],
+  ['property_type', 'Property Type', 'asset_type'],
+  ['building_class', 'Building Class', 'building_class'],
+  ['year_built', 'Year Built', 'year_built'],
+  ['square_footage', 'Square Footage', 'square_footage'],
+  ['lot_size', 'Lot Size', 'lot_size'],
+  ['stories', 'Stories', 'stories'],
+  ['units', 'Units', 'units'],
+  ['parking', 'Parking', 'parking'],
+  ['zoning', 'Zoning', 'zoning'],
+  ['occupancy', 'Occupancy', 'occupancy'],
+  ['lease_term', 'Lease Term', 'lease_term'],
+  ['tenant_name', 'Tenant', 'tenant_name'],
+  ['owner_name', 'Owner', 'owner_name'],
+  ['broker_name', 'Broker', 'broker_name'],
+  ['broker_company', 'Brokerage', 'broker_company'],
+  ['sale_price', 'Last Sale Price', 'sale_price'],
+  ['sale_date', 'Last Sale Date', 'sale_date'],
+];
 
-async function loadBriefing() {
-  const container = $('#briefingContent');
-  container.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading briefing...</div>';
+async function loadPropertyTab() {
+  const header = $('#propertyHeader');
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
 
-  const result = await apiCall('/api/chat', { copilot_action: 'get_daily_briefing_snapshot' });
+  // Determine data source: page context or selected entity from search
+  const ctx = await getPageContext();
+  const source = ctx && ctx.address ? ctx : selectedEntity;
 
-  if (!result.ok) {
-    container.innerHTML = `<div class="error-state">${escapeHtml(result.error || result.data?.error || 'Failed to load briefing')}</div>`;
+  if (!source) {
+    header.innerHTML = '<div class="empty-state">Browse a property on CoStar to see details here, or search for one.</div>';
+    body.innerHTML = '';
+    actions.innerHTML = '';
     return;
   }
 
-  const data = result.data;
+  const address = source.address || source.name || '';
+  const city = source.city || '';
+  const state = source.state || '';
+  const domain = source.domain || '';
 
-  // Handle AI text response format (markdown string from copilot_action dispatch)
-  if (data?.response) {
-    container.innerHTML = renderBriefingMarkdown(data.response);
-    $('#briefingTimestamp').textContent = `Updated ${new Date().toLocaleTimeString()}`;
-    $('#lastUpdated').textContent = `Briefing: ${new Date().toLocaleTimeString()}`;
-    return;
-  }
+  header.innerHTML = `
+    <div class="property-title">${escapeHtml(address)}</div>
+    ${city || state ? `<div class="property-subtitle">${escapeHtml([city, state].filter(Boolean).join(', '))}</div>` : ''}
+    ${domain ? `<div class="property-source">Detected from ${escapeHtml(domain)}</div>` : ''}
+  `;
 
-  // Fallback: structured priority arrays
-  const briefing = data?.briefing || data?.data?.briefing || data;
-  const payload = briefing?.payload || briefing;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
+  actions.innerHTML = '';
 
-  const strategic = payload?.strategic_items || payload?.strategic || [];
-  const important = payload?.important_items || payload?.important || [];
-  const urgent = payload?.urgent_items || payload?.urgent || [];
-
-  let html = '';
-
-  if (strategic.length) {
-    html += renderPrioritySection('strategic', 'Strategic', strategic);
-  }
-  if (important.length) {
-    html += renderPrioritySection('important', 'Important', important);
-  }
-  if (urgent.length) {
-    html += renderPrioritySection('urgent', 'Urgent', urgent);
-  }
-
-  if (!html) {
-    html = '<div class="empty-state">No briefing items found. Try refreshing.</div>';
-  }
-
-  container.innerHTML = html;
-  $('#briefingTimestamp').textContent = `Updated ${new Date().toLocaleTimeString()}`;
-  $('#lastUpdated').textContent = `Briefing: ${new Date().toLocaleTimeString()}`;
-}
-
-function renderPrioritySection(cls, label, items) {
-  let html = `<div class="priority-section ${cls}">`;
-  html += `<div class="priority-label">${escapeHtml(label)}</div>`;
-  items.forEach((item) => {
-    const title = item.title || item.entity_name || 'Untitled';
-    const desc = item.context || item.status || '';
-    const domain = item.domain || '';
-    html += `<div class="priority-item">
-      <div class="priority-item-title">${escapeHtml(title)}${domainBadge(domain)}</div>
-      ${desc ? `<div class="priority-item-desc">${escapeHtml(desc)}</div>` : ''}
-    </div>`;
+  // Query LCC to see if this property exists
+  const result = await apiCall('/api/chat', {
+    copilot_action: 'fetch_listing_activity_context',
+    params: { address },
   });
-  html += '</div>';
+
+  const responseData = result.ok ? (result.data?.data || result.data || {}) : {};
+  const lccEntity = responseData.entity || null;
+  const matched = lccEntity && lccEntity.id;
+
+  let html = '';
+
+  // Match status banner
+  if (result.ok) {
+    html += `<div class="match-status ${matched ? 'found' : 'not-found'}">
+      <span class="match-dot ${matched ? 'found' : 'not-found'}"></span>
+      ${matched ? 'Found in LCC database' : 'Not yet in LCC database'}
+    </div>`;
+  }
+
+  // Render fields — compare table if matched, simple list if not
+  if (matched && ctx && ctx.address) {
+    html += renderCompareTable(ctx, lccEntity);
+  } else if (ctx && ctx.address) {
+    html += renderDetectedFields(ctx);
+  } else if (matched) {
+    html += renderLccFields(lccEntity, responseData);
+  }
+
+  // Related data from LCC (leases, ownership, tasks)
+  if (matched) {
+    const govData = responseData.gov_data || {};
+
+    // GSA Leases
+    const leases = govData.gsa_leases || [];
+    if (leases.length) {
+      html += '<div class="section-label">Lease Details</div>';
+      const lease = leases[0];
+      if (lease.tenant || lease.agency) {
+        html += `<div class="context-field"><span class="context-label">Tenant</span><span class="context-value">${escapeHtml(lease.tenant || lease.agency)}</span></div>`;
+      }
+      if (lease.lease_expiration || lease.expiration_date) {
+        html += `<div class="context-field"><span class="context-label">Lease Expires</span><span class="context-value">${formatDate(lease.lease_expiration || lease.expiration_date)}</span></div>`;
+      }
+      if (lease.annual_rent) {
+        html += `<div class="context-field"><span class="context-label">Annual Rent</span><span class="context-value">$${Number(lease.annual_rent).toLocaleString()}</span></div>`;
+      }
+    }
+
+    // Ownership
+    const ownership = govData.ownership_history || [];
+    if (ownership.length) {
+      html += '<div class="section-label">Ownership</div>';
+      const latest = ownership[0];
+      html += `<div class="context-field"><span class="context-label">Owner</span><span class="context-value">${escapeHtml(latest.owner_name || latest.grantee || '—')}</span></div>`;
+      if (latest.entity_type || latest.owner_type) {
+        html += `<div class="context-field"><span class="context-label">Entity Type</span><span class="context-value">${escapeHtml(latest.entity_type || latest.owner_type)}</span></div>`;
+      }
+    }
+
+    // Active tasks
+    const tasks = (responseData.active_tasks || []).slice(0, 5);
+    if (tasks.length) {
+      html += '<div class="section-label">Active Tasks</div>';
+      tasks.forEach((task) => {
+        html += `<div class="related-entity">
+          <div><span style="font-weight:600;">${escapeHtml(task.title || '')}</span>
+          <div class="related-type">${escapeHtml(task.status || '')}</div></div>
+        </div>`;
+      });
+    }
+
+    // Research status
+    if (lccEntity.research_status) {
+      html += `<div class="context-field" style="margin-top:8px;"><span class="context-label">Research Status</span><span class="context-value">${escapeHtml(lccEntity.research_status)}</span></div>`;
+    }
+  }
+
+  body.innerHTML = html;
+
+  // Action buttons
+  if (ctx && ctx.address) {
+    if (matched) {
+      actions.innerHTML = `<button class="btn btn-sm btn-confirm" id="updateLccBtn">Update LCC with CoStar Data</button>`;
+    } else {
+      actions.innerHTML = `<button class="btn btn-sm btn-success" id="saveLccBtn">Save Property to LCC</button>`;
+    }
+    wirePropertyActions(ctx, lccEntity);
+  }
+
+  $('#lastUpdated').textContent = `Property: ${new Date().toLocaleTimeString()}`;
+}
+
+function renderDetectedFields(ctx) {
+  let html = '<div class="section-label">Detected Data</div>';
+  for (const [key, label] of PROPERTY_FIELDS) {
+    const val = ctx[key];
+    if (val) {
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value compare-new">${escapeHtml(val)}</span>
+      </div>`;
+    }
+  }
   return html;
+}
+
+function renderCompareTable(ctx, lccEntity) {
+  // Only show fields that have data from either source
+  const rows = PROPERTY_FIELDS.filter(([costarKey, , lccKey]) =>
+    ctx[costarKey] || lccEntity[lccKey]
+  );
+
+  if (!rows.length) return '<div class="empty-state">No comparable fields found</div>';
+
+  let html = '<table class="compare-table">';
+  html += '<tr><th>Field</th><th>CoStar</th><th>LCC</th></tr>';
+
+  for (const [costarKey, label, lccKey] of rows) {
+    const costarVal = ctx[costarKey] || '';
+    const lccVal = lccEntity[lccKey] || '';
+    const costarDisplay = costarVal || '—';
+    const lccDisplay = lccVal || '—';
+
+    // Highlight differences
+    let costarCls = '';
+    if (costarVal && !lccVal) costarCls = 'compare-new';
+    else if (costarVal && lccVal && costarVal !== lccVal) costarCls = 'compare-diff';
+
+    html += `<tr>
+      <td class="field-label">${escapeHtml(label)}</td>
+      <td class="${costarCls}">${escapeHtml(costarDisplay)}</td>
+      <td>${escapeHtml(lccDisplay)}</td>
+    </tr>`;
+  }
+
+  html += '</table>';
+  return html;
+}
+
+function renderLccFields(entity, data) {
+  let html = '';
+  const fields = [
+    ['address', 'Address'], ['city', 'City'], ['state', 'State'],
+    ['asset_type', 'Asset Type'], ['building_class', 'Building Class'],
+    ['year_built', 'Year Built'], ['square_footage', 'Square Footage'],
+  ];
+  for (const [key, label] of fields) {
+    const val = entity[key];
+    if (val) {
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value">${escapeHtml(String(val))}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+function wirePropertyActions(ctx, lccEntity) {
+  const updateBtn = $('#updateLccBtn');
+  const saveBtn = $('#saveLccBtn');
+
+  if (updateBtn) {
+    updateBtn.addEventListener('click', async () => {
+      updateBtn.disabled = true;
+      updateBtn.textContent = 'Updating...';
+
+      const result = await apiCall('/api/chat', {
+        copilot_action: 'update_entity',
+        params: {
+          entity_id: lccEntity.id,
+          source: 'costar',
+          fields: extractCostarFields(ctx),
+        },
+      });
+
+      if (result.ok) {
+        updateBtn.className = 'btn btn-sm btn-success';
+        updateBtn.textContent = 'Updated!';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast updated';
+        toast.textContent = 'Property data synced from CoStar';
+        $('#propertyActions').prepend(toast);
+      } else {
+        updateBtn.disabled = false;
+        updateBtn.textContent = 'Update Failed — Retry';
+        updateBtn.className = 'btn btn-sm btn-danger';
+      }
+    });
+  }
+
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      const result = await apiCall('/api/chat', {
+        copilot_action: 'create_entity',
+        params: {
+          entity_type: 'asset',
+          source: 'costar',
+          address: ctx.address,
+          city: ctx.city,
+          state: ctx.state,
+          fields: extractCostarFields(ctx),
+        },
+      });
+
+      if (result.ok) {
+        saveBtn.className = 'btn btn-sm btn-success';
+        saveBtn.textContent = 'Saved!';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast updated';
+        toast.textContent = 'Property added to LCC';
+        $('#propertyActions').prepend(toast);
+        // Reload to show matched state
+        setTimeout(() => loadPropertyTab(), 1500);
+      } else {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Failed — Retry';
+        saveBtn.className = 'btn btn-sm btn-danger';
+      }
+    });
+  }
+}
+
+function extractCostarFields(ctx) {
+  const fields = {};
+  for (const [key] of PROPERTY_FIELDS) {
+    if (ctx[key]) fields[key] = ctx[key];
+  }
+  return fields;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -359,7 +499,7 @@ async function doSearch() {
     card.addEventListener('click', () => {
       try {
         selectedEntity = JSON.parse(card.dataset.entity);
-        switchTab('context');
+        switchTab('property');
       } catch {
         // Invalid entity data
       }
@@ -368,241 +508,7 @@ async function doSearch() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TAB 3: CONTEXT
-// ══════════════════════════════════════════════════════════════════════════════
-
-async function loadContextTab() {
-  const header = $('#contextHeader');
-  const body = $('#contextBody');
-
-  // Check for page context first, then selected entity
-  const pageCtx = await getPageContext();
-
-  if (pageCtx && pageCtx.domain) {
-    header.innerHTML = `<div class="context-detected">Detected on this page:</div>
-      <div class="card-title">${escapeHtml(pageCtx.email || pageCtx.address || pageCtx.name || pageCtx.domain)}</div>
-      <div class="card-subtitle">${escapeHtml(pageCtx.entity_type || '')} via ${escapeHtml(pageCtx.domain)}</div>`;
-
-    body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading context...</div>';
-
-    if (pageCtx.entity_type === 'contact' || pageCtx.email) {
-      await loadContactContext({ email: pageCtx.email, name: pageCtx.name }, body);
-    } else if (pageCtx.entity_type === 'property' || pageCtx.address) {
-      await loadPropertyContext({ address: pageCtx.address }, body);
-    } else {
-      body.innerHTML = '<div class="empty-state">Unable to resolve entity from page context</div>';
-    }
-    return;
-  }
-
-  if (selectedEntity) {
-    const type = selectedEntity.entity_type || 'unknown';
-    header.innerHTML = `<div class="card-title">${escapeHtml(selectedEntity.name || selectedEntity.address || '')}</div>
-      <div class="card-subtitle">${escapeHtml(type)}${domainBadge(selectedEntity.domain)}</div>`;
-
-    body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading context...</div>';
-
-    if (type === 'person') {
-      await loadContactContext({ entity_id: selectedEntity.id, email: selectedEntity.email }, body);
-    } else if (type === 'asset') {
-      await loadPropertyContext({ entity_id: selectedEntity.id, address: selectedEntity.address }, body);
-    } else {
-      await loadGenericContext(selectedEntity, body);
-    }
-    return;
-  }
-
-  header.innerHTML = '<div class="empty-state">No context loaded. Search for an entity or browse a supported site.</div>';
-  body.innerHTML = '';
-}
-
-async function loadContactContext(params, body) {
-  const result = await apiCall('/api/chat', {
-    copilot_action: 'get_relationship_context',
-    params,
-  });
-
-  if (!result.ok) {
-    body.innerHTML = `<div class="error-state">${escapeHtml(result.error || 'Failed to load contact')}</div>`;
-    return;
-  }
-
-  const data = result.data?.data || result.data || {};
-  const entity = data.entity || {};
-  const daysSince = data.days_since_contact;
-  const touchClass = touchColor(daysSince);
-
-  let html = '<div>';
-
-  // Contact details
-  html += `<div class="context-field"><span class="context-label">Name</span><span class="context-value">${escapeHtml(entity.name || '—')}</span></div>`;
-  if (entity.company || entity.org_name) {
-    html += `<div class="context-field"><span class="context-label">Company</span><span class="context-value">${escapeHtml(entity.company || entity.org_name)}</span></div>`;
-  }
-  if (entity.title) {
-    html += `<div class="context-field"><span class="context-label">Title</span><span class="context-value">${escapeHtml(entity.title)}</span></div>`;
-  }
-
-  // Touch data
-  html += `<div class="context-field"><span class="context-label">Last Touch</span>
-    <span class="context-value touch-badge ${touchClass}">${formatDate(data.last_touch_date)}${daysSince != null ? ` (${daysSince}d)` : ''}</span></div>`;
-  html += `<div class="context-field"><span class="context-label">Touchpoints</span><span class="context-value">${data.touchpoint_count || 0}</span></div>`;
-
-  // Recommendation
-  if (data.recommended_next_action) {
-    html += `<div class="card" style="margin-top:8px;background:#FFFBEB;border-color:#FCD34D;">
-      <div class="card-title" style="font-size:11px;color:#92400E;">Recommendation</div>
-      <div style="font-size:12px;margin-top:2px;">${escapeHtml(data.recommended_next_action)}</div>
-    </div>`;
-  }
-
-  // Active deals
-  const deals = data.active_deals || [];
-  if (deals.length) {
-    html += '<div style="margin-top:10px;font-weight:600;font-size:12px;margin-bottom:4px;">Active Pursuits</div>';
-    deals.forEach((deal) => {
-      html += `<div class="card"><div class="card-title">${escapeHtml(deal.title || '')}</div>
-        <div class="card-subtitle">${escapeHtml(deal.status || '')} &middot; ${escapeHtml(deal.priority_class || '')}</div></div>`;
-    });
-  }
-
-  // Recent events
-  const events = (data.recent_events || []).slice(0, 5);
-  if (events.length) {
-    html += '<div style="margin-top:10px;font-weight:600;font-size:12px;margin-bottom:4px;">Recent Activity</div>';
-    html += '<ul class="activity-list">';
-    events.forEach((evt) => {
-      html += `<li class="activity-item">
-        <span class="activity-date">${formatDate(evt.occurred_at)}</span> —
-        ${escapeHtml(evt.title || evt.category || '')}
-      </li>`;
-    });
-    html += '</ul>';
-  }
-
-  html += '</div>';
-  body.innerHTML = html;
-}
-
-async function loadPropertyContext(params, body) {
-  const result = await apiCall('/api/chat', {
-    copilot_action: 'fetch_listing_activity_context',
-    params,
-  });
-
-  if (!result.ok) {
-    body.innerHTML = `<div class="error-state">${escapeHtml(result.error || 'Failed to load property')}</div>`;
-    return;
-  }
-
-  const data = result.data?.data || result.data || {};
-  const entity = data.entity || {};
-  const govData = data.gov_data || {};
-
-  let html = '<div>';
-
-  // Property details
-  html += `<div class="context-field"><span class="context-label">Address</span><span class="context-value">${escapeHtml(entity.address || entity.name || '—')}</span></div>`;
-  if (entity.city || entity.state) {
-    html += `<div class="context-field"><span class="context-label">Location</span><span class="context-value">${escapeHtml([entity.city, entity.state].filter(Boolean).join(', '))}</span></div>`;
-  }
-  if (entity.asset_type) {
-    html += `<div class="context-field"><span class="context-label">Asset Type</span><span class="context-value">${escapeHtml(entity.asset_type)}</span></div>`;
-  }
-
-  // GSA lease details
-  const leases = govData.gsa_leases || [];
-  if (leases.length) {
-    const lease = leases[0];
-    html += '<div style="margin-top:10px;font-weight:600;font-size:12px;margin-bottom:4px;">Lease Details</div>';
-    if (lease.tenant || lease.agency) {
-      html += `<div class="context-field"><span class="context-label">Tenant</span><span class="context-value">${escapeHtml(lease.tenant || lease.agency || '')}</span></div>`;
-    }
-    if (lease.lease_expiration || lease.expiration_date) {
-      html += `<div class="context-field"><span class="context-label">Lease Expires</span><span class="context-value">${formatDate(lease.lease_expiration || lease.expiration_date)}</span></div>`;
-    }
-    if (lease.annual_rent) {
-      html += `<div class="context-field"><span class="context-label">Annual Rent</span><span class="context-value">$${Number(lease.annual_rent).toLocaleString()}</span></div>`;
-    }
-  }
-
-  // Investment score from context packet
-  const packet = data.context_packet?.payload || {};
-  if (packet.valuation || entity.investment_score != null) {
-    const score = entity.investment_score ?? packet.priority_score;
-    if (score != null) {
-      html += `<div class="context-field"><span class="context-label">Investment Score</span><span class="context-value">${scoreBadge(score)}</span></div>`;
-    }
-  }
-
-  // Research status
-  if (entity.research_status) {
-    html += `<div class="context-field"><span class="context-label">Research Status</span><span class="context-value">${escapeHtml(entity.research_status)}</span></div>`;
-  }
-
-  // Ownership
-  const ownership = govData.ownership_history || [];
-  if (ownership.length) {
-    const latest = ownership[0];
-    html += '<div style="margin-top:10px;font-weight:600;font-size:12px;margin-bottom:4px;">Ownership</div>';
-    html += `<div class="context-field"><span class="context-label">Owner</span><span class="context-value">${escapeHtml(latest.owner_name || latest.grantee || '—')}</span></div>`;
-    if (latest.entity_type || latest.owner_type) {
-      html += `<div class="context-field"><span class="context-label">Entity Type</span><span class="context-value">${escapeHtml(latest.entity_type || latest.owner_type)}</span></div>`;
-    }
-  }
-
-  // Active tasks
-  const tasks = (data.active_tasks || []).slice(0, 5);
-  if (tasks.length) {
-    html += '<div style="margin-top:10px;font-weight:600;font-size:12px;margin-bottom:4px;">Active Tasks</div>';
-    html += '<ul class="activity-list">';
-    tasks.forEach((task) => {
-      html += `<li class="activity-item">
-        ${escapeHtml(task.title || '')}
-        <span class="activity-date">${escapeHtml(task.status || '')}</span>
-      </li>`;
-    });
-    html += '</ul>';
-  }
-
-  // Research button
-  html += `<div style="margin-top:12px;">
-    <button class="btn btn-sm btn-primary" id="researchOwnershipBtn">Research Ownership</button>
-  </div>`;
-
-  html += '</div>';
-  body.innerHTML = html;
-
-  // Wire up research button
-  const researchBtn = body.querySelector('#researchOwnershipBtn');
-  if (researchBtn) {
-    researchBtn.addEventListener('click', () => {
-      chrome.storage.sync.get(['LCC_RAILWAY_URL'], (config) => {
-        const base = config.LCC_RAILWAY_URL || '';
-        if (base) {
-          chrome.tabs.create({ url: base });
-        }
-      });
-    });
-  }
-}
-
-async function loadGenericContext(entity, body) {
-  let html = '<div>';
-  Object.entries(entity).forEach(([key, value]) => {
-    if (value && typeof value !== 'object') {
-      html += `<div class="context-field">
-        <span class="context-label">${escapeHtml(key.replace(/_/g, ' '))}</span>
-        <span class="context-value">${escapeHtml(String(value))}</span>
-      </div>`;
-    }
-  });
-  html += '</div>';
-  body.innerHTML = html;
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// TAB 4: CHAT
+// TAB 3: CHAT
 // ══════════════════════════════════════════════════════════════════════════════
 
 $('#chatSend').addEventListener('click', sendChat);
@@ -619,7 +525,6 @@ async function sendChat() {
   input.value = '';
   appendChatMessage('user', message);
 
-  // Determine action from keywords
   const action = routeMessage(message);
 
   const result = await apiCall('/api/chat', {
@@ -653,7 +558,6 @@ function routeMessage(msg) {
 function appendChatMessage(role, text) {
   const container = $('#chatMessages');
 
-  // Clear empty state
   const empty = container.querySelector('.empty-state');
   if (empty) empty.remove();
 
@@ -665,14 +569,13 @@ function appendChatMessage(role, text) {
   container.appendChild(msgDiv);
   container.scrollTop = container.scrollHeight;
 
-  // Persist to session storage
   chrome.storage.session.set({ chatHistory });
 }
 
 function clearChat() {
   chatHistory = [];
   const container = $('#chatMessages');
-  container.innerHTML = '<div class="empty-state">Ask anything about your pipeline, contacts, or deals.</div>';
+  container.innerHTML = '<div class="empty-state">Ask about this property or anything in your pipeline.</div>';
   chrome.storage.session.remove('chatHistory');
 }
 
@@ -698,22 +601,20 @@ async function restoreChatHistory() {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.pageContext) {
     updatePageContextBadge();
-    if (currentTab === 'context') {
-      loadContextTab();
+    if (currentTab === 'property') {
+      loadPropertyTab();
     }
   }
 });
 
-// ── Init (deferred to after first paint) ────────────────────────────────────
+// ── Init ────────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Load default tab preference
   const prefs = await chrome.storage.sync.get(['defaultTab']);
-  if (prefs.defaultTab && prefs.defaultTab !== 'briefing') {
+  if (prefs.defaultTab && prefs.defaultTab !== 'property') {
     switchTab(prefs.defaultTab);
   }
 
-  // These are deferred — UI renders instantly, then data loads
   requestAnimationFrame(async () => {
     await Promise.all([
       checkConnection(),
@@ -721,9 +622,8 @@ async function init() {
       restoreChatHistory(),
     ]);
 
-    // Auto-load briefing if on briefing tab
-    if (currentTab === 'briefing') {
-      loadBriefing();
+    if (currentTab === 'property') {
+      loadPropertyTab();
     }
   });
 }

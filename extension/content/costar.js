@@ -31,14 +31,46 @@
     if (!address || address === lastDetectedAddress) return;
     lastDetectedAddress = address;
 
-    // Try to extract financial data
+    // Extract financial data
     const priceEl = document.querySelector('[data-testid="asking-price"]') ||
       document.querySelector('.asking-price') ||
       findTextElement('Price', 'Asking');
     const capRateEl = document.querySelector('[data-testid="cap-rate"]') ||
       document.querySelector('.cap-rate') ||
       findTextElement('Cap Rate');
-    const leaseTermEl = findTextElement('Lease', 'Term');
+    const leaseTermEl = findTextElement('Lease Term', 'Remaining Term');
+
+    // Property details
+    const propertyTypeEl = findTextElement('Property Type', 'Property Subtype', 'Asset Type');
+    const buildingClassEl = findTextElement('Building Class');
+    const yearBuiltEl = findTextElement('Year Built');
+    const sqftEl = findTextElement('Building Size', 'Rentable SF', 'RSF', 'GLA', 'Total SF', 'Square Feet');
+    const lotSizeEl = findTextElement('Land Area', 'Lot Size', 'Acres');
+    const storiesEl = findTextElement('Number of Stories', 'Stories', 'Floors');
+    const unitsEl = findTextElement('Number of Units', 'Total Units');
+    const parkingEl = findTextElement('Parking Spaces', 'Parking Ratio', 'Parking');
+    const zoningEl = findTextElement('Zoning', 'Zone');
+
+    // Additional financial
+    const noiEl = findTextElement('NOI', 'Net Operating Income');
+    const psfEl = findTextElement('Price/SF', 'Price Per SF');
+    const occupancyEl = findTextElement('Occupancy', 'Percent Leased');
+
+    // Tenancy, ownership, broker
+    const tenantEl = findTextElement('Tenant', 'Primary Tenant', 'Major Tenant');
+    const ownerEl = findTextElement('True Owner', 'Record Owner', 'Owner');
+    const brokerEl = findTextElement('Listing Agent', 'Broker', 'Listed By');
+    const brokerCoEl = findTextElement('Brokerage', 'Listing Company');
+
+    // Sale history
+    const salePriceEl = findTextElement('Sale Price', 'Last Sale Price');
+    const saleDateEl = findTextElement('Sale Date', 'Last Sale Date');
+
+    // Location (if shown separately from heading)
+    const cityEl = findTextElement('City', 'Municipality');
+    const stateEl = findTextElement('State');
+
+    const val = (el) => el?.textContent?.trim() || null;
 
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
@@ -46,10 +78,30 @@
         domain: 'costar',
         entity_type: 'property',
         address,
-        asking_price: priceEl?.textContent?.trim() || null,
-        cap_rate: capRateEl?.textContent?.trim() || null,
-        lease_term: leaseTermEl?.textContent?.trim() || null,
         page_url: url,
+        asking_price: val(priceEl),
+        cap_rate: val(capRateEl),
+        lease_term: val(leaseTermEl),
+        noi: val(noiEl),
+        price_per_sf: val(psfEl),
+        property_type: val(propertyTypeEl),
+        building_class: val(buildingClassEl),
+        year_built: val(yearBuiltEl),
+        square_footage: val(sqftEl),
+        lot_size: val(lotSizeEl),
+        stories: val(storiesEl),
+        units: val(unitsEl),
+        parking: val(parkingEl),
+        zoning: val(zoningEl),
+        occupancy: val(occupancyEl),
+        tenant_name: val(tenantEl),
+        owner_name: val(ownerEl),
+        broker_name: val(brokerEl),
+        broker_company: val(brokerCoEl),
+        sale_price: val(salePriceEl),
+        sale_date: val(saleDateEl),
+        city: val(cityEl),
+        state: val(stateEl),
       },
     });
 
