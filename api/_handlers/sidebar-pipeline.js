@@ -607,6 +607,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   // Step 5b: Upsert sales transactions
   results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
 
+  // Step 5b2: Upsert broker links (dialysis only)
+  if (domain === 'dialysis') {
+    results.records.brokers = await upsertDialysisBrokerLinks(propertyId, results.records.sales, metadata);
+  }
+
   // Step 5c: Upsert loans
   results.records.loans = await upsertDomainLoans(domain, propertyId, metadata);
 
@@ -755,6 +760,95 @@ async function upsertDomainSales(domain, propertyId, metadata) {
   }
 
   return count;
+}
+
+/**
+ * Upsert broker records and sale_brokers junction links in the Dialysis DB.
+ * Collects broker names from metadata.contacts[], normalizes them, upserts into
+ * the brokers table, then links each broker to the relevant sale via sale_brokers.
+ */
+async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
+  const contacts = metadata.contacts;
+  if (!Array.isArray(contacts)) return 0;
+
+  const brokerContacts = contacts.filter(
+    c => c.role === 'listing_broker' || c.role === 'buyer_broker'
+  );
+  if (brokerContacts.length === 0) return 0;
+
+  // Map role to sale_brokers.role value
+  const roleMap = { listing_broker: 'listing', buyer_broker: 'procuring' };
+
+  let created = 0;
+
+  for (const contact of brokerContacts) {
+    const name = (contact.name || '').trim();
+    if (!name) continue;
+
+    // Normalize: lowercase, strip common suffixes, collapse whitespace
+    const normalized = name
+      .toLowerCase()
+      .replace(/\b(llc|inc|corp|ltd|lp|llp|co|company|group|associates|advisors)\b\.?/gi, '')
+      .replace(/[.,]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!normalized) continue;
+
+    // Look up existing broker by normalized_name
+    const encodedNorm = encodeURIComponent(normalized);
+    const lookup = await domainQuery('dialysis', 'GET',
+      `brokers?normalized_name=eq.${encodedNorm}&select=broker_id&limit=1`
+    );
+
+    let brokerId;
+    if (lookup.ok && lookup.data?.length) {
+      brokerId = lookup.data[0].broker_id;
+    } else {
+      // Insert new broker
+      const brokerData = stripNulls({
+        broker_name: name,
+        company: contact.company || null,
+        normalized_name: normalized,
+      });
+      const ins = await domainQuery('dialysis', 'POST', 'brokers', brokerData);
+      if (!ins.ok || !ins.data?.length) continue;
+      brokerId = ins.data[0].broker_id;
+      created++;
+    }
+
+    // Link broker to each sale for this property written in this pipeline run
+    const sales = metadata.sales_history;
+    if (!Array.isArray(sales)) continue;
+
+    for (const sale of sales) {
+      const saleDate = parseDate(sale.sale_date);
+      if (!saleDate) continue;
+      const datePart = saleDate.split('T')[0];
+
+      // Look up the sale_id by property_id + sale_date
+      const saleLookup = await domainQuery('dialysis', 'GET',
+        `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`
+      );
+      if (!saleLookup.ok || !saleLookup.data?.length) continue;
+      const saleId = saleLookup.data[0].sale_id;
+
+      // Check if junction row already exists
+      const junctionLookup = await domainQuery('dialysis', 'GET',
+        `sale_brokers?sale_id=eq.${saleId}&broker_id=eq.${brokerId}&select=sale_broker_id&limit=1`
+      );
+      if (junctionLookup.ok && junctionLookup.data?.length) continue;
+
+      // Insert junction record
+      await domainQuery('dialysis', 'POST', 'sale_brokers', {
+        sale_id: saleId,
+        broker_id: brokerId,
+        role: roleMap[contact.role] || contact.role,
+      });
+    }
+  }
+
+  return created;
 }
 
 /**
