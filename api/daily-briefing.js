@@ -844,21 +844,51 @@ function buildActions(roleView) {
   return base;
 }
 
-function buildDomainSignals(myWork, inboxSummary, unassignedWork) {
+const GOV_DOMAIN_RE = /\b(gsa|federal|government|gov\b|lease|tenant|agency|sba|hud|va\b|dod|usda|fema|census|opm)\b/i;
+const DIA_DOMAIN_RE = /\b(dialysis|davita|fresenius|clinic|renal|kidney|nephrology|npi|cms\b|esrd|rcm)\b/i;
+
+function inferDomain(item) {
+  if (item.domain === 'government' || item.domain === 'dialysis') return item.domain;
+  const text = `${item.title || ''} ${item.body || ''} ${item.metadata?.sender_name || ''} ${item.metadata?.sender_email || ''}`;
+  if (GOV_DOMAIN_RE.test(text)) return 'government';
+  if (DIA_DOMAIN_RE.test(text)) return 'dialysis';
+  return null;
+}
+
+function buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, diaPipeline) {
   const govHighlights = [];
   const diaHighlights = [];
 
-  for (const item of myWork) {
-    if (item.domain === 'government') govHighlights.push(item.title || '(Untitled)');
-    if (item.domain === 'dialysis') diaHighlights.push(item.title || '(Untitled)');
-  }
-  for (const item of inboxSummary.items || []) {
-    if (item.domain === 'government') govHighlights.push(item.title || '(Untitled)');
-    if (item.domain === 'dialysis') diaHighlights.push(item.title || '(Untitled)');
+  // 1. Keyword-inferred domain matching from OPS items
+  const allOpsItems = [...(myWork || []), ...(inboxSummary.items || [])];
+  for (const item of allOpsItems) {
+    const domain = inferDomain(item);
+    if (domain === 'government') govHighlights.push(item.title || '(Untitled)');
+    if (domain === 'dialysis') diaHighlights.push(item.title || '(Untitled)');
   }
 
-  const govReview = (unassignedWork || []).filter((item) => item.domain === 'government').slice(0, 5);
-  const diaReview = (unassignedWork || []).filter((item) => item.domain === 'dialysis').slice(0, 5);
+  // 2. GOV highlights from hot contacts (already fetched from GOV Supabase)
+  for (const c of (hotContacts || [])) {
+    if (govHighlights.length >= 5) break;
+    const name = c.full_name || c.company_name || '(Contact)';
+    const score = c.engagement_score ? ` (score: ${c.engagement_score})` : '';
+    govHighlights.push(`${name}${score}`);
+  }
+
+  // 3. DIA highlights from pipeline data (already fetched from DIA Supabase)
+  const diaPipe = diaPipeline || { deals: [], leads: [] };
+  for (const deal of (diaPipe.deals || [])) {
+    if (diaHighlights.length >= 5) break;
+    diaHighlights.push(deal.subject || deal.what_name || '(Open Opportunity)');
+  }
+  for (const lead of (diaPipe.leads || [])) {
+    if (diaHighlights.length >= 5) break;
+    diaHighlights.push(lead.subject || lead.what_name || '(Open Task)');
+  }
+
+  // 4. Review items from unassigned work (keyword-inferred)
+  const govReview = (unassignedWork || []).filter((item) => inferDomain(item) === 'government').slice(0, 5);
+  const diaReview = (unassignedWork || []).filter((item) => inferDomain(item) === 'dialysis').slice(0, 5);
 
   return {
     government: {
@@ -1139,7 +1169,7 @@ export default withErrorHandler(async function handler(req, res) {
         unassigned_work: unassignedWork,
         sync_health: syncHealth
       },
-      domain_specific_alerts_highlights: buildDomainSignals(myWork, inboxSummary, unassignedWork),
+      domain_specific_alerts_highlights: buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, diaPipeline),
       cross_domain_highlights: crossDomainHighlights,
       actions: buildActions(roleView)
     };
