@@ -97,7 +97,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 13,
+        _version: 14,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -212,8 +212,15 @@
         else if (/^\$[\d,]+/.test(prev)) data.asking_price = prev;
       }
 
-      if (!data.sale_price && /^sale\s+price$/i.test(line)) {
-        if (next && next.length < 60) data.sale_price = next;
+      // Sale price: prefer stat card value (appears first, is most recent sale)
+      // but skip "Not Disclosed" — grab actual dollar amounts
+      if (/^sale\s+price$/i.test(line)) {
+        if (next && /^\$[\d,]+/.test(next)) {
+          // Only take the first actual dollar amount (stat card = most recent)
+          if (!data.sale_price || !/^\$/.test(data.sale_price)) data.sale_price = next;
+        } else if (!data.sale_price && next && next.length < 60) {
+          data.sale_price = next; // "Not Disclosed" as fallback
+        }
       }
 
       if (!data.square_footage) {
@@ -301,7 +308,10 @@
       }
 
       if (!data.lease_type && /^lease\s+type$/i.test(line)) {
-        if (next && next.length < 40) data.lease_type = next;
+        if (next && next.length < 40 &&
+            /^(nnn|nn|n|triple\s+net|double\s+net|net|full\s+service|gross|modified\s+gross|ground|absolute\s+net|bondable|fs|mg)/i.test(next)) {
+          data.lease_type = next;
+        }
       }
 
       if (!data.lease_term && /^lease\s+term$/i.test(line)) {
@@ -512,42 +522,25 @@
   //   "Tenants" / "Tenant Detail" tabs: more detailed lease info
   //   "Stacking Plan" tabs: floor-by-floor tenant breakdown
 
+  // CoStar UI elements that appear in tenant sections but are NOT tenant names
+  const COSTAR_UI_REJECT = /^(name|source:|costar|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed)$/i;
+
   function extractTenants(lines) {
     const tenants = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // ── "Tenants at Sale" section ─────────────────────────────
+      // "Tenants at Sale" section
       if (/^tenants?\s+at\s+sale$/i.test(line)) {
         parseTenantSection(lines, i + 1, tenants);
         continue;
       }
 
-      // ── "Tenant Detail" or "Tenants" section on lease tab ─────
-      if (/^tenant\s+detail$/i.test(line) || /^tenants?$/i.test(line)) {
-        // Make sure this isn't "Tenancy" (building field) — must be standalone
-        if (/^tenants?$/i.test(line) && i + 1 < lines.length) {
-          const next = lines[i + 1];
-          // If next line is a short value like "Single", this is the building field
-          if (next && /^(single|multi|none)$/i.test(next)) continue;
-        }
+      // "Tenant Detail" section on lease tab
+      if (/^tenant\s+detail$/i.test(line)) {
         parseTenantSection(lines, i + 1, tenants);
         continue;
-      }
-
-      // ── Stacking plan entries ─────────────────────────────────
-      // Format: "Floor X" then tenant names with SF
-      if (/^(suite|floor|unit)\s+/i.test(line)) {
-        const next = i + 1 < lines.length ? lines[i + 1] : '';
-        if (next && next.length > 2 && next.length < 80 && !/^(suite|floor|unit)\s/i.test(next)) {
-          const tenant = { name: next, location: line };
-          // Look for SF on the line after name
-          const sfLine = i + 2 < lines.length ? lines[i + 2] : '';
-          if (/^[\d,]+\s*sf/i.test(sfLine)) tenant.sf = sfLine;
-          else if (/^[\d,]+$/.test(sfLine)) tenant.sf = sfLine + ' SF';
-          if (!tenants.some((t) => t.name === tenant.name)) tenants.push(tenant);
-        }
       }
     }
 
@@ -561,10 +554,13 @@
       const line = lines[j];
 
       // Stop at next major section
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©)/i.test(line)) break;
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts)/i.test(line)) break;
 
-      // Skip headers
-      if (/^(name|source:|costar\s+research)$/i.test(line)) continue;
+      // Skip CoStar UI elements
+      if (COSTAR_UI_REJECT.test(line)) continue;
+
+      // Skip lines that are just dates (month/year) — these are column values, not names
+      if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(line)) continue;
 
       // SF value (often follows tenant name): "8,750" or "8,750 SF"
       if (/^[\d,]+(\s*sf)?$/i.test(line)) {
