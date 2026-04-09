@@ -173,6 +173,39 @@ export async function writeListingCreatedSignal(entity, user) {
  * @param {object} activity - The activity event
  * @param {object} user - The acting user
  */
+/**
+ * Write a sidebar_extraction_processed signal when the sidebar pipeline
+ * finishes unpacking CRE metadata from the browser extension.
+ *
+ * @param {object} entity - The property entity
+ * @param {object} user - The acting user
+ * @param {object} summary - { contacts_created, sales_recorded, domain }
+ */
+export async function writeSidebarExtractionSignal(entity, user, summary) {
+  await writeSignal({
+    signal_type: 'sidebar_extraction_processed',
+    signal_category: 'intelligence',
+    entity_type: 'asset',
+    entity_id: entity.id || null,
+    domain: summary.domain || entity.domain || null,
+    user_id: user.id,
+    payload: {
+      source: entity.metadata?.source || 'costar',
+      extraction_type: `${entity.metadata?.source || 'costar'}_sidebar`,
+      entity_name: (entity.name || '').substring(0, 100),
+      contacts_created: summary.contacts_created || 0,
+      sales_recorded: summary.sales_recorded || 0,
+      financial_signals: {
+        has_pricing: !!entity.metadata?.asking_price,
+        has_cap_rate: !!entity.metadata?.cap_rate,
+        has_noi: !!entity.metadata?.noi,
+        sale_count: entity.metadata?.sales_history?.length || 0,
+      },
+    },
+    outcome: 'pending',
+  });
+}
+
 export async function writeTouchpointSignal(activity, user) {
   await writeSignal({
     signal_type: 'touchpoint_logged',

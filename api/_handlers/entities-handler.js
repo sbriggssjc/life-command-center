@@ -12,12 +12,14 @@
 // POST   /api/entities?action=merge           — merge two entities (manager+)
 // POST   /api/entities?action=add_alias       — add alias for entity
 // GET    /api/entities?action=quality         — data quality dashboard
+// POST   /api/entities?action=process_sidebar_extraction — unpack CRE sidebar metadata
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
+import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -232,6 +234,24 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
   if (req.method === 'POST') {
     if (!requireRole(user, 'operator', workspaceId)) {
       return res.status(403).json({ error: 'Operator role required' });
+    }
+
+    // On-demand sidebar extraction processing
+    if (req.query.action === 'process_sidebar_extraction') {
+      const { entity_id } = req.body || {};
+      if (!entity_id) {
+        return res.status(400).json({ error: 'entity_id is required' });
+      }
+      try {
+        const result = await processSidebarExtraction(entity_id, workspaceId, user.id);
+        if (!result.ok) {
+          return res.status(result.error === 'Entity not found' ? 404 : 500).json(result);
+        }
+        return res.status(200).json(result);
+      } catch (err) {
+        console.error('[Sidebar pipeline error]', err);
+        return res.status(500).json({ error: 'Pipeline processing failed', detail: err?.message });
+      }
     }
 
     // Add alias
@@ -455,6 +475,12 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     // Fire-and-forget: signal for listing-as-BD pipeline when an asset/listing is created
     if (entity_type === 'asset' && created?.state) {
       writeListingCreatedSignal(created, user);
+    }
+
+    // Fire-and-forget: unpack sidebar extraction data (contacts, sales, domain classification)
+    if (entity_type === 'asset' && created?.id && hasSidebarData(metadata)) {
+      processSidebarExtraction(created.id, workspaceId, user.id)
+        .catch(err => console.error('[Sidebar pipeline async error]', err?.message || err));
     }
 
     return res.status(201).json({ entity: created });
