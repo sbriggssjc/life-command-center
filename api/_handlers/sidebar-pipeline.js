@@ -980,9 +980,8 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
   const metadata = entity.metadata || {};
 
   // Only process if there's sidebar extraction data worth unpacking
-  if (!metadata.contacts && !metadata.sales_history && !metadata.tenants
-      && !metadata.tenant_name && !metadata.primary_tenant) {
-    return { ok: true, skipped: true, reason: 'No contacts, sales_history, tenants, or tenant in metadata' };
+  if (!hasSidebarData(metadata)) {
+    return { ok: true, skipped: true, reason: 'No actionable sidebar data in metadata' };
   }
 
   // Step 1 — classify domain (needed for entity creation in steps 2-3)
@@ -1005,9 +1004,13 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
   await writeExtractionSignal(entityId, metadata, domain, userId, totalContacts, salesCount);
 
   // Mark metadata as processed so we don't re-process
+  // Only write _pipeline_processed_at when propagation succeeded — failed runs
+  // remain retryable (hasSidebarData() will return true on the next save).
   const updatedMeta = {
     ...metadata,
-    _pipeline_processed_at: new Date().toISOString(),
+    ...(propagation.propagated
+      ? { _pipeline_processed_at: new Date().toISOString(), _pipeline_status: 'success' }
+      : { _pipeline_status: 'failed', _pipeline_last_error: propagation.reason || 'unknown' }),
     _pipeline_summary: {
       contacts_created: contactCount,
       tenant_created: tenantCount,
@@ -1044,12 +1047,16 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
  */
 export function hasSidebarData(metadata) {
   if (!metadata) return false;
-  if (metadata._pipeline_processed_at) return false; // Already processed
+  if (metadata._pipeline_processed_at && metadata._pipeline_status !== 'failed') return false; // Already processed (failed runs are retryable)
   return !!(
     metadata.contacts?.length ||
     metadata.sales_history?.length ||
     metadata.tenants?.length ||
     metadata.tenant_name ||
-    metadata.primary_tenant
+    metadata.primary_tenant ||
+    metadata.asking_price ||
+    metadata.square_footage ||
+    metadata.cap_rate ||
+    metadata.lease_expiration
   );
 }
