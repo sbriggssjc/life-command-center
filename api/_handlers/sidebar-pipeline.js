@@ -735,7 +735,19 @@ async function upsertDomainSales(domain, propertyId, metadata) {
     const procuringBrokerVal = buyerBroker?.name || null;
 
     const domainSaleFields = domain === 'government'
-      ? { sold_cap_rate: capRateVal, buyer: buyerVal, seller: sellerVal, purchasing_broker: procuringBrokerVal }
+      ? {
+          sold_cap_rate: capRateVal, buyer: buyerVal, seller: sellerVal, purchasing_broker: procuringBrokerVal,
+          guarantor: metadata.guarantor || null,
+          financing_type: sale.financing_type || null,
+          rent_escalations: metadata.rent_escalations || null,
+          renewal_options: metadata.renewal_options || null,
+          gross_rent: parseCurrency(metadata.annual_rent),
+          gross_rent_psf: parseCurrency(metadata.rent_per_sf),
+          comp_type: sale.comp_status || null,
+          transaction_type: sale.transaction_type || null,
+          days_on_market: parseIntSafe(metadata.days_on_market),
+          data_source: 'costar_sidebar',
+        }
       : { cap_rate: capRateVal, buyer_name: buyerVal, seller_name: sellerVal, procuring_broker: procuringBrokerVal };
 
     const saleData = stripNulls({
