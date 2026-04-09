@@ -1,7 +1,7 @@
 // ============================================================================
 // LCC Assistant — Side Panel Logic
 // Manages 4 tabs: Briefing, Search, Context, Chat
-// All API calls proxied through background.js service worker
+// API calls made directly via fetch (no background.js dependency)
 // ============================================================================
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -54,21 +54,44 @@ function touchColor(days) {
   return 'touch-red';
 }
 
-function apiCall(endpoint, body) {
+async function getLCCConfig() {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      { type: 'LCC_API_CALL', endpoint, body },
-      (response) => resolve(response || { ok: false, error: 'No response from background' })
-    );
+    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], resolve);
   });
 }
 
-function getPageContext() {
+async function apiCall(endpoint, body) {
+  try {
+    const config = await getLCCConfig();
+    const baseUrl = config.LCC_RAILWAY_URL;
+    const apiKey = config.LCC_API_KEY;
+
+    if (!baseUrl) {
+      return { ok: false, error: 'LCC URL not configured. Click ⚙ to open Settings.' };
+    }
+
+    const url = `${baseUrl.replace(/\/+$/, '')}${endpoint}`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['X-LCC-Key'] = apiKey;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body || {}),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    return { ok: false, error: `Network error: ${err.message}` };
+  }
+}
+
+async function getPageContext() {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      { type: 'GET_PAGE_CONTEXT' },
-      (response) => resolve(response)
-    );
+    chrome.storage.session.get(['pageContext'], (result) => {
+      resolve(result.pageContext || null);
+    });
   });
 }
 
@@ -103,24 +126,35 @@ function switchTab(tab) {
 // ── Settings ────────────────────────────────────────────────────────────────
 
 $('#openSettings').addEventListener('click', () => {
-  chrome.tabs.create({ url: 'settings.html' });
+  chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
 });
 
 // ── Connection check ────────────────────────────────────────────────────────
 
 async function checkConnection() {
   try {
-    const result = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'TEST_CONNECTION' }, resolve);
-    });
-    if (result && result.ok) {
+    const config = await getLCCConfig();
+    const baseUrl = config.LCC_RAILWAY_URL;
+    const apiKey = config.LCC_API_KEY;
+
+    if (!baseUrl) {
+      $('#statusDot').className = 'status-dot offline';
+      $('#statusText').textContent = 'Not configured — click ⚙';
+      return;
+    }
+
+    const headers = {};
+    if (apiKey) headers['X-LCC-Key'] = apiKey;
+
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/health`, { headers });
+    if (res.ok) {
       $('#statusDot').className = 'status-dot online';
       $('#statusText').textContent = 'Connected';
     } else {
       $('#statusDot').className = 'status-dot offline';
-      $('#statusText').textContent = result?.error || 'Offline';
+      $('#statusText').textContent = `Error ${res.status}`;
     }
-  } catch {
+  } catch (err) {
     $('#statusDot').className = 'status-dot offline';
     $('#statusText').textContent = 'LCC offline';
   }
