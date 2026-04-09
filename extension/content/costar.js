@@ -93,7 +93,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 8,
+        _version: 9,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -285,7 +285,7 @@
       const line = lines[i];
 
       // ── STOP at end-of-content sections ───────────────────────
-      if (/^(my\s+notes|sources\s+&\s+research|sale\s+comp\s+id)/i.test(line)) break;
+      if (/^(my\s+notes|sources|verification|sale\s+comp\s+id|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
 
       // ── Recorded Seller → entity name ─────────────────────────
       if (/^recorded\s+seller$/i.test(line)) {
@@ -361,6 +361,8 @@
       if (isURL(s) || isPhone(s) || isEmail(s)) return false;
       if (/^(no\s+|source:|add\s+notes|name$|united states)/i.test(s)) return false;
       if (/^[a-z]/.test(s)) return false; // must start with capital
+      // Reject page footer / CoStar chrome
+      if (/^(©|by\s+using|costar\s+(comp|group|est)|last\s+updated|report\s+an|publication|verification|all\s+rights|terms\s+of)/i.test(s)) return false;
       return true;
     }
 
@@ -371,8 +373,8 @@
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
 
-      // Stop at section boundaries
-      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources\s+&|sale\s+comp|comparable|recorded\s+(seller|buyer)|lender)/i.test(line)) break;
+      // Stop at section boundaries and page footer content
+      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources|verification|sale\s+comp|comparable|recorded\s+(seller|buyer)|lender|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
       // Stop at other contact section headers (but not sub-labels within)
       if (/^(seller|buyer\s+broker|listing\s+(broker|agent))$/i.test(line) && j > startIdx) break;
 

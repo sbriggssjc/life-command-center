@@ -348,7 +348,7 @@ async function loadPropertyTab() {
   // ── SECTION 4: Sales history from source ──────────────────────────
   const salesHistory = ctx?.sales_history || [];
   if (salesHistory.length) {
-    html += renderSalesHistory(salesHistory);
+    html += renderSalesHistory(salesHistory, ctx);
   }
 
   body.innerHTML = html;
@@ -634,15 +634,50 @@ function renderContacts(contacts) {
 
 // ── Sales history display ───────────────────────────────────────────────────
 
-function renderSalesHistory(sales) {
+function classifySale(sale, ctx) {
+  // Infer sale classification from available data
+  const tags = [];
+  const yearBuilt = parseInt(ctx?.year_built);
+  const saleYear = parseSaleYear(sale.sale_date);
+
+  if (yearBuilt && saleYear && saleYear < yearBuilt) {
+    tags.push('Pre-development (land sale)');
+  }
+  if (sale.transaction_type === 'Construction Loan' || /construction/i.test(sale.loan_type || '')) {
+    tags.push('Construction financing');
+  }
+  if (sale.sale_price && sale.sale_price !== 'Not Disclosed') {
+    const price = parseFloat(sale.sale_price.replace(/[$,]/g, ''));
+    const sqft = parseFloat((ctx?.square_footage || '').replace(/[^0-9.]/g, ''));
+    if (price && sqft && price / sqft < 50 && yearBuilt && saleYear && saleYear < yearBuilt) {
+      tags.push('Likely vacant land');
+    }
+  }
+  return tags;
+}
+
+function parseSaleYear(dateStr) {
+  if (!dateStr) return null;
+  // "2/28/2019" or "Mar 27, 2026"
+  const m = dateStr.match(/\d{4}/);
+  return m ? parseInt(m[0]) : null;
+}
+
+function renderSalesHistory(sales, ctx) {
   if (!sales.length) return '';
   let html = '<div class="section-label">Sales History</div>';
   for (const s of sales) {
+    const tags = classifySale(s, ctx);
     html += '<div class="sale-row">';
     html += '<div class="sale-row-header">';
     html += `<span class="sale-date">${escapeHtml(s.sale_date || '—')}</span>`;
     html += `<span class="sale-price">${escapeHtml(s.sale_price || s.asking_price || '—')}</span>`;
     html += '</div>';
+
+    // Classification tags (land sale, construction, etc.)
+    if (tags.length) {
+      html += `<div style="margin:2px 0;"><span style="background:#FEF3C7;color:#92400E;font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;">${tags.map((t) => escapeHtml(t)).join(' · ')}</span></div>`;
+    }
 
     // Transaction details line
     const details = [];
