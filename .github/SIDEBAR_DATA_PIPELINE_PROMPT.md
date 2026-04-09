@@ -65,16 +65,28 @@ POST /api/entities?action=link
   // ── Building details ──────────────────────────────────────────
   "building_class": "A",
   "year_built": "2019",
+  "year_renovated": "2023",              // if renovated
+  "construction_start": "Jan 2019",
   "square_footage": "8,750 SF",
-  "lot_size": "0.54 AC",                 // or "23,653 SF"
+  "typical_floor_sf": "8,750 SF",
+  "lot_size": "0.54 AC",
+  "land_sf": "23,544 SF",               // separate from acres
+  "far": "0.37",                         // floor area ratio
   "stories": "1",
   "parking": "2.28/1,000 SF",
   "zoning": "CA",
   "occupancy": "100%",
   "ownership_type": "Company Or Corporation",
+  "location_type": "Urban",              // Urban, Suburban, Rural, CBD
+  "building_name": "Fresenius Medical Care",
+  "property_subtype": "Medical Office",  // parsed from submarket line
+  "days_on_market": "102 days",
+  "comp_status": "In Progress",          // or "Confirmed"
+  "price_status": "Full Value",
 
   // ── Public records ────────────────────────────────────────────
   "parcel_number": "31-29-22-23-0096",
+  "county": "Ramsey",
   "assessed_value": "$3,122,800",
   "land_value": "$283,600",
   "improvement_value": "$2,839,200",
@@ -88,6 +100,23 @@ POST /api/entities?action=link
   "lease_expiration": "12/31/2029",
   "rent_per_sf": "$22.00",
   "annual_rent": "$192,500",
+  "expense_structure": "NNN",            // NNN, Full Service, Modified Gross
+  "renewal_options": "2 x 5 Year",
+  "guarantor": "Parent Corp LLC",
+  "rent_escalations": "2% Annual",
+  "lease_commencement": "Jan 2019",
+  "sf_leased": "8,750",
+
+  // ── Market data (from "Market at Sale" section) ───────────────
+  "subject_vacancy": "0.0%",
+  "submarket_vacancy": "4.5%",
+  "market_vacancy": "11.8%",
+  "subject_rent_psf": "$21.92/SF",
+  "market_rent_psf": "$26.04/SF",
+  "submarket_12mo_leased": "312,519 SF",
+  "submarket_avg_months_on_market": "18.2",
+  "submarket_12mo_sales_volume": "$4.62M",
+  "market_sale_price_psf": "$130/SF",
 
   // ── Tenants array ────────────────────────────────────────────
   // Each entry is a tenant occupying space in the property.
