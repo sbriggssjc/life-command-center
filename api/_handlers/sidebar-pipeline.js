@@ -615,6 +615,9 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   results.records.owners = ownerResults.owners;
   results.records.history = ownerResults.history;
 
+  // Step 5e: Upsert leases (dialysis only — gov skipped for now)
+  results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
+
   return { propagated: true, ...results };
 }
 
@@ -953,6 +956,91 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
   }
 
   return results;
+}
+
+// ── Step 5e: Upsert leases (dialysis only) ────────────────────────────────
+
+/**
+ * Upsert lease records in the domain database.
+ * Builds one lease record per tenant from metadata.tenants[].
+ * Falls back to a single record from top-level fields if tenants[] is empty.
+ * Deduplicates by property_id + tenant (case-insensitive).
+ * Skips government domain (not yet supported).
+ */
+async function upsertDomainLeases(domain, propertyId, metadata) {
+  // Domain guard — only dialysis for now
+  if (domain !== 'dialysis') return 0;
+
+  const tenants = metadata.tenants;
+  let leaseRecords = [];
+
+  if (Array.isArray(tenants) && tenants.length > 0) {
+    // Build one lease record per tenant entry
+    for (const t of tenants) {
+      if (!t.name) continue;
+      leaseRecords.push({
+        property_id: propertyId,
+        tenant: t.name,
+        leased_area: parseSF(t.sf || metadata.sf_leased),
+        lease_start: parseDate(t.lease_start || metadata.lease_commencement),
+        lease_expiration: parseDate(t.lease_expiration || metadata.lease_expiration),
+        expense_structure: t.lease_type || metadata.expense_structure || metadata.lease_type,
+        rent_per_sf: parseCurrency(t.rent_per_sf || metadata.rent_per_sf),
+        annual_rent: parseCurrency(metadata.annual_rent),
+        renewal_options: metadata.renewal_options || null,
+        guarantor: metadata.guarantor || null,
+        status: 'active',
+        is_active: true,
+      });
+    }
+  } else {
+    // Fallback: single lease from top-level metadata fields
+    const tenantName = metadata.tenant_name || metadata.primary_tenant;
+    if (!tenantName) return 0;
+
+    leaseRecords.push({
+      property_id: propertyId,
+      tenant: tenantName,
+      leased_area: parseSF(metadata.sf_leased || metadata.square_footage),
+      lease_start: parseDate(metadata.lease_commencement),
+      lease_expiration: parseDate(metadata.lease_expiration),
+      expense_structure: metadata.expense_structure || metadata.lease_type,
+      rent_per_sf: parseCurrency(metadata.rent_per_sf),
+      annual_rent: parseCurrency(metadata.annual_rent),
+      renewal_options: metadata.renewal_options || null,
+      guarantor: metadata.guarantor || null,
+      status: 'active',
+      is_active: true,
+    });
+  }
+
+  let count = 0;
+  for (const record of leaseRecords) {
+    const cleaned = stripNulls(record);
+    // Always keep property_id, status, is_active even if they'd survive stripNulls
+    cleaned.property_id = propertyId;
+    cleaned.status = 'active';
+    cleaned.is_active = true;
+
+    // Dedup: look up existing lease by property_id + tenant (case-insensitive)
+    const encodedTenant = encodeURIComponent(record.tenant);
+    const lookup = await domainQuery(domain, 'GET',
+      `leases?property_id=eq.${propertyId}&tenant=ilike.${encodedTenant}&select=id&limit=1`
+    );
+
+    if (lookup.ok && lookup.data?.length) {
+      // PATCH existing lease
+      const { property_id: _pid, ...patchData } = cleaned;
+      await domainQuery(domain, 'PATCH',
+        `leases?id=eq.${lookup.data[0].id}`, patchData);
+    } else {
+      // INSERT new lease
+      const result = await domainQuery(domain, 'POST', 'leases', cleaned);
+      if (result.ok) count++;
+    }
+  }
+
+  return count;
 }
 
 // ── Main pipeline entry point ───────────────────────────────────────────────
