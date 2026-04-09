@@ -50,10 +50,10 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status !== 'complete') return;
   const hint = detectDomainHint(tab.url);
   if (hint) {
-    chrome.action.setBadgeText({ text: hint.badge, tabId });
-    chrome.action.setBadgeBackgroundColor({ color: '#1F3864', tabId });
+    chrome.action.setBadgeText({ text: hint.badge, tabId }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: '#1F3864', tabId }).catch(() => {});
   } else {
-    chrome.action.setBadgeText({ text: '', tabId });
+    chrome.action.setBadgeText({ text: '', tabId }).catch(() => {});
   }
 });
 
@@ -62,10 +62,10 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const tab = await chrome.tabs.get(activeInfo.tabId);
     const hint = detectDomainHint(tab.url);
     if (hint) {
-      chrome.action.setBadgeText({ text: hint.badge, tabId: tab.id });
-      chrome.action.setBadgeBackgroundColor({ color: '#1F3864', tabId: tab.id });
+      await chrome.action.setBadgeText({ text: hint.badge, tabId: tab.id });
+      await chrome.action.setBadgeBackgroundColor({ color: '#1F3864', tabId: tab.id });
     } else {
-      chrome.action.setBadgeText({ text: '', tabId: tab.id });
+      await chrome.action.setBadgeText({ text: '', tabId: tab.id });
     }
   } catch {
     // Tab may have been closed
