@@ -339,7 +339,13 @@ async function loadPropertyTab() {
     html += renderAssessorFields(ctx);
   }
 
-  // ── SECTION 3: Contacts from source ───────────────────────────────
+  // ── SECTION 3: Tenants from source ──────────────────────────────
+  const tenants = ctx?.tenants || [];
+  if (tenants.length) {
+    html += renderTenants(tenants, ctx);
+  }
+
+  // ── SECTION 4: Contacts from source ───────────────────────────────
   const contacts = ctx?.contacts || [];
   if (contacts.length) {
     html += renderContacts(contacts);
@@ -470,6 +476,15 @@ function wirePropertyActions(ctx, lccEntity) {
         assessed_value: ctx.assessed_value || null,
         land_value: ctx.land_value || null,
         improvement_value: ctx.improvement_value || null,
+        tenancy_type: ctx.tenancy_type || null,
+        owner_occupied: ctx.owner_occupied || null,
+        est_rent: ctx.est_rent || null,
+        lease_type: ctx.lease_type || null,
+        lease_term: ctx.lease_term || null,
+        lease_expiration: ctx.lease_expiration || null,
+        rent_per_sf: ctx.rent_per_sf || null,
+        annual_rent: ctx.annual_rent || null,
+        tenants: ctx.tenants || [],
         contacts: ctx.contacts || [],
         sales_history: ctx.sales_history || [],
       };
@@ -666,6 +681,42 @@ function renderRelatedLccData(responseData, lccEntity) {
 }
 
 // ── Contacts display ────────────────────────────────────────────────────────
+
+function renderTenants(tenants, ctx) {
+  if (!tenants.length) return '';
+  let html = '<div class="section-label">Tenants</div>';
+
+  // Show tenancy summary fields if available
+  const summaryFields = [];
+  if (ctx?.tenancy_type) summaryFields.push(`Tenancy: ${ctx.tenancy_type}`);
+  if (ctx?.owner_occupied) summaryFields.push(`Owner Occupied: ${ctx.owner_occupied}`);
+  if (ctx?.est_rent) summaryFields.push(`Est. Rent: ${ctx.est_rent}`);
+  if (ctx?.lease_type) summaryFields.push(`Lease Type: ${ctx.lease_type}`);
+  if (ctx?.lease_term) summaryFields.push(`Term: ${ctx.lease_term}`);
+  if (ctx?.lease_expiration) summaryFields.push(`Expires: ${ctx.lease_expiration}`);
+  if (ctx?.annual_rent) summaryFields.push(`Annual Rent: ${ctx.annual_rent}`);
+  if (ctx?.rent_per_sf) summaryFields.push(`Rent/SF: ${ctx.rent_per_sf}`);
+  if (summaryFields.length) {
+    html += `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${summaryFields.map((f) => escapeHtml(f)).join(' · ')}</div>`;
+  }
+
+  for (const t of tenants) {
+    html += '<div class="contact-card">';
+    html += `<div class="contact-name">${escapeHtml(t.name || '')}</div>`;
+    const details = [];
+    if (t.sf) details.push(t.sf);
+    if (t.location) details.push(t.location);
+    if (t.lease_type) details.push(t.lease_type);
+    if (t.rent_per_sf) details.push(`${t.rent_per_sf}/SF`);
+    if (t.lease_start && t.lease_expiration) details.push(`${t.lease_start} — ${t.lease_expiration}`);
+    else if (t.lease_expiration) details.push(`Exp: ${t.lease_expiration}`);
+    if (details.length) {
+      html += `<div class="contact-detail">${details.map((d) => escapeHtml(d)).join(' · ')}</div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
 
 function renderContacts(contacts) {
   if (!contacts.length) return '';

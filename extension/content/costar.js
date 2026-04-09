@@ -13,7 +13,7 @@
   let extractionTimer = null;
 
   // Accumulated data: merges across CoStar tab switches and popups
-  let accumulated = { contacts: [], sales_history: [] };
+  let accumulated = { contacts: [], sales_history: [], tenants: [] };
 
   const observer = new MutationObserver(() => {
     clearTimeout(extractionTimer);
@@ -77,6 +77,7 @@
     const data = extractFields(lines);
     const contacts = extractContacts(lines);
     const salesHistory = extractSalesHistory(lines);
+    const tenants = extractTenants(lines);
     const location = findLocationInLines(lines);
 
     // Merge new data into accumulated (preserves data from prior tab views)
@@ -85,6 +86,7 @@
     }
     mergeContacts(accumulated.contacts, contacts);
     mergeSales(accumulated.sales_history, salesHistory);
+    mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
     if (location.state) accumulated.state = location.state;
 
@@ -93,7 +95,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 10,
+        _version: 11,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -101,6 +103,7 @@
         ...accumulated,
         contacts: accumulated.contacts,
         sales_history: accumulated.sales_history,
+        tenants: accumulated.tenants,
       },
     });
 
@@ -123,6 +126,13 @@
         e.buyer === s.buyer && e.seller === s.seller
       );
       if (!dup) existing.push(s);
+    }
+  }
+
+  function mergeTenants(existing, newTenants) {
+    for (const t of newTenants) {
+      const dup = existing.some((e) => e.name === t.name);
+      if (!dup) existing.push(t);
     }
   }
 
@@ -269,9 +279,144 @@
       if (!data.ownership_type && /^ownership\s+type$/i.test(line) && next) {
         data.ownership_type = next;
       }
+
+      // ── Tenant / Lease fields ─────────────────────────────────
+      if (!data.tenancy_type && /^tenancy$/i.test(line)) {
+        if (next && next.length < 30) data.tenancy_type = next;
+      }
+
+      if (!data.owner_occupied && /^owner\s+occup(ied)?$/i.test(line)) {
+        if (next && /^(yes|no)$/i.test(next)) data.owner_occupied = next;
+      }
+
+      if (!data.est_rent && /^costar\s+est\.?\s+rent$/i.test(line)) {
+        if (next && next.length < 40) data.est_rent = next;
+      }
+
+      if (!data.lease_type && /^lease\s+type$/i.test(line)) {
+        if (next && next.length < 40) data.lease_type = next;
+      }
+
+      if (!data.lease_term && /^lease\s+term$/i.test(line)) {
+        if (next && next.length < 40) data.lease_term = next;
+      }
+
+      if (!data.lease_expiration && /^lease\s+expir(ation|es)$/i.test(line)) {
+        if (next && next.length < 30) data.lease_expiration = next;
+      }
+
+      if (!data.rent_per_sf && /^rent\/?sf$/i.test(line)) {
+        if (next && /^\$?[\d,.]+/.test(next)) data.rent_per_sf = next;
+      }
+
+      if (!data.annual_rent && /^annual\s+rent$/i.test(line)) {
+        if (next && /^\$?[\d,.]+/.test(next)) data.annual_rent = next;
+      }
     }
 
     return data;
+  }
+
+  // ── Tenant extraction ──────────────────────────────────────────────────
+  //
+  // Parses tenant data from:
+  //   "Tenants at Sale" section: Name, SF, lease dates
+  //   "Tenants" / "Tenant Detail" tabs: more detailed lease info
+  //   "Stacking Plan" tabs: floor-by-floor tenant breakdown
+
+  function extractTenants(lines) {
+    const tenants = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // ── "Tenants at Sale" section ─────────────────────────────
+      if (/^tenants?\s+at\s+sale$/i.test(line)) {
+        parseTenantSection(lines, i + 1, tenants);
+        continue;
+      }
+
+      // ── "Tenant Detail" or "Tenants" section on lease tab ─────
+      if (/^tenant\s+detail$/i.test(line) || /^tenants?$/i.test(line)) {
+        // Make sure this isn't "Tenancy" (building field) — must be standalone
+        if (/^tenants?$/i.test(line) && i + 1 < lines.length) {
+          const next = lines[i + 1];
+          // If next line is a short value like "Single", this is the building field
+          if (next && /^(single|multi|none)$/i.test(next)) continue;
+        }
+        parseTenantSection(lines, i + 1, tenants);
+        continue;
+      }
+
+      // ── Stacking plan entries ─────────────────────────────────
+      // Format: "Floor X" then tenant names with SF
+      if (/^(suite|floor|unit)\s+/i.test(line)) {
+        const next = i + 1 < lines.length ? lines[i + 1] : '';
+        if (next && next.length > 2 && next.length < 80 && !/^(suite|floor|unit)\s/i.test(next)) {
+          const tenant = { name: next, location: line };
+          // Look for SF on the line after name
+          const sfLine = i + 2 < lines.length ? lines[i + 2] : '';
+          if (/^[\d,]+\s*sf/i.test(sfLine)) tenant.sf = sfLine;
+          else if (/^[\d,]+$/.test(sfLine)) tenant.sf = sfLine + ' SF';
+          if (!tenants.some((t) => t.name === tenant.name)) tenants.push(tenant);
+        }
+      }
+    }
+
+    return tenants;
+  }
+
+  function parseTenantSection(lines, startIdx, tenants) {
+    let current = null;
+
+    for (let j = startIdx; j < lines.length; j++) {
+      const line = lines[j];
+
+      // Stop at next major section
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©)/i.test(line)) break;
+
+      // Skip headers
+      if (/^(name|source:|costar\s+research)$/i.test(line)) continue;
+
+      // SF value (often follows tenant name): "8,750" or "8,750 SF"
+      if (/^[\d,]+(\s*sf)?$/i.test(line)) {
+        if (current) current.sf = line.replace(/\s*sf\s*$/i, '').trim() + ' SF';
+        continue;
+      }
+
+      // Lease dates
+      if (/^lease\s+(start|commenced?)$/i.test(line) && lines[j + 1]) {
+        if (current) current.lease_start = lines[j + 1];
+        j++; continue;
+      }
+      if (/^lease\s+expir(ation|es)$/i.test(line) && lines[j + 1]) {
+        if (current) current.lease_expiration = lines[j + 1];
+        j++; continue;
+      }
+      if (/^lease\s+(type|term)$/i.test(line) && lines[j + 1]) {
+        if (current) current.lease_type = lines[j + 1];
+        j++; continue;
+      }
+      if (/^rent\/?sf$/i.test(line) && lines[j + 1]) {
+        if (current) current.rent_per_sf = lines[j + 1];
+        j++; continue;
+      }
+
+      // Tenant name: anything else that's a reasonable-length text line
+      if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
+          !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line)) {
+        // Push previous tenant
+        if (current && current.name) {
+          if (!tenants.some((t) => t.name === current.name)) tenants.push(current);
+        }
+        current = { name: line };
+        continue;
+      }
+    }
+
+    if (current && current.name) {
+      if (!tenants.some((t) => t.name === current.name)) tenants.push(current);
+    }
   }
 
   // ── Contact extraction ────────────────────────────────────────────────
