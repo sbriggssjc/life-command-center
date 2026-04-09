@@ -5317,25 +5317,46 @@ function _diaPropsFilters() {
   return { filter: filter, filter2: filter2 };
 }
 
-// Background-load summary stats (states, avg SF) without blocking page render
+// Background-load summary stats (states, avg SF) via lightweight aggregate queries.
+// Two parallel single-column queries instead of fetching all 11k rows:
+//   1) state column (non-null only) — deduplicate client-side for distinct count
+//   2) building_sf column (> 0 only) — compute avg from the filtered subset
 async function _loadDiaPropertiesSummary() {
   if (diaPropertiesSummary) return;
   try {
-    var rows = await diaQueryAll('properties', 'state,building_sf', {});
+    // Run two focused queries in parallel — much lighter than SELECT state, building_sf FROM all rows
+    var results = await Promise.all([
+      diaQueryAll('properties', 'state', { filter: 'state=not.is.null' }),
+      diaQueryAll('properties', 'building_sf', { filter: 'building_sf=gt.0' })
+    ]);
+    var stateRows = results[0];
+    var sfRows = results[1];
+
+    // If both queries returned nothing, likely a transient error — don't cache so we can retry
+    if (stateRows.length === 0 && sfRows.length === 0) {
+      console.warn('Properties summary: both queries returned 0 rows, will retry on next render');
+      return;
+    }
+
+    // Extract unique states
     var states = [];
     var seen = {};
-    for (var i = 0; i < rows.length; i++) {
-      var st = rows[i].state;
+    for (var i = 0; i < stateRows.length; i++) {
+      var st = stateRows[i].state;
       if (st && !seen[st]) { seen[st] = true; states.push(st); }
     }
     states.sort();
-    var withSFCount = 0, sfSum = 0;
-    for (var j = 0; j < rows.length; j++) {
-      var sf = parseFloat(rows[j].building_sf);
-      if (sf > 0) { withSFCount++; sfSum += sf; }
+
+    // Compute avg SF from pre-filtered rows (only rows with building_sf > 0)
+    var withSFCount = sfRows.length;
+    var sfSum = 0;
+    for (var j = 0; j < sfRows.length; j++) {
+      sfSum += parseFloat(sfRows[j].building_sf);
     }
     var avgSF = withSFCount > 0 ? Math.round(sfSum / withSFCount) : 0;
-    diaPropertiesSummary = { states: states, withSFCount: withSFCount, avgSF: avgSF, total: rows.length };
+
+    diaPropertiesSummary = { states: states, withSFCount: withSFCount, avgSF: avgSF, total: stateRows.length };
+
     // Update DOM in-place without full re-render
     var statesValEl = document.getElementById('diaPropStatesValue');
     var statesSubEl = document.getElementById('diaPropStatesSub');
