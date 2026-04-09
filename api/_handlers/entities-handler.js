@@ -418,7 +418,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     }
 
     // Create entity
-    const { entity_type, name, domain: entityDomain, ...fields } = req.body || {};
+    const { entity_type, name, domain: entityDomain, metadata, ...fields } = req.body || {};
 
     if (!entity_type || !isValidEnum(entity_type, ENTITY_TYPES)) {
       return res.status(400).json({ error: `entity_type must be one of: ${ENTITY_TYPES.join(', ')}` });
@@ -441,6 +441,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       canonical_name,
       domain: entityDomain || null,
       created_by: user.id,
+      metadata: metadata || {},
       ...pickEntityFields(entity_type, fields)
     };
 
