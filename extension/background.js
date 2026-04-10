@@ -146,8 +146,38 @@ async function testConnection() {
 
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg.type === 'CONTEXT_DETECTED') {
-    // Store detected page context for the sidepanel to read
-    chrome.storage.session.set({ pageContext: msg.data });
+    // Merge detected page context with any existing context for the same
+    // property, so tenant/sales data captured on one CoStar sub-tab (e.g.
+    // main detail) isn't overwritten when the user switches to Contacts or
+    // Public Records and that tab emits a fresh CONTEXT_DETECTED.
+    chrome.storage.session.get(['pageContext'], (result) => {
+      const existing = result.pageContext || {};
+      const incoming = msg.data || {};
+
+      const sameProperty = existing.address &&
+        existing.address === incoming.address;
+
+      let merged = incoming;
+      if (sameProperty) {
+        // Preserve tenants from either source, dedupe by name
+        const mergedTenants = [...(existing.tenants || [])];
+        for (const t of (incoming.tenants || [])) {
+          if (!mergedTenants.some(e => e.name === t.name)) {
+            mergedTenants.push(t);
+          }
+        }
+        // Keep tenant_name / primary_tenant if existing has it and incoming doesn't
+        merged = {
+          ...existing,
+          ...incoming,
+          tenants: mergedTenants,
+          tenant_name: incoming.tenant_name || existing.tenant_name || null,
+          primary_tenant: incoming.primary_tenant || existing.primary_tenant || null,
+        };
+      }
+
+      chrome.storage.session.set({ pageContext: merged });
+    });
     respond({ ok: true });
     return false;
   }
