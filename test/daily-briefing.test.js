@@ -336,4 +336,102 @@ describe('daily briefing snapshot endpoint', () => {
     assert.equal(gmi.highlights[0].category, 'dialysis');
     assert.equal(gmi.highlights[1].category, 'government');
   });
+
+  it('still returns 200 with valid JSON when context_packets write fails', async () => {
+    const capturedErrors = [];
+    const originalConsoleError = console.error;
+    console.error = (...args) => { capturedErrors.push(args); };
+
+    global.fetch = async (url, opts = {}) => {
+      const target = String(url);
+      const method = opts.method || 'GET';
+
+      if (target === 'https://morning.example.com/structured.json') {
+        return jsonResponse({
+          source_system: 'morning_briefing',
+          summary: 'Market summary available.',
+          highlights: [],
+          sector_signals: [],
+          watchlist: [],
+          source_links: []
+        });
+      }
+      if (target === 'https://morning.example.com/briefing.html') {
+        return textResponse('<div>html</div>');
+      }
+
+      // Simulate the production error: context_packets write fails.
+      if (target.includes('/rest/v1/context_packets') && method === 'POST') {
+        return jsonResponse({ message: 'insert failed: permission denied' }, false, 500);
+      }
+      // Also simulate signals write failure to verify that guard too.
+      if (target.includes('/rest/v1/signals') && method === 'POST') {
+        return jsonResponse({ message: 'insert failed: permission denied' }, false, 500);
+      }
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-4',
+          email: 'dev@example.com',
+          display_name: 'Dev User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'operator', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      if (target.includes('/rest/v1/mv_work_counts?workspace_id=eq.ws-1')) return jsonResponse([{}]);
+      if (target.includes('/rest/v1/mv_user_work_counts?workspace_id=eq.ws-1&user_id=eq.user-4')) return jsonResponse([{}]);
+      if (target.includes('/rest/v1/v_my_work?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/v_inbox_triage?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/inbox_items?workspace_id=eq.ws-1&status=eq.new')) return jsonResponse([], true, 200, { 'content-range': '*/0' });
+      if (target.includes('/rest/v1/inbox_items?workspace_id=eq.ws-1&status=eq.triaged')) return jsonResponse([], true, 200, { 'content-range': '*/0' });
+      if (target.includes('/rest/v1/v_unassigned_work?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/connector_accounts?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/sync_jobs?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/sync_errors?workspace_id=eq.ws-1')) return jsonResponse([]);
+      if (target.includes('/rest/v1/inbox_items?workspace_id=eq.ws-1&source_type=eq.sf_task')) return jsonResponse([], true, 200, { 'content-range': '*/0' });
+
+      throw new Error(`Unexpected fetch: ${method} ${target}`);
+    };
+
+    try {
+      const handler = await loadHandler();
+      const req = {
+        method: 'GET',
+        query: { action: 'snapshot', role_view: 'broker' },
+        headers: { 'x-lcc-user-id': 'user-4', 'x-lcc-workspace': 'ws-1' }
+      };
+      const res = mockRes();
+
+      await handler(req, res);
+
+      // Give fire-and-forget writes time to settle so their .catch handlers run.
+      // opsQuery -> fetchWithTimeout -> fetch is multi-tick async, so drain
+      // several task queue turns before asserting.
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      // Endpoint still returns 200 with a valid briefing payload.
+      assert.equal(res._status, 200);
+      assert.ok(res._json, 'response json should be defined');
+      assert.equal(res._json.role_view, 'broker');
+      assert.ok(res._json.daily_briefing_packet, 'briefing packet should still be present in response');
+      assert.equal(res._json.daily_briefing_packet.packet_type, 'daily_briefing');
+
+      // Response must be serializable as valid JSON.
+      const serialized = JSON.stringify(res._json);
+      assert.ok(serialized.length > 0);
+      const reparsed = JSON.parse(serialized);
+      assert.equal(reparsed.role_view, 'broker');
+
+      // Write failure was logged with the required prefix.
+      const flatErrors = capturedErrors.map((args) => args.map(String).join(' ')).join('\n');
+      assert.ok(
+        flatErrors.includes('[Briefing write error]'),
+        `expected "[Briefing write error]" log prefix, got:\n${flatErrors}`
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
 });
