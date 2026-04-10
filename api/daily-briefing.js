@@ -858,13 +858,29 @@ function inferDomain(item) {
 function buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, diaPipeline) {
   const govHighlights = [];
   const diaHighlights = [];
+  const seenGov = new Set();
+  const seenDia = new Set();
+
+  const keyFor = (item) =>
+    item.id ||
+    item.external_id ||
+    item.task_id ||
+    (item.title ? String(item.title).trim().toLowerCase() : null);
 
   // 1. Keyword-inferred domain matching from OPS items
   const allOpsItems = [...(myWork || []), ...(inboxSummary.items || [])];
   for (const item of allOpsItems) {
     const domain = inferDomain(item);
-    if (domain === 'government') govHighlights.push(item.title || '(Untitled)');
-    if (domain === 'dialysis') diaHighlights.push(item.title || '(Untitled)');
+    const k = keyFor(item);
+    const title = item.title || '(Untitled)';
+    if (domain === 'government' && k && !seenGov.has(k)) {
+      seenGov.add(k);
+      govHighlights.push(title);
+    }
+    if (domain === 'dialysis' && k && !seenDia.has(k)) {
+      seenDia.add(k);
+      diaHighlights.push(title);
+    }
   }
 
   // 2. GOV highlights from hot contacts (already fetched from GOV Supabase)
