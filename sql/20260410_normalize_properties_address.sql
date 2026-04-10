@@ -99,7 +99,8 @@ DECLARE
   has_annual_rent boolean;
   has_fk_unique   boolean;
   uc              RECORD;
-  match_clause    text;
+  partition_cols  text;
+  select_extra    text;
 BEGIN
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
@@ -174,14 +175,30 @@ BEGIN
     CROSS JOIN LATERAL generate_series(2, array_length(grp.ids, 1)) AS k;
 
   -- Batch-merge medicare_id / lease fields from older into target.
+  --
+  -- medicare_id has a UNIQUE constraint on dialysis, so we can't just
+  -- copy it from older to target in one UPDATE — the older row still
+  -- holds the value when the target row is written, producing
+  -- 23505 duplicate key. Three-step: capture older values into a
+  -- temp, clear older's medicare_id, then set target's.
   IF has_medicare THEN
+    DROP TABLE IF EXISTS merge_medicare;
+    CREATE TEMP TABLE merge_medicare ON COMMIT DROP AS
+    SELECT dp.target_id, old.medicare_id
+      FROM dup_pairs dp
+      JOIN properties old ON old.property_id::text = dp.older_id
+     WHERE old.medicare_id IS NOT NULL;
+
+    UPDATE properties
+       SET medicare_id = NULL
+     WHERE property_id::text IN (SELECT older_id FROM dup_pairs)
+       AND medicare_id IS NOT NULL;
+
     UPDATE properties tgt
-       SET medicare_id = old.medicare_id
-      FROM properties old
-      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
-     WHERE tgt.property_id::text = dp.target_id
-       AND tgt.medicare_id IS NULL
-       AND old.medicare_id IS NOT NULL;
+       SET medicare_id = mm.medicare_id
+      FROM merge_medicare mm
+     WHERE tgt.property_id::text = mm.target_id
+       AND tgt.medicare_id IS NULL;
   END IF;
 
   IF has_lease_exp THEN
@@ -269,38 +286,55 @@ BEGIN
             CONTINUE;
           END IF;
 
-          SELECT string_agg(
-                   format('other.%I = child.%I', c, c),
-                   ' AND '
-                 )
-            INTO match_clause
-            FROM unnest(uc.cols) AS c
-           WHERE c <> child_fk;
+          -- Build a comma-separated list of the constraint's non-FK
+          -- columns, both as bare identifiers (for PARTITION BY on the
+          -- CTE's output) and as c.<col> (for the CTE's SELECT list).
+          SELECT string_agg(format('%I',    col), ', '),
+                 string_agg(format('c.%I',  col), ', ')
+            INTO partition_cols, select_extra
+            FROM unnest(uc.cols) AS col
+           WHERE col <> child_fk;
 
-          IF match_clause IS NULL THEN
-            EXECUTE format(
-              'DELETE FROM %I AS child '
-              ' USING dup_pairs dp '
-              ' WHERE child.%I::text = dp.older_id '
-              '   AND EXISTS ('
-              '     SELECT 1 FROM %I AS other '
-              '      WHERE other.%I::text = dp.target_id'
-              '   )',
-              child_table, child_fk, child_table, child_fk
-            );
-          ELSE
-            EXECUTE format(
-              'DELETE FROM %I AS child '
-              ' USING dup_pairs dp '
-              ' WHERE child.%I::text = dp.older_id '
-              '   AND EXISTS ('
-              '     SELECT 1 FROM %I AS other '
-              '      WHERE other.%I::text = dp.target_id '
-              '        AND %s'
-              '   )',
-              child_table, child_fk, child_table, child_fk, match_clause
-            );
-          END IF;
+          -- Ranked-partition DELETE. For every row in the child that
+          -- belongs to a dup pair (either the older or the target
+          -- side), compute an "effective target" — the row's target
+          -- if it's on the older side of a dup pair, or its own
+          -- property_id otherwise — and rank rows within each
+          -- (eff_target, non-FK constraint cols) bucket. Target rows
+          -- sort first so they always win; only rn = 1 per bucket
+          -- survives. This handles both the older-vs-target collision
+          -- (e.g. both hold a 2013 property_financials row) AND the
+          -- within-older collision (two olders both hold a 2013 row
+          -- with no target row — only one can be kept).
+          --
+          -- Without this, the subsequent batched UPDATE would fail
+          -- with 23505 on the second older of a within-older pair.
+          EXECUTE format(
+            'WITH involved AS ( '
+            '  SELECT c.ctid, '
+            '         COALESCE(dp.target_id, c.%1$I::text) AS eff_target, '
+            '         (dp.target_id IS NULL) AS is_target_row%2$s '
+            '    FROM %3$I c '
+            '    LEFT JOIN dup_pairs dp ON dp.older_id = c.%1$I::text '
+            '   WHERE c.%1$I::text IN (SELECT older_id  FROM dup_pairs) '
+            '      OR c.%1$I::text IN (SELECT target_id FROM dup_pairs) '
+            '), '
+            'ranked AS ( '
+            '  SELECT ctid, '
+            '         row_number() OVER ( '
+            '           PARTITION BY %4$s '
+            '           ORDER BY is_target_row DESC, ctid '
+            '         ) AS rn '
+            '    FROM involved '
+            ') '
+            'DELETE FROM %3$I '
+            ' WHERE ctid IN (SELECT ctid FROM ranked WHERE rn > 1)',
+            child_fk,
+            CASE WHEN select_extra   IS NULL THEN '' ELSE ', ' || select_extra   END,
+            child_table,
+            CASE WHEN partition_cols IS NULL THEN 'eff_target'
+                                             ELSE 'eff_target, ' || partition_cols END
+          );
         END LOOP;
       END IF;
 
