@@ -300,11 +300,16 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
       return res.status(200).json({ emails: [], total, limit, offset, error: 'db_query_failed' });
     }
 
-    // Map inbox_items fields to the email format the frontend expects
+    // Map inbox_items fields to the email format the frontend expects.
+    // Surface both stable ids at the top level so outlookLinks() can build
+    // a desktop deeplink without reaching into metadata:
+    //   - internet_message_id: RFC 5322 Message-ID, stable across folder moves
+    //   - graph_rest_id: Graph REST id, works until the message is moved
     const emails = (result.data || []).map(item => ({
       id: item.id,
       external_id: item.external_id,
-      internet_message_id: item.internet_message_id,
+      internet_message_id: item.internet_message_id || item.metadata?.internet_message_id || null,
+      graph_rest_id: item.metadata?.graph_rest_id || null,
       subject: item.title,
       body_preview: item.body,
       sender_name: item.metadata?.sender_name || null,
@@ -316,7 +321,8 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
       web_link: item.external_url,
       outlook_link: item.external_url,
       status: item.status,
-      flag_removed_at: item.flag_removed_at
+      flag_removed_at: item.flag_removed_at,
+      metadata: item.metadata || null
     }));
 
     return res.status(200).json({ emails, total, limit, offset });

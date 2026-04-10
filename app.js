@@ -296,29 +296,106 @@ function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replac
 // Safe URL for href attributes — blocks javascript: and data: schemes
 function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
 
-// Build a reliable Outlook deep-link for a specific email.
-// Priority: Graph webLink (stable) → REST id deeplink → internet_message_id fallback.
-// Graph REST IDs change when emails move between folders, so we prefer the
-// canonical webLink provided by the Graph API which survives folder moves.
-function outlookWebLink(email) {
-  // 1. Prefer Graph-supplied webLink / external_url — most reliable, survives moves.
-  //    Normalise legacy OWA domain but keep deep-link params intact.
-  const raw = email.external_url || email.web_link || email.outlook_link || '';
-  if (raw) {
-    return raw.replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/');
-  }
-  // 2. Fall back to Graph REST id deeplink (breaks if email is moved).
-  const restId = email.id || email.email_id || (email.metadata && email.metadata.graph_rest_id) || '';
-  if (restId) {
-    return `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(restId)}`;
-  }
-  // 3. Last resort: internet_message_id search (least reliable)
-  const inetId = email.internet_message_id || (email.metadata && email.metadata.internet_message_id) || '';
+// Build both desktop (ms-outlook:) and web fallback links for an email.
+// Prefer internet_message_id (stable across folder moves) over graph rest id.
+// Graph REST IDs change when emails move between folders, so they are not
+// safe to deep-link against; the Message-ID header is.
+function outlookLinks(email) {
+  if (!email) return { desktop: '', web: '' };
+
+  const meta = email.metadata || {};
+  const inetId =
+    email.internet_message_id ||
+    meta.internet_message_id ||
+    meta.message_id ||
+    '';
+  const restId =
+    meta.graph_rest_id ||
+    email.graph_rest_id ||
+    email.id ||
+    email.email_id ||
+    '';
+  const rawWeb =
+    email.web_link ||
+    email.external_url ||
+    email.outlook_link ||
+    '';
+
+  // ---- Desktop (ms-outlook: protocol) ----
+  // Outlook Desktop registers these handlers on Windows/macOS when installed.
+  // `ms-outlook://emails/open?messageId=...` works with the modern "New Outlook"
+  // client. Classic Outlook responds to `outlook:` with an EntryID, which we
+  // don't have, so we use the messageId form which both clients honor.
+  let desktop = '';
   if (inetId) {
-    return `https://outlook.office.com/mail/inbox/id/${encodeURIComponent(inetId)}`;
+    // Strip angle brackets if present; Outlook dislikes them in the URL.
+    const cleanId = String(inetId).replace(/^<|>$/g, '');
+    desktop = `ms-outlook://emails/open?messageId=${encodeURIComponent(cleanId)}`;
+  } else if (restId) {
+    desktop = `ms-outlook://emails/open?id=${encodeURIComponent(restId)}`;
   }
-  return '';
+
+  // ---- Web fallback ----
+  let web = '';
+  if (rawWeb) {
+    // Normalize legacy OWA host to modern one.
+    web = rawWeb
+      .replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/')
+      .replace('outlook.office365.com/mail/', 'outlook.office.com/mail/');
+  } else if (inetId) {
+    // Searching by Message-ID finds the email wherever it lives now.
+    const cleanId = String(inetId).replace(/^<|>$/g, '');
+    web = `https://outlook.office.com/mail/inbox/search/${encodeURIComponent('"' + cleanId + '"')}`;
+  } else if (restId) {
+    web = `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(restId)}`;
+  }
+
+  return { desktop, web };
 }
+
+// Back-compat shim so any legacy call sites keep working while we migrate.
+// Prefers desktop; falls back to web.
+function outlookWebLink(email) {
+  const links = outlookLinks(email);
+  return links.desktop || links.web || '';
+}
+
+// Attach to window so inline onclick= works; also used by addEventListener wiring.
+// Tries the Outlook Desktop protocol first, falls back to the web URL after a
+// short timeout if the OS didn't hand off to a registered handler (the protocol
+// handoff is silent on failure).
+window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
+  if (evt && evt.preventDefault) evt.preventDefault();
+  if (!desktopUrl && !webUrl) return false;
+
+  // If no desktop URL, just open web.
+  if (!desktopUrl) {
+    window.open(webUrl, '_blank', 'noopener');
+    return false;
+  }
+
+  // Detect whether the protocol handoff succeeded. If the tab loses focus
+  // within ~1200ms, the desktop app grabbed it. Otherwise, open web fallback.
+  let handed = false;
+  const onBlur = () => { handed = true; };
+  window.addEventListener('blur', onBlur, { once: true });
+
+  // Use a hidden iframe to avoid navigating the top frame on failure.
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  frame.src = desktopUrl;
+  document.body.appendChild(frame);
+
+  setTimeout(() => {
+    window.removeEventListener('blur', onBlur);
+    try { frame.remove(); } catch (_) {}
+    if (!handed && webUrl) {
+      window.open(webUrl, '_blank', 'noopener');
+    }
+  }, 1200);
+
+  return false;
+};
 
 // Display normalization — title case, clean formatting for consistent display
 function norm(s) {
@@ -5177,12 +5254,13 @@ function renderRecentEmails() {
       const source = esc(item.source_ref || item.source_type || '');
       const date = item.received_at ? formatDate(item.received_at) : '';
       const bodyPreview = (item.body || item.body_preview || '').substring(0, 120).replace(/\n/g, ' ');
-      const link = outlookWebLink(item);
+      const links = outlookLinks(item);
+      const hasLink = !!(links.desktop || links.web);
       html += `<div class="email-card canonical-inbox-item" onclick="navTo('pageInbox')">
         <div class="email-subj">${title}</div>
         <div class="email-from"><span>${source}</span><span>${date}</span></div>
         ${bodyPreview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(bodyPreview)}</div>` : ''}
-        ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
+        ${hasLink ? `<a href="${safeHref(links.web || links.desktop)}" target="_blank" rel="noopener" onclick="event.stopPropagation();return openOutlookEmail(event, ${safeJSON(links.desktop)}, ${safeJSON(links.web)})" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
       </div>`;
     }
     const total = canonicalInbox.pagination?.total || 0;
@@ -5196,13 +5274,14 @@ function renderRecentEmails() {
   if (emails.length === 0) return '<div style="color:var(--text2);font-size:13px">No flagged emails.</div>';
   let html = '';
   for (const e of emails.slice(0, 6)) {
-    const link = outlookWebLink(e);
+    const links = outlookLinks(e);
+    const hasLink = !!(links.desktop || links.web);
     const preview = (e.body_preview || '').substring(0, 120);
     html += `<div class="email-card">
       <div class="email-subj">${esc(e.subject || '(No subject)')}</div>
       <div class="email-from"><span>${esc(e.sender_name || e.sender_email || '')}</span><span>${formatDate(e.received_date)}</span></div>
       ${preview ? `<div class="email-preview" style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(preview)}</div>` : ''}
-      ${link ? `<a href="${safeHref(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
+      ${hasLink ? `<a href="${safeHref(links.web || links.desktop)}" target="_blank" rel="noopener" onclick="event.stopPropagation();return openOutlookEmail(event, ${safeJSON(links.desktop)}, ${safeJSON(links.web)})" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
     </div>`;
   }
   return html;
@@ -5716,21 +5795,26 @@ function renderMessages() {
 
   let items = [];
   if (currentMsgTab === 'flagged') {
-    items = msgData.flagged.map(e => ({
-      sender: e.sender_name || e.sender_email || 'Unknown',
-      subject: e.subject || '(No subject)',
-      preview: e.body_preview || '',
-      time: e.received_date,
-      link: outlookWebLink(e),
-      unread: e.is_read === false,
-    }));
+    items = msgData.flagged.map(e => {
+      const links = outlookLinks(e);
+      return {
+        sender: e.sender_name || e.sender_email || 'Unknown',
+        subject: e.subject || '(No subject)',
+        preview: e.body_preview || '',
+        time: e.received_date,
+        desktopLink: links.desktop,
+        webLink: links.web,
+        unread: e.is_read === false,
+      };
+    });
   } else if (currentMsgTab === 'recent') {
     items = msgData.recent.map(a => ({
       sender: a.contact_name || a.company_name || 'Unknown',
       subject: a.subject || '(No subject)',
       preview: a.description || '',
       time: a.activity_date,
-      link: null,
+      desktopLink: '',
+      webLink: '',
       unread: false,
     }));
   } else {
@@ -5739,7 +5823,8 @@ function renderMessages() {
       subject: a.subject || '(No subject)',
       preview: a.description || '',
       time: a.activity_date,
-      link: null,
+      desktopLink: '',
+      webLink: '',
       unread: false,
     }));
   }
@@ -5763,6 +5848,7 @@ function renderMessages() {
 
   let html = '';
   for (const m of items.slice(0, 50)) {
+    const hasLink = !!(m.desktopLink || m.webLink);
     html += `<div class="msg-item${m.unread ? ' unread' : ''}">
       <div class="msg-header">
         <div class="msg-sender">${esc(m.sender)}</div>
@@ -5770,7 +5856,7 @@ function renderMessages() {
       </div>
       <div class="msg-subject">${esc(m.subject)}</div>
       ${m.preview ? `<div class="msg-preview">${esc(m.preview)}</div>` : ''}
-      ${m.link ? `<a href="${safeHref(m.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
+      ${hasLink ? `<a href="${safeHref(m.webLink || m.desktopLink)}" target="_blank" rel="noopener" onclick="event.stopPropagation();return openOutlookEmail(event, ${safeJSON(m.desktopLink)}, ${safeJSON(m.webLink)})" style="display:inline-block;margin-top:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>` : ''}
     </div>`;
   }
   if (items.length > 50) html += `<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 50 of ${items.length} messages</div>`;
