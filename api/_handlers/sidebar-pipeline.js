@@ -739,11 +739,18 @@ async function upsertDomainSales(domain, propertyId, metadata) {
     const listingBroker = (metadata.contacts || []).find(c => c.role === 'listing_broker');
     const buyerBroker = (metadata.contacts || []).find(c => c.role === 'buyer_broker');
 
+    // Only apply current brokers to the current/most-recent sale. Historical
+    // deed-record sales predate the current broker engagement and must not
+    // have these broker names attributed to them.
+    const parsedSaleDate = new Date(saleDate);
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const isCurrentSale = sale.is_current === true || parsedSaleDate >= ninetyDaysAgo;
+
     // Domain-aware field names for sales transactions
     const capRateVal = parsePercent(sale.cap_rate || metadata.cap_rate);
     const buyerVal = sale.buyer || null;
     const sellerVal = sale.seller || null;
-    const procuringBrokerVal = buyerBroker?.name || null;
+    const procuringBrokerVal = isCurrentSale ? (buyerBroker?.name || null) : null;
 
     const domainSaleFields = domain === 'government'
       ? {
@@ -766,7 +773,7 @@ async function upsertDomainSales(domain, propertyId, metadata) {
       sale_date: datePart,
       sold_price: soldPrice,
       ...domainSaleFields,
-      listing_broker: listingBroker?.name || null,
+      listing_broker: isCurrentSale ? (listingBroker?.name || null) : null,
       recorded_date: parseDate(sale.recordation_date) ? parseDate(sale.recordation_date).split('T')[0] : null,
       notes: [
         sale.deed_type ? `Deed: ${sale.deed_type}` : null,
