@@ -1608,9 +1608,10 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         status: 'active',
         is_active: true,
         data_source: 'costar_sidebar',
-        source_confidence: 'costar_estimate',
-        effective_date: parseDate(t.lease_start || metadata.lease_commencement)
-                        ?.split('T')[0] || new Date().toISOString().split('T')[0],
+        // Dialysis leases.source_confidence has a CHECK constraint; 'estimated'
+        // matches the allowed enum values ('documented' | 'estimated' | 'inferred').
+        // 'costar_estimate' was rejected and caused every INSERT to 400 silently.
+        source_confidence: 'estimated',
       });
     }
   } else {
@@ -1632,9 +1633,8 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       status: 'active',
       is_active: true,
       data_source: 'costar_sidebar',
-      source_confidence: 'costar_estimate',
-      effective_date: parseDate(metadata.lease_commencement)
-                      ?.split('T')[0] || new Date().toISOString().split('T')[0],
+      // Same CHECK-constraint-safe value as above.
+      source_confidence: 'estimated',
     });
   }
 
@@ -1662,12 +1662,34 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         l => l.tenant?.toLowerCase().trim() === tenantKey
       );
       const { property_id: _pid, ...patchData } = cleaned;
-      await domainQuery(domain, 'PATCH',
+      const patchResult = await domainQuery(domain, 'PATCH',
         `leases?lease_id=eq.${existingLease.lease_id}`, patchData);
+      if (!patchResult.ok) {
+        console.error('[upsertDomainLeases] PATCH failed:', {
+          domain,
+          propertyId,
+          leaseId: existingLease.lease_id,
+          tenant: record.tenant,
+          status: patchResult.status,
+          error: patchResult.data,
+          patchData,
+        });
+      }
     } else {
       // INSERT new lease
       const result = await domainQuery(domain, 'POST', 'leases', cleaned);
-      if (result.ok) count++;
+      if (!result.ok) {
+        console.error('[upsertDomainLeases] INSERT failed:', {
+          domain,
+          propertyId,
+          tenant: record.tenant,
+          status: result.status,
+          error: result.data,
+          leaseData: cleaned,
+        });
+        continue;
+      }
+      count++;
       existingTenants.add(tenantKey); // prevent double-insert within same run
     }
   }
