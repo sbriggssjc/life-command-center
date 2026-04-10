@@ -1457,14 +1457,16 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 
   // Process buyers and sellers from sales history to build ownership chain
   const sales = metadata.sales_history || [];
-  // Sort chronologically (oldest first) for ownership chain
-  const sortedSales = [...sales].sort((a, b) => {
-    const da = new Date(a.sale_date), db = new Date(b.sale_date);
-    return da.getTime() - db.getTime();
-  });
 
-  for (let i = 0; i < sortedSales.length; i++) {
-    const sale = sortedSales[i];
+  // Build ownership chain — only use sales with actual buyers as
+  // transition points. Stat card entries (is_current: true, no buyer)
+  // are noise and must not create false ownership end dates.
+  const validTransitions = [...sales]
+    .filter(s => s.sale_date && s.buyer)  // must have a buyer to count as a transfer
+    .sort((a, b) => new Date(a.sale_date) - new Date(b.sale_date));
+
+  for (let i = 0; i < validTransitions.length; i++) {
+    const sale = validTransitions[i];
     const saleDate = parseDate(sale.sale_date);
     if (!saleDate) continue;
     const saleDateStr = saleDate.split('T')[0];
@@ -1477,7 +1479,10 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 
     // Build ownership_history entry for the buyer (they own from this sale forward)
     if (buyerId) {
-      const nextSaleDate = i < sortedSales.length - 1 ? parseDate(sortedSales[i + 1].sale_date) : null;
+      // Next transition is the NEXT SALE WITH A BUYER, not any stat card entry.
+      // nextSaleDate = null means this buyer is still the current owner.
+      const nextTransition = i < validTransitions.length - 1 ? validTransitions[i + 1] : null;
+      const nextSaleDate = nextTransition ? parseDate(nextTransition.sale_date) : null;
 
       // Domain-aware ownership_history field names
       // Dialysis: ownership_start, ownership_end, sold_price
