@@ -461,6 +461,40 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       const dupCheck = await opsQuery('GET', dedupPath);
       if (dupCheck.ok && dupCheck.data?.length) {
         const existing = dupCheck.data[0];
+
+        // Merge new metadata into the existing entity so the pipeline
+        // can pick up any data captured on this page view
+        if (metadata && Object.keys(metadata).length > 0) {
+          // Strip the processed flag so the pipeline re-runs
+          const mergedMeta = {
+            ...(existing.metadata || {}),
+            ...metadata,
+            _pipeline_processed_at: undefined,
+            _pipeline_status: undefined,
+          };
+          // Remove the undefined keys
+          for (const k of Object.keys(mergedMeta)) {
+            if (mergedMeta[k] === undefined) delete mergedMeta[k];
+          }
+
+          const patchResult = await opsQuery(
+            'PATCH',
+            `entities?id=eq.${existing.id}&workspace_id=eq.${workspaceId}`,
+            { metadata: mergedMeta, updated_at: new Date().toISOString() }
+          );
+
+          // Re-trigger pipeline with the fresh merged metadata
+          if (patchResult.ok && hasSidebarData(mergedMeta)) {
+            const patched = Array.isArray(patchResult.data)
+              ? patchResult.data[0] : patchResult.data;
+            if (patched?.id) {
+              processSidebarExtraction(patched.id, workspaceId, user.id)
+                .catch(err => console.error('[Dedup pipeline re-trigger]',
+                  err?.message || err));
+            }
+          }
+        }
+
         return res.status(200).json({ entity: existing, deduplicated: true });
       }
     }
