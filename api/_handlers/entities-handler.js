@@ -8,6 +8,7 @@
 // PATCH  /api/entities?id=<uuid>              — update entity
 // POST   /api/entities?action=link            — link external identity to entity
 // GET    /api/entities?action=search&q=       — search by name across types
+// GET    /api/entities?action=lookup_asset&address=&city=&state= — find asset entity by address
 // GET    /api/entities?action=duplicates      — find duplicate candidates
 // POST   /api/entities?action=merge           — merge two entities (manager+)
 // POST   /api/entities?action=add_alias       — add alias for entity
@@ -204,6 +205,30 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
       const result = await opsQuery('GET', path);
       return res.status(200).json({ entities: result.data || [], count: result.count });
+    }
+
+    // Lookup a single asset entity by address (+ optional city/state).
+    // Used by the property detail panel to surface CoStar-sourced lease
+    // estimates from the entity's metadata JSONB.
+    if (action === 'lookup_asset') {
+      const rawAddress = (req.query.address || '').trim();
+      if (rawAddress.length < 3) {
+        return res.status(400).json({ error: 'address query parameter required (min 3 chars)' });
+      }
+      const address = rawAddress.replace(/[%_*]/g, '');
+      let path = `entities?workspace_id=eq.${workspaceId}&entity_type=eq.asset&address=ilike.${encodeURIComponent(address)}&select=id,name,address,city,state,metadata&limit=1`;
+      if (req.query.city) {
+        const city = req.query.city.trim().replace(/[%_*]/g, '');
+        if (city) path += `&city=ilike.${encodeURIComponent(city)}`;
+      }
+      if (req.query.state) {
+        const state = req.query.state.trim().replace(/[%_*]/g, '');
+        if (state) path += `&state=eq.${encodeURIComponent(state)}`;
+      }
+
+      const result = await opsQuery('GET', path);
+      const entity = (result.data && result.data[0]) || null;
+      return res.status(200).json({ entity });
     }
 
     // List with filters

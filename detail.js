@@ -207,7 +207,27 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     const allEmpty = !property && leases.length === 0 && !ownership && chain.length === 0;
     const synthProperty = allEmpty ? _udSynthPropertyFromFallback(fallback, db) : property;
 
-    _udCache = { db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, _fallbackOnly: allEmpty };
+    // Fetch LCC entity metadata (CoStar estimates) for this property by address.
+    // These supplement v_lease_detail on the Lease tab when no executed lease
+    // document is on file. Best-effort only — never blocks the detail render.
+    let entityMeta = null;
+    try {
+      const lookupAddr = (synthProperty && synthProperty.address) || fallback.address;
+      const lookupState = (synthProperty && synthProperty.state) || fallback.state;
+      const lookupCity = (synthProperty && synthProperty.city) || fallback.city;
+      if (lookupAddr) {
+        const params = new URLSearchParams({ action: 'lookup_asset', address: lookupAddr });
+        if (lookupCity) params.set('city', lookupCity);
+        if (lookupState) params.set('state', lookupState);
+        const entRes = await _entityApiFetch('/api/entities?' + params.toString());
+        const ent = entRes?.entity || null;
+        entityMeta = ent?.metadata || null;
+      }
+    } catch (e) {
+      console.warn('entity metadata lookup failed', e);
+    }
+
+    _udCache = { db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, entityMeta, _fallbackOnly: allEmpty };
 
     // Update header with real data (page_title or fallback to tenant/address)
     if (synthProperty) {
@@ -760,10 +780,44 @@ function _udTabFallbackSummary(fb) {
 
 // ─── LEASE TAB ───────────────────────────────────────────────────────────────
 
+/**
+ * Compute a friendly term-remaining string from an expiration date.
+ * Used on the Lease tab when v_lease_detail has no computed term_remaining_years
+ * (e.g. CoStar-sourced estimates on properties with no executed lease document).
+ */
+function termRemaining(expirationDate) {
+  if (!expirationDate) return null;
+  const exp = new Date(expirationDate);
+  const now = new Date();
+  const years = ((exp - now) / (1000 * 60 * 60 * 24 * 365.25)).toFixed(1);
+  return parseFloat(years) > 0 ? years + ' yrs remaining' : 'Expired';
+}
+
+/** Small amber "Est." badge marking a field as a CoStar estimate. */
+function _udEstBadge() {
+  return '<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);font-size:10px;font-weight:600;letter-spacing:0.3px;vertical-align:middle" title="Estimated from CoStar metadata — no executed lease document on file">Est.</span>';
+}
+
+/** Render a lease row whose value may be a raw-HTML string, with an optional Est. badge. */
+function _udLeaseRowH(label, valueHtml, isEst) {
+  if (valueHtml == null || valueHtml === '' || valueHtml === '—') return '';
+  const badge = isEst ? _udEstBadge() : '';
+  return `<div class="detail-row">
+    <div class="detail-lbl">${esc(label)}</div>
+    <div class="detail-val">${valueHtml}${badge}</div>
+  </div>`;
+}
+
 function _udTabLease() {
-  const leases = _udCache.leases;
-  // If no lease view data, try to show lease info from the fallback record
-  if (!leases || leases.length === 0) {
+  const leases = _udCache.leases || [];
+  const em = _udCache.entityMeta || {};
+  const hasEntityMeta = !!(em && (em.tenant_name || em.lease_commencement ||
+    em.lease_expiration || em.annual_rent || em.rent_per_sf ||
+    em.expense_structure || em.renewal_options || em.guarantor ||
+    em.rent_escalations));
+
+  // If no lease view data AND no CoStar metadata, try the search fallback record
+  if (leases.length === 0 && !hasEntityMeta) {
     const fb = _udCache.fallback;
     if (fb && (fb.lease_start || fb.lease_end || fb.firm_term_start || fb.annual_rent || fb.lease_number)) {
       let html = '<div class="detail-section"><div class="detail-section-title">Lease Details (from search record)</div><div class="detail-grid">';
@@ -781,43 +835,101 @@ function _udTabLease() {
     return '<div class="detail-empty">No lease data available</div>';
   }
 
+  // If we only have entity metadata (no v_lease_detail rows), synthesize one
+  // empty lease so the renderer produces a single estimates-only section.
+  const leasesToRender = leases.length > 0 ? leases : [{}];
+  const estimatesOnly = leases.length === 0;
+
+  // Pick verified lease field if present, else fall through to the CoStar
+  // estimate from entity metadata. Returns { html, est } where est=true when
+  // the value came from metadata and should get an "Est." badge.
+  const pick = (verified, estimate, format) => {
+    if (verified != null && verified !== '') {
+      return { html: format ? format(verified) : esc(String(verified)), est: false };
+    }
+    if (estimate != null && estimate !== '') {
+      return { html: format ? format(estimate) : esc(String(estimate)), est: true };
+    }
+    return { html: null, est: false };
+  };
+  const dateFmt = (v) => esc(_fmtDate(v));
+  const moneyFmt = (v) => esc(fmt(v));
+
   let html = '';
 
-  leases.forEach((l, idx) => {
-    const isOnly = leases.length === 1;
+  leasesToRender.forEach((l, idx) => {
+    const isOnly = leasesToRender.length === 1;
     html += '<div class="detail-section">';
     html += `<div class="detail-section-title">${isOnly ? 'Lease Details' : 'Lease ' + (idx + 1)}</div>`;
     html += '<div class="detail-grid">';
 
-    html += _row('Tenant', l.tenant);
-    html += _row('Guarantor', l.guarantor);
-    html += _row('Guarantor Type', l.guarantor_type);
-    html += _row('Original Occupancy', _fmtDate(l.original_occupancy));
-    html += _row('Lease Start', _fmtDate(l.lease_start));
-    html += _row('Last Extension', _fmtDate(l.last_extension_date));
-    html += _row('No. of Extensions', l.extension_count != null ? fmtN(Number(l.extension_count)) : null);
-    html += _row('Expiration', _fmtDate(l.lease_expiration));
-    html += _row('Termination', _fmtDate(l.termination_date));
-    html += _row('Initial Term', l.initial_term_years ? Number(l.initial_term_years).toFixed(1) + ' yrs' : null);
-    html += _row('Total Term', l.total_term_years ? Number(l.total_term_years).toFixed(1) + ' yrs' : null);
-    html += _rowHtml('Term Remaining', l.term_remaining_years != null ? (Number(l.term_remaining_years) < 0 ? '<span style="color:var(--red)">Expired</span>' : Number(l.term_remaining_years).toFixed(1) + ' yrs') : null);
-    html += _row('No. of Renewals', l.num_renewals);
-    html += _rowMoney('Annual Rent', l.annual_rent);
-    html += _rowMoney('Rent / SF', l.rent_psf);
-    html += _rowMoney('Future Rent / SF', l.future_rent_psf);
-    html += _row('Rent CAGR', l.rent_cagr ? (Number(l.rent_cagr) * 100).toFixed(2) + '%' : null);
-    html += _row('Expense Structure', l.expense_structure);
-    html += _row('Lease Structure', l.lease_structure);
-    html += _row('Renewal Options', l.renewal_options);
+    // Term Remaining: prefer verified term_remaining_years from the view,
+    // else compute from whichever expiration date we have (verified or estimate).
+    let termRow;
+    if (l.term_remaining_years != null) {
+      const n = Number(l.term_remaining_years);
+      termRow = {
+        html: n < 0 ? '<span style="color:var(--red)">Expired</span>' : esc(n.toFixed(1) + ' yrs remaining'),
+        est: false
+      };
+    } else {
+      const exp = l.lease_expiration || em.lease_expiration;
+      const tr = termRemaining(exp);
+      termRow = {
+        html: tr == null ? null : (tr === 'Expired' ? '<span style="color:var(--red)">Expired</span>' : esc(tr)),
+        est: !l.lease_expiration && !!em.lease_expiration
+      };
+    }
 
-    // Flags
-    const flags = [];
-    if (l.is_renewed) flags.push('Renewed');
-    if (l.is_first_generation) flags.push('1st Gen');
-    if (l.is_superseding) flags.push('Superseding');
-    if (flags.length) html += _row('Flags', flags.join(' · '));
+    // Escalations: verified rent_cagr from v_lease_detail takes priority;
+    // otherwise fall through to the freeform CoStar escalations string.
+    const esc_row = (l.rent_cagr != null)
+      ? { html: esc((Number(l.rent_cagr) * 100).toFixed(2) + '%'), est: false }
+      : pick(null, em.rent_escalations);
 
-    html += _row('Data Source', l.data_source);
+    const dataSourceRow = l.data_source
+      ? { html: esc(l.data_source), est: false }
+      : (estimatesOnly ? { html: esc('costar_estimate'), est: true } : { html: null, est: false });
+
+    const leaseSections = [
+      { label: 'Tenant',            row: pick(l.tenant, em.tenant_name) },
+      { label: 'Commencement',      row: pick(l.lease_start, em.lease_commencement, dateFmt) },
+      { label: 'Expiration',        row: pick(l.lease_expiration, em.lease_expiration, dateFmt) },
+      { label: 'Term Remaining',    row: termRow },
+      { label: 'Annual Rent',       row: pick(l.annual_rent, em.annual_rent, moneyFmt) },
+      { label: 'Rent PSF',          row: pick(l.rent_psf, em.rent_per_sf, moneyFmt) },
+      { label: 'Expense Structure', row: pick(l.expense_structure, em.expense_structure) },
+      { label: 'Renewal Options',   row: pick(l.renewal_options, em.renewal_options) },
+      { label: 'Guarantor',         row: pick(l.guarantor, em.guarantor) },
+      { label: 'Escalations',       row: esc_row },
+      { label: 'Data Source',       row: dataSourceRow },
+    ];
+
+    for (const s of leaseSections) {
+      html += _udLeaseRowH(s.label, s.row.html, s.row.est);
+    }
+
+    // Preserve secondary verified-lease fields when we have a real lease record.
+    if (!estimatesOnly) {
+      html += _row('Guarantor Type', l.guarantor_type);
+      html += _row('Original Occupancy', _fmtDate(l.original_occupancy));
+      html += _row('Last Extension', _fmtDate(l.last_extension_date));
+      html += _row('No. of Extensions', l.extension_count != null ? fmtN(Number(l.extension_count)) : null);
+      html += _row('Termination', _fmtDate(l.termination_date));
+      html += _row('Initial Term', l.initial_term_years ? Number(l.initial_term_years).toFixed(1) + ' yrs' : null);
+      html += _row('Total Term', l.total_term_years ? Number(l.total_term_years).toFixed(1) + ' yrs' : null);
+      html += _row('No. of Renewals', l.num_renewals);
+      html += _rowMoney('Future Rent / SF', l.future_rent_psf);
+      html += _row('Lease Structure', l.lease_structure);
+
+      // Flags
+      const flags = [];
+      if (l.is_renewed) flags.push('Renewed');
+      if (l.is_first_generation) flags.push('1st Gen');
+      if (l.is_superseding) flags.push('Superseding');
+      if (flags.length) html += _row('Flags', flags.join(' · '));
+    }
+
     html += '</div></div>';
   });
 
