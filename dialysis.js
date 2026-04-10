@@ -5572,53 +5572,74 @@ async function renderDiaProperties() {
   html += '<span style="font-size:12px;color:var(--text3);">' + fmtN(totalCount) + ' results</span>';
   html += '</div>';
 
-  // Scrollable table
-  html += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;max-height:70vh;">';
-  html += '<table class="data-table" style="width:100%;min-width:1000px;border-collapse:collapse;font-size:12px;">';
-
-  // Sortable header
+  // Sort toolbar — address is the default/primary sort
+  var SORT_COLS = [
+    { col: 'address', label: 'Address' },
+    { col: 'city', label: 'City' },
+    { col: 'state', label: 'State' },
+    { col: 'building_size', label: 'SF' },
+    { col: 'year_built', label: 'Year Built' },
+    { col: 'tenant', label: 'Tenant' },
+    { col: 'owner', label: 'Owner' }
+  ];
   var sortArrow = function(col) {
-    if (diaPropertiesSort.col !== col) return ' <span style="opacity:0.3;font-size:9px">&#x21C5;</span>';
-    return diaPropertiesSort.dir === 'asc' ? ' <span style="color:var(--accent)">&#x25B2;</span>' : ' <span style="color:var(--accent)">&#x25BC;</span>';
+    if (diaPropertiesSort.col !== col) return '';
+    return diaPropertiesSort.dir === 'asc' ? ' \u25B2' : ' \u25BC';
   };
-  var thBase = 'padding:10px 8px;font-weight:600;font-size:11px;letter-spacing:0.3px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;';
-  var th = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:left;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
-  var thr = function(label, w, col) { return '<th data-prop-sort-col="' + col + '" style="text-align:right;' + thBase + 'min-width:' + w + 'px;">' + label + sortArrow(col) + '</th>'; };
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">';
+  html += '<span style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-right:4px;">Sort:</span>';
+  SORT_COLS.forEach(function(s) {
+    var active = diaPropertiesSort.col === s.col;
+    html += '<button class="pill' + (active ? ' active' : '') + '" data-prop-sort-col="' + s.col + '" style="font-size:11px;padding:4px 10px;">' + s.label + sortArrow(s.col) + '</button>';
+  });
+  html += '</div>';
 
-  html += '<thead><tr style="background:var(--s2);position:sticky;top:0;z-index:1;">';
-  html += th('Property Name', 160, 'property_name');
-  html += th('Address', 160, 'address');
-  html += th('City', 100, 'city');
-  html += th('State', 50, 'state');
-  html += thr('SF', 70, 'building_size');
-  html += thr('Year Built', 70, 'year_built');
-  html += th('Owner', 150, 'owner');
-  html += th('Tenant/Operator', 150, 'tenant');
-  html += '</tr></thead>';
-
-  // Body
-  html += '<tbody>';
-  var td = function(val, trunc) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;' + (trunc ? 'max-width:180px;overflow:hidden;text-overflow:ellipsis;' : '') + '">' + esc(val || '\u2014') + '</td>'; };
-  var tdr = function(val) { return '<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:right;font-family:\'JetBrains Mono\',monospace;font-size:11px;">' + (val || '\u2014') + '</td>'; };
+  // Scrollable card grid — address is the primary title, with city/state/zip subtitle
+  html += '<div style="overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:10px;max-height:70vh;padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;">';
 
   pageRows.forEach(function(r, _ri) {
-    var _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
-    html += '<tr class="clickable-row" data-prop-idx="' + _ri + '" style="cursor:pointer;' + _zebra + '">';
-    html += td(r.property_name, true);
-    html += td(r.address, true);
-    html += td(r.city);
-    html += td(r.state);
-    html += tdr(r.building_size > 0 ? fmtN(Math.round(parseFloat(r.building_size))) : '\u2014');
-    html += tdr(r.year_built || '\u2014');
-    html += td(r.owner, true);
-    html += td(r.tenant, true);
-    html += '</tr>';
+    // Title priority: address (primary) > property_name / facility_name (fallback)
+    var title = r.address || r.property_name || r.facility_name || '\u2014';
+    var locParts = [];
+    if (r.city) locParts.push(r.city);
+    if (r.state) locParts.push(r.state);
+    var locLine = locParts.join(', ');
+    if (r.zip_code) locLine = locLine ? locLine + ' ' + r.zip_code : String(r.zip_code);
+
+    var metaParts = [];
+    if (r.building_size && parseFloat(r.building_size) > 0) {
+      metaParts.push(fmtN(Math.round(parseFloat(r.building_size))) + ' SF');
+    }
+    if (r.year_built) metaParts.push('Built ' + r.year_built);
+    if (r.cap_rate) {
+      var capNum = parseFloat(r.cap_rate);
+      if (capNum > 0) {
+        var capPct = capNum < 1 ? (capNum * 100).toFixed(1) : capNum.toFixed(1);
+        metaParts.push('Cap: ' + capPct + '%');
+      }
+    }
+
+    html += '<div class="prop-card clickable-row" data-prop-idx="' + _ri + '" style="cursor:pointer;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--s2);display:flex;flex-direction:column;gap:3px;">';
+    html += '<div class="prop-card-title" style="font-size:14px;font-weight:700;color:var(--text);line-height:1.3;overflow:hidden;text-overflow:ellipsis;">' + esc(title) + '</div>';
+    if (locLine) {
+      html += '<div class="prop-card-sub" style="font-size:12px;color:var(--text2);">' + esc(locLine) + '</div>';
+    }
+    if (r.tenant) {
+      html += '<div class="prop-card-tenant" style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(r.tenant) + '</div>';
+    }
+    if (metaParts.length) {
+      html += '<div class="prop-card-meta" style="font-size:11px;color:var(--text2);font-family:\'JetBrains Mono\',monospace;margin-top:4px;">' + esc(metaParts.join(' | ')) + '</div>';
+    }
+    if (r.owner && r.owner !== r.tenant) {
+      html += '<div class="prop-card-owner" style="font-size:10px;color:var(--text3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Owner: ' + esc(r.owner) + '</div>';
+    }
+    html += '</div>';
   });
 
   if (pageRows.length === 0) {
-    html += '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text3);">No properties to display</td></tr>';
+    html += '<div style="grid-column:1/-1;text-align:center;padding:32px;color:var(--text3);">No properties to display</div>';
   }
-  html += '</tbody></table></div>';
+  html += '</div>';
 
   // Pagination
   if (totalPages > 1) {
