@@ -1004,13 +1004,26 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
           && sale.buyer === contact.sale_buyer?.toUpperCase()?.trim();
         const sellerMatch = contact.sale_seller
           && sale.seller === contact.sale_seller?.toUpperCase()?.trim();
-        // Also try case-insensitive partial match
-        const buyerFuzzy  = contact.sale_buyer && sale.buyer_name
-          && sale.buyer_name.toLowerCase().includes(
-               contact.sale_buyer.toLowerCase().split(' ')[0]);
-        const sellerFuzzy = contact.sale_seller && sale.seller_name
-          && sale.seller_name.toLowerCase().includes(
-               contact.sale_seller.toLowerCase().split(' ')[0]);
+        // Also try case-insensitive token match. Split on spaces AND hyphens
+        // so hyphenated compounds like "Tognoli-Blefari-Thompson" yield
+        // individual tokens that can match "THOMAS C TOGNOLI; LYNN D TOGNOLI".
+        const buyerTokens = (contact.sale_buyer || '')
+          .toLowerCase()
+          .split(/[\s\-]+/)
+          .filter(t => t.length >= 4);
+        const buyerFuzzy = buyerTokens.length > 0 && (
+          sale.buyer_name || sale.buyer || ''
+        ).toLowerCase().split(/[\s\-;,]+/)
+          .some(nameToken => buyerTokens.includes(nameToken));
+
+        const sellerTokens = (contact.sale_seller || '')
+          .toLowerCase()
+          .split(/[\s\-]+/)
+          .filter(t => t.length >= 4);
+        const sellerFuzzy = sellerTokens.length > 0 && (
+          sale.seller_name || sale.seller || ''
+        ).toLowerCase().split(/[\s\-;,]+/)
+          .some(nameToken => sellerTokens.includes(nameToken));
         if (!buyerMatch && !sellerMatch && !buyerFuzzy && !sellerFuzzy) continue;
       } else {
         // No tag — fall back to 90-day recency filter (current sale only)
