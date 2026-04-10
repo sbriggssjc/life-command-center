@@ -810,36 +810,29 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
   let created = 0;
 
   // Regex to detect firm/company names vs. actual person names
-  const firmPattern = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
+  // e.g. "Horvath & Tremblay" or "Marcus & Millichap" match on "&"
+  const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
 
-  // Track the most recently processed person broker so firm entries can
-  // back-fill the company field on the preceding person record.
-  let lastPersonBrokerId = null;
+  // ── Pass 1: Separate contacts into people and firms ──
+  const people = brokerContacts.filter(c => !FIRM_PATTERN.test(c.name || ''));
+  const firms  = brokerContacts.filter(c =>  FIRM_PATTERN.test(c.name || ''));
 
-  for (const contact of brokerContacts) {
+  // ── Pass 2: Assign firm name as company on people who lack one ──
+  for (const person of people) {
+    if (!person.company && firms.length === 1) {
+      // Only one firm listed — assume it's this person's brokerage
+      person.company = firms[0].name;
+    } else if (!person.company) {
+      // Multiple firms — match by role (listing_broker ↔ listing firm, etc.)
+      const matchedFirm = firms.find(f => f.role === person.role);
+      if (matchedFirm) person.company = matchedFirm.name;
+    }
+  }
+
+  // ── Pass 3: Process people — create broker records + sale_brokers entries ──
+  for (const contact of people) {
     const name = (contact.name || '').trim();
     if (!name) continue;
-
-    const isFirm = firmPattern.test(name);
-
-    // ── Firm entry: attach as company to the preceding person broker ──
-    if (isFirm) {
-      if (lastPersonBrokerId) {
-        // Only patch company if the person broker doesn't already have one
-        const personLookup = await domainQuery('dialysis', 'GET',
-          `brokers?broker_id=eq.${lastPersonBrokerId}&select=broker_id,company&limit=1`
-        );
-        if (personLookup.ok && personLookup.data?.length && personLookup.data[0].company == null) {
-          await domainQuery('dialysis', 'PATCH',
-            `brokers?broker_id=eq.${lastPersonBrokerId}`, { company: name }
-          );
-        }
-      }
-      // Skip creating a broker record or sale_brokers entries for the firm
-      continue;
-    }
-
-    // ── Person entry: existing broker upsert logic ──
 
     // Normalize: lowercase, strip common suffixes, collapse whitespace
     const normalized = name
@@ -854,7 +847,7 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     // Look up existing broker by normalized_name
     const encodedNorm = encodeURIComponent(normalized);
     const lookup = await domainQuery('dialysis', 'GET',
-      `brokers?normalized_name=eq.${encodedNorm}&select=broker_id,email,phone&limit=1`
+      `brokers?normalized_name=eq.${encodedNorm}&select=broker_id,email,phone,company&limit=1`
     );
 
     let brokerId;
@@ -866,6 +859,7 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       const patch = stripNulls({
         email: existing.email == null && contact.email ? contact.email : null,
         phone: existing.phone == null && contact.phones?.[0] ? contact.phones[0] : null,
+        company: existing.company == null && contact.company ? contact.company : null,
       });
       if (Object.keys(patch).length) {
         await domainQuery('dialysis', 'PATCH',
@@ -873,7 +867,7 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
         );
       }
     } else {
-      // Insert new broker
+      // Insert new broker with company from the firm assignment above
       const brokerData = stripNulls({
         broker_name: name,
         email: contact.email || null,
@@ -886,9 +880,6 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       brokerId = ins.data[0].broker_id;
       created++;
     }
-
-    // Remember this person broker for potential firm back-fill
-    lastPersonBrokerId = brokerId;
 
     // Link broker to each sale for this property written in this pipeline run
     const sales = metadata.sales_history;
@@ -917,6 +908,78 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
         sale_id: saleId,
         broker_id: brokerId,
         role: roleMap[contact.role] || contact.role,
+      });
+    }
+  }
+
+  // ── Pass 4: Handle firm-only listings (no person from the same firm) ──
+  // If a firm has no matching person, create a broker record + sale_brokers
+  // for the firm itself so we don't lose data.
+  const processedCompanies = new Set(people.map(p => p.company).filter(Boolean));
+
+  for (const firm of firms) {
+    const firmName = (firm.name || '').trim();
+    if (!firmName) continue;
+
+    // A person already carries this firm as their company — skip
+    if (processedCompanies.has(firmName)) continue;
+
+    // Normalize firm name for lookup
+    const normalized = firmName
+      .toLowerCase()
+      .replace(/\b(llc|inc|corp|ltd|lp|llp|co|company|group|associates|advisors)\b\.?/gi, '')
+      .replace(/[.,]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!normalized) continue;
+
+    const encodedNorm = encodeURIComponent(normalized);
+    const lookup = await domainQuery('dialysis', 'GET',
+      `brokers?normalized_name=eq.${encodedNorm}&select=broker_id&limit=1`
+    );
+
+    let brokerId;
+    if (lookup.ok && lookup.data?.length) {
+      brokerId = lookup.data[0].broker_id;
+    } else {
+      const brokerData = stripNulls({
+        broker_name: firmName,
+        email: firm.email || null,
+        phone: firm.phones?.[0] || null,
+        company: firmName,
+        normalized_name: normalized,
+      });
+      const ins = await domainQuery('dialysis', 'POST', 'brokers', brokerData);
+      if (!ins.ok || !ins.data?.length) continue;
+      brokerId = ins.data[0].broker_id;
+      created++;
+    }
+
+    // Link firm broker to each sale
+    const sales = metadata.sales_history;
+    if (!Array.isArray(sales)) continue;
+
+    for (const sale of sales) {
+      const saleDate = parseDate(sale.sale_date);
+      if (!saleDate) continue;
+      const datePart = saleDate.split('T')[0];
+
+      const saleLookup = await domainQuery('dialysis', 'GET',
+        `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`
+      );
+      if (!saleLookup.ok || !saleLookup.data?.length) continue;
+      const saleId = saleLookup.data[0].sale_id;
+
+      const junctionLookup = await domainQuery('dialysis', 'GET',
+        `sale_brokers?sale_id=eq.${saleId}&broker_id=eq.${brokerId}&select=sale_broker_id&limit=1`
+      );
+      if (junctionLookup.ok && junctionLookup.data?.length) continue;
+
+      await domainQuery('dialysis', 'POST', 'sale_brokers', {
+        sale_id: saleId,
+        broker_id: brokerId,
+        role: roleMap[firm.role] || firm.role,
       });
     }
   }
