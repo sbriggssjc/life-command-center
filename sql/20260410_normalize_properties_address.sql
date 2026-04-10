@@ -415,21 +415,34 @@ BEGIN
         EXCEPTION WHEN unique_violation OR exclusion_violation THEN
           -- Tier 3: row-level UPDATE + delete-on-conflict + un-pair
           -- on grandchild FK violation.
+          --
+          -- The row-level UPDATE's USING parameter MUST be a
+          -- consistent type across every outer FK-child iteration.
+          -- Round 12 cast dp.target_id to the native fk_type in the
+          -- SELECT so rec.new_fk's record-field type differed per
+          -- child (integer, bigint, uuid…). PL/pgSQL's SPI cached
+          -- the prepared EXECUTE at this source location from the
+          -- first call's type and later calls with a different type
+          -- tripped 42804 "type of parameter N does not match that
+          -- when preparing the plan". Keep rec.new_fk_text as plain
+          -- text (dp.target_id's native type) and cast to fk_type
+          -- inside the UPDATE SQL itself so the USING parameter is
+          -- always text.
           FOR rec IN
             EXECUTE format(
-              'SELECT c.ctid               AS child_ctid, '
-              '       c.%3$I::text         AS older_id_text, '
-              '       dp.target_id::%1$s   AS new_fk '
-              '  FROM %2$I c '
-              '  JOIN dup_pairs dp ON dp.older_id::%1$s = c.%3$I',
-              fk_type, child_table, child_fk
+              'SELECT c.ctid        AS child_ctid, '
+              '       c.%2$I::text  AS older_id_text, '
+              '       dp.target_id  AS new_fk_text '
+              '  FROM %1$I c '
+              '  JOIN dup_pairs dp ON dp.older_id::%3$s = c.%2$I',
+              child_table, child_fk, fk_type
             )
           LOOP
             BEGIN
               EXECUTE format(
-                'UPDATE %1$I SET %2$I = $1 WHERE ctid = $2',
-                child_table, child_fk
-              ) USING rec.new_fk, rec.child_ctid;
+                'UPDATE %1$I SET %2$I = $1::%3$s WHERE ctid = $2',
+                child_table, child_fk, fk_type
+              ) USING rec.new_fk_text, rec.child_ctid;
             EXCEPTION WHEN unique_violation OR exclusion_violation THEN
               BEGIN
                 EXECUTE format(
