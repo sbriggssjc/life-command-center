@@ -1437,11 +1437,23 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
  * Returns 1 if a record was created or updated, 0 if skipped.
  */
 async function upsertDialysisListings(propertyId, metadata) {
-  // Trigger guard
-  const hasAskingPrice = !!metadata.asking_price;
-  const hasCurrentSale = Array.isArray(metadata.sales_history)
-    && metadata.sales_history.some(s => s.is_current === true);
-  if (!hasAskingPrice && !hasCurrentSale) return 0;
+  // Trigger guard — check parsed value, not raw metadata string.
+  // If metadata.asking_price is undefined (e.g. stripped by buildMetadata),
+  // the raw-string guard would silently return 0 even when a current sale
+  // exists, so parse first and also evaluate any current sales_history rows.
+  const parsedAskingPrice = parseCurrency(metadata.asking_price);
+  const currentListings = Array.isArray(metadata.sales_history)
+    ? metadata.sales_history.filter(s => s.is_current === true)
+    : [];
+  if (!parsedAskingPrice && !currentListings.length) {
+    console.log('[upsertDialysisListings] early-exit: no asking_price and no current sale', {
+      propertyId,
+      raw_asking_price: metadata.asking_price,
+      parsed_asking_price: parsedAskingPrice,
+      sales_history_count: Array.isArray(metadata.sales_history) ? metadata.sales_history.length : 0,
+    });
+    return 0;
+  }
 
   const contacts = metadata.contacts || [];
   const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
@@ -1467,8 +1479,12 @@ async function upsertDialysisListings(propertyId, metadata) {
     : null;
   const safePricePsf = pricePsf || computedPricePsf || null;
 
+  // Dialysis available_listings.property_id is an integer column; PostgREST
+  // will reject a numeric-string with a silent 400. Cast once here and reuse.
+  const propertyIdInt = parseInt(propertyId, 10);
+
   const record = stripNulls({
-    property_id: propertyId,
+    property_id: propertyIdInt,
     initial_price: parseCurrency(metadata.asking_price),
     last_price: parseCurrency(metadata.asking_price),
     current_cap_rate: parsePercent(metadata.cap_rate),
@@ -1484,7 +1500,7 @@ async function upsertDialysisListings(propertyId, metadata) {
   });
 
   // Always keep property_id, status, and is_active even after stripNulls
-  record.property_id = propertyId;
+  record.property_id = propertyIdInt;
   record.status = 'Active';
   record.is_active = true;
 
@@ -1507,7 +1523,16 @@ async function upsertDialysisListings(propertyId, metadata) {
   }
 
   const result = await domainQuery('dialysis', 'POST', 'available_listings', record);
-  return result.ok ? 1 : 0;
+  if (!result.ok) {
+    console.error('[upsertDialysisListings] INSERT failed:', {
+      propertyId: propertyIdInt,
+      status: result.status,
+      data: result.data,
+      record,
+    });
+    return 0;
+  }
+  return 1;
 }
 
 /**
