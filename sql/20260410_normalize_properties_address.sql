@@ -53,6 +53,7 @@ $fn$;
 -- ingest) and copy the older record's medicare_id / lease fields into the
 -- target when the target is missing them. Then we repoint FK tables to
 -- the target and delete the older row.
+--
 -- property_id isn't the same type across domains (government uses bigint,
 -- dialysis uses uuid), and dialysis.properties has no created_at column.
 -- We work in text so the same DO block runs against either database, then
@@ -66,24 +67,37 @@ $fn$;
 -- and so child tables whose column isn't literally named
 -- "property_id" (e.g. dialysis.clinic_financial_estimates) work
 -- without a 42703 "column does not exist" error.
+--
+-- All per-row work is batched via a dup_pairs temp table so the
+-- migration runs in a fixed number of set-based statements instead
+-- of nested loops — earlier iterations issued
+-- N_dups × N_children × several EXECUTE calls each and timed out
+-- on dialysis.
+--
+-- session_replication_role is flipped to 'replica' for the duration
+-- of the transaction to bypass a latent bug in the government DB's
+-- propagate_ownership_to_property() trigger, which references
+-- NEW.ownership_end even though ownership_history doesn't have that
+-- column and blows up any UPDATE on ownership_history.
 DO $merge$
 DECLARE
-  dup             RECORD;
-  older_id        text;
-  target_id       text;
-  has_medicare    boolean;
-  has_lease_exp   boolean;
-  has_lease_com   boolean;
-  has_annual_rent boolean;
   fk_tables       text[];
   fk_cols         text[];
   i               integer;
   child_table     text;
   child_fk        text;
+  has_medicare    boolean;
+  has_lease_exp   boolean;
+  has_lease_com   boolean;
+  has_annual_rent boolean;
   has_fk_unique   boolean;
   uc              RECORD;
   match_clause    text;
+  dup_count       integer;
 BEGIN
+  -- Disable user triggers for this transaction only.
+  PERFORM set_config('session_replication_role', 'replica', true);
+
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
     INTO fk_tables, fk_cols
@@ -119,193 +133,178 @@ BEGIN
      WHERE table_name = 'properties' AND column_name = 'annual_rent'
   ) INTO has_annual_rent;
 
-  FOR dup IN
-    SELECT normalize_address_txt(address)                          AS norm_addr,
-           lower(city)                                              AS city_key,
-           state,
-           array_agg(property_id::text ORDER BY updated_at DESC NULLS LAST) AS ids
-      FROM properties
-     WHERE address IS NOT NULL
-       AND city    IS NOT NULL
-     GROUP BY normalize_address_txt(address), lower(city), state
-    HAVING count(*) > 1
-  LOOP
-    target_id := dup.ids[1];
+  -- Build a temp table of (older_id, target_id) pairs so every step
+  -- below is a single set-based statement.
+  DROP TABLE IF EXISTS dup_pairs;
+  CREATE TEMP TABLE dup_pairs (
+    older_id  text PRIMARY KEY,
+    target_id text NOT NULL
+  ) ON COMMIT DROP;
 
-    FOREACH older_id IN ARRAY dup.ids[2:array_length(dup.ids, 1)]
+  INSERT INTO dup_pairs (older_id, target_id)
+  SELECT grp.ids[k], grp.ids[1]
+    FROM (
+      SELECT array_agg(property_id::text
+                       ORDER BY updated_at DESC NULLS LAST) AS ids
+        FROM properties
+       WHERE address IS NOT NULL
+         AND city    IS NOT NULL
+       GROUP BY normalize_address_txt(address), lower(city), state
+      HAVING count(*) > 1
+    ) grp
+    CROSS JOIN LATERAL generate_series(2, array_length(grp.ids, 1)) AS k;
+
+  SELECT count(*) INTO dup_count FROM dup_pairs;
+  IF dup_count = 0 THEN
+    RETURN;
+  END IF;
+
+  -- Batch-merge medicare_id / lease fields from older into target.
+  IF has_medicare THEN
+    UPDATE properties tgt
+       SET medicare_id = old.medicare_id
+      FROM properties old
+      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
+     WHERE tgt.property_id::text = dp.target_id
+       AND tgt.medicare_id IS NULL
+       AND old.medicare_id IS NOT NULL;
+  END IF;
+
+  IF has_lease_exp THEN
+    UPDATE properties tgt
+       SET lease_expiration = old.lease_expiration
+      FROM properties old
+      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
+     WHERE tgt.property_id::text = dp.target_id
+       AND tgt.lease_expiration IS NULL
+       AND old.lease_expiration IS NOT NULL;
+  END IF;
+
+  IF has_lease_com THEN
+    UPDATE properties tgt
+       SET lease_commencement = old.lease_commencement
+      FROM properties old
+      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
+     WHERE tgt.property_id::text = dp.target_id
+       AND tgt.lease_commencement IS NULL
+       AND old.lease_commencement IS NOT NULL;
+  END IF;
+
+  IF has_annual_rent THEN
+    UPDATE properties tgt
+       SET annual_rent = old.annual_rent
+      FROM properties old
+      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
+     WHERE tgt.property_id::text = dp.target_id
+       AND tgt.annual_rent IS NULL
+       AND old.annual_rent IS NOT NULL;
+  END IF;
+
+  -- Repoint every discovered FK child. Hybrid strategy:
+  --   1. If NO unique/PK index on the child involves the FK column,
+  --      do a single batched UPDATE. Surrogate PKs stay put, so
+  --      grandchildren (lease_escalations etc.) follow for free.
+  --   2. Otherwise, for each unique index that DOES include the FK
+  --      column, delete older rows that would collide with a target
+  --      row on the non-FK columns, then batch-UPDATE the rest.
+  --
+  -- Unique-index metadata comes from pg_catalog (not
+  -- information_schema) so plain CREATE UNIQUE INDEX entries that
+  -- never become pg_constraint rows are still detected.
+  IF fk_tables IS NOT NULL THEN
+    FOR i IN 1 .. array_length(fk_tables, 1)
     LOOP
-      -- Merge medicare_id from older → target when target is missing it.
-      IF has_medicare THEN
-        EXECUTE $q$
-          UPDATE properties tgt
-             SET medicare_id = old.medicare_id
-            FROM properties old
-           WHERE tgt.property_id::text = $1
-             AND old.property_id::text = $2
-             AND tgt.medicare_id IS NULL
-             AND old.medicare_id IS NOT NULL
-        $q$ USING target_id, older_id;
-      END IF;
+      child_table := fk_tables[i];
+      child_fk    := fk_cols[i];
 
-      -- Merge lease fields from older → target when target is missing them.
-      IF has_lease_exp THEN
-        EXECUTE $q$
-          UPDATE properties tgt
-             SET lease_expiration = old.lease_expiration
-            FROM properties old
-           WHERE tgt.property_id::text = $1
-             AND old.property_id::text = $2
-             AND tgt.lease_expiration IS NULL
-             AND old.lease_expiration IS NOT NULL
-        $q$ USING target_id, older_id;
-      END IF;
+      SELECT EXISTS (
+        SELECT 1
+          FROM pg_index i2
+          JOIN pg_class  c2 ON c2.oid = i2.indrelid
+          JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
+          JOIN pg_attribute a2 ON a2.attrelid = i2.indexrelid
+                              AND a2.attnum > 0
+                              AND NOT a2.attisdropped
+                              AND a2.attname = child_fk
+         WHERE n2.nspname   = 'public'
+           AND c2.relname   = child_table
+           AND i2.indisunique
+           AND i2.indpred IS NULL
+      ) INTO has_fk_unique;
 
-      IF has_lease_com THEN
-        EXECUTE $q$
-          UPDATE properties tgt
-             SET lease_commencement = old.lease_commencement
-            FROM properties old
-           WHERE tgt.property_id::text = $1
-             AND old.property_id::text = $2
-             AND tgt.lease_commencement IS NULL
-             AND old.lease_commencement IS NOT NULL
-        $q$ USING target_id, older_id;
-      END IF;
-
-      IF has_annual_rent THEN
-        EXECUTE $q$
-          UPDATE properties tgt
-             SET annual_rent = old.annual_rent
-            FROM properties old
-           WHERE tgt.property_id::text = $1
-             AND old.property_id::text = $2
-             AND tgt.annual_rent IS NULL
-             AND old.annual_rent IS NOT NULL
-        $q$ USING target_id, older_id;
-      END IF;
-
-      -- Repoint every discovered FK child. We use a hybrid strategy so
-      -- the same code path handles both leaves-with-unique-on-FK (e.g.
-      -- property_embeddings with PK (property_id), cap_rate_history with
-      -- UNIQUE (property_id, event_type, event_date)) AND tables with
-      -- grandchildren that can't be deleted (e.g. leases, whose rows are
-      -- referenced by lease_escalations.lease_id without ON DELETE
-      -- CASCADE, so deleting an older lease row errors out with 23503).
-      --
-      -- Per child:
-      --   1. If NO unique/PK constraint on the child involves the FK
-      --      column, do a plain UPDATE. Grandchildren follow for free
-      --      since we never touch the surrogate PK (lease_id stays,
-      --      lease_escalations.lease_id keeps pointing at the same row).
-      --   2. Otherwise, for each unique/PK constraint that does include
-      --      the FK column, first delete older rows that would collide
-      --      with a target row on the constraint's non-FK columns
-      --      (target wins). Then UPDATE whatever older rows are left.
-      IF fk_tables IS NOT NULL THEN
-        FOR i IN 1 .. array_length(fk_tables, 1)
+      IF has_fk_unique THEN
+        FOR uc IN
+          SELECT ARRAY(
+                   SELECT a3.attname::text
+                     FROM pg_attribute a3
+                    WHERE a3.attrelid = i3.indexrelid
+                      AND a3.attnum > 0
+                      AND NOT a3.attisdropped
+                      AND a3.attname NOT LIKE 'pg\_expression\_%'
+                    ORDER BY a3.attnum
+                 ) AS cols
+            FROM pg_index i3
+            JOIN pg_class  c3 ON c3.oid = i3.indrelid
+            JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
+           WHERE n3.nspname   = 'public'
+             AND c3.relname   = child_table
+             AND i3.indisunique
+             AND i3.indpred IS NULL
         LOOP
-          child_table := fk_tables[i];
-          child_fk    := fk_cols[i];
-
-          SELECT EXISTS (
-            SELECT 1
-              FROM pg_index i2
-              JOIN pg_class  c2 ON c2.oid = i2.indrelid
-              JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
-              JOIN pg_attribute a2 ON a2.attrelid = i2.indexrelid
-                                  AND a2.attnum > 0
-                                  AND NOT a2.attisdropped
-                                  AND a2.attname = child_fk
-             WHERE n2.nspname   = 'public'
-               AND c2.relname   = child_table
-               AND i2.indisunique
-               AND i2.indpred IS NULL
-          ) INTO has_fk_unique;
-
-          IF has_fk_unique THEN
-            -- Per-constraint conflict resolution: delete older rows that
-            -- would clash with a target row on the non-FK columns of the
-            -- constraint, so the follow-up UPDATE has no collisions.
-            --
-            -- Queries pg_catalog (not information_schema) so plain
-            -- CREATE UNIQUE INDEX entries like
-            -- idx_inv_scores_property_unique and
-            -- cap_rate_history_property_event_idx — which never get
-            -- turned into pg_constraint rows — are still detected.
-            FOR uc IN
-              SELECT i3.indexrelid::regclass::text AS idx_name,
-                     ARRAY(
-                       SELECT a3.attname::text
-                         FROM pg_attribute a3
-                        WHERE a3.attrelid = i3.indexrelid
-                          AND a3.attnum > 0
-                          AND NOT a3.attisdropped
-                          AND a3.attname NOT LIKE 'pg\_expression\_%'
-                        ORDER BY a3.attnum
-                     ) AS cols
-                FROM pg_index i3
-                JOIN pg_class  c3 ON c3.oid = i3.indrelid
-                JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
-               WHERE n3.nspname   = 'public'
-                 AND c3.relname   = child_table
-                 AND i3.indisunique
-                 AND i3.indpred IS NULL
-            LOOP
-              -- Skip constraints that don't involve the FK column.
-              IF NOT (child_fk = ANY(uc.cols)) THEN
-                CONTINUE;
-              END IF;
-
-              SELECT string_agg(
-                       format('other.%I = child.%I', c, c),
-                       ' AND '
-                     )
-                INTO match_clause
-                FROM unnest(uc.cols) AS c
-               WHERE c <> child_fk;
-
-              IF match_clause IS NULL THEN
-                -- Constraint is solely (fk_col): any older row collides
-                -- with the target's single row. Drop all older rows.
-                EXECUTE format(
-                  'DELETE FROM %I WHERE %I::text = $1',
-                  child_table, child_fk
-                ) USING older_id;
-              ELSE
-                -- Drop older rows that match a target row on the other
-                -- constraint columns. Remaining older rows are safe to
-                -- repoint.
-                EXECUTE format(
-                  'DELETE FROM %I AS child '
-                  ' WHERE child.%I::text = $1 '
-                  '   AND EXISTS ('
-                  '     SELECT 1 FROM %I AS other '
-                  '      WHERE other.%I::text = $2 '
-                  '        AND %s'
-                  '   )',
-                  child_table, child_fk, child_table, child_fk, match_clause
-                ) USING older_id, target_id;
-              END IF;
-            END LOOP;
+          IF NOT (child_fk = ANY(uc.cols)) THEN
+            CONTINUE;
           END IF;
 
-          -- Plain repoint: changes only the FK column, so any surrogate
-          -- PK stays put and grandchildren follow automatically.
-          EXECUTE format(
-            'UPDATE %I AS child '
-            '   SET %I = p.property_id '
-            '  FROM properties p '
-            ' WHERE p.property_id::text = $1 '
-            '   AND child.%I::text      = $2',
-            child_table, child_fk, child_fk
-          ) USING target_id, older_id;
+          SELECT string_agg(
+                   format('other.%I = child.%I', c, c),
+                   ' AND '
+                 )
+            INTO match_clause
+            FROM unnest(uc.cols) AS c
+           WHERE c <> child_fk;
+
+          IF match_clause IS NULL THEN
+            EXECUTE format(
+              'DELETE FROM %I AS child '
+              ' USING dup_pairs dp '
+              ' WHERE child.%I::text = dp.older_id '
+              '   AND EXISTS ('
+              '     SELECT 1 FROM %I AS other '
+              '      WHERE other.%I::text = dp.target_id'
+              '   )',
+              child_table, child_fk, child_table, child_fk
+            );
+          ELSE
+            EXECUTE format(
+              'DELETE FROM %I AS child '
+              ' USING dup_pairs dp '
+              ' WHERE child.%I::text = dp.older_id '
+              '   AND EXISTS ('
+              '     SELECT 1 FROM %I AS other '
+              '      WHERE other.%I::text = dp.target_id '
+              '        AND %s'
+              '   )',
+              child_table, child_fk, child_table, child_fk, match_clause
+            );
+          END IF;
         END LOOP;
       END IF;
 
-      EXECUTE 'DELETE FROM properties WHERE property_id::text = $1'
-        USING older_id;
+      -- One batched UPDATE per child covers every older→target pair.
+      EXECUTE format(
+        'UPDATE %I AS child '
+        '   SET %I = p.property_id '
+        '  FROM properties p '
+        '  JOIN dup_pairs dp ON dp.target_id = p.property_id::text '
+        ' WHERE child.%I::text = dp.older_id',
+        child_table, child_fk, child_fk
+      );
     END LOOP;
-  END LOOP;
+  END IF;
+
+  -- Finally remove every stale duplicate in one DELETE.
+  DELETE FROM properties
+   WHERE property_id::text IN (SELECT older_id FROM dup_pairs);
 END
 $merge$;
 
