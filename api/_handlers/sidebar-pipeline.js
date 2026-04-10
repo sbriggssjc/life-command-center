@@ -557,14 +557,28 @@ async function writeExtractionSignal(propertyEntityId, metadata, domain, userId,
 
 async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
   const classified = classifyDomain(metadata, entity);
-  if (classified && classified !== entity.domain) {
-    await opsQuery('PATCH',
-      `entities?id=eq.${entity.id}&workspace_id=eq.${workspaceId}`,
-      { domain: classified, updated_at: new Date().toISOString() }
-    );
+
+  if (classified) {
+    // Positive keyword match — update if it changed
+    if (classified !== entity.domain) {
+      await opsQuery('PATCH',
+        `entities?id=eq.${entity.id}&workspace_id=eq.${workspaceId}`,
+        { domain: classified, updated_at: new Date().toISOString() }
+      );
+    }
     return classified;
   }
-  return entity.domain || null;
+
+  // No keyword match found — this usually means the page view didn't
+  // include tenant data (e.g. user was on Contacts or Public Records tab).
+  // NEVER downgrade an established domain to null or a different domain
+  // based on absence of evidence. Only a POSITIVE match for a different
+  // domain should cause a reclassification.
+  if (entity.domain) {
+    return entity.domain;  // preserve existing
+  }
+
+  return null;
 }
 
 // ── Step 5: Domain database propagation ────────────────────────────────────
