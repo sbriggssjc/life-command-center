@@ -749,16 +749,28 @@ async function upsertDomainSales(domain, propertyId, metadata) {
       `&select=sale_id,sale_date&limit=1`;
     const lookup = await domainQuery(domain, 'GET', lookupPath);
 
-    // Find brokers from contacts
-    const listingBroker = (metadata.contacts || []).find(c => c.role === 'listing_broker');
-    const buyerBroker = (metadata.contacts || []).find(c => c.role === 'buyer_broker');
-
     // Only apply current brokers to the current/most-recent sale. Historical
     // deed-record sales predate the current broker engagement and must not
     // have these broker names attributed to them.
     const parsedSaleDate = new Date(saleDate);
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const isCurrentSale = parsedSaleDate >= ninetyDaysAgo;
+
+    // Find brokers from contacts
+    const listingBroker = (metadata.contacts || []).find(c =>
+      c.role === 'listing_broker' && (
+        // Prefer a broker tagged to this specific transaction
+        (c.sale_buyer && (
+          (sale.buyer || '').toLowerCase().includes(c.sale_buyer.toLowerCase().split(' ')[0]) ||
+          (sale.buyer_name || '').toLowerCase().includes(c.sale_buyer.toLowerCase().split(' ')[0])
+        )) ||
+        (c.sale_seller && (
+          (sale.seller || '').toLowerCase().includes(c.sale_seller.toLowerCase().split(' ')[0]) ||
+          (sale.seller_name || '').toLowerCase().includes(c.sale_seller.toLowerCase().split(' ')[0])
+        ))
+      )
+    ) || (isCurrentSale ? (metadata.contacts || []).find(c => c.role === 'listing_broker') : null);
+    const buyerBroker = (metadata.contacts || []).find(c => c.role === 'buyer_broker');
 
     // Domain-aware field names for sales transactions
     const capRateVal = parsePercent(sale.cap_rate || metadata.cap_rate);
@@ -787,7 +799,7 @@ async function upsertDomainSales(domain, propertyId, metadata) {
       sale_date: datePart,
       sold_price: soldPrice,
       ...domainSaleFields,
-      listing_broker: isCurrentSale ? (listingBroker?.name || null) : null,
+      listing_broker: listingBroker?.name || null,
       recorded_date: parseDate(sale.recordation_date) ? parseDate(sale.recordation_date).split('T')[0] : null,
       notes: [
         sale.deed_type ? `Deed: ${sale.deed_type}` : null,
@@ -912,14 +924,32 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     for (const sale of sales) {
       const saleDate = parseDate(sale.sale_date);
       if (!saleDate) continue;
-
-      // Only link brokers to current/recent sales, not historical deed records
-      const saleDateObj = new Date(saleDate);
-      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const isCurrentSale = saleDateObj >= ninetyDaysAgo;
-      if (!isCurrentSale) continue;
-
       const datePart = saleDate.split('T')[0];
+
+      // Match broker to their transaction using the tagged buyer/seller,
+      // falling back to recency if no tag is available
+      const hasSaleTag = contact.sale_buyer || contact.sale_seller;
+      if (hasSaleTag) {
+        // Broker was tagged with a specific transaction group —
+        // only link to sales that match the buyer or seller
+        const buyerMatch  = contact.sale_buyer
+          && sale.buyer === contact.sale_buyer?.toUpperCase()?.trim();
+        const sellerMatch = contact.sale_seller
+          && sale.seller === contact.sale_seller?.toUpperCase()?.trim();
+        // Also try case-insensitive partial match
+        const buyerFuzzy  = contact.sale_buyer && sale.buyer_name
+          && sale.buyer_name.toLowerCase().includes(
+               contact.sale_buyer.toLowerCase().split(' ')[0]);
+        const sellerFuzzy = contact.sale_seller && sale.seller_name
+          && sale.seller_name.toLowerCase().includes(
+               contact.sale_seller.toLowerCase().split(' ')[0]);
+        if (!buyerMatch && !sellerMatch && !buyerFuzzy && !sellerFuzzy) continue;
+      } else {
+        // No tag — fall back to 90-day recency filter (current sale only)
+        const saleDateObj  = new Date(saleDate);
+        const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        if (saleDateObj < ninetyDaysAgo) continue;
+      }
 
       // Look up the sale_id by property_id + sale_date
       const saleLookup = await domainQuery('dialysis', 'GET',
@@ -994,14 +1024,32 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     for (const sale of sales) {
       const saleDate = parseDate(sale.sale_date);
       if (!saleDate) continue;
-
-      // Only link brokers to current/recent sales, not historical deed records
-      const saleDateObj = new Date(saleDate);
-      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const isCurrentSale = saleDateObj >= ninetyDaysAgo;
-      if (!isCurrentSale) continue;
-
       const datePart = saleDate.split('T')[0];
+
+      // Match broker to their transaction using the tagged buyer/seller,
+      // falling back to recency if no tag is available
+      const hasSaleTag = firm.sale_buyer || firm.sale_seller;
+      if (hasSaleTag) {
+        // Broker was tagged with a specific transaction group —
+        // only link to sales that match the buyer or seller
+        const buyerMatch  = firm.sale_buyer
+          && sale.buyer === firm.sale_buyer?.toUpperCase()?.trim();
+        const sellerMatch = firm.sale_seller
+          && sale.seller === firm.sale_seller?.toUpperCase()?.trim();
+        // Also try case-insensitive partial match
+        const buyerFuzzy  = firm.sale_buyer && sale.buyer_name
+          && sale.buyer_name.toLowerCase().includes(
+               firm.sale_buyer.toLowerCase().split(' ')[0]);
+        const sellerFuzzy = firm.sale_seller && sale.seller_name
+          && sale.seller_name.toLowerCase().includes(
+               firm.sale_seller.toLowerCase().split(' ')[0]);
+        if (!buyerMatch && !sellerMatch && !buyerFuzzy && !sellerFuzzy) continue;
+      } else {
+        // No tag — fall back to 90-day recency filter (current sale only)
+        const saleDateObj  = new Date(saleDate);
+        const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        if (saleDateObj < ninetyDaysAgo) continue;
+      }
 
       const saleLookup = await domainQuery('dialysis', 'GET',
         `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`
