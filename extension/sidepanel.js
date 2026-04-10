@@ -400,6 +400,11 @@ async function loadPropertyTab() {
     html += renderSalesHistory(salesHistory, ctx);
   }
 
+  // ── SECTION 5: Diff preview (what this save would update) ────────
+  if (matched && ctx && ctx.address) {
+    html += renderIngestDiff(ctx, lccEntity);
+  }
+
   body.innerHTML = html;
 
   // Action buttons
@@ -509,6 +514,42 @@ function renderCompareTable(ctx, lccEntity, sourceLabel) {
   }
 
   html += '</table>';
+  return html;
+}
+
+function renderIngestDiff(ctx, lccEntity) {
+  const meta = lccEntity.metadata || {};
+  const comparisons = [
+    { label: 'Asking Price', costar: ctx.asking_price, db: null },
+    { label: 'Cap Rate', costar: ctx.cap_rate, db: null },
+    { label: 'Building Size', costar: ctx.square_footage,
+      db: lccEntity.metadata?.square_footage },
+    { label: 'Tenants',
+      costar: (ctx.tenants||[]).map(t=>t.name).join(', ') || ctx.tenant_name,
+      db: meta.tenant_name || (meta.tenants||[]).map(t=>t.name).join(', ') },
+    { label: 'Owner',
+      costar: (ctx.contacts||[]).find(c=>c.role==='owner')?.name,
+      db: meta.contacts ? meta.contacts.find(c=>c.role==='owner')?.name : null },
+    { label: 'Sales in History',
+      costar: (ctx.sales_history||[]).length + ' records',
+      db: meta.sales_history ? meta.sales_history.length + ' records' : '0' },
+  ];
+
+  let html = '<div class="section-label">Comparison: CoStar vs LCC</div>';
+  for (const c of comparisons) {
+    if (!c.costar && !c.db) continue;
+    const changed = c.costar && c.db && c.costar !== c.db;
+    html += `<div class="context-field" style="background:${
+      changed ? 'rgba(251,191,36,0.08)' : 'transparent'}">
+      <span class="context-label">${escapeHtml(c.label)}</span>
+      <span class="context-value">
+        ${c.db ? '<span style="color:var(--text3);font-size:10px">DB: ' +
+          escapeHtml(c.db) + '</span><br>' : ''}
+        ${c.costar ? '<span style="color:var(--text);font-size:11px">→ ' +
+          escapeHtml(c.costar) + '</span>' : ''}
+      </span>
+    </div>`;
+  }
   return html;
 }
 
