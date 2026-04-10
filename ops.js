@@ -718,7 +718,9 @@ function inboxItemHTML(item, idx) {
     html += `<div class="q-item-preview" style="font-size:12px;color:var(--text3);margin:4px 0 6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(previewText)}</div>`;
   }
 
-  // Open in Outlook link — prefer desktop protocol, fall back to web search-by-Message-ID
+  // Open in Outlook link — prefer web URL (outlook.office.com). See
+  // window.openOutlookEmail in app.js for why we no longer try the
+  // `ms-outlook://` desktop protocol first.
   const emailLinks = typeof outlookLinks === 'function'
     ? outlookLinks(item)
     : { desktop: '', web: (typeof outlookWebLink === 'function' ? outlookWebLink(item) : (item.external_url || '')) };

@@ -361,39 +361,26 @@ function outlookWebLink(email) {
 }
 
 // Attach to window so inline onclick= works; also used by addEventListener wiring.
-// Tries the Outlook Desktop protocol first, falls back to the web URL after a
-// short timeout if the OS didn't hand off to a registered handler (the protocol
-// handoff is silent on failure).
+// Always prefer the web URL (outlook.office.com). The `ms-outlook://` protocol
+// was historically used for a desktop handoff, but the "New Outlook for Windows"
+// client intercepts that scheme and then shows "This action isn't supported yet"
+// because it doesn't implement the `emails/open?messageId=` verb — and since the
+// browser still loses focus when the OS routes the protocol, our old blur-based
+// fallback never fired. The web URL works in every modern Outlook client (New
+// Outlook is essentially OWA) and in every browser, so use it directly.
 window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
   if (evt && evt.preventDefault) evt.preventDefault();
-  if (!desktopUrl && !webUrl) return false;
+  if (!webUrl && !desktopUrl) return false;
 
-  // If no desktop URL, just open web.
-  if (!desktopUrl) {
+  // Prefer the web URL. Only fall back to the desktop protocol if that's
+  // literally all we have (e.g., an email with no Graph webLink or
+  // internet_message_id — rare, but keep the button functional).
+  if (webUrl) {
     window.open(webUrl, '_blank', 'noopener');
     return false;
   }
 
-  // Detect whether the protocol handoff succeeded. If the tab loses focus
-  // within ~1200ms, the desktop app grabbed it. Otherwise, open web fallback.
-  let handed = false;
-  const onBlur = () => { handed = true; };
-  window.addEventListener('blur', onBlur, { once: true });
-
-  // Use a hidden iframe to avoid navigating the top frame on failure.
-  const frame = document.createElement('iframe');
-  frame.style.display = 'none';
-  frame.src = desktopUrl;
-  document.body.appendChild(frame);
-
-  setTimeout(() => {
-    window.removeEventListener('blur', onBlur);
-    try { frame.remove(); } catch (_) {}
-    if (!handed && webUrl) {
-      window.open(webUrl, '_blank', 'noopener');
-    }
-  }, 1200);
-
+  window.open(desktopUrl, '_blank', 'noopener');
   return false;
 };
 
