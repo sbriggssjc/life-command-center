@@ -715,6 +715,29 @@ async function upsertDomainProperty(domain, entity, metadata) {
   return null;
 }
 
+function classifySaleType(sale) {
+  const raw = (sale.sale_type || sale.transaction_type || '').toLowerCase();
+  if (raw.includes('land') || raw.includes('pre-development') ||
+      raw.includes('pre development') || raw.includes('ground lease') ||
+      raw.includes('vacant')) {
+    return { transaction_type: 'Land Sale', exclude_from_market_metrics: true };
+  }
+  if (raw.includes('build-to-suit') || raw.includes('build to suit') ||
+      raw.includes('bts')) {
+    return { transaction_type: 'Build-to-Suit', exclude_from_market_metrics: false };
+  }
+  if (raw.includes('portfolio')) {
+    return { transaction_type: 'Portfolio', exclude_from_market_metrics: false };
+  }
+  if (raw.includes('1031') || raw.includes('exchange')) {
+    return { transaction_type: '1031 Exchange', exclude_from_market_metrics: false };
+  }
+  if (raw.includes('investment') || raw.includes('resale')) {
+    return { transaction_type: 'Investment', exclude_from_market_metrics: false };
+  }
+  return { transaction_type: null, exclude_from_market_metrics: false };
+}
+
 /**
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
@@ -794,6 +817,8 @@ async function upsertDomainSales(domain, propertyId, metadata) {
         }
       : { cap_rate: capRateVal, buyer_name: buyerVal, seller_name: sellerVal, procuring_broker: procuringBrokerVal };
 
+    const { transaction_type, exclude_from_market_metrics } = classifySaleType(sale);
+
     const saleData = stripNulls({
       property_id: propertyId,
       sale_date: datePart,
@@ -808,6 +833,9 @@ async function upsertDomainSales(domain, propertyId, metadata) {
         sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
       ].filter(Boolean).join('; ') || null,
     });
+    saleData.transaction_type           = transaction_type;
+    saleData.exclude_from_market_metrics = exclude_from_market_metrics;
+    saleData.data_source                = 'costar_sidebar';
 
     if (lookup.ok && lookup.data?.length) {
       // Update existing
@@ -922,6 +950,10 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     if (!Array.isArray(sales)) continue;
 
     for (const sale of sales) {
+      // Skip land / pre-development sales — they distort broker market stats.
+      const { exclude_from_market_metrics } = classifySaleType(sale);
+      if (exclude_from_market_metrics) continue;
+
       const saleDate = parseDate(sale.sale_date);
       if (!saleDate) continue;
       const datePart = saleDate.split('T')[0];
@@ -1022,6 +1054,10 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     if (!Array.isArray(sales)) continue;
 
     for (const sale of sales) {
+      // Skip land / pre-development sales — they distort broker market stats.
+      const { exclude_from_market_metrics } = classifySaleType(sale);
+      if (exclude_from_market_metrics) continue;
+
       const saleDate = parseDate(sale.sale_date);
       if (!saleDate) continue;
       const datePart = saleDate.split('T')[0];
