@@ -5357,13 +5357,29 @@ function formatBriefingAsOf(asOf) {
 }
 
 function renderBriefingItems(items, emptyLabel, limit = 5) {
-  const list = Array.isArray(items) ? items.slice(0, limit) : [];
-  if (list.length === 0) return `<div class="db-empty">${esc(emptyLabel)}</div>`;
-  return '<ul class="db-list">' + list.map((item) => {
+  // Filter out entries with no derivable title so the Briefing UI never
+  // displays "(Untitled)" rows. Upstream APIs should do this too; this is a
+  // defensive safety net for any shape that slips through.
+  const normalized = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (typeof item === 'string') {
+        const t = String(item || '').trim();
+        return t || null;
+      }
+      if (!item || typeof item !== 'object') return null;
+      const title =
+        item.title || item.label || item.name || item.subject ||
+        item.headline || item.description || item.text;
+      if (!title || !String(title).trim()) return null;
+      return { ...item, title: String(title).trim() };
+    })
+    .filter(Boolean)
+    .slice(0, limit);
+  if (normalized.length === 0) return `<div class="db-empty">${esc(emptyLabel)}</div>`;
+  return '<ul class="db-list">' + normalized.map((item) => {
     if (typeof item === 'string') return `<li>${esc(item)}</li>`;
-    const title = item?.title || item?.label || item?.id || '(Untitled)';
     const meta = [item?.status, item?.priority, item?.domain].filter(Boolean).join(' · ');
-    return `<li><span class="db-li-title">${esc(title)}</span>${meta ? `<span class="db-li-meta">${esc(meta)}</span>` : ''}</li>`;
+    return `<li><span class="db-li-title">${esc(item.title)}</span>${meta ? `<span class="db-li-meta">${esc(meta)}</span>` : ''}</li>`;
   }).join('') + '</ul>';
 }
 
