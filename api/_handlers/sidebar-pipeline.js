@@ -1138,6 +1138,33 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
 }
 
 /**
+ * Map a raw CoStar loan type description to the constrained values
+ * allowed by the Dialysis loans table CHECK constraint ('Refinance' or
+ * 'Acquisition'). Returns null for unknown types rather than violating
+ * the constraint.
+ */
+function mapLoanType(rawType) {
+  if (!rawType) return null;
+  const t = rawType.toLowerCase();
+  // Any purchase/acquisition loan
+  if (t.includes('purchase') || t.includes('acquisition') ||
+      t.includes('commercial') || t.includes('construction') ||
+      t.includes('future advance') || t.includes('open end') ||
+      t.includes('bridge') || t.includes('new') ||
+      t.includes('purchase money')) {
+    return 'Acquisition';
+  }
+  // Any refinance loan
+  if (t.includes('refinanc') || t.includes('refi') ||
+      t.includes('cash out') || t.includes('rate') ||
+      t.includes('term') || t.includes('modification')) {
+    return 'Refinance';
+  }
+  // Unknown — send null rather than violate the constraint
+  return null;
+}
+
+/**
  * Upsert loan records in the domain database.
  * Created from sales_history entries that have lender/loan_amount data.
  */
@@ -1159,8 +1186,7 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
       `loans?property_id=eq.${propertyId}&lender_name=ilike.${encodedLender}&loan_amount=eq.${loanAmount}&select=loan_id&limit=1`
     );
 
-    // Map loan_type: "Commercial" → "Acquisition", else keep as-is
-    const loanType = sale.loan_type === 'Commercial' ? 'Acquisition' : (sale.loan_type || null);
+    const loanType = mapLoanType(sale.loan_type);
 
     // Domain-aware interest rate column: dialysis=interest_rate_percent, gov=interest_rate
     const interestRateVal = parsePercent(sale.interest_rate);
