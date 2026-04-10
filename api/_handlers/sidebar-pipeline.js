@@ -820,21 +820,24 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
   // e.g. "Horvath & Tremblay" or "Marcus & Millichap" match on "&"
   const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
 
-  // ── Pass 1: Separate contacts into people and firms ──
-  const people = brokerContacts.filter(c => !FIRM_PATTERN.test(c.name || ''));
-  const firms  = brokerContacts.filter(c =>  FIRM_PATTERN.test(c.name || ''));
-
-  // ── Pass 2: Assign firm name as company on people who lack one ──
-  for (const person of people) {
-    if (!person.company && firms.length === 1) {
-      // Only one firm listed — assume it's this person's brokerage
-      person.company = firms[0].name;
-    } else if (!person.company) {
-      // Multiple firms — match by role (listing_broker ↔ listing firm, etc.)
-      const matchedFirm = firms.find(f => f.role === person.role);
-      if (matchedFirm) person.company = matchedFirm.name;
+  // ── Pass 2: Position-based firm→person assignment ──
+  // Contacts are extracted in CoStar order, where each person is immediately
+  // followed by their firm. Walk the array and assign each firm to the most
+  // recent person who doesn't yet have a company. This correctly handles
+  // pages with multiple broker groups (e.g. two listing-broker blocks with
+  // separate firms) where a single-firm fallback would misassign.
+  let lastPerson = null;
+  for (const contact of brokerContacts) {
+    if (!FIRM_PATTERN.test(contact.name || '')) {
+      lastPerson = contact; // it's a person
+    } else if (lastPerson && !lastPerson.company) {
+      lastPerson.company = contact.name; // assign firm to preceding person
     }
   }
+
+  // Re-derive people and firms arrays after assignment
+  const people = brokerContacts.filter(c => !FIRM_PATTERN.test(c.name || ''));
+  const firms  = brokerContacts.filter(c =>  FIRM_PATTERN.test(c.name || ''));
 
   // ── Pass 3: Process people — create broker records + sale_brokers entries ──
   for (const contact of people) {
