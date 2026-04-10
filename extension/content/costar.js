@@ -921,8 +921,10 @@
         }
         continue;
       }
-      if (/^(borrower)$/i.test(line)) {
-        if (next && next.length < 80) current.buyer = next;
+      if (/^borrower$/i.test(line)) {
+        if (next && next.length < 80) {
+          if (!current.buyer) current.buyer = next;
+        }
         continue;
       }
       if (/^seller$/i.test(line)) {
@@ -944,7 +946,7 @@
       if (/^origination\s+date$/i.test(line) && next) { current.loan_origination_date = next; continue; }
       if (/^loan\s+amount$/i.test(line) && next) { current.loan_amount = next; continue; }
       if (/^loan\s+type$/i.test(line) && next) { current.loan_type = next; continue; }
-      if (/^originator$/i.test(line) && next && next.length < 80) { current.lender = next; continue; }
+      if (/^(originator|lender)$/i.test(line) && next && next.length < 80) { current.lender = next; continue; }
       if (/^interest\s+rate$/i.test(line) && next) { current.interest_rate = next; continue; }
       if (/^loan\s+term$/i.test(line) && next) { current.loan_term = next; continue; }
       if (/^maturity\s+date$/i.test(line) && next) { current.maturity_date = next; continue; }
