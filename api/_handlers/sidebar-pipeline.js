@@ -49,6 +49,12 @@ const DIALYSIS_TENANT_KEYWORDS = [
   'northwest kidney', 'kidney center', 'renal', 'nephrology',
 ];
 
+// ── Mortgage / refinance deed types ─────────────────────────────────────────
+// These deed types are financial instruments recorded against the property
+// (liens, refinances, releases) and do NOT represent ownership transfers.
+// They must be skipped when building sales_transactions and ownership_history.
+const MORTGAGE_DEED_TYPES = /^(mortgage|deed\s+of\s+trust|assignment\s+of|subordination|satisfaction|release|reconveyance|lien|easement)/i;
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -765,6 +771,13 @@ async function upsertDomainSales(domain, propertyId, metadata) {
     const saleDate = parseDate(sale.sale_date);
     if (!saleDate) continue;
 
+    // Skip refinance/encumbrance deeds — not ownership transfers.
+    // Still written as loan records if lender/loan data is present
+    // (upsertDomainLoans handles this separately).
+    if (sale.deed_type && MORTGAGE_DEED_TYPES.test(sale.deed_type)) {
+      continue;
+    }
+
     const soldPrice = parseCurrency(sale.sale_price);
 
     // Check for existing sale by property_id within a ±45 day window.
@@ -1470,6 +1483,12 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     const sale = validTransitions[i];
     const saleDate = parseDate(sale.sale_date);
     if (!saleDate) continue;
+
+    // Skip refinance/encumbrance deeds — buyer here is a lender or the
+    // existing owner refinancing, not a new owner. Counting these would
+    // create duplicate ownership_history rows.
+    if (sale.deed_type && MORTGAGE_DEED_TYPES.test(sale.deed_type)) continue;
+
     const saleDateStr = saleDate.split('T')[0];
 
     // Ensure buyer owner record
