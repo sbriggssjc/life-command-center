@@ -307,6 +307,7 @@ function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerC
 // opens Outlook on the Web with a KQL-style search across all folders, so as
 // long as we can describe the message uniquely (subject + from), the user
 // lands on the live message wherever it currently lives.
+window.LCC_OUTLOOK_VERSION = 'v238';
 function outlookLinks(email) {
   if (!email) return { desktop: '', web: '' };
 
@@ -316,11 +317,14 @@ function outlookLinks(email) {
     meta.internet_message_id ||
     meta.message_id ||
     '';
+  // Graph REST IDs are long base64-ish strings (e.g. "AAMkAGI2TG93..."). The
+  // canonical inbox view exposes `i.id` which is the LCC inbox_items UUID
+  // primary key — NOT a Graph id — so we must not fall back to `email.id` or
+  // `email.email_id` when looking for a REST id. We only trust fields that
+  // are explicitly labeled as graph_rest_id.
   const restId =
     meta.graph_rest_id ||
     email.graph_rest_id ||
-    email.id ||
-    email.email_id ||
     '';
   const rawWeb =
     email.web_link ||
@@ -358,19 +362,19 @@ function outlookLinks(email) {
   // ---- Web link ----
   // Priority (all land on URLs that don't reference mutable REST ids):
   //   1. Subject + from search via the documented deeplink/search endpoint
-  //   2. Plain subject text dropped into the inbox search box (fallback
-  //      in case deeplink/search isn't honored for the current tenant)
-  //   3. Graph webLink (stale risk, but works on fresh emails)
-  //   4. REST id deeplink (ancient fallback)
+  //   2. Message-ID search (in case Outlook indexes the Message-ID header)
+  //   3. Graph webLink — only if it's NOT a stale deeplink/read/<uuid> URL
+  //      that the ingest path built from a bogus id (we've seen the LCC row
+  //      UUID leak into external_url for older rows)
+  //   4. Outlook inbox root — never errors, user can find the message
+  //      manually from context shown in LCC
   let web = '';
   const cleanSubject = String(subject || '').trim().slice(0, 120).replace(/"/g, '');
   const senderForQuery = String(senderEmail || senderName || '').trim().replace(/"/g, '');
 
   if (cleanSubject || senderForQuery) {
     // Build a KQL-style query. Outlook's search box accepts subject:"..." and
-    // from:"..." operators. We also append the plain subject text as a safety
-    // net so search still matches even if KQL parsing is stricter than docs
-    // suggest.
+    // from:"..." operators.
     const parts = [];
     if (cleanSubject) parts.push(`subject:"${cleanSubject}"`);
     if (senderForQuery) parts.push(`from:"${senderForQuery}"`);
@@ -379,16 +383,31 @@ function outlookLinks(email) {
   } else if (inetId) {
     const cleanId = String(inetId).replace(/^<|>$/g, '');
     web = `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent('"' + cleanId + '"')}`;
-  } else if (rawWeb) {
+  } else if (rawWeb && !_looksLikeStaleDeeplinkRead(rawWeb)) {
     // Normalize legacy OWA host to modern one.
     web = rawWeb
       .replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/')
       .replace('outlook.office365.com/mail/', 'outlook.office.com/mail/');
-  } else if (restId) {
-    web = `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(restId)}`;
+  } else {
+    // Ultimate fallback — always opens a valid OWA page, never the
+    // "This message might have been moved or deleted" error.
+    web = 'https://outlook.office.com/mail/inbox';
   }
 
   return { desktop, web };
+}
+
+// A `deeplink/read/<id>` URL with a UUID-shaped id is always broken: Graph
+// REST ids are base64-ish, not UUIDs. UUIDs in that slot are the LCC
+// inbox_items primary key that leaked into external_url during older ingest
+// runs. Detect and skip these so we don't hand the user a known-bad URL.
+function _looksLikeStaleDeeplinkRead(url) {
+  if (!url) return false;
+  const m = String(url).match(/\/mail\/deeplink\/read\/([^?#]+)/i);
+  if (!m) return false;
+  let id = '';
+  try { id = decodeURIComponent(m[1]); } catch (_) { id = m[1]; }
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 }
 
 // Back-compat shim so any legacy call sites keep working while we migrate.
@@ -414,16 +433,16 @@ window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
   // literally all we have (e.g., an email with no Graph webLink or
   // internet_message_id — rare, but keep the button functional).
   if (webUrl) {
-    // Diagnostic log — look for "[LCC-Outlook v237]" in DevTools Console to
+    // Diagnostic log — look for "[LCC-Outlook v238]" in DevTools Console to
     // confirm the new code is active. If the URL printed is NOT of the form
     // `.../mail/deeplink/search?query=...`, the service worker is still
     // serving a cached app.js — hard-refresh (Ctrl+Shift+R) to pick it up.
-    try { console.log('[LCC-Outlook v237] opening', webUrl); } catch (_) {}
+    try { console.log('[LCC-Outlook v238] opening', webUrl); } catch (_) {}
     window.open(webUrl, '_blank', 'noopener');
     return false;
   }
 
-  try { console.log('[LCC-Outlook v237] desktop fallback', desktopUrl); } catch (_) {}
+  try { console.log('[LCC-Outlook v238] desktop fallback', desktopUrl); } catch (_) {}
   window.open(desktopUrl, '_blank', 'noopener');
   return false;
 };
