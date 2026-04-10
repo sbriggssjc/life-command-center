@@ -820,21 +820,24 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
   // e.g. "Horvath & Tremblay" or "Marcus & Millichap" match on "&"
   const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
 
-  // ── Pass 1: Separate contacts into people and firms ──
-  const people = brokerContacts.filter(c => !FIRM_PATTERN.test(c.name || ''));
-  const firms  = brokerContacts.filter(c =>  FIRM_PATTERN.test(c.name || ''));
-
-  // ── Pass 2: Assign firm name as company on people who lack one ──
-  for (const person of people) {
-    if (!person.company && firms.length === 1) {
-      // Only one firm listed — assume it's this person's brokerage
-      person.company = firms[0].name;
-    } else if (!person.company) {
-      // Multiple firms — match by role (listing_broker ↔ listing firm, etc.)
-      const matchedFirm = firms.find(f => f.role === person.role);
-      if (matchedFirm) person.company = matchedFirm.name;
+  // ── Pass 2: Position-based firm→person assignment ──
+  // Contacts are extracted in CoStar order, where each person is immediately
+  // followed by their firm. Walk the array and assign each firm to the most
+  // recent person who doesn't yet have a company. This correctly handles
+  // pages with multiple broker groups (e.g. two listing-broker blocks with
+  // separate firms) where a single-firm fallback would misassign.
+  let lastPerson = null;
+  for (const contact of brokerContacts) {
+    if (!FIRM_PATTERN.test(contact.name || '')) {
+      lastPerson = contact; // it's a person
+    } else if (lastPerson && !lastPerson.company) {
+      lastPerson.company = contact.name; // assign firm to preceding person
     }
   }
+
+  // Re-derive people and firms arrays after assignment
+  const people = brokerContacts.filter(c => !FIRM_PATTERN.test(c.name || ''));
+  const firms  = brokerContacts.filter(c =>  FIRM_PATTERN.test(c.name || ''));
 
   // ── Pass 3: Process people — create broker records + sale_brokers entries ──
   for (const contact of people) {
@@ -1215,14 +1218,20 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     if (s.buyer) allOwnerNames.add(normalizeOwnerName(s.buyer));
     if (s.seller) allOwnerNames.add(normalizeOwnerName(s.seller));
   }
+  // Track existing owner rows so we can back-fill missing fields on cache hit
+  const existingOwnerData = new Map();
   if (allOwnerNames.size > 0) {
     const nameList = [...allOwnerNames].map(n => encodeURIComponent(n)).join(',');
+    const selectCols = domain === 'government'
+      ? `recorded_owner_id,${nameCol}`
+      : `recorded_owner_id,${nameCol},address`;
     const prefetch = await domainQuery(domain, 'GET',
-      `recorded_owners?${nameCol}=in.(${nameList})&select=recorded_owner_id,${nameCol}&limit=50`
+      `recorded_owners?${nameCol}=in.(${nameList})&select=${selectCols}&limit=50`
     );
     if (prefetch.ok && Array.isArray(prefetch.data)) {
       for (const row of prefetch.data) {
         ownerIds.set(row[nameCol], row.recorded_owner_id);
+        existingOwnerData.set(row[nameCol], row);
       }
     }
   }
@@ -1232,7 +1241,34 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     if (!name) return null;
     const normalizedName = normalizeOwnerName(name);
 
-    if (ownerIds.has(normalizedName)) return ownerIds.get(normalizedName);
+    if (ownerIds.has(normalizedName)) {
+      const id = ownerIds.get(normalizedName);
+
+      // Patch address if existing record is missing it and we have data.
+      // Gov uses a contact_info JSONB column instead of flat address — skip
+      // that domain here to avoid PATCHing a non-existent column.
+      if (domain !== 'government' && address) {
+        const existing = existingOwnerData.get(normalizedName);
+        if (existing && !existing.address) {
+          const addrFields = {};
+          const parts = address.split(',').map(s => s.trim());
+          addrFields.address = parts[0] || null;
+          if (parts.length >= 2) addrFields.city = parts[1] || null;
+          if (parts.length >= 3) {
+            const stateZip = parts[2].split(/\s+/);
+            if (stateZip[0]) addrFields.state = stateZip[0];
+          }
+          if (Object.keys(addrFields).length) {
+            await domainQuery(domain, 'PATCH',
+              `recorded_owners?recorded_owner_id=eq.${id}`,
+              addrFields
+            );
+          }
+        }
+      }
+
+      return id;
+    }
 
     // Parse address if provided — domain-aware storage
     // Dialysis: flat address/city/state columns
