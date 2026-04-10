@@ -902,18 +902,26 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
   // e.g. "Horvath & Tremblay" or "Marcus & Millichap" match on "&"
   const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
 
-  // ── Pass 2: Position-based firm→person assignment ──
-  // Contacts are extracted in CoStar order, where each person is immediately
-  // followed by their firm. Walk the array and assign each firm to the most
-  // recent person who doesn't yet have a company. This correctly handles
-  // pages with multiple broker groups (e.g. two listing-broker blocks with
-  // separate firms) where a single-firm fallback would misassign.
-  let lastPerson = null;
+  // ── Pass 2: Group-based firm→person assignment ──
+  // Contacts are extracted in CoStar order, where one or more people are
+  // followed by the firm they all work for. Walk the array collecting people,
+  // and when a firm entry is encountered, assign it to ALL people in the
+  // current group who don't yet have a company. This correctly handles
+  // groups with multiple people sharing a single firm (e.g. Matt Hagar +
+  // Yuan-Sing Chang both at AiCRE Partners, or Alvin Mansour + Phil Sambazis
+  // both at Marcus & Millichap).
+  let groupPeople = [];
   for (const contact of brokerContacts) {
-    if (!FIRM_PATTERN.test(contact.name || '')) {
-      lastPerson = contact; // it's a person
-    } else if (lastPerson && !lastPerson.company) {
-      lastPerson.company = contact.name; // assign firm to preceding person
+    const isFirm = FIRM_PATTERN.test(contact.name || '');
+    if (!isFirm) {
+      groupPeople.push(contact);
+    } else {
+      // Firm encountered — assign to ALL people in the current group
+      // who don't yet have a company
+      for (const person of groupPeople) {
+        if (!person.company) person.company = contact.name;
+      }
+      groupPeople = []; // reset for next group
     }
   }
 
