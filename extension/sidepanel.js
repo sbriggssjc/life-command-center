@@ -420,7 +420,7 @@ async function loadPropertyTab() {
     if (meta._pipeline_status === 'success') {
       pipelineLabel = 'Re-run Pipeline';
     } else if (meta._pipeline_status === 'failed') {
-      pipelineLabel = 'Retry Pipeline';
+      pipelineLabel = 'Retry Pipeline (Failed)';
     } else if (!meta._pipeline_processed_at) {
       pipelineLabel = 'Run Pipeline';
     } else {
