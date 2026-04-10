@@ -35,7 +35,9 @@ function enc(v) {
 }
 
 // Constant-time API key comparison (same pattern as _shared/auth.js verifyApiKey)
-function verifyApiKey(provided) {
+// Exported so sibling handlers (e.g. contact-handler.js) can reuse the exact
+// same strict X-LCC-Key check without reimplementing it.
+export function verifyApiKey(provided) {
   const expected = process.env.LCC_API_KEY;
   if (!expected) return false;
   if (typeof provided !== 'string' || provided.length === 0) return false;
