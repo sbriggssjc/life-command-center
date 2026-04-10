@@ -4967,11 +4967,25 @@ function renderDiaDetailProperty(record) {
   html += _detRow('Address', r.address || '—');
   html += _detRow('City / State', (r.city || '—') + ', ' + (r.state || '—'));
   html += _detRow('ZIP', r.zip_code || '—');
-  html += _detRow('Property ID', r.property_id || 'Not linked');
+  // Use != null so that a legitimate property_id of 0 is still treated as linked.
+  html += _detRow('Property ID', r.property_id != null ? r.property_id : 'Not linked');
   html += _detRow('Building Size', r.building_size ? fmtN(Math.round(Number(r.building_size))) + ' SF' : '—');
   html += _detRow('Land Area', r.land_area ? fmtN(Math.round(Number(r.land_area))) + ' SF' : '—');
   html += _detRow('Year Built', r.year_built || '—');
   html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
+
+  // Ownership vs operator — never conflate the two.
+  // "Recorded Owner" is the deed holder (e.g. Agree Central LLC) sourced from the
+  // recorded_owners table via v_property_detail. "Tenant / Operator" is the facility
+  // operator (e.g. DaVita Kidney Care) sourced from CMS clinic data. Earlier versions
+  // of this renderer leaked the CMS operator into the "Owner" slot via a data merge —
+  // keep them on separate rows so the display cannot regress.
+  html += '<div class="detail-section-title" style="margin-top:20px">Ownership &amp; Operator</div>';
+  html += _detRow('Recorded Owner', r.recorded_owner_name || '— unknown');
+  if (r.recorded_owner_address) {
+    html += _detRow('Recorded Owner Address', r.recorded_owner_address);
+  }
+  html += _detRow('Tenant / Operator', r.operator_name || r.chain_organization || '—');
 
   // Lease detail section
   html += '<div class="detail-section-title" style="margin-top:20px">Active Lease</div>';
