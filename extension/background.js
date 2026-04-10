@@ -155,24 +155,30 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
       const incoming = msg.data || {};
 
       const sameProperty = existing.address &&
-        existing.address === incoming.address;
+        incoming.address &&
+        existing.address.toLowerCase().trim() ===
+        incoming.address.toLowerCase().trim();
 
       let merged = incoming;
       if (sameProperty) {
-        // Preserve tenants from either source, dedupe by name
+        // Merge tenants — preserve from either source, dedupe by name
         const mergedTenants = [...(existing.tenants || [])];
         for (const t of (incoming.tenants || [])) {
           if (!mergedTenants.some(e => e.name === t.name)) {
             mergedTenants.push(t);
           }
         }
-        // Keep tenant_name / primary_tenant if existing has it and incoming doesn't
         merged = {
           ...existing,
           ...incoming,
           tenants: mergedTenants,
           tenant_name: incoming.tenant_name || existing.tenant_name || null,
           primary_tenant: incoming.primary_tenant || existing.primary_tenant || null,
+          // Also preserve sales history — take the longer array
+          sales_history: (incoming.sales_history || []).length >=
+                         (existing.sales_history || []).length
+            ? incoming.sales_history
+            : existing.sales_history,
         };
       }
 
