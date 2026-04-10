@@ -100,11 +100,11 @@ async function apiCall(endpoint, body, method = 'POST') {
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers['X-LCC-Key'] = apiKey;
 
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: JSON.stringify(body || {}),
-    });
+    const fetchOpts = { method, headers };
+    if (method !== 'GET' && method !== 'HEAD') {
+      fetchOpts.body = JSON.stringify(body || {});
+    }
+    const res = await fetch(url, fetchOpts);
 
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
@@ -316,23 +316,18 @@ async function loadPropertyTab() {
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
   actions.innerHTML = '';
 
-  // Query LCC to see if this property already exists (search by address)
-  const searchResult = await apiCall('/api/chat', {
-    copilot_action: 'search_entity_targets',
-    params: { query: address, entity_type: 'asset' },
-  });
+  // Query LCC to see if this property already exists.
+  // Use the address-based lookup_asset endpoint (purpose-built for dedup
+  // by address + city + state) instead of search_entity_targets, which
+  // matches on entity name and is fragile against address formatting
+  // differences and missing dedup signals.
+  const lookupQuery = new URLSearchParams({ action: 'lookup_asset', address });
+  if (city) lookupQuery.set('city', city);
+  if (state) lookupQuery.set('state', state);
+  const searchResult = await apiCall(`/api/entities?${lookupQuery.toString()}`, null, 'GET');
 
-  const entities = searchResult.ok
-    ? (searchResult.data?.entities || searchResult.data?.data?.entities || searchResult.data?.results || [])
-    : [];
-
-  // Address-based dedup: exact match on address+city prevents duplicates from different source URLs
-  const addressMatch = entities.find(e =>
-    e.address?.toLowerCase().trim() === (ctx.address || '').toLowerCase().trim() &&
-    e.city?.toLowerCase().trim() === (ctx.city || '').toLowerCase().trim()
-  );
-  const lccEntity = addressMatch || (entities.length ? entities[0] : null);
-  const matched = lccEntity && lccEntity.id;
+  const lccEntity = searchResult.ok ? (searchResult.data?.entity || null) : null;
+  const matched = !!(lccEntity && lccEntity.id);
 
   // If matched, fetch full context for that entity
   let responseData = {};
@@ -417,6 +412,10 @@ async function loadPropertyTab() {
     }
     wirePropertyActions(ctx, lccEntity);
   }
+
+  console.log('[Re-run btn] matched:', matched,
+    'entity_type:', lccEntity?.entity_type,
+    'pipeline_status:', lccEntity?.metadata?._pipeline_status);
 
   // Pipeline button — always available on matched assets
   if (matched && lccEntity.entity_type === 'asset') {

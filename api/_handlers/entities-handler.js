@@ -216,7 +216,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         return res.status(400).json({ error: 'address query parameter required (min 3 chars)' });
       }
       const address = rawAddress.replace(/[%_*]/g, '');
-      let path = `entities?workspace_id=eq.${workspaceId}&entity_type=eq.asset&address=ilike.${encodeURIComponent(address)}&select=id,name,address,city,state,metadata&limit=1`;
+      let path = `entities?workspace_id=eq.${workspaceId}&entity_type=eq.asset&address=ilike.${encodeURIComponent(address)}&select=id,entity_type,name,address,city,state,asset_type,metadata&limit=1`;
       if (req.query.city) {
         const city = req.query.city.trim().replace(/[%_*]/g, '');
         if (city) path += `&city=ilike.${encodeURIComponent(city)}`;
