@@ -53,11 +53,16 @@ $fn$;
 -- ingest) and copy the older record's medicare_id / lease fields into the
 -- target when the target is missing them. Then we repoint FK tables to
 -- the target and delete the older row.
+-- property_id isn't the same type across domains (government uses bigint,
+-- dialysis uses uuid), and dialysis.properties has no created_at column.
+-- We work in text so the same DO block runs against either database, then
+-- cast property_id::text on both sides of every comparison so PostgreSQL
+-- never has to coerce a text literal back into the native id type.
 DO $merge$
 DECLARE
   dup             RECORD;
-  older_id        uuid;
-  target_id       uuid;
+  older_id        text;
+  target_id       text;
   has_medicare    boolean;
   has_lease_exp   boolean;
   has_lease_com   boolean;
@@ -82,11 +87,10 @@ BEGIN
   ) INTO has_annual_rent;
 
   FOR dup IN
-    SELECT normalize_address_txt(address) AS norm_addr,
-           lower(city)                    AS city_key,
+    SELECT normalize_address_txt(address)                          AS norm_addr,
+           lower(city)                                              AS city_key,
            state,
-           array_agg(property_id ORDER BY updated_at DESC NULLS LAST,
-                                          created_at DESC NULLS LAST) AS ids
+           array_agg(property_id::text ORDER BY updated_at DESC NULLS LAST) AS ids
       FROM properties
      WHERE address IS NOT NULL
        AND city    IS NOT NULL
@@ -103,8 +107,8 @@ BEGIN
           UPDATE properties tgt
              SET medicare_id = old.medicare_id
             FROM properties old
-           WHERE tgt.property_id = $1
-             AND old.property_id = $2
+           WHERE tgt.property_id::text = $1
+             AND old.property_id::text = $2
              AND tgt.medicare_id IS NULL
              AND old.medicare_id IS NOT NULL
         $q$ USING target_id, older_id;
@@ -116,8 +120,8 @@ BEGIN
           UPDATE properties tgt
              SET lease_expiration = old.lease_expiration
             FROM properties old
-           WHERE tgt.property_id = $1
-             AND old.property_id = $2
+           WHERE tgt.property_id::text = $1
+             AND old.property_id::text = $2
              AND tgt.lease_expiration IS NULL
              AND old.lease_expiration IS NOT NULL
         $q$ USING target_id, older_id;
@@ -128,8 +132,8 @@ BEGIN
           UPDATE properties tgt
              SET lease_commencement = old.lease_commencement
             FROM properties old
-           WHERE tgt.property_id = $1
-             AND old.property_id = $2
+           WHERE tgt.property_id::text = $1
+             AND old.property_id::text = $2
              AND tgt.lease_commencement IS NULL
              AND old.lease_commencement IS NOT NULL
         $q$ USING target_id, older_id;
@@ -140,8 +144,8 @@ BEGIN
           UPDATE properties tgt
              SET annual_rent = old.annual_rent
             FROM properties old
-           WHERE tgt.property_id = $1
-             AND old.property_id = $2
+           WHERE tgt.property_id::text = $1
+             AND old.property_id::text = $2
              AND tgt.annual_rent IS NULL
              AND old.annual_rent IS NOT NULL
         $q$ USING target_id, older_id;
@@ -149,25 +153,48 @@ BEGIN
 
       -- Repoint FK tables that reference property_id. Each UPDATE is guarded
       -- with to_regclass so the file is safe regardless of which related
-      -- tables exist in the target database.
+      -- tables exist in the target database. We resolve the native
+      -- property_id by joining properties on ::text so we never have to
+      -- know whether the column is uuid or bigint.
       IF to_regclass('public.sales_transactions') IS NOT NULL THEN
-        EXECUTE 'UPDATE sales_transactions SET property_id = $1 WHERE property_id = $2'
-          USING target_id, older_id;
+        EXECUTE $q$
+          UPDATE sales_transactions st
+             SET property_id = p.property_id
+            FROM properties p
+           WHERE p.property_id::text  = $1
+             AND st.property_id::text = $2
+        $q$ USING target_id, older_id;
       END IF;
       IF to_regclass('public.clinic_financial_estimates') IS NOT NULL THEN
-        EXECUTE 'UPDATE clinic_financial_estimates SET property_id = $1 WHERE property_id = $2'
-          USING target_id, older_id;
+        EXECUTE $q$
+          UPDATE clinic_financial_estimates cfe
+             SET property_id = p.property_id
+            FROM properties p
+           WHERE p.property_id::text   = $1
+             AND cfe.property_id::text = $2
+        $q$ USING target_id, older_id;
       END IF;
       IF to_regclass('public.property_contacts') IS NOT NULL THEN
-        EXECUTE 'UPDATE property_contacts SET property_id = $1 WHERE property_id = $2'
-          USING target_id, older_id;
+        EXECUTE $q$
+          UPDATE property_contacts pc
+             SET property_id = p.property_id
+            FROM properties p
+           WHERE p.property_id::text  = $1
+             AND pc.property_id::text = $2
+        $q$ USING target_id, older_id;
       END IF;
       IF to_regclass('public.property_notes') IS NOT NULL THEN
-        EXECUTE 'UPDATE property_notes SET property_id = $1 WHERE property_id = $2'
-          USING target_id, older_id;
+        EXECUTE $q$
+          UPDATE property_notes pn
+             SET property_id = p.property_id
+            FROM properties p
+           WHERE p.property_id::text  = $1
+             AND pn.property_id::text = $2
+        $q$ USING target_id, older_id;
       END IF;
 
-      DELETE FROM properties WHERE property_id = older_id;
+      EXECUTE 'DELETE FROM properties WHERE property_id::text = $1'
+        USING older_id;
     END LOOP;
   END LOOP;
 END
