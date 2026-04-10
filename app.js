@@ -356,19 +356,26 @@ function outlookLinks(email) {
   }
 
   // ---- Web link ----
-  // Priority:
-  //   1. Subject + from search (stable across folder moves)
-  //   2. Message-ID search (in case Outlook indexes the Message-ID header)
+  // Priority (all land on URLs that don't reference mutable REST ids):
+  //   1. Subject + from search via the documented deeplink/search endpoint
+  //   2. Plain subject text dropped into the inbox search box (fallback
+  //      in case deeplink/search isn't honored for the current tenant)
   //   3. Graph webLink (stale risk, but works on fresh emails)
   //   4. REST id deeplink (ancient fallback)
   let web = '';
-  const cleanSubject = String(subject || '').trim().slice(0, 120);
-  const fromSelector = String(senderEmail || senderName || '').trim();
-  if (cleanSubject || fromSelector) {
+  const cleanSubject = String(subject || '').trim().slice(0, 120).replace(/"/g, '');
+  const senderForQuery = String(senderEmail || senderName || '').trim().replace(/"/g, '');
+
+  if (cleanSubject || senderForQuery) {
+    // Build a KQL-style query. Outlook's search box accepts subject:"..." and
+    // from:"..." operators. We also append the plain subject text as a safety
+    // net so search still matches even if KQL parsing is stricter than docs
+    // suggest.
     const parts = [];
-    if (cleanSubject) parts.push(`subject:"${cleanSubject.replace(/"/g, '')}"`);
-    if (fromSelector) parts.push(`from:"${fromSelector.replace(/"/g, '')}"`);
-    web = `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent(parts.join(' '))}`;
+    if (cleanSubject) parts.push(`subject:"${cleanSubject}"`);
+    if (senderForQuery) parts.push(`from:"${senderForQuery}"`);
+    const query = parts.join(' ');
+    web = `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent(query)}`;
   } else if (inetId) {
     const cleanId = String(inetId).replace(/^<|>$/g, '');
     web = `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent('"' + cleanId + '"')}`;
@@ -407,10 +414,16 @@ window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
   // literally all we have (e.g., an email with no Graph webLink or
   // internet_message_id — rare, but keep the button functional).
   if (webUrl) {
+    // Diagnostic log — look for "[LCC-Outlook v237]" in DevTools Console to
+    // confirm the new code is active. If the URL printed is NOT of the form
+    // `.../mail/deeplink/search?query=...`, the service worker is still
+    // serving a cached app.js — hard-refresh (Ctrl+Shift+R) to pick it up.
+    try { console.log('[LCC-Outlook v237] opening', webUrl); } catch (_) {}
     window.open(webUrl, '_blank', 'noopener');
     return false;
   }
 
+  try { console.log('[LCC-Outlook v237] desktop fallback', desktopUrl); } catch (_) {}
   window.open(desktopUrl, '_blank', 'noopener');
   return false;
 };
