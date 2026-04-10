@@ -258,77 +258,153 @@ async function resolveConnector(userId, workspaceId, connectorType) {
 // READ: FLAGGED EMAILS from inbox_items (database-backed, accurate total)
 // ============================================================================
 
+// Log a PostgREST error with all the diagnostic fields PostgREST returns
+// (message, details, hint, code) so Vercel logs show what actually went wrong
+// instead of swallowing it into a generic "db_query_failed".
+function logPgError(tag, status, payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  console.error(`[flagged_emails] ${tag} failed:`, {
+    http_status: status,
+    message: p.message || (typeof payload === 'string' ? payload : null),
+    details: p.details || null,
+    hint: p.hint || null,
+    code: p.code || null
+  });
+}
+
+// Build a soft-failure payload the frontend can render as the empty state.
+// Keep both shape variants so existing callers using `emails`/`total` keep
+// working while new callers can rely on `items`/`count`.
+function degradedEmailsPayload(reason, extras = {}) {
+  return {
+    emails: [],
+    items: [],
+    total: 0,
+    count: 0,
+    degraded: true,
+    reason: reason || 'unknown_error',
+    ...extras
+  };
+}
+
 async function handleFlaggedEmails(req, res, user, workspaceId) {
   try {
     const { count_only } = req.query;
 
-    // Count-only mode: fast path for stat cards
+    // Only select columns that are guaranteed to exist on the base
+    // inbox_items table (schema/004_operations.sql) + flag_removed_at
+    // (schema/028_email_dedup_constraint.sql, used in the WHERE clause).
+    // Do NOT select internet_message_id as a top-level column — it was
+    // added in migration 029 which may not be applied in every environment.
+    // The ingest path stores it inside `metadata.internet_message_id`, so
+    // we pull it from there in the mapping below.
+    const baseFilter =
+      `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
+      `&source_type=eq.flagged_email` +
+      `&status=in.(new,triaged)` +
+      `&flag_removed_at=is.null`;
+
+    // Count-only mode: fast path for stat cards. Uses HEAD + count=exact so
+    // we pay for no row payload, just the Content-Range total.
     if (count_only === 'true') {
-      const countResult = await opsQuery('GET',
-        `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
-        `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
+      const countResult = await opsQuery(
+        'GET',
+        `${baseFilter}&select=id&limit=1`,
+        null,
+        { Prefer: 'count=exact' }
       );
       if (!countResult.ok) {
-        console.error('[flagged_emails] count query failed:', countResult.status, countResult.data);
-        return res.status(200).json({ emails: [], total: 0, error: 'db_query_failed' });
+        logPgError('count query', countResult.status, countResult.data);
+        return res.status(200).json(
+          degradedEmailsPayload(
+            (countResult.data && countResult.data.message) || 'db_query_failed'
+          )
+        );
       }
-      const total = countResult.data?.length || 0;
-      return res.status(200).json({ emails: [], total });
+      const total = countResult.count || 0;
+      return res.status(200).json({ emails: [], items: [], total, count: total });
     }
 
-    // Full query with pagination
+    // Full query with pagination. opsQuery already sends Prefer: count=exact
+    // for GETs, so result.count will be the total matching rows — no need
+    // for a separate count round-trip.
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 200, 1), 2000);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
-    // Get total count (all active flagged emails)
-    const countResult = await opsQuery('GET',
-      `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
-      `&status=in.(new,triaged)&flag_removed_at=is.null&select=id`
-    );
-    const total = countResult.ok ? (countResult.data?.length || 0) : 0;
+    const selectCols = [
+      'id',
+      'external_id',
+      'title',
+      'body',
+      'status',
+      'priority',
+      'external_url',
+      'received_at',
+      'flag_removed_at',
+      'metadata'
+    ].join(',');
 
-    // Get paginated results
-    const result = await opsQuery('GET',
-      `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.flagged_email` +
-      `&status=in.(new,triaged)&flag_removed_at=is.null` +
-      `&select=id,external_id,internet_message_id,title,body,status,priority,external_url,received_at,flag_removed_at,metadata` +
-      `&order=received_at.desc&limit=${limit}&offset=${offset}`
+    const result = await opsQuery(
+      'GET',
+      `${baseFilter}&select=${selectCols}&order=received_at.desc&limit=${limit}&offset=${offset}`
     );
 
     if (!result.ok) {
-      console.error('[flagged_emails] query failed:', result.status, result.data);
-      return res.status(200).json({ emails: [], total, limit, offset, error: 'db_query_failed' });
+      logPgError('select query', result.status, result.data);
+      return res.status(200).json(
+        degradedEmailsPayload(
+          (result.data && result.data.message) || 'db_query_failed',
+          { limit, offset }
+        )
+      );
     }
 
+    const total = result.count || 0;
+
     // Map inbox_items fields to the email format the frontend expects.
-    // Surface both stable ids at the top level so outlookLinks() can build
-    // a desktop deeplink without reaching into metadata:
+    // internet_message_id / graph_rest_id live inside metadata because the
+    // top-level columns aren't guaranteed to exist across environments.
     //   - internet_message_id: RFC 5322 Message-ID, stable across folder moves
     //   - graph_rest_id: Graph REST id, works until the message is moved
-    const emails = (result.data || []).map(item => ({
-      id: item.id,
-      external_id: item.external_id,
-      internet_message_id: item.internet_message_id || item.metadata?.internet_message_id || null,
-      graph_rest_id: item.metadata?.graph_rest_id || null,
-      subject: item.title,
-      body_preview: item.body,
-      sender_name: item.metadata?.sender_name || null,
-      sender_email: item.metadata?.sender_email || null,
-      received_date: item.received_at,
-      received_date_time: item.metadata?.received_at || item.received_at,
-      has_attachments: item.metadata?.has_attachments || false,
-      importance: item.metadata?.importance || 'normal',
-      web_link: item.external_url,
-      outlook_link: item.external_url,
-      status: item.status,
-      flag_removed_at: item.flag_removed_at,
-      metadata: item.metadata || null
-    }));
+    const emails = (result.data || []).map(item => {
+      const meta = item.metadata || {};
+      return {
+        id: item.id,
+        external_id: item.external_id,
+        internet_message_id: meta.internet_message_id || item.external_id || null,
+        graph_rest_id: meta.graph_rest_id || null,
+        subject: item.title,
+        body_preview: item.body,
+        sender_name: meta.sender_name || null,
+        sender_email: meta.sender_email || null,
+        received_date: item.received_at,
+        received_date_time: meta.received_at || item.received_at,
+        has_attachments: meta.has_attachments || false,
+        importance: meta.importance || 'normal',
+        web_link: item.external_url,
+        outlook_link: item.external_url,
+        status: item.status,
+        flag_removed_at: item.flag_removed_at,
+        metadata: item.metadata || null
+      };
+    });
 
-    return res.status(200).json({ emails, total, limit, offset });
+    return res.status(200).json({
+      emails,
+      items: emails,
+      total,
+      count: total,
+      limit,
+      offset
+    });
   } catch (err) {
-    console.error('[flagged_emails] unexpected error:', err.message);
-    return res.status(200).json({ emails: [], total: 0, error: 'fetch_failed' });
+    console.error('[flagged_emails] unexpected error:', {
+      message: err && err.message,
+      stack: err && err.stack
+    });
+    return res.status(200).json(
+      degradedEmailsPayload((err && err.message) || 'fetch_failed')
+    );
   }
 }
 
