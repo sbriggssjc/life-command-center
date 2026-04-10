@@ -209,31 +209,47 @@ BEGIN
 
           SELECT EXISTS (
             SELECT 1
-              FROM information_schema.table_constraints tc2
-              JOIN information_schema.key_column_usage  kcu2
-                ON tc2.constraint_name = kcu2.constraint_name
-               AND tc2.table_schema    = kcu2.table_schema
-             WHERE tc2.table_schema    = 'public'
-               AND tc2.table_name      = child_table
-               AND tc2.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
-               AND kcu2.column_name    = child_fk
+              FROM pg_index i2
+              JOIN pg_class  c2 ON c2.oid = i2.indrelid
+              JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
+              JOIN pg_attribute a2 ON a2.attrelid = i2.indexrelid
+                                  AND a2.attnum > 0
+                                  AND NOT a2.attisdropped
+                                  AND a2.attname = child_fk
+             WHERE n2.nspname   = 'public'
+               AND c2.relname   = child_table
+               AND i2.indisunique
+               AND i2.indpred IS NULL
           ) INTO has_fk_unique;
 
           IF has_fk_unique THEN
             -- Per-constraint conflict resolution: delete older rows that
             -- would clash with a target row on the non-FK columns of the
             -- constraint, so the follow-up UPDATE has no collisions.
+            --
+            -- Queries pg_catalog (not information_schema) so plain
+            -- CREATE UNIQUE INDEX entries like
+            -- idx_inv_scores_property_unique and
+            -- cap_rate_history_property_event_idx — which never get
+            -- turned into pg_constraint rows — are still detected.
             FOR uc IN
-              SELECT tc3.constraint_name,
-                     array_agg(kcu3.column_name ORDER BY kcu3.ordinal_position) AS cols
-                FROM information_schema.table_constraints tc3
-                JOIN information_schema.key_column_usage  kcu3
-                  ON tc3.constraint_name = kcu3.constraint_name
-                 AND tc3.table_schema    = kcu3.table_schema
-               WHERE tc3.table_schema    = 'public'
-                 AND tc3.table_name      = child_table
-                 AND tc3.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
-               GROUP BY tc3.constraint_name
+              SELECT i3.indexrelid::regclass::text AS idx_name,
+                     ARRAY(
+                       SELECT a3.attname::text
+                         FROM pg_attribute a3
+                        WHERE a3.attrelid = i3.indexrelid
+                          AND a3.attnum > 0
+                          AND NOT a3.attisdropped
+                          AND a3.attname NOT LIKE 'pg\_expression\_%'
+                        ORDER BY a3.attnum
+                     ) AS cols
+                FROM pg_index i3
+                JOIN pg_class  c3 ON c3.oid = i3.indrelid
+                JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
+               WHERE n3.nspname   = 'public'
+                 AND c3.relname   = child_table
+                 AND i3.indisunique
+                 AND i3.indpred IS NULL
             LOOP
               -- Skip constraints that don't involve the FK column.
               IF NOT (child_fk = ANY(uc.cols)) THEN
