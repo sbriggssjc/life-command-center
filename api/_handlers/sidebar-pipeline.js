@@ -1677,9 +1677,11 @@ async function upsertDialysisListings(propertyId, metadata) {
   const firmBroker = brokerContacts.find(c => FIRM_PATTERN.test(c.name));
   const primaryBroker = personBroker || firmBroker || brokerContacts[0] || null;
 
-  // Guard: reject price_per_sf under $50 — almost certainly a cap rate leak
+  // Guard: reject price_per_sf under $50 (cap rate leak) or over $2000
+  // (CoStar sometimes shows building SF in the Price/SF position)
   const rawPricePsf = parseCurrency(metadata.price_per_sf);
-  const pricePsf = (rawPricePsf && rawPricePsf >= 50) ? rawPricePsf : null;
+  const pricePsf = (rawPricePsf && rawPricePsf >= 50 && rawPricePsf <= 2000)
+    ? rawPricePsf : null;
   // Fallback: compute from asking_price / square_footage when raw value is bad
   const computedPricePsf = (!pricePsf && parseCurrency(metadata.asking_price)
     && parseSF(metadata.square_footage))
@@ -1783,9 +1785,11 @@ async function upsertGovListings(propertyId, entity, metadata) {
 
   const sfInt = parseSF(metadata.square_footage);
 
-  // Guard: reject price_per_sf under $50 — almost certainly a cap rate leak
+  // Guard: reject price_per_sf under $50 (cap rate leak) or over $2000
+  // (CoStar sometimes shows building SF in the Price/SF position)
   const rawGovPricePsf = parseCurrency(metadata.price_per_sf);
-  const govPricePsf = (rawGovPricePsf && rawGovPricePsf >= 50) ? rawGovPricePsf : null;
+  const govPricePsf = (rawGovPricePsf && rawGovPricePsf >= 50 && rawGovPricePsf <= 2000)
+    ? rawGovPricePsf : null;
   const computedGovPricePsf = (!govPricePsf && parseCurrency(metadata.asking_price) && sfInt)
     ? Math.round(parseCurrency(metadata.asking_price) / sfInt * 100) / 100
     : null;
