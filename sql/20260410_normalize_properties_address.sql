@@ -88,19 +88,22 @@ $fn$;
 -- covers the normal-exit path. No early RETURNs in between.
 DO $merge$
 DECLARE
-  fk_tables       text[];
-  fk_cols         text[];
-  i               integer;
-  child_table     text;
-  child_fk        text;
-  has_medicare    boolean;
-  has_lease_exp   boolean;
-  has_lease_com   boolean;
-  has_annual_rent boolean;
-  has_fk_unique   boolean;
-  uc              RECORD;
-  partition_cols  text;
-  select_extra    text;
+  fk_tables          text[];
+  fk_cols            text[];
+  i                  integer;
+  child_table        text;
+  child_fk           text;
+  fk_type            text;
+  properties_pk_type text;
+  has_medicare       boolean;
+  has_lease_exp      boolean;
+  has_lease_com      boolean;
+  has_annual_rent    boolean;
+  uc                 RECORD;
+  pos                integer;
+  expr               text;
+  select_extra       text;
+  partition_list     text;
 BEGIN
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
@@ -136,6 +139,22 @@ BEGIN
     SELECT 1 FROM information_schema.columns
      WHERE table_name = 'properties' AND column_name = 'annual_rent'
   ) INTO has_annual_rent;
+
+  -- Native type of properties.property_id (uuid on dialysis, bigint
+  -- on government). Cached once so every downstream statement can
+  -- cast dup_pairs text columns to the native type and keep the
+  -- comparison on c.property_id itself — that's the difference
+  -- between an index scan and a full table scan, and is what caused
+  -- Round 9 to time out on government's larger child tables.
+  SELECT format_type(a.atttypid, a.atttypmod)
+    INTO properties_pk_type
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname   = 'public'
+     AND c.relname   = 'properties'
+     AND a.attname   = 'property_id'
+     AND NOT a.attisdropped;
 
   -- Disable user triggers on properties and every FK child table so
   -- the broken gov trigger (and anything similar) doesn't block the
@@ -181,178 +200,205 @@ BEGIN
   -- holds the value when the target row is written, producing
   -- 23505 duplicate key. Three-step: capture older values into a
   -- temp, clear older's medicare_id, then set target's.
+  --
+  -- Every statement below casts the dup_pairs text columns to the
+  -- native properties_pk_type so the comparisons land on the PK
+  -- index instead of forcing a seq scan.
   IF has_medicare THEN
     DROP TABLE IF EXISTS merge_medicare;
-    CREATE TEMP TABLE merge_medicare ON COMMIT DROP AS
-    SELECT dp.target_id, old.medicare_id
-      FROM dup_pairs dp
-      JOIN properties old ON old.property_id::text = dp.older_id
-     WHERE old.medicare_id IS NOT NULL;
+    EXECUTE format($cte$
+      CREATE TEMP TABLE merge_medicare ON COMMIT DROP AS
+      SELECT dp.target_id::%1$s AS target_id, old.medicare_id
+        FROM dup_pairs dp
+        JOIN properties old ON old.property_id = dp.older_id::%1$s
+       WHERE old.medicare_id IS NOT NULL
+    $cte$, properties_pk_type);
 
-    UPDATE properties
-       SET medicare_id = NULL
-     WHERE property_id::text IN (SELECT older_id FROM dup_pairs)
-       AND medicare_id IS NOT NULL;
+    EXECUTE format($sql$
+      UPDATE properties
+         SET medicare_id = NULL
+       WHERE property_id = ANY(ARRAY(
+               SELECT older_id::%1$s FROM dup_pairs))
+         AND medicare_id IS NOT NULL
+    $sql$, properties_pk_type);
 
     UPDATE properties tgt
        SET medicare_id = mm.medicare_id
       FROM merge_medicare mm
-     WHERE tgt.property_id::text = mm.target_id
+     WHERE tgt.property_id = mm.target_id
        AND tgt.medicare_id IS NULL;
   END IF;
 
   IF has_lease_exp THEN
-    UPDATE properties tgt
-       SET lease_expiration = old.lease_expiration
-      FROM properties old
-      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
-     WHERE tgt.property_id::text = dp.target_id
-       AND tgt.lease_expiration IS NULL
-       AND old.lease_expiration IS NOT NULL;
+    EXECUTE format($sql$
+      UPDATE properties tgt
+         SET lease_expiration = old.lease_expiration
+        FROM properties old
+        JOIN dup_pairs dp ON dp.older_id::%1$s = old.property_id
+       WHERE tgt.property_id = dp.target_id::%1$s
+         AND tgt.lease_expiration IS NULL
+         AND old.lease_expiration IS NOT NULL
+    $sql$, properties_pk_type);
   END IF;
 
   IF has_lease_com THEN
-    UPDATE properties tgt
-       SET lease_commencement = old.lease_commencement
-      FROM properties old
-      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
-     WHERE tgt.property_id::text = dp.target_id
-       AND tgt.lease_commencement IS NULL
-       AND old.lease_commencement IS NOT NULL;
+    EXECUTE format($sql$
+      UPDATE properties tgt
+         SET lease_commencement = old.lease_commencement
+        FROM properties old
+        JOIN dup_pairs dp ON dp.older_id::%1$s = old.property_id
+       WHERE tgt.property_id = dp.target_id::%1$s
+         AND tgt.lease_commencement IS NULL
+         AND old.lease_commencement IS NOT NULL
+    $sql$, properties_pk_type);
   END IF;
 
   IF has_annual_rent THEN
-    UPDATE properties tgt
-       SET annual_rent = old.annual_rent
-      FROM properties old
-      JOIN dup_pairs dp ON dp.older_id = old.property_id::text
-     WHERE tgt.property_id::text = dp.target_id
-       AND tgt.annual_rent IS NULL
-       AND old.annual_rent IS NOT NULL;
+    EXECUTE format($sql$
+      UPDATE properties tgt
+         SET annual_rent = old.annual_rent
+        FROM properties old
+        JOIN dup_pairs dp ON dp.older_id::%1$s = old.property_id
+       WHERE tgt.property_id = dp.target_id::%1$s
+         AND tgt.annual_rent IS NULL
+         AND old.annual_rent IS NOT NULL
+    $sql$, properties_pk_type);
   END IF;
 
-  -- Repoint every discovered FK child. Hybrid strategy:
-  --   1. If NO unique/PK index on the child involves the FK column,
-  --      do a single batched UPDATE. Surrogate PKs stay put, so
-  --      grandchildren (lease_escalations etc.) follow for free.
-  --   2. Otherwise, for each unique index that DOES include the FK
-  --      column, delete older rows that would collide with a target
-  --      row on the non-FK columns, then batch-UPDATE the rest.
+  -- Repoint every discovered FK child. For each unique non-partial
+  -- index whose key columns include the FK, run a ranked-partition
+  -- DELETE that drops older rows that would collide with the target
+  -- on the constraint's other key columns, and then do one batched
+  -- UPDATE to repoint whatever older rows survive.
   --
-  -- Unique-index metadata comes from pg_catalog (not
-  -- information_schema) so plain CREATE UNIQUE INDEX entries that
-  -- never become pg_constraint rows are still detected.
+  -- Per-child changes vs Round 9:
+  --   * fk_type is detected from pg_attribute and all casts happen
+  --     on the small dup_pairs side so c.<fk> stays native and a
+  --     child-side index on the FK can be used (Round 9 cast
+  --     c.<fk>::text and forced seq scans on every child — that's
+  --     what timed out government).
+  --   * Non-FK key columns are pulled via pg_get_indexdef(idx, pos)
+  --     instead of pg_attribute on the index relation. That returns
+  --     the real SQL expression for expression keys too — e.g.
+  --     "COALESCE(sold_price, 0::numeric)" for
+  --     sales_property_date_price_uidx — so the PARTITION BY matches
+  --     the full unique key. Round 9 filtered expression slots out
+  --     with `attname NOT LIKE 'pg_expression_%'` and under-
+  --     partitioned, missing collisions.
   IF fk_tables IS NOT NULL THEN
     FOR i IN 1 .. array_length(fk_tables, 1)
     LOOP
       child_table := fk_tables[i];
       child_fk    := fk_cols[i];
 
-      SELECT EXISTS (
-        SELECT 1
-          FROM pg_index i2
-          JOIN pg_class  c2 ON c2.oid = i2.indrelid
-          JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
-          JOIN pg_attribute a2 ON a2.attrelid = i2.indexrelid
-                              AND a2.attnum > 0
-                              AND NOT a2.attisdropped
-                              AND a2.attname = child_fk
-         WHERE n2.nspname   = 'public'
-           AND c2.relname   = child_table
-           AND i2.indisunique
-           AND i2.indpred IS NULL
-      ) INTO has_fk_unique;
+      SELECT format_type(a.atttypid, a.atttypmod)
+        INTO fk_type
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname   = 'public'
+         AND c.relname   = child_table
+         AND a.attname   = child_fk
+         AND NOT a.attisdropped;
 
-      IF has_fk_unique THEN
-        FOR uc IN
-          SELECT ARRAY(
-                   SELECT a3.attname::text
-                     FROM pg_attribute a3
-                    WHERE a3.attrelid = i3.indexrelid
-                      AND a3.attnum > 0
-                      AND NOT a3.attisdropped
-                      AND a3.attname NOT LIKE 'pg\_expression\_%'
-                    ORDER BY a3.attnum
-                 ) AS cols
-            FROM pg_index i3
-            JOIN pg_class  c3 ON c3.oid = i3.indrelid
-            JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
-           WHERE n3.nspname   = 'public'
-             AND c3.relname   = child_table
-             AND i3.indisunique
-             AND i3.indpred IS NULL
+      FOR uc IN
+        SELECT i3.indexrelid,
+               i3.indkey::smallint[] AS idx_keys,
+               i3.indnatts            AS natts,
+               (SELECT a.attnum
+                  FROM pg_attribute a
+                 WHERE a.attrelid = i3.indrelid
+                   AND a.attname  = child_fk
+                   AND NOT a.attisdropped
+                   AND a.attnum > 0) AS fk_attnum
+          FROM pg_index i3
+          JOIN pg_class  c3 ON c3.oid = i3.indrelid
+          JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
+         WHERE n3.nspname   = 'public'
+           AND c3.relname   = child_table
+           AND i3.indisunique
+           AND i3.indpred IS NULL
+      LOOP
+        -- Skip indexes that don't include the FK column at all.
+        IF uc.fk_attnum IS NULL
+           OR NOT (uc.fk_attnum = ANY(uc.idx_keys)) THEN
+          CONTINUE;
+        END IF;
+
+        -- Walk the index key positions and build two parallel strings:
+        --   select_extra:   "<expr> AS _pk_2, <expr> AS _pk_3, ..."
+        --   partition_list: "_pk_2, _pk_3, ..."
+        -- We alias each non-FK key position so the PARTITION BY in the
+        -- CTE can refer to the CTE's output column by name, which lets
+        -- expression keys participate in the partition without having
+        -- to qualify their column references.
+        select_extra   := NULL;
+        partition_list := NULL;
+        FOR pos IN 1 .. uc.natts
         LOOP
-          IF NOT (child_fk = ANY(uc.cols)) THEN
+          IF uc.idx_keys[pos] = uc.fk_attnum THEN
             CONTINUE;
           END IF;
-
-          -- Build a comma-separated list of the constraint's non-FK
-          -- columns, both as bare identifiers (for PARTITION BY on the
-          -- CTE's output) and as c.<col> (for the CTE's SELECT list).
-          SELECT string_agg(format('%I',    col), ', '),
-                 string_agg(format('c.%I',  col), ', ')
-            INTO partition_cols, select_extra
-            FROM unnest(uc.cols) AS col
-           WHERE col <> child_fk;
-
-          -- Ranked-partition DELETE. For every row in the child that
-          -- belongs to a dup pair (either the older or the target
-          -- side), compute an "effective target" — the row's target
-          -- if it's on the older side of a dup pair, or its own
-          -- property_id otherwise — and rank rows within each
-          -- (eff_target, non-FK constraint cols) bucket. Target rows
-          -- sort first so they always win; only rn = 1 per bucket
-          -- survives. This handles both the older-vs-target collision
-          -- (e.g. both hold a 2013 property_financials row) AND the
-          -- within-older collision (two olders both hold a 2013 row
-          -- with no target row — only one can be kept).
-          --
-          -- Without this, the subsequent batched UPDATE would fail
-          -- with 23505 on the second older of a within-older pair.
-          EXECUTE format(
-            'WITH involved AS ( '
-            '  SELECT c.ctid, '
-            '         COALESCE(dp.target_id, c.%1$I::text) AS eff_target, '
-            '         (dp.target_id IS NULL) AS is_target_row%2$s '
-            '    FROM %3$I c '
-            '    LEFT JOIN dup_pairs dp ON dp.older_id = c.%1$I::text '
-            '   WHERE c.%1$I::text IN (SELECT older_id  FROM dup_pairs) '
-            '      OR c.%1$I::text IN (SELECT target_id FROM dup_pairs) '
-            '), '
-            'ranked AS ( '
-            '  SELECT ctid, '
-            '         row_number() OVER ( '
-            '           PARTITION BY %4$s '
-            '           ORDER BY is_target_row DESC, ctid '
-            '         ) AS rn '
-            '    FROM involved '
-            ') '
-            'DELETE FROM %3$I '
-            ' WHERE ctid IN (SELECT ctid FROM ranked WHERE rn > 1)',
-            child_fk,
-            CASE WHEN select_extra   IS NULL THEN '' ELSE ', ' || select_extra   END,
-            child_table,
-            CASE WHEN partition_cols IS NULL THEN 'eff_target'
-                                             ELSE 'eff_target, ' || partition_cols END
-          );
+          expr := pg_get_indexdef(uc.indexrelid, pos, true);
+          select_extra := COALESCE(select_extra   || ', ', '')
+                          || expr || ' AS _pk_' || pos::text;
+          partition_list := COALESCE(partition_list || ', ', '')
+                            || '_pk_' || pos::text;
         END LOOP;
-      END IF;
+
+        EXECUTE format(
+          'WITH involved AS ( '
+          '  SELECT c.ctid, '
+          '         COALESCE(dp.target_id, c.%1$I::text) AS eff_target, '
+          '         (dp.target_id IS NULL) AS is_target_row%2$s '
+          '    FROM %3$I c '
+          '    LEFT JOIN dup_pairs dp '
+          '           ON dp.older_id::%5$s = c.%1$I '
+          '   WHERE c.%1$I = ANY(ARRAY( '
+          '           SELECT older_id::%5$s  FROM dup_pairs '
+          '           UNION '
+          '           SELECT target_id::%5$s FROM dup_pairs '
+          '         )) '
+          '), '
+          'ranked AS ( '
+          '  SELECT ctid, '
+          '         row_number() OVER ( '
+          '           PARTITION BY %4$s '
+          '           ORDER BY is_target_row DESC, ctid '
+          '         ) AS rn '
+          '    FROM involved '
+          ') '
+          'DELETE FROM %3$I '
+          ' WHERE ctid IN (SELECT ctid FROM ranked WHERE rn > 1)',
+          child_fk,
+          CASE WHEN select_extra   IS NULL THEN '' ELSE ', ' || select_extra END,
+          child_table,
+          CASE WHEN partition_list IS NULL THEN 'eff_target'
+                                           ELSE 'eff_target, ' || partition_list END,
+          fk_type
+        );
+      END LOOP;
 
       -- One batched UPDATE per child covers every older→target pair.
+      -- Native-type cast on dp.* so the filter and assignment stay on
+      -- the child's FK column and can use its index.
       EXECUTE format(
-        'UPDATE %I AS child '
-        '   SET %I = p.property_id '
-        '  FROM properties p '
-        '  JOIN dup_pairs dp ON dp.target_id = p.property_id::text '
-        ' WHERE child.%I::text = dp.older_id',
-        child_table, child_fk, child_fk
+        'UPDATE %1$I AS child '
+        '   SET %2$I = dp.target_id::%3$s '
+        '  FROM dup_pairs dp '
+        ' WHERE child.%2$I = dp.older_id::%3$s',
+        child_table, child_fk, fk_type
       );
     END LOOP;
   END IF;
 
-  -- Finally remove every stale duplicate in one DELETE.
-  DELETE FROM properties
-   WHERE property_id::text IN (SELECT older_id FROM dup_pairs);
+  -- Finally remove every stale duplicate in one DELETE. Native-type
+  -- cast on the dup_pairs side so the properties PK index can be used.
+  EXECUTE format($sql$
+    DELETE FROM properties
+     WHERE property_id = ANY(ARRAY(
+             SELECT older_id::%1$s FROM dup_pairs))
+  $sql$, properties_pk_type);
 
   -- Re-enable user triggers on every table we disabled above.
   EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
