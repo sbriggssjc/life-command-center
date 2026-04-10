@@ -1384,6 +1384,16 @@ async function upsertDialysisListings(propertyId, metadata) {
   const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
   const brokerContact = contacts.find(c => c.role === 'listing_broker') || null;
 
+  // Guard: reject price_per_sf under $50 — almost certainly a cap rate leak
+  const rawPricePsf = parseCurrency(metadata.price_per_sf);
+  const pricePsf = (rawPricePsf && rawPricePsf >= 50) ? rawPricePsf : null;
+  // Fallback: compute from asking_price / square_footage when raw value is bad
+  const computedPricePsf = (!pricePsf && parseCurrency(metadata.asking_price)
+    && parseSF(metadata.square_footage))
+    ? Math.round(parseCurrency(metadata.asking_price) / parseSF(metadata.square_footage) * 100) / 100
+    : null;
+  const safePricePsf = pricePsf || computedPricePsf || null;
+
   const record = stripNulls({
     property_id: propertyId,
     initial_price: parseCurrency(metadata.asking_price),
@@ -1396,7 +1406,7 @@ async function upsertDialysisListings(propertyId, metadata) {
     seller_name: sellerContact?.name || null,
     listing_broker: brokerContact?.name || null,
     broker_email: brokerContact?.email || null,
-    price_per_sf: parseCurrency(metadata.price_per_sf),
+    price_per_sf: safePricePsf,
   });
 
   // Always keep property_id, status, and is_active even after stripNulls
@@ -1415,7 +1425,7 @@ async function upsertDialysisListings(propertyId, metadata) {
       last_price: parseCurrency(metadata.asking_price),
       current_cap_rate: parsePercent(metadata.cap_rate),
       cap_rate: parsePercent(metadata.cap_rate),
-      price_per_sf: parseCurrency(metadata.price_per_sf),
+      price_per_sf: safePricePsf,
     });
     await domainQuery('dialysis', 'PATCH',
       `available_listings?property_id=eq.${propertyId}&is_active=is.true`, patchData);
@@ -1467,6 +1477,14 @@ async function upsertGovListings(propertyId, entity, metadata) {
 
   const sfInt = parseSF(metadata.square_footage);
 
+  // Guard: reject price_per_sf under $50 — almost certainly a cap rate leak
+  const rawGovPricePsf = parseCurrency(metadata.price_per_sf);
+  const govPricePsf = (rawGovPricePsf && rawGovPricePsf >= 50) ? rawGovPricePsf : null;
+  const computedGovPricePsf = (!govPricePsf && parseCurrency(metadata.asking_price) && sfInt)
+    ? Math.round(parseCurrency(metadata.asking_price) / sfInt * 100) / 100
+    : null;
+  const safeGovPricePsf = govPricePsf || computedGovPricePsf || null;
+
   const record = stripNulls({
     property_id: propertyId,
     listing_source: 'costar_sidebar',
@@ -1476,7 +1494,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
     square_feet: sfInt != null ? Math.round(sfInt) : null,
     asking_price: parseCurrency(metadata.asking_price),
     asking_cap_rate: parsePercent(metadata.cap_rate),
-    asking_price_psf: parseCurrency(metadata.price_per_sf),
+    asking_price_psf: safeGovPricePsf,
     listing_date: listingDate,
     listing_status: 'Active',
     days_on_market: parseIntSafe(metadata.days_on_market),
