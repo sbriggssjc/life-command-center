@@ -620,12 +620,20 @@
 
   function extractContacts(lines) {
     const contacts = [];
+    let currentGroupBuyer  = null;
+    let currentGroupSeller = null;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
       // ── STOP at end-of-content sections ───────────────────────
       if (/^(my\s+notes|sources|verification|sale\s+comp\s+id|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
+
+      // ── Current Owner marks a new transaction group ──────────
+      if (/^current\s+owner$/i.test(line)) {
+        currentGroupBuyer  = null;
+        currentGroupSeller = null;
+      }
 
       // ── Recorded Owner → entity with mailing address ────────
       if (/^recorded\s+owner$/i.test(line)) {
@@ -649,6 +657,7 @@
       if (/^recorded\s+seller$/i.test(line)) {
         const next = lines[i + 1];
         if (next && next.length > 2 && next.length < 80 && !/^buyer/i.test(next)) {
+          currentGroupSeller = next;
           contacts.push({ role: 'seller', name: next, type: 'entity' });
         }
         continue;
@@ -658,6 +667,7 @@
       if (/^recorded\s+buyer$/i.test(line)) {
         const next = lines[i + 1];
         if (next && next.length > 2 && next.length < 80 && !/^(buyer|no\s+|not\s+)/i.test(next)) {
+          currentGroupBuyer = next;
           contacts.push({ role: 'buyer', name: next, type: 'entity' });
         }
         continue;
@@ -668,7 +678,12 @@
         const peek = lines[i + 1];
         if (peek && /^(no\s+|not\s+available)/i.test(peek)) continue;
         const people = parsePersonBlocks(lines, i + 1);
-        for (const p of people) { p.role = 'listing_broker'; contacts.push(p); }
+        for (const p of people) {
+          p.role = 'listing_broker';
+          p.sale_buyer  = currentGroupBuyer;
+          p.sale_seller = currentGroupSeller;
+          contacts.push(p);
+        }
         continue;
       }
 
@@ -677,7 +692,12 @@
         const peek = lines[i + 1];
         if (peek && /^(no\s+|not\s+available)/i.test(peek)) continue;
         const people = parsePersonBlocks(lines, i + 1);
-        for (const p of people) { p.role = 'buyer_broker'; contacts.push(p); }
+        for (const p of people) {
+          p.role = 'buyer_broker';
+          p.sale_buyer  = currentGroupBuyer;
+          p.sale_seller = currentGroupSeller;
+          contacts.push(p);
+        }
         continue;
       }
 
