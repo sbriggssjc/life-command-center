@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress } from '../_shared/entity-link.js';
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
@@ -673,9 +673,12 @@ async function upsertDomainProperty(domain, entity, metadata) {
   const address = entity.address || metadata.address;
   if (!address) return null;
 
-  // Try to find existing property by address
-  const encodedAddr = encodeURIComponent(address);
-  let lookupPath = `properties?address=ilike.${encodedAddr}&select=property_id&limit=1`;
+  // Try to find existing property by address. Normalize first so abbreviation
+  // variants ("Street" vs "St", "Road" vs "Rd") resolve to the same record
+  // instead of creating a duplicate every time CoStar spells it differently.
+  const normAddr = normalizeAddress(address);
+  let lookupPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
+    `&select=property_id&limit=1`;
   if (entity.state) lookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
 
   const lookup = await domainQuery(domain, 'GET', lookupPath);

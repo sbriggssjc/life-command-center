@@ -19,6 +19,7 @@
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, paginationParams, requireOps, withErrorHandler } from '../_shared/ops-db.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
+import { normalizeAddress } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 
@@ -479,10 +480,16 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Pre-insert dedup check for assets: match on address + city
+    // Pre-insert dedup check for assets: match on normalized address + city.
+    // Exact ilike on raw address misses common abbreviation variants
+    // ("Street" vs "St", "Road" vs "Rd"), which lets CoStar create a duplicate
+    // every time it spells a street type differently from the CMS record.
     const pickedFields = pickEntityFields(entity_type, fields);
     if (entity_type === 'asset' && pickedFields.address && pickedFields.city) {
-      const dedupPath = `entities?address=ilike.${encodeURIComponent(pickedFields.address.trim())}&city=ilike.${encodeURIComponent(pickedFields.city.trim())}&entity_type=eq.asset&workspace_id=eq.${workspaceId}&limit=1`;
+      const normAddr = normalizeAddress(pickedFields.address);
+      const dedupPath = `entities?canonical_name=ilike.*${encodeURIComponent(normAddr)}*` +
+        `&city=ilike.${encodeURIComponent(pickedFields.city.trim())}` +
+        `&entity_type=eq.asset&workspace_id=eq.${workspaceId}&limit=1`;
       const dupCheck = await opsQuery('GET', dedupPath);
       if (dupCheck.ok && dupCheck.data?.length) {
         const existing = dupCheck.data[0];
@@ -534,6 +541,12 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       metadata: metadata || {},
       ...pickedFields
     };
+
+    // Store a normalized copy of the street address on assets so future
+    // dedup lookups can match on an abbreviation-stable key.
+    if (entity_type === 'asset' && pickedFields.address) {
+      entity.normalized_address = normalizeAddress(pickedFields.address);
+    }
 
     const result = await opsQuery('POST', 'entities', entity);
     if (!result.ok) {
