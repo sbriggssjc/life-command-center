@@ -1578,7 +1578,6 @@ async function upsertDialysisListings(propertyId, metadata) {
     seller_name: sellerContact?.name || null,
     listing_broker: primaryBroker?.name || null,
     broker_email: primaryBroker?.email || null,
-    broker_phone: primaryBroker?.phones?.[0] || null,
     price_per_sf: safePricePsf,
   });
 
