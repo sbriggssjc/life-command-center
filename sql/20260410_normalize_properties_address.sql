@@ -104,6 +104,7 @@ DECLARE
   expr               text;
   select_extra       text;
   partition_list     text;
+  rec                RECORD;
 BEGIN
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
@@ -302,8 +303,15 @@ BEGIN
          AND NOT a.attisdropped;
 
       FOR uc IN
+        -- indkey is int2vector; cast via ::text + string_to_array
+        -- because the direct `indkey::smallint[]` cast is not
+        -- guaranteed to work. Round 10 relied on that direct cast
+        -- and silently produced a null/empty idx_keys, which made
+        -- the `fk_attnum = ANY(idx_keys)` check always false, so
+        -- the ranked-partition DELETE loop body never ran and
+        -- every conflict fell through to the batched UPDATE.
         SELECT i3.indexrelid,
-               i3.indkey::smallint[] AS idx_keys,
+               string_to_array(i3.indkey::text, ' ')::smallint[] AS idx_keys,
                i3.indnatts            AS natts,
                (SELECT a.attnum
                   FROM pg_attribute a
@@ -382,13 +390,46 @@ BEGIN
       -- One batched UPDATE per child covers every older→target pair.
       -- Native-type cast on dp.* so the filter and assignment stay on
       -- the child's FK column and can use its index.
-      EXECUTE format(
-        'UPDATE %1$I AS child '
-        '   SET %2$I = dp.target_id::%3$s '
-        '  FROM dup_pairs dp '
-        ' WHERE child.%2$I = dp.older_id::%3$s',
-        child_table, child_fk, fk_type
-      );
+      --
+      -- If the ranked-partition DELETE above missed a conflict for
+      -- any reason (e.g. a unique index whose shape we didn't parse
+      -- correctly), fall back to a per-row UPDATE that delete-on-
+      -- conflicts: for each older row, try to repoint it, and if the
+      -- row-level UPDATE trips a unique_violation just delete the
+      -- older row (target already holds the survivor). PL/pgSQL's
+      -- EXCEPTION block wraps the inner UPDATE in an implicit
+      -- savepoint so one row's failure doesn't abort the rest.
+      BEGIN
+        EXECUTE format(
+          'UPDATE %1$I AS child '
+          '   SET %2$I = dp.target_id::%3$s '
+          '  FROM dup_pairs dp '
+          ' WHERE child.%2$I = dp.older_id::%3$s',
+          child_table, child_fk, fk_type
+        );
+      EXCEPTION WHEN unique_violation OR exclusion_violation THEN
+        FOR rec IN
+          EXECUTE format(
+            'SELECT c.ctid AS child_ctid, '
+            '       dp.target_id::%1$s AS new_fk '
+            '  FROM %2$I c '
+            '  JOIN dup_pairs dp ON dp.older_id::%1$s = c.%3$I',
+            fk_type, child_table, child_fk
+          )
+        LOOP
+          BEGIN
+            EXECUTE format(
+              'UPDATE %1$I SET %2$I = $1 WHERE ctid = $2',
+              child_table, child_fk
+            ) USING rec.new_fk, rec.child_ctid;
+          EXCEPTION WHEN unique_violation OR exclusion_violation THEN
+            EXECUTE format(
+              'DELETE FROM %1$I WHERE ctid = $1',
+              child_table
+            ) USING rec.child_ctid;
+          END;
+        END LOOP;
+      END;
     END LOOP;
   END IF;
 
