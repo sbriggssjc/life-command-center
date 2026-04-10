@@ -444,6 +444,7 @@ function buildContactOverview() {
   h += '<div class="detail-section-title">Engagement</div>';
   h += '<div class="detail-grid">';
   h += engagementStat('Score', Math.round(eng?.score || 0), engagementHeat(eng?.score));
+  h += engagementStat('Touchpoints', eng?.touchpoint_count || 0);
   h += engagementStat('Calls', eng?.total_calls || 0);
   h += engagementStat('Emails', eng?.total_emails || 0);
   h += engagementStat('Last Call', eng?.last_call ? relativeDate(eng.last_call) : 'Never');
