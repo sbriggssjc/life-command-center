@@ -718,10 +718,18 @@ function inboxItemHTML(item, idx) {
     html += `<div class="q-item-preview" style="font-size:12px;color:var(--text3);margin:4px 0 6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(previewText)}</div>`;
   }
 
-  // Open in Outlook link
-  const emailLink = typeof outlookWebLink === 'function' ? outlookWebLink(item) : (item.external_url || '');
-  if (emailLink) {
-    html += `<a href="${typeof safeHref === 'function' ? safeHref(emailLink) : emailLink}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="display:inline-block;margin-bottom:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>`;
+  // Open in Outlook link — prefer desktop protocol, fall back to web search-by-Message-ID
+  const emailLinks = typeof outlookLinks === 'function'
+    ? outlookLinks(item)
+    : { desktop: '', web: (typeof outlookWebLink === 'function' ? outlookWebLink(item) : (item.external_url || '')) };
+  if (emailLinks.desktop || emailLinks.web) {
+    const hrefSafe = typeof safeHref === 'function'
+      ? safeHref(emailLinks.web || emailLinks.desktop)
+      : (emailLinks.web || emailLinks.desktop);
+    const jsonSafe = typeof safeJSON === 'function'
+      ? safeJSON
+      : (v) => JSON.stringify(v).replace(/"/g, '&quot;');
+    html += `<a href="${hrefSafe}" target="_blank" rel="noopener" onclick="event.stopPropagation();return (window.openOutlookEmail ? window.openOutlookEmail(event, ${jsonSafe(emailLinks.desktop)}, ${jsonSafe(emailLinks.web)}) : true)" style="display:inline-block;margin-bottom:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>`;
   }
 
   // Normalized quick actions
