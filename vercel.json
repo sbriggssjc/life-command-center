@@ -33,6 +33,7 @@
     { "source": "/api/unified-contacts", "destination": "/api/entity-hub?_domain=contacts" },
     { "source": "/api/contacts", "destination": "/api/entity-hub?_domain=contacts" },
     { "source": "/api/entities", "destination": "/api/entity-hub?_domain=entities" },
+    { "source": "/api/property", "destination": "/api/entity-hub?_domain=property" },
     { "source": "/api/bridge", "destination": "/api/operations" },
     { "source": "/api/workflows", "destination": "/api/operations" },
     { "source": "/api/intake-outlook-message", "destination": "/api/intake?_route=outlook-message" },
