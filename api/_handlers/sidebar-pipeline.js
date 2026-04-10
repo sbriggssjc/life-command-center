@@ -758,7 +758,7 @@ async function upsertDomainSales(domain, propertyId, metadata) {
     // have these broker names attributed to them.
     const parsedSaleDate = new Date(saleDate);
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const isCurrentSale = sale.is_current === true || parsedSaleDate >= ninetyDaysAgo;
+    const isCurrentSale = parsedSaleDate >= ninetyDaysAgo;
 
     // Domain-aware field names for sales transactions
     const capRateVal = parsePercent(sale.cap_rate || metadata.cap_rate);
@@ -916,7 +916,7 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       // Only link brokers to current/recent sales, not historical deed records
       const saleDateObj = new Date(saleDate);
       const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const isCurrentSale = sale.is_current === true || saleDateObj >= ninetyDaysAgo;
+      const isCurrentSale = saleDateObj >= ninetyDaysAgo;
       if (!isCurrentSale) continue;
 
       const datePart = saleDate.split('T')[0];
@@ -998,7 +998,7 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       // Only link brokers to current/recent sales, not historical deed records
       const saleDateObj = new Date(saleDate);
       const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const isCurrentSale = sale.is_current === true || saleDateObj >= ninetyDaysAgo;
+      const isCurrentSale = saleDateObj >= ninetyDaysAgo;
       if (!isCurrentSale) continue;
 
       const datePart = saleDate.split('T')[0];
