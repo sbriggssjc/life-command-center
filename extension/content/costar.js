@@ -68,6 +68,10 @@
     lastDetectedId = pageId;
     lastContentLen = contentLen;
 
+    // Extract stable CoStar Comp ID from URL (e.g. /Comp/7588072/)
+    const compMatch = url.match(/\/Comp\/(\d+)\//i);
+    if (compMatch) accumulated.costar_comp_id = compMatch[1];
+
     // If address changed (navigated to different property), reset accumulation
     if (accumulated._address && accumulated._address !== identifier) {
       accumulated = { contacts: [], sales_history: [], tenants: [] };

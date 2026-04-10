@@ -325,7 +325,13 @@ async function loadPropertyTab() {
   const entities = searchResult.ok
     ? (searchResult.data?.entities || searchResult.data?.data?.entities || searchResult.data?.results || [])
     : [];
-  const lccEntity = entities.length ? entities[0] : null;
+
+  // Address-based dedup: exact match on address+city prevents duplicates from different source URLs
+  const addressMatch = entities.find(e =>
+    e.address?.toLowerCase().trim() === (ctx.address || '').toLowerCase().trim() &&
+    e.city?.toLowerCase().trim() === (ctx.city || '').toLowerCase().trim()
+  );
+  const lccEntity = addressMatch || (entities.length ? entities[0] : null);
   const matched = lccEntity && lccEntity.id;
 
   // If matched, fetch full context for that entity
@@ -639,6 +645,7 @@ function buildMetadata(ctx, domain) {
   const m = {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
+    costar_comp_id: ctx.costar_comp_id || null,
     extracted_at: new Date().toISOString(),
     // Financials
     asking_price: ctx.asking_price || null,
