@@ -5,8 +5,10 @@
 // Routes:
 //   /api/entity-hub?_domain=contacts&...  → Unified Contact Hub (contacts-handler.js)
 //   /api/entity-hub?_domain=entities&...  → Canonical Entity API (entities-handler.js)
+//   /api/entity-hub?_domain=property&...  → Property context (property-handler.js)
 //   /api/unified-contacts?...             → contacts (via vercel.json rewrite)
 //   /api/entities?...                     → entities (via vercel.json rewrite)
+//   /api/property?...                     → property context (via vercel.json rewrite)
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -15,6 +17,7 @@
 
 import { contactsHandler } from './_handlers/contacts-handler.js';
 import { entitiesHandler } from './_handlers/entities-handler.js';
+import { propertyHandler } from './_handlers/property-handler.js';
 
 export default async function handler(req, res) {
   const domain = req.query._domain;
@@ -25,6 +28,10 @@ export default async function handler(req, res) {
 
   if (domain === 'entities') {
     return entitiesHandler(req, res);
+  }
+
+  if (domain === 'property') {
+    return propertyHandler(req, res);
   }
 
   // Default: check if this looks like a contacts or entities request

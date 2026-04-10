@@ -28,7 +28,7 @@ These must be set in Vercel before deployment:
 | `DIA_SUPABASE_KEY` | Yes | Service role key for Dialysis domain (existing) |
 | `DIA_SUPABASE_URL` | No | Defaults to existing Dia project URL |
 | `EDGE_FUNCTION_URL` | No | Defaults to existing ai-copilot edge function URL |
-| `LCC_API_KEY` | Recommended | API key for dev/internal access |
+| `LCC_API_KEY` | Yes | API key used by Power Automate integrations and **required (strictly enforced)** for the `/api/property` endpoint which mirrors the Railway MCP `get_property_context` tool. Callers must send it as `X-LCC-Key: <value>`. Other endpoints fall back to transitional dev auth when unset. |
 | `LCC_ENV` | Yes | Set to `production` for live deployment |
 
 ---
