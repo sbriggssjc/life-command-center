@@ -1463,6 +1463,10 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         guarantor: metadata.guarantor || null,
         status: 'active',
         is_active: true,
+        data_source: 'costar_sidebar',
+        source_confidence: 'costar_estimate',
+        effective_date: parseDate(t.lease_start || metadata.lease_commencement)
+                        ?.split('T')[0] || new Date().toISOString().split('T')[0],
       });
     }
   } else {
@@ -1483,6 +1487,10 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       guarantor: metadata.guarantor || null,
       status: 'active',
       is_active: true,
+      data_source: 'costar_sidebar',
+      source_confidence: 'costar_estimate',
+      effective_date: parseDate(metadata.lease_commencement)
+                      ?.split('T')[0] || new Date().toISOString().split('T')[0],
     });
   }
 
