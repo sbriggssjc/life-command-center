@@ -263,13 +263,25 @@ async function resolveConnector(userId, workspaceId, connectorType) {
 // instead of swallowing it into a generic "db_query_failed".
 function logPgError(tag, status, payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
-  console.error(`[flagged_emails] ${tag} failed:`, {
+  console.error(`[sync/flagged_emails error] ${tag} failed:`, {
     http_status: status,
     message: p.message || (typeof payload === 'string' ? payload : null),
     details: p.details || null,
     hint: p.hint || null,
     code: p.code || null
   });
+}
+
+// PostgREST error codes we recognize as "missing column / schema drift".
+// 42703 = undefined_column (Postgres), PGRST204 = column not found (PostgREST v11+).
+function isMissingColumnError(status, payload) {
+  if (status !== 400 && status !== 404) return false;
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const code = String(p.code || '');
+  const message = String(p.message || '');
+  if (code === '42703' || code === 'PGRST204') return true;
+  return /column .* does not exist/i.test(message)
+    || /could not find the .* column/i.test(message);
 }
 
 // Build a soft-failure payload the frontend can render as the empty state.
@@ -292,27 +304,40 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
     const { count_only } = req.query;
 
     // Only select columns that are guaranteed to exist on the base
-    // inbox_items table (schema/004_operations.sql) + flag_removed_at
-    // (schema/028_email_dedup_constraint.sql, used in the WHERE clause).
+    // inbox_items table (schema/004_operations.sql). flag_removed_at
+    // was added in schema/028_email_dedup_constraint.sql but may not be
+    // applied in every environment, so we treat it as optional: the
+    // query is attempted with the flag_removed_at filter first, and on
+    // a "column does not exist" error we retry without it.
+    //
     // Do NOT select internet_message_id as a top-level column — it was
     // added in migration 029 which may not be applied in every environment.
     // The ingest path stores it inside `metadata.internet_message_id`, so
     // we pull it from there in the mapping below.
-    const baseFilter =
-      `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
-      `&source_type=eq.flagged_email` +
-      `&status=in.(new,triaged)` +
-      `&flag_removed_at=is.null`;
+    const wsEnc = encodeURIComponent(workspaceId);
+    const buildBaseFilter = (includeFlagRemoved) => {
+      let f =
+        `inbox_items?workspace_id=eq.${wsEnc}` +
+        `&source_type=eq.flagged_email` +
+        `&status=in.(new,triaged)`;
+      if (includeFlagRemoved) f += `&flag_removed_at=is.null`;
+      return f;
+    };
 
-    // Count-only mode: fast path for stat cards. Uses HEAD + count=exact so
-    // we pay for no row payload, just the Content-Range total.
+    // Count-only mode: fast path for stat cards. opsQuery already sends
+    // Prefer: count=exact for GETs, so result.count carries the total.
     if (count_only === 'true') {
-      const countResult = await opsQuery(
+      let countResult = await opsQuery(
         'GET',
-        `${baseFilter}&select=id&limit=1`,
-        null,
-        { Prefer: 'count=exact' }
+        `${buildBaseFilter(true)}&select=id&limit=1`
       );
+      if (!countResult.ok && isMissingColumnError(countResult.status, countResult.data)) {
+        logPgError('count query (flag_removed_at)', countResult.status, countResult.data);
+        countResult = await opsQuery(
+          'GET',
+          `${buildBaseFilter(false)}&select=id&limit=1`
+        );
+      }
       if (!countResult.ok) {
         logPgError('count query', countResult.status, countResult.data);
         return res.status(200).json(
@@ -331,7 +356,7 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 200, 1), 2000);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
-    const selectCols = [
+    const baseCols = [
       'id',
       'external_id',
       'title',
@@ -340,14 +365,26 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
       'priority',
       'external_url',
       'received_at',
-      'flag_removed_at',
       'metadata'
-    ].join(',');
+    ];
+    const buildSelect = (includeFlagRemoved) =>
+      includeFlagRemoved ? [...baseCols, 'flag_removed_at'].join(',') : baseCols.join(',');
 
-    const result = await opsQuery(
-      'GET',
-      `${baseFilter}&select=${selectCols}&order=received_at.desc&limit=${limit}&offset=${offset}`
-    );
+    const runSelect = (includeFlagRemoved) =>
+      opsQuery(
+        'GET',
+        `${buildBaseFilter(includeFlagRemoved)}` +
+          `&select=${buildSelect(includeFlagRemoved)}` +
+          `&order=received_at.desc&limit=${limit}&offset=${offset}`
+      );
+
+    let result = await runSelect(true);
+    let usedFlagRemoved = true;
+    if (!result.ok && isMissingColumnError(result.status, result.data)) {
+      logPgError('select query (flag_removed_at)', result.status, result.data);
+      result = await runSelect(false);
+      usedFlagRemoved = false;
+    }
 
     if (!result.ok) {
       logPgError('select query', result.status, result.data);
@@ -384,7 +421,7 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
         web_link: item.external_url,
         outlook_link: item.external_url,
         status: item.status,
-        flag_removed_at: item.flag_removed_at,
+        flag_removed_at: usedFlagRemoved ? (item.flag_removed_at || null) : null,
         metadata: item.metadata || null
       };
     });
@@ -395,16 +432,26 @@ async function handleFlaggedEmails(req, res, user, workspaceId) {
       total,
       count: total,
       limit,
-      offset
+      offset,
+      ...(usedFlagRemoved ? {} : { flag_removed_at_unavailable: true })
     });
   } catch (err) {
-    console.error('[flagged_emails] unexpected error:', {
+    console.error('[sync/flagged_emails error] unexpected error:', {
       message: err && err.message,
       stack: err && err.stack
     });
-    return res.status(200).json(
-      degradedEmailsPayload((err && err.message) || 'fetch_failed')
-    );
+    // Never let a flagged_emails failure propagate — always return a 200
+    // with a degraded payload so the sync response stays usable.
+    try {
+      return res.status(200).json(
+        degradedEmailsPayload((err && err.message) || 'fetch_failed')
+      );
+    } catch (responseErr) {
+      console.error('[sync/flagged_emails error] failed to send degraded payload:', {
+        message: responseErr && responseErr.message
+      });
+      return;
+    }
   }
 }
 
