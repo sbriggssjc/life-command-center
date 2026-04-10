@@ -5013,6 +5013,12 @@ function renderDiaDetailProperty(record) {
 
 /**
  * Ownership tab — view chain and resolve ownership back to developer
+ *
+ * Uses the v_ownership_chain array (loaded by detail.js into window._udCache.chain)
+ * to render a full timeline of every recorded owner for this property, most recent
+ * at top. Falls back to the single v_ownership_current record fields embedded on
+ * the record when no chain is available (e.g. when this renderer is invoked
+ * outside of the unified detail panel flow).
  */
 function renderDiaDetailOwnership(record) {
   const r = record;
@@ -5020,7 +5026,65 @@ function renderDiaDetailOwnership(record) {
 
   html += '<div class="detail-section-title">Ownership Chain</div>';
 
-  if (r.ownership_id) {
+  // Pull chain from the unified detail cache when available. detail.js populates
+  // window._udCache.chain via openUnifiedDetail() before invoking any tab renderer.
+  const chain = (window._udCache && Array.isArray(window._udCache.chain))
+    ? window._udCache.chain
+    : [];
+
+  if (chain.length > 0) {
+    // 90-day fallback rule: if the most-recent entry has an ownership_end within
+    // 90 days of today, treat it as current. This guards against stale end dates
+    // on the active ownership record (e.g. Agree Central's 2026-03-13 bug).
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+    const isChainEntryCurrent = (entry, isMostRecent) => {
+      if (!isMostRecent) return false;
+      if (!entry.ownership_end) return true;
+      const endMs = new Date(entry.ownership_end).getTime();
+      if (isNaN(endMs)) return true;
+      return Math.abs(nowMs - endMs) <= NINETY_DAYS_MS;
+    };
+
+    html += '<div class="detail-timeline">';
+    chain.forEach((h, idx) => {
+      const isFirst = idx === 0;
+      const isCurrent = isChainEntryCurrent(h, isFirst);
+      const ownerLabel = h.recorded_owner_name || h.true_owner_name || '—';
+      const startStr = h.transfer_date
+        ? new Date(h.transfer_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        : 'Unknown';
+      const endStr = isCurrent
+        ? 'Present'
+        : (h.ownership_end
+            ? new Date(h.ownership_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            : 'Unknown');
+      const priceStr = h.sale_price
+        ? '$' + Number(h.sale_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
+        : 'Not Disclosed';
+      const capStr = h.cap_rate ? Number(h.cap_rate).toFixed(2) + '%' : '—';
+
+      html += '<div class="detail-timeline-item ' + (isCurrent ? 'green' : '') + '" style="margin-bottom:10px">';
+      html += '<div class="detail-card-date">' + esc(startStr) + ' → ' + esc(endStr);
+      if (isCurrent) html += ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>';
+      html += '</div>';
+      // Clickable owner name — opens the entity/contact by name so the user
+      // can jump from the ownership chain into LCC Contacts.
+      html += '<div class="detail-card-title">' + (typeof entityLink === 'function' ? entityLink(ownerLabel, 'contact', null) : esc(ownerLabel)) + '</div>';
+      html += '<div class="detail-card-body">';
+      if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
+        html += '<span style="font-size:12px;color:var(--text3)">True Owner:</span> ' + (typeof entityLink === 'function' ? entityLink(h.true_owner_name, 'contact', null) : esc(h.true_owner_name)) + '<br>';
+      }
+      html += '<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">' + esc(priceStr) + '</span> <span style="color:var(--text3)">|</span> Cap rate: ' + esc(capStr) + '</div>';
+      if (h.ownership_type) html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ' + esc(h.ownership_type) + '</div>';
+      if (h.ownership_source) html += '<div style="font-size:11px;color:var(--text3)">Source: ' + esc(h.ownership_source) + '</div>';
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  } else if (r.ownership_id) {
+    // Fallback: no chain loaded — show the single current-ownership fields
+    // embedded on the record (legacy v_ownership_current path).
     html += _detRow('Recorded Owner', r.recorded_owner_name || '— unknown');
     html += _detRow('True Owner / Developer', r.true_owner_name || '— not traced');
     html += _detRow('Owner Type', r.owner_type || '—');

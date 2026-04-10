@@ -6,6 +6,9 @@
 
 // Cache for the current detail data (avoids re-fetch on tab switch)
 let _udCache = null;
+// Helper: update the cache and mirror to window so cross-file consumers
+// (e.g. renderDiaDetailOwnership in dialysis.js) can read chain/ownership.
+function _setUdCache(v) { _udCache = v; window._udCache = v; }
 let _udFormDirty = false; // track unsaved form edits for beforeunload guard
 
 // Helper for safe parseFloat: converts empty strings to null instead of NaN
@@ -63,7 +66,7 @@ let _udIntakeState = {
  * @param {object} fallback - the raw record from the list (shown while loading)
  */
 async function openUnifiedDetail(db, ids, fallback, initialTab) {
-  _udCache = null;
+  _setUdCache(null);
   _opsExtraCache = null; // reset operations extra data for new clinic
   _salesCache = null; // reset sales data for new property
   const panel = document.getElementById('detailPanel');
@@ -150,7 +153,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   if (!mainFilter) {
     // No property_id or lease_number — render a fallback detail panel
     // using the fields already present on the search card record
-    _udCache = { db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true };
+    _setUdCache({ db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true });
     _udRenderFallbackHeader(db, fallback);
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
     return;
@@ -227,7 +230,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       console.warn('entity metadata lookup failed', e);
     }
 
-    _udCache = { db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, entityMeta, _fallbackOnly: allEmpty };
+    _setUdCache({ db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, entityMeta, _fallbackOnly: allEmpty });
 
     // Update header with real data (page_title or fallback to tenant/address)
     if (synthProperty) {
@@ -1765,14 +1768,28 @@ function _udTabOwnership() {
   if (chain.length === 0) {
     html += '<div class="detail-empty" style="font-size:13px">No ownership transfer history found for this property. Check the History tab or use Research Quick Links to trace prior owners.</div>';
   } else {
+    // Determine if the most recent chain entry should be treated as "current".
+    // An entry is current when its ownership_end is NULL, OR (fallback) when the
+    // ownership_end is within 90 days of today and no more recent entry exists.
+    // This guards against stale ownership_end dates on the current record.
+    const _NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const _nowMs = Date.now();
+    const _isChainEntryCurrent = (entry, isMostRecent) => {
+      if (!isMostRecent) return false;
+      if (!entry.ownership_end) return true;
+      const endMs = new Date(entry.ownership_end).getTime();
+      if (isNaN(endMs)) return true;
+      return Math.abs(_nowMs - endMs) <= _NINETY_DAYS_MS;
+    };
+
     html += '<div class="detail-timeline">';
     chain.forEach((h, idx) => {
       const isFirst = idx === 0;
-      const statusClass = isFirst ? 'green' : '';
-      html += `<div class="detail-timeline-item ${statusClass}">`;
-      html += `<div class="detail-card-date">${esc(_fmtDate(h.transfer_date) || 'Unknown date')}</div>`;
 
       if (db === 'gov') {
+        const statusClass = isFirst ? 'green' : '';
+        html += `<div class="detail-timeline-item ${statusClass}">`;
+        html += `<div class="detail-card-date">${esc(_fmtDate(h.transfer_date) || 'Unknown date')}</div>`;
         html += `<div class="detail-card-title">${esc(h.to_owner || '—')}</div>`;
         html += '<div class="detail-card-body">';
         if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
@@ -1785,22 +1802,36 @@ function _udTabOwnership() {
         if (h.principal_names) html += `<span style="font-size:12px;color:var(--text3)">Principals:</span> ${esc(h.principal_names)}<br>`;
         if (h.research_status) html += `<span class="detail-badge">${esc(cleanLabel(h.research_status))}</span>`;
         html += '</div>';
+        html += '</div>';
       } else {
+        // Dia: render as an ownership timeline row per LCC spec.
+        //   [Owner Name]  — [transfer_date] → [ownership_end | "Present"]
+        //   Sale price: $X | Cap rate: X%
         const ownerLabel = h.recorded_owner_name || h.true_owner_name || '—';
-        html += `<div class="detail-card-title">${esc(ownerLabel)}</div>`;
+        const isCurrent = _isChainEntryCurrent(h, isFirst);
+        const statusClass = isCurrent ? 'green' : '';
+        const startStr = _fmtDate(h.transfer_date) || 'Unknown';
+        const endStr = isCurrent ? 'Present' : (_fmtDate(h.ownership_end) || 'Unknown');
+        const priceStr = h.sale_price
+          ? '$' + Number(h.sale_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
+          : 'Not Disclosed';
+        const capStr = h.cap_rate ? Number(h.cap_rate).toFixed(2) + '%' : '—';
+
+        html += `<div class="detail-timeline-item ${statusClass}">`;
+        html += `<div class="detail-card-date">${esc(startStr)} → ${esc(endStr)}${isCurrent ? ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>' : ''}</div>`;
+        // Clickable owner name — opens the entity/contact by name so the user
+        // can jump from the ownership chain into LCC Contacts.
+        html += `<div class="detail-card-title">${entityLink(ownerLabel, 'contact', null)}</div>`;
         html += '<div class="detail-card-body">';
         if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
-          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
+          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${entityLink(h.true_owner_name, 'contact', null)}<br>`;
         }
-        if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
-        if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
-        if (h.rent) html += `Rent: ${fmt(h.rent)}<br>`;
-        if (h.ownership_type) html += `<span style="font-size:12px;color:var(--text3)">Type:</span> ${esc(h.ownership_type)}<br>`;
-        if (h.ownership_source) html += `<span style="font-size:12px;color:var(--text3)">Source:</span> ${esc(h.ownership_source)}<br>`;
-        if (h.ownership_end) html += `<span style="font-size:12px;color:var(--text3)">End:</span> ${esc(_fmtDate(h.ownership_end))}<br>`;
+        html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span style="color:var(--text3)">|</span> Cap rate: ${esc(capStr)}</div>`;
+        if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
+        if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
+        html += '</div>';
         html += '</div>';
       }
-      html += '</div>';
     });
     html += '</div>';
   }
