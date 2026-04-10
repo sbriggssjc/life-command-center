@@ -730,9 +730,23 @@ async function upsertDomainSales(domain, propertyId, metadata) {
 
     const soldPrice = parseCurrency(sale.sale_price);
 
-    // Check for existing sale by property_id + sale_date
+    // Check for existing sale by property_id within a ±45 day window.
+    // CoStar often records the same transaction with two different dates
+    // (deed recording date vs. stat-card transaction date), which can differ
+    // by days to weeks. An exact-date match creates a duplicate on every
+    // re-save, so we treat any sale on the same property within ±45 days as
+    // the same transaction and PATCH it instead of inserting.
     const datePart = saleDate.split('T')[0]; // YYYY-MM-DD
-    let lookupPath = `sales_transactions?property_id=eq.${propertyId}&sale_date=eq.${datePart}&select=sale_id&limit=1`;
+    const saleD = new Date(datePart);
+    const lo = new Date(saleD); lo.setDate(lo.getDate() - 45);
+    const hi = new Date(saleD); hi.setDate(hi.getDate() + 45);
+    const loStr = lo.toISOString().split('T')[0];
+    const hiStr = hi.toISOString().split('T')[0];
+
+    const lookupPath =
+      `sales_transactions?property_id=eq.${propertyId}` +
+      `&sale_date=gte.${loStr}&sale_date=lte.${hiStr}` +
+      `&select=sale_id,sale_date&limit=1`;
     const lookup = await domainQuery(domain, 'GET', lookupPath);
 
     // Find brokers from contacts
