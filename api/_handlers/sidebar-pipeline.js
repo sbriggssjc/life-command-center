@@ -1782,6 +1782,33 @@ async function upsertDialysisListings(propertyId, metadata) {
     });
     return 0;
   }
+
+  // Post-insert check: if a closed sale already exists for this property
+  // within the last 2 years, immediately close the listing so we don't
+  // treat it as a new active listing.
+  const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000)
+    .toISOString().split('T')[0];
+  const recentSales = await domainQuery('dialysis', 'GET',
+    `sales_transactions?property_id=eq.${propertyIdInt}` +
+    `&sale_date=gte.${twoYearsAgo}&select=sale_id,sale_date,sold_price,cap_rate` +
+    `&order=sale_date.desc&limit=1`
+  );
+
+  if (recentSales.ok && recentSales.data?.length) {
+    const latestSale = recentSales.data[0];
+    await domainQuery('dialysis', 'PATCH',
+      `available_listings?property_id=eq.${propertyIdInt}&is_active=is.true`,
+      {
+        is_active: false,
+        status: 'Sold',
+        off_market_date: latestSale.sale_date,
+        last_price: parseCurrency(latestSale.sold_price) || null,
+        current_cap_rate: latestSale.cap_rate || null,
+      }
+    );
+    // Return 0 — don't count as "new active listing" since it's already sold
+    return 0;
+  }
   return 1;
 }
 
