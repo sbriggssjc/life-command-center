@@ -266,26 +266,37 @@ BEGIN
     $sql$, properties_pk_type);
   END IF;
 
-  -- Repoint every discovered FK child. For each unique non-partial
-  -- index whose key columns include the FK, run a ranked-partition
-  -- DELETE that drops older rows that would collide with the target
-  -- on the constraint's other key columns, and then do one batched
-  -- UPDATE to repoint whatever older rows survive.
+  -- Repoint every discovered FK child. Three-tier strategy so the
+  -- expensive work only runs when it's actually needed:
   --
-  -- Per-child changes vs Round 9:
-  --   * fk_type is detected from pg_attribute and all casts happen
-  --     on the small dup_pairs side so c.<fk> stays native and a
-  --     child-side index on the FK can be used (Round 9 cast
-  --     c.<fk>::text and forced seq scans on every child — that's
-  --     what timed out government).
-  --   * Non-FK key columns are pulled via pg_get_indexdef(idx, pos)
-  --     instead of pg_attribute on the index relation. That returns
-  --     the real SQL expression for expression keys too — e.g.
-  --     "COALESCE(sold_price, 0::numeric)" for
-  --     sales_property_date_price_uidx — so the PARTITION BY matches
-  --     the full unique key. Round 9 filtered expression slots out
-  --     with `attname NOT LIKE 'pg_expression_%'` and under-
-  --     partitioned, missing collisions.
+  --   Tier 1 (fast path, runs for every child):
+  --     Plain batched UPDATE. Surrogate PKs stay put so grandchildren
+  --     follow automatically. When there are no unique-on-FK
+  --     collisions (the common case for most tables), this is the
+  --     only statement that runs per child.
+  --
+  --   Tier 2 (only on unique_violation from Tier 1):
+  --     Walk each unique non-partial index whose key columns include
+  --     the FK and run a ranked-partition DELETE keyed on the non-FK
+  --     columns. Uses pg_get_indexdef for the key expressions so
+  --     expression indexes like
+  --     sales_property_date_price_uidx (property_id, sale_date,
+  --     COALESCE(sold_price, 0::numeric)) are partitioned on the
+  --     full key. Then retry the batched UPDATE.
+  --
+  --   Tier 3 (only on unique_violation from the retry):
+  --     Row-level UPDATE with delete-on-conflict. If even the delete
+  --     is blocked by a grandchild FK (e.g.
+  --     ownership_history.sale_id → sales_transactions.sale_id with
+  --     no ON DELETE CASCADE), un-pair the older from dup_pairs so
+  --     the final DELETE FROM properties skips it — we'd rather
+  --     leave one older unmerged than fail the whole migration.
+  --
+  -- Why the tiers matter: Round 11 ran Tier 2 unconditionally for
+  -- every child × every unique-on-FK index. For government with
+  -- dozens of FK children and multiple indexes each, the cumulative
+  -- scan + window-function cost exceeded statement_timeout even
+  -- when there were zero conflicts to resolve.
   IF fk_tables IS NOT NULL THEN
     FOR i IN 1 .. array_length(fk_tables, 1)
     LOOP
@@ -302,104 +313,9 @@ BEGIN
          AND a.attname   = child_fk
          AND NOT a.attisdropped;
 
-      FOR uc IN
-        -- indkey is int2vector; cast via ::text + string_to_array
-        -- because the direct `indkey::smallint[]` cast is not
-        -- guaranteed to work. Round 10 relied on that direct cast
-        -- and silently produced a null/empty idx_keys, which made
-        -- the `fk_attnum = ANY(idx_keys)` check always false, so
-        -- the ranked-partition DELETE loop body never ran and
-        -- every conflict fell through to the batched UPDATE.
-        SELECT i3.indexrelid,
-               string_to_array(i3.indkey::text, ' ')::smallint[] AS idx_keys,
-               i3.indnatts            AS natts,
-               (SELECT a.attnum
-                  FROM pg_attribute a
-                 WHERE a.attrelid = i3.indrelid
-                   AND a.attname  = child_fk
-                   AND NOT a.attisdropped
-                   AND a.attnum > 0) AS fk_attnum
-          FROM pg_index i3
-          JOIN pg_class  c3 ON c3.oid = i3.indrelid
-          JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
-         WHERE n3.nspname   = 'public'
-           AND c3.relname   = child_table
-           AND i3.indisunique
-           AND i3.indpred IS NULL
-      LOOP
-        -- Skip indexes that don't include the FK column at all.
-        IF uc.fk_attnum IS NULL
-           OR NOT (uc.fk_attnum = ANY(uc.idx_keys)) THEN
-          CONTINUE;
-        END IF;
-
-        -- Walk the index key positions and build two parallel strings:
-        --   select_extra:   "<expr> AS _pk_2, <expr> AS _pk_3, ..."
-        --   partition_list: "_pk_2, _pk_3, ..."
-        -- We alias each non-FK key position so the PARTITION BY in the
-        -- CTE can refer to the CTE's output column by name, which lets
-        -- expression keys participate in the partition without having
-        -- to qualify their column references.
-        select_extra   := NULL;
-        partition_list := NULL;
-        FOR pos IN 1 .. uc.natts
-        LOOP
-          IF uc.idx_keys[pos] = uc.fk_attnum THEN
-            CONTINUE;
-          END IF;
-          expr := pg_get_indexdef(uc.indexrelid, pos, true);
-          select_extra := COALESCE(select_extra   || ', ', '')
-                          || expr || ' AS _pk_' || pos::text;
-          partition_list := COALESCE(partition_list || ', ', '')
-                            || '_pk_' || pos::text;
-        END LOOP;
-
-        EXECUTE format(
-          'WITH involved AS ( '
-          '  SELECT c.ctid, '
-          '         COALESCE(dp.target_id, c.%1$I::text) AS eff_target, '
-          '         (dp.target_id IS NULL) AS is_target_row%2$s '
-          '    FROM %3$I c '
-          '    LEFT JOIN dup_pairs dp '
-          '           ON dp.older_id::%5$s = c.%1$I '
-          '   WHERE c.%1$I = ANY(ARRAY( '
-          '           SELECT older_id::%5$s  FROM dup_pairs '
-          '           UNION '
-          '           SELECT target_id::%5$s FROM dup_pairs '
-          '         )) '
-          '), '
-          'ranked AS ( '
-          '  SELECT ctid, '
-          '         row_number() OVER ( '
-          '           PARTITION BY %4$s '
-          '           ORDER BY is_target_row DESC, ctid '
-          '         ) AS rn '
-          '    FROM involved '
-          ') '
-          'DELETE FROM %3$I '
-          ' WHERE ctid IN (SELECT ctid FROM ranked WHERE rn > 1)',
-          child_fk,
-          CASE WHEN select_extra   IS NULL THEN '' ELSE ', ' || select_extra END,
-          child_table,
-          CASE WHEN partition_list IS NULL THEN 'eff_target'
-                                           ELSE 'eff_target, ' || partition_list END,
-          fk_type
-        );
-      END LOOP;
-
-      -- One batched UPDATE per child covers every older→target pair.
-      -- Native-type cast on dp.* so the filter and assignment stay on
-      -- the child's FK column and can use its index.
-      --
-      -- If the ranked-partition DELETE above missed a conflict for
-      -- any reason (e.g. a unique index whose shape we didn't parse
-      -- correctly), fall back to a per-row UPDATE that delete-on-
-      -- conflicts: for each older row, try to repoint it, and if the
-      -- row-level UPDATE trips a unique_violation just delete the
-      -- older row (target already holds the survivor). PL/pgSQL's
-      -- EXCEPTION block wraps the inner UPDATE in an implicit
-      -- savepoint so one row's failure doesn't abort the rest.
       BEGIN
+        -- Tier 1: fast-path batched UPDATE. Native-type casts so the
+        -- FK-column index on the child can be used.
         EXECUTE format(
           'UPDATE %1$I AS child '
           '   SET %2$I = dp.target_id::%3$s '
@@ -408,27 +324,125 @@ BEGIN
           child_table, child_fk, fk_type
         );
       EXCEPTION WHEN unique_violation OR exclusion_violation THEN
-        FOR rec IN
-          EXECUTE format(
-            'SELECT c.ctid AS child_ctid, '
-            '       dp.target_id::%1$s AS new_fk '
-            '  FROM %2$I c '
-            '  JOIN dup_pairs dp ON dp.older_id::%1$s = c.%3$I',
-            fk_type, child_table, child_fk
-          )
+        -- Tier 2: ranked-partition DELETE per unique-on-FK index.
+        -- indkey is int2vector; cast via ::text + string_to_array
+        -- because the direct `indkey::smallint[]` cast is not
+        -- guaranteed to work across versions.
+        FOR uc IN
+          SELECT i3.indexrelid,
+                 string_to_array(i3.indkey::text, ' ')::smallint[] AS idx_keys,
+                 i3.indnatts            AS natts,
+                 (SELECT a.attnum
+                    FROM pg_attribute a
+                   WHERE a.attrelid = i3.indrelid
+                     AND a.attname  = child_fk
+                     AND NOT a.attisdropped
+                     AND a.attnum > 0) AS fk_attnum
+            FROM pg_index i3
+            JOIN pg_class  c3 ON c3.oid = i3.indrelid
+            JOIN pg_namespace n3 ON n3.oid = c3.relnamespace
+           WHERE n3.nspname   = 'public'
+             AND c3.relname   = child_table
+             AND i3.indisunique
+             AND i3.indpred IS NULL
         LOOP
-          BEGIN
-            EXECUTE format(
-              'UPDATE %1$I SET %2$I = $1 WHERE ctid = $2',
-              child_table, child_fk
-            ) USING rec.new_fk, rec.child_ctid;
-          EXCEPTION WHEN unique_violation OR exclusion_violation THEN
-            EXECUTE format(
-              'DELETE FROM %1$I WHERE ctid = $1',
-              child_table
-            ) USING rec.child_ctid;
-          END;
+          IF uc.fk_attnum IS NULL
+             OR NOT (uc.fk_attnum = ANY(uc.idx_keys)) THEN
+            CONTINUE;
+          END IF;
+
+          -- Walk the index key positions and build two parallel
+          -- strings: select_extra (expressions aliased as _pk_N) and
+          -- partition_list (those aliases). pg_get_indexdef handles
+          -- both plain columns and expression keys.
+          select_extra   := NULL;
+          partition_list := NULL;
+          FOR pos IN 1 .. uc.natts
+          LOOP
+            IF uc.idx_keys[pos] = uc.fk_attnum THEN
+              CONTINUE;
+            END IF;
+            expr := pg_get_indexdef(uc.indexrelid, pos, true);
+            select_extra := COALESCE(select_extra   || ', ', '')
+                            || expr || ' AS _pk_' || pos::text;
+            partition_list := COALESCE(partition_list || ', ', '')
+                              || '_pk_' || pos::text;
+          END LOOP;
+
+          EXECUTE format(
+            'WITH involved AS ( '
+            '  SELECT c.ctid, '
+            '         COALESCE(dp.target_id, c.%1$I::text) AS eff_target, '
+            '         (dp.target_id IS NULL) AS is_target_row%2$s '
+            '    FROM %3$I c '
+            '    LEFT JOIN dup_pairs dp '
+            '           ON dp.older_id::%5$s = c.%1$I '
+            '   WHERE c.%1$I = ANY(ARRAY( '
+            '           SELECT older_id::%5$s  FROM dup_pairs '
+            '           UNION '
+            '           SELECT target_id::%5$s FROM dup_pairs '
+            '         )) '
+            '), '
+            'ranked AS ( '
+            '  SELECT ctid, '
+            '         row_number() OVER ( '
+            '           PARTITION BY %4$s '
+            '           ORDER BY is_target_row DESC, ctid '
+            '         ) AS rn '
+            '    FROM involved '
+            ') '
+            'DELETE FROM %3$I '
+            ' WHERE ctid IN (SELECT ctid FROM ranked WHERE rn > 1)',
+            child_fk,
+            CASE WHEN select_extra   IS NULL THEN '' ELSE ', ' || select_extra END,
+            child_table,
+            CASE WHEN partition_list IS NULL THEN 'eff_target'
+                                             ELSE 'eff_target, ' || partition_list END,
+            fk_type
+          );
         END LOOP;
+
+        -- Retry the batched UPDATE now that known conflicts have
+        -- been cleared.
+        BEGIN
+          EXECUTE format(
+            'UPDATE %1$I AS child '
+            '   SET %2$I = dp.target_id::%3$s '
+            '  FROM dup_pairs dp '
+            ' WHERE child.%2$I = dp.older_id::%3$s',
+            child_table, child_fk, fk_type
+          );
+        EXCEPTION WHEN unique_violation OR exclusion_violation THEN
+          -- Tier 3: row-level UPDATE + delete-on-conflict + un-pair
+          -- on grandchild FK violation.
+          FOR rec IN
+            EXECUTE format(
+              'SELECT c.ctid               AS child_ctid, '
+              '       c.%3$I::text         AS older_id_text, '
+              '       dp.target_id::%1$s   AS new_fk '
+              '  FROM %2$I c '
+              '  JOIN dup_pairs dp ON dp.older_id::%1$s = c.%3$I',
+              fk_type, child_table, child_fk
+            )
+          LOOP
+            BEGIN
+              EXECUTE format(
+                'UPDATE %1$I SET %2$I = $1 WHERE ctid = $2',
+                child_table, child_fk
+              ) USING rec.new_fk, rec.child_ctid;
+            EXCEPTION WHEN unique_violation OR exclusion_violation THEN
+              BEGIN
+                EXECUTE format(
+                  'DELETE FROM %1$I WHERE ctid = $1',
+                  child_table
+                ) USING rec.child_ctid;
+              EXCEPTION WHEN foreign_key_violation THEN
+                DELETE FROM dup_pairs
+                 WHERE older_id = rec.older_id_text;
+              END;
+            END;
+          END LOOP;
+        END;
       END;
     END LOOP;
   END IF;
