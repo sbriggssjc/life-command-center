@@ -34,6 +34,65 @@ function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+// Derives a human-readable title from a heterogeneous record.
+// Returns null when no usable title can be inferred, so callers can skip the
+// item rather than render a meaningless "(Untitled)" entry. When the raw
+// record lacks a title-like field, a synthetic title is composed from sender
+// or task_type metadata so the source data still surfaces something useful.
+function deriveItemTitle(item) {
+  if (item == null) return null;
+  if (typeof item === 'string') {
+    const s = item.trim();
+    return s || null;
+  }
+  if (typeof item !== 'object') return null;
+
+  const direct = [
+    item.title,
+    item.subject,
+    item.name,
+    item.headline,
+    item.label,
+    item.what_name,
+    item.full_name,
+    item.company_name,
+  ];
+  for (const c of direct) {
+    if (c != null && String(c).trim()) return String(c).trim();
+  }
+
+  // Synthetic title fallbacks from item metadata
+  const meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  const sender =
+    item.sender_name || item.from_name || meta.sender_name || meta.from_name || null;
+  const senderEmail =
+    item.sender_email || item.from_email || meta.sender_email || meta.from_email || null;
+  const taskType = item.task_type || meta.task_type || null;
+  const rawType = String(
+    item.item_type || item.source_type || item.type || meta.type || ''
+  ).toLowerCase();
+
+  if (rawType.includes('email') || rawType.includes('inbox')) {
+    if (sender) return `Email from ${sender}`;
+    if (senderEmail) return `Email from ${senderEmail}`;
+  }
+  if (rawType.includes('call')) {
+    if (sender) return `Call with ${sender}`;
+  }
+  if (rawType.includes('task') || rawType.includes('action')) {
+    if (taskType) return `Task: ${taskType}`;
+    if (sender) return `Task from ${sender}`;
+  }
+
+  // Descriptive-text fields used by market intelligence payloads
+  const descriptive = item.description || item.text || item.summary;
+  if (descriptive && String(descriptive).trim()) {
+    return String(descriptive).trim();
+  }
+
+  return null;
+}
+
 function normalizeMorningStructured(raw) {
   if (!raw || typeof raw !== 'object') return null;
 
@@ -45,12 +104,29 @@ function normalizeMorningStructured(raw) {
     raw.briefing_summary ||
     null;
 
+  // Normalize a market-intel collection: keep plain strings, ensure object
+  // entries have a derivable title, and drop entries that lack one so the
+  // Briefing UI never renders "(Untitled)" rows.
+  const normalizeGmiList = (arr) =>
+    toArray(arr)
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          const t = entry.trim();
+          return t || null;
+        }
+        if (!entry || typeof entry !== 'object') return null;
+        const title = deriveItemTitle(entry);
+        if (!title) return null;
+        return { ...entry, title };
+      })
+      .filter(Boolean);
+
   const normalized = {
     source_system: raw.source_system || gmi.source_system || 'morning_briefing',
     summary,
-    highlights: toArray(gmi.highlights?.length ? gmi.highlights : raw.highlights),
-    sector_signals: toArray(gmi.sector_signals?.length ? gmi.sector_signals : raw.sector_signals),
-    watchlist: toArray(gmi.watchlist?.length ? gmi.watchlist : raw.watchlist),
+    highlights: normalizeGmiList(gmi.highlights?.length ? gmi.highlights : raw.highlights),
+    sector_signals: normalizeGmiList(gmi.sector_signals?.length ? gmi.sector_signals : raw.sector_signals),
+    watchlist: normalizeGmiList(gmi.watchlist?.length ? gmi.watchlist : raw.watchlist),
     html_fragment: gmi.html_fragment || raw.html_fragment || raw.html || null,
     source_links: toArray(gmi.source_links?.length ? gmi.source_links : raw.source_links)
   };
@@ -260,15 +336,22 @@ async function fetchSyncHealthSnapshot(workspaceId) {
 }
 
 function mapPriorityItems(items, limit = 5) {
-  return items.slice(0, limit).map((item) => ({
-    id: item.id,
-    title: item.title || '(Untitled)',
-    status: item.status || null,
-    priority: item.priority || null,
-    due_date: item.due_date || null,
-    domain: item.domain || null,
-    type: item.item_type || item.source_type || 'action'
-  }));
+  const mapped = [];
+  for (const item of items || []) {
+    if (mapped.length >= limit) break;
+    const title = deriveItemTitle(item);
+    if (!title) continue;
+    mapped.push({
+      id: item.id,
+      title,
+      status: item.status || null,
+      priority: item.priority || null,
+      due_date: item.due_date || null,
+      domain: item.domain || null,
+      type: item.item_type || item.source_type || 'action'
+    });
+  }
+  return mapped;
 }
 
 async function fetchCrossDomainOwnersDueForTouch(workspaceId, limit = 5) {
@@ -675,18 +758,24 @@ async function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity
   });
 
   return {
-    today_priorities: todayPriorities.map(i => ({
-      id: i.id,
-      title: i.title || '(Untitled)',
-      status: i.status || null,
-      priority: i.priority || null,
-      due_date: i.due_date || null,
-      domain: i.domain || null,
-      type: i.type || i.item_type || i.source_type || 'action',
-      tier: i._tier,
-      score: i._score,
-      source: i._source
-    })),
+    today_priorities: todayPriorities
+      .map((i) => {
+        const title = deriveItemTitle(i);
+        if (!title) return null;
+        return {
+          id: i.id,
+          title,
+          status: i.status || null,
+          priority: i.priority || null,
+          due_date: i.due_date || null,
+          domain: i.domain || null,
+          type: i.type || i.item_type || i.source_type || 'action',
+          tier: i._tier,
+          score: i._score,
+          source: i._source
+        };
+      })
+      .filter(Boolean),
     strategic_count: strategic.length,
     important_count: important.length,
     urgent_count: urgent.length,
@@ -871,13 +960,15 @@ function buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, d
   const allOpsItems = [...(myWork || []), ...(inboxSummary.items || [])];
   for (const item of allOpsItems) {
     const domain = inferDomain(item);
-    const k = keyFor(item);
-    const title = item.title || '(Untitled)';
-    if (domain === 'government' && k && !seenGov.has(k)) {
+    if (domain !== 'government' && domain !== 'dialysis') continue;
+    const title = deriveItemTitle(item);
+    if (!title) continue;
+    const k = keyFor(item) || title.toLowerCase();
+    if (domain === 'government' && !seenGov.has(k)) {
       seenGov.add(k);
       govHighlights.push(title);
     }
-    if (domain === 'dialysis' && k && !seenDia.has(k)) {
+    if (domain === 'dialysis' && !seenDia.has(k)) {
       seenDia.add(k);
       diaHighlights.push(title);
     }
@@ -886,7 +977,8 @@ function buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, d
   // 2. GOV highlights from hot contacts (already fetched from GOV Supabase)
   for (const c of (hotContacts || [])) {
     if (govHighlights.length >= 5) break;
-    const name = c.full_name || c.company_name || '(Contact)';
+    const name = deriveItemTitle(c);
+    if (!name) continue;
     const score = c.engagement_score ? ` (score: ${c.engagement_score})` : '';
     govHighlights.push(`${name}${score}`);
   }
@@ -895,11 +987,15 @@ function buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, d
   const diaPipe = diaPipeline || { deals: [], leads: [] };
   for (const deal of (diaPipe.deals || [])) {
     if (diaHighlights.length >= 5) break;
-    diaHighlights.push(deal.subject || deal.what_name || '(Open Opportunity)');
+    const title = deriveItemTitle(deal);
+    if (!title) continue;
+    diaHighlights.push(title);
   }
   for (const lead of (diaPipe.leads || [])) {
     if (diaHighlights.length >= 5) break;
-    diaHighlights.push(lead.subject || lead.what_name || '(Open Task)');
+    const title = deriveItemTitle(lead);
+    if (!title) continue;
+    diaHighlights.push(title);
   }
 
   // 4. Review items from unassigned work (keyword-inferred)
@@ -927,11 +1023,13 @@ function buildDomainSignals(myWork, inboxSummary, unassignedWork, hotContacts, d
 // ---------------------------------------------------------------------------
 
 function buildPacketItem(item, rank, category) {
+  const title = deriveItemTitle(item);
+  if (!title) return null;
   return {
     priority_rank: rank,
     category: category || item.type || 'general',
-    title: item.title || '(Untitled)',
-    entity_name: item.title || null,
+    title,
+    entity_name: title,
     entity_id: item.id || null,
     context: item.metadata?.description || item.body || null,
     suggested_actions: [],
@@ -1083,10 +1181,10 @@ export default withErrorHandler(async function handler(req, res) {
             fallbackSummary = `Trailing 12-month activity: ${parts.join(' and ')} tracked.`;
           }
           if (txCounts.dia.count > 0) {
-            fallbackHighlights.push({ text: `Dialysis TTM volume: ${txCounts.dia.count} transactions`, category: 'dialysis' });
+            fallbackHighlights.push({ title: `Dialysis TTM volume: ${txCounts.dia.count} transactions`, category: 'dialysis' });
           }
           if (txCounts.gov.count > 0) {
-            fallbackHighlights.push({ text: `Government TTM volume: ${txCounts.gov.count} transactions`, category: 'government' });
+            fallbackHighlights.push({ title: `Government TTM volume: ${txCounts.gov.count} transactions`, category: 'government' });
           }
         } catch (err) {
           console.error('[Briefing] domain transaction fallback failed:', err.message);
@@ -1121,17 +1219,23 @@ export default withErrorHandler(async function handler(req, res) {
       generated_at: asOf,
       date: safeDateOnly(asOf),
       user_id: user.id,
-      strategic_items: strategicItems.map((item, i) => buildPacketItem(item, i + 1, 'deal_action')),
-      important_items: importantItems.map((item, i) => buildPacketItem(item, i + 1, 'touchpoint_due')),
-      urgent_items: urgentItems.map((item, i) => buildPacketItem(item, i + 1, 'inbox_triage')),
+      strategic_items: strategicItems.map((item, i) => buildPacketItem(item, i + 1, 'deal_action')).filter(Boolean),
+      important_items: importantItems.map((item, i) => buildPacketItem(item, i + 1, 'touchpoint_due')).filter(Boolean),
+      urgent_items: urgentItems.map((item, i) => buildPacketItem(item, i + 1, 'inbox_triage')).filter(Boolean),
       production_score: buildProductionScore(workCounts, sfActivity),
       overnight_signals: buildOvernightSignals(globalMarketIntelligence),
-      carry_forward_from_yesterday: (strategicPriorities.my_overdue || []).map(item => ({
-        item: item.title || '(Untitled)',
-        days_carried: item.due_date
-          ? Math.max(0, Math.floor((Date.now() - new Date(item.due_date).getTime()) / 86400000))
-          : 0,
-      })),
+      carry_forward_from_yesterday: (strategicPriorities.my_overdue || [])
+        .map((item) => {
+          const title = deriveItemTitle(item);
+          if (!title) return null;
+          return {
+            item: title,
+            days_carried: item.due_date
+              ? Math.max(0, Math.floor((Date.now() - new Date(item.due_date).getTime()) / 86400000))
+              : 0,
+          };
+        })
+        .filter(Boolean),
     };
 
     // Write packet to context_packets table (fire-and-forget)
