@@ -454,6 +454,17 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       .replace(/\s+/g, ' ')
       .trim();
 
+    // Pre-insert dedup check for assets: match on address + city
+    const pickedFields = pickEntityFields(entity_type, fields);
+    if (entity_type === 'asset' && pickedFields.address && pickedFields.city) {
+      const dedupPath = `entities?address=ilike.${encodeURIComponent(pickedFields.address.trim())}&city=ilike.${encodeURIComponent(pickedFields.city.trim())}&entity_type=eq.asset&workspace_id=eq.${workspaceId}&limit=1`;
+      const dupCheck = await opsQuery('GET', dedupPath);
+      if (dupCheck.ok && dupCheck.data?.length) {
+        const existing = dupCheck.data[0];
+        return res.status(200).json({ entity: existing, deduplicated: true });
+      }
+    }
+
     const entity = {
       workspace_id: workspaceId,
       entity_type,
@@ -462,7 +473,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       domain: entityDomain || null,
       created_by: user.id,
       metadata: metadata || {},
-      ...pickEntityFields(entity_type, fields)
+      ...pickedFields
     };
 
     const result = await opsQuery('POST', 'entities', entity);
