@@ -446,14 +446,25 @@ async function getContact(req, res, id) {
   if (contact.gov_contact_id) sources.push({ system: 'gov_db', id: contact.gov_contact_id });
   if (contact.dia_contact_id) sources.push({ system: 'dia_db', id: contact.dia_contact_id });
 
+  // Touchpoint count: fan out across every known email address for this
+  // contact (primary, secondary, and any learned aliases) and sum matches
+  // in inbox_items. This is what drives the "Touchpoints" stat on the
+  // contact detail drawer — a single-address join misses contacts like
+  // Sarah Martin / Nathanael Berwaldt who email from multiple addresses.
+  const workspaceId = req.headers['x-lcc-workspace'];
+  const touchpoint = await computeContactTouchpoints(contact, workspaceId);
+
   // Engagement summary
   const engagementSummary = {
     score: contact.engagement_score || 0,
     last_call: contact.last_call_date,
-    last_email: contact.last_email_date,
+    last_email: contact.last_email_date || touchpoint.last_touch_date,
     last_meeting: contact.last_meeting_date,
     total_calls: contact.total_calls || 0,
     total_emails: contact.total_emails_sent || 0,
+    touchpoint_count: touchpoint.count,
+    touchpoint_addresses: touchpoint.addresses,
+    last_touch_date: touchpoint.last_touch_date,
     heat: contact.engagement_score >= 60 ? 'hot'
       : contact.engagement_score >= 30 ? 'warm'
       : contact.engagement_score > 0 ? 'cool'
@@ -461,6 +472,92 @@ async function getContact(req, res, id) {
   };
 
   return res.status(200).json({ contact, sources, engagement: engagementSummary });
+}
+
+// ============================================================================
+// TOUCHPOINT COUNT — match inbox_items against all known addresses
+// ============================================================================
+
+/**
+ * Collect every email address we know about for a contact. Handles
+ * display-name-wrapped values like `"Sarah Martin <sarah@x.com>"` and
+ * comma/semicolon delimited lists in case legacy rows have them.
+ */
+function collectContactEmails(contact) {
+  const out = new Set();
+  const push = (val) => {
+    if (val == null) return;
+    const str = String(val);
+    // Extract anything that looks like an email address (incl. from
+    // display-name-wrapped strings like "Jane Doe <jane@x.com>")
+    const matches = str.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+    for (const m of matches) out.add(m.toLowerCase().trim());
+  };
+
+  push(contact.email);
+  push(contact.email_secondary);
+  if (Array.isArray(contact.email_aliases)) {
+    for (const a of contact.email_aliases) push(a);
+  } else if (typeof contact.email_aliases === 'string') {
+    push(contact.email_aliases);
+  }
+  return Array.from(out);
+}
+
+/**
+ * Count inbox_items whose stored email metadata references any of the
+ * contact's known addresses. We match on:
+ *   - metadata->>'sender_email'  (from address)
+ *   - metadata->>'reply_to'      (reply-to header, when captured)
+ *   - metadata->>'to_emails'     (delivered-to list, when captured)
+ *   - metadata->>'cc_emails'     (cc list, when captured)
+ *
+ * Any row that references any of the contact's addresses in any of those
+ * fields counts once.
+ */
+async function computeContactTouchpoints(contact, workspaceId) {
+  const emails = collectContactEmails(contact);
+  const empty = { count: 0, addresses: emails, last_touch_date: null };
+  if (!emails.length || !isOpsConfigured()) return empty;
+
+  // Build a single OR filter that hits every email-bearing metadata field
+  // for every known address. PostgREST disallows commas inside OR children,
+  // so we percent-encode the value (includes the leading `*`).
+  const fields = ['sender_email', 'reply_to', 'to_emails', 'cc_emails'];
+  const orClauses = [];
+  for (const email of emails) {
+    const enc = encodeURIComponent(`*${email}*`);
+    for (const f of fields) {
+      orClauses.push(`metadata->>${f}.ilike.${enc}`);
+    }
+  }
+  if (!orClauses.length) return empty;
+
+  const workspaceFilter = workspaceId
+    ? `workspace_id=eq.${encodeURIComponent(workspaceId)}&`
+    : '';
+  const path =
+    `inbox_items?${workspaceFilter}` +
+    `or=(${orClauses.join(',')})` +
+    `&select=id,received_at&order=received_at.desc&limit=500`;
+
+  try {
+    const result = await opsQuery('GET', path);
+    if (!result.ok) {
+      console.warn('[contacts] touchpoint query failed:', result.status, result.data);
+      return empty;
+    }
+    const rows = Array.isArray(result.data) ? result.data : [];
+    const lastTouch = rows[0]?.received_at || null;
+    return {
+      count: rows.length,
+      addresses: emails,
+      last_touch_date: lastTouch
+    };
+  } catch (err) {
+    console.warn('[contacts] touchpoint query error:', err.message || err);
+    return empty;
+  }
 }
 
 // ============================================================================
