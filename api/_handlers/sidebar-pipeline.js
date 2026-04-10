@@ -847,8 +847,9 @@ async function upsertDomainSales(domain, propertyId, metadata) {
         sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
       ].filter(Boolean).join('; ') || null,
     });
-    saleData.transaction_type           = transaction_type;
-    saleData.exclude_from_market_metrics = exclude_from_market_metrics;
+    if (transaction_type !== null) saleData.transaction_type = transaction_type;
+    // Always write exclude flag since false is a valid value that should persist
+    saleData.exclude_from_market_metrics = exclude_from_market_metrics ?? false;
     saleData.data_source                = 'costar_sidebar';
 
     if (lookup.ok && lookup.data?.length) {
