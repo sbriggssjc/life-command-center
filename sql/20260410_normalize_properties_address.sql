@@ -58,6 +58,14 @@ $fn$;
 -- We work in text so the same DO block runs against either database, then
 -- cast property_id::text on both sides of every comparison so PostgreSQL
 -- never has to coerce a text literal back into the native id type.
+--
+-- FK tables that reference properties.property_id are discovered
+-- dynamically via information_schema so we automatically repoint
+-- things like gsa_leases (government) and sales_transactions
+-- (both DBs) without having to hard-code every child table here —
+-- and so child tables whose column isn't literally named
+-- "property_id" (e.g. dialysis.clinic_financial_estimates) work
+-- without a 42703 "column does not exist" error.
 DO $merge$
 DECLARE
   dup             RECORD;
@@ -67,7 +75,27 @@ DECLARE
   has_lease_exp   boolean;
   has_lease_com   boolean;
   has_annual_rent boolean;
+  fk_tables       text[];
+  fk_cols         text[];
+  i               integer;
 BEGIN
+  -- Discover every child table that has a FK to properties.property_id.
+  SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
+    INTO fk_tables, fk_cols
+    FROM information_schema.table_constraints      tc
+    JOIN information_schema.key_column_usage       kcu
+      ON tc.constraint_name = kcu.constraint_name
+     AND tc.table_schema    = kcu.table_schema
+    JOIN information_schema.constraint_column_usage ccu
+      ON ccu.constraint_name = tc.constraint_name
+     AND ccu.table_schema    = tc.table_schema
+   WHERE tc.constraint_type = 'FOREIGN KEY'
+     AND tc.table_schema    = 'public'
+     AND ccu.table_schema   = 'public'
+     AND ccu.table_name     = 'properties'
+     AND ccu.column_name    = 'property_id'
+     AND tc.table_name     <> 'properties';
+
   -- Column-existence guards so the same file runs on dialysis and government.
   SELECT EXISTS (
     SELECT 1 FROM information_schema.columns
@@ -151,46 +179,25 @@ BEGIN
         $q$ USING target_id, older_id;
       END IF;
 
-      -- Repoint FK tables that reference property_id. Each UPDATE is guarded
-      -- with to_regclass so the file is safe regardless of which related
-      -- tables exist in the target database. We resolve the native
-      -- property_id by joining properties on ::text so we never have to
-      -- know whether the column is uuid or bigint.
-      IF to_regclass('public.sales_transactions') IS NOT NULL THEN
-        EXECUTE $q$
-          UPDATE sales_transactions st
-             SET property_id = p.property_id
-            FROM properties p
-           WHERE p.property_id::text  = $1
-             AND st.property_id::text = $2
-        $q$ USING target_id, older_id;
-      END IF;
-      IF to_regclass('public.clinic_financial_estimates') IS NOT NULL THEN
-        EXECUTE $q$
-          UPDATE clinic_financial_estimates cfe
-             SET property_id = p.property_id
-            FROM properties p
-           WHERE p.property_id::text   = $1
-             AND cfe.property_id::text = $2
-        $q$ USING target_id, older_id;
-      END IF;
-      IF to_regclass('public.property_contacts') IS NOT NULL THEN
-        EXECUTE $q$
-          UPDATE property_contacts pc
-             SET property_id = p.property_id
-            FROM properties p
-           WHERE p.property_id::text  = $1
-             AND pc.property_id::text = $2
-        $q$ USING target_id, older_id;
-      END IF;
-      IF to_regclass('public.property_notes') IS NOT NULL THEN
-        EXECUTE $q$
-          UPDATE property_notes pn
-             SET property_id = p.property_id
-            FROM properties p
-           WHERE p.property_id::text  = $1
-             AND pn.property_id::text = $2
-        $q$ USING target_id, older_id;
+      -- Repoint every discovered FK table. We resolve the native
+      -- property_id by joining properties on ::text so we never have
+      -- to know whether the underlying column is uuid (dialysis) or
+      -- bigint (government), and %I quotes both the child table name
+      -- and its FK column name safely regardless of what that column
+      -- is actually called (e.g. gsa_leases.property_id vs any future
+      -- child that uses a different name).
+      IF fk_tables IS NOT NULL THEN
+        FOR i IN 1 .. array_length(fk_tables, 1)
+        LOOP
+          EXECUTE format(
+            'UPDATE %I AS child '
+            '   SET %I = p.property_id '
+            '  FROM properties p '
+            ' WHERE p.property_id::text = $1 '
+            '   AND child.%I::text      = $2',
+            fk_tables[i], fk_cols[i], fk_cols[i]
+          ) USING target_id, older_id;
+        END LOOP;
       END IF;
 
       EXECUTE 'DELETE FROM properties WHERE property_id::text = $1'
