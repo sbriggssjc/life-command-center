@@ -5324,6 +5324,17 @@ function _diaPropsFilters() {
   return { filter: filter, filter2: filter2 };
 }
 
+// Canonical US state/territory codes (50 states + DC + 5 inhabited territories = 56)
+// Used to whitelist raw values from the properties.state column so junk data
+// (foreign codes, full names, whitespace, casing dupes) does not leak into the
+// Properties tab state filter dropdown.
+var DIA_US_STATES = new Set([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
+  'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT',
+  'VA','WA','WV','WI','WY','DC','PR','VI','GU','AS','MP'
+]);
+
 // Background-load summary stats (states, avg SF) via lightweight aggregate queries.
 // Two parallel single-column queries instead of fetching all 11k rows:
 //   1) state column (non-null only) — deduplicate client-side for distinct count
@@ -5348,12 +5359,17 @@ async function _loadDiaPropertiesSummary() {
       return;
     }
 
-    // Extract unique states
+    // Extract unique states — normalize (trim + uppercase) and whitelist to canonical
+    // US codes so junk values (foreign codes like AD/AG, lowercase dupes, full names
+    // like "Alabama", stray whitespace) don't pollute the filter dropdown.
     var states = [];
     var seen = {};
     for (var i = 0; i < stateRows.length; i++) {
-      var st = stateRows[i].state;
-      if (st && !seen[st]) { seen[st] = true; states.push(st); }
+      var raw = stateRows[i].state;
+      if (!raw) continue;
+      var st = String(raw).trim().toUpperCase();
+      if (!DIA_US_STATES.has(st)) continue;
+      if (!seen[st]) { seen[st] = true; states.push(st); }
     }
     states.sort();
 
