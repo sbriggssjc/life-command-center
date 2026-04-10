@@ -35,6 +35,7 @@
     { "source": "/api/entities", "destination": "/api/entity-hub?_domain=entities" },
     { "source": "/api/property", "destination": "/api/entity-hub?_domain=property" },
     { "source": "/api/contact", "destination": "/api/entity-hub?_domain=contact" },
+    { "source": "/api/search", "destination": "/api/entity-hub?_domain=search" },
     { "source": "/api/bridge", "destination": "/api/operations" },
     { "source": "/api/workflows", "destination": "/api/operations" },
     { "source": "/api/intake-outlook-message", "destination": "/api/intake?_route=outlook-message" },
