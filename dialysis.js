@@ -5327,14 +5327,17 @@ function _diaPropsFilters() {
 // Background-load summary stats (states, avg SF) via lightweight aggregate queries.
 // Two parallel single-column queries instead of fetching all 11k rows:
 //   1) state column (non-null only) — deduplicate client-side for distinct count
-//   2) building_sf column (> 0 only) — compute avg from the filtered subset
+//   2) building_size column (> 0 only) — compute avg from the filtered subset
+//      NOTE: the DIA properties table uses `building_size` (the v_available_listings
+//      view aliases it as `rba`). An earlier attempt queried `building_sf`, which
+//      does not exist on this table and silently returned 0 rows.
 async function _loadDiaPropertiesSummary() {
   if (diaPropertiesSummary) return;
   try {
-    // Run two focused queries in parallel — much lighter than SELECT state, building_sf FROM all rows
+    // Run two focused queries in parallel — much lighter than SELECT state, building_size FROM all rows
     var results = await Promise.all([
       diaQueryAll('properties', 'state', { filter: 'state=not.is.null' }),
-      diaQueryAll('properties', 'building_sf', { filter: 'building_sf=gt.0' })
+      diaQueryAll('properties', 'building_size', { filter: 'building_size=gt.0' })
     ]);
     var stateRows = results[0];
     var sfRows = results[1];
@@ -5354,11 +5357,11 @@ async function _loadDiaPropertiesSummary() {
     }
     states.sort();
 
-    // Compute avg SF from pre-filtered rows (only rows with building_sf > 0)
+    // Compute avg SF from pre-filtered rows (only rows with building_size > 0)
     var withSFCount = sfRows.length;
     var sfSum = 0;
     for (var j = 0; j < sfRows.length; j++) {
-      sfSum += parseFloat(sfRows[j].building_sf);
+      sfSum += parseFloat(sfRows[j].building_size);
     }
     var avgSF = withSFCount > 0 ? Math.round(sfSum / withSFCount) : 0;
 
@@ -5493,7 +5496,7 @@ async function renderDiaProperties() {
   html += th('Address', 160, 'address');
   html += th('City', 100, 'city');
   html += th('State', 50, 'state');
-  html += thr('SF', 70, 'building_sf');
+  html += thr('SF', 70, 'building_size');
   html += thr('Year Built', 70, 'year_built');
   html += th('Owner', 150, 'owner');
   html += th('Tenant/Operator', 150, 'tenant');
@@ -5511,7 +5514,7 @@ async function renderDiaProperties() {
     html += td(r.address, true);
     html += td(r.city);
     html += td(r.state);
-    html += tdr(r.building_sf > 0 ? fmtN(Math.round(parseFloat(r.building_sf))) : '\u2014');
+    html += tdr(r.building_size > 0 ? fmtN(Math.round(parseFloat(r.building_size))) : '\u2014');
     html += tdr(r.year_built || '\u2014');
     html += td(r.owner, true);
     html += td(r.tenant, true);
