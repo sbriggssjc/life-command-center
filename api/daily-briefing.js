@@ -1106,25 +1106,41 @@ function buildOvernightSignals(morningStructured) {
 }
 
 async function writeBriefingPacket(userId, packetPayload) {
+  // Isolated try/catch so a write failure never affects the briefing response.
   try {
     const ttlHours = 18;
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
     const tokenEstimate = Math.ceil(JSON.stringify(packetPayload).length / 4);
 
-    await opsQuery('POST', 'context_packets', {
-      packet_type: 'daily_briefing',
-      entity_id: null,
-      entity_type: null,
-      requesting_user: userId,
-      surface_hint: 'daily_briefing',
-      payload: packetPayload,
-      token_count: tokenEstimate,
-      expires_at: expiresAt,
-      assembly_duration_ms: 0,
-      model_version: 'v1.0',
-    });
+    try {
+      const result = await opsQuery('POST', 'context_packets', {
+        packet_type: 'daily_briefing',
+        entity_id: null,
+        entity_type: null,
+        requesting_user: userId,
+        surface_hint: 'daily_briefing',
+        payload: packetPayload,
+        token_count: tokenEstimate,
+        expires_at: expiresAt,
+        assembly_duration_ms: 0,
+        model_version: 'v1.0',
+      });
+      // opsQuery returns { ok, status, data } instead of throwing on non-2xx,
+      // so we have to inspect the result explicitly.
+      if (!result || !result.ok) {
+        console.error(
+          '[Briefing write error] context_packets insert failed:',
+          `status=${result?.status}`,
+          result?.data?.message || result?.data || 'unknown error'
+        );
+      }
+    } catch (writeErr) {
+      // Swallow — do not throw, do not affect response.
+      console.error('[Briefing write error] context_packets insert threw:', writeErr?.message || writeErr);
+    }
   } catch (err) {
-    console.error('[Briefing packet write failed]', err?.message || err);
+    // Defensive outer catch for any pre-write synchronous failure.
+    console.error('[Briefing write error] packet preparation failed:', err?.message || err);
   }
 }
 
@@ -1264,22 +1280,43 @@ export default withErrorHandler(async function handler(req, res) {
         .filter(Boolean),
     };
 
-    // Write packet to context_packets table (fire-and-forget)
-    writeBriefingPacket(user.id, dailyBriefingPacket);
+    // Write packet to context_packets table (fire-and-forget).
+    // Wrapped in try/catch + .catch() so a write failure can never affect
+    // the response. The endpoint must still return 200 with briefing data.
+    try {
+      const packetWrite = writeBriefingPacket(user.id, dailyBriefingPacket);
+      if (packetWrite && typeof packetWrite.catch === 'function') {
+        packetWrite.catch((err) => {
+          console.error('[Briefing write error] packet write rejected:', err?.message || err);
+        });
+      }
+    } catch (err) {
+      console.error('[Briefing write error] packet write threw:', err?.message || err);
+    }
 
-    // Log briefing assembly signal
-    writeSignal({
-      signal_type: 'packet_assembled',
-      signal_category: 'intelligence',
-      user_id: user.id,
-      payload: {
-        packet_type: 'daily_briefing',
-        strategic_count: strategicItems.length,
-        important_count: importantItems.length,
-        urgent_count: urgentItems.length,
-        carry_forward_count: dailyBriefingPacket.carry_forward_from_yesterday.length,
-      },
-    });
+    // Log briefing assembly signal (fire-and-forget).
+    // Same guard pattern — never let a signals-table write break the response.
+    try {
+      const signalWrite = writeSignal({
+        signal_type: 'packet_assembled',
+        signal_category: 'intelligence',
+        user_id: user.id,
+        payload: {
+          packet_type: 'daily_briefing',
+          strategic_count: strategicItems.length,
+          important_count: importantItems.length,
+          urgent_count: urgentItems.length,
+          carry_forward_count: dailyBriefingPacket.carry_forward_from_yesterday.length,
+        },
+      });
+      if (signalWrite && typeof signalWrite.catch === 'function') {
+        signalWrite.catch((err) => {
+          console.error('[Briefing write error] signal write rejected:', err?.message || err);
+        });
+      }
+    } catch (err) {
+      console.error('[Briefing write error] signal write threw:', err?.message || err);
+    }
 
     // ── Return full response (backwards-compatible + packet) ──
     const payload = {
