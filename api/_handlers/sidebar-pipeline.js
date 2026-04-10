@@ -1382,7 +1382,17 @@ async function upsertDialysisListings(propertyId, metadata) {
 
   const contacts = metadata.contacts || [];
   const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
-  const brokerContact = contacts.find(c => c.role === 'listing_broker') || null;
+
+  // Prefer a person (has email or phone) over a firm name
+  const brokerContacts = contacts.filter(
+    c => c.role === 'listing_broker' || c.role === 'buyer_broker'
+  );
+  const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
+  const personBroker = brokerContacts.find(
+    c => !FIRM_PATTERN.test(c.name) && (c.email || c.phones?.length)
+  );
+  const firmBroker = brokerContacts.find(c => FIRM_PATTERN.test(c.name));
+  const primaryBroker = personBroker || firmBroker || brokerContacts[0] || null;
 
   // Guard: reject price_per_sf under $50 — almost certainly a cap rate leak
   const rawPricePsf = parseCurrency(metadata.price_per_sf);
@@ -1404,8 +1414,9 @@ async function upsertDialysisListings(propertyId, metadata) {
     status: 'Active',
     is_active: true,
     seller_name: sellerContact?.name || null,
-    listing_broker: brokerContact?.name || null,
-    broker_email: brokerContact?.email || null,
+    listing_broker: primaryBroker?.name || null,
+    broker_email: primaryBroker?.email || null,
+    broker_phone: primaryBroker?.phones?.[0] || null,
     price_per_sf: safePricePsf,
   });
 
