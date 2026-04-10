@@ -5394,6 +5394,15 @@ function renderDailyBriefingPanel() {
   const usp = snap.user_specific_priorities || {};
   const team = snap.team_level_production_signals || {};
   const wc = team.work_counts || {};
+  // Canonical team signals live at snap.global_signals.team — prefer that
+  // shape and fall back to the legacy work_counts object for older responses.
+  const teamSignals = (snap.global_signals && snap.global_signals.team) || {};
+  const tsOpen = teamSignals.open != null ? teamSignals.open : (wc.open != null ? wc.open : wc.open_actions);
+  const tsOverdue = teamSignals.overdue != null ? teamSignals.overdue : wc.overdue;
+  const tsDueToday = teamSignals.due_today != null ? teamSignals.due_today : wc.due_today;
+  if (snap._debug && snap._debug.work_counts_raw) {
+    try { console.debug('[Briefing] work_counts_raw', snap._debug.work_counts_raw); } catch (_) {}
+  }
   const domain = snap.domain_specific_alerts_highlights || {};
   const actions = Array.isArray(snap.actions) ? snap.actions : [];
 
@@ -5427,10 +5436,11 @@ function renderDailyBriefingPanel() {
   html += '<div class="db-section">';
   html += '<div class="db-section-title">Team Signals</div>';
   html += '<div class="db-kpis">';
-  html += `<div class="db-kpi"><span>Open</span><strong>${Number(wc.open_actions || 0).toLocaleString()}</strong></div>`;
+  html += `<div class="db-kpi"><span>Open</span><strong>${Number(tsOpen || 0).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Inbox New</span><strong>${Number(wc.inbox_new || 0).toLocaleString()}</strong></div>`;
   html += `<div class="db-kpi"><span>Sync Errors</span><strong>${Number(wc.sync_errors || 0).toLocaleString()}</strong></div>`;
-  html += `<div class="db-kpi"><span>Overdue</span><strong>${Number(wc.overdue || 0).toLocaleString()}</strong></div>`;
+  html += `<div class="db-kpi"><span>Overdue</span><strong>${Number(tsOverdue || 0).toLocaleString()}</strong></div>`;
+  html += `<div class="db-kpi"><span>Due Today</span><strong>${Number(tsDueToday || 0).toLocaleString()}</strong></div>`;
   html += '</div>';
   html += '</div>';
   html += '</div>';

@@ -193,10 +193,13 @@ async function fetchWorkCounts(workspaceId, userId) {
   ]);
 
   let team = teamMv;
+  let teamSource = 'mv_work_counts';
   if (!team.ok || !team.data?.length) {
     team = await opsQuery('GET', `v_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`);
+    teamSource = 'v_work_counts';
   }
   let t = team.data?.[0] || {};
+  const rawMvRow = { ...t, _source: teamSource, _ok: team.ok, _status: team.status, _row_count: team.data?.length || 0 };
 
   // Direct-count fallback: if materialized + regular views return all zeros,
   // query action_items and inbox_items tables directly
@@ -233,22 +236,45 @@ async function fetchWorkCounts(workspaceId, userId) {
   }
   const u = user.data?.[0] || {};
 
+  // Canonical team-signal shape: { open, overdue, due_today }.
+  // Legacy field names (open_actions, overdue, due_this_week) are preserved
+  // for backwards compatibility with consumers that still read them.
+  const today = new Date().toISOString().slice(0, 10);
+  let dueToday = 0;
+  try {
+    const dueTodayRes = await opsQuery('GET',
+      `action_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=in.(open,in_progress,waiting)&due_date=eq.${today}&select=id&limit=0`
+    );
+    dueToday = dueTodayRes.count || 0;
+  } catch (err) {
+    console.error('[Briefing] due_today direct-count failed:', err.message);
+  }
+
+  const open = Number(t.open_actions || 0);
+  const overdue = Number(t.overdue_actions || 0);
+
   return {
+    // Canonical
+    open,
+    overdue,
+    due_today: dueToday,
+    // Legacy / extended
     my_actions: u.my_actions || 0,
     my_overdue: u.my_overdue || 0,
     my_inbox: u.my_inbox || 0,
     my_research: u.my_research || 0,
     my_completed_week: u.my_completed_week || 0,
-    open_actions: t.open_actions || 0,
+    open_actions: open,
     inbox_new: t.inbox_new || 0,
     inbox_triaged: t.inbox_triaged || 0,
     research_active: t.research_active || 0,
     sync_errors: t.sync_errors || 0,
-    overdue: t.overdue_actions || 0,
     due_this_week: t.due_this_week || 0,
     completed_week: t.completed_week || 0,
     open_escalations: t.open_escalations || 0,
-    refreshed_at: t.refreshed_at || null
+    refreshed_at: t.refreshed_at || null,
+    // Debug: raw MV row (temporary — remove once Team Signals verified in prod)
+    _mv_raw: rawMvRow
   };
 }
 
@@ -1129,7 +1155,7 @@ export default withErrorHandler(async function handler(req, res) {
 
   // Each fetch is individually guarded so a single source failure
   // doesn't crash the entire briefing — we return degraded data instead.
-  const defaultWorkCounts = { my_actions: 0, my_overdue: 0, my_inbox: 0, my_research: 0, my_completed_week: 0, open_actions: 0, inbox_new: 0, inbox_triaged: 0, research_active: 0, sync_errors: 0, overdue: 0, due_this_week: 0, completed_week: 0, open_escalations: 0, refreshed_at: null };
+  const defaultWorkCounts = { open: 0, overdue: 0, due_today: 0, my_actions: 0, my_overdue: 0, my_inbox: 0, my_research: 0, my_completed_week: 0, open_actions: 0, inbox_new: 0, inbox_triaged: 0, research_active: 0, sync_errors: 0, due_this_week: 0, completed_week: 0, open_escalations: 0, refreshed_at: null, _mv_raw: { _source: 'default_fallback' } };
   const defaultInbox = { total_new: 0, total_triaged: 0, items: [] };
   const defaultSyncHealth = { summary: { total_connectors: 0, healthy: 0, degraded: 0, error: 0, disconnected: 0, pending: 0, outbound_success_rate_24h: null }, unresolved_errors: [], queue_drift: { source: 'salesforce', salesforce_open_task_count: 0, last_sf_records_processed: 0, estimated_gap: 0, drift_flag: false, last_inbound_completed_at: null } };
 
@@ -1268,18 +1294,34 @@ export default withErrorHandler(async function handler(req, res) {
         missing_sections: missingSections
       },
       global_market_intelligence: globalMarketIntelligence,
+      // Canonical team signals — API owners this shape; frontend should prefer it.
+      global_signals: {
+        team: {
+          open: workCounts.open,
+          overdue: workCounts.overdue,
+          due_today: workCounts.due_today,
+          refreshed_at: workCounts.refreshed_at
+        }
+      },
+      // Temporary debug field — surfaces raw MV row in the Network tab so we
+      // can confirm the API is reading non-zero rows. Remove once verified.
+      _debug: {
+        work_counts_raw: workCounts._mv_raw || null
+      },
       // Formal packet (new — used by Copilot and AI surfaces)
       daily_briefing_packet: dailyBriefingPacket,
       // Legacy shape (preserved for existing frontend)
       user_specific_priorities: strategicPriorities,
       team_level_production_signals: {
         work_counts: {
+          open: workCounts.open,
           open_actions: workCounts.open_actions,
           inbox_new: workCounts.inbox_new,
           inbox_triaged: workCounts.inbox_triaged,
           research_active: workCounts.research_active,
           sync_errors: workCounts.sync_errors,
           overdue: workCounts.overdue,
+          due_today: workCounts.due_today,
           due_this_week: workCounts.due_this_week,
           completed_week: workCounts.completed_week,
           open_escalations: workCounts.open_escalations,
