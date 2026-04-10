@@ -74,11 +74,18 @@ $fn$;
 -- N_dups × N_children × several EXECUTE calls each and timed out
 -- on dialysis.
 --
--- session_replication_role is flipped to 'replica' for the duration
--- of the transaction to bypass a latent bug in the government DB's
--- propagate_ownership_to_property() trigger, which references
--- NEW.ownership_end even though ownership_history doesn't have that
--- column and blows up any UPDATE on ownership_history.
+-- User triggers on properties + every FK child are ALTER TABLE
+-- DISABLE'd for the duration of this transaction so a latent bug
+-- in the government DB's propagate_ownership_to_property() trigger
+-- (references NEW.ownership_end on ownership_history, which doesn't
+-- have that column) doesn't block UPDATEs. session_replication_role
+-- would be cleaner but it requires superuser and Supabase's SQL
+-- editor user doesn't have that — ALTER TABLE only needs ownership.
+-- DISABLE TRIGGER USER keeps RI/FK enforcement triggers active, so
+-- foreign-key checks still run; only user-defined trigger functions
+-- are suppressed. If the transaction rolls back for any reason the
+-- DDL is reverted automatically; the explicit ENABLE at the bottom
+-- covers the normal-exit path. No early RETURNs in between.
 DO $merge$
 DECLARE
   fk_tables       text[];
@@ -93,11 +100,7 @@ DECLARE
   has_fk_unique   boolean;
   uc              RECORD;
   match_clause    text;
-  dup_count       integer;
 BEGIN
-  -- Disable user triggers for this transaction only.
-  PERFORM set_config('session_replication_role', 'replica', true);
-
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
     INTO fk_tables, fk_cols
@@ -133,8 +136,24 @@ BEGIN
      WHERE table_name = 'properties' AND column_name = 'annual_rent'
   ) INTO has_annual_rent;
 
+  -- Disable user triggers on properties and every FK child table so
+  -- the broken gov trigger (and anything similar) doesn't block the
+  -- migration. These ALTERs live inside the same transaction, so a
+  -- rollback reverts them automatically; the matching ENABLE block
+  -- at the bottom covers the successful-exit path.
+  EXECUTE 'ALTER TABLE properties DISABLE TRIGGER USER';
+  IF fk_tables IS NOT NULL THEN
+    FOR i IN 1 .. array_length(fk_tables, 1)
+    LOOP
+      EXECUTE format('ALTER TABLE %I DISABLE TRIGGER USER', fk_tables[i]);
+    END LOOP;
+  END IF;
+
   -- Build a temp table of (older_id, target_id) pairs so every step
-  -- below is a single set-based statement.
+  -- below is a single set-based statement. If there are no duplicates
+  -- the table is empty and every statement below is a no-op — we do
+  -- NOT early-return, because we still need the ENABLE TRIGGER block
+  -- to run before COMMIT (otherwise DDL would persist).
   DROP TABLE IF EXISTS dup_pairs;
   CREATE TEMP TABLE dup_pairs (
     older_id  text PRIMARY KEY,
@@ -153,11 +172,6 @@ BEGIN
       HAVING count(*) > 1
     ) grp
     CROSS JOIN LATERAL generate_series(2, array_length(grp.ids, 1)) AS k;
-
-  SELECT count(*) INTO dup_count FROM dup_pairs;
-  IF dup_count = 0 THEN
-    RETURN;
-  END IF;
 
   -- Batch-merge medicare_id / lease fields from older into target.
   IF has_medicare THEN
@@ -305,6 +319,15 @@ BEGIN
   -- Finally remove every stale duplicate in one DELETE.
   DELETE FROM properties
    WHERE property_id::text IN (SELECT older_id FROM dup_pairs);
+
+  -- Re-enable user triggers on every table we disabled above.
+  EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
+  IF fk_tables IS NOT NULL THEN
+    FOR i IN 1 .. array_length(fk_tables, 1)
+    LOOP
+      EXECUTE format('ALTER TABLE %I ENABLE TRIGGER USER', fk_tables[i]);
+    END LOOP;
+  END IF;
 END
 $merge$;
 
