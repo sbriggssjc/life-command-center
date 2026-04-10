@@ -16,33 +16,46 @@
 BEGIN;
 
 -- 1. SQL mirror of normalizeAddress() from api/_shared/entity-link.js.
+--    LANGUAGE sql (not plpgsql) so the planner can inline it into
+--    the INSERT INTO dup_pairs scan and the final address rewrite,
+--    avoiding a per-row plpgsql call for large properties tables.
 CREATE OR REPLACE FUNCTION normalize_address_txt(addr text)
 RETURNS text
-LANGUAGE plpgsql
+LANGUAGE sql
 IMMUTABLE
 AS $fn$
-DECLARE
-  s text;
-BEGIN
-  IF addr IS NULL THEN
-    RETURN '';
-  END IF;
-  s := btrim(addr);
-  s := regexp_replace(s, '\mStreet\M',    'St',   'gi');
-  s := regexp_replace(s, '\mAvenue\M',    'Ave',  'gi');
-  s := regexp_replace(s, '\mBoulevard\M', 'Blvd', 'gi');
-  s := regexp_replace(s, '\mDrive\M',     'Dr',   'gi');
-  s := regexp_replace(s, '\mRoad\M',      'Rd',   'gi');
-  s := regexp_replace(s, '\mLane\M',      'Ln',   'gi');
-  s := regexp_replace(s, '\mCourt\M',     'Ct',   'gi');
-  s := regexp_replace(s, '\mPlace\M',     'Pl',   'gi');
-  s := regexp_replace(s, '\mHighway\M',   'Hwy',  'gi');
-  s := regexp_replace(s, '\mParkway\M',   'Pkwy', 'gi');
-  s := regexp_replace(s, '\mCircle\M',    'Cir',  'gi');
-  s := regexp_replace(s, '\mTrail\M',     'Trl',  'gi');
-  s := regexp_replace(s, '\s+',           ' ',    'g');
-  RETURN lower(s);
-END;
+  SELECT CASE
+    WHEN addr IS NULL THEN ''
+    ELSE lower(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+      regexp_replace(
+        btrim(addr),
+        '\mStreet\M',    'St',   'gi'),
+        '\mAvenue\M',    'Ave',  'gi'),
+        '\mBoulevard\M', 'Blvd', 'gi'),
+        '\mDrive\M',     'Dr',   'gi'),
+        '\mRoad\M',      'Rd',   'gi'),
+        '\mLane\M',      'Ln',   'gi'),
+        '\mCourt\M',     'Ct',   'gi'),
+        '\mPlace\M',     'Pl',   'gi'),
+        '\mHighway\M',   'Hwy',  'gi'),
+        '\mParkway\M',   'Pkwy', 'gi'),
+        '\mCircle\M',    'Cir',  'gi'),
+        '\mTrail\M',     'Trl',  'gi'),
+        '\s+',           ' ',    'g')
+    )
+  END
 $fn$;
 
 -- 2. Merge duplicate property pairs BEFORE rewriting addresses so that
@@ -105,7 +118,14 @@ DECLARE
   select_extra       text;
   partition_list     text;
   rec                RECORD;
+  dup_count          integer;
 BEGIN
+  -- Lift the local statement timeout for this transaction so PG
+  -- doesn't kill the DO block partway through. The upstream HTTP
+  -- timeout is a separate concern — if you're hitting it, run the
+  -- migration directly via psql instead of the Supabase SQL editor.
+  PERFORM set_config('statement_timeout', '0', true);
+
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
     INTO fk_tables, fk_cols
@@ -193,6 +213,22 @@ BEGIN
       HAVING count(*) > 1
     ) grp
     CROSS JOIN LATERAL generate_series(2, array_length(grp.ids, 1)) AS k;
+
+  -- Early exit if there are no duplicates to process. We still have
+  -- to re-enable triggers before returning because ALTER TABLE
+  -- DISABLE TRIGGER is regular DDL, not a session GUC — skipping
+  -- the ENABLE step would leave user triggers disabled after COMMIT.
+  SELECT count(*) INTO dup_count FROM dup_pairs;
+  IF dup_count = 0 THEN
+    EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
+    IF fk_tables IS NOT NULL THEN
+      FOR i IN 1 .. array_length(fk_tables, 1)
+      LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE TRIGGER USER', fk_tables[i]);
+      END LOOP;
+    END IF;
+    RETURN;
+  END IF;
 
   -- Batch-merge medicare_id / lease fields from older into target.
   --
