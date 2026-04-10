@@ -78,6 +78,10 @@ DECLARE
   fk_tables       text[];
   fk_cols         text[];
   i               integer;
+  child_table     text;
+  child_fk        text;
+  col_list        text;
+  sel_list        text;
 BEGIN
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
@@ -179,24 +183,55 @@ BEGIN
         $q$ USING target_id, older_id;
       END IF;
 
-      -- Repoint every discovered FK table. We resolve the native
-      -- property_id by joining properties on ::text so we never have
-      -- to know whether the underlying column is uuid (dialysis) or
-      -- bigint (government), and %I quotes both the child table name
-      -- and its FK column name safely regardless of what that column
-      -- is actually called (e.g. gsa_leases.property_id vs any future
-      -- child that uses a different name).
+      -- Repoint every discovered FK child. A raw UPDATE of the FK
+      -- column blows up on unique-constraint collisions:
+      --   * gov.property_embeddings has PK (property_id), so the
+      --     target already holds the only allowed row.
+      --   * dia.cap_rate_history has UNIQUE (property_id, event_type,
+      --     event_date) and both rows may describe the same event.
+      -- Instead we INSERT each older row into the target via
+      -- ON CONFLICT DO NOTHING (target wins on any unique collision,
+      -- non-colliding rows migrate) and then delete the older's
+      -- remaining rows. Column lists are pulled from information_schema
+      -- so we don't need to know the shape of each child table; the
+      -- FK column is replaced with a scalar subquery that returns the
+      -- native target property_id, so this works for uuid (dialysis)
+      -- and bigint (government) alike. Generated (STORED) columns are
+      -- skipped since postgres recomputes them on insert.
       IF fk_tables IS NOT NULL THEN
         FOR i IN 1 .. array_length(fk_tables, 1)
         LOOP
+          child_table := fk_tables[i];
+          child_fk    := fk_cols[i];
+
+          SELECT string_agg(quote_ident(column_name),
+                            ', ' ORDER BY ordinal_position),
+                 string_agg(
+                   CASE
+                     WHEN column_name = child_fk THEN
+                       '(SELECT property_id FROM properties '
+                       ' WHERE property_id::text = $1)'
+                     ELSE quote_ident(column_name)
+                   END,
+                   ', ' ORDER BY ordinal_position
+                 )
+            INTO col_list, sel_list
+            FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name   = child_table
+             AND is_generated = 'NEVER';
+
           EXECUTE format(
-            'UPDATE %I AS child '
-            '   SET %I = p.property_id '
-            '  FROM properties p '
-            ' WHERE p.property_id::text = $1 '
-            '   AND child.%I::text      = $2',
-            fk_tables[i], fk_cols[i], fk_cols[i]
+            'INSERT INTO %I (%s) '
+            'SELECT %s FROM %I WHERE %I::text = $2 '
+            'ON CONFLICT DO NOTHING',
+            child_table, col_list, sel_list, child_table, child_fk
           ) USING target_id, older_id;
+
+          EXECUTE format(
+            'DELETE FROM %I WHERE %I::text = $1',
+            child_table, child_fk
+          ) USING older_id;
         END LOOP;
       END IF;
 
