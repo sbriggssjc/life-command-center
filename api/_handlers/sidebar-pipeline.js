@@ -895,6 +895,13 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     for (const sale of sales) {
       const saleDate = parseDate(sale.sale_date);
       if (!saleDate) continue;
+
+      // Only link brokers to current/recent sales, not historical deed records
+      const saleDateObj = new Date(saleDate);
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const isCurrentSale = sale.is_current === true || saleDateObj >= ninetyDaysAgo;
+      if (!isCurrentSale) continue;
+
       const datePart = saleDate.split('T')[0];
 
       // Look up the sale_id by property_id + sale_date
@@ -970,6 +977,13 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
     for (const sale of sales) {
       const saleDate = parseDate(sale.sale_date);
       if (!saleDate) continue;
+
+      // Only link brokers to current/recent sales, not historical deed records
+      const saleDateObj = new Date(saleDate);
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const isCurrentSale = sale.is_current === true || saleDateObj >= ninetyDaysAgo;
+      if (!isCurrentSale) continue;
+
       const datePart = saleDate.split('T')[0];
 
       const saleLookup = await domainQuery('dialysis', 'GET',
