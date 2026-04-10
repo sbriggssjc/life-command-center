@@ -297,9 +297,16 @@ function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replac
 function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
 
 // Build both desktop (ms-outlook:) and web fallback links for an email.
-// Prefer internet_message_id (stable across folder moves) over graph rest id.
-// Graph REST IDs change when emails move between folders, so they are not
-// safe to deep-link against; the Message-ID header is.
+// Prefer a search-based web URL over the Graph `webLink`, because Graph's
+// webLink embeds a mutable REST item ID. That ID is invalidated any time the
+// message moves folders (archived, auto-filed by rules, reindexed by OWA),
+// which is why clicking "Open in Outlook" was landing users on the
+// "This message might have been moved or deleted" page.
+//
+// The documented OWA deep link `https://outlook.office.com/mail/deeplink/search`
+// opens Outlook on the Web with a KQL-style search across all folders, so as
+// long as we can describe the message uniquely (subject + from), the user
+// lands on the live message wherever it currently lives.
 function outlookLinks(email) {
   if (!email) return { desktop: '', web: '' };
 
@@ -320,32 +327,56 @@ function outlookLinks(email) {
     email.external_url ||
     email.outlook_link ||
     '';
+  const subject =
+    email.subject ||
+    email.title ||
+    meta.subject ||
+    '';
+  const senderEmail =
+    email.sender_email ||
+    email.from_email ||
+    meta.sender_email ||
+    '';
+  const senderName =
+    email.sender_name ||
+    email.from_name ||
+    email.sender ||
+    meta.sender_name ||
+    '';
 
   // ---- Desktop (ms-outlook: protocol) ----
-  // Outlook Desktop registers these handlers on Windows/macOS when installed.
-  // `ms-outlook://emails/open?messageId=...` works with the modern "New Outlook"
-  // client. Classic Outlook responds to `outlook:` with an EntryID, which we
-  // don't have, so we use the messageId form which both clients honor.
+  // Kept for completeness; openOutlookEmail no longer prefers it because
+  // "New Outlook for Windows" intercepts ms-outlook:// then errors out.
   let desktop = '';
   if (inetId) {
-    // Strip angle brackets if present; Outlook dislikes them in the URL.
     const cleanId = String(inetId).replace(/^<|>$/g, '');
     desktop = `ms-outlook://emails/open?messageId=${encodeURIComponent(cleanId)}`;
   } else if (restId) {
     desktop = `ms-outlook://emails/open?id=${encodeURIComponent(restId)}`;
   }
 
-  // ---- Web fallback ----
+  // ---- Web link ----
+  // Priority:
+  //   1. Subject + from search (stable across folder moves)
+  //   2. Message-ID search (in case Outlook indexes the Message-ID header)
+  //   3. Graph webLink (stale risk, but works on fresh emails)
+  //   4. REST id deeplink (ancient fallback)
   let web = '';
-  if (rawWeb) {
+  const cleanSubject = String(subject || '').trim().slice(0, 120);
+  const fromSelector = String(senderEmail || senderName || '').trim();
+  if (cleanSubject || fromSelector) {
+    const parts = [];
+    if (cleanSubject) parts.push(`subject:"${cleanSubject.replace(/"/g, '')}"`);
+    if (fromSelector) parts.push(`from:"${fromSelector.replace(/"/g, '')}"`);
+    web = `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent(parts.join(' '))}`;
+  } else if (inetId) {
+    const cleanId = String(inetId).replace(/^<|>$/g, '');
+    web = `https://outlook.office.com/mail/deeplink/search?query=${encodeURIComponent('"' + cleanId + '"')}`;
+  } else if (rawWeb) {
     // Normalize legacy OWA host to modern one.
     web = rawWeb
       .replace('https://outlook.office365.com/owa/', 'https://outlook.office.com/mail/')
       .replace('outlook.office365.com/mail/', 'outlook.office.com/mail/');
-  } else if (inetId) {
-    // Searching by Message-ID finds the email wherever it lives now.
-    const cleanId = String(inetId).replace(/^<|>$/g, '');
-    web = `https://outlook.office.com/mail/inbox/search/${encodeURIComponent('"' + cleanId + '"')}`;
   } else if (restId) {
     web = `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(restId)}`;
   }
