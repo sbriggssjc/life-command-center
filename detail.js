@@ -2002,20 +2002,21 @@ async function _udRenderSalesAsync(bodyEl) {
 
   if (propertyId) {
     try {
-      const [txnRes, listRes] = await Promise.all([
-        qFn('sales_comps', '*', {
-          filter: `property_id=eq.${encodeURIComponent(propertyId)}`,
-          order: 'sale_date.desc',
-          limit: 100
-        }).catch(() => []),
+      const propId = encodeURIComponent(propertyId);
+      const [listRes, txnRes] = await Promise.all([
         qFn('available_listings', '*', {
-          filter: `property_id=eq.${encodeURIComponent(propertyId)}`,
+          filter: `property_id=eq.${propId}`,
           order: 'listing_date.desc.nullslast',
           limit: 50
+        }).catch(() => []),
+        qFn('sales_transactions', '*', {
+          filter: `property_id=eq.${propId}&exclude_from_market_metrics=is.false`,
+          order: 'sale_date.desc',
+          limit: 100
         }).catch(() => [])
       ]);
-      transactions = Array.isArray(txnRes) ? txnRes : (txnRes?.data || []);
       listings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
+      transactions = Array.isArray(txnRes) ? txnRes : (txnRes?.data || []);
     } catch (e) {
       console.warn('Sales history fetch error:', e);
     }
@@ -2026,27 +2027,34 @@ async function _udRenderSalesAsync(bodyEl) {
 }
 
 function _udTabSales() {
-  const txns = _salesCache ? _salesCache.transactions : [];
+  const txns = _salesCache ? (_salesCache.transactions || []) : [];
+  const listings = _salesCache ? (_salesCache.listings || []) : [];
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+
+  // Build a unified chronological timeline that pairs listings with their
+  // corresponding sale where off_market_date ≈ sale_date (±30 days).
+  const events = _salesBuildTimeline(listings, txns);
 
   let html = '';
 
-  if (!txns || txns.length === 0) {
+  if (events.length === 0) {
     html += '<div class="detail-empty" style="text-align:center;padding:40px 20px">';
-    html += '<div style="font-size:18px;margin-bottom:8px;color:var(--text2)">No recorded transactions</div>';
+    html += '<div style="font-size:18px;margin-bottom:8px;color:var(--text2)">No listing or sales history</div>';
     html += '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Add a sales comp to start building the transaction history.</div>';
     if (propertyId) {
       html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:8px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add Transaction</button>`;
     }
     html += '</div>';
-    html += _salesListingsHtml();
     html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
     return html;
   }
 
+  const saleCount = events.reduce((n, e) => n + (e.sale ? 1 : 0), 0);
+  const listingCount = events.reduce((n, e) => n + (e.listing ? 1 : 0), 0);
+
   html += '<div class="detail-section">';
   html += `<div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between">`;
-  html += `<span>Sales History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${txns.length} transaction${txns.length !== 1 ? 's' : ''}</span></span>`;
+  html += `<span>Sales &amp; Listing History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${listingCount} listing${listingCount !== 1 ? 's' : ''} · ${saleCount} sale${saleCount !== 1 ? 's' : ''}</span></span>`;
   if (propertyId) {
     html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:5px 14px;border-radius:6px;font-size:12px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add</button>`;
   }
@@ -2054,53 +2062,22 @@ function _udTabSales() {
 
   // Timeline
   html += '<div style="position:relative;padding-left:24px;margin-top:8px">';
-  // Vertical line
   html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
 
-  txns.forEach((t, idx) => {
+  events.forEach((ev, idx) => {
     const isFirst = idx === 0;
-    const dotColor = isFirst ? 'var(--green)' : 'var(--text3)';
+    const dotColor = ev.sale ? 'var(--green)' : (ev.listing && _salesListingIsActive(ev.listing) ? 'var(--accent)' : 'var(--text3)');
 
     html += '<div style="position:relative;margin-bottom:16px">';
-    // Dot marker
-    html += `<div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:${dotColor};border:2px solid var(--bg)"></div>`;
-
-    // Card
+    html += `<div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:${dotColor};border:2px solid var(--bg)${isFirst ? ';box-shadow:0 0 0 3px rgba(46,204,113,0.15)' : ''}"></div>`;
     html += '<div style="background:var(--s2);border-radius:10px;padding:14px;border:1px solid var(--border)">';
 
-    // Date header
-    const dateStr = _fmtDate(t.sale_date) || 'Unknown date';
-    html += `<div style="font-size:11px;color:var(--text3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${esc(dateStr)}</div>`;
-
-    // Price row
-    if (t.sale_price) {
-      html += `<div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:6px">${fmt(t.sale_price)}</div>`;
-    }
-
-    // Metrics row
-    const metrics = [];
-    if (t.price_psf) metrics.push(`$${Number(t.price_psf).toFixed(0)}/SF`);
-    if (t.cap_rate) metrics.push(`${Number(t.cap_rate).toFixed(2)}% Cap`);
-    if (metrics.length) {
-      html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
-    }
-
-    // Buyer / Seller
-    if (t.buyer || t.buyer_name) {
-      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(t.buyer || t.buyer_name)}</span></div>`;
-    }
-    if (t.seller || t.seller_name) {
-      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(t.seller || t.seller_name)}</span></div>`;
-    }
-
-    // Source
-    if (t.source) {
-      html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(t.source)}</div>`;
-    }
-
-    // Notes
-    if (t.notes) {
-      html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(t.notes)}</div>`;
+    if (ev.listing && ev.sale) {
+      html += _salesRenderCombined(ev.listing, ev.sale);
+    } else if (ev.sale) {
+      html += _salesRenderSale(ev.sale);
+    } else if (ev.listing) {
+      html += _salesRenderListing(ev.listing);
     }
 
     html += '</div></div>';
@@ -2108,65 +2085,266 @@ function _udTabSales() {
 
   html += '</div></div>';
 
-  // Active / For Sale listings section
-  html += _salesListingsHtml();
-
   html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
   return html;
 }
 
-function _salesListingsHtml() {
-  const listings = _salesCache ? _salesCache.listings : [];
-  if (!listings || listings.length === 0) return '';
+// ─── Sales tab helpers ──────────────────────────────────────────────────────
 
-  let html = '<div class="detail-section" style="margin-top:16px">';
-  html += `<div class="detail-section-title">Active Listings <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${listings.length} listing${listings.length !== 1 ? 's' : ''}</span></div>`;
+function _salesParseDate(d) {
+  if (!d) return null;
+  const t = Date.parse(d);
+  return isNaN(t) ? null : t;
+}
 
-  listings.forEach(l => {
-    const status = l.listing_status || 'available';
-    const statusColor = status === 'active' || status === 'available' ? 'var(--green)' : 'var(--yellow)';
+function _salesListingIsActive(l) {
+  if (l.is_active === true) return true;
+  if (l.is_active === false) return false;
+  // Fallback: active if no off_market_date
+  return !l.off_market_date;
+}
 
-    html += '<div style="background:var(--s2);border-radius:10px;padding:14px;border:1px solid var(--border);margin-bottom:10px">';
+function _salesListingStatus(l, matchedSale) {
+  if (matchedSale) return { label: 'Sold', color: 'var(--green)' };
+  if (_salesListingIsActive(l)) return { label: 'Active', color: 'var(--accent)' };
+  if (l.off_market_date) return { label: 'Withdrawn', color: 'var(--yellow)' };
+  return { label: 'Inactive', color: 'var(--text3)' };
+}
 
-    // Status badge + listing date
-    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
-    html += `<span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:${statusColor}">${esc(status)}</span>`;
-    if (l.listing_date) {
-      html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(l.listing_date))}</span>`;
+function _salesBuildTimeline(listings, txns) {
+  const listingArr = Array.isArray(listings) ? listings.slice() : [];
+  const saleArr = Array.isArray(txns) ? txns.slice() : [];
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  const usedSaleIdx = new Set();
+  const events = [];
+
+  listingArr.forEach(listing => {
+    const offMs = _salesParseDate(listing.off_market_date);
+    let matchIdx = -1;
+    let matchDiff = Infinity;
+
+    if (offMs != null) {
+      saleArr.forEach((sale, i) => {
+        if (usedSaleIdx.has(i)) return;
+        const saleMs = _salesParseDate(sale.sale_date);
+        if (saleMs == null) return;
+        const diff = Math.abs(saleMs - offMs);
+        if (diff <= THIRTY_DAYS && diff < matchDiff) {
+          matchIdx = i;
+          matchDiff = diff;
+        }
+      });
     }
-    html += '</div>';
 
-    // Ask price
-    if (l.asking_price) {
-      html += `<div style="font-size:18px;font-weight:700;color:var(--accent);margin-bottom:6px">${fmt(l.asking_price)}</div>`;
+    if (matchIdx >= 0) {
+      usedSaleIdx.add(matchIdx);
+      const sale = saleArr[matchIdx];
+      events.push({
+        listing,
+        sale,
+        sortKey: _salesParseDate(sale.sale_date) || offMs || _salesParseDate(listing.listing_date) || 0
+      });
+    } else {
+      events.push({
+        listing,
+        sale: null,
+        sortKey: offMs || _salesParseDate(listing.listing_date) || 0
+      });
     }
-
-    // Metrics row
-    const metrics = [];
-    if (l.asking_price_psf) metrics.push(`$${Number(l.asking_price_psf).toFixed(0)}/SF`);
-    if (l.asking_cap_rate) metrics.push(`${Number(l.asking_cap_rate).toFixed(2)}% Cap`);
-    if (l.days_on_market != null) metrics.push(`${l.days_on_market} DOM`);
-    if (metrics.length) {
-      html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
-    }
-
-    // Broker
-    if (l.listing_broker) {
-      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(l.listing_broker)}</span></div>`;
-    }
-    if (l.seller) {
-      html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(l.seller)}</span></div>`;
-    }
-
-    // Source
-    if (l.listing_source) {
-      html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(l.listing_source)}</div>`;
-    }
-
-    html += '</div>';
   });
 
+  saleArr.forEach((sale, i) => {
+    if (usedSaleIdx.has(i)) return;
+    events.push({
+      listing: null,
+      sale,
+      sortKey: _salesParseDate(sale.sale_date) || 0
+    });
+  });
+
+  events.sort((a, b) => (b.sortKey || 0) - (a.sortKey || 0));
+  return events;
+}
+
+function _salesRenderListing(l) {
+  const status = _salesListingStatus(l, null);
+  let html = '';
+
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
+  html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${status.color};padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid ${status.color}">${esc(status.label)}</span>`;
+  html += `<span style="font-size:11px;color:var(--text3)">Listing</span>`;
   html += '</div>';
+
+  // Dates row
+  const dateBits = [];
+  if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
+  if (l.off_market_date) dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+  if (dateBits.length) {
+    html += `<div style="font-size:12px;margin-bottom:8px;display:flex;gap:14px;flex-wrap:wrap">${dateBits.join('')}</div>`;
+  }
+
+  // Asking prices
+  const initial = l.initial_price != null ? l.initial_price : l.asking_price;
+  const last = l.last_price != null ? l.last_price : null;
+  if (initial != null || last != null) {
+    html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
+    if (initial != null) {
+      html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Original Ask</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(initial)}</div></div>`;
+    }
+    if (last != null && Number(last) !== Number(initial)) {
+      html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Final Ask</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
+    }
+    html += '</div>';
+  }
+
+  if (l.listing_broker) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(l.listing_broker)}</span></div>`;
+  }
+
+  return html;
+}
+
+function _salesRenderSale(s) {
+  let html = '';
+
+  const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
+  const isLand = s.exclude_from_market_metrics === true;
+
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
+  html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
+  html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--green);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--green)">${esc(txnType)}</span>`;
+  if (isLand) {
+    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--yellow);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--yellow)">Land Sale</span>`;
+  }
+  html += `</div>`;
+  if (s.sale_date) {
+    html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(s.sale_date))}</span>`;
+  }
+  html += '</div>';
+
+  const soldPrice = s.sold_price != null ? s.sold_price : s.sale_price;
+  if (soldPrice != null) {
+    html += `<div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:6px">${fmt(soldPrice)}</div>`;
+  }
+
+  const metrics = [];
+  if (s.cap_rate != null) metrics.push(`${Number(s.cap_rate).toFixed(2)}% Cap`);
+  if (s.price_psf != null) metrics.push(`$${Number(s.price_psf).toFixed(0)}/SF`);
+  if (metrics.length) {
+    html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
+  }
+
+  if (s.buyer_name || s.buyer) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(s.buyer_name || s.buyer)}</span></div>`;
+  }
+  if (s.seller_name || s.seller) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(s.seller_name || s.seller)}</span></div>`;
+  }
+  if (s.listing_broker) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(s.listing_broker)}</span></div>`;
+  }
+  if (s.source) {
+    html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
+  }
+  if (s.notes) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(s.notes)}</div>`;
+  }
+
+  return html;
+}
+
+function _salesRenderCombined(l, s) {
+  const initial = l.initial_price != null ? l.initial_price : l.asking_price;
+  const last = l.last_price != null ? l.last_price : null;
+  const soldPrice = s.sold_price != null ? s.sold_price : s.sale_price;
+  const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
+  const isLand = s.exclude_from_market_metrics === true;
+
+  let html = '';
+
+  // Header: Sold badge + transaction type + land tag + sale date
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
+  html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
+  html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--green);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--green)">Sold</span>`;
+  if (txnType && txnType.toLowerCase() !== 'sale') {
+    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--border)">${esc(txnType)}</span>`;
+  }
+  if (isLand) {
+    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--yellow);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--yellow)">Land Sale</span>`;
+  }
+  html += '</div>';
+  if (s.sale_date) {
+    html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(s.sale_date))}</span>`;
+  }
+  html += '</div>';
+
+  // Narrative line: "Listed → [price] → Sold [date] at [price]/[cap rate]"
+  const parts = [];
+  if (l.listing_date) {
+    parts.push(`<span style="color:var(--text2)">Listed ${esc(_fmtDate(l.listing_date))}</span>`);
+  } else {
+    parts.push(`<span style="color:var(--text2)">Listed</span>`);
+  }
+  if (initial != null) {
+    parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(initial)}</span>`);
+  }
+  if (last != null && Number(last) !== Number(initial)) {
+    parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(last)}</span>`);
+  }
+  const soldBits = ['Sold'];
+  if (s.sale_date) soldBits.push(esc(_fmtDate(s.sale_date)));
+  let soldTail = soldBits.join(' ');
+  if (soldPrice != null) soldTail += ` at ${fmt(soldPrice)}`;
+  if (s.cap_rate != null) soldTail += ` / ${Number(s.cap_rate).toFixed(2)}% Cap`;
+  parts.push(`<span style="color:var(--green);font-weight:600">${soldTail}</span>`);
+
+  html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
+
+  // Price grid
+  html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
+  if (initial != null) {
+    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Original Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(initial)}</div></div>`;
+  }
+  if (last != null && Number(last) !== Number(initial)) {
+    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Final Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(last)}</div></div>`;
+  }
+  if (soldPrice != null) {
+    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Sold Price</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fmt(soldPrice)}</div></div>`;
+  }
+  if (s.cap_rate != null) {
+    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${Number(s.cap_rate).toFixed(2)}%</div></div>`;
+  }
+  html += '</div>';
+
+  // Dates row (on/off market)
+  const dateBits = [];
+  if (l.listing_date) dateBits.push(`<span style="color:var(--text3)">On Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.listing_date))}</span>`);
+  if (l.off_market_date) dateBits.push(`<span style="color:var(--text3)">Off Market:</span> <span style="color:var(--text)">${esc(_fmtDate(l.off_market_date))}</span>`);
+  if (dateBits.length) {
+    html += `<div style="font-size:12px;margin-bottom:6px;display:flex;gap:14px;flex-wrap:wrap">${dateBits.join('')}</div>`;
+  }
+
+  // Parties
+  if (s.buyer_name || s.buyer) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(s.buyer_name || s.buyer)}</span></div>`;
+  }
+  if (s.seller_name || s.seller) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(s.seller_name || s.seller)}</span></div>`;
+  }
+
+  // Broker: prefer sale record, fall back to listing
+  const broker = s.listing_broker || l.listing_broker;
+  if (broker) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
+  }
+
+  if (s.source) {
+    html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
+  }
+  if (s.notes) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(s.notes)}</div>`;
+  }
+
   return html;
 }
 
