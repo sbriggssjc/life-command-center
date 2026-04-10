@@ -80,8 +80,9 @@ DECLARE
   i               integer;
   child_table     text;
   child_fk        text;
-  col_list        text;
-  sel_list        text;
+  has_fk_unique   boolean;
+  uc              RECORD;
+  match_clause    text;
 BEGIN
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
@@ -183,55 +184,105 @@ BEGIN
         $q$ USING target_id, older_id;
       END IF;
 
-      -- Repoint every discovered FK child. A raw UPDATE of the FK
-      -- column blows up on unique-constraint collisions:
-      --   * gov.property_embeddings has PK (property_id), so the
-      --     target already holds the only allowed row.
-      --   * dia.cap_rate_history has UNIQUE (property_id, event_type,
-      --     event_date) and both rows may describe the same event.
-      -- Instead we INSERT each older row into the target via
-      -- ON CONFLICT DO NOTHING (target wins on any unique collision,
-      -- non-colliding rows migrate) and then delete the older's
-      -- remaining rows. Column lists are pulled from information_schema
-      -- so we don't need to know the shape of each child table; the
-      -- FK column is replaced with a scalar subquery that returns the
-      -- native target property_id, so this works for uuid (dialysis)
-      -- and bigint (government) alike. Generated (STORED) columns are
-      -- skipped since postgres recomputes them on insert.
+      -- Repoint every discovered FK child. We use a hybrid strategy so
+      -- the same code path handles both leaves-with-unique-on-FK (e.g.
+      -- property_embeddings with PK (property_id), cap_rate_history with
+      -- UNIQUE (property_id, event_type, event_date)) AND tables with
+      -- grandchildren that can't be deleted (e.g. leases, whose rows are
+      -- referenced by lease_escalations.lease_id without ON DELETE
+      -- CASCADE, so deleting an older lease row errors out with 23503).
+      --
+      -- Per child:
+      --   1. If NO unique/PK constraint on the child involves the FK
+      --      column, do a plain UPDATE. Grandchildren follow for free
+      --      since we never touch the surrogate PK (lease_id stays,
+      --      lease_escalations.lease_id keeps pointing at the same row).
+      --   2. Otherwise, for each unique/PK constraint that does include
+      --      the FK column, first delete older rows that would collide
+      --      with a target row on the constraint's non-FK columns
+      --      (target wins). Then UPDATE whatever older rows are left.
       IF fk_tables IS NOT NULL THEN
         FOR i IN 1 .. array_length(fk_tables, 1)
         LOOP
           child_table := fk_tables[i];
           child_fk    := fk_cols[i];
 
-          SELECT string_agg(quote_ident(column_name),
-                            ', ' ORDER BY ordinal_position),
-                 string_agg(
-                   CASE
-                     WHEN column_name = child_fk THEN
-                       '(SELECT property_id FROM properties '
-                       ' WHERE property_id::text = $1)'
-                     ELSE quote_ident(column_name)
-                   END,
-                   ', ' ORDER BY ordinal_position
-                 )
-            INTO col_list, sel_list
-            FROM information_schema.columns
-           WHERE table_schema = 'public'
-             AND table_name   = child_table
-             AND is_generated = 'NEVER';
+          SELECT EXISTS (
+            SELECT 1
+              FROM information_schema.table_constraints tc2
+              JOIN information_schema.key_column_usage  kcu2
+                ON tc2.constraint_name = kcu2.constraint_name
+               AND tc2.table_schema    = kcu2.table_schema
+             WHERE tc2.table_schema    = 'public'
+               AND tc2.table_name      = child_table
+               AND tc2.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+               AND kcu2.column_name    = child_fk
+          ) INTO has_fk_unique;
 
+          IF has_fk_unique THEN
+            -- Per-constraint conflict resolution: delete older rows that
+            -- would clash with a target row on the non-FK columns of the
+            -- constraint, so the follow-up UPDATE has no collisions.
+            FOR uc IN
+              SELECT tc3.constraint_name,
+                     array_agg(kcu3.column_name ORDER BY kcu3.ordinal_position) AS cols
+                FROM information_schema.table_constraints tc3
+                JOIN information_schema.key_column_usage  kcu3
+                  ON tc3.constraint_name = kcu3.constraint_name
+                 AND tc3.table_schema    = kcu3.table_schema
+               WHERE tc3.table_schema    = 'public'
+                 AND tc3.table_name      = child_table
+                 AND tc3.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+               GROUP BY tc3.constraint_name
+            LOOP
+              -- Skip constraints that don't involve the FK column.
+              IF NOT (child_fk = ANY(uc.cols)) THEN
+                CONTINUE;
+              END IF;
+
+              SELECT string_agg(
+                       format('other.%I = child.%I', c, c),
+                       ' AND '
+                     )
+                INTO match_clause
+                FROM unnest(uc.cols) AS c
+               WHERE c <> child_fk;
+
+              IF match_clause IS NULL THEN
+                -- Constraint is solely (fk_col): any older row collides
+                -- with the target's single row. Drop all older rows.
+                EXECUTE format(
+                  'DELETE FROM %I WHERE %I::text = $1',
+                  child_table, child_fk
+                ) USING older_id;
+              ELSE
+                -- Drop older rows that match a target row on the other
+                -- constraint columns. Remaining older rows are safe to
+                -- repoint.
+                EXECUTE format(
+                  'DELETE FROM %I AS child '
+                  ' WHERE child.%I::text = $1 '
+                  '   AND EXISTS ('
+                  '     SELECT 1 FROM %I AS other '
+                  '      WHERE other.%I::text = $2 '
+                  '        AND %s'
+                  '   )',
+                  child_table, child_fk, child_table, child_fk, match_clause
+                ) USING older_id, target_id;
+              END IF;
+            END LOOP;
+          END IF;
+
+          -- Plain repoint: changes only the FK column, so any surrogate
+          -- PK stays put and grandchildren follow automatically.
           EXECUTE format(
-            'INSERT INTO %I (%s) '
-            'SELECT %s FROM %I WHERE %I::text = $2 '
-            'ON CONFLICT DO NOTHING',
-            child_table, col_list, sel_list, child_table, child_fk
+            'UPDATE %I AS child '
+            '   SET %I = p.property_id '
+            '  FROM properties p '
+            ' WHERE p.property_id::text = $1 '
+            '   AND child.%I::text      = $2',
+            child_table, child_fk, child_fk
           ) USING target_id, older_id;
-
-          EXECUTE format(
-            'DELETE FROM %I WHERE %I::text = $1',
-            child_table, child_fk
-          ) USING older_id;
         END LOOP;
       END IF;
 
