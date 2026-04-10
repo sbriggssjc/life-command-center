@@ -10,6 +10,31 @@ export function normalizeCanonicalName(name) {
     .trim();
 }
 
+/**
+ * Normalize a street address for duplicate detection.
+ * Collapses common street-type abbreviation variants ("Street"/"St",
+ * "Road"/"Rd", etc.) and lowercases so CoStar records using different
+ * spellings from existing CMS records resolve to the same key.
+ */
+export function normalizeAddress(addr) {
+  if (!addr) return '';
+  return String(addr).trim()
+    .replace(/\bStreet\b/gi, 'St')
+    .replace(/\bAvenue\b/gi, 'Ave')
+    .replace(/\bBoulevard\b/gi, 'Blvd')
+    .replace(/\bDrive\b/gi, 'Dr')
+    .replace(/\bRoad\b/gi, 'Rd')
+    .replace(/\bLane\b/gi, 'Ln')
+    .replace(/\bCourt\b/gi, 'Ct')
+    .replace(/\bPlace\b/gi, 'Pl')
+    .replace(/\bHighway\b/gi, 'Hwy')
+    .replace(/\bParkway\b/gi, 'Pkwy')
+    .replace(/\bCircle\b/gi, 'Cir')
+    .replace(/\bTrail\b/gi, 'Trl')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
