@@ -1,8 +1,8 @@
 -- Normalize properties.address to collapse abbreviation variants
 -- ("Street" vs "St", "Road" vs "Rd", "Avenue" vs "Ave") so the upsert
--- lookup in sidebar-pipeline.js::upsertDomainProperty() stops creating a
--- new row every time CoStar spells a street type differently from the
--- existing CMS-sourced record.
+-- lookup in sidebar-pipeline.js::upsertDomainProperty() stops creating
+-- a new row every time CoStar spells a street type differently from
+-- the existing CMS-sourced record.
 --
 -- Mirrors the normalizeAddress() function in api/_shared/entity-link.js.
 --
@@ -10,15 +10,44 @@
 --   * dialysis (properties has medicare_id / lease fields)
 --   * government (properties has lease fields, no medicare_id)
 --
--- Medicare/lease merge logic uses information_schema guards so the same
--- file is safe to run against either database. Idempotent.
+-- =====================================================================
+-- HOW TO RUN
+-- =====================================================================
+--
+-- This file is split into FOUR independent transactions (Parts 1–4)
+-- plus an optional Part 5 so each piece can be run individually in
+-- the Supabase SQL editor if the full script exceeds the upstream
+-- HTTP timeout.
+--
+-- Fastest path — run the whole file via psql, which has no HTTP
+-- timeout:
+--
+--   psql "<pooler connection string>" \
+--     -f sql/20260410_normalize_properties_address.sql
+--
+-- SQL-editor path — select and run each Part's BEGIN..COMMIT block
+-- individually, in order. State flows between parts through a
+-- regular table `lcc_dedup_pairs` that Part 1 creates and Part 5
+-- drops. If you need to abort, re-enable user triggers on every
+-- affected table (Part 2 and Part 3 disable them per-transaction
+-- and re-enable at the end, so an aborted transaction auto-rolls
+-- back the DDL).
+--
+-- Idempotent: every Part is safe to re-run. Part 1 recreates the
+-- function + lcc_dedup_pairs from scratch. Part 4 leaves no state.
+-- =====================================================================
 
+
+-- =====================================================================
+-- PART 1: normalize_address_txt function + lcc_dedup_pairs state table
+-- =====================================================================
 BEGIN;
+SET LOCAL statement_timeout = 0;
 
--- 1. SQL mirror of normalizeAddress() from api/_shared/entity-link.js.
---    LANGUAGE sql (not plpgsql) so the planner can inline it into
---    the INSERT INTO dup_pairs scan and the final address rewrite,
---    avoiding a per-row plpgsql call for large properties tables.
+-- LANGUAGE sql (not plpgsql) so the planner can inline the regexp
+-- chain into the INSERT INTO lcc_dedup_pairs scan and the Part 4
+-- address rewrite, avoiding per-row plpgsql call overhead on what
+-- is otherwise a full properties scan.
 CREATE OR REPLACE FUNCTION normalize_address_txt(addr text)
 RETURNS text
 LANGUAGE sql
@@ -58,73 +87,200 @@ AS $fn$
   END
 $fn$;
 
--- 2. Merge duplicate property pairs BEFORE rewriting addresses so that
--- the "older CMS" vs "newer CoStar" identification stays stable.
---
--- For each (normalized_address, lower(city), state) bucket with more than
--- one row, we keep the most-recently-updated property (the CoStar sidebar
--- ingest) and copy the older record's medicare_id / lease fields into the
--- target when the target is missing them. Then we repoint FK tables to
--- the target and delete the older row.
---
--- property_id isn't the same type across domains (government uses bigint,
--- dialysis uses uuid), and dialysis.properties has no created_at column.
--- We work in text so the same DO block runs against either database, then
--- cast property_id::text on both sides of every comparison so PostgreSQL
--- never has to coerce a text literal back into the native id type.
---
--- FK tables that reference properties.property_id are discovered
--- dynamically via information_schema so we automatically repoint
--- things like gsa_leases (government) and sales_transactions
--- (both DBs) without having to hard-code every child table here —
--- and so child tables whose column isn't literally named
--- "property_id" (e.g. dialysis.clinic_financial_estimates) work
--- without a 42703 "column does not exist" error.
---
--- All per-row work is batched via a dup_pairs temp table so the
--- migration runs in a fixed number of set-based statements instead
--- of nested loops — earlier iterations issued
--- N_dups × N_children × several EXECUTE calls each and timed out
--- on dialysis.
---
--- User triggers on properties + every FK child are ALTER TABLE
--- DISABLE'd for the duration of this transaction so a latent bug
--- in the government DB's propagate_ownership_to_property() trigger
--- (references NEW.ownership_end on ownership_history, which doesn't
--- have that column) doesn't block UPDATEs. session_replication_role
--- would be cleaner but it requires superuser and Supabase's SQL
--- editor user doesn't have that — ALTER TABLE only needs ownership.
--- DISABLE TRIGGER USER keeps RI/FK enforcement triggers active, so
--- foreign-key checks still run; only user-defined trigger functions
--- are suppressed. If the transaction rolls back for any reason the
--- DDL is reverted automatically; the explicit ENABLE at the bottom
--- covers the normal-exit path. No early RETURNs in between.
-DO $merge$
+-- Regular table (not TEMP) so state persists between the Part 1–4
+-- transactions. Part 5 drops it.
+DROP TABLE IF EXISTS lcc_dedup_pairs;
+CREATE TABLE lcc_dedup_pairs (
+  older_id  text PRIMARY KEY,
+  target_id text NOT NULL
+);
+
+-- For each (normalized_address, lower(city), state) bucket with more
+-- than one row, keep the most-recently-updated property (the CoStar
+-- sidebar ingest) and emit one row per older → target pair.
+INSERT INTO lcc_dedup_pairs (older_id, target_id)
+SELECT grp.ids[k], grp.ids[1]
+  FROM (
+    SELECT array_agg(property_id::text
+                     ORDER BY updated_at DESC NULLS LAST) AS ids
+      FROM properties
+     WHERE address IS NOT NULL
+       AND city    IS NOT NULL
+     GROUP BY normalize_address_txt(address), lower(city), state
+    HAVING count(*) > 1
+  ) grp
+  CROSS JOIN LATERAL generate_series(2, array_length(grp.ids, 1)) AS k;
+
+COMMIT;
+
+
+-- =====================================================================
+-- PART 2: Merge medicare_id / lease fields from olders into targets
+-- =====================================================================
+-- Touches only the properties table — fast (O(|lcc_dedup_pairs|) PK
+-- lookups). Safe to re-run; every UPDATE guards on tgt.<col> IS NULL.
+-- =====================================================================
+BEGIN;
+SET LOCAL statement_timeout = 0;
+
+DO $part2$
 DECLARE
-  fk_tables          text[];
-  fk_cols            text[];
-  i                  integer;
-  child_table        text;
-  child_fk           text;
-  fk_type            text;
   properties_pk_type text;
   has_medicare       boolean;
   has_lease_exp      boolean;
   has_lease_com      boolean;
   has_annual_rent    boolean;
-  uc                 RECORD;
-  pos                integer;
-  expr               text;
-  select_extra       text;
-  partition_list     text;
-  rec                RECORD;
-  dup_count          integer;
 BEGIN
-  -- Lift the local statement timeout for this transaction so PG
-  -- doesn't kill the DO block partway through. The upstream HTTP
-  -- timeout is a separate concern — if you're hitting it, run the
-  -- migration directly via psql instead of the Supabase SQL editor.
-  PERFORM set_config('statement_timeout', '0', true);
+  IF (SELECT count(*) FROM lcc_dedup_pairs) = 0 THEN
+    RETURN;
+  END IF;
+
+  SELECT format_type(a.atttypid, a.atttypmod)
+    INTO properties_pk_type
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname   = 'public'
+     AND c.relname   = 'properties'
+     AND a.attname   = 'property_id'
+     AND NOT a.attisdropped;
+
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'properties' AND column_name = 'medicare_id'
+  ) INTO has_medicare;
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'properties' AND column_name = 'lease_expiration'
+  ) INTO has_lease_exp;
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'properties' AND column_name = 'lease_commencement'
+  ) INTO has_lease_com;
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'properties' AND column_name = 'annual_rent'
+  ) INTO has_annual_rent;
+
+  -- Disable user triggers on properties for the duration of this
+  -- transaction so latent trigger bugs (e.g. gov's
+  -- propagate_ownership_to_property referencing NEW.ownership_end)
+  -- don't block field merges.
+  EXECUTE 'ALTER TABLE properties DISABLE TRIGGER USER';
+
+  -- medicare_id has a UNIQUE constraint on dialysis, so we can't
+  -- copy it in one UPDATE while the older row still holds the
+  -- value. Three-step: capture, clear older, set target.
+  IF has_medicare THEN
+    DROP TABLE IF EXISTS lcc_merge_medicare;
+    EXECUTE format($cte$
+      CREATE TEMP TABLE lcc_merge_medicare ON COMMIT DROP AS
+      SELECT dp.target_id::%1$s AS target_id, old.medicare_id
+        FROM lcc_dedup_pairs dp
+        JOIN properties old ON old.property_id = dp.older_id::%1$s
+       WHERE old.medicare_id IS NOT NULL
+    $cte$, properties_pk_type);
+
+    EXECUTE format($sql$
+      UPDATE properties
+         SET medicare_id = NULL
+       WHERE property_id = ANY(ARRAY(
+               SELECT older_id::%1$s FROM lcc_dedup_pairs))
+         AND medicare_id IS NOT NULL
+    $sql$, properties_pk_type);
+
+    UPDATE properties tgt
+       SET medicare_id = mm.medicare_id
+      FROM lcc_merge_medicare mm
+     WHERE tgt.property_id = mm.target_id
+       AND tgt.medicare_id IS NULL;
+  END IF;
+
+  IF has_lease_exp THEN
+    EXECUTE format($sql$
+      UPDATE properties tgt
+         SET lease_expiration = old.lease_expiration
+        FROM properties old
+        JOIN lcc_dedup_pairs dp ON dp.older_id::%1$s = old.property_id
+       WHERE tgt.property_id = dp.target_id::%1$s
+         AND tgt.lease_expiration IS NULL
+         AND old.lease_expiration IS NOT NULL
+    $sql$, properties_pk_type);
+  END IF;
+
+  IF has_lease_com THEN
+    EXECUTE format($sql$
+      UPDATE properties tgt
+         SET lease_commencement = old.lease_commencement
+        FROM properties old
+        JOIN lcc_dedup_pairs dp ON dp.older_id::%1$s = old.property_id
+       WHERE tgt.property_id = dp.target_id::%1$s
+         AND tgt.lease_commencement IS NULL
+         AND old.lease_commencement IS NOT NULL
+    $sql$, properties_pk_type);
+  END IF;
+
+  IF has_annual_rent THEN
+    EXECUTE format($sql$
+      UPDATE properties tgt
+         SET annual_rent = old.annual_rent
+        FROM properties old
+        JOIN lcc_dedup_pairs dp ON dp.older_id::%1$s = old.property_id
+       WHERE tgt.property_id = dp.target_id::%1$s
+         AND tgt.annual_rent IS NULL
+         AND old.annual_rent IS NOT NULL
+    $sql$, properties_pk_type);
+  END IF;
+
+  EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
+END
+$part2$;
+
+COMMIT;
+
+
+-- =====================================================================
+-- PART 3: Repoint FK children from olders to targets
+-- =====================================================================
+-- The slow part. For each child table that FKs into
+-- properties.property_id, use a three-tier strategy:
+--
+--   Tier 1 — plain batched UPDATE. Runs for every child. For
+--            children with no unique-on-FK collisions (the common
+--            case), this is the only statement per child.
+--   Tier 2 — ranked-partition DELETE per unique non-partial index
+--            whose key columns include the FK, then retry the
+--            batched UPDATE.
+--   Tier 3 — row-level UPDATE + delete-on-conflict. If even the
+--            delete is blocked by a grandchild FK, un-pair the
+--            older from lcc_dedup_pairs so the Part 4 DELETE FROM
+--            properties skips it and the row stays in place.
+--
+-- If this part still exceeds the upstream HTTP timeout on a very
+-- large DB, run it via psql — every other path here assumes one
+-- all-at-once pass through the FK children.
+-- =====================================================================
+BEGIN;
+SET LOCAL statement_timeout = 0;
+
+DO $part3$
+DECLARE
+  fk_tables       text[];
+  fk_cols         text[];
+  i               integer;
+  child_table     text;
+  child_fk        text;
+  fk_type         text;
+  uc              RECORD;
+  pos             integer;
+  expr            text;
+  select_extra    text;
+  partition_list  text;
+  rec             RECORD;
+BEGIN
+  IF (SELECT count(*) FROM lcc_dedup_pairs) = 0 THEN
+    RETURN;
+  END IF;
 
   -- Discover every child table that has a FK to properties.property_id.
   SELECT array_agg(tc.table_name), array_agg(kcu.column_name)
@@ -143,46 +299,10 @@ BEGIN
      AND ccu.column_name    = 'property_id'
      AND tc.table_name     <> 'properties';
 
-  -- Column-existence guards so the same file runs on dialysis and government.
-  SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-     WHERE table_name = 'properties' AND column_name = 'medicare_id'
-  ) INTO has_medicare;
-  SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-     WHERE table_name = 'properties' AND column_name = 'lease_expiration'
-  ) INTO has_lease_exp;
-  SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-     WHERE table_name = 'properties' AND column_name = 'lease_commencement'
-  ) INTO has_lease_com;
-  SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-     WHERE table_name = 'properties' AND column_name = 'annual_rent'
-  ) INTO has_annual_rent;
-
-  -- Native type of properties.property_id (uuid on dialysis, bigint
-  -- on government). Cached once so every downstream statement can
-  -- cast dup_pairs text columns to the native type and keep the
-  -- comparison on c.property_id itself — that's the difference
-  -- between an index scan and a full table scan, and is what caused
-  -- Round 9 to time out on government's larger child tables.
-  SELECT format_type(a.atttypid, a.atttypmod)
-    INTO properties_pk_type
-    FROM pg_attribute a
-    JOIN pg_class c ON c.oid = a.attrelid
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname   = 'public'
-     AND c.relname   = 'properties'
-     AND a.attname   = 'property_id'
-     AND NOT a.attisdropped;
-
-  -- Disable user triggers on properties and every FK child table so
-  -- the broken gov trigger (and anything similar) doesn't block the
-  -- migration. These ALTERs live inside the same transaction, so a
-  -- rollback reverts them automatically; the matching ENABLE block
-  -- at the bottom covers the successful-exit path.
-  EXECUTE 'ALTER TABLE properties DISABLE TRIGGER USER';
+  -- Disable user triggers on every FK child so latent trigger bugs
+  -- don't block the UPDATEs. These ALTERs live in this transaction
+  -- only — rollback reverts them; we re-enable explicitly before
+  -- COMMIT on the happy path.
   IF fk_tables IS NOT NULL THEN
     FOR i IN 1 .. array_length(fk_tables, 1)
     LOOP
@@ -190,149 +310,6 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- Build a temp table of (older_id, target_id) pairs so every step
-  -- below is a single set-based statement. If there are no duplicates
-  -- the table is empty and every statement below is a no-op — we do
-  -- NOT early-return, because we still need the ENABLE TRIGGER block
-  -- to run before COMMIT (otherwise DDL would persist).
-  DROP TABLE IF EXISTS dup_pairs;
-  CREATE TEMP TABLE dup_pairs (
-    older_id  text PRIMARY KEY,
-    target_id text NOT NULL
-  ) ON COMMIT DROP;
-
-  INSERT INTO dup_pairs (older_id, target_id)
-  SELECT grp.ids[k], grp.ids[1]
-    FROM (
-      SELECT array_agg(property_id::text
-                       ORDER BY updated_at DESC NULLS LAST) AS ids
-        FROM properties
-       WHERE address IS NOT NULL
-         AND city    IS NOT NULL
-       GROUP BY normalize_address_txt(address), lower(city), state
-      HAVING count(*) > 1
-    ) grp
-    CROSS JOIN LATERAL generate_series(2, array_length(grp.ids, 1)) AS k;
-
-  -- Early exit if there are no duplicates to process. We still have
-  -- to re-enable triggers before returning because ALTER TABLE
-  -- DISABLE TRIGGER is regular DDL, not a session GUC — skipping
-  -- the ENABLE step would leave user triggers disabled after COMMIT.
-  SELECT count(*) INTO dup_count FROM dup_pairs;
-  IF dup_count = 0 THEN
-    EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
-    IF fk_tables IS NOT NULL THEN
-      FOR i IN 1 .. array_length(fk_tables, 1)
-      LOOP
-        EXECUTE format('ALTER TABLE %I ENABLE TRIGGER USER', fk_tables[i]);
-      END LOOP;
-    END IF;
-    RETURN;
-  END IF;
-
-  -- Batch-merge medicare_id / lease fields from older into target.
-  --
-  -- medicare_id has a UNIQUE constraint on dialysis, so we can't just
-  -- copy it from older to target in one UPDATE — the older row still
-  -- holds the value when the target row is written, producing
-  -- 23505 duplicate key. Three-step: capture older values into a
-  -- temp, clear older's medicare_id, then set target's.
-  --
-  -- Every statement below casts the dup_pairs text columns to the
-  -- native properties_pk_type so the comparisons land on the PK
-  -- index instead of forcing a seq scan.
-  IF has_medicare THEN
-    DROP TABLE IF EXISTS merge_medicare;
-    EXECUTE format($cte$
-      CREATE TEMP TABLE merge_medicare ON COMMIT DROP AS
-      SELECT dp.target_id::%1$s AS target_id, old.medicare_id
-        FROM dup_pairs dp
-        JOIN properties old ON old.property_id = dp.older_id::%1$s
-       WHERE old.medicare_id IS NOT NULL
-    $cte$, properties_pk_type);
-
-    EXECUTE format($sql$
-      UPDATE properties
-         SET medicare_id = NULL
-       WHERE property_id = ANY(ARRAY(
-               SELECT older_id::%1$s FROM dup_pairs))
-         AND medicare_id IS NOT NULL
-    $sql$, properties_pk_type);
-
-    UPDATE properties tgt
-       SET medicare_id = mm.medicare_id
-      FROM merge_medicare mm
-     WHERE tgt.property_id = mm.target_id
-       AND tgt.medicare_id IS NULL;
-  END IF;
-
-  IF has_lease_exp THEN
-    EXECUTE format($sql$
-      UPDATE properties tgt
-         SET lease_expiration = old.lease_expiration
-        FROM properties old
-        JOIN dup_pairs dp ON dp.older_id::%1$s = old.property_id
-       WHERE tgt.property_id = dp.target_id::%1$s
-         AND tgt.lease_expiration IS NULL
-         AND old.lease_expiration IS NOT NULL
-    $sql$, properties_pk_type);
-  END IF;
-
-  IF has_lease_com THEN
-    EXECUTE format($sql$
-      UPDATE properties tgt
-         SET lease_commencement = old.lease_commencement
-        FROM properties old
-        JOIN dup_pairs dp ON dp.older_id::%1$s = old.property_id
-       WHERE tgt.property_id = dp.target_id::%1$s
-         AND tgt.lease_commencement IS NULL
-         AND old.lease_commencement IS NOT NULL
-    $sql$, properties_pk_type);
-  END IF;
-
-  IF has_annual_rent THEN
-    EXECUTE format($sql$
-      UPDATE properties tgt
-         SET annual_rent = old.annual_rent
-        FROM properties old
-        JOIN dup_pairs dp ON dp.older_id::%1$s = old.property_id
-       WHERE tgt.property_id = dp.target_id::%1$s
-         AND tgt.annual_rent IS NULL
-         AND old.annual_rent IS NOT NULL
-    $sql$, properties_pk_type);
-  END IF;
-
-  -- Repoint every discovered FK child. Three-tier strategy so the
-  -- expensive work only runs when it's actually needed:
-  --
-  --   Tier 1 (fast path, runs for every child):
-  --     Plain batched UPDATE. Surrogate PKs stay put so grandchildren
-  --     follow automatically. When there are no unique-on-FK
-  --     collisions (the common case for most tables), this is the
-  --     only statement that runs per child.
-  --
-  --   Tier 2 (only on unique_violation from Tier 1):
-  --     Walk each unique non-partial index whose key columns include
-  --     the FK and run a ranked-partition DELETE keyed on the non-FK
-  --     columns. Uses pg_get_indexdef for the key expressions so
-  --     expression indexes like
-  --     sales_property_date_price_uidx (property_id, sale_date,
-  --     COALESCE(sold_price, 0::numeric)) are partitioned on the
-  --     full key. Then retry the batched UPDATE.
-  --
-  --   Tier 3 (only on unique_violation from the retry):
-  --     Row-level UPDATE with delete-on-conflict. If even the delete
-  --     is blocked by a grandchild FK (e.g.
-  --     ownership_history.sale_id → sales_transactions.sale_id with
-  --     no ON DELETE CASCADE), un-pair the older from dup_pairs so
-  --     the final DELETE FROM properties skips it — we'd rather
-  --     leave one older unmerged than fail the whole migration.
-  --
-  -- Why the tiers matter: Round 11 ran Tier 2 unconditionally for
-  -- every child × every unique-on-FK index. For government with
-  -- dozens of FK children and multiple indexes each, the cumulative
-  -- scan + window-function cost exceeded statement_timeout even
-  -- when there were zero conflicts to resolve.
   IF fk_tables IS NOT NULL THEN
     FOR i IN 1 .. array_length(fk_tables, 1)
     LOOP
@@ -350,20 +327,17 @@ BEGIN
          AND NOT a.attisdropped;
 
       BEGIN
-        -- Tier 1: fast-path batched UPDATE. Native-type casts so the
-        -- FK-column index on the child can be used.
+        -- Tier 1: fast-path batched UPDATE.
         EXECUTE format(
           'UPDATE %1$I AS child '
           '   SET %2$I = dp.target_id::%3$s '
-          '  FROM dup_pairs dp '
+          '  FROM lcc_dedup_pairs dp '
           ' WHERE child.%2$I = dp.older_id::%3$s',
           child_table, child_fk, fk_type
         );
       EXCEPTION WHEN unique_violation OR exclusion_violation THEN
         -- Tier 2: ranked-partition DELETE per unique-on-FK index.
-        -- indkey is int2vector; cast via ::text + string_to_array
-        -- because the direct `indkey::smallint[]` cast is not
-        -- guaranteed to work across versions.
+        -- indkey is int2vector; cast via ::text + string_to_array.
         FOR uc IN
           SELECT i3.indexrelid,
                  string_to_array(i3.indkey::text, ' ')::smallint[] AS idx_keys,
@@ -387,10 +361,6 @@ BEGIN
             CONTINUE;
           END IF;
 
-          -- Walk the index key positions and build two parallel
-          -- strings: select_extra (expressions aliased as _pk_N) and
-          -- partition_list (those aliases). pg_get_indexdef handles
-          -- both plain columns and expression keys.
           select_extra   := NULL;
           partition_list := NULL;
           FOR pos IN 1 .. uc.natts
@@ -411,12 +381,12 @@ BEGIN
             '         COALESCE(dp.target_id, c.%1$I::text) AS eff_target, '
             '         (dp.target_id IS NULL) AS is_target_row%2$s '
             '    FROM %3$I c '
-            '    LEFT JOIN dup_pairs dp '
+            '    LEFT JOIN lcc_dedup_pairs dp '
             '           ON dp.older_id::%5$s = c.%1$I '
             '   WHERE c.%1$I = ANY(ARRAY( '
-            '           SELECT older_id::%5$s  FROM dup_pairs '
+            '           SELECT older_id::%5$s  FROM lcc_dedup_pairs '
             '           UNION '
-            '           SELECT target_id::%5$s FROM dup_pairs '
+            '           SELECT target_id::%5$s FROM lcc_dedup_pairs '
             '         )) '
             '), '
             'ranked AS ( '
@@ -438,39 +408,26 @@ BEGIN
           );
         END LOOP;
 
-        -- Retry the batched UPDATE now that known conflicts have
-        -- been cleared.
         BEGIN
           EXECUTE format(
             'UPDATE %1$I AS child '
             '   SET %2$I = dp.target_id::%3$s '
-            '  FROM dup_pairs dp '
+            '  FROM lcc_dedup_pairs dp '
             ' WHERE child.%2$I = dp.older_id::%3$s',
             child_table, child_fk, fk_type
           );
         EXCEPTION WHEN unique_violation OR exclusion_violation THEN
           -- Tier 3: row-level UPDATE + delete-on-conflict + un-pair
-          -- on grandchild FK violation.
-          --
-          -- The row-level UPDATE's USING parameter MUST be a
-          -- consistent type across every outer FK-child iteration.
-          -- Round 12 cast dp.target_id to the native fk_type in the
-          -- SELECT so rec.new_fk's record-field type differed per
-          -- child (integer, bigint, uuid…). PL/pgSQL's SPI cached
-          -- the prepared EXECUTE at this source location from the
-          -- first call's type and later calls with a different type
-          -- tripped 42804 "type of parameter N does not match that
-          -- when preparing the plan". Keep rec.new_fk_text as plain
-          -- text (dp.target_id's native type) and cast to fk_type
-          -- inside the UPDATE SQL itself so the USING parameter is
-          -- always text.
+          -- on grandchild FK violation. USING parameters kept as
+          -- (text, tid) across every outer iteration so the SPI-
+          -- cached plan doesn't trip a parameter type mismatch.
           FOR rec IN
             EXECUTE format(
               'SELECT c.ctid        AS child_ctid, '
               '       c.%2$I::text  AS older_id_text, '
               '       dp.target_id  AS new_fk_text '
               '  FROM %1$I c '
-              '  JOIN dup_pairs dp ON dp.older_id::%3$s = c.%2$I',
+              '  JOIN lcc_dedup_pairs dp ON dp.older_id::%3$s = c.%2$I',
               child_table, child_fk, fk_type
             )
           LOOP
@@ -486,7 +443,7 @@ BEGIN
                   child_table
                 ) USING rec.child_ctid;
               EXCEPTION WHEN foreign_key_violation THEN
-                DELETE FROM dup_pairs
+                DELETE FROM lcc_dedup_pairs
                  WHERE older_id = rec.older_id_text;
               END;
             END;
@@ -496,16 +453,7 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- Finally remove every stale duplicate in one DELETE. Native-type
-  -- cast on the dup_pairs side so the properties PK index can be used.
-  EXECUTE format($sql$
-    DELETE FROM properties
-     WHERE property_id = ANY(ARRAY(
-             SELECT older_id::%1$s FROM dup_pairs))
-  $sql$, properties_pk_type);
-
-  -- Re-enable user triggers on every table we disabled above.
-  EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
+  -- Re-enable user triggers on every child we disabled.
   IF fk_tables IS NOT NULL THEN
     FOR i IN 1 .. array_length(fk_tables, 1)
     LOOP
@@ -513,22 +461,74 @@ BEGIN
     END LOOP;
   END IF;
 END
-$merge$;
+$part3$;
 
--- 3. Rewrite every remaining address to the canonical abbreviated form so
--- the runtime lookup (which now normalizes before querying) matches exactly.
+COMMIT;
+
+
+-- =====================================================================
+-- PART 4: Delete older properties + normalize remaining addresses
+-- =====================================================================
+-- Also adds the lower(address) index that the runtime lookup uses.
+-- The UPDATE is filtered by `address IS DISTINCT FROM
+-- normalize_address_txt(address)` so it's a no-op after the first
+-- successful run.
+-- =====================================================================
+BEGIN;
+SET LOCAL statement_timeout = 0;
+
+DO $part4$
+DECLARE
+  properties_pk_type text;
+BEGIN
+  SELECT format_type(a.atttypid, a.atttypmod)
+    INTO properties_pk_type
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname   = 'public'
+     AND c.relname   = 'properties'
+     AND a.attname   = 'property_id'
+     AND NOT a.attisdropped;
+
+  EXECUTE 'ALTER TABLE properties DISABLE TRIGGER USER';
+
+  EXECUTE format($sql$
+    DELETE FROM properties
+     WHERE property_id = ANY(ARRAY(
+             SELECT older_id::%1$s FROM lcc_dedup_pairs))
+  $sql$, properties_pk_type);
+
+  EXECUTE 'ALTER TABLE properties ENABLE TRIGGER USER';
+END
+$part4$;
+
+-- Rewrite every remaining address to the canonical abbreviated form
+-- so the runtime lookup (which normalizes before querying) matches
+-- exactly. The WHERE filter makes this a no-op on re-runs.
 UPDATE properties
    SET address = normalize_address_txt(address)
  WHERE address IS NOT NULL
    AND address IS DISTINCT FROM normalize_address_txt(address);
 
--- 4. Index supporting the normalized lookup path.
 CREATE INDEX IF NOT EXISTS idx_properties_address_lower
   ON properties (lower(address));
 
 COMMIT;
 
--- Sanity check (run after commit):
+
+-- =====================================================================
+-- PART 5: Drop the state table (optional cleanup)
+-- =====================================================================
+-- Part 1 recreates lcc_dedup_pairs on the next run, so this is just
+-- tidy-up. Safe to skip if you want to inspect the pairs post-migration.
+-- =====================================================================
+BEGIN;
+DROP TABLE IF EXISTS lcc_dedup_pairs;
+COMMIT;
+
+
+-- Sanity check (run after Part 5):
 --   SELECT normalize_address_txt(address), lower(city), state, count(*)
 --     FROM properties
 --    WHERE address IS NOT NULL
