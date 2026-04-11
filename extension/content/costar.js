@@ -888,6 +888,12 @@
       if (/^comp\s+status$/i.test(line) && next) sale.comp_status = next;
       if (/^buyer\s+type$/i.test(line) && next) sale.buyer_type = next;
       if (/^financing\s+type$/i.test(line) && next) sale.financing_type = next;
+
+      // Inline cap rate on summary lines like "Cap: 7.15% · Investment"
+      if (!sale.cap_rate && /\bCap:\s*[\d.]+%/i.test(line)) {
+        const m = line.match(/\bCap:\s*([\d.]+%)/i);
+        if (m) sale.cap_rate = m[1];
+      }
     }
     return sale;
   }
@@ -970,6 +976,12 @@
       if (/^interest\s+rate$/i.test(line) && next) { current.interest_rate = next; continue; }
       if (/^loan\s+term$/i.test(line) && next) { current.loan_term = next; continue; }
       if (/^maturity\s+date$/i.test(line) && next) { current.maturity_date = next; continue; }
+
+      // After the line "Cap: X% · ..." pattern — parse inline cap rate
+      if (!current.cap_rate) {
+        const capMatch = line.match(/\bCap:\s*([\d.]+%)/i);
+        if (capMatch) current.cap_rate = capMatch[1];
+      }
     }
 
     pushCurrent();
@@ -1008,6 +1020,12 @@
           if (/^\$[\d,]+/.test(sl) && !sale.sale_price) sale.sale_price = sl;
           if (/[\d.]+%/.test(sl) && !sale.cap_rate) sale.cap_rate = sl;
           if (/^(investment|owner.?user|1031|build.?to.?suit)/i.test(sl)) sale.sale_type = sl;
+
+          // After the line "Cap: X% · ..." pattern — parse inline cap rate
+          if (!sale.cap_rate) {
+            const capMatch = sl.match(/\bCap:\s*([\d.]+%)/i);
+            if (capMatch) sale.cap_rate = capMatch[1];
+          }
         }
         sales.push(sale);
       }
