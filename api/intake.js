@@ -80,6 +80,7 @@ function firstNonEmpty(...values) {
 }
 
 async function handleOutlookMessage(req, res) {
+  console.log('[intake-outlook-message] diag req:', JSON.stringify({ method: req.method, bodyKeys: Object.keys(req.body || {}), hasMessageId: !!(req.body?.message_id || req.body?.id || req.body?.internet_message_id || req.body?.internetMessageId), hasWorkspaceHeader: !!req.headers['x-lcc-workspace'], bodyType: typeof req.body }));
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
