@@ -855,8 +855,15 @@ async function upsertDomainSales(domain, propertyId, metadata) {
 
     // Domain-aware field names for sales transactions
     const capRateVal = parsePercent(sale.cap_rate || metadata.cap_rate);
-    const buyerVal = sale.buyer || null;
-    const sellerVal = sale.seller || null;
+    // For current sales with no deed-level buyer/seller, supplement
+    // from contacts (buyer/seller contacts are the same entities)
+    const contactBuyer = (metadata.contacts || [])
+      .find(c => c.role === 'buyer')?.name || null;
+    const contactSeller = (metadata.contacts || [])
+      .find(c => c.role === 'seller')?.name || null;
+
+    const buyerVal  = sale.buyer  || (isCurrentSale ? contactBuyer  : null);
+    const sellerVal = sale.seller || (isCurrentSale ? contactSeller : null);
     const procuringBrokerVal = isCurrentSale ? (buyerBroker?.name || null) : null;
 
     const domainSaleFields = domain === 'government'
