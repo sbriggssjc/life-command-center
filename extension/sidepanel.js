@@ -15,6 +15,29 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Coerce any value (string, number, array, object) to a safe display string.
+// Prevents "[object Object]" from leaking into the UI.
+function toDisplayString(val) {
+  if (val == null) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  try {
+    return JSON.stringify(val);
+  } catch (_) {
+    return String(val);
+  }
+}
+
+// Extract a human-readable error message from arbitrary API error shapes.
+function toErrorMessage(val) {
+  if (val == null) return null;
+  if (typeof val === 'string') return val;
+  if (typeof val === 'object') {
+    return val.message || val.error || val.detail || toDisplayString(val);
+  }
+  return String(val);
+}
+
 function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -69,10 +92,10 @@ async function pollPipelineStatus(entityId, container) {
     const line = document.createElement('div');
     if (status === 'failed') {
       line.className = 'update-toast';
-      line.textContent = `→ Pipeline error: ${lastError || 'unknown'}`;
+      line.textContent = `→ Pipeline error: ${toErrorMessage(lastError) || 'unknown'}`;
     } else if (summary) {
       line.className = 'update-toast updated';
-      line.textContent = `→ ${summary}`;
+      line.textContent = `→ ${toDisplayString(summary)}`;
     } else {
       line.className = 'update-toast';
       line.style.background = '#F3F4F6';
@@ -455,7 +478,9 @@ async function loadPropertyTab() {
           rerunBtn.disabled = false;
         });
       } else {
-        const errMsg = result.data?.error || result.error || 'Unknown error';
+        const errMsg = toErrorMessage(result.data?.error)
+          || toErrorMessage(result.error)
+          || 'Unknown error';
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
@@ -472,11 +497,11 @@ async function loadPropertyTab() {
 function renderDetectedFields(ctx, sourceLabel) {
   let html = `<div class="section-label">${escapeHtml(sourceLabel || 'Detected')} Data</div>`;
   for (const [key, label] of PROPERTY_FIELDS) {
-    const val = ctx[key];
-    if (val) {
+    const valStr = toDisplayString(ctx[key]);
+    if (valStr) {
       html += `<div class="context-field">
         <span class="context-label">${escapeHtml(label)}</span>
-        <span class="context-value compare-new">${escapeHtml(val)}</span>
+        <span class="context-value compare-new">${escapeHtml(valStr)}</span>
       </div>`;
     }
   }
@@ -485,9 +510,11 @@ function renderDetectedFields(ctx, sourceLabel) {
 
 function renderCompareTable(ctx, lccEntity, sourceLabel) {
   // Only show fields where source has data that's new or different from LCC
-  const rows = PROPERTY_FIELDS.filter(([srcKey, , lccKey]) =>
-    ctx[srcKey] && (!lccEntity[lccKey] || ctx[srcKey] !== String(lccEntity[lccKey]))
-  );
+  const rows = PROPERTY_FIELDS.filter(([srcKey, , lccKey]) => {
+    const srcStr = toDisplayString(ctx[srcKey]);
+    const lccStr = toDisplayString(lccEntity[lccKey]);
+    return srcStr && (!lccStr || srcStr !== lccStr);
+  });
 
   if (!rows.length) return `<div class="section-label">No new data from ${escapeHtml(sourceLabel || 'source')}</div>`;
 
@@ -496,8 +523,8 @@ function renderCompareTable(ctx, lccEntity, sourceLabel) {
   html += `<tr><th>Field</th><th>${escapeHtml(sourceLabel || 'Source')}</th><th>Current LCC</th></tr>`;
 
   for (const [srcKey, label, lccKey] of rows) {
-    const srcVal = ctx[srcKey] || '';
-    const lccVal = lccEntity[lccKey] || '';
+    const srcVal = toDisplayString(ctx[srcKey]);
+    const lccVal = toDisplayString(lccEntity[lccKey]);
     const srcDisplay = srcVal || '—';
     const lccDisplay = lccVal || '—';
 
@@ -536,16 +563,18 @@ function renderIngestDiff(ctx, lccEntity) {
 
   let html = '<div class="section-label">Comparison: CoStar vs LCC</div>';
   for (const c of comparisons) {
-    if (!c.costar && !c.db) continue;
-    const changed = c.costar && c.db && c.costar !== c.db;
+    const costarStr = toDisplayString(c.costar);
+    const dbStr = toDisplayString(c.db);
+    if (!costarStr && !dbStr) continue;
+    const changed = costarStr && dbStr && costarStr !== dbStr;
     html += `<div class="context-field" style="background:${
       changed ? 'rgba(251,191,36,0.08)' : 'transparent'}">
       <span class="context-label">${escapeHtml(c.label)}</span>
       <span class="context-value">
-        ${c.db ? '<span style="color:var(--text3);font-size:10px">DB: ' +
-          escapeHtml(c.db) + '</span><br>' : ''}
-        ${c.costar ? '<span style="color:var(--text);font-size:11px">→ ' +
-          escapeHtml(c.costar) + '</span>' : ''}
+        ${dbStr ? '<span style="color:var(--text3);font-size:10px">DB: ' +
+          escapeHtml(dbStr) + '</span><br>' : ''}
+        ${costarStr ? '<span style="color:var(--text);font-size:11px">→ ' +
+          escapeHtml(costarStr) + '</span>' : ''}
       </span>
     </div>`;
   }
@@ -605,7 +634,10 @@ function wirePropertyActions(ctx, lccEntity) {
         updateBtn.disabled = false;
         updateBtn.textContent = 'Update Failed — Retry';
         updateBtn.className = 'btn btn-sm btn-danger';
-        const errMsg = result.error || result.data?.error || result.data?.message || `HTTP ${result.status || 'error'}`;
+        const errMsg = toErrorMessage(result.error)
+          || toErrorMessage(result.data?.error)
+          || toErrorMessage(result.data?.message)
+          || `HTTP ${result.status || 'error'}`;
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
@@ -667,7 +699,10 @@ function wirePropertyActions(ctx, lccEntity) {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
         saveBtn.className = 'btn btn-sm btn-danger';
-        const errMsg = result.error || result.data?.error || result.data?.message || `HTTP ${result.status || 'error'}`;
+        const errMsg = toErrorMessage(result.error)
+          || toErrorMessage(result.data?.error)
+          || toErrorMessage(result.data?.message)
+          || `HTTP ${result.status || 'error'}`;
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
@@ -1063,7 +1098,10 @@ function loadOrgView(source, domainLabel) {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
         saveBtn.className = 'btn btn-sm btn-danger';
-        const errMsg = result.error || result.data?.error || result.data?.message || `HTTP ${result.status || 'error'}`;
+        const errMsg = toErrorMessage(result.error)
+          || toErrorMessage(result.data?.error)
+          || toErrorMessage(result.data?.message)
+          || `HTTP ${result.status || 'error'}`;
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
