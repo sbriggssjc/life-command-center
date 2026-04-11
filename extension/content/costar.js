@@ -673,6 +673,68 @@
         continue;
       }
 
+      // ── True Buyer ─────────────────────────────────────────────
+      if (/^true\s+buyer$/i.test(line)) {
+        const { entity, individuals } = parseEntityBlock(lines, i + 1);
+        if (entity.name) {
+          contacts.push({
+            role: 'true_buyer',
+            name: entity.name,
+            type: 'organization',
+            address: entity.address || null,
+            city: entity.city || null,
+            state: entity.state || null,
+            zip: entity.zip || null,
+            phone: entity.phone || null,
+            email: entity.email || null,
+            website: entity.website || null,
+            sale_buyer:  currentGroupBuyer,
+            sale_seller: currentGroupSeller,
+          });
+          // Individual contacts within the true buyer org
+          for (const ind of individuals) {
+            contacts.push({
+              ...ind,
+              role: 'true_buyer_contact',
+              company: entity.name,
+              sale_buyer:  currentGroupBuyer,
+              sale_seller: currentGroupSeller,
+            });
+          }
+        }
+        continue;
+      }
+
+      // ── True Seller ────────────────────────────────────────────
+      if (/^true\s+seller$/i.test(line)) {
+        const { entity, individuals } = parseEntityBlock(lines, i + 1);
+        if (entity.name) {
+          contacts.push({
+            role: 'true_seller',
+            name: entity.name,
+            type: 'organization',
+            address: entity.address || null,
+            city: entity.city || null,
+            state: entity.state || null,
+            phone: entity.phone || null,
+            email: entity.email || null,
+            website: entity.website || null,
+            sale_buyer:  currentGroupBuyer,
+            sale_seller: currentGroupSeller,
+          });
+          for (const ind of individuals) {
+            contacts.push({
+              ...ind,
+              role: 'true_seller_contact',
+              company: entity.name,
+              sale_buyer:  currentGroupBuyer,
+              sale_seller: currentGroupSeller,
+            });
+          }
+        }
+        continue;
+      }
+
       // ── Listing Broker section → parse person blocks ──────────
       if (/^listing\s+broker$/i.test(line)) {
         const peek = lines[i + 1];
@@ -712,6 +774,71 @@
     }
 
     return contacts;
+  }
+
+  // Parse a True Buyer / True Seller entity block: a company line followed
+  // by address, phones, website, and optional individual contacts.
+  function parseEntityBlock(lines, startIdx) {
+    const entity = {};
+    const individuals = [];
+    let current = null;
+
+    function isPhone(s) { return /^\(?\d{3}\)?\s*[-.]?\s*\d{3}[-.]?\d{4}/.test(s); }
+    function isEmail(s) { return /@/.test(s) && /\.\w{2,}$/.test(s); }
+    function isURL(s)   { return /^(https?:\/\/|www\.)/i.test(s); }
+    function isAddress(s) { return /^\d+\s+\w+/.test(s); }
+    function isCityState(s) { return /^[A-Za-z].*,\s*[A-Z]{2}\s+\d{5}/.test(s); }
+
+    for (let j = startIdx; j < lines.length; j++) {
+      const line = lines[j];
+      // Stop at next major section
+      if (/^(true\s+(buyer|seller)|recorded\s+(buyer|seller|owner)|listing\s+broker|buyer\s+broker|current\s+owner|lender|my\s+notes|sources|©)/i.test(line)) break;
+      if (/^United States$/i.test(line)) continue;
+
+      if (!entity.name) {
+        // First real line = company name
+        if (line.length > 1 && line.length < 80 && /^[A-Z]/.test(line)
+            && !isPhone(line) && !isEmail(line) && !isURL(line)) {
+          entity.name = line;
+        }
+        continue;
+      }
+
+      if (isPhone(line)) {
+        // Strip (p)/(f) suffix — keep first phone on entity, rest on current person
+        const phone = line.replace(/\s*\([pPfFmMwW]\)\s*$/, '').trim();
+        if (!entity.phone) entity.phone = phone;
+        else if (current) {
+          if (!current.phones) current.phones = [];
+          current.phones.push(phone);
+        }
+        continue;
+      }
+      if (isEmail(line)) {
+        if (current) current.email = line.trim();
+        else entity.email = line.trim();
+        continue;
+      }
+      if (isURL(line)) { entity.website = line.trim(); continue; }
+      if (isAddress(line)) { entity.address = line.trim(); continue; }
+      if (isCityState(line)) {
+        // Parse "Chicago, IL 60606"
+        const m = line.match(/^(.+),\s*([A-Z]{2})\s+(\d{5})/);
+        if (m) { entity.city = m[1].trim(); entity.state = m[2]; entity.zip = m[3]; }
+        continue;
+      }
+
+      // A name-like line after entity is established = individual contact
+      if (/^[A-Z][a-z]/.test(line) && line.length < 60
+          && !isPhone(line) && !isEmail(line) && !isURL(line)) {
+        if (current) individuals.push(current);
+        current = { name: line, type: 'person' };
+        continue;
+      }
+    }
+    if (current) individuals.push(current);
+
+    return { entity, individuals };
   }
 
   // Parse person/company blocks. Does NOT rely on "logo" separators (they
