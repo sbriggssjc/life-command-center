@@ -30,6 +30,10 @@ const ROLE_TO_RELATIONSHIP = {
   listing_broker: 'brokers',
   buyer_broker: 'brokers',
   lender: 'finances',
+  true_buyer: 'purchases',
+  true_seller: 'sells',
+  true_buyer_contact: 'associated_with',
+  true_seller_contact: 'associated_with',
 };
 
 // ── Domain classification keywords ──────────────────────────────────────────
