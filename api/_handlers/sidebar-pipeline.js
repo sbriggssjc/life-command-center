@@ -2039,7 +2039,35 @@ async function upsertGovListings(propertyId, entity, metadata) {
   }
 
   const result = await domainQuery('government', 'POST', 'available_listings', record);
-  return result.ok ? 1 : 0;
+  if (!result.ok) return 0;
+
+  // Post-insert check: if a closed sale already exists for this property
+  // within the last 2 years, immediately close the listing so we don't
+  // treat it as a new active listing. The close_listing_on_sale trigger
+  // fires on sale INSERT, but the pipeline creates the listing AFTER the
+  // sale, so the trigger finds no active listing to close.
+  const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000)
+    .toISOString().split('T')[0];
+  const recentSales = await domainQuery('government', 'GET',
+    `sales_transactions?property_id=eq.${propertyId}` +
+    `&sale_date=gte.${twoYearsAgo}&select=sale_id,sale_date,sold_price,sold_cap_rate` +
+    `&order=sale_date.desc&limit=1`
+  );
+
+  if (recentSales.ok && recentSales.data?.length) {
+    const latestSale = recentSales.data[0];
+    await domainQuery('government', 'PATCH',
+      `available_listings?property_id=eq.${propertyId}&listing_status=eq.Active`,
+      {
+        listing_status:  'Sold',
+        off_market_date: latestSale.sale_date,
+        asking_cap_rate: latestSale.sold_cap_rate || null,
+        updated_at:      new Date().toISOString(),
+      }
+    );
+    return 0; // Sold, not an active listing
+  }
+  return 1;
 }
 
 // ── Main pipeline entry point ───────────────────────────────────────────────
