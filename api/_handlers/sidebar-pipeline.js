@@ -895,17 +895,22 @@ async function upsertDomainSales(domain, propertyId, metadata) {
 
     const saleData = stripNulls({
       property_id: propertyId,
-      sale_date: datePart,
-      sold_price: soldPrice,
+      sale_date:   datePart,
+      sold_price:  soldPrice,
       ...domainSaleFields,
       listing_broker: listingBroker?.name || null,
-      recorded_date: parseDate(sale.recordation_date) ? parseDate(sale.recordation_date).split('T')[0] : null,
-      notes: [
-        sale.deed_type ? `Deed: ${sale.deed_type}` : null,
-        sale.transaction_type ? `Type: ${sale.transaction_type}` : null,
-        sale.document_number ? `Doc#: ${sale.document_number}` : null,
-        sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
-      ].filter(Boolean).join('; ') || null,
+      // Only include recorded_date and notes for dialysis — gov
+      // sales_transactions has neither column, and PostgREST will
+      // silently 400 on PATCH if these are sent.
+      ...(domain === 'dialysis' ? {
+        recorded_date: parseDate(sale.recordation_date)?.split('T')[0] || null,
+        notes: [
+          sale.deed_type ? `Deed: ${sale.deed_type}` : null,
+          sale.transaction_type ? `Type: ${sale.transaction_type}` : null,
+          sale.document_number ? `Doc#: ${sale.document_number}` : null,
+          sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
+        ].filter(Boolean).join('; ') || null,
+      } : {}),
     });
     if (transaction_type !== null) saleData.transaction_type = transaction_type;
     // Always write exclude flag since false is a valid value that should persist
@@ -1574,51 +1579,47 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 
     // Build ownership_history entry for the buyer (they own from this sale forward)
     if (buyerId) {
-      if (domain === 'government') {
-        // Gov ownership_history has no ownership_end column, so skip the
-        // nextDate / end-date logic entirely. Dedup by property_id +
-        // transfer_date only (the gov table uses ownership_id as PK).
-        const govOhData = stripNulls({
-          property_id:       propertyId,
-          recorded_owner_id: buyerId,
-          new_owner:         sale.buyer || null,
-          prior_owner:       sale.seller || null,
-          transfer_date:     saleDateStr,
-          sale_price:        parseCurrency(sale.sale_price),
-          data_source:       'costar_sidebar',
-        });
+      // Next transition is the NEXT SALE WITH A BUYER, not any stat card entry.
+      // nextSaleDate = null means this buyer is still the current owner.
+      // (Only used by the dialysis branch — gov has no ownership_end column.)
+      const nextTransition = i < validTransitions.length - 1 ? validTransitions[i + 1] : null;
+      const nextSaleDate = nextTransition ? parseDate(nextTransition.sale_date) : null;
 
-        const ohLookup = await domainQuery('government', 'GET',
-          `ownership_history?property_id=eq.${propertyId}` +
-          `&transfer_date=eq.${saleDateStr}&select=ownership_id&limit=1`
-        );
-        if (!ohLookup.ok || !ohLookup.data?.length) {
-          const result = await domainQuery('government', 'POST', 'ownership_history', govOhData);
-          if (result.ok) results.history++;
-        }
-      } else {
-        // Dialysis: ownership_start, ownership_end, sold_price.
-        // Next transition is the NEXT SALE WITH A BUYER, not any stat card entry.
-        // nextSaleDate = null means this buyer is still the current owner.
-        const nextTransition = i < validTransitions.length - 1 ? validTransitions[i + 1] : null;
-        const nextSaleDate = nextTransition ? parseDate(nextTransition.sale_date) : null;
+      // Dedup check — domain-aware date column.
+      // Gov ownership_history uses transfer_date; dialysis uses ownership_start.
+      const dateColFilter = domain === 'government'
+        ? `transfer_date=eq.${saleDateStr}`
+        : `ownership_start=eq.${saleDateStr}`;
+      const ohLookup = await domainQuery(domain, 'GET',
+        `ownership_history?property_id=eq.${propertyId}` +
+        `&recorded_owner_id=eq.${buyerId}&${dateColFilter}` +
+        `&select=ownership_id&limit=1`
+      );
 
-        // Dedup ownership_history by property_id + recorded_owner_id + ownership_start
-        const ohLookup = await domainQuery(domain, 'GET',
-          `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${buyerId}&ownership_start=eq.${saleDateStr}&select=id&limit=1`
-        );
-
-        if (!ohLookup.ok || !ohLookup.data?.length) {
-          const ohData = stripNulls({
-            property_id: propertyId,
+      // Build data — domain-aware column names.
+      // Gov: transfer_date / transfer_price, no ownership_end.
+      // Dialysis: ownership_start / ownership_end / sold_price.
+      const ohData = domain === 'government'
+        ? stripNulls({
+            property_id:       propertyId,
             recorded_owner_id: buyerId,
-            ownership_start: saleDateStr,
-            ownership_end: nextSaleDate ? nextSaleDate.split('T')[0] : null,
-            sold_price: parseCurrency(sale.sale_price),
+            new_owner:         sale.buyer || null,
+            prior_owner:       sale.seller || null,
+            transfer_date:     saleDateStr,
+            transfer_price:    parseCurrency(sale.sale_price),
+            data_source:       'costar_sidebar',
+          })
+        : stripNulls({
+            property_id:       propertyId,
+            recorded_owner_id: buyerId,
+            ownership_start:   saleDateStr,
+            ownership_end:     nextSaleDate ? nextSaleDate.split('T')[0] : null,
+            sold_price:        parseCurrency(sale.sale_price),
           });
-          const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
-          if (result.ok) results.history++;
-        }
+
+      if (!ohLookup.ok || !ohLookup.data?.length) {
+        const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
+        if (result.ok) results.history++;
       }
     }
   }
