@@ -7,10 +7,21 @@
 // Which rewrites to /api/entity-hub?_domain=search and dispatches here.
 //
 // Derived from mcp/server.js search_entities (lines ~220-251): reuses the
-// same PostgREST ilike search against entities.name / canonical_name with
-// the same [%_] sanitization and ≥2-char minimum. The response is RESHAPED
-// for UI consumers — unified array of { id, type, title, subtitle, domain,
-// url, score } sorted by score descending.
+// same PostgREST ilike search with the same [%_] sanitization and ≥2-char
+// minimum, but broadens the filter from name/canonical_name only to also
+// match address, city, and state so that location queries like "Tulsa"
+// surface government-leased properties whose name column is a lease
+// number rather than a city.
+//
+// In addition, when a government domain backend is configured and the
+// caller is not restricted to the dialysis domain, this handler runs a
+// parallel PostgREST query against the government Supabase `properties`
+// table. That table stores the canonical GovLease records and many of
+// its rows are not yet mirrored into the LCC entities table, so
+// searching entities alone would continue to miss them.
+//
+// The response is RESHAPED for UI consumers — unified array of
+// { id, type, title, subtitle, domain, url, score } sorted by score desc.
 //
 // Query params:
 //   q      — required, ≥2 chars after sanitization
@@ -30,6 +41,7 @@
 // ============================================================================
 
 import { opsQuery } from '../_shared/ops-db.js';
+import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { verifyApiKey } from './property-handler.js';
 
 const VERCEL_BASE = 'https://life-command-center-nine.vercel.app';
@@ -137,9 +149,15 @@ export async function searchHandler(req, res) {
     return;
   }
 
-  // ── Build PostgREST path (same as mcp/server.js search_entities) ────────
+  // ── Build PostgREST path for entities (ops DB) ──────────────────────────
+  // Expanded from the original name/canonical_name-only filter to also
+  // match address/city/state. Without this, searches like "Tulsa" return
+  // zero rows even when the entities table has Tulsa-located assets,
+  // because city was never part of the or=(…) clause.
+  const encTerm = enc(searchTerm);
+  const encTermLower = enc(searchTerm.toLowerCase());
   let path =
-    `entities?or=(name.ilike.*${enc(searchTerm)}*,canonical_name.ilike.*${enc(searchTerm.toLowerCase())}*)` +
+    `entities?or=(name.ilike.*${encTerm}*,canonical_name.ilike.*${encTermLower}*,address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*)` +
     `&select=id,entity_type,name,canonical_name,domain,city,state,email,phone,address,org_type,asset_type,external_identities(source_system,source_type,external_id)`;
 
   const entityTypeFilter = resolveEntityTypeFilter(type);
@@ -147,13 +165,39 @@ export async function searchHandler(req, res) {
     path += `&entity_type=eq.${enc(entityTypeFilter)}`;
   }
 
-  if (domain && domain !== 'all' && domain !== 'both') {
-    path += `&domain=eq.${enc(domain)}`;
+  const normalizedDomain =
+    domain && domain !== 'all' && domain !== 'both' ? domain : null;
+  if (normalizedDomain) {
+    path += `&domain=eq.${enc(normalizedDomain)}`;
   }
 
   path += `&limit=${limit}&order=name`;
 
-  const result = await opsQuery('GET', path);
+  // ── Parallel query: government domain `properties` table ────────────────
+  // The government Supabase backend is the source of truth for GovLease
+  // records. Many properties live there without a matching LCC entity, so
+  // searching only the entities table would miss them. Fire this query
+  // alongside the ops query when credentials exist and the caller isn't
+  // restricted to another domain. The asset/contact/all type filter is
+  // honored: only run it when type is 'all' or 'asset' (properties map to
+  // the asset result type).
+  const includeGov =
+    normalizedDomain !== 'dialysis' &&
+    (!type || type === 'all' || type === 'asset') &&
+    getDomainCredentials('government') != null;
+
+  const govPath = includeGov
+    ? `properties?or=(address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*,tenant.ilike.*${encTerm}*,recorded_owner_name.ilike.*${encTerm}*)` +
+      `&select=property_id,address,city,state,tenant,recorded_owner_name` +
+      `&limit=${limit}&order=address`
+    : null;
+
+  const [result, govResult] = await Promise.all([
+    opsQuery('GET', path),
+    govPath
+      ? domainQuery('government', 'GET', govPath).catch(() => null)
+      : Promise.resolve(null),
+  ]);
   const rows = result?.data || [];
 
   // ── Reshape into unified UI search results ────────────────────────────────
@@ -170,11 +214,46 @@ export async function searchHandler(req, res) {
     };
   });
 
+  // Dedupe helper: skip government properties whose address is already
+  // represented by a linked entity, so the UI doesn't show twins.
+  const seenAddresses = new Set(
+    rows
+      .filter((r) => r.address)
+      .map((r) => `${r.address}|${r.city || ''}|${r.state || ''}`.toLowerCase())
+  );
+
+  const govRows = Array.isArray(govResult?.data) ? govResult.data : [];
+  for (const prop of govRows) {
+    const key = `${prop.address || ''}|${prop.city || ''}|${prop.state || ''}`.toLowerCase();
+    if (seenAddresses.has(key)) continue;
+    seenAddresses.add(key);
+    const cityState = [prop.city, prop.state].filter(Boolean).join(', ');
+    const subtitleParts = [];
+    if (prop.address) subtitleParts.push(prop.address);
+    if (cityState && !subtitleParts.includes(cityState)) subtitleParts.push(cityState);
+    if (prop.tenant) subtitleParts.push(prop.tenant);
+    items.push({
+      id: `gov:${prop.property_id}`,
+      type: 'asset',
+      title: prop.address || prop.tenant || '(unnamed property)',
+      subtitle: subtitleParts.join(' · ') || null,
+      domain: 'government',
+      url: `${VERCEL_BASE}/asset/gov:${prop.property_id}`,
+      score: computeScore(searchTerm, {
+        name: prop.address,
+        canonical_name: prop.city,
+      }),
+    });
+  }
+
   // Sort by score descending, stable on title ascending
   items.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return (a.title || '').localeCompare(b.title || '');
   });
 
-  res.status(200).json(items);
+  // Cap the merged entities+government result set to the requested limit.
+  const trimmed = items.slice(0, limit);
+
+  res.status(200).json(trimmed);
 }
