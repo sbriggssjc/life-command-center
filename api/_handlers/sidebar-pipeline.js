@@ -1614,6 +1614,63 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     }
   }
 
+  // If no ownership_history was written from sales (e.g. only stat card
+  // captured, no deed entries with buyer names), write one from the
+  // current owner contact and the most recent sale date.
+  if (results.history === 0) {
+    const ownerContact = (metadata.contacts || [])
+      .find(c => c.role === 'owner');
+    if (ownerContact?.name) {
+      const ownerId = await ensureRecordedOwner(
+        ownerContact.name,
+        ownerContact.address || null
+      );
+      if (ownerId) {
+        // Find the most recent sale date as the transfer date
+        const mostRecentSale = [...(metadata.sales_history || [])]
+          .filter(s => s.sale_date)
+          .sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date))[0];
+        const transferDate = mostRecentSale
+          ? parseDate(mostRecentSale.sale_date)?.split('T')[0]
+          : null;
+
+        // Gov uses transfer_date + new_owner/prior_owner
+        // Dialysis uses ownership_start
+        const ohData = domain === 'government'
+          ? stripNulls({
+              property_id:       propertyId,
+              recorded_owner_id: ownerId,
+              new_owner:         ownerContact.name,
+              prior_owner:       (metadata.contacts || [])
+                                   .find(c => c.role === 'seller')?.name || null,
+              transfer_date:     transferDate,
+              sale_price:        parseCurrency(
+                                   mostRecentSale?.sale_price),
+              data_source:       'costar_sidebar',
+            })
+          : stripNulls({
+              property_id:       propertyId,
+              recorded_owner_id: ownerId,
+              ownership_start:   transferDate,
+              ownership_end:     null,  // current owner
+              sold_price:        parseCurrency(
+                                   mostRecentSale?.sale_price),
+            });
+
+        const dateCol = domain === 'government'
+          ? `transfer_date=eq.${transferDate}`
+          : `ownership_start=eq.${transferDate}`;
+        const dedupPath = `ownership_history?property_id=eq.${propertyId}` +
+          `&recorded_owner_id=eq.${ownerId}&${dateCol}&select=ownership_id&limit=1`;
+        const ohCheck = await domainQuery(domain, 'GET', dedupPath);
+        if (!ohCheck.ok || !ohCheck.data?.length) {
+          const r = await domainQuery(domain, 'POST', 'ownership_history', ohData);
+          if (r.ok) results.history++;
+        }
+      }
+    }
+  }
+
   // Link the current owner to the property record
   const currentOwner = ownerContacts[0];
   if (currentOwner) {
