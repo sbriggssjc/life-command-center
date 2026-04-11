@@ -88,7 +88,9 @@ async function handleOutlookMessage(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
 
-  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id;
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
   if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
 
   if (!requireRole(user, 'operator', workspaceId)) {
