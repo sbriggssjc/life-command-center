@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 
 from supabase import create_client
 
+try:
+    from pipeline.pipeline_utils import send_pa_webhook
+except ImportError:  # allow running this file as a script
+    from pipeline_utils import send_pa_webhook
+
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.environ.get("GOV_SUPABASE_URL", "")
@@ -171,6 +176,20 @@ def process_gsa_events(*, limit: int = 500, dry_run: bool = False) -> dict:
             lead["created_at"] = datetime.now(timezone.utc).isoformat()
             client.table("prospect_leads").insert(lead).execute()
             created += 1
+
+            # Notify Power Automate of the new lead (never raises).
+            send_pa_webhook(
+                {
+                    "lease_number": lease_num,
+                    "address": lead.get("address"),
+                    "city": lead.get("city"),
+                    "state": lead.get("state"),
+                    "agency": lead.get("agency_full_name"),
+                    "award_date": lead.get("lease_effective"),
+                    "annual_rent": lead.get("annual_rent"),
+                    "expiration_date": lead.get("lease_expiration"),
+                }
+            )
 
         event_ids_processed.append(event["id"])
 
