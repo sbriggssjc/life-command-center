@@ -686,7 +686,9 @@ async function upsertDomainProperty(domain, entity, metadata) {
   const primaryTenant = metadata.tenants?.[0]?.name || null;
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 
-  // Build property data from CoStar metadata — domain-aware field names
+  // Build property data from CoStar metadata — domain-aware field names.
+  // Dialysis build stays as-is; government overrides follow below because
+  // the gov properties table uses a different column set entirely.
   const parsedSF = parseSF(metadata.square_footage);
   const propertyData = stripNulls({
     address,
@@ -694,8 +696,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
     state: entity.state || null,
     zip_code: entity.zip || null,
     county: metadata.county || entity.county || null,
-    // SF column differs: dialysis=building_size, gov=rba
-    ...(domain === 'government' ? { rba: parsedSF } : { building_size: parsedSF }),
+    building_size: parsedSF,
     year_built: parseIntSafe(metadata.year_built),
     year_renovated: parseIntSafe(metadata.year_renovated),
     tenant: primaryTenant,
@@ -704,21 +705,48 @@ async function upsertDomainProperty(domain, entity, metadata) {
     parking_ratio: parseParkingRatio(metadata.parking),
     lot_sf: parseSF(metadata.land_sf) || parseSF(metadata.lot_size),
     assessed_value: parseCurrency(metadata.assessed_value),
-    ...(domain === 'dialysis' ? {
-      is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
-    } : {}),
-    ...(domain === 'government' ? {
-      rent_escalations: metadata.rent_escalations || null,
-      renewal_options: metadata.renewal_options || null,
-      lease_commencement: parseDate(metadata.lease_commencement)?.split('T')[0] || null,
-      lease_expiration: parseDate(metadata.lease_expiration)?.split('T')[0] || null,
-      gross_rent: parseCurrency(metadata.annual_rent),
-      gross_rent_psf: parseCurrency(metadata.rent_per_sf),
-    } : {}),
+    is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
     property_ownership_type: metadata.ownership_type || null,
     recorded_owner_name: ownerContact?.name || null,
     land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
   });
+
+  if (domain === 'government') {
+    // Government properties schema uses different column names
+    const lotSF = parseSF(metadata.land_sf) || parseSF(metadata.lot_size);
+    const lotAcres = lotSF ? Math.round(lotSF / 43560 * 100) / 100 : null;
+    const landAcresRaw = metadata.lot_size && /AC/i.test(metadata.lot_size)
+      ? parseAcres(metadata.lot_size) : null;
+
+    Object.assign(propertyData, stripNulls({
+      rba:               parsedSF,
+      year_built:        parseIntSafe(metadata.year_built),
+      year_renovated:    parseIntSafe(metadata.year_renovated),
+      county:            metadata.county || entity.county || null,
+      zip_code:          entity.zip || null,
+      land_acres:        landAcresRaw || lotAcres,
+      gov_occupancy_pct: parsePercent(metadata.occupancy),
+      assessed_value:    parseCurrency(metadata.assessed_value),
+      gross_rent:        parseCurrency(metadata.annual_rent),
+      gross_rent_psf:    parseCurrency(metadata.rent_per_sf),
+      lease_commencement: parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+      lease_expiration:   parseDate(metadata.lease_expiration)?.split('T')[0] || null,
+      renewal_options:    metadata.renewal_options || null,
+      rent_escalations:   metadata.rent_escalations || null,
+      data_source:       'costar_sidebar',
+    }));
+    // Remove any dialysis-only fields that may have been set
+    delete propertyData.lot_sf;
+    delete propertyData.parking_ratio;
+    delete propertyData.property_ownership_type;
+    delete propertyData.recorded_owner_name;
+    delete propertyData.tenant;
+    delete propertyData.occupancy_percent;
+    delete propertyData.zoning;
+    delete propertyData.land_area;
+    delete propertyData.is_single_tenant;
+    delete propertyData.building_size;
+  }
 
   if (lookup.ok && lookup.data?.length) {
     // Update existing property
@@ -1338,21 +1366,28 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
 
     const loanType = mapLoanType(sale.loan_type);
 
-    // Domain-aware interest rate column: dialysis=interest_rate_percent, gov=interest_rate
-    const interestRateVal = parsePercent(sale.interest_rate);
-    const domainRateField = domain === 'government'
-      ? { interest_rate: interestRateVal }
-      : { interest_rate_percent: interestRateVal };
-
-    const loanData = stripNulls({
-      property_id: propertyId,
-      lender_name: lenderName,
-      loan_amount: loanAmount,
-      loan_type: loanType,
-      origination_date: parseDate(sale.loan_origination_date) ? parseDate(sale.loan_origination_date).split('T')[0] : null,
-      ...domainRateField,
-      loan_term: parseIntSafe(sale.loan_term),
-      maturity_date: parseDate(sale.maturity_date) ? parseDate(sale.maturity_date).split('T')[0] : null,
+    // Government loans table has different column names (no text lender
+    // column, term_years instead of loan_term, interest_rate instead of
+    // interest_rate_percent), so build a domain-specific payload.
+    const loanData = domain === 'government' ? stripNulls({
+      property_id:      propertyId,
+      loan_type:        loanType,
+      loan_amount:      loanAmount,
+      interest_rate:    parsePercent(sale.interest_rate),
+      term_years:       sale.loan_term ? parseFloat(sale.loan_term) / 12 : null,
+      origination_date: parseDate(sale.loan_origination_date)?.split('T')[0] || null,
+      maturity_date:    parseDate(sale.maturity_date)?.split('T')[0] || null,
+      data_source:      'costar_sidebar',
+    }) : stripNulls({
+      property_id:           propertyId,
+      lender_name:           lenderName,
+      loan_amount:           loanAmount,
+      loan_type:             loanType,
+      origination_date:      parseDate(sale.loan_origination_date)?.split('T')[0] || null,
+      interest_rate_percent: parsePercent(sale.interest_rate),
+      loan_term:             parseIntSafe(sale.loan_term),
+      maturity_date:         parseDate(sale.maturity_date)?.split('T')[0] || null,
+      data_source:           'costar_sidebar',
     });
 
     if (lookup.ok && lookup.data?.length) {
@@ -1523,41 +1558,51 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 
     // Build ownership_history entry for the buyer (they own from this sale forward)
     if (buyerId) {
-      // Next transition is the NEXT SALE WITH A BUYER, not any stat card entry.
-      // nextSaleDate = null means this buyer is still the current owner.
-      const nextTransition = i < validTransitions.length - 1 ? validTransitions[i + 1] : null;
-      const nextSaleDate = nextTransition ? parseDate(nextTransition.sale_date) : null;
+      if (domain === 'government') {
+        // Gov ownership_history has no ownership_end column, so skip the
+        // nextDate / end-date logic entirely. Dedup by property_id +
+        // transfer_date only (the gov table uses ownership_id as PK).
+        const govOhData = stripNulls({
+          property_id:       propertyId,
+          recorded_owner_id: buyerId,
+          new_owner:         sale.buyer || null,
+          prior_owner:       sale.seller || null,
+          transfer_date:     saleDateStr,
+          sale_price:        parseCurrency(sale.sale_price),
+          data_source:       'costar_sidebar',
+        });
 
-      // Domain-aware ownership_history field names
-      // Dialysis: ownership_start, ownership_end, sold_price
-      // Gov: transfer_date (no end column), transfer_price
-      const dateCol = domain === 'government' ? 'transfer_date' : 'ownership_start';
+        const ohLookup = await domainQuery('government', 'GET',
+          `ownership_history?property_id=eq.${propertyId}` +
+          `&transfer_date=eq.${saleDateStr}&select=ownership_id&limit=1`
+        );
+        if (!ohLookup.ok || !ohLookup.data?.length) {
+          const result = await domainQuery('government', 'POST', 'ownership_history', govOhData);
+          if (result.ok) results.history++;
+        }
+      } else {
+        // Dialysis: ownership_start, ownership_end, sold_price.
+        // Next transition is the NEXT SALE WITH A BUYER, not any stat card entry.
+        // nextSaleDate = null means this buyer is still the current owner.
+        const nextTransition = i < validTransitions.length - 1 ? validTransitions[i + 1] : null;
+        const nextSaleDate = nextTransition ? parseDate(nextTransition.sale_date) : null;
 
-      // Dedup ownership_history by property_id + recorded_owner_id + date column
-      const ohLookup = await domainQuery(domain, 'GET',
-        `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${buyerId}&${dateCol}=eq.${saleDateStr}&select=id&limit=1`
-      );
+        // Dedup ownership_history by property_id + recorded_owner_id + ownership_start
+        const ohLookup = await domainQuery(domain, 'GET',
+          `ownership_history?property_id=eq.${propertyId}&recorded_owner_id=eq.${buyerId}&ownership_start=eq.${saleDateStr}&select=id&limit=1`
+        );
 
-      if (!ohLookup.ok || !ohLookup.data?.length) {
-        let ohData;
-        if (domain === 'government') {
-          ohData = stripNulls({
-            property_id: propertyId,
-            recorded_owner_id: buyerId,
-            transfer_date: saleDateStr,
-            transfer_price: parseCurrency(sale.sale_price),
-          });
-        } else {
-          ohData = stripNulls({
+        if (!ohLookup.ok || !ohLookup.data?.length) {
+          const ohData = stripNulls({
             property_id: propertyId,
             recorded_owner_id: buyerId,
             ownership_start: saleDateStr,
             ownership_end: nextSaleDate ? nextSaleDate.split('T')[0] : null,
             sold_price: parseCurrency(sale.sale_price),
           });
+          const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
+          if (result.ok) results.history++;
         }
-        const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
-        if (result.ok) results.history++;
       }
     }
   }
