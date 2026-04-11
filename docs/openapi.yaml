@@ -430,42 +430,38 @@ paths:
         - Briefing
       summary: Daily briefing email digest
       description: >-
-        Returns the daily briefing rendered as an HTML email digest suitable
-        for direct delivery via Outlook / Power Automate. Mirrors the
-        /api/daily-briefing content but formatted for inbox consumption.
+        Returns the daily briefing pre-formatted for email delivery as a
+        `{ subject, html, text }` payload suitable for Outlook / Power
+        Automate "Send an email" actions. The HTML body is inline-styled,
+        max-width 600px, table-based, Calibri/Arial, header color #003087,
+        and contains no `<html>`, `<head>`, or `<body>` wrappers so it can
+        be dropped straight into an email client. Shares query logic with
+        `/api/daily-briefing` but never HTTP-calls itself.
       security:
         - ApiKeyAuth: []
       parameters:
-        - name: role_view
-          in: query
+        - name: X-LCC-Workspace
+          in: header
           required: false
-          description: Audience lens applied to the briefing content.
+          description: >-
+            Workspace UUID to build the briefing for. Falls back to the
+            `LCC_DEFAULT_WORKSPACE_ID` environment variable when absent.
           schema:
             type: string
-            enum:
-              - analyst_ops
-              - broker
-              - manager
-            example: broker
-        - name: format
-          in: query
+            format: uuid
+        - name: X-LCC-User-Id
+          in: header
           required: false
-          description: Output format. "html" returns a full HTML document.
+          description: >-
+            User UUID used for `my_work` / `my_actions` scoping. Falls back
+            to `LCC_SYSTEM_USER_ID` when absent.
           schema:
             type: string
-            enum:
-              - html
-              - json
-            default: html
-            example: html
+            format: uuid
       responses:
         '200':
-          description: Rendered briefing email
+          description: Rendered briefing email payload
           content:
-            text/html:
-              schema:
-                type: string
-                example: '<!DOCTYPE html><html><body><h1>Daily Briefing</h1>...</body></html>'
             application/json:
               schema:
                 $ref: '#/components/schemas/BriefingEmail'
@@ -473,8 +469,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
+        '503':
+          description: OPS database not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -1440,27 +1440,57 @@ components:
       required:
         - subject
         - html
+        - text
         - generated_at
+        - role_view
+      description: >-
+        Pre-formatted email payload returned by `/api/briefing-email`. The
+        `html` field is a self-contained fragment (no `<html>`/`<head>`/
+        `<body>` wrappers) with inline styles, a 600px max-width, Calibri/
+        Arial font stack, and the `#003087` LCC header color, organized
+        into Strategic Priorities, Urgent Items, Pipeline Health, and Queue
+        Summary sections. The `text` field is the plain-text fallback.
       properties:
         subject:
           type: string
-          example: 'Daily Briefing — 2026-04-11'
+          description: >-
+            Email subject line in the format
+            `LCC Morning Briefing — {DayOfWeek}, {Month} {Date}, {Year}`.
+          example: 'LCC Morning Briefing — Saturday, April 11, 2026'
         html:
           type: string
-          description: Full HTML email body
-          example: '<!DOCTYPE html><html><body><h1>Daily Briefing</h1>...</body></html>'
+          description: >-
+            Inline-styled HTML email body fragment. Does NOT include
+            `<html>`, `<head>`, or `<body>` tags — designed to be embedded
+            directly by the caller (Power Automate, Outlook add-in, etc.).
+            Uses a table-based layout with `max-width:600px`, font-family
+            `Calibri,Arial,sans-serif`, and header color `#003087`.
+          example: '<table role="presentation" style="max-width:600px;..."><tr>...</tr></table>'
         text:
           type: string
-          description: Plain-text fallback rendering
-          example: 'Daily Briefing 2026-04-11\n\nTop 3 priorities: ...'
+          description: >-
+            Plain-text rendering of the same briefing content, mirroring the
+            HTML sections (Strategic Priorities, Urgent Items, Pipeline
+            Health, Queue Summary). Provided as a fallback for clients that
+            cannot render HTML.
+          example: |-
+            LCC Morning Briefing — Saturday, April 11, 2026
+            Generated Sat, 11 Apr 2026 13:00:00 GMT
+
+            STRATEGIC PRIORITIES
+              - Follow up on Davita offer [dialysis | high | due Apr 12]
         generated_at:
           type: string
           format: date-time
-          example: '2026-04-11T13:00:00Z'
+          description: ISO-8601 timestamp of when the briefing was assembled.
+          example: '2026-04-11T13:00:00.000Z'
         role_view:
           type: string
           enum:
             - analyst_ops
             - broker
             - manager
+          description: >-
+            Audience lens used when assembling the briefing. Currently
+            fixed to `broker` for email digests.
           example: broker

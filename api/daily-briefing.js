@@ -39,7 +39,7 @@ function toArray(value) {
 // item rather than render a meaningless "(Untitled)" entry. When the raw
 // record lacks a title-like field, a synthetic title is composed from sender
 // or task_type metadata so the source data still surfaces something useful.
-function deriveItemTitle(item) {
+export function deriveItemTitle(item) {
   if (item == null) return null;
   if (typeof item === 'string') {
     const s = item.trim();
@@ -186,7 +186,7 @@ async function fetchMorningHtml() {
   }
 }
 
-async function fetchWorkCounts(workspaceId, userId) {
+export async function fetchWorkCounts(workspaceId, userId) {
   const [teamMv, userMv] = await Promise.all([
     opsQuery('GET', `mv_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`),
     opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`)
@@ -278,7 +278,7 @@ async function fetchWorkCounts(workspaceId, userId) {
   };
 }
 
-async function fetchMyWork(workspaceId, userId, limit = 15) {
+export async function fetchMyWork(workspaceId, userId, limit = 15) {
   const path =
     `v_my_work?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
     `&or=(user_id.eq.${encodeURIComponent(userId)},assigned_to.eq.${encodeURIComponent(userId)})` +
@@ -288,7 +288,7 @@ async function fetchMyWork(workspaceId, userId, limit = 15) {
   return Array.isArray(result.data) ? result.data : [];
 }
 
-async function fetchInboxSummary(workspaceId, limit = 10) {
+export async function fetchInboxSummary(workspaceId, limit = 10) {
   const path =
     `v_inbox_triage?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
     `&limit=${Math.max(1, Math.min(limit, 50))}` +
@@ -305,7 +305,7 @@ async function fetchInboxSummary(workspaceId, limit = 10) {
   };
 }
 
-async function fetchUnassignedWork(workspaceId, limit = 10) {
+export async function fetchUnassignedWork(workspaceId, limit = 10) {
   const path =
     `v_unassigned_work?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
     `&limit=${Math.max(1, Math.min(limit, 50))}` +
@@ -314,7 +314,7 @@ async function fetchUnassignedWork(workspaceId, limit = 10) {
   return Array.isArray(result.data) ? result.data : [];
 }
 
-async function fetchSyncHealthSnapshot(workspaceId) {
+export async function fetchSyncHealthSnapshot(workspaceId) {
   const [connectors, recentJobs, unresolvedErrors, openSfTasks] = await Promise.all([
     opsQuery('GET',
       `connector_accounts?workspace_id=eq.${encodeURIComponent(workspaceId)}&select=id,user_id,connector_type,status,last_sync_at,last_error,external_user_id&order=connector_type,display_name`
@@ -445,7 +445,7 @@ async function fetchCrossDomainOwnersDueForTouch(workspaceId, limit = 5) {
 // STRATEGIC DATA FETCHERS — pull from all business-critical sources
 // ---------------------------------------------------------------------------
 
-async function fetchRecentSfActivity(workspaceId, limit = 30) {
+export async function fetchRecentSfActivity(workspaceId, limit = 30) {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const result = await opsQuery('GET',
     `activity_events?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.salesforce&occurred_at=gte.${encodeURIComponent(sevenDaysAgo)}&order=occurred_at.desc&limit=${limit}&select=id,category,title,body,source_type,external_url,metadata,occurred_at`
@@ -453,7 +453,7 @@ async function fetchRecentSfActivity(workspaceId, limit = 30) {
   return Array.isArray(result.data) ? result.data : [];
 }
 
-async function fetchHotContacts(limit = 15) {
+export async function fetchHotContacts(limit = 15) {
   if (!GOV_URL || !GOV_KEY) return [];
   try {
     const res = await fetchWithTimeout(
@@ -495,7 +495,7 @@ async function fetchDomainTransactionCounts() {
   return { gov, dia };
 }
 
-async function fetchDiaPipeline() {
+export async function fetchDiaPipeline() {
   if (!DIA_URL || !DIA_KEY) return { deals: [], leads: [] };
   try {
     const [dealsRes, leadsRes] = await Promise.all([
@@ -592,7 +592,7 @@ function scoreItem(item, hotContactMap) {
   return { score, tier };
 }
 
-async function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts) {
+export async function buildStrategicPriorities(roleView, myWork, inboxItems, sfActivity, hotContacts, diaPipeline, unassignedWork, syncHealth, workCounts) {
   const today = new Date();
   const weekEnd = new Date(today);
   weekEnd.setDate(today.getDate() + 7);
