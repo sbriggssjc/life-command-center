@@ -656,6 +656,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   results.records.owners = ownerResults.owners;
   results.records.history = ownerResults.history;
 
+  // Step 5d2: Upsert true owners (true buyer / true seller behind shell entities)
+  const trueOwnerResult = await upsertTrueOwners(domain, propertyId, metadata);
+  results.records.true_owners = (trueOwnerResult.true_buyer_id ? 1 : 0)
+                               + (trueOwnerResult.true_seller_id ? 1 : 0);
+
   // Step 5e: Upsert leases (dialysis only — gov skipped for now)
   results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
 
@@ -1684,6 +1689,117 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
   }
 
   return results;
+}
+
+// ── Step 5d2: Upsert true owners (true buyer / true seller) ────────────────
+
+async function upsertTrueOwners(domain, propertyId, metadata) {
+  const contacts = metadata.contacts || [];
+
+  // Find true buyer and true seller from contacts
+  const trueBuyer  = contacts.find(c => c.role === 'true_buyer');
+  const trueSeller = contacts.find(c => c.role === 'true_seller');
+
+  // Individual contacts for each
+  const trueBuyerContacts  = contacts.filter(c =>
+    c.role === 'true_buyer_contact');
+  const trueSellerContacts = contacts.filter(c =>
+    c.role === 'true_seller_contact');
+
+  let trueBuyerId  = null;
+  let trueSellerId = null;
+
+  // Helper: find or create a true_owner record
+  async function ensureTrueOwner(owner, individualContacts) {
+    if (!owner?.name) return null;
+    const normalized = owner.name.trim().toLowerCase()
+      .replace(/\b(llc|inc|corp|ltd|lp|llp|co|company|group|partners)\b\.?/gi, '')
+      .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Dialysis uses true_owners table; gov has no true_owners table
+    // — store as recorded_owner with entity_type='true_owner' instead
+    if (domain === 'government') {
+      // Gov: store in recorded_owners with enriched contact_info
+      const lookup = await domainQuery('government', 'GET',
+        `recorded_owners?canonical_name=eq.${encodeURIComponent(normalized)}&select=recorded_owner_id&limit=1`
+      );
+      if (lookup.ok && lookup.data?.length) {
+        return lookup.data[0].recorded_owner_id;
+      }
+      const govOwnerData = stripNulls({
+        name:           owner.name,
+        canonical_name: normalized,
+        entity_type:    'true_owner',
+        state:          owner.state || null,
+        contact_info:   {
+          address:  owner.address || null,
+          city:     owner.city    || null,
+          state:    owner.state   || null,
+          phone:    owner.phone   || null,
+          email:    owner.email   || null,
+          website:  owner.website || null,
+          contacts: individualContacts.map(c => ({
+            name:  c.name,
+            phone: c.phones?.[0] || null,
+            email: c.email       || null,
+          })),
+        },
+      });
+      const r = await domainQuery('government', 'POST', 'recorded_owners', govOwnerData);
+      return r.ok && r.data
+        ? (Array.isArray(r.data) ? r.data[0] : r.data)?.recorded_owner_id
+        : null;
+    }
+
+    // Dialysis: true_owners table
+    const lookup = await domainQuery('dialysis', 'GET',
+      `true_owners?normalized_name=eq.${encodeURIComponent(normalized)}&select=true_owner_id&limit=1`
+    );
+    if (lookup.ok && lookup.data?.length) {
+      return lookup.data[0].true_owner_id;
+    }
+    const contact1 = individualContacts[0]?.name || null;
+    const contact2 = individualContacts[1]?.name || null;
+    const trueOwnerData = stripNulls({
+      name:              owner.name,
+      normalized_name:   normalized,
+      notice_address_1:  owner.address || null,
+      city:              owner.city    || null,
+      state:             owner.state   || null,
+      contact_1_name:    contact1,
+      contact_2_name:    contact2,
+      owner_type:        'buyer',
+      is_prospect:       true,
+      updated_at:        new Date().toISOString(),
+    });
+    const r = await domainQuery('dialysis', 'POST', 'true_owners', trueOwnerData);
+    return r.ok && r.data
+      ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
+      : null;
+  }
+
+  // Write true buyer
+  if (trueBuyer) {
+    trueBuyerId = await ensureTrueOwner(trueBuyer, trueBuyerContacts);
+    if (trueBuyerId) {
+      // Link to property as current true owner
+      const idCol = domain === 'government' ? 'true_owner_id' : 'true_owner_id';
+      await domainQuery(domain, 'PATCH',
+        `properties?property_id=eq.${propertyId}`,
+        { true_owner_id: trueBuyerId }
+      );
+    }
+  }
+
+  // Write true seller (for historical record — don't update property)
+  if (trueSeller) {
+    trueSellerId = await ensureTrueOwner(trueSeller, trueSellerContacts);
+  }
+
+  return {
+    true_buyer_id:  trueBuyerId,
+    true_seller_id: trueSellerId,
+  };
 }
 
 // ── Step 5e: Upsert leases (dialysis only) ────────────────────────────────
