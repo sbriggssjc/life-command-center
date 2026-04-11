@@ -20,6 +20,14 @@
 // its rows are not yet mirrored into the LCC entities table, so
 // searching entities alone would continue to miss them.
 //
+// Symmetrically, when a dialysis domain backend is configured and the
+// caller is not restricted to the government domain, a parallel query
+// is run against the dialysis Supabase `properties` table. The dialysis
+// DB is the source of truth for DCI / Fresenius / DaVita site records,
+// most of which never land in the LCC entities table, so without this
+// branch `domain=dialysis` (and `domain=all`) returned empty for any
+// location query.
+//
 // The response is RESHAPED for UI consumers — unified array of
 // { id, type, title, subtitle, domain, url, score } sorted by score desc.
 //
@@ -193,6 +201,26 @@ export async function searchHandler(req, res) {
     (!type || type === 'all' || type === 'asset') &&
     getDomainCredentials('government') != null;
 
+  // ── Parallel query: dialysis domain `properties` table ─────────────────
+  // The dialysis Supabase backend is the source of truth for DCI /
+  // Fresenius / DaVita site records. The LCC entities table only mirrors
+  // a subset of these, so searching entities alone misses the majority of
+  // dialysis properties — which is why `domain=dialysis` (and the default
+  // `domain=all`) returned empty for any location query before this
+  // branch existed. Fire this query alongside the ops query when
+  // credentials exist and the caller isn't restricted to the government
+  // domain. Same type-filter logic as the government branch (assets only).
+  //
+  // NOTE: the dialysis properties schema is wider than the government one
+  // — it has a real `tenant` column (see sidebar-pipeline.js:702), so the
+  // OR filter also matches tenant strings like "Fresenius" or "DCI".
+  // Keep the selected columns minimal so PostgREST 400s on schema drift
+  // don't silently turn the whole dialysis branch into zero results.
+  const includeDia =
+    normalizedDomain !== 'government' &&
+    (!type || type === 'all' || type === 'asset') &&
+    getDomainCredentials('dialysis') != null;
+
   // ── Build PostgREST path for entities (ops DB) ──────────────────────────
   // Expanded from the original name/canonical_name-only filter to also
   // match address/city/state. Without this, searches like "Tulsa" return
@@ -219,11 +247,28 @@ export async function searchHandler(req, res) {
         `&limit=${limit}&order=address`
       : null;
 
-    const [entitiesResult, govQueryResult] = await Promise.all([
+    // Dialysis properties table supports a `tenant` column, so include it
+    // in the OR filter to match queries like "Fresenius" or "DCI". Other
+    // columns not known to exist on the dialysis schema (e.g. recorded
+    // owner) are intentionally left out — see the gov-branch comment above
+    // about PostgREST 400s silently turning into zero results.
+    const diaPath = includeDia
+      ? `properties?or=(address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*,tenant.ilike.*${encTerm}*)` +
+        `&select=property_id,address,city,state,tenant` +
+        `&limit=${limit}&order=address`
+      : null;
+
+    const [entitiesResult, govQueryResult, diaQueryResult] = await Promise.all([
       opsQuery('GET', path),
       govPath
         ? domainQuery('government', 'GET', govPath).catch((err) => {
             console.error(`[search] gov query threw for q="${term}":`, err?.message || err);
+            return null;
+          })
+        : Promise.resolve(null),
+      diaPath
+        ? domainQuery('dialysis', 'GET', diaPath).catch((err) => {
+            console.error(`[search] dia query threw for q="${term}":`, err?.message || err);
             return null;
           })
         : Promise.resolve(null),
@@ -238,6 +283,12 @@ export async function searchHandler(req, res) {
         govQueryResult.data
       );
     }
+    if (diaPath && diaQueryResult && diaQueryResult.ok === false) {
+      console.error(
+        `[search] dia query failed for q="${term}" status=${diaQueryResult.status}:`,
+        diaQueryResult.data
+      );
+    }
     if (!entitiesResult?.ok) {
       console.error(
         `[search] entities query failed for q="${term}" status=${entitiesResult?.status}:`,
@@ -248,19 +299,25 @@ export async function searchHandler(req, res) {
     return {
       rows: entitiesResult?.data || [],
       govRows: Array.isArray(govQueryResult?.data) ? govQueryResult.data : [],
+      diaRows: Array.isArray(diaQueryResult?.data) ? diaQueryResult.data : [],
     };
   }
 
   // Try the cleaned term first (e.g. "Tulsa"), fall back to the raw term
   // (e.g. "Tulsa OK") if the cleaned variant returns nothing.
   let searchTerm = hasCleanVariant ? cleanTerm : rawSearchTerm;
-  let { rows, govRows } = await runSearch(searchTerm);
-  if (rows.length === 0 && govRows.length === 0 && hasCleanVariant) {
+  let { rows, govRows, diaRows } = await runSearch(searchTerm);
+  if (
+    rows.length === 0 &&
+    govRows.length === 0 &&
+    diaRows.length === 0 &&
+    hasCleanVariant
+  ) {
     console.log(
       `[search] clean term "${cleanTerm}" returned 0; falling back to raw q="${rawSearchTerm}"`
     );
     searchTerm = rawSearchTerm;
-    ({ rows, govRows } = await runSearch(searchTerm));
+    ({ rows, govRows, diaRows } = await runSearch(searchTerm));
   }
 
   // ── Reshape into unified UI search results ────────────────────────────────
@@ -307,6 +364,32 @@ export async function searchHandler(req, res) {
     });
   }
 
+  // Dialysis properties: same dedupe-by-address logic, plus surface the
+  // tenant name in the subtitle so that Fresenius/DCI/DaVita sites are
+  // distinguishable in a location-based result list.
+  for (const prop of diaRows) {
+    const key = `${prop.address || ''}|${prop.city || ''}|${prop.state || ''}`.toLowerCase();
+    if (seenAddresses.has(key)) continue;
+    seenAddresses.add(key);
+    const cityState = [prop.city, prop.state].filter(Boolean).join(', ');
+    const subtitleParts = [];
+    if (prop.address) subtitleParts.push(prop.address);
+    if (cityState && !subtitleParts.includes(cityState)) subtitleParts.push(cityState);
+    if (prop.tenant) subtitleParts.push(prop.tenant);
+    items.push({
+      id: `dia:${prop.property_id}`,
+      type: 'asset',
+      title: prop.address || '(unnamed property)',
+      subtitle: subtitleParts.join(' · ') || null,
+      domain: 'dialysis',
+      url: `${VERCEL_BASE}/asset/dia:${prop.property_id}`,
+      score: computeScore(searchTerm, {
+        name: prop.address,
+        canonical_name: prop.tenant || prop.city,
+      }),
+    });
+  }
+
   // Sort by score descending, stable on title ascending
   items.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -318,7 +401,8 @@ export async function searchHandler(req, res) {
 
   console.log(
     `[search] results: ${trimmed.length} for q="${searchTerm}" ` +
-    `(entities: ${rows.length}, gov_properties: ${govRows.length})`
+    `(entities: ${rows.length}, gov_properties: ${govRows.length}, ` +
+    `dia_properties: ${diaRows.length})`
   );
 
   res.status(200).json(trimmed);
