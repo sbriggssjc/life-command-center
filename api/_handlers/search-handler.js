@@ -129,6 +129,12 @@ export async function searchHandler(req, res) {
 
   const { q, domain, type } = req.query;
 
+  // Observability: log every hit so Vercel runtime logs show exactly what
+  // queries reach this handler, what domain/type filters are applied, and
+  // (below) how many rows came back. Without this, empty-result bugs
+  // (e.g. PostgREST 400s on missing columns) are invisible.
+  console.log(`[search] q="${q ?? ''}" domain="${domain ?? ''}" type="${type ?? ''}"`);
+
   // Validate q: same sanitization as mcp/server.js search_entities
   if (typeof q !== 'string' || q.trim().length === 0) {
     res.status(400).json({ error: 'q query parameter is required' });
@@ -181,24 +187,52 @@ export async function searchHandler(req, res) {
   // restricted to another domain. The asset/contact/all type filter is
   // honored: only run it when type is 'all' or 'asset' (properties map to
   // the asset result type).
+  //
+  // IMPORTANT: the government properties schema is narrower than the
+  // dialysis one. Tenant and recorded owner are NOT columns on
+  // government.properties — they are explicitly deleted on ingest
+  // (see sidebar-pipeline.js upsertDomainProperty, government branch).
+  // Including them in the or=() filter made PostgREST return a 400
+  // ("column properties.tenant does not exist") and the swallow-catch
+  // below turned that into zero results. Keep the filter limited to
+  // columns that actually exist on the gov properties table.
   const includeGov =
     normalizedDomain !== 'dialysis' &&
     (!type || type === 'all' || type === 'asset') &&
     getDomainCredentials('government') != null;
 
   const govPath = includeGov
-    ? `properties?or=(address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*,tenant.ilike.*${encTerm}*,recorded_owner_name.ilike.*${encTerm}*)` +
-      `&select=property_id,address,city,state,tenant,recorded_owner_name` +
+    ? `properties?or=(address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*)` +
+      `&select=property_id,address,city,state` +
       `&limit=${limit}&order=address`
     : null;
 
   const [result, govResult] = await Promise.all([
     opsQuery('GET', path),
     govPath
-      ? domainQuery('government', 'GET', govPath).catch(() => null)
+      ? domainQuery('government', 'GET', govPath).catch((err) => {
+          console.error(`[search] gov query threw for q="${searchTerm}":`, err?.message || err);
+          return null;
+        })
       : Promise.resolve(null),
   ]);
   const rows = result?.data || [];
+
+  // Surface PostgREST-level failures (e.g. missing column, bad filter) that
+  // domainQuery() returns as { ok:false, status, data } rather than throwing.
+  // Without this, a broken gov query would just look like "zero gov results".
+  if (govPath && govResult && govResult.ok === false) {
+    console.error(
+      `[search] gov query failed for q="${searchTerm}" status=${govResult.status}:`,
+      govResult.data
+    );
+  }
+  if (!result?.ok) {
+    console.error(
+      `[search] entities query failed for q="${searchTerm}" status=${result?.status}:`,
+      result?.data
+    );
+  }
 
   // ── Reshape into unified UI search results ────────────────────────────────
   const items = rows.map((entity) => {
@@ -231,11 +265,10 @@ export async function searchHandler(req, res) {
     const subtitleParts = [];
     if (prop.address) subtitleParts.push(prop.address);
     if (cityState && !subtitleParts.includes(cityState)) subtitleParts.push(cityState);
-    if (prop.tenant) subtitleParts.push(prop.tenant);
     items.push({
       id: `gov:${prop.property_id}`,
       type: 'asset',
-      title: prop.address || prop.tenant || '(unnamed property)',
+      title: prop.address || '(unnamed property)',
       subtitle: subtitleParts.join(' · ') || null,
       domain: 'government',
       url: `${VERCEL_BASE}/asset/gov:${prop.property_id}`,
@@ -254,6 +287,11 @@ export async function searchHandler(req, res) {
 
   // Cap the merged entities+government result set to the requested limit.
   const trimmed = items.slice(0, limit);
+
+  console.log(
+    `[search] results: ${trimmed.length} for q="${searchTerm}" ` +
+    `(entities: ${rows.length}, gov_properties: ${govRows.length})`
+  );
 
   res.status(200).json(trimmed);
 }
