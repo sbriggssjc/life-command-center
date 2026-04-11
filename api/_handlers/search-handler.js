@@ -140,11 +140,23 @@ export async function searchHandler(req, res) {
     res.status(400).json({ error: 'q query parameter is required' });
     return;
   }
-  const searchTerm = q.replace(/[%_]/g, '').trim();
-  if (searchTerm.length < 2) {
+  const rawSearchTerm = q.replace(/[%_]/g, '').trim();
+  if (rawSearchTerm.length < 2) {
     res.status(400).json({ error: 'q must be at least 2 characters' });
     return;
   }
+
+  // Pre-process: strip trailing US state abbreviations (", OK" / " OK") or
+  // full state names (" Oklahoma") so that compound location queries like
+  // "Tulsa OK" or "Tulsa, Oklahoma" match rows where city and state live
+  // in separate columns. Without this, the ilike OR clause tries to match
+  // the literal "Tulsa OK" within a single column and returns nothing.
+  // The raw term is retained as a fallback when the cleaned variant yields
+  // zero results (e.g. the caller really did mean a multi-word entity).
+  const STATE_NAME_RE = /\s+(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)$/i;
+  let cleanTerm = rawSearchTerm.replace(/[,\s]+[A-Z]{2}$/, '').trim();
+  cleanTerm = cleanTerm.replace(STATE_NAME_RE, '').trim();
+  const hasCleanVariant = cleanTerm.length >= 2 && cleanTerm !== rawSearchTerm;
 
   // Validate limit
   const rawLimit = parseInt(req.query.limit, 10);
@@ -155,29 +167,9 @@ export async function searchHandler(req, res) {
     return;
   }
 
-  // ── Build PostgREST path for entities (ops DB) ──────────────────────────
-  // Expanded from the original name/canonical_name-only filter to also
-  // match address/city/state. Without this, searches like "Tulsa" return
-  // zero rows even when the entities table has Tulsa-located assets,
-  // because city was never part of the or=(…) clause.
-  const encTerm = enc(searchTerm);
-  const encTermLower = enc(searchTerm.toLowerCase());
-  let path =
-    `entities?or=(name.ilike.*${encTerm}*,canonical_name.ilike.*${encTermLower}*,address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*)` +
-    `&select=id,entity_type,name,canonical_name,domain,city,state,email,phone,address,org_type,asset_type,external_identities(source_system,source_type,external_id)`;
-
   const entityTypeFilter = resolveEntityTypeFilter(type);
-  if (entityTypeFilter) {
-    path += `&entity_type=eq.${enc(entityTypeFilter)}`;
-  }
-
   const normalizedDomain =
     domain && domain !== 'all' && domain !== 'both' ? domain : null;
-  if (normalizedDomain) {
-    path += `&domain=eq.${enc(normalizedDomain)}`;
-  }
-
-  path += `&limit=${limit}&order=name`;
 
   // ── Parallel query: government domain `properties` table ────────────────
   // The government Supabase backend is the source of truth for GovLease
@@ -201,37 +193,74 @@ export async function searchHandler(req, res) {
     (!type || type === 'all' || type === 'asset') &&
     getDomainCredentials('government') != null;
 
-  const govPath = includeGov
-    ? `properties?or=(address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*)` +
-      `&select=property_id,address,city,state` +
-      `&limit=${limit}&order=address`
-    : null;
+  // ── Build PostgREST path for entities (ops DB) ──────────────────────────
+  // Expanded from the original name/canonical_name-only filter to also
+  // match address/city/state. Without this, searches like "Tulsa" return
+  // zero rows even when the entities table has Tulsa-located assets,
+  // because city was never part of the or=(…) clause.
+  async function runSearch(term) {
+    const encTerm = enc(term);
+    const encTermLower = enc(term.toLowerCase());
+    let path =
+      `entities?or=(name.ilike.*${encTerm}*,canonical_name.ilike.*${encTermLower}*,address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*)` +
+      `&select=id,entity_type,name,canonical_name,domain,city,state,email,phone,address,org_type,asset_type,external_identities(source_system,source_type,external_id)`;
 
-  const [result, govResult] = await Promise.all([
-    opsQuery('GET', path),
-    govPath
-      ? domainQuery('government', 'GET', govPath).catch((err) => {
-          console.error(`[search] gov query threw for q="${searchTerm}":`, err?.message || err);
-          return null;
-        })
-      : Promise.resolve(null),
-  ]);
-  const rows = result?.data || [];
+    if (entityTypeFilter) {
+      path += `&entity_type=eq.${enc(entityTypeFilter)}`;
+    }
+    if (normalizedDomain) {
+      path += `&domain=eq.${enc(normalizedDomain)}`;
+    }
+    path += `&limit=${limit}&order=name`;
 
-  // Surface PostgREST-level failures (e.g. missing column, bad filter) that
-  // domainQuery() returns as { ok:false, status, data } rather than throwing.
-  // Without this, a broken gov query would just look like "zero gov results".
-  if (govPath && govResult && govResult.ok === false) {
-    console.error(
-      `[search] gov query failed for q="${searchTerm}" status=${govResult.status}:`,
-      govResult.data
-    );
+    const govPath = includeGov
+      ? `properties?or=(address.ilike.*${encTerm}*,city.ilike.*${encTerm}*,state.ilike.*${encTerm}*)` +
+        `&select=property_id,address,city,state` +
+        `&limit=${limit}&order=address`
+      : null;
+
+    const [entitiesResult, govQueryResult] = await Promise.all([
+      opsQuery('GET', path),
+      govPath
+        ? domainQuery('government', 'GET', govPath).catch((err) => {
+            console.error(`[search] gov query threw for q="${term}":`, err?.message || err);
+            return null;
+          })
+        : Promise.resolve(null),
+    ]);
+
+    // Surface PostgREST-level failures (e.g. missing column, bad filter) that
+    // domainQuery() returns as { ok:false, status, data } rather than throwing.
+    // Without this, a broken gov query would just look like "zero gov results".
+    if (govPath && govQueryResult && govQueryResult.ok === false) {
+      console.error(
+        `[search] gov query failed for q="${term}" status=${govQueryResult.status}:`,
+        govQueryResult.data
+      );
+    }
+    if (!entitiesResult?.ok) {
+      console.error(
+        `[search] entities query failed for q="${term}" status=${entitiesResult?.status}:`,
+        entitiesResult?.data
+      );
+    }
+
+    return {
+      rows: entitiesResult?.data || [],
+      govRows: Array.isArray(govQueryResult?.data) ? govQueryResult.data : [],
+    };
   }
-  if (!result?.ok) {
-    console.error(
-      `[search] entities query failed for q="${searchTerm}" status=${result?.status}:`,
-      result?.data
+
+  // Try the cleaned term first (e.g. "Tulsa"), fall back to the raw term
+  // (e.g. "Tulsa OK") if the cleaned variant returns nothing.
+  let searchTerm = hasCleanVariant ? cleanTerm : rawSearchTerm;
+  let { rows, govRows } = await runSearch(searchTerm);
+  if (rows.length === 0 && govRows.length === 0 && hasCleanVariant) {
+    console.log(
+      `[search] clean term "${cleanTerm}" returned 0; falling back to raw q="${rawSearchTerm}"`
     );
+    searchTerm = rawSearchTerm;
+    ({ rows, govRows } = await runSearch(searchTerm));
   }
 
   // ── Reshape into unified UI search results ────────────────────────────────
@@ -256,7 +285,6 @@ export async function searchHandler(req, res) {
       .map((r) => `${r.address}|${r.city || ''}|${r.state || ''}`.toLowerCase())
   );
 
-  const govRows = Array.isArray(govResult?.data) ? govResult.data : [];
   for (const prop of govRows) {
     const key = `${prop.address || ''}|${prop.city || ''}|${prop.state || ''}`.toLowerCase();
     if (seenAddresses.has(key)) continue;
