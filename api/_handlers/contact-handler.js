@@ -55,10 +55,24 @@ export async function contactHandler(req, res) {
     return;
   }
 
-  const { entity_id, email, name } = req.query;
+  let { entity_id, email, name, q } = req.query;
+
+  // Resolve q → entity_id, email, or name when the dedicated params are absent
+  if (!entity_id && !email && !name && q) {
+    const trimmed = q.trim();
+    // UUIDs (8-4-4-4-12) or prefixed IDs like "gov:11136"
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)
+        || /^[a-z]+:/i.test(trimmed)) {
+      entity_id = trimmed;
+    } else if (trimmed.includes('@')) {
+      email = trimmed;
+    } else {
+      name = trimmed;
+    }
+  }
 
   if (!entity_id && !email && !name) {
-    res.status(400).json({ error: 'One of entity_id, email, or name query parameters is required' });
+    res.status(400).json({ error: 'One of q, entity_id, email, or name query parameters is required' });
     return;
   }
 

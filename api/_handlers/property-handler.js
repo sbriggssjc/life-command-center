@@ -71,10 +71,22 @@ export async function propertyHandler(req, res) {
     return;
   }
 
-  const { address, entity_id } = req.query;
+  let { address, entity_id, q } = req.query;
+
+  // Resolve q → entity_id or address when the dedicated params are absent
+  if (!address && !entity_id && q) {
+    const trimmed = q.trim();
+    // UUIDs (8-4-4-4-12) or prefixed IDs like "gov:11136"
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)
+        || /^[a-z]+:/i.test(trimmed)) {
+      entity_id = trimmed;
+    } else {
+      address = trimmed;
+    }
+  }
 
   if (!address && !entity_id) {
-    res.status(400).json({ error: 'Either address or entity_id query parameter is required' });
+    res.status(400).json({ error: 'One of q, address, or entity_id query parameter is required' });
     return;
   }
 
