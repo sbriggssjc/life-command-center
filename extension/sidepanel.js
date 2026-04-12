@@ -761,6 +761,8 @@ function extractSourceFields(ctx) {
 function buildMetadata(ctx, domain) {
   // Capture ALL extracted data for the cleaning/propagation pipeline.
   // Keys match database column names where possible.
+  // Belt-and-suspenders filter: strip CoStar section headings that slip past extractFields()
+  const INVALID_TENANT = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research)$/i;
   const m = {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
@@ -801,8 +803,8 @@ function buildMetadata(ctx, domain) {
     land_value: ctx.land_value || null,
     improvement_value: ctx.improvement_value || null,
     // Tenant / Lease
-    tenant_name:       ctx.tenant_name || null,
-    primary_tenant:    ctx.primary_tenant || null,
+    tenant_name:       (ctx.tenant_name && !INVALID_TENANT.test(ctx.tenant_name)) ? ctx.tenant_name : null,
+    primary_tenant:    (ctx.primary_tenant && !INVALID_TENANT.test(ctx.primary_tenant)) ? ctx.primary_tenant : null,
     tenancy_type: ctx.tenancy_type || null,
     owner_occupied: ctx.owner_occupied || null,
     est_rent: ctx.est_rent || null,
