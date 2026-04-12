@@ -1768,15 +1768,46 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 async function upsertTrueOwners(domain, propertyId, metadata) {
   const contacts = metadata.contacts || [];
 
-  // Find true buyer and true seller from contacts
-  const trueBuyer  = contacts.find(c => c.role === 'true_buyer');
-  const trueSeller = contacts.find(c => c.role === 'true_seller');
+  // Find true buyer — must have a name that looks like an organization,
+  // not a CoStar UI label
+  const COSTAR_LABEL_PATTERN = /^(sale\s+date|sale\s+price|buyer\s+type|country|national|institutional|private|individual|confirmed|investment|research\s+complete|wood\s+frame|suburban|parking|land|zoning|building|type|location|stories|class|construction|tenancy|sprinklers|parcels|assessment|documents|deed|market|vacancy|submarket|months\s+on\s+market|prev\s+year)/i;
 
-  // Individual contacts for each
-  const trueBuyerContacts  = contacts.filter(c =>
-    c.role === 'true_buyer_contact');
+  const trueBuyer = contacts.find(c =>
+    c.role === 'true_buyer' &&
+    c.name &&
+    c.name.length > 3 &&
+    c.name.length < 100 &&
+    !COSTAR_LABEL_PATTERN.test(c.name)
+  );
+
+  const trueSeller = contacts.find(c =>
+    c.role === 'true_seller' &&
+    c.name &&
+    c.name.length > 3 &&
+    c.name.length < 100 &&
+    !COSTAR_LABEL_PATTERN.test(c.name)
+  );
+
+  // Filter individual contacts to only include those with a name that
+  // looks like a real person (not a CoStar UI label)
+  const trueBuyerContacts = contacts.filter(c =>
+    c.role === 'true_buyer_contact' &&
+    c.name &&
+    c.name.length > 3 &&
+    c.name.length < 60 &&
+    !COSTAR_LABEL_PATTERN.test(c.name) &&
+    // Real person names have at least a first and last name (space between)
+    // OR have a phone/email attached
+    (c.name.includes(' ') || c.phones?.length || c.email)
+  );
   const trueSellerContacts = contacts.filter(c =>
-    c.role === 'true_seller_contact');
+    c.role === 'true_seller_contact' &&
+    c.name &&
+    c.name.length > 3 &&
+    c.name.length < 60 &&
+    !COSTAR_LABEL_PATTERN.test(c.name) &&
+    (c.name.includes(' ') || c.phones?.length || c.email)
+  );
 
   let trueBuyerId  = null;
   let trueSellerId = null;
