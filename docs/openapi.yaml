@@ -271,19 +271,28 @@ paths:
       security:
         - ApiKeyAuth: []
       parameters:
+        - name: q
+          in: query
+          required: true
+          description: >-
+            Address or entity ID to look up. Accepts a street address
+            (e.g. '601 S Boulder Ave') or an LCC entity ID (e.g. 'gov:11136').
+          schema:
+            type: string
+            example: 601 S Boulder Ave
         - name: address
           in: query
           required: false
           description: >-
             Property street address (partial match supported). Provide either
-            address or entity_id.
+            address or entity_id. Direct API callers may use this instead of q.
           schema:
             type: string
             example: 1234 Main St
         - name: entity_id
           in: query
           required: false
-          description: Canonical LCC entity UUID for exact match.
+          description: Canonical LCC entity UUID for exact match. Direct API callers may use this instead of q.
           schema:
             type: string
             format: uuid
@@ -314,10 +323,20 @@ paths:
       security:
         - ApiKeyAuth: []
       parameters:
+        - name: q
+          in: query
+          required: true
+          description: >-
+            Name, email, or entity ID to look up. Accepts a contact name
+            (e.g. 'Jane Smith'), email (e.g. 'jane@example.com'), or an LCC
+            entity ID (e.g. 'gov:11136').
+          schema:
+            type: string
+            example: Jane Smith
         - name: entity_id
           in: query
           required: false
-          description: Canonical LCC entity UUID for exact match.
+          description: Canonical LCC entity UUID for exact match. Direct API callers may use this instead of q.
           schema:
             type: string
             format: uuid
@@ -325,7 +344,7 @@ paths:
         - name: email
           in: query
           required: false
-          description: Exact email address lookup.
+          description: Exact email address lookup. Direct API callers may use this instead of q.
           schema:
             type: string
             format: email
@@ -333,7 +352,7 @@ paths:
         - name: name
           in: query
           required: false
-          description: Contact name (partial match supported).
+          description: Contact name (partial match supported). Direct API callers may use this instead of q.
           schema:
             type: string
             example: Jane Smith
