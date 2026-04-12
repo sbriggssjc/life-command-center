@@ -38,6 +38,26 @@ function toErrorMessage(val) {
   return String(val);
 }
 
+// Render a concise human-readable summary of the pipeline_summary object
+// returned from the ingestion pipeline. Prevents raw JSON leaking into toasts.
+function formatPipelineSummary(summary) {
+  if (!summary || typeof summary !== 'object') return String(summary);
+  const r = summary.domain_records || {};
+  const parts = [];
+  if (r.sales > 0)      parts.push(r.sales + ' sale' + (r.sales > 1 ? 's' : ''));
+  if (r.leases > 0)     parts.push(r.leases + ' lease' + (r.leases > 1 ? 's' : ''));
+  if (r.loans > 0)      parts.push(r.loans + ' loan' + (r.loans > 1 ? 's' : ''));
+  if (r.owners > 0)     parts.push(r.owners + ' owner' + (r.owners > 1 ? 's' : ''));
+  if (r.listings > 0)   parts.push(r.listings + ' listing' + (r.listings > 1 ? 's' : ''));
+  if (r.brokers > 0)    parts.push(r.brokers + ' broker' + (r.brokers > 1 ? 's' : ''));
+  if (r.deed_records > 0) parts.push(r.deed_records + ' deed' + (r.deed_records > 1 ? 's' : ''));
+  const domain = summary.domain || '';
+  const base = '→ ' + (domain ? domain.charAt(0).toUpperCase() + domain.slice(1) + ' DB: ' : '');
+  return parts.length
+    ? base + parts.join(', ')
+    : base + 'no new records (all deduped)';
+}
+
 function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -95,7 +115,7 @@ async function pollPipelineStatus(entityId, container) {
       line.textContent = `→ Pipeline error: ${toErrorMessage(lastError) || 'unknown'}`;
     } else if (summary) {
       line.className = 'update-toast updated';
-      line.textContent = `→ ${toDisplayString(summary)}`;
+      line.textContent = formatPipelineSummary(summary);
     } else {
       line.className = 'update-toast';
       line.style.background = '#F3F4F6';
@@ -591,9 +611,10 @@ function renderLccFields(entity, data) {
   for (const [key, label] of fields) {
     const val = entity[key];
     if (val) {
+      const valStr = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
       html += `<div class="context-field">
         <span class="context-label">${escapeHtml(label)}</span>
-        <span class="context-value">${escapeHtml(String(val))}</span>
+        <span class="context-value">${escapeHtml(valStr)}</span>
       </div>`;
     }
   }
