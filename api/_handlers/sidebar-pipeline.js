@@ -1819,38 +1819,34 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
       .replace(/\b(llc|inc|corp|ltd|lp|llp|co|company|group|partners)\b\.?/gi, '')
       .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // Dialysis uses true_owners table; gov has no true_owners table
-    // — store as recorded_owner with entity_type='true_owner' instead
     if (domain === 'government') {
-      // Gov: store in recorded_owners with enriched contact_info
+      // Check true_owners table first (canonical buyer intelligence)
+      const normalized = owner.name.trim().toUpperCase()
+        .replace(/\b(LLC|INC|CORP|LTD|LP|LLP|GLOBAL|ASSET\s+MANAGEMENT)\b\.?/gi, '')
+        .replace(/[^A-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
       const lookup = await domainQuery('government', 'GET',
-        `recorded_owners?canonical_name=eq.${encodeURIComponent(normalized)}&select=recorded_owner_id&limit=1`
+        `true_owners?canonical_name=ilike.*${encodeURIComponent(normalized)}*` +
+        `&select=true_owner_id,name&limit=1`
       );
       if (lookup.ok && lookup.data?.length) {
-        return lookup.data[0].recorded_owner_id;
+        return lookup.data[0].true_owner_id;
       }
-      const govOwnerData = stripNulls({
+
+      // Not in true_owners — create a new record
+      const r = await domainQuery('government', 'POST', 'true_owners', {
         name:           owner.name,
-        canonical_name: normalized,
-        entity_type:    'true_owner',
-        state:          owner.state || null,
-        contact_info:   {
-          address:  owner.address || null,
-          city:     owner.city    || null,
-          state:    owner.state   || null,
-          phone:    owner.phone   || null,
-          email:    owner.email   || null,
-          website:  owner.website || null,
-          contacts: individualContacts.map(c => ({
-            name:  c.name,
-            phone: c.phones?.[0] || null,
-            email: c.email       || null,
-          })),
-        },
+        canonical_name: owner.name.toUpperCase(),
+        entity_type:    'buyer',
+        contact_info:   JSON.stringify({
+          address: owner.address || null,
+          city:    owner.city    || null,
+          state:   owner.state   || null,
+          phone:   owner.phone   || null,
+        }),
       });
-      const r = await domainQuery('government', 'POST', 'recorded_owners', govOwnerData);
       return r.ok && r.data
-        ? (Array.isArray(r.data) ? r.data[0] : r.data)?.recorded_owner_id
+        ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
         : null;
     }
 
@@ -1885,8 +1881,6 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
   if (trueBuyer) {
     trueBuyerId = await ensureTrueOwner(trueBuyer, trueBuyerContacts);
     if (trueBuyerId) {
-      // Link to property as current true owner
-      const idCol = domain === 'government' ? 'true_owner_id' : 'true_owner_id';
       await domainPatch(domain,
         `properties?property_id=eq.${propertyId}`,
         { true_owner_id: trueBuyerId },
