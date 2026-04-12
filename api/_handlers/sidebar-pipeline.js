@@ -667,9 +667,12 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     results.records.brokers = await upsertGovBrokers(propertyId, metadata);
   }
 
-  // Step 5b3: Upsert deed records (dialysis only)
+  // Step 5b3: Upsert deed records
   if (domain === 'dialysis') {
     results.records.deed_records = await upsertDialysisDeedRecords(propertyId, entity, metadata);
+  }
+  if (domain === 'government') {
+    results.records.deed_records = await upsertGovernmentDeedRecords(entity, metadata);
   }
 
   // Step 5c: Upsert loans
@@ -1350,6 +1353,48 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
     deedRecord.data_hash = dataHash;
 
     const result = await domainQuery('dialysis', 'POST', 'deed_records', deedRecord);
+    if (result.ok) inserted++;
+  }
+
+  return inserted;
+}
+
+/**
+ * Upsert deed records into the government domain database.
+ * Government schema uses parcel_id (not property_id) and state_code (not state).
+ * Filters out mortgage-type deeds via MORTGAGE_DEED_TYPES.
+ */
+async function upsertGovernmentDeedRecords(entity, metadata) {
+  const deedSales = (metadata.sales_history || [])
+    .filter(s => s.document_number && !MORTGAGE_DEED_TYPES.test(s.deed_type || ''));
+  if (deedSales.length === 0) return 0;
+
+  let inserted = 0;
+
+  for (const sale of deedSales) {
+    const datePart = parseDate(sale.recordation_date || sale.sale_date)
+      ?.split('T')[0] || null;
+    const dataHash = Buffer.from(
+      `${sale.document_number}|${entity.state}|${datePart || ''}`
+    ).toString('base64');
+
+    const lookup = await domainQuery('government', 'GET',
+      `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=deed_id&limit=1`
+    );
+    if (lookup.ok && lookup.data?.length) continue;
+
+    const result = await domainQuery('government', 'POST', 'deed_records', {
+      document_number:  sale.document_number,
+      deed_type:        sale.deed_type || null,
+      grantor:          sale.seller || null,
+      grantee:          sale.buyer || null,
+      recording_date:   datePart,
+      consideration:    parseCurrency(sale.sale_price),
+      county:           entity.county || null,
+      state_code:       entity.state || null,
+      data_hash:        dataHash,
+      raw_payload:      sale,
+    });
     if (result.ok) inserted++;
   }
 
