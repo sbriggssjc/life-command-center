@@ -715,7 +715,10 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   const lookup = await domainQuery(domain, 'GET', lookupPath);
 
-  const primaryTenant = metadata.tenants?.[0]?.name || null;
+  const primaryTenant = metadata.tenants?.[0]?.name
+    || metadata.tenant_name
+    || metadata.primary_tenant
+    || null;
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 
   // Build property data from CoStar metadata — domain-aware field names.
@@ -765,6 +768,9 @@ async function upsertDomainProperty(domain, entity, metadata) {
       lease_expiration:   parseDate(metadata.lease_expiration)?.split('T')[0] || null,
       renewal_options:    metadata.renewal_options || null,
       rent_escalations:   metadata.rent_escalations || null,
+      sf_leased:         parseSF(metadata.sf_leased || metadata.square_footage),
+      agency:            primaryTenant || null,
+      agency_full_name:  primaryTenant || null,
       data_source:       'costar_sidebar',
     }));
     // Remove any dialysis-only fields that may have been set
