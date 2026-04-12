@@ -1003,7 +1003,7 @@ Move connector CRUD from sync.js into admin.js or operations.js, then delete: `a
 | 0.1 | Create `supabase/functions/_shared/` directory with `supabase-client.ts`, `auth.ts`, `signals.ts`, `cors.ts` | TypeScript compiles |
 | 0.2 | Deploy a `health-check` Edge Function that verifies OPS/Gov/Dia connectivity | Returns 200 with source status from all 3 DBs |
 | 0.3 | Set environment variables in Supabase Edge: `OPS_SUPABASE_URL`, `OPS_SUPABASE_SERVICE_KEY`, `GOV_SUPABASE_URL`, `GOV_SUPABASE_KEY`, `DIA_SUPABASE_URL`, `DIA_SUPABASE_KEY`, `PA_WEBHOOK_SECRET` | Health check accesses all DBs |
-| 0.4 | Add `quality_score` column to `context_packets` table | Column exists |
+| 0.4 | Add `quality_score` column to `context_packets` table (run schema/033) | Column exists |
 | 0.5 | Add new feature flags to `admin.js` DEFAULT_FLAGS | Flags appear in /api/flags response |
 
 **Risk:** Zero. No production changes.
