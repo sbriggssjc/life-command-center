@@ -570,9 +570,21 @@ function renderIngestDiff(ctx, lccEntity) {
     { label: 'Cap Rate', costar: ctx.cap_rate, db: null },
     { label: 'Building Size', costar: ctx.square_footage,
       db: lccEntity.metadata?.square_footage },
-    { label: 'Tenant',
-      costar: ctx.tenant_name || (ctx.tenants||[]).map(t=>t.name).join(', '),
-      db: meta.tenant_name || (meta.tenants||[]).map(t=>t.name).join(', ') },
+    (() => {
+      const INVALID = /^(public\s+record|building|land|market|sources)$/i;
+      const tenantCostar = (() => {
+        const raw = (ctx.tenants||[]).map(t=>t.name).join(', ') || ctx.tenant_name;
+        return (raw && !INVALID.test(raw)) ? raw : null;
+      })();
+      const tenantDb = (() => {
+        const raw = meta.tenant_name || (meta.tenants||[]).map(t=>t.name).join(', ');
+        return (raw && !INVALID.test(raw)) ? raw : null;
+      })();
+      return { label: 'Tenant', costar: tenantCostar, db: tenantDb,
+        hint: (!tenantCostar && !tenantDb)
+          ? 'Not available on comp pages \u2014 open property details in CoStar'
+          : null };
+    })(),
     { label: 'Owner',
       costar: (ctx.contacts||[]).find(c=>c.role==='owner')?.name,
       db: meta.contacts ? meta.contacts.find(c=>c.role==='owner')?.name : null },
@@ -585,7 +597,7 @@ function renderIngestDiff(ctx, lccEntity) {
   for (const c of comparisons) {
     const costarStr = toDisplayString(c.costar);
     const dbStr = toDisplayString(c.db);
-    if (!costarStr && !dbStr) continue;
+    if (!costarStr && !dbStr && !c.hint) continue;
     const changed = costarStr && dbStr && costarStr !== dbStr;
     html += `<div class="context-field" style="background:${
       changed ? 'rgba(251,191,36,0.08)' : 'transparent'}">
@@ -593,8 +605,10 @@ function renderIngestDiff(ctx, lccEntity) {
       <span class="context-value">
         ${dbStr ? '<span style="color:var(--text3);font-size:10px">DB: ' +
           escapeHtml(dbStr) + '</span><br>' : ''}
-        ${costarStr ? '<span style="color:var(--text);font-size:11px">→ ' +
+        ${costarStr ? '<span style="color:var(--text);font-size:11px">\u2192 ' +
           escapeHtml(costarStr) + '</span>' : ''}
+        ${(!costarStr && !dbStr && c.hint) ? '<span style="color:var(--text3);font-size:10px;font-style:italic">\u26A0 ' +
+          escapeHtml(c.hint) + '</span>' : ''}
       </span>
     </div>`;
   }
