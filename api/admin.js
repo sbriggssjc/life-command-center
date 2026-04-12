@@ -30,6 +30,15 @@ const DEFAULT_FLAGS = {
   ops_pages_enabled: true,
   more_drawer_enabled: true,
   freshness_indicators: true,
+
+  // ── Edge Migration Flags (Phase 0–4) ──
+  // When enabled, frontend routes requests to Supabase Edge Functions
+  // instead of Vercel API endpoints. Disable to instantly roll back.
+  edge_context_broker: false,     // Phase 1: Context Broker → Supabase Edge
+  edge_copilot_chat: false,       // Phase 3: Chat / Copilot → Supabase Edge
+  edge_template_service: false,   // Phase 3: Template drafts → Supabase Edge
+  edge_daily_briefing: false,     // Phase 4: Daily briefing → Supabase Edge
+  edge_data_query: false,         // Phase 4: Gov/Dia data queries → Supabase Edge
 };
 
 const VALID_ROLES = ROLES;
