@@ -335,6 +335,23 @@
         if (next && /^\$?[\d,.]+/.test(next)) data.annual_rent = next;
       }
 
+      // Tenant name — appears as a label/value pair on property detail pages
+      // e.g. "Tenant" label followed by "VA Madison East Clinic" or "DaVita..."
+      if (!data.tenant_name && /^tenant\s*name?$/i.test(line) && next
+          && next.length > 2 && next.length < 80
+          && !/^(tenancy|type|sf|detail|info)/i.test(next)) {
+        data.tenant_name = next;
+      }
+
+      // Also capture from "Tenants" header when only one tenant is shown
+      // (property detail shows a single tenant inline, not a full table)
+      if (!data.tenant_name && /^tenants?$/i.test(line) && next
+          && next.length > 2 && next.length < 80
+          && /^[A-Z]/.test(next)
+          && !/^(at\s+sale|detail|directory|stacking)/i.test(next)) {
+        data.tenant_name = next;
+      }
+
       // ── Additional property fields ────────────────────────────
 
       // County (from public records or property details)
@@ -449,6 +466,14 @@
       // Market vacancy
       if (!data.market_vacancy && /^market\s+overall$/i.test(line) && next) {
         if (/[\d.]+%/.test(next)) data.market_vacancy = next;
+      }
+    }
+
+    // Fallback: derive tenant_name from building_name when it contains a known tenant indicator
+    if (!data.tenant_name && data.building_name) {
+      const bn = data.building_name.toLowerCase();
+      if (/davita|fresenius|dialysis|va\s|veterans|kidney|renal/.test(bn)) {
+        data.tenant_name = data.building_name;
       }
     }
 
