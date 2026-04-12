@@ -715,10 +715,13 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   const lookup = await domainQuery(domain, 'GET', lookupPath);
 
-  const primaryTenant = metadata.tenants?.[0]?.name
-    || metadata.tenant_name
-    || metadata.primary_tenant
-    || null;
+  const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified)$/i;
+
+  const primaryTenant = [
+    metadata.tenants?.[0]?.name,
+    metadata.tenant_name,
+    metadata.primary_tenant,
+  ].find(t => t && t.length > 2 && !INVALID_TENANT_VALUES.test(t)) || null;
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 
   // Build property data from CoStar metadata — domain-aware field names.
