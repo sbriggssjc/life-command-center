@@ -789,11 +789,20 @@
     function isAddress(s) { return /^\d+\s+\w+/.test(s); }
     function isCityState(s) { return /^[A-Za-z].*,\s*[A-Z]{2}\s+\d{5}/.test(s); }
 
+    // Stop at the next contact group OR any CoStar comp detail section
+    const STOP_PATTERN = /^(true\s+(buyer|seller)|recorded\s+(buyer|seller|owner)|listing\s+broker|buyer\s+broker|current\s+owner|lender|transaction\s+details|market\s+at\s+sale|building$|land$|vacancy\s+rates|market\s+asking\s+rent|submarket\s+(leasing|sales)|public\s+record|assessment\s+at\s+sale|sale\s+notes|documents|my\s+notes|sources|verification|©\s*\d{4}|by\s+using\s+this|comp\s+status|research\s+complete|last\s+updated|report\s+an\s+error|comparable|building\s+summary|building\s+information|market\s+at\s+sale|lease\s+information|investment\s+highlights)/i;
+
+    // Reject lines that are CoStar UI labels/data values, not entity info
+    const COSTAR_UI_LABELS = /^(country\s+of\s+origin|buyer\s+origin|seller\s+origin|buyer\s+type|seller\s+type|secondary\s+type|activity\s+\(last|sale\s+date|sale\s+price|price\/sf|price\s+status|hold\s+period|recording\s+date|sale\s+type|document\s+#|comp\s+status|seller\s+contacts|[\d]\s+star|star\s+office|national|institutional|private|individual|other\/unknown)/i;
+
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
       // Stop at next major section
-      if (/^(true\s+(buyer|seller)|recorded\s+(buyer|seller|owner)|listing\s+broker|buyer\s+broker|current\s+owner|lender|my\s+notes|sources|©)/i.test(line)) break;
+      if (STOP_PATTERN.test(line)) break;
+      // Safety limit: don't consume more than 25 lines
+      if (j - startIdx > 25) break;
       if (/^United States$/i.test(line)) continue;
+      if (COSTAR_UI_LABELS.test(line)) continue;
 
       if (!entity.name) {
         // First real line = company name
