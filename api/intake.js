@@ -697,7 +697,9 @@ async function handleIntakeSummary(req, res) {
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
   }
 
-  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id;
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
   if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
 
   const limit = parseLimit(req.query.limit);
