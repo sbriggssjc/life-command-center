@@ -133,6 +133,26 @@ function stripNulls(obj) {
 }
 
 /**
+ * Wrapper around domainQuery for PATCH calls that surfaces silent failures
+ * (column mismatches, CHECK constraint violations, etc.) in Vercel logs.
+ * Previously, PATCH failures were swallowed — this forced schema issues to
+ * only be discovered during audits. Always use this instead of calling
+ * domainQuery(..., 'PATCH', ...) directly within this pipeline.
+ */
+async function domainPatch(domain, path, data, label) {
+  const result = await domainQuery(domain, 'PATCH', path, data);
+  if (!result.ok) {
+    console.error(`[${label}] PATCH failed:`, {
+      domain, path,
+      status: result.status,
+      error: result.data,
+      fields: Object.keys(data),
+    });
+  }
+  return result;
+}
+
+/**
  * Infer entity_type for a contact entry from the sidebar metadata.
  */
 function contactEntityType(contact) {
@@ -760,7 +780,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
   if (lookup.ok && lookup.data?.length) {
     // Update existing property
     const propertyId = lookup.data[0].property_id;
-    await domainQuery(domain, 'PATCH', `properties?property_id=eq.${propertyId}`, propertyData);
+    await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
     return propertyId;
   }
 
@@ -919,8 +939,8 @@ async function upsertDomainSales(domain, propertyId, metadata) {
 
     if (lookup.ok && lookup.data?.length) {
       // Update existing
-      await domainQuery(domain, 'PATCH',
-        `sales_transactions?sale_id=eq.${lookup.data[0].sale_id}`, saleData);
+      await domainPatch(domain,
+        `sales_transactions?sale_id=eq.${lookup.data[0].sale_id}`, saleData, 'upsertDomainSales');
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -1014,8 +1034,8 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
         company: existing.company == null && contact.company ? contact.company : null,
       });
       if (Object.keys(patch).length) {
-        await domainQuery('dialysis', 'PATCH',
-          `brokers?broker_id=eq.${brokerId}`, patch
+        await domainPatch('dialysis',
+          `brokers?broker_id=eq.${brokerId}`, patch, 'upsertDialysisBrokerLinks'
         );
       }
     } else {
@@ -1263,8 +1283,8 @@ async function upsertGovBrokers(propertyId, metadata) {
       if (!existing.firm && contact.company) patchData.firm = contact.company;
 
       if (Object.keys(patchData).length > 0) {
-        await domainQuery('government', 'PATCH',
-          `brokers?broker_id=eq.${existing.broker_id}`, patchData);
+        await domainPatch('government',
+          `brokers?broker_id=eq.${existing.broker_id}`, patchData, 'upsertGovBrokers');
       }
     } else {
       // INSERT new broker record
@@ -1412,8 +1432,8 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
     });
 
     if (lookup.ok && lookup.data?.length) {
-      await domainQuery(domain, 'PATCH',
-        `loans?loan_id=eq.${lookup.data[0].loan_id}`, loanData);
+      await domainPatch(domain,
+        `loans?loan_id=eq.${lookup.data[0].loan_id}`, loanData, 'upsertDomainLoans');
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
       if (result.ok) count++;
@@ -1491,9 +1511,10 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
             if (stateZip[0]) addrFields.state = stateZip[0];
           }
           if (Object.keys(addrFields).length) {
-            await domainQuery(domain, 'PATCH',
+            await domainPatch(domain,
               `recorded_owners?recorded_owner_id=eq.${id}`,
-              addrFields
+              addrFields,
+              'upsertDomainOwners:ensureRecordedOwner'
             );
           }
         }
@@ -1686,9 +1707,10 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
   if (currentOwner) {
     const ownerId = ownerIds.get(normalizeOwnerName(currentOwner.name));
     if (ownerId) {
-      await domainQuery(domain, 'PATCH',
+      await domainPatch(domain,
         `properties?property_id=eq.${propertyId}`,
-        { recorded_owner_id: ownerId }
+        { recorded_owner_id: ownerId },
+        'upsertDomainOwners:linkCurrentOwner'
       );
     }
   }
@@ -1789,9 +1811,10 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
     if (trueBuyerId) {
       // Link to property as current true owner
       const idCol = domain === 'government' ? 'true_owner_id' : 'true_owner_id';
-      await domainQuery(domain, 'PATCH',
+      await domainPatch(domain,
         `properties?property_id=eq.${propertyId}`,
-        { true_owner_id: trueBuyerId }
+        { true_owner_id: trueBuyerId },
+        'upsertTrueOwners'
       );
     }
   }
@@ -1895,19 +1918,8 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         l => l.tenant?.toLowerCase().trim() === tenantKey
       );
       const { property_id: _pid, ...patchData } = cleaned;
-      const patchResult = await domainQuery(domain, 'PATCH',
-        `leases?lease_id=eq.${existingLease.lease_id}`, patchData);
-      if (!patchResult.ok) {
-        console.error('[upsertDomainLeases] PATCH failed:', {
-          domain,
-          propertyId,
-          leaseId: existingLease.lease_id,
-          tenant: record.tenant,
-          status: patchResult.status,
-          error: patchResult.data,
-          patchData,
-        });
-      }
+      await domainPatch(domain,
+        `leases?lease_id=eq.${existingLease.lease_id}`, patchData, 'upsertDomainLeases');
     } else {
       // INSERT new lease
       const result = await domainQuery(domain, 'POST', 'leases', cleaned);
@@ -2022,8 +2034,8 @@ async function upsertDialysisListings(propertyId, metadata) {
       cap_rate: parsePercent(metadata.cap_rate),
       price_per_sf: safePricePsf,
     });
-    await domainQuery('dialysis', 'PATCH',
-      `available_listings?property_id=eq.${propertyId}&is_active=is.true`, patchData);
+    await domainPatch('dialysis',
+      `available_listings?property_id=eq.${propertyId}&is_active=is.true`, patchData, 'upsertDialysisListings');
     return 1;
   }
 
@@ -2051,7 +2063,7 @@ async function upsertDialysisListings(propertyId, metadata) {
 
   if (recentSales.ok && recentSales.data?.length) {
     const latestSale = recentSales.data[0];
-    await domainQuery('dialysis', 'PATCH',
+    await domainPatch('dialysis',
       `available_listings?property_id=eq.${propertyIdInt}&is_active=is.true`,
       {
         is_active: false,
@@ -2059,7 +2071,8 @@ async function upsertDialysisListings(propertyId, metadata) {
         off_market_date: latestSale.sale_date,
         last_price: parseCurrency(latestSale.sold_price) || null,
         current_cap_rate: latestSale.cap_rate || null,
-      }
+      },
+      'upsertDialysisListings:autoClose'
     );
     // Return 0 — don't count as "new active listing" since it's already sold
     return 0;
@@ -2154,8 +2167,8 @@ async function upsertGovListings(propertyId, entity, metadata) {
 
   if (lookup.ok && lookup.data?.length) {
     const { property_id: _pid, ...patchData } = record;
-    await domainQuery('government', 'PATCH',
-      `available_listings?id=eq.${lookup.data[0].id}`, patchData);
+    await domainPatch('government',
+      `available_listings?id=eq.${lookup.data[0].id}`, patchData, 'upsertGovListings');
     return 0; // updated, not newly created
   }
 
@@ -2177,14 +2190,15 @@ async function upsertGovListings(propertyId, entity, metadata) {
 
   if (recentSales.ok && recentSales.data?.length) {
     const latestSale = recentSales.data[0];
-    await domainQuery('government', 'PATCH',
+    await domainPatch('government',
       `available_listings?property_id=eq.${propertyId}&listing_status=eq.Active`,
       {
         listing_status:  'Sold',
         off_market_date: latestSale.sale_date,
         asking_cap_rate: latestSale.sold_cap_rate || null,
         updated_at:      new Date().toISOString(),
-      }
+      },
+      'upsertGovListings:autoClose'
     );
     return 0; // Sold, not an active listing
   }
