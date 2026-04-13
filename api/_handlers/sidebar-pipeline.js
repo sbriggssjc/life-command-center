@@ -149,6 +149,19 @@ function stripNulls(obj) {
   return result;
 }
 
+/** Strip address prefix from tenant names (e.g. "309 Monroe Ave, Memphis, TN 38103 - SSA, Office of Disability" → "SSA, Office of Disability") */
+function cleanTenantValue(raw) {
+  if (!raw) return null;
+  const dashIdx = raw.indexOf(' - ');
+  if (dashIdx > 0) {
+    const prefix = raw.substring(0, dashIdx);
+    if (/^\d+\s+\w/.test(prefix) || /,\s*[A-Z]{2}\s+\d{5}/.test(prefix)) {
+      return raw.substring(dashIdx + 3).trim();
+    }
+  }
+  return raw;
+}
+
 /**
  * Wrapper around domainQuery for PATCH calls that surfaces silent failures
  * (column mismatches, CHECK constraint violations, etc.) in Vercel logs.
@@ -884,11 +897,13 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
 
-  const primaryTenant = [
-    metadata.tenants?.[0]?.name,
-    metadata.tenant_name,
-    metadata.primary_tenant,
-  ].find(t => t && t.length > 2 && !INVALID_TENANT_VALUES.test(t)) || null;
+  const primaryTenant = cleanTenantValue(
+    [
+      metadata.tenants?.[0]?.name,
+      metadata.tenant_name,
+      metadata.primary_tenant,
+    ].find(t => t && t.length > 2 && !INVALID_TENANT_VALUES.test(t)) || null
+  );
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 
   // Build property data from CoStar metadata — domain-aware field names.
@@ -1270,8 +1285,10 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
   const parsedSF = parseSF(metadata.square_footage);
-  const primaryTenant = metadata.tenants?.[0]?.name
-    || metadata.tenant_name || metadata.primary_tenant || null;
+  const primaryTenant = cleanTenantValue(
+    metadata.tenants?.[0]?.name
+    || metadata.tenant_name || metadata.primary_tenant || null
+  );
 
   let count = 0;
   for (const sale of sales) {
@@ -2740,8 +2757,9 @@ async function upsertDialysisListings(propertyId, metadata) {
  * Upsert a listing record in the government available_listings table.
  * Trigger: only writes if metadata.asking_price is present OR any
  *          sales_history entry has is_current: true.
- * Dedup: property_id + listing_status='Active' — one active listing per property.
- *        If one already exists, PATCH it; otherwise INSERT.
+ * Dedup: finds ANY existing listing for the property (not just Active).
+ *        If Active exists, PATCH it. If non-Active (under_contract/sold/etc),
+ *        create a new Active listing. If none exist, INSERT.
  */
 async function upsertGovListings(propertyId, entity, metadata) {
   // Trigger guard
@@ -2823,18 +2841,28 @@ async function upsertGovListings(propertyId, entity, metadata) {
   record.property_id = propertyId;
   record.listing_status = 'Active';
 
-  // Dedup: one active listing per property
+  // Dedup: find ANY existing listing for this property (not just Active)
   const lookup = await domainQuery('government', 'GET',
-    `available_listings?property_id=eq.${propertyId}&listing_status=eq.Active&select=id&limit=1`
+    `available_listings?property_id=eq.${propertyId}` +
+    `&select=listing_id,listing_status&order=listing_date.desc.nullslast&limit=1`
   );
 
   if (lookup.ok && lookup.data?.length) {
-    const { property_id: _pid, ...patchData } = record;
-    await domainPatch('government',
-      `available_listings?id=eq.${lookup.data[0].id}`, patchData, 'upsertGovListings');
-    return 0; // updated, not newly created
+    const existing = lookup.data[0];
+    if (existing.listing_status === 'Active') {
+      // Update existing Active listing
+      const { property_id: _pid, ...patchData } = record;
+      await domainPatch('government',
+        `available_listings?listing_id=eq.${existing.listing_id}`,
+        patchData, 'upsertGovListings:update'
+      );
+      return 0;
+    }
+    // Existing listing is under_contract/sold/superseded — create new Active
+    // (fall through to INSERT below)
   }
 
+  // INSERT new listing
   const result = await domainQuery('government', 'POST', 'available_listings', record);
   if (!result.ok) return 0;
 
