@@ -23,7 +23,7 @@
   },
   "accentColor": "#1F3864",
   "copilotAgents": {
-    "declarativeCopilots": [
+    "declarativeAgents": [
       {
         "id": "lccCopilot",
         "file": "declarative-copilot.json"
