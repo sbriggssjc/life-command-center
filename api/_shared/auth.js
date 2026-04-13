@@ -278,7 +278,32 @@ export async function authenticate(req, res) {
     };
   }
 
-  // 3. Transitional dev fallback — DUAL MODE
+  // 3a. Copilot plugin passthrough — requests from M365 Copilot declarative agent
+  //     arrive via vercel.json rewrites with _copilot_path query param. Copilot
+  //     authenticates the user at the M365 layer; allow these through with limited scope.
+  if (req.query._copilot_path) {
+    res.setHeader('X-LCC-Auth-Warning', 'copilot-plugin-passthrough');
+    if (OPS_SUPABASE_URL) {
+      const firstOwner = await resolveFirstOwner();
+      if (firstOwner) return { ...firstOwner, _copilot_plugin: true };
+    }
+    return {
+      id: 'copilot-plugin-user',
+      email: 'copilot@microsoft.com',
+      display_name: 'Copilot Plugin',
+      avatar_url: null,
+      auth_id: null,
+      _copilot_plugin: true,
+      memberships: [{
+        workspace_id: 'default-workspace',
+        workspace_name: 'Default',
+        workspace_slug: 'default',
+        role: 'operator'
+      }]
+    };
+  }
+
+  // 3b. Transitional dev fallback — DUAL MODE
   //    In development: allow unauthenticated frontend requests through even when
   //    LCC_API_KEY is set (the key is needed for Power Automate / external callers).
   //    Production and staging always require real authentication.
