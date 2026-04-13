@@ -107,6 +107,28 @@ Browser → app.js/gov.js/dialysis.js
 - LCC provides: intake endpoints, chat API, sync endpoints
 - Copilot vision: entry point for Tier 1-2 actions via Teams/Outlook/Chat
 
+### Scheduled Jobs (Phase 5 — pg_cron)
+
+pg_cron (v1.6.4) runs on the LCC Opps Supabase project (`xengecqvemvfknjvbvrq`).
+HTTP jobs use the `lcc_cron_post()` helper function which reads `lcc_api_key` from
+Supabase Vault and calls endpoints via `pg_net`.
+
+| Job Name | Schedule (UTC) | Type | Target |
+|----------|---------------|------|--------|
+| `refresh-work-counts` | `*/5 * * * *` (every 5 min) | SQL | `refresh_work_counts()` — materialized view refresh |
+| `nightly-preassemble` | `0 7 * * *` (2:00 AM CT) | HTTP→Vercel | `/api/preassemble` — context cache warming |
+| `nightly-cross-domain-match` | `0 8 * * *` (3:00 AM CT) | HTTP→Vercel | `/api/cross-domain-match` — batch contact matching |
+| `daily-briefing-snapshot` | `0 10 * * *` (5:00 AM CT) | HTTP→Edge | `/daily-briefing` — daily briefing assembly |
+| `weekly-intelligence-report` | `0 11 * * 0` (6:00 AM CT Sun) | HTTP→Vercel | `/api/weekly-report` — weekly intelligence report |
+| `cleanup-cron-history` | `0 4 * * *` (11:00 PM CT) | SQL | Purge `cron.job_run_details` older than 7 days |
+
+**Key infrastructure:**
+- `lcc_cron_post(endpoint, body, target)` — SECURITY DEFINER function, reads API key from `vault.decrypted_secrets`
+- Vault secret `lcc_api_key` — must contain the same value as Vercel's `LCC_API_KEY` env var
+- `pg_net` extension handles async HTTP from within PostgreSQL
+
+**Monitoring:** `SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;`
+
 ---
 
 ## CRITICAL: Authentication & Environment Variables
