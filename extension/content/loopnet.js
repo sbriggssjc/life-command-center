@@ -347,7 +347,7 @@
     // Try to find the listing company for all brokers
     const brokerageEl = findTextElement('Brokerage', 'Listing Company',
                                         'Listed By', 'Company');
-    let brokerageName = brokerageEl?.textContent?.trim() || null;
+    let brokerageName = brokerageEl?.textContent?.replace(/\s+/g, ' ').trim() || null;
 
     // Also try extracting from "Presented by" text near the contacts section
     if (!brokerageName) {
@@ -356,7 +356,7 @@
       if (presentedBy) {
         const firmEl = presentedBy.nextElementSibling ||
                        presentedBy.parentElement?.querySelector('a, strong');
-        if (firmEl) brokerageName = firmEl.textContent.trim();
+        if (firmEl) brokerageName = firmEl.textContent.replace(/\s+/g, ' ').trim();
       }
     }
 
@@ -368,17 +368,21 @@
       const nameEl = item.querySelector(
         '[class*="name"], strong, a, h3, h4, [class*="agent-name"]'
       );
-      const name = nameEl?.textContent?.trim();
+      const name = nameEl?.textContent?.replace(/\s+/g, ' ').trim();
       if (!name || name.length < 3 || name.length > 80) continue;
       const phoneEl = item.querySelector('[href^="tel:"], [class*="phone"]');
       const emailEl = item.querySelector('[href^="mailto:"], [class*="email"]');
+      const phone = phoneEl?.textContent?.replace(/\s+/g, ' ').trim()
+                 || phoneEl?.href?.replace('tel:', '').replace(/\s+/g, '') || null;
+      const email = emailEl?.textContent?.replace(/\s+/g, '').trim()
+                 || emailEl?.href?.replace('mailto:', '').replace(/\s+/g, '') || null;
       contacts.push({
         role: 'listing_broker',
         type: 'person',
         name,
         company: brokerageName,
-        phone: phoneEl?.textContent?.trim() || phoneEl?.href?.replace('tel:', '') || null,
-        email: emailEl?.textContent?.trim() || emailEl?.href?.replace('mailto:', '') || null,
+        phone,
+        email,
       });
     }
 
@@ -389,7 +393,7 @@
         contacts.push({
           role: 'listing_broker',
           type: 'person',
-          name:    brokerNameEl.textContent.trim(),
+          name:    brokerNameEl.textContent.replace(/\s+/g, ' ').trim(),
           company: brokerageName,
         });
       }
