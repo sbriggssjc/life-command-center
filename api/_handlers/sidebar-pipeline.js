@@ -149,6 +149,19 @@ function stripNulls(obj) {
   return result;
 }
 
+/** Strip address prefix from tenant names (e.g. "309 Monroe Ave, Memphis, TN 38103 - SSA, Office of Disability" → "SSA, Office of Disability") */
+function cleanTenantValue(raw) {
+  if (!raw) return null;
+  const dashIdx = raw.indexOf(' - ');
+  if (dashIdx > 0) {
+    const prefix = raw.substring(0, dashIdx);
+    if (/^\d+\s+\w/.test(prefix) || /,\s*[A-Z]{2}\s+\d{5}/.test(prefix)) {
+      return raw.substring(dashIdx + 3).trim();
+    }
+  }
+  return raw;
+}
+
 /**
  * Wrapper around domainQuery for PATCH calls that surfaces silent failures
  * (column mismatches, CHECK constraint violations, etc.) in Vercel logs.
@@ -884,11 +897,13 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
 
-  const primaryTenant = [
-    metadata.tenants?.[0]?.name,
-    metadata.tenant_name,
-    metadata.primary_tenant,
-  ].find(t => t && t.length > 2 && !INVALID_TENANT_VALUES.test(t)) || null;
+  const primaryTenant = cleanTenantValue(
+    [
+      metadata.tenants?.[0]?.name,
+      metadata.tenant_name,
+      metadata.primary_tenant,
+    ].find(t => t && t.length > 2 && !INVALID_TENANT_VALUES.test(t)) || null
+  );
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 
   // Build property data from CoStar metadata — domain-aware field names.
@@ -1270,8 +1285,10 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
   const parsedSF = parseSF(metadata.square_footage);
-  const primaryTenant = metadata.tenants?.[0]?.name
-    || metadata.tenant_name || metadata.primary_tenant || null;
+  const primaryTenant = cleanTenantValue(
+    metadata.tenants?.[0]?.name
+    || metadata.tenant_name || metadata.primary_tenant || null
+  );
 
   let count = 0;
   for (const sale of sales) {

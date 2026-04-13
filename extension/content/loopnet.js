@@ -252,6 +252,19 @@
     return facts;
   }
 
+  /** Clean address-prefixed tenant names like "309 Monroe Ave, Memphis, TN 38103 - SSA, Office of Disability" */
+  function cleanTenantName(raw) {
+    if (!raw) return null;
+    const dashIdx = raw.indexOf(' - ');
+    if (dashIdx > 0) {
+      const prefix = raw.substring(0, dashIdx);
+      if (/^\d+\s+\w/.test(prefix) || /,\s*[A-Z]{2}\s+\d{5}/.test(prefix)) {
+        return raw.substring(dashIdx + 3).trim();
+      }
+    }
+    return raw.trim();
+  }
+
   /** 4. TENANT NAME — from listing title or Major Tenants data table only */
   function extractTenantName() {
     // Primary: listing title "DaVita Dialysis | Tulsa, OK"
@@ -268,7 +281,7 @@
             !/^\d/.test(candidate) &&
             !/https?:/.test(candidate) &&
             !/public\s+record|more\s+(public|information)|nearby|neighborhood|properties\s+in/i.test(candidate)) {
-          return candidate;
+          return cleanTenantName(candidate);
         }
       }
     }
@@ -281,7 +294,7 @@
       if (fromTitle.length > 2 && fromTitle.length < 80 &&
           !/loopnet|commercial|for\s+(sale|lease)/i.test(fromTitle)) {
         console.log('[LCC LoopNet] tenant from page title:', JSON.stringify(fromTitle));
-        return fromTitle;
+        return cleanTenantName(fromTitle);
       }
     }
 
@@ -302,7 +315,7 @@
         const t = el.textContent?.trim();
         if (!t || t.length < 2 || t.length > 80) continue;
         if (/nearby|neighborhood|office\s+properties|public\s+record|more\s+info|health\s+care|industry|sf\s+occupied|rent\/sf|lease\s+end/i.test(t)) continue;
-        if (!/^\d/.test(t)) return t;
+        if (!/^\d/.test(t)) return cleanTenantName(t);
       }
     }
     return null;
