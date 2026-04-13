@@ -1214,8 +1214,12 @@ function classifySaleType(sale) {
       raw.includes('vacant')) {
     return { transaction_type: 'Land Sale', exclude_from_market_metrics: true };
   }
+  if (/owner\s+user/.test(raw) || raw.includes('owner-user') ||
+      raw.includes('owner occupied') || raw.includes('user')) {
+    return { transaction_type: 'Owner-User', exclude_from_market_metrics: true };
+  }
   if (raw.includes('build-to-suit') || raw.includes('build to suit') ||
-      raw.includes('bts')) {
+      raw.includes('bts') || raw.includes('built to suit')) {
     return { transaction_type: 'Build-to-Suit', exclude_from_market_metrics: false };
   }
   if (raw.includes('portfolio')) {
