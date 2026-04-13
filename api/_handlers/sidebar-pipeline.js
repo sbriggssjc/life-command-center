@@ -2304,6 +2304,17 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
   // Helper: find or create a true_owner record
   async function ensureTrueOwner(owner, individualContacts) {
     if (!owner?.name) return null;
+
+    // Reject CoStar classification labels that slip in as contact entries
+    const CONTACT_LABEL_REJECT = /^(public|private|local|national|institutional|corporation|individual|other|buyer\s+contacts|seller\s+contacts|public\s+reit|user|managing\s+partner|country\s+of\s+origin|buyer\s+origin|seller\s+origin|buyer\s+type|seller\s+type|secondary\s+type|activity|sale\s+notes|documents|deed)$/i;
+
+    const cleanedContacts = individualContacts.filter(c =>
+      c.name &&
+      c.name.length > 3 &&
+      !CONTACT_LABEL_REJECT.test(c.name.trim()) &&
+      (c.name.includes(' ') || c.phones?.length || c.email)
+    );
+
     const normalized = owner.name.trim().toLowerCase()
       .replace(/\b(llc|inc|corp|ltd|lp|llp|co|company|group|partners)\b\.?/gi, '')
       .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -2346,8 +2357,8 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
     if (lookup.ok && lookup.data?.length) {
       return lookup.data[0].true_owner_id;
     }
-    const contact1 = individualContacts[0]?.name || null;
-    const contact2 = individualContacts[1]?.name || null;
+    const contact1 = cleanedContacts[0]?.name || null;
+    const contact2 = cleanedContacts[1]?.name || null;
     const trueOwnerData = stripNulls({
       name:              owner.name,
       normalized_name:   normalized,
