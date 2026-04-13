@@ -933,6 +933,9 @@ async function upsertDomainProperty(domain, entity, metadata) {
     // Update existing property
     const propertyId = lookup.data[0].property_id;
     await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
+    if (domain === 'government' && metadata.lease_number) {
+      await linkGsaLease(propertyId, metadata.lease_number);
+    }
     return propertyId;
   }
 
@@ -940,11 +943,56 @@ async function upsertDomainProperty(domain, entity, metadata) {
   const result = await domainQuery(domain, 'POST', 'properties', propertyData);
   if (result.ok && result.data) {
     const created = Array.isArray(result.data) ? result.data[0] : result.data;
-    return created?.property_id || null;
+    const newPropertyId = created?.property_id || null;
+    if (newPropertyId && domain === 'government' && metadata.lease_number) {
+      await linkGsaLease(newPropertyId, metadata.lease_number);
+    }
+    return newPropertyId;
   }
 
   console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
   return null;
+}
+
+/**
+ * Look up a GSA lease by lease_number and link it to the property, pulling in
+ * annual_rent, lease_expiration, sf_leased, agency, and government_type from
+ * the GSA IOLP data already in the database.
+ */
+async function linkGsaLease(propertyId, leaseNumber) {
+  if (!leaseNumber) return;
+
+  // Find the GSA lease record
+  const leaseLookup = await domainQuery('government', 'GET',
+    `gsa_leases?lease_number=eq.${encodeURIComponent(leaseNumber)}` +
+    `&select=lease_id,agency,agency_full_name,annual_rent,lease_expiration,` +
+    `sf_leased,government_type&limit=1`
+  );
+  if (!leaseLookup.ok || !leaseLookup.data?.length) {
+    console.log('[linkGsaLease] Lease not found in gsa_leases:', leaseNumber);
+    return;
+  }
+
+  const lease = leaseLookup.data[0];
+
+  // Link the GSA lease to the property and pull in lease data
+  await domainPatch('government',
+    `properties?property_id=eq.${propertyId}`,
+    {
+      linked_gsa_lease_id: lease.lease_id,
+      lease_number:        leaseNumber,
+      // Populate from GSA lease record if not already set
+      agency:              lease.agency || null,
+      agency_full_name:    lease.agency_full_name || null,
+      sf_leased:           lease.sf_leased || null,
+      gross_rent:          lease.annual_rent || null,
+      lease_expiration:    lease.lease_expiration || null,
+      government_type:     lease.government_type || null,
+    },
+    'linkGsaLease'
+  );
+
+  console.log('[linkGsaLease] Linked lease', leaseNumber, 'to property', propertyId);
 }
 
 /**
