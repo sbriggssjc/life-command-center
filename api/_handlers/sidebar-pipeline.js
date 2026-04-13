@@ -855,7 +855,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   const lookup = await domainQuery(domain, 'GET', lookupPath);
 
-  const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified)$/i;
+  const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
 
   const primaryTenant = [
     metadata.tenants?.[0]?.name,
@@ -2753,6 +2753,14 @@ async function upsertGovListings(propertyId, entity, metadata) {
     : null;
   const safeGovPricePsf = govPricePsf || computedGovPricePsf || null;
 
+  // Guard against section-header noise captured as tenant names (e.g. "Buyer")
+  const INVALID_TENANT = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
+  const tenantAgency = [
+    metadata.tenants?.[0]?.name,
+    metadata.tenant_name,
+    metadata.primary_tenant,
+  ].find(t => t && t.length > 2 && !INVALID_TENANT.test(t)) || null;
+
   const record = stripNulls({
     property_id: propertyId,
     listing_source: 'costar_sidebar',
@@ -2766,8 +2774,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
     listing_date: listingDate,
     listing_status: 'Active',
     days_on_market: parseIntSafe(metadata.days_on_market),
-    tenant_agency: metadata.tenant_name || metadata.primary_tenant
-      || metadata.tenants?.[0]?.name || null,
+    tenant_agency: tenantAgency,
     annual_rent: parseCurrency(metadata.annual_rent),
     lease_expiration: parseDate(metadata.lease_expiration)?.split('T')[0] || null,
     firm_term_remaining: firmTermRemaining,
