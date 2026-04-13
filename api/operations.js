@@ -778,12 +778,15 @@ async function executeReadAction(spec, params, user, workspaceId, req) {
 
   // Build headers to forward auth context
   const headers = { 'Content-Type': 'application/json' };
-  if (req?.headers?.['authorization']) headers['authorization'] = req.headers['authorization'];
-  if (req?.headers?.['x-lcc-key']) headers['x-lcc-key'] = req.headers['x-lcc-key'];
-  // Copilot plugin requests arrive without auth headers — inject the API key
-  // so internal sub-calls to entity-hub, queue, etc. pass auth.
-  if (!headers['authorization'] && !headers['x-lcc-key'] && process.env.LCC_API_KEY && user?._copilot_plugin) {
+  // Copilot plugin requests: always use the server's own API key for internal
+  // sub-calls. The connector may send a key via the connection, but the copilot
+  // passthrough in auth.js skips key validation — so the forwarded key may not
+  // match LCC_API_KEY. Using the server key guarantees internal calls pass auth.
+  if (user?._copilot_plugin && process.env.LCC_API_KEY) {
     headers['x-lcc-key'] = process.env.LCC_API_KEY;
+  } else {
+    if (req?.headers?.['authorization']) headers['authorization'] = req.headers['authorization'];
+    if (req?.headers?.['x-lcc-key']) headers['x-lcc-key'] = req.headers['x-lcc-key'];
   }
   if (workspaceId) headers['x-lcc-workspace'] = workspaceId;
 
