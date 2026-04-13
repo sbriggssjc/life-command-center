@@ -252,47 +252,45 @@
     return facts;
   }
 
-  /** 4. TENANT NAME — from listing title or Major Tenants section */
+  /** 4. TENANT NAME — from listing title or Major Tenants data table only */
   function extractTenantName() {
-    // Strategy 1: Listing title often has "DaVita Dialysis | Tulsa, OK"
+    // Primary: listing title "DaVita Dialysis | Tulsa, OK"
     const h1 = document.querySelector('h1');
     if (h1) {
-      const firstLine = h1.textContent.split('\n')[0].trim();
+      const firstLine = (h1.textContent.split('\n')[0] || '').trim();
       const pipeIdx = firstLine.indexOf('|');
       if (pipeIdx > 0) {
         const candidate = firstLine.substring(0, pipeIdx).trim();
-        // Must look like a tenant name — not a price, address, or URL
-        if (candidate.length > 3 &&
-            candidate.length < 60 &&
+        if (candidate.length > 2 &&
+            candidate.length < 80 &&
             !/^\d/.test(candidate) &&
             !/https?:/.test(candidate) &&
-            !/public\s+record/i.test(candidate)) {
+            !/public\s+record|more\s+(public|information)|nearby|neighborhood|properties\s+in/i.test(candidate)) {
           return candidate;
         }
       }
     }
 
-    // Strategy 2: Major Tenants section — but validate the anchor
-    const tenantSection = Array.from(document.querySelectorAll('h2,h3,h4,div'))
-      .find(el => /major\s+tenants/i.test(el.textContent?.trim() || ''));
-    if (tenantSection) {
-      const sibling = tenantSection.nextElementSibling;
-      if (sibling) {
-        const candidates = sibling.querySelectorAll(
-          'strong, [class*="tenant"], [class*="name"]'
-        );
-        for (const c of candidates) {
-          const t = c.textContent?.trim();
-          if (t && t.length > 2 && t.length < 80 &&
-              !/public\s+record/i.test(t) &&
-              !/more\s+information/i.test(t) &&
-              !/^\d+\s+\w+\s+(st|rd|ave|blvd|dr|ln|ct)/i.test(t)) {
-            return t;
-          }
-        }
+    // Secondary: look ONLY inside an element whose text is exactly
+    // "Major Tenants" for a non-link text value
+    const headers = document.querySelectorAll('h2, h3, h4');
+    for (const h of headers) {
+      if (!/^major\s+tenants$/i.test(h.textContent.trim())) continue;
+      // Walk the next sibling or parent's next sibling for tenant rows
+      let block = h.nextElementSibling ||
+                  h.parentElement?.nextElementSibling;
+      if (!block) continue;
+      // Reject blocks that are large sections (neighborhood content)
+      if (block.textContent.length > 500) continue;
+      // Look for a short non-link text that's a company name
+      const els = block.querySelectorAll('td, strong, [class*="tenant"]');
+      for (const el of els) {
+        const t = el.textContent?.trim();
+        if (!t || t.length < 2 || t.length > 80) continue;
+        if (/nearby|neighborhood|office\s+properties|public\s+record|more\s+info|health\s+care|industry|sf\s+occupied|rent\/sf|lease\s+end/i.test(t)) continue;
+        if (!/^\d/.test(t)) return t;
       }
     }
-
     return null;
   }
 
@@ -321,8 +319,11 @@
   /** 6. BROKERS / CONTACTS — from the Contacts section */
   function extractBrokers() {
     const contacts = [];
-    const contactSection = Array.from(document.querySelectorAll('h2,h3,h4,div'))
-      .find(el => /^contacts?$/i.test(el.textContent?.trim() || ''));
+    // Find the contacts section — take FIRST match only (LoopNet duplicates
+    // its DOM for desktop/mobile rendering)
+    const contactSection = Array.from(document.querySelectorAll(
+      'h2, h3, h4, [class*="contactSection"], [class*="contact-section"]'
+    )).find(el => /^contacts?$/i.test(el.textContent?.trim() || ''));
     if (!contactSection) return contacts;
 
     const block = contactSection.nextElementSibling ||
@@ -380,7 +381,31 @@
       }
     }
 
-    return contacts;
+    // Dedup by name and detect firm entries
+    const FIRM_PATTERN = /\b(LLC|Inc|Corp|Ltd|LP|LLP|Group|Partners|Associates|Advisors|Realty|Properties|Capital|Investments|Commercial|Retail|Real\s+Estate|Investment|Brokerage|CBRE|Colliers|Marcus|Cushman|JLL|Northmarq|Hanley|Marcus\s+&\s+Millichap|Trinity|Avison|Newmark|KW|Keller)\b/i;
+    const seen = new Set();
+    const deduped = [];
+    let firmName = null;
+
+    for (const c of contacts) {
+      // Detect firm entries
+      if (FIRM_PATTERN.test(c.name)) {
+        firmName = c.name;  // capture firm, don't add as person
+        continue;
+      }
+      if (seen.has(c.name.toLowerCase())) continue;
+      seen.add(c.name.toLowerCase());
+      deduped.push(c);
+    }
+
+    // Assign the firm to all people
+    if (firmName) {
+      for (const c of deduped) {
+        c.company = c.company || firmName;
+      }
+    }
+
+    return deduped;
   }
 
   /** 7. LAST SALE — sale history and listing metadata */
