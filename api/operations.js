@@ -1369,8 +1369,9 @@ function generateTeamsCard(params) {
 // ---------------------------------------------------------------------------
 
 async function handleDocumentAssembly(params, user, workspaceId) {
-  const { doc_type, entity_id, entity_name, title, additional_context } = params || {};
-  if (!doc_type) return { ok: false, error: 'doc_type is required. Options: bov, proposal, seller_report, comp_analysis, pursuit_summary' };
+  const { doc_type, document_type, entity_id, entity_name, title, additional_context, domain } = params || {};
+  const resolvedDocType = doc_type || document_type;
+  if (!resolvedDocType) return { ok: false, error: 'doc_type is required. Options: bov, proposal, seller_report, comp_analysis, pursuit_summary' };
 
   const graphToken = process.env.MS_GRAPH_TOKEN;
 
@@ -1424,15 +1425,15 @@ async function handleDocumentAssembly(params, user, workspaceId) {
     pursuit_summary: `Generate a one-page pursuit summary brief for this property/opportunity.\n\n${entityContext}${domainContext}\n${additional_context ? '\nAdditional Context: ' + additional_context : ''}\n\nStructure as a single concise page:\n1. **Opportunity** — what's the play?\n2. **Property** — key facts\n3. **Owner/Decision-Maker** — who to approach\n4. **Our Advantage** — why us\n5. **Risks** — what could go wrong\n6. **Next Action** — what to do this week\n\nKeep it tight — this is a quick-reference brief, not a full report.`
   };
 
-  const prompt = docPrompts[doc_type];
+  const prompt = docPrompts[resolvedDocType];
   if (!prompt) {
-    return { ok: false, error: `Unknown doc_type: ${doc_type}. Options: ${Object.keys(docPrompts).join(', ')}` };
+    return { ok: false, error: `Unknown doc_type: ${resolvedDocType}. Options: ${Object.keys(docPrompts).join(', ')}` };
   }
 
   // Generate document content via AI
   const result = await invokeChatProvider({
     message: prompt,
-    context: { assistant_feature: 'global_copilot', action: 'generate_document', doc_type },
+    context: { assistant_feature: 'global_copilot', action: 'generate_document', doc_type: resolvedDocType },
     history: [], attachments: [], user, workspaceId
   });
 
@@ -1443,7 +1444,7 @@ async function handleDocumentAssembly(params, user, workspaceId) {
 
   // Build HTML wrapper for Word-compatible document
   const entityLabel = entityData?.name || entity_name || 'Property';
-  const docTitle = title || `${doc_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} — ${entityLabel}`;
+  const docTitle = title || `${resolvedDocType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} — ${entityLabel}`;
   const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   const htmlDoc = `<!DOCTYPE html>
@@ -1458,7 +1459,7 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
   // Try to save to OneDrive if Graph token is available
   let savedFile = null;
   if (graphToken) {
-    const fileName = `${doc_type}_${entityLabel.replace(/[^a-zA-Z0-9]/g, '_')}_${dateStr.replace(/[^a-zA-Z0-9]/g, '_')}.html`;
+    const fileName = `${resolvedDocType}_${entityLabel.replace(/[^a-zA-Z0-9]/g, '_')}_${dateStr.replace(/[^a-zA-Z0-9]/g, '_')}.html`;
     const folderPath = 'LCC Documents';
 
     try {
@@ -1496,16 +1497,16 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
       user_id: user?.id,
       event_type: 'document_generated',
       source: 'copilot',
-      title: `Generated ${doc_type}: ${entityLabel}`,
+      title: `Generated ${resolvedDocType}: ${entityLabel}`,
       entity_id: entityData?.id || null,
-      metadata: { doc_type, saved_to_onedrive: !!savedFile, file_name: savedFile?.name }
+      metadata: { doc_type: resolvedDocType, saved_to_onedrive: !!savedFile, file_name: savedFile?.name }
     }).catch(() => {});
   }
 
   return {
     ok: true,
     action: 'generate_document',
-    doc_type,
+    doc_type: resolvedDocType,
     title: docTitle,
     entity: entityData ? { id: entityData.id, name: entityData.name } : null,
     response: content,
