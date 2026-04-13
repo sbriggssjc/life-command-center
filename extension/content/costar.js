@@ -344,7 +344,7 @@
       // Tenant name — appears as a label/value pair on property detail pages
       // e.g. "Tenant" label followed by "VA Madison East Clinic" or "DaVita..."
       // Reject CoStar section header labels that follow a "Tenant" label in page text.
-      const TENANT_REJECT = /^(public\s+record|building|land|market|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type)$/i;
+      const TENANT_REJECT = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score)$/i;
 
       if (!data.tenant_name && /^tenant\s*name?$/i.test(line) && next
           && next.length > 2 && next.length < 80
