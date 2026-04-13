@@ -738,6 +738,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   // Step 5b: Upsert sales transactions
   results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata);
 
+  // Step 5b0.5: Auto-stage gov comp to sf_comps_staging for Salesforce sync
+  if (domain === 'government' && results.records.sales > 0) {
+    await stageGovCompForSalesforce(propertyId, entity, metadata);
+  }
+
   // Step 5b1.5: Upsert available_listings
   if (domain === 'government') {
     results.records.listings = await upsertGovListings(propertyId, entity, metadata);
@@ -1323,6 +1328,44 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
   }
 
   return count;
+}
+
+// ── Auto-stage gov comp for Salesforce sync ─────────────────────────────────
+async function stageGovCompForSalesforce(propertyId, entity, metadata) {
+  // Check if already staged for this property + most recent sale date
+  const mostRecentSale = (metadata.sales_history || [])
+    .filter(s => s.sale_date)
+    .sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date))[0];
+  if (!mostRecentSale) return;
+
+  const saleDate = parseDate(mostRecentSale.sale_date)?.split('T')[0];
+  if (!saleDate) return;
+
+  // Check for existing staging row
+  const existing = await domainQuery('government', 'GET',
+    `sf_comps_staging?address=eq.${encodeURIComponent(entity.address || '')}` +
+    `&sale_date=eq.${saleDate}&select=id&limit=1`
+  );
+  if (existing.ok && existing.data?.length) return; // already staged
+
+  const buyerContact = (metadata.contacts || []).find(c => c.role === 'buyer');
+  const sellerContact = (metadata.contacts || []).find(c => c.role === 'seller');
+
+  await domainQuery('government', 'POST', 'sf_comps_staging', {
+    address:        entity.address || null,
+    city:           entity.city    || null,
+    state:          entity.state   || null,
+    sale_date:      saleDate,
+    sale_price:     parseCurrency(mostRecentSale.sale_price),
+    cap_rate:       parsePercent(mostRecentSale.cap_rate),
+    buyer_name:     buyerContact?.name || mostRecentSale.buyer || null,
+    seller_name:    sellerContact?.name || mostRecentSale.seller || null,
+    square_feet:    parseSF(metadata.square_footage),
+    property_id:    propertyId,
+    data_source:    'costar_sidebar',
+    sync_status:    'pending',
+    created_at:     new Date().toISOString(),
+  });
 }
 
 /**
