@@ -552,7 +552,7 @@
       "post": {
         "operationId": "TriageInboxItem",
         "summary": "Triage Inbox Item",
-        "description": "Updates the status and priority of an inbox item. Call this when the user wants to triage, prioritize, assign, or dismiss an inbox item.",
+        "description": "Updates the status and priority of an inbox item. Call this when the user wants to triage, prioritize, assign, or dismiss an inbox item. Requires an item ID — use ListStagedIntakeInbox first to find it.",
         "parameters": [
           {
             "in": "body",
@@ -560,16 +560,16 @@
             "required": true,
             "schema": {
               "type": "object",
-              "required": ["id", "status"],
+              "required": ["id"],
               "properties": {
                 "id": {
                   "type": "string",
-                  "description": "Inbox item ID",
+                  "description": "Inbox item UUID (use ListStagedIntakeInbox to find this)",
                   "x-ms-summary": "Item ID"
                 },
                 "status": {
                   "type": "string",
-                  "enum": ["triaged", "dismissed", "promoted", "deferred"],
+                  "enum": ["triaged", "dismissed", "snoozed"],
                   "description": "New status",
                   "x-ms-summary": "Status"
                 },
@@ -580,7 +580,7 @@
                 },
                 "assigned_to": {
                   "type": "string",
-                  "description": "User ID to assign to",
+                  "description": "User UUID to assign to",
                   "x-ms-summary": "Assign To"
                 },
                 "_confirmed": {
@@ -609,7 +609,7 @@
       "post": {
         "operationId": "UpdateExecutionTaskStatus",
         "summary": "Update Task Status",
-        "description": "Updates the status of an execution task or action item. Call this when the user wants to mark a task complete, in-progress, or update its status.",
+        "description": "Updates the status of an execution task or action item. Call this when the user wants to mark a task complete, in-progress, or update its status. Requires a task ID — use GetMyExecutionQueue first to find it.",
         "parameters": [
           {
             "in": "body",
@@ -621,19 +621,14 @@
               "properties": {
                 "id": {
                   "type": "string",
-                  "description": "Action/task ID",
+                  "description": "Action item UUID (use GetMyExecutionQueue to find this)",
                   "x-ms-summary": "Task ID"
                 },
                 "status": {
                   "type": "string",
-                  "enum": ["open", "in_progress", "completed", "deferred", "cancelled"],
+                  "enum": ["open", "in_progress", "blocked", "completed", "cancelled"],
                   "description": "New status",
                   "x-ms-summary": "Status"
-                },
-                "notes": {
-                  "type": "string",
-                  "description": "Status update notes",
-                  "x-ms-summary": "Notes"
                 },
                 "_confirmed": {
                   "type": "boolean",
@@ -661,7 +656,7 @@
       "post": {
         "operationId": "GenerateDocument",
         "summary": "Generate Document",
-        "description": "AI-generates a professional document — BOV, proposal, seller report, comp analysis, or pursuit summary. Call this when the user wants to create a document, report, or analysis for a property or deal.",
+        "description": "AI-generates a professional document — BOV, comp package, market report, or seller report for a property. Call this when the user wants to create a document, report, or analysis. Requires entity_id — use SearchEntities first.",
         "parameters": [
           {
             "in": "body",
@@ -669,33 +664,24 @@
             "required": true,
             "schema": {
               "type": "object",
-              "required": ["doc_type"],
+              "required": ["document_type", "entity_id"],
               "properties": {
-                "doc_type": {
+                "document_type": {
                   "type": "string",
-                  "enum": ["bov", "proposal", "seller_report", "comp_analysis", "pursuit_summary"],
+                  "enum": ["bov", "comp_package", "market_report", "seller_report"],
                   "description": "Type of document to generate",
                   "x-ms-summary": "Document Type"
                 },
                 "entity_id": {
                   "type": "string",
-                  "description": "Property or entity UUID",
+                  "description": "Property or entity UUID (use SearchEntities to find this)",
                   "x-ms-summary": "Entity ID"
                 },
-                "entity_name": {
+                "domain": {
                   "type": "string",
-                  "description": "Property or entity name for lookup",
-                  "x-ms-summary": "Entity Name"
-                },
-                "title": {
-                  "type": "string",
-                  "description": "Custom document title",
-                  "x-ms-summary": "Title"
-                },
-                "additional_context": {
-                  "type": "string",
-                  "description": "Extra instructions or context for the document",
-                  "x-ms-summary": "Additional Context"
+                  "enum": ["government", "dialysis"],
+                  "description": "Business domain",
+                  "x-ms-summary": "Domain"
                 },
                 "_confirmed": {
                   "type": "boolean",
