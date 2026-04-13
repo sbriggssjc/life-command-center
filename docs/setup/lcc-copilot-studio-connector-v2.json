@@ -397,7 +397,7 @@
       "post": {
         "operationId": "DraftSellerUpdateEmail",
         "summary": "Draft Seller Update Email",
-        "description": "AI-generates a seller update email for an active listing. Call this when the user wants to write a weekly seller update, listing status report, or client communication about a property.",
+        "description": "AI-generates a seller update email for an active listing. Call this when the user wants to write a weekly seller update, listing status report, or client communication about a property. Requires an entity_id — use SearchEntities first to find it.",
         "parameters": [
           {
             "in": "body",
@@ -405,10 +405,11 @@
             "required": true,
             "schema": {
               "type": "object",
+              "required": ["entity_id"],
               "properties": {
                 "entity_id": {
                   "type": "string",
-                  "description": "Listing entity UUID",
+                  "description": "Listing entity UUID (use SearchEntities to find this)",
                   "x-ms-summary": "Entity ID"
                 },
                 "entity_name": {
