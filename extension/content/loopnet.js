@@ -258,9 +258,11 @@
     const h1 = document.querySelector('h1');
     if (h1) {
       const firstLine = (h1.textContent.split('\n')[0] || '').trim();
+      console.log('[LCC LoopNet] h1 first line:', JSON.stringify(firstLine));
       const pipeIdx = firstLine.indexOf('|');
       if (pipeIdx > 0) {
         const candidate = firstLine.substring(0, pipeIdx).trim();
+        console.log('[LCC LoopNet] tenant candidate:', JSON.stringify(candidate));
         if (candidate.length > 2 &&
             candidate.length < 80 &&
             !/^\d/.test(candidate) &&
@@ -268,6 +270,18 @@
             !/public\s+record|more\s+(public|information)|nearby|neighborhood|properties\s+in/i.test(candidate)) {
           return candidate;
         }
+      }
+    }
+
+    // Additional fallback: try document.title which LoopNet sets to
+    // "{Tenant} | {Address} | LoopNet"
+    const titleParts = document.title.split('|');
+    if (titleParts.length >= 2) {
+      const fromTitle = titleParts[0].trim();
+      if (fromTitle.length > 2 && fromTitle.length < 80 &&
+          !/loopnet|commercial|for\s+(sale|lease)/i.test(fromTitle)) {
+        console.log('[LCC LoopNet] tenant from page title:', JSON.stringify(fromTitle));
+        return fromTitle;
       }
     }
 
