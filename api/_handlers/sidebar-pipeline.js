@@ -649,7 +649,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   results.property_id = propertyId;
 
   // Step 5b: Upsert sales transactions
-  results.records.sales = await upsertDomainSales(domain, propertyId, metadata);
+  results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata);
 
   // Step 5b1.5: Upsert available_listings
   if (domain === 'government') {
@@ -834,9 +834,13 @@ function classifySaleType(sale) {
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
  */
-async function upsertDomainSales(domain, propertyId, metadata) {
+async function upsertDomainSales(domain, propertyId, entity, metadata) {
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
+
+  const parsedSF = parseSF(metadata.square_footage);
+  const primaryTenant = metadata.tenants?.[0]?.name
+    || metadata.tenant_name || metadata.primary_tenant || null;
 
   let count = 0;
   for (const sale of sales) {
@@ -909,17 +913,28 @@ async function upsertDomainSales(domain, propertyId, metadata) {
 
     const domainSaleFields = domain === 'government'
       ? {
-          sold_cap_rate: capRateVal, buyer: buyerVal, seller: sellerVal, purchasing_broker: procuringBrokerVal,
-          guarantor: metadata.guarantor || null,
-          financing_type: sale.financing_type || null,
-          rent_escalations: metadata.rent_escalations || null,
-          renewal_options: metadata.renewal_options || null,
-          gross_rent: parseCurrency(metadata.annual_rent),
-          gross_rent_psf: parseCurrency(metadata.rent_per_sf),
-          comp_type: sale.comp_status || null,
-          transaction_type: sale.transaction_type || null,
-          days_on_market: parseIntSafe(metadata.days_on_market),
-          data_source: 'costar_sidebar',
+          sold_cap_rate:    capRateVal,
+          buyer:            buyerVal,
+          seller:           sellerVal,
+          purchasing_broker: procuringBrokerVal,
+          // v_sales_comps reads address/agency from sales_transactions
+          address:          entity.address || null,
+          city:             entity.city    || null,
+          state:            entity.state   || null,
+          agency:           primaryTenant  || null,
+          government_type:  metadata.government_type || null,
+          // Compute sold_price_psf when both price and SF are known
+          sold_price_psf:   (soldPrice && parsedSF && parsedSF > 0)
+                            ? Math.round(soldPrice / parsedSF * 100) / 100
+                            : null,
+          // Financing details from deed entry
+          financing_type:   sale.financing_type || sale.deed_type || null,
+          lender_name:      sale.lender_name    || null,
+          guarantor:        metadata.guarantor  || null,
+          gross_rent:       parseCurrency(metadata.annual_rent),
+          gross_rent_psf:   parseCurrency(metadata.rent_per_sf),
+          transaction_type: null,  // set below by classifySaleType
+          data_source:      'costar_sidebar',
         }
       : { cap_rate: capRateVal, buyer_name: buyerVal, seller_name: sellerVal, procuring_broker: procuringBrokerVal };
 
