@@ -1,0 +1,739 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Life Command Center",
+    "description": "CRE deal intelligence API for Team Briggs at Northmarq. Full bidirectional: read briefings, pipeline, contacts, and entities; draft emails and documents; create tasks and update deal status.",
+    "version": "2.0.0",
+    "contact": {
+      "name": "Scott Briggs",
+      "email": "sbriggssjc@gmail.com"
+    }
+  },
+  "host": "life-command-center-nine.vercel.app",
+  "basePath": "/",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "paths": {
+    "/api/copilot/portfolio/get-daily-briefing-snapshot": {
+      "post": {
+        "operationId": "GetDailyBriefing",
+        "summary": "Get Daily Briefing",
+        "description": "Returns today's prioritized daily briefing with strategic, important, and urgent items. Call this when the user asks what to focus on, wants a morning briefing, or asks about daily priorities.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "timeframe": {
+                  "type": "string",
+                  "description": "Time range for the briefing",
+                  "enum": ["today", "since_yesterday", "this_week"],
+                  "default": "today",
+                  "x-ms-summary": "Timeframe"
+                },
+                "domain": {
+                  "type": "string",
+                  "description": "Filter by business domain",
+                  "enum": ["government", "dialysis", "both"],
+                  "default": "both",
+                  "x-ms-summary": "Domain"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily briefing with prioritized items",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "snapshot": { "type": "object", "description": "Structured briefing data" },
+                "generated_at": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/portfolio/get-hot-business-contacts": {
+      "post": {
+        "operationId": "GetHotContacts",
+        "summary": "Get Hot Business Contacts",
+        "description": "Returns high-priority business development contacts with recent activity or upcoming touchpoints. Call this when the user asks who to call, wants prospecting targets, or asks about warm contacts.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "description": "Filter by business domain",
+                  "enum": ["government", "dialysis"],
+                  "x-ms-summary": "Domain"
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum contacts to return (1-50)",
+                  "default": 10,
+                  "x-ms-summary": "Limit"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hot contacts list",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "data": { "type": "object" },
+                "count": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/portfolio/search-entity-targets": {
+      "post": {
+        "operationId": "SearchEntities",
+        "summary": "Search Entities",
+        "description": "Search properties, contacts, or organizations by name. Call this when the user asks about a specific property, contact, or company.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["q"],
+              "properties": {
+                "q": {
+                  "type": "string",
+                  "description": "Search query — property, contact, or org name",
+                  "x-ms-summary": "Search Query"
+                },
+                "entity_type": {
+                  "type": "string",
+                  "enum": ["contact", "organization", "asset"],
+                  "x-ms-summary": "Entity Type"
+                },
+                "domain": {
+                  "type": "string",
+                  "enum": ["government", "dialysis"],
+                  "x-ms-summary": "Domain"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching entities",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "data": { "type": "object" },
+                "count": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/portfolio/get-pipeline-intelligence": {
+      "post": {
+        "operationId": "GetPipelineIntelligence",
+        "summary": "Get Pipeline Intelligence",
+        "description": "Returns deal pipeline health — velocity, conversion rates, bottleneck analysis. Call this when the user asks about pipeline, deals, what's stuck, or conversion rates.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": ["government", "dialysis", "both"],
+                  "default": "both",
+                  "x-ms-summary": "Domain"
+                },
+                "timeframe": {
+                  "type": "string",
+                  "enum": ["30d", "90d", "6m", "1y"],
+                  "default": "90d",
+                  "x-ms-summary": "Timeframe"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline metrics",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "pipeline": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/ops/get-work-counts": {
+      "post": {
+        "operationId": "GetWorkCounts",
+        "summary": "Get Work Counts",
+        "description": "Returns aggregate work counts — open actions, inbox items, overdue tasks. Call this when the user asks about workload, task counts, or what's overdue.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": ["government", "dialysis"],
+                  "x-ms-summary": "Domain"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Work counts",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "data": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/ops/get-my-execution-queue": {
+      "post": {
+        "operationId": "GetMyExecutionQueue",
+        "summary": "Get My Execution Queue",
+        "description": "Returns open action items sorted by due date. Call this when the user asks about their task queue, what's due, or what to work on next.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": ["government", "dialysis"],
+                  "x-ms-summary": "Domain"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Execution queue items",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "data": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/ops/list-staged-intake-inbox": {
+      "post": {
+        "operationId": "ListStagedIntakeInbox",
+        "summary": "List Staged Intake Inbox",
+        "description": "Returns flagged emails, Salesforce tasks, and system alerts awaiting triage. Call this when the user asks about their inbox, new items, or what needs triage.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string",
+                  "enum": ["government", "dialysis"],
+                  "x-ms-summary": "Domain"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inbox items",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "data": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/ops/get-sync-run-health": {
+      "post": {
+        "operationId": "GetSyncRunHealth",
+        "summary": "Get Sync Health",
+        "description": "Returns connector health for Salesforce, Outlook, and database syncs. Call this when the user asks if systems are syncing, data freshness, or sync errors.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync health status",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "data": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/outreach/draft-outreach-email": {
+      "post": {
+        "operationId": "DraftOutreachEmail",
+        "summary": "Draft Outreach Email",
+        "description": "AI-generates a personalized outreach email for a contact. Call this when the user wants to draft an email, reach out to someone, or write a prospecting message. Returns a draft for review — never sends automatically.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "contact_id": {
+                  "type": "string",
+                  "description": "Contact unified_id from LCC database",
+                  "x-ms-summary": "Contact ID"
+                },
+                "contact_name": {
+                  "type": "string",
+                  "description": "Contact name (used if contact_id not available)",
+                  "x-ms-summary": "Contact Name"
+                },
+                "intent": {
+                  "type": "string",
+                  "description": "Purpose: reconnect, listing pitch, market update, introduction, follow-up",
+                  "x-ms-summary": "Intent"
+                },
+                "tone": {
+                  "type": "string",
+                  "description": "Desired tone",
+                  "default": "professional, warm, and concise",
+                  "x-ms-summary": "Tone"
+                },
+                "_confirmed": {
+                  "type": "boolean",
+                  "description": "Must be true to execute write action",
+                  "default": true,
+                  "x-ms-summary": "Confirmed"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Draft email content for review",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "response": { "type": "string", "description": "Draft email text" },
+                "requires_review": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/outreach/draft-seller-update-email": {
+      "post": {
+        "operationId": "DraftSellerUpdateEmail",
+        "summary": "Draft Seller Update Email",
+        "description": "AI-generates a seller update email for an active listing. Call this when the user wants to write a weekly seller update, listing status report, or client communication about a property.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "entity_id": {
+                  "type": "string",
+                  "description": "Listing entity UUID",
+                  "x-ms-summary": "Entity ID"
+                },
+                "entity_name": {
+                  "type": "string",
+                  "description": "Property or listing name",
+                  "x-ms-summary": "Entity Name"
+                },
+                "listing_context": {
+                  "type": "string",
+                  "description": "Additional context about recent activity",
+                  "x-ms-summary": "Context"
+                },
+                "_confirmed": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-ms-summary": "Confirmed"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Draft seller update for review",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "response": { "type": "string", "description": "Draft email text" },
+                "requires_review": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/outreach/generate-prospecting-brief": {
+      "post": {
+        "operationId": "GenerateProspectingBrief",
+        "summary": "Generate Prospecting Brief",
+        "description": "AI-generates a prospecting brief with prioritized contacts and talking points. Call this when the user wants a call sheet, prospecting plan, or outreach priorities.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "description": "Number of contacts to include (1-25)",
+                  "default": 10,
+                  "x-ms-summary": "Limit"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prospecting brief with contacts and talking points",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "response": { "type": "string" },
+                "contacts": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/workflow/create-todo-task": {
+      "post": {
+        "operationId": "CreateTodoTask",
+        "summary": "Create To Do Task",
+        "description": "Creates a task in Microsoft To Do. Call this when the user wants to create a task, reminder, follow-up, or action item. The task is created immediately.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["title"],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Task title",
+                  "x-ms-summary": "Title"
+                },
+                "body": {
+                  "type": "string",
+                  "description": "Task notes or description",
+                  "x-ms-summary": "Body"
+                },
+                "due_date": {
+                  "type": "string",
+                  "description": "Due date in YYYY-MM-DD format",
+                  "x-ms-summary": "Due Date"
+                },
+                "importance": {
+                  "type": "string",
+                  "enum": ["low", "normal", "high"],
+                  "default": "normal",
+                  "x-ms-summary": "Importance"
+                },
+                "list_name": {
+                  "type": "string",
+                  "description": "Target To Do list name",
+                  "default": "Work",
+                  "x-ms-summary": "List Name"
+                },
+                "_confirmed": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-ms-summary": "Confirmed"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Created task details",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "task": { "type": "object", "description": "Created task with id, title, status, due, web_url" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/workflow/triage-inbox-item": {
+      "post": {
+        "operationId": "TriageInboxItem",
+        "summary": "Triage Inbox Item",
+        "description": "Updates the status and priority of an inbox item. Call this when the user wants to triage, prioritize, assign, or dismiss an inbox item.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["id", "status"],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Inbox item ID",
+                  "x-ms-summary": "Item ID"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["triaged", "dismissed", "promoted", "deferred"],
+                  "description": "New status",
+                  "x-ms-summary": "Status"
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": ["low", "normal", "high", "urgent"],
+                  "x-ms-summary": "Priority"
+                },
+                "assigned_to": {
+                  "type": "string",
+                  "description": "User ID to assign to",
+                  "x-ms-summary": "Assign To"
+                },
+                "_confirmed": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-ms-summary": "Confirmed"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated item status",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/workflow/update-execution-task-status": {
+      "post": {
+        "operationId": "UpdateExecutionTaskStatus",
+        "summary": "Update Task Status",
+        "description": "Updates the status of an execution task or action item. Call this when the user wants to mark a task complete, in-progress, or update its status.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["id", "status"],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Action/task ID",
+                  "x-ms-summary": "Task ID"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["open", "in_progress", "completed", "deferred", "cancelled"],
+                  "description": "New status",
+                  "x-ms-summary": "Status"
+                },
+                "notes": {
+                  "type": "string",
+                  "description": "Status update notes",
+                  "x-ms-summary": "Notes"
+                },
+                "_confirmed": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-ms-summary": "Confirmed"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated task",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/outreach/generate-document": {
+      "post": {
+        "operationId": "GenerateDocument",
+        "summary": "Generate Document",
+        "description": "AI-generates a professional document — BOV, proposal, seller report, comp analysis, or pursuit summary. Call this when the user wants to create a document, report, or analysis for a property or deal.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["doc_type"],
+              "properties": {
+                "doc_type": {
+                  "type": "string",
+                  "enum": ["bov", "proposal", "seller_report", "comp_analysis", "pursuit_summary"],
+                  "description": "Type of document to generate",
+                  "x-ms-summary": "Document Type"
+                },
+                "entity_id": {
+                  "type": "string",
+                  "description": "Property or entity UUID",
+                  "x-ms-summary": "Entity ID"
+                },
+                "entity_name": {
+                  "type": "string",
+                  "description": "Property or entity name for lookup",
+                  "x-ms-summary": "Entity Name"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Custom document title",
+                  "x-ms-summary": "Title"
+                },
+                "additional_context": {
+                  "type": "string",
+                  "description": "Extra instructions or context for the document",
+                  "x-ms-summary": "Additional Context"
+                },
+                "_confirmed": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-ms-summary": "Confirmed"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated document content",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ok": { "type": "boolean" },
+                "doc_type": { "type": "string" },
+                "title": { "type": "string" },
+                "response": { "type": "string", "description": "Document content" },
+                "saved_file": { "type": "string" },
+                "html_available": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "securityDefinitions": {
+    "api_key": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "X-LCC-Key"
+    }
+  },
+  "security": [
+    {
+      "api_key": []
+    }
+  ]
+}
