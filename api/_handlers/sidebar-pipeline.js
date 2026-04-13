@@ -109,11 +109,28 @@ function parseAcres(val) {
   return isNaN(num) ? null : num;
 }
 
-/** Parse parking ratio: "2.28/1,000 SF" → 2.28 */
-function parseParkingRatio(val) {
-  if (val == null) return null;
-  const match = String(val).match(/([\d.]+)/);
-  return match ? parseFloat(match[1]) : null;
+/** Parse lot SF: handles "2.49 AC" → acres-to-SF conversion, or standard SF parse */
+function parseLotSF(rawLotSize) {
+  if (!rawLotSize) return null;
+  // If value contains AC/Acres, convert to SF
+  const acMatch = String(rawLotSize).match(/([\d.]+)\s*AC/i);
+  if (acMatch) return Math.round(parseFloat(acMatch[1]) * 43560);
+  // Otherwise try standard SF parse
+  return parseSF(rawLotSize);
+}
+
+/** Parse parking ratio: "2.28/1,000 SF" → 2.28, "32 Spaces (5.82 Spaces per 1,000 SF)" → 5.82 */
+function parseParkingRatio(raw) {
+  if (!raw) return null;
+  // Prefer "X per 1,000 SF" ratio pattern
+  const ratioMatch = String(raw).match(/([\d.]+)\s*[Ss]paces?\s+per\s+1[,.]?000/);
+  if (ratioMatch) return parseFloat(ratioMatch[1]);
+  // Fall back to first number (e.g. "4.35/1,000 SF" from CoStar)
+  const perMatch = String(raw).match(/([\d.]+)\s*\/\s*1[,.]?000/);
+  if (perMatch) return parseFloat(perMatch[1]);
+  // Last resort: any decimal/integer
+  const numMatch = String(raw).match(/[\d.]+/);
+  return numMatch ? parseFloat(numMatch[0]) : null;
 }
 
 /** Safely parse integer: "2019" → 2019, "1" → 1 */
@@ -881,7 +898,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
     zoning: metadata.zoning || null,
     occupancy_percent: parsePercent(metadata.occupancy),
     parking_ratio: parseParkingRatio(metadata.parking),
-    lot_sf: parseSF(metadata.land_sf) || parseSF(metadata.lot_size),
+    lot_sf: parseLotSF(metadata.land_sf) || parseLotSF(metadata.lot_size),
     assessed_value: parseCurrency(metadata.assessed_value),
     is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
     property_ownership_type: metadata.ownership_type || null,
@@ -2660,6 +2677,9 @@ async function upsertDialysisListings(propertyId, metadata) {
       cap_rate: parsePercent(metadata.cap_rate),
       price_per_sf: safePricePsf,
     });
+    // Also update broker fields if currently empty
+    if (primaryBroker?.name)  patchData.listing_broker = primaryBroker.name;
+    if (primaryBroker?.email) patchData.broker_email   = primaryBroker.email;
     await domainPatch('dialysis',
       `available_listings?property_id=eq.${propertyId}&is_active=is.true`, patchData, 'upsertDialysisListings');
     return 1;
