@@ -12,7 +12,7 @@
                 "type": "None"
             },
             "spec": {
-                "url": "https://life-command-center-nine.vercel.app/api/copilot-spec"
+                "url": "openapi.json"
             }
         }
     ]
