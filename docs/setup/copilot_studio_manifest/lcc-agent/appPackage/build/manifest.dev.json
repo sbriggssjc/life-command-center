@@ -1,7 +1,7 @@
 {
     "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
     "manifestVersion": "1.19",
-    "version": "1.0.2",
+    "version": "1.0.5",
     "id": "b2a68aca-83a3-4644-b448-642691296f89",
     "developer": {
         "name": "Team Briggs - Northmarq",
