@@ -14,6 +14,43 @@ import {
   isAllowedTable, safeLimit, safeSelect, safeColumn
 } from './_shared/allowlist.js';
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
+import { opsQuery, pgFilterVal } from './_shared/ops-db.js';
+
+// ── Edge Function proxy (Phase 4a migration) ──
+const DATA_QUERY_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/data-query';
+
+async function proxyToDataQuery(req, res) {
+  const url = new URL(DATA_QUERY_EDGE_URL);
+  // Forward all query params except _route (Vercel-internal)
+  for (const [key, value] of Object.entries(req.query || {})) {
+    if (key !== '_route') url.searchParams.set(key, value);
+  }
+  // Map Vercel _route to edge function _route param for gov-write/gov-evidence
+  if (req.query._route === 'gov-write' || req.query._route === 'gov-evidence') {
+    url.searchParams.set('_route', req.query._route);
+  }
+  const headers = { 'Content-Type': 'application/json' };
+  const forwardHeaders = [
+    'x-lcc-workspace', 'x-lcc-key', 'x-pa-webhook-secret',
+    'x-lcc-user-id', 'x-lcc-user-email', 'authorization', 'prefer'
+  ];
+  for (const h of forwardHeaders) {
+    if (req.headers[h]) headers[h] = req.headers[h];
+  }
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers,
+      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(25000),
+    });
+    const data = await edgeRes.json();
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error('[data-proxy] Edge proxy failed, falling back to local:', err.message);
+    return null;
+  }
+}
 
 const SOURCE_CONFIG = {
   gov: {
@@ -208,6 +245,24 @@ async function handleGovEvidence(req, res, user) {
 }
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
+
+  // ── Edge proxy gate (Phase 4a) ──
+  try {
+    const wsId = req.headers['x-lcc-workspace'];
+    if (wsId) {
+      const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+      const wsConfig = wsResult.data?.[0]?.config || {};
+      const flags = wsConfig.feature_flags || {};
+      if (flags.edge_data_query) {
+        const proxyResult = await proxyToDataQuery(req, res);
+        if (proxyResult) return;
+        console.warn('[data-proxy] Edge proxy failed, falling back to local handler');
+      }
+    }
+  } catch (flagErr) {
+    console.error('[data-proxy] Flag check error:', flagErr.message);
+    // Fall through to local handler
+  }
 
   const user = await authenticate(req, res);
   if (!user) return;

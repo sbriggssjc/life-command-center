@@ -29,7 +29,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
-import { fetchWithTimeout, logPerfMetric, opsQuery, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { fetchWithTimeout, logPerfMetric, opsQuery, pgFilterVal, paginationParams, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ACTIVITY_CATEGORIES, buildTransitionActivity } from './_shared/lifecycle.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { writeListingCreatedSignal, writeSignal } from './_shared/signals.js';
@@ -60,6 +60,37 @@ function authenticateWebhook(req) {
     mismatch |= provided.charCodeAt(i) ^ PA_WEBHOOK_SECRET.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+// ── Edge Function Proxy for Lead Ingest ────────────────────────────────────
+const LEAD_INGEST_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/lead-ingest';
+
+async function proxyToLeadIngest(req, res, action) {
+  const url = new URL(LEAD_INGEST_EDGE_URL);
+  url.searchParams.set('action', action);
+
+  const headers = { 'Content-Type': 'application/json' };
+  const forwardHeaders = [
+    'x-lcc-workspace', 'x-lcc-key', 'x-pa-webhook-secret',
+    'x-lcc-user-id', 'x-lcc-user-email', 'authorization'
+  ];
+  for (const h of forwardHeaders) {
+    if (req.headers[h]) headers[h] = req.headers[h];
+  }
+
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers,
+      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(25000),
+    });
+    const data = await edgeRes.json();
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error('[edge-proxy] lead-ingest failed, falling back to local:', err.message);
+    return null;
+  }
 }
 
 /**
@@ -95,7 +126,23 @@ export default withErrorHandler(async function handler(req, res) {
   }
 
   // Dispatch to RCM ingest if routed via _route=rcm-ingest
+  // When edge_lead_ingest flag is enabled, proxy to Supabase Edge Function
   if (req.query._route === 'rcm-ingest') {
+    try {
+      const wsId = req.headers['x-lcc-workspace'];
+      if (wsId) {
+        const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+        const wsConfig = wsResult.data?.[0]?.config || {};
+        const flags = wsConfig.feature_flags || {};
+        if (flags.edge_lead_ingest) {
+          const proxyResult = await proxyToLeadIngest(req, res, 'rcm');
+          if (proxyResult) return;
+          console.warn('[rcm-proxy] Edge proxy failed, falling back to local handler');
+        }
+      }
+    } catch (err) {
+      console.warn('[rcm-proxy] Flag check failed, using local handler:', err.message);
+    }
     return handleRcmIngest(req, res);
   }
 
@@ -105,7 +152,23 @@ export default withErrorHandler(async function handler(req, res) {
   }
 
   // Dispatch to LoopNet ingest
+  // When edge_lead_ingest flag is enabled, proxy to Supabase Edge Function
   if (req.query._route === 'loopnet-ingest') {
+    try {
+      const wsId = req.headers['x-lcc-workspace'];
+      if (wsId) {
+        const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+        const wsConfig = wsResult.data?.[0]?.config || {};
+        const flags = wsConfig.feature_flags || {};
+        if (flags.edge_lead_ingest) {
+          const proxyResult = await proxyToLeadIngest(req, res, 'loopnet');
+          if (proxyResult) return;
+          console.warn('[loopnet-proxy] Edge proxy failed, falling back to local handler');
+        }
+      }
+    } catch (err) {
+      console.warn('[loopnet-proxy] Flag check failed, using local handler:', err.message);
+    }
     return handleLoopNetIngest(req, res);
   }
 

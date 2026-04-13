@@ -74,6 +74,50 @@ import {
 } from './_shared/lifecycle.js';
 
 // ============================================================================
+// EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
+// Used by feature flags to gradually migrate routes off Vercel
+// ============================================================================
+
+const EDGE_FUNCTION_BASE = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1';
+
+async function proxyToEdgeFunction(req, res, functionName) {
+  const url = new URL(`${EDGE_FUNCTION_BASE}/${functionName}`);
+
+  // Forward query params (except _route which is Vercel-internal)
+  for (const [key, value] of Object.entries(req.query || {})) {
+    if (key !== '_route') url.searchParams.set(key, value);
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+  // Forward auth-relevant headers
+  const forwardHeaders = [
+    'x-lcc-workspace', 'x-lcc-key', 'x-pa-webhook-secret',
+    'x-lcc-user-id', 'x-lcc-user-email', 'authorization'
+  ];
+  for (const h of forwardHeaders) {
+    if (req.headers[h]) headers[h] = req.headers[h];
+  }
+
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers,
+      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(25000), // 25s timeout (Vercel hobby = 30s)
+    });
+
+    const data = await edgeRes.json();
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error(`[edge-proxy] ${functionName} failed, falling back to local:`, err.message);
+    // Return null to signal caller should fall back to local handler
+    return null;
+  }
+}
+
+// ============================================================================
 // MAIN DISPATCHER
 // ============================================================================
 
@@ -82,17 +126,76 @@ export default withErrorHandler(async function handler(req, res) {
   if (requireOps(res)) return;
 
   // Chat route (via vercel.json _route=chat)
+  // When edge_copilot_chat flag is enabled, proxy chat messages & followup signals
+  // to Supabase Edge Function. copilot_action dispatch + GET spec/manifest stay local.
   if (req.query._route === 'chat') {
+    const isChatMessage = req.method === 'POST' && (req.body?.message || req.body?.copilot_followup);
+    if (isChatMessage) {
+      try {
+        const wsId = req.headers['x-lcc-workspace'];
+        if (wsId) {
+          const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+          const flags = wsResult.data?.[0]?.config?.feature_flags || {};
+          if (flags.edge_copilot_chat) {
+            const edgeAction = req.body?.copilot_followup ? 'followup' : 'chat';
+            const proxyResult = await proxyToEdgeFunction(req, res, `copilot-chat?action=${edgeAction}`);
+            if (proxyResult) return;
+            console.warn('[chat-proxy] Edge proxy failed, falling back to local handler');
+          }
+        }
+      } catch (err) {
+        console.warn('[chat-proxy] Flag check failed, using local handler:', err.message);
+      }
+    }
     return handleChatRoute(req, res);
   }
 
   // Template draft route (via vercel.json _route=draft)
+  // When edge_template_service flag is enabled, proxy to Supabase Edge Function.
+  // listing_bd action stays local (depends on listing-bd.js pipeline).
   if (req.query._route === 'draft') {
+    const isListingBd = req.method === 'POST' && req.query.action === 'listing_bd';
+    if (!isListingBd) {
+      try {
+        const wsId = req.headers['x-lcc-workspace'];
+        if (wsId) {
+          const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+          const flags = wsResult.data?.[0]?.config?.feature_flags || {};
+          if (flags.edge_template_service) {
+            // Map _route query params to edge function format
+            const edgeAction = req.query.action || (req.method === 'GET' ? null : 'generate');
+            const edgeUrl = edgeAction ? `template-service?action=${edgeAction}` : 'template-service';
+            const proxyResult = await proxyToEdgeFunction(req, res, edgeUrl);
+            if (proxyResult) return;
+            console.warn('[draft-proxy] Edge proxy failed, falling back to local handler');
+          }
+        }
+      } catch (err) {
+        console.warn('[draft-proxy] Flag check failed, using local handler:', err.message);
+      }
+    }
     return handleDraftRoute(req, res);
   }
 
   // Context broker route (via vercel.json _route=context)
+  // When edge_context_broker flag is enabled, proxy to Supabase Edge Function
   if (req.query._route === 'context') {
+    try {
+      const wsId = req.headers['x-lcc-workspace'];
+      if (wsId) {
+        const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+        const wsConfig = wsResult.data?.[0]?.config || {};
+        const flags = wsConfig.feature_flags || {};
+        if (flags.edge_context_broker) {
+          const proxyResult = await proxyToEdgeFunction(req, res, 'context-broker');
+          if (proxyResult) return; // proxy succeeded
+          // proxyResult === null means proxy failed, fall through to local
+          console.warn('[context-proxy] Edge proxy failed, falling back to local handler');
+        }
+      }
+    } catch (err) {
+      console.error('[context-proxy] Flag check failed, falling back to local:', err.message);
+    }
     return handleContextRoute(req, res);
   }
 

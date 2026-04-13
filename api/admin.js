@@ -35,6 +35,8 @@ const DEFAULT_FLAGS = {
   // When enabled, frontend routes requests to Supabase Edge Functions
   // instead of Vercel API endpoints. Disable to instantly roll back.
   edge_context_broker: false,     // Phase 1: Context Broker → Supabase Edge
+  edge_lead_ingest: false,        // Phase 2: RCM + LoopNet lead ingest → Supabase Edge
+  edge_intake_receiver: false,    // Phase 2: Outlook email intake → Supabase Edge
   edge_copilot_chat: false,       // Phase 3: Chat / Copilot → Supabase Edge
   edge_template_service: false,   // Phase 3: Template drafts → Supabase Edge
   edge_daily_briefing: false,     // Phase 4: Daily briefing → Supabase Edge

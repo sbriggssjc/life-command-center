@@ -12,11 +12,45 @@
 
 import { createHash } from 'crypto';
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
-import { opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+
+// ============================================================================
+// EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
+// ============================================================================
+
+const INTAKE_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/intake-receiver';
+
+async function proxyToIntakeReceiver(req, res, action) {
+  const url = new URL(INTAKE_EDGE_URL);
+  url.searchParams.set('action', action);
+
+  const headers = { 'Content-Type': 'application/json' };
+  const forwardHeaders = [
+    'x-lcc-workspace', 'x-lcc-key', 'x-pa-webhook-secret',
+    'x-lcc-user-id', 'x-lcc-user-email', 'authorization'
+  ];
+  for (const h of forwardHeaders) {
+    if (req.headers[h]) headers[h] = req.headers[h];
+  }
+
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers,
+      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(25000),
+    });
+    const data = await edgeRes.json();
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error('[edge-proxy] intake-receiver failed, falling back to local:', err.message);
+    return null;
+  }
+}
 
 // ============================================================================
 // ROUTE DISPATCHER
@@ -29,8 +63,25 @@ export default withErrorHandler(async function handler(req, res) {
   const route = req.query._route;
 
   switch (route) {
-    case 'outlook-message':
+    case 'outlook-message': {
+      // When edge_intake_receiver flag is enabled, proxy to Supabase Edge Function
+      try {
+        const wsId = req.headers['x-lcc-workspace'];
+        if (wsId) {
+          const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+          const wsConfig = wsResult.data?.[0]?.config || {};
+          const flags = wsConfig.feature_flags || {};
+          if (flags.edge_intake_receiver) {
+            const proxyResult = await proxyToIntakeReceiver(req, res, 'outlook-message');
+            if (proxyResult) return;
+            console.warn('[intake-proxy] Edge proxy failed, falling back to local handler');
+          }
+        }
+      } catch (err) {
+        console.warn('[intake-proxy] Flag check failed, using local handler:', err.message);
+      }
       return handleOutlookMessage(req, res);
+    }
     case 'summary':
       return handleIntakeSummary(req, res);
     default:

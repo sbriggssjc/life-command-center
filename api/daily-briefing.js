@@ -6,9 +6,40 @@
 // ============================================================================
 
 import { authenticate, handleCors } from './_shared/auth.js';
-import { fetchWithTimeout, opsQuery, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
+
+// ── Edge Function proxy (Phase 4a migration) ──
+const DAILY_BRIEFING_EDGE_URL = 'https://xengecqvemvfknjvbvrq.supabase.co/functions/v1/daily-briefing';
+
+async function proxyToDailyBriefing(req, res) {
+  const url = new URL(DAILY_BRIEFING_EDGE_URL);
+  // Forward all query params
+  for (const [key, value] of Object.entries(req.query || {})) {
+    url.searchParams.set(key, value);
+  }
+  const headers = { 'Content-Type': 'application/json' };
+  const forwardHeaders = [
+    'x-lcc-workspace', 'x-lcc-key', 'x-pa-webhook-secret',
+    'x-lcc-user-id', 'x-lcc-user-email', 'authorization', 'prefer'
+  ];
+  for (const h of forwardHeaders) {
+    if (req.headers[h]) headers[h] = req.headers[h];
+  }
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers,
+      signal: AbortSignal.timeout(30000),
+    });
+    const data = await edgeRes.json();
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error('[daily-briefing] Edge proxy failed, falling back to local:', err.message);
+    return null;
+  }
+}
 
 const MORNING_STRUCTURED_URL = process.env.MORNING_BRIEFING_STRUCTURED_URL || '';
 const MORNING_HTML_URL = process.env.MORNING_BRIEFING_HTML_URL || '';
@@ -1146,6 +1177,25 @@ async function writeBriefingPacket(userId, packetPayload) {
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
+
+  // ── Edge proxy gate (Phase 4a) ──
+  try {
+    const wsId = req.headers['x-lcc-workspace'];
+    if (wsId) {
+      const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
+      const wsConfig = wsResult.data?.[0]?.config || {};
+      const flags = wsConfig.feature_flags || {};
+      if (flags.edge_daily_briefing) {
+        const proxyResult = await proxyToDailyBriefing(req, res);
+        if (proxyResult) return;
+        console.warn('[daily-briefing] Edge proxy failed, falling back to local handler');
+      }
+    }
+  } catch (flagErr) {
+    console.error('[daily-briefing] Flag check error:', flagErr.message);
+    // Fall through to local handler
+  }
+
   if (requireOps(res)) return;
 
   if (req.method !== 'GET') {

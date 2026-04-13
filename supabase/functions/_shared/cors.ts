@@ -53,13 +53,15 @@ export function handleCors(req: Request): Response | null {
 export function jsonResponse(
   req: Request,
   body: unknown,
-  status = 200
+  status = 200,
+  extraHeaders?: Record<string, string>
 ): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       ...corsHeaders(req),
       "Content-Type": "application/json",
+      ...(extraHeaders || {}),
     },
   });
 }
