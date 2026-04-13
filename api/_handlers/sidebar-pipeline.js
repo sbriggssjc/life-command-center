@@ -635,6 +635,81 @@ async function propagateToDomainDb(entity, metadata, domain) {
   }
 }
 
+// ── Upsert sidebar contacts (brokers, true owner contacts → contacts table) ─
+
+async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
+  const contacts = metadata.contacts || [];
+  let count = 0;
+
+  // Roles that represent real individuals with contact info
+  const PERSON_ROLES = ['listing_broker', 'buyer_broker',
+    'true_buyer_contact', 'true_seller_contact'];
+
+  const people = contacts.filter(c =>
+    PERSON_ROLES.includes(c.role) &&
+    c.name &&
+    c.name.length > 2 &&
+    c.name.length < 80 &&
+    // Must have at least one contact detail
+    (c.email || c.phones?.length || c.phone)
+  );
+
+  for (const person of people) {
+    const email   = person.email || null;
+    const phone   = person.phones?.[0] || person.phone || null;
+    const company = person.company || null;
+
+    // Normalize name for dedup
+    const normName = person.name.trim().toLowerCase();
+
+    // Check if contact already exists by email (most reliable dedup key)
+    let existingId = null;
+    if (email) {
+      const emailLookup = await domainQuery(domain, 'GET',
+        `contacts?email=eq.${encodeURIComponent(email)}&select=id&limit=1`
+      );
+      if (emailLookup.ok && emailLookup.data?.length) {
+        existingId = emailLookup.data[0].id;
+      }
+    }
+
+    // Fall back to name dedup if no email match
+    if (!existingId) {
+      const nameLookup = await domainQuery(domain, 'GET',
+        `contacts?name=ilike.${encodeURIComponent(normName)}&select=id&limit=1`
+      );
+      if (nameLookup.ok && nameLookup.data?.length) {
+        existingId = nameLookup.data[0].id;
+      }
+    }
+
+    const contactData = {
+      name:        person.name.trim(),
+      email:       email,
+      phone:       phone,
+      company:     company,
+      title:       person.title || null,
+      role:        person.role,
+      data_source: 'costar_sidebar',
+    };
+
+    if (existingId) {
+      // Update with any new info
+      await domainPatch(domain,
+        `contacts?id=eq.${existingId}`,
+        { email: email || undefined, phone: phone || undefined,
+          company: company || undefined },
+        'upsertSidebarContacts:update'
+      );
+    } else {
+      const r = await domainQuery(domain, 'POST', 'contacts', contactData);
+      if (r.ok) count++;
+    }
+  }
+
+  return count;
+}
+
 // ── Domain DB propagation (direct PostgREST for both dialysis & government) ─
 
 async function propagateToDomainDbDirect(domain, entity, metadata) {
@@ -702,6 +777,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
 
   // Step 5e: Upsert leases (dialysis only — gov skipped for now)
   results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
+
+  // Step 5e2: Upsert named contacts (brokers, true owner contacts → CRM)
+  results.records.contacts = await upsertSidebarContacts(
+    domain, propertyId, entity, metadata
+  );
 
   // Step 5f: Auto-enqueue ownership research if true_owner still unknown (gov)
   if (domain === 'government') {
