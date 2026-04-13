@@ -41,18 +41,28 @@ function toErrorMessage(val) {
 // Render a concise human-readable summary of the pipeline_summary object
 // returned from the ingestion pipeline. Prevents raw JSON leaking into toasts.
 function formatPipelineSummary(summary) {
-  if (!summary || typeof summary !== 'object') return String(summary);
+  if (!summary || typeof summary !== 'object') return String(summary || '');
   const r = summary.domain_records || {};
   const parts = [];
-  if (r.sales > 0)      parts.push(r.sales + ' sale' + (r.sales > 1 ? 's' : ''));
-  if (r.leases > 0)     parts.push(r.leases + ' lease' + (r.leases > 1 ? 's' : ''));
-  if (r.loans > 0)      parts.push(r.loans + ' loan' + (r.loans > 1 ? 's' : ''));
-  if (r.owners > 0)     parts.push(r.owners + ' owner' + (r.owners > 1 ? 's' : ''));
-  if (r.listings > 0)   parts.push(r.listings + ' listing' + (r.listings > 1 ? 's' : ''));
-  if (r.brokers > 0)    parts.push(r.brokers + ' broker' + (r.brokers > 1 ? 's' : ''));
+  if (r.sales > 0)       parts.push(r.sales + ' sale' + (r.sales > 1 ? 's' : ''));
+  if (r.leases > 0)      parts.push(r.leases + ' lease' + (r.leases > 1 ? 's' : ''));
+  if (r.loans > 0)       parts.push(r.loans + ' loan' + (r.loans > 1 ? 's' : ''));
+  if (r.owners > 0)      parts.push(r.owners + ' owner' + (r.owners > 1 ? 's' : ''));
+  if (r.listings > 0)    parts.push(r.listings + ' listing' + (r.listings > 1 ? 's' : ''));
+  if (r.brokers > 0)     parts.push(r.brokers + ' broker' + (r.brokers > 1 ? 's' : ''));
   if (r.deed_records > 0) parts.push(r.deed_records + ' deed' + (r.deed_records > 1 ? 's' : ''));
-  const domain = summary.domain || '';
-  const base = '→ ' + (domain ? domain.charAt(0).toUpperCase() + domain.slice(1) + ' DB: ' : '');
+  if (r.true_owners > 0)  parts.push(r.true_owners + ' true owner' + (r.true_owners > 1 ? 's' : ''));
+  if (r.contacts > 0)     parts.push(r.contacts + ' contact' + (r.contacts > 1 ? 's' : ''));
+
+  // Fix domain label — must match exactly what the pipeline sets
+  const PIPELINE_DOMAIN_LABELS = {
+    'dialysis':   'Dialysis DB',
+    'government': 'Government DB',
+    'net_lease':  'Net Lease DB',
+  };
+  const domainLabel = PIPELINE_DOMAIN_LABELS[summary.domain] || summary.domain || '';
+  const base = '→ ' + (domainLabel ? domainLabel + ': ' : '');
+
   return parts.length
     ? base + parts.join(', ')
     : base + 'no new records (all deduped)';
