@@ -648,6 +648,13 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   }
   results.property_id = propertyId;
 
+  // Step 5a1: Link property to government agency tenant (gov only)
+  if (domain === 'government') {
+    results.records.property_agencies = await upsertPropertyAgency(
+      propertyId, metadata
+    );
+  }
+
   // Step 5a2: Upsert public records (parcel + tax from CoStar sidebar)
   results.records.public_records = await upsertPublicRecords(
     domain, propertyId, entity, metadata
@@ -810,6 +817,58 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
   return null;
+}
+
+/**
+ * Link a property to its government agency tenant in the property_agencies
+ * junction table (government domain only, 43k rows).
+ *
+ * Schema (from information_schema):
+ *   property_agency_id (uuid PK), property_id (bigint), agency_id (uuid),
+ *   agency_code (text), government_type (text), sf_occupied (int),
+ *   occupancy_pct (numeric), is_primary_tenant (bool), lease_number (text),
+ *   lease_commencement (date), lease_expiration (date), annual_rent (numeric),
+ *   rent_psf (numeric), status (text), move_in_date (date), move_out_date (date),
+ *   data_source (text), notes (text), created_at (timestamptz), updated_at (timestamptz)
+ *
+ * government_agencies uses `full_name` (not `name`) for the agency display name.
+ */
+async function upsertPropertyAgency(propertyId, metadata) {
+  const agencyName = metadata.tenants?.[0]?.name
+    || metadata.tenant_name
+    || metadata.primary_tenant
+    || null;
+  if (!agencyName) return 0;
+
+  // Look up the agency in government_agencies by full_name
+  const agencyLookup = await domainQuery('government', 'GET',
+    `government_agencies?full_name=ilike.*${encodeURIComponent(agencyName)}*&select=agency_id,code,government_type&limit=1`
+  );
+  const agency = agencyLookup.ok && agencyLookup.data?.length
+    ? agencyLookup.data[0] : null;
+
+  if (!agency) {
+    // Agency not in master list — skip for now (don't create unknown agencies)
+    console.log('[upsertPropertyAgency] Agency not found in master list:', agencyName);
+    return 0;
+  }
+
+  // Check existing link
+  const existing = await domainQuery('government', 'GET',
+    `property_agencies?property_id=eq.${propertyId}&agency_id=eq.${agency.agency_id}&select=property_agency_id&limit=1`
+  );
+  if (existing.ok && existing.data?.length) return 0; // already linked
+
+  // Create junction record
+  const r = await domainQuery('government', 'POST', 'property_agencies', {
+    property_id:     propertyId,
+    agency_id:       agency.agency_id,
+    agency_code:     agency.code || null,
+    government_type: agency.government_type || null,
+    is_primary_tenant: true,
+    data_source:     'costar_sidebar',
+  });
+  return r.ok ? 1 : 0;
 }
 
 /**
