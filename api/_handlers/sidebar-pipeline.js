@@ -162,6 +162,33 @@ function cleanTenantValue(raw) {
   return raw;
 }
 
+// ── Primary tenant priority selectors ──────────────────────────────────────
+// Multi-tenant properties list tenants by SF (largest first). For domain
+// pipelines the most *relevant* tenant matters more than the largest:
+//   - Dialysis: prefer medical/dialysis tenants (e.g. Fresenius over Dollar Tree)
+//   - Government: prefer government agency tenants (e.g. SSA over anchor store)
+
+const MEDICAL_TENANT_PRIORITY = /fresenius|davita|dialysis|fmc|dci\b|kidney|renal|nephrology|satellite|healthcare|medical|clinic|health\s+care/i;
+
+const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government/i;
+
+/**
+ * Select the most domain-relevant tenant from metadata.tenants[].
+ * Falls back to metadata.tenant_name / metadata.primary_tenant when no
+ * tenants array is present, and to tenants[0] when no priority match.
+ */
+function selectPrimaryTenant(metadata, domain) {
+  const tenants = metadata.tenants || [];
+  if (tenants.length === 0) {
+    return metadata.tenant_name || metadata.primary_tenant || null;
+  }
+  const priorityRe = domain === 'government' ? GOV_TENANT_PRIORITY : MEDICAL_TENANT_PRIORITY;
+  const match = tenants.find(t => t.name && priorityRe.test(t.name));
+  if (match) return match.name;
+  // Fall back to first (largest by SF) tenant
+  return tenants[0]?.name || metadata.tenant_name || null;
+}
+
 /**
  * Wrapper around domainQuery for PATCH calls that surfaces silent failures
  * (column mismatches, CHECK constraint violations, etc.) in Vercel logs.
@@ -897,13 +924,10 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   const INVALID_TENANT_VALUES = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score)$/i;
 
-  const primaryTenant = cleanTenantValue(
-    [
-      metadata.tenants?.[0]?.name,
-      metadata.tenant_name,
-      metadata.primary_tenant,
-    ].find(t => t && t.length > 2 && !INVALID_TENANT_VALUES.test(t)) || null
-  );
+  const rawTenant = selectPrimaryTenant(metadata, domain);
+  const primaryTenant = (rawTenant && rawTenant.length > 2 && !INVALID_TENANT_VALUES.test(rawTenant))
+    ? cleanTenantValue(rawTenant)
+    : null;
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 
   // Build property data from CoStar metadata — domain-aware field names.
@@ -1285,10 +1309,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
   const parsedSF = parseSF(metadata.square_footage);
-  const primaryTenant = cleanTenantValue(
-    metadata.tenants?.[0]?.name
-    || metadata.tenant_name || metadata.primary_tenant || null
-  );
+  const primaryTenant = cleanTenantValue(selectPrimaryTenant(metadata, domain));
 
   let count = 0;
   for (const sale of sales) {
