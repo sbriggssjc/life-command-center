@@ -63,6 +63,7 @@ import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
+import { buildTeamContextWithSales, getTrackRecordSummary } from './_shared/team-context.js';
 import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -1964,6 +1965,98 @@ function formatForOutlookDigest(actionId, result) {
 // TEMPLATE DRAFT ENGINE — /api/draft → operations?_route=draft
 // ============================================================================
 
+/**
+ * Auto-enrich a draft context object with server-side variables that
+ * the caller shouldn't need to build manually:
+ *
+ *  - team.credentials_summary  — domain-specific track record paragraph
+ *  - team.signature            — Scott's signature block
+ *  - comp_highlights           — formatted recent sales table from domain DB
+ *  - quarter_year              — current quarter label (e.g., "Q2 2026")
+ *
+ * Variables already present in the context are NOT overwritten, so the
+ * caller can always override any auto-enriched value.
+ */
+async function enrichDraftContext(context) {
+  const enriched = { ...context };
+
+  // Resolve domain from property or top-level
+  const domain = enriched.property?.domain || enriched.domain || null;
+
+  // --- team.credentials_summary ---
+  if (!enriched.team?.credentials_summary && domain) {
+    enriched.team = enriched.team || {};
+    enriched.team.credentials_summary = getTrackRecordSummary(domain);
+  }
+
+  // --- team.signature ---
+  if (!enriched.team?.signature) {
+    enriched.team = enriched.team || {};
+    enriched.team.signature = [
+      'Scott Briggs',
+      'Senior Vice President | Northmarq',
+      'sabriggs@northmarq.com',
+      'Specializing in Government-Leased & Healthcare Net Lease Investment Sales'
+    ].join('\n');
+  }
+
+  // --- comp_highlights (recent sales from domain DB) ---
+  if (!enriched.comp_highlights && domain) {
+    try {
+      const state = enriched.property?.state || null;
+      const teamCtx = await buildTeamContextWithSales(domain, {
+        limit: 5,
+        state // prefer comps in same state as property
+      });
+      if (teamCtx.recent_sales_table) {
+        enriched.comp_highlights = teamCtx.recent_sales_table;
+      } else if (state) {
+        // Retry without state filter if no same-state comps found
+        const fallback = await buildTeamContextWithSales(domain, { limit: 5 });
+        if (fallback.recent_sales_table) {
+          enriched.comp_highlights = fallback.recent_sales_table;
+        }
+      }
+    } catch (err) {
+      console.warn('[enrichDraftContext] comp_highlights fetch failed:', err.message);
+    }
+  }
+
+  // --- property.domain_label (display-friendly domain name) ---
+  if (enriched.property && !enriched.property.domain_label && domain) {
+    const labels = { government: 'Government-Leased', dialysis: 'Net Lease Medical/Dialysis' };
+    enriched.property.domain_label = labels[domain] || domain;
+  }
+
+  // --- quarter_year ---
+  if (!enriched.quarter_year) {
+    const now = new Date();
+    const q = Math.ceil((now.getMonth() + 1) / 3);
+    enriched.quarter_year = `Q${q} ${now.getFullYear()}`;
+  }
+
+  // --- is_standard_touch (inverse of is_final_touch for T-002 rendering) ---
+  // The template engine can't nest if/else blocks, so T-002 uses two separate
+  // {{#if}} blocks: is_final_touch for Touch 7, is_standard_touch for Touches 2-6.
+  if (!enriched.is_standard_touch && !enriched.is_final_touch) {
+    enriched.is_standard_touch = 'true';
+  }
+
+  // --- T-003 mode flags (mutually exclusive) ---
+  // is_inbound_request: someone asked for the report
+  // is_outbound_anchored: proactive send to a known owner (has property.tenant)
+  // is_mass_broadcast: quarterly blast with no specific property anchor
+  if (!enriched.is_inbound_request && !enriched.is_outbound_anchored && !enriched.is_mass_broadcast) {
+    if (enriched.property?.tenant) {
+      enriched.is_outbound_anchored = 'true';
+    } else {
+      enriched.is_mass_broadcast = 'true';
+    }
+  }
+
+  return enriched;
+}
+
 async function handleDraftRoute(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
@@ -1996,7 +2089,10 @@ async function handleDraftRoute(req, res) {
         return res.status(400).json({ error: 'context object is required (merged packet payload)' });
       }
 
-      const result = await generateDraft(template_id, context, { strict: !!strict });
+      // Auto-enrich context with team variables if not already provided
+      const enrichedContext = await enrichDraftContext(context);
+
+      const result = await generateDraft(template_id, enrichedContext, { strict: !!strict });
       if (!result.ok) {
         return res.status(422).json(result);
       }
@@ -2011,7 +2107,10 @@ async function handleDraftRoute(req, res) {
         return res.status(400).json({ error: 'contacts array is required and must not be empty' });
       }
 
-      const result = await generateBatchDrafts(template_id, contacts, shared_context || {}, { strict: !!strict });
+      // Auto-enrich shared context with team variables
+      const enrichedShared = await enrichDraftContext(shared_context || {});
+
+      const result = await generateBatchDrafts(template_id, contacts, enrichedShared, { strict: !!strict });
       return res.status(200).json(result);
     }
 

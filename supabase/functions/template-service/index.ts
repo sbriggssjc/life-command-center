@@ -45,27 +45,78 @@ function isPresent(value: unknown): boolean {
 
 function renderTemplate(template: string, context: Record<string, unknown>): string {
   if (!template) return "";
-  let output = template;
 
-  // Pass 1: {{#if var}}...{{else}}...{{/if}}
-  output = output.replace(
-    /\{\{#if\s+([\w.]+)\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g,
-    (_, path, ifBlock, elseBlock) => {
-      const value = resolvePath(path, context);
-      return isPresent(value) ? ifBlock : elseBlock;
+  // Recursive resolver that handles nested {{#if}}...{{else}}...{{/if}} blocks
+  // by finding balanced tag pairs instead of using simple regex.
+  function resolveConditionals(text: string): string {
+    let result = "";
+    let i = 0;
+
+    while (i < text.length) {
+      const ifStart = text.indexOf("{{#if ", i);
+      if (ifStart === -1) { result += text.slice(i); break; }
+
+      result += text.slice(i, ifStart);
+
+      const pathEnd = text.indexOf("}}", ifStart);
+      if (pathEnd === -1) { result += text.slice(ifStart); break; }
+      const path = text.slice(ifStart + 6, pathEnd).trim();
+      const bodyStart = pathEnd + 2;
+
+      // Find matching {{/if}} by counting nesting depth
+      let depth = 1;
+      let pos = bodyStart;
+      let elsePos = -1;
+
+      while (pos < text.length && depth > 0) {
+        const nextIf = text.indexOf("{{#if ", pos);
+        const nextEndIf = text.indexOf("{{/if}}", pos);
+        const nextElse = text.indexOf("{{else}}", pos);
+
+        const candidates: { type: string; pos: number }[] = [];
+        if (nextIf !== -1) candidates.push({ type: "if", pos: nextIf });
+        if (nextEndIf !== -1) candidates.push({ type: "endif", pos: nextEndIf });
+        if (nextElse !== -1 && depth === 1) candidates.push({ type: "else", pos: nextElse });
+        if (candidates.length === 0) break;
+
+        candidates.sort((a, b) => a.pos - b.pos);
+        const next = candidates[0];
+
+        if (next.type === "if") {
+          depth++;
+          pos = next.pos + 6;
+        } else if (next.type === "endif") {
+          depth--;
+          if (depth === 0) {
+            const value = resolvePath(path, context);
+            if (elsePos !== -1) {
+              const ifBlock = text.slice(bodyStart, elsePos);
+              const elseBlock = text.slice(elsePos + 8, next.pos);
+              result += isPresent(value)
+                ? resolveConditionals(ifBlock)
+                : resolveConditionals(elseBlock);
+            } else {
+              result += isPresent(value) ? resolveConditionals(text.slice(bodyStart, next.pos)) : "";
+            }
+            pos = next.pos + 7;
+          } else {
+            pos = next.pos + 7;
+          }
+        } else if (next.type === "else") {
+          elsePos = next.pos;
+          pos = next.pos + 8;
+        }
+      }
+
+      i = pos;
     }
-  );
 
-  // Pass 2: {{#if var}}...{{/if}}
-  output = output.replace(
-    /\{\{#if\s+([\w.]+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
-    (_, path, block) => {
-      const value = resolvePath(path, context);
-      return isPresent(value) ? block : "";
-    }
-  );
+    return result;
+  }
 
-  // Pass 3: {{variable.path}}
+  let output = resolveConditionals(template);
+
+  // Replace {{variable.path}} with resolved values
   output = output.replace(
     /\{\{([\w.]+)\}\}/g,
     (_, path) => {
