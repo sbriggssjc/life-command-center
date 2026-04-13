@@ -648,6 +648,18 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   }
   results.property_id = propertyId;
 
+  // Step 5a1: Link property to government agency tenant (gov only)
+  if (domain === 'government') {
+    results.records.property_agencies = await upsertPropertyAgency(
+      propertyId, metadata
+    );
+  }
+
+  // Step 5a2: Upsert public records (parcel + tax from CoStar sidebar)
+  results.records.public_records = await upsertPublicRecords(
+    domain, propertyId, entity, metadata
+  );
+
   // Step 5b: Upsert sales transactions
   results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata);
 
@@ -805,6 +817,218 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
   return null;
+}
+
+/**
+ * Link a property to its government agency tenant in the property_agencies
+ * junction table (government domain only, 43k rows).
+ *
+ * Schema (from information_schema):
+ *   property_agency_id (uuid PK), property_id (bigint), agency_id (uuid),
+ *   agency_code (text), government_type (text), sf_occupied (int),
+ *   occupancy_pct (numeric), is_primary_tenant (bool), lease_number (text),
+ *   lease_commencement (date), lease_expiration (date), annual_rent (numeric),
+ *   rent_psf (numeric), status (text), move_in_date (date), move_out_date (date),
+ *   data_source (text), notes (text), created_at (timestamptz), updated_at (timestamptz)
+ *
+ * government_agencies uses `full_name` (not `name`) for the agency display name.
+ */
+async function upsertPropertyAgency(propertyId, metadata) {
+  const agencyName = metadata.tenants?.[0]?.name
+    || metadata.tenant_name
+    || metadata.primary_tenant
+    || null;
+  if (!agencyName) return 0;
+
+  // Look up the agency in government_agencies by full_name
+  const agencyLookup = await domainQuery('government', 'GET',
+    `government_agencies?full_name=ilike.*${encodeURIComponent(agencyName)}*&select=agency_id,code,government_type&limit=1`
+  );
+  const agency = agencyLookup.ok && agencyLookup.data?.length
+    ? agencyLookup.data[0] : null;
+
+  if (!agency) {
+    // Agency not in master list — skip for now (don't create unknown agencies)
+    console.log('[upsertPropertyAgency] Agency not found in master list:', agencyName);
+    return 0;
+  }
+
+  // Check existing link
+  const existing = await domainQuery('government', 'GET',
+    `property_agencies?property_id=eq.${propertyId}&agency_id=eq.${agency.agency_id}&select=property_agency_id&limit=1`
+  );
+  if (existing.ok && existing.data?.length) return 0; // already linked
+
+  // Create junction record
+  const r = await domainQuery('government', 'POST', 'property_agencies', {
+    property_id:     propertyId,
+    agency_id:       agency.agency_id,
+    agency_code:     agency.code || null,
+    government_type: agency.government_type || null,
+    is_primary_tenant: true,
+    data_source:     'costar_sidebar',
+  });
+  return r.ok ? 1 : 0;
+}
+
+/**
+ * Upsert parcel_records and tax_records from CoStar Public Records section.
+ * Writes APN, land value, and improvement value into both domain databases.
+ *
+ * Schema notes (from information_schema):
+ *   Dialysis parcel_records: id (uuid PK), apn, county, state, assessed_value,
+ *       data_hash (NOT NULL)
+ *   Dialysis tax_records: id (uuid PK), apn, county, state, tax_year,
+ *       assessed_value, data_hash (NOT NULL)
+ *   Gov parcel_records: parcel_id (uuid PK), apn, county (NOT NULL),
+ *       state_code (NOT NULL), land_value, improvement_value,
+ *       total_assessed_value, assessment_year, data_hash
+ *   Gov tax_records: tax_record_id (uuid PK), parcel_id (uuid FK),
+ *       county (NOT NULL), state_code (NOT NULL), tax_year (NOT NULL),
+ *       assessed_value, data_hash
+ */
+async function upsertPublicRecords(domain, propertyId, entity, metadata) {
+  if (!metadata.parcel_number) return 0;
+  let count = 0;
+
+  const apn       = metadata.parcel_number;
+  const county    = metadata.county || entity.county || null;
+  const landVal   = parseCurrency(metadata.land_value);
+  const impVal    = parseCurrency(metadata.improvement_value);
+  const assessed  = parseCurrency(metadata.assessed_value)
+                    || (landVal && impVal ? landVal + impVal : null);
+  const taxYear   = new Date().getFullYear();
+
+  // ── parcel_records ──────────────────────────────────────────────────────
+  if (domain === 'dialysis') {
+    const parcelHash = Buffer.from(`parcel|${apn}|${entity.state || ''}`).toString('base64');
+    const parcelLookup = await domainQuery('dialysis', 'GET',
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=id&limit=1`
+    );
+    if (!parcelLookup.ok || !parcelLookup.data?.length) {
+      const parcelData = stripNulls({
+        apn,
+        county,
+        state:          entity.state || null,
+        assessed_value: assessed,
+        raw_payload:    { source: 'costar_sidebar', property_id: propertyId },
+        fetched_at:     metadata.extracted_at || new Date().toISOString(),
+        data_hash:      parcelHash,
+      });
+      parcelData.data_hash = parcelHash;  // NOT NULL — ensure present after stripNulls
+      const r = await domainQuery('dialysis', 'POST', 'parcel_records', parcelData);
+      if (r.ok) count++;
+    } else {
+      await domainPatch('dialysis',
+        `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
+        { assessed_value: assessed, county },
+        'upsertPublicRecords:dialysis:parcel'
+      );
+    }
+  }
+
+  if (domain === 'government') {
+    const parcelLookup = await domainQuery('government', 'GET',
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=parcel_id&limit=1`
+    );
+    if (!parcelLookup.ok || !parcelLookup.data?.length) {
+      const parcelHash = Buffer.from(`parcel|${apn}|${entity.state || ''}`).toString('base64');
+      const parcelData = stripNulls({
+        apn,
+        county:               county || 'Unknown',
+        state_code:           entity.state || 'XX',
+        land_value:           landVal,
+        improvement_value:    impVal,
+        total_assessed_value: assessed,
+        assessment_year:      taxYear,
+        situs_address:        entity.address || null,
+        raw_payload:          { source: 'costar_sidebar', property_id: propertyId },
+        fetched_at:           metadata.extracted_at || new Date().toISOString(),
+        data_hash:            parcelHash,
+      });
+      const r = await domainQuery('government', 'POST', 'parcel_records', parcelData);
+      if (r.ok) count++;
+    } else {
+      await domainPatch('government',
+        `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
+        stripNulls({
+          land_value:           landVal,
+          improvement_value:    impVal,
+          total_assessed_value: assessed,
+          assessment_year:      taxYear,
+        }),
+        'upsertPublicRecords:gov:parcel'
+      );
+    }
+  }
+
+  // ── tax_records ─────────────────────────────────────────────────────────
+  if (domain === 'dialysis' && assessed) {
+    const taxHash = Buffer.from(`tax|${apn}|${taxYear}`).toString('base64');
+    const taxLookup = await domainQuery('dialysis', 'GET',
+      `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${taxYear}&select=id&limit=1`
+    );
+    if (!taxLookup.ok || !taxLookup.data?.length) {
+      const taxData = stripNulls({
+        apn,
+        county,
+        state:          entity.state || null,
+        tax_year:       taxYear,
+        assessed_value: assessed,
+        raw_payload:    { source: 'costar_sidebar', land_value: landVal, improvement_value: impVal },
+        fetched_at:     metadata.extracted_at || new Date().toISOString(),
+        data_hash:      taxHash,
+      });
+      taxData.data_hash = taxHash;  // NOT NULL — ensure present after stripNulls
+      const r = await domainQuery('dialysis', 'POST', 'tax_records', taxData);
+      if (r.ok) count++;
+    } else {
+      await domainPatch('dialysis',
+        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${taxYear}`,
+        { assessed_value: assessed },
+        'upsertPublicRecords:dialysis:tax'
+      );
+    }
+  }
+
+  if (domain === 'government' && assessed) {
+    // Gov tax_records requires parcel_id FK — look up parcel first
+    const parcelLookup = await domainQuery('government', 'GET',
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=parcel_id&limit=1`
+    );
+    const parcelId = parcelLookup.ok && parcelLookup.data?.length
+      ? parcelLookup.data[0].parcel_id
+      : null;
+
+    const taxLookup = parcelId
+      ? await domainQuery('government', 'GET',
+          `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${taxYear}&select=tax_record_id&limit=1`)
+      : { ok: false, data: [] };
+
+    if (!taxLookup.ok || !taxLookup.data?.length) {
+      const taxHash = Buffer.from(`tax|${apn}|${entity.state || ''}|${taxYear}`).toString('base64');
+      const taxData = stripNulls({
+        parcel_id:      parcelId,
+        county:         county || 'Unknown',
+        state_code:     entity.state || 'XX',
+        tax_year:       taxYear,
+        assessed_value: assessed,
+        raw_payload:    { source: 'costar_sidebar', land_value: landVal, improvement_value: impVal },
+        fetched_at:     metadata.extracted_at || new Date().toISOString(),
+        data_hash:      taxHash,
+      });
+      const r = await domainQuery('government', 'POST', 'tax_records', taxData);
+      if (r.ok) count++;
+    } else {
+      await domainPatch('government',
+        `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${taxYear}`,
+        { assessed_value: assessed },
+        'upsertPublicRecords:gov:tax'
+      );
+    }
+  }
+
+  return count;
 }
 
 function classifySaleType(sale) {
