@@ -36,7 +36,7 @@ import {
   fetchDiaPipeline,
   buildStrategicPriorities,
   deriveItemTitle,
-} from '../daily-briefing.js';
+} from '../_shared/briefing-data.js';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
