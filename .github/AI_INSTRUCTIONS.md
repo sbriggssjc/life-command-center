@@ -13,22 +13,24 @@ This project is deployed on Vercel's Hobby plan, which has a **maximum of 12 ser
 functions per deployment**. Each `.js` file directly inside `/api/` counts as one function.
 Files in subdirectories starting with `_` (like `_shared/` and `_handlers/`) do NOT count.
 
-### Current Function Inventory (12 of 12 — NO ROOM)
+### Current Function Inventory (9 of 12 — 3 slots free)
 
 | # | File | Purpose |
 |---|------|---------|
 | 1 | actions.js | Action lifecycle + activity logging |
-| 2 | admin.js | Workspace, members, feature flags (3 sub-routes) |
+| 2 | admin.js | Workspaces, members, flags, connectors, diagnostics, edge proxies (10+ sub-routes) |
 | 3 | apply-change.js | Audited mutation service |
-| 4 | daily-briefing.js | Daily snapshot aggregation |
-| 5 | data-proxy.js | Gov/Dia query proxy + write service (4 sub-routes) |
-| 6 | diagnostics.js | Config, diagnostics, treasury (3 sub-routes) |
-| 7 | domains.js | Domain CRUD + templates + validation |
-| 8 | entity-hub.js | Contacts + Entities router (delegates to _handlers/) |
-| 9 | intake.js | Outlook message intake + summary (2 sub-routes) |
-| 10 | operations.js | Bridge actions + Workflow engine + Chat (18+ sub-routes) |
-| 11 | queue.js | Queue (v1 & v2) + inbox CRUD |
-| 12 | sync.js | Sync + connectors + RCM/LoopNet ingest (5 sub-routes) |
+| 4 | domains.js | Domain CRUD + templates + validation |
+| 5 | entity-hub.js | Contacts + Entities router (delegates to _handlers/) |
+| 6 | intake.js | Outlook message intake + summary (2 sub-routes) |
+| 7 | operations.js | Bridge actions + Workflow engine + Chat (18+ sub-routes) |
+| 8 | queue.js | Queue (v1 & v2) + inbox CRUD |
+| 9 | sync.js | Sync orchestration + RCM/LoopNet ingest + webhooks (10+ sub-routes) |
+
+#### Deleted in Phase 4b (migrated to admin.js + Supabase Edge Functions):
+- ~~daily-briefing.js~~ → edge function `daily-briefing` on LCC Opps, proxied via admin.js `_route=edge-brief`
+- ~~data-proxy.js~~ → edge function `data-query` on LCC Opps, proxied via admin.js `_route=edge-data`
+- ~~diagnostics.js~~ → absorbed into admin.js routes: `_route=config`, `_route=diag`, `_route=treasury`
 
 ### RULES — Read These Carefully
 
@@ -80,7 +82,8 @@ When multiple logical endpoints share a single serverless function, they use:
 - `?action=<name>` for action-based routing
 - `?_route=<name>` for vercel.json rewrite routing
 - `?_domain=<name>` for domain-based delegation (entity-hub pattern)
-- `?_source=<name>` for data source selection (data-proxy pattern)
+- `?_source=<name>` for data source selection (edge-data proxy pattern)
+- `?_edgeRoute=<name>` for mapping to edge function _route params (admin.js edge proxy)
 
 ### Frontend Architecture
 - **app.js** — Main orchestration, user context, feature flags, Copilot UI
@@ -92,7 +95,7 @@ When multiple logical endpoints share a single serverless function, they use:
 ### Data Flow
 ```
 Browser → app.js/gov.js/dialysis.js
-  → /api/data-proxy (gov/dia queries, keys server-side)
+  → /api/admin?_route=edge-data (gov/dia queries → Supabase Edge Function data-query)
   → /api/operations (bridge + workflow actions)
   → /api/entity-hub (contacts + entities)
   → /api/queue (work queue + inbox)
@@ -132,13 +135,13 @@ essential for the current single-user deployment. The logic works as follows:
    - Frontend login flow with JWT token management
    - `X-LCC-Key` or `Authorization: Bearer` header on every `fetch()` call
    - OPS database `users` and `workspace_memberships` tables populated
-5. `/api/config` and `/api/treasury` routes in `diagnostics.js` do NOT call
+5. `/api/config` and `/api/treasury` routes in `admin.js` do NOT call
    `authenticate()` — they are intentionally public. All other endpoints require auth.
 
 ### Other Environment Variables
 - `OPS_SUPABASE_URL` / `OPS_SUPABASE_KEY` — Required for OPS database access
-- `GOV_SUPABASE_KEY` — Required for government domain queries via data-proxy
-- `DIA_SUPABASE_KEY` — Required for dialysis domain queries via data-proxy
+- `GOV_SUPABASE_KEY` — Required for government domain queries via edge-data proxy
+- `DIA_SUPABASE_KEY` — Required for dialysis domain queries via edge-data proxy
 - `LCC_ENV` — Defaults to 'development'; set to 'production' in Vercel
 
 ---

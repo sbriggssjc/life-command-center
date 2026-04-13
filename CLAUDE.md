@@ -5,7 +5,8 @@
 ## Vercel Hobby Plan Constraint
 
 HARD LIMIT: 12 serverless functions max (12 .js files in /api/).
-Currently AT the limit. A 13th file = broken deployment = production 404.
+Currently at 9 functions (Phase 4b freed 3 slots via edge migration).
+data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge Functions.
 
 ## Rules
 
@@ -24,4 +25,6 @@ Currently AT the limit. A 13th file = broken deployment = production 404.
 - Contacts + Entities consolidated into entity-hub.js (routes to _handlers/)
 - Bridge + Workflows consolidated into operations.js
 - Intake functions consolidated into intake.js
+- admin.js: workspaces, members, flags, connectors, diagnostics (config/diag/treasury), edge proxies (data-query, daily-briefing)
+- Supabase Edge Functions: data-query (gov/dia PostgREST proxy), daily-briefing (snapshot orchestration) on LCC Opps project
 - All rewrites defined in vercel.json — order matters (specific before catch-all)

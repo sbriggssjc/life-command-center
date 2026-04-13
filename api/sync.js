@@ -120,9 +120,9 @@ export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
-  // Dispatch to connectors handler if routed via _route=connectors
+  // NOTE: Connectors CRUD moved to admin.js (Phase 4b). Legacy route preserved for safety.
   if (req.query._route === 'connectors') {
-    return handleConnectors(req, res);
+    return res.status(301).json({ error: 'Connectors moved to /api/admin?_route=connectors', redirect: '/api/connectors' });
   }
 
   // Dispatch to RCM ingest if routed via _route=rcm-ingest
