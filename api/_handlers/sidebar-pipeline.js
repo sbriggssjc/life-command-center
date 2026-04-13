@@ -869,8 +869,18 @@ async function upsertDomainProperty(domain, entity, metadata) {
   let lookupPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
     `&select=property_id&limit=1`;
   if (entity.state) lookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
+  if (entity.city)  lookupPath += `&city=ilike.${encodeURIComponent(entity.city)}`;
 
-  const lookup = await domainQuery(domain, 'GET', lookupPath);
+  let lookup = await domainQuery(domain, 'GET', lookupPath);
+
+  // Fallback: if city filter yielded no results, retry without city in case of
+  // city-name variant mismatch ("MEMPHIS" vs "Memphis" vs "memphis" in DB).
+  if (!lookup.data?.length && entity.city && entity.state) {
+    const fallbackPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
+      `&state=eq.${encodeURIComponent(entity.state)}&select=property_id&limit=1`;
+    const fallback = await domainQuery(domain, 'GET', fallbackPath);
+    if (fallback.ok && fallback.data?.length) lookup = fallback;
+  }
 
   const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
 
