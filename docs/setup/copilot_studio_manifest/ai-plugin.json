@@ -1,23 +1,19 @@
 {
-  "schema_version": "v2.4",
-  "name_for_human": "Life Command Center",
-  "namespace": "LifeCommandCenter",
-  "description_for_human": "Access LCC deal intelligence, daily priorities, property context, contact history, and queue management.",
-  "description_for_model": "Call LCC to get daily briefings, search properties and contacts, retrieve full context packets for properties and contacts, check research queue status, draft outreach, and monitor pipeline health. The data is REAL and current - always reference specific names and numbers from LCC responses. Never generate fictional CRE data.",
-  "logo_url": "https://life-command-center-nine.vercel.app/icon-192.png",
-  "contact_email": "scott@northmarq.com",
-  "legal_info_url": "https://life-command-center-nine.vercel.app/terms",
-  "privacy_policy_url": "https://life-command-center-nine.vercel.app/privacy",
-  "runtimes": [
-    {
-      "type": "OpenApi",
-      "auth": {
-        "type": "None"
-      },
-      "spec": {
-        "url": "https://life-command-center-nine.vercel.app/api/copilot-spec",
-        "progress_style": "ShowUsageWithInput"
-      }
-    }
-  ]
+    "$schema": "https://aka.ms/json-schemas/copilot-extensions/v2.1/plugin.schema.json",
+    "schema_version": "v2.4",
+    "name_for_human": "Life Command Center",
+    "namespace": "LifeCommandCenter",
+    "description_for_human": "Access LCC deal intelligence, daily priorities, property context, and queue management.",
+    "description_for_model": "Call LCC to get daily briefings, search properties and contacts, retrieve full context packets for properties and contacts, check research queue status, and monitor pipeline health.",
+    "runtimes": [
+        {
+            "type": "OpenApi",
+            "auth": {
+                "type": "None"
+            },
+            "spec": {
+                "url": "https://life-command-center-nine.vercel.app/api/copilot-spec"
+            }
+        }
+    ]
 }
