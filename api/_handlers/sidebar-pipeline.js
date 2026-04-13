@@ -1371,11 +1371,38 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
-      if (result.ok) count++;
+      if (result.ok) {
+        count++;
+        // Create BD alert for new dialysis sale capture (gov uses sf_comps_staging)
+        if (domain === 'dialysis') {
+          await createSaleAlert(propertyId, saleData);
+        }
+      }
     }
   }
 
   return count;
+}
+
+// ── Alert BD team on new dialysis sale capture ──────────────────────────────
+async function createSaleAlert(propertyId, saleData) {
+  const price = saleData.sold_price
+    ? '$' + Number(saleData.sold_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : 'undisclosed price';
+  const capRate = saleData.cap_rate ? ` at ${saleData.cap_rate}% cap` : '';
+  const buyer = saleData.buyer_name || 'unknown buyer';
+
+  await domainQuery('dialysis', 'POST', 'alerts_unified', {
+    entity_type:   'property',
+    entity_id:     String(propertyId),
+    alert_type:    'new_sale',
+    priority:      'high',
+    title:         `New sale captured via CoStar`,
+    message:       `Sold to ${buyer} for ${price}${capRate} on ${saleData.sale_date}`,
+    data_source:   'costar_sidebar',
+    is_resolved:   false,
+    created_at:    new Date().toISOString(),
+  });
 }
 
 // ── Auto-stage gov comp for Salesforce sync ─────────────────────────────────
