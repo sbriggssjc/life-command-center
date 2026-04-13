@@ -703,7 +703,50 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   // Step 5e: Upsert leases (dialysis only — gov skipped for now)
   results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
 
+  // Step 5f: Auto-enqueue ownership research if true_owner still unknown (gov)
+  if (domain === 'government') {
+    await autoEnqueueOwnerResearch(propertyId, entity, metadata);
+  }
+
   return { propagated: true, ...results };
+}
+
+// ── Auto-enqueue ownership research ───────────────────────────────────────
+
+async function autoEnqueueOwnerResearch(propertyId, entity, metadata) {
+  // Only enqueue if true_owner_id is still null after pipeline ran
+  const propCheck = await domainQuery('government', 'GET',
+    `properties?property_id=eq.${propertyId}&select=true_owner_id,recorded_owner_id&limit=1`
+  );
+  if (!propCheck.ok || !propCheck.data?.length) return;
+  const prop = propCheck.data[0];
+
+  // If true owner is already known, no research needed
+  if (prop.true_owner_id) return;
+  if (!prop.recorded_owner_id) return;
+
+  // Check if already in research queue
+  const queueCheck = await domainQuery('government', 'GET',
+    `ownership_research_queue?property_id=eq.${propertyId}&status=neq.completed&select=id&limit=1`
+  );
+  if (queueCheck.ok && queueCheck.data?.length) return; // already queued
+
+  // Enqueue for research
+  const ownerName = (metadata.contacts || [])
+    .find(c => c.role === 'owner')?.name || null;
+
+  await domainQuery('government', 'POST', 'ownership_research_queue', {
+    property_id:         propertyId,
+    address:             entity.address || null,
+    city:                entity.city    || null,
+    state:               entity.state   || null,
+    recorded_owner_id:   prop.recorded_owner_id,
+    recorded_owner_name: ownerName,
+    source:              'costar_sidebar',
+    priority:            'normal',
+    status:              'pending',
+    created_at:          new Date().toISOString(),
+  });
 }
 
 // ── Shared domain DB upsert helpers ────────────────────────────────────────
