@@ -92,6 +92,7 @@
         sale_date:         saleData.sale_date,
         listing_id:        saleData.listing_id,
         date_on_market:    saleData.date_on_market,
+        last_updated:      saleData.last_updated,
         contacts:          brokers,
         tenants:           tenant ? [{ name: tenant, sf: building_size }] : [],
       },
@@ -133,6 +134,8 @@
 
   /** 2. CITY / STATE / ZIP — parse from address block or breadcrumbs */
   function extractCityStateZip() {
+    const BUILDING_NOISE = /\b(sf|office|building|industrial|retail|medical|warehouse|flex|mixed|suite|floor|sq\s*ft|sqft|story|stories|class|bldg|gross|net|leasable)\b/i;
+
     // Look for "City, ST XXXXX" pattern anywhere in the header area
     const headerArea =
       document.querySelector('[class*="listingHero"]') ||
@@ -143,10 +146,23 @@
 
     const text = headerArea.textContent || '';
     // Match "Tulsa, OK 74131" pattern
-    const match = text.match(/([A-Za-z\s]+),\s*([A-Z]{2})\s+(\d{5})/);
-    if (match) {
+    const match = text.match(/([A-Za-z][A-Za-z\s]{0,40}),\s*([A-Z]{2})\s+(\d{5})/);
+    if (match && !BUILDING_NOISE.test(match[1])) {
       return { city: match[1].trim(), state: match[2], zip: match[3] };
     }
+
+    // If the body-level match had noise, do a targeted scan — look only
+    // in elements that are small (< 50 chars) and match City, ST ZIP:
+    const allText = document.querySelectorAll('p, span, div, h2, h3, li');
+    for (const el of allText) {
+      const t = el.textContent?.trim() || '';
+      if (t.length > 50 || t.length < 5) continue;
+      const m = t.match(/^([A-Za-z][A-Za-z\s]{1,30}),\s*([A-Z]{2})\s+(\d{5})$/);
+      if (m && !BUILDING_NOISE.test(m[1])) {
+        return { city: m[1].trim(), state: m[2], zip: m[3] };
+      }
+    }
+
     // Fallback: check breadcrumbs
     const crumbs = document.querySelectorAll('[class*="breadcrumb"] a, nav a');
     for (const crumb of crumbs) {
@@ -236,27 +252,47 @@
     return facts;
   }
 
-  /** 4. TENANT NAME — from Major Tenants table, not the Tenancy field */
+  /** 4. TENANT NAME — from listing title or Major Tenants section */
   function extractTenantName() {
-    // Strategy 1: Major Tenants table — look for tenant company name
-    const tenantSection = Array.from(document.querySelectorAll('h2, h3, h4, div'))
-      .find(el => /major\s+tenants/i.test(el.textContent?.trim() || ''));
-    if (tenantSection) {
-      const anchor = tenantSection.nextElementSibling?.querySelector('a, strong, [class*="tenant"]');
-      if (anchor) return anchor.textContent.trim();
-    }
-
-    // Strategy 2: Title of listing often has tenant name (e.g. "DaVita Dialysis | Tulsa, OK")
+    // Strategy 1: Listing title often has "DaVita Dialysis | Tulsa, OK"
     const h1 = document.querySelector('h1');
     if (h1) {
-      const heading = h1.textContent.split('\n')[0].trim();
-      const pipeIdx = heading.indexOf('|');
+      const firstLine = h1.textContent.split('\n')[0].trim();
+      const pipeIdx = firstLine.indexOf('|');
       if (pipeIdx > 0) {
-        const candidate = heading.substring(0, pipeIdx).trim();
-        // Validate it looks like a tenant name (not a number, address, or price)
-        if (candidate.length > 3 && !/^\d/.test(candidate)) return candidate;
+        const candidate = firstLine.substring(0, pipeIdx).trim();
+        // Must look like a tenant name — not a price, address, or URL
+        if (candidate.length > 3 &&
+            candidate.length < 60 &&
+            !/^\d/.test(candidate) &&
+            !/https?:/.test(candidate) &&
+            !/public\s+record/i.test(candidate)) {
+          return candidate;
+        }
       }
     }
+
+    // Strategy 2: Major Tenants section — but validate the anchor
+    const tenantSection = Array.from(document.querySelectorAll('h2,h3,h4,div'))
+      .find(el => /major\s+tenants/i.test(el.textContent?.trim() || ''));
+    if (tenantSection) {
+      const sibling = tenantSection.nextElementSibling;
+      if (sibling) {
+        const candidates = sibling.querySelectorAll(
+          'strong, [class*="tenant"], [class*="name"]'
+        );
+        for (const c of candidates) {
+          const t = c.textContent?.trim();
+          if (t && t.length > 2 && t.length < 80 &&
+              !/public\s+record/i.test(t) &&
+              !/more\s+information/i.test(t) &&
+              !/^\d+\s+\w+\s+(st|rd|ave|blvd|dr|ln|ct)/i.test(t)) {
+            return t;
+          }
+        }
+      }
+    }
+
     return null;
   }
 
@@ -293,6 +329,22 @@
                   contactSection.parentElement?.nextElementSibling;
     if (!block) return contacts;
 
+    // Try to find the listing company for all brokers
+    const brokerageEl = findTextElement('Brokerage', 'Listing Company',
+                                        'Listed By', 'Company');
+    let brokerageName = brokerageEl?.textContent?.trim() || null;
+
+    // Also try extracting from "Presented by" text near the contacts section
+    if (!brokerageName) {
+      const presentedBy = Array.from(document.querySelectorAll('p,span,div'))
+        .find(el => /^presented\s+by/i.test(el.textContent?.trim() || ''));
+      if (presentedBy) {
+        const firmEl = presentedBy.nextElementSibling ||
+                       presentedBy.parentElement?.querySelector('a, strong');
+        if (firmEl) brokerageName = firmEl.textContent.trim();
+      }
+    }
+
     // Each broker is in a list item or card
     const items = block.querySelectorAll(
       'li, [class*="contact"], [class*="agent"], [class*="broker"]'
@@ -309,6 +361,7 @@
         role: 'listing_broker',
         type: 'person',
         name,
+        company: brokerageName,
         phone: phoneEl?.textContent?.trim() || phoneEl?.href?.replace('tel:', '') || null,
         email: emailEl?.textContent?.trim() || emailEl?.href?.replace('mailto:', '') || null,
       });
@@ -317,13 +370,12 @@
     // Fallback: simple single-broker layout via findTextElement
     if (contacts.length === 0) {
       const brokerNameEl = findTextElement('Listing Agent', 'Broker', 'Listed By');
-      const brokerCoEl   = findTextElement('Brokerage', 'Listing Company');
       if (brokerNameEl) {
         contacts.push({
           role: 'listing_broker',
           type: 'person',
           name:    brokerNameEl.textContent.trim(),
-          company: brokerCoEl?.textContent?.trim() || null,
+          company: brokerageName,
         });
       }
     }
@@ -333,16 +385,20 @@
 
   /** 7. LAST SALE — sale history and listing metadata */
   function extractLastSale() {
-    const salePriceEl  = findTextElement('Sale Price', 'Last Sale Price');
-    const saleDateEl   = findTextElement('Sale Date', 'Last Sale Date', 'Date on Market');
-    const listingIdEl  = findTextElement('Listing ID');
-    const dateOnMarket = findTextElement('Date on Market');
+    const salePriceEl   = findTextElement('Sale Price', 'Last Sale Price');
+    const saleDateEl    = findTextElement('Sale Date', 'Last Sale Date');
+    // Note: explicitly exclude 'Last Updated' and 'Date on Market'
+    // from sale_date — those are listing metadata, not transaction dates
+    const listingIdEl   = findTextElement('Listing ID');
+    const dateOnMarket  = findTextElement('Date on Market');
+    const lastUpdatedEl = findTextElement('Last Updated');
 
     return {
-      sale_price:     salePriceEl?.textContent?.trim()  || null,
-      sale_date:      saleDateEl?.textContent?.trim()   || null,
-      listing_id:     listingIdEl?.textContent?.trim()   || null,
-      date_on_market: dateOnMarket?.textContent?.trim() || null,
+      sale_price:     salePriceEl?.textContent?.trim()    || null,
+      sale_date:      saleDateEl?.textContent?.trim()     || null,
+      listing_id:     listingIdEl?.textContent?.trim()    || null,
+      date_on_market: dateOnMarket?.textContent?.trim()   || null,
+      last_updated:   lastUpdatedEl?.textContent?.trim()  || null,
     };
   }
 
