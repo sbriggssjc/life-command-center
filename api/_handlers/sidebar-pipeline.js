@@ -895,7 +895,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
     if (fallback.ok && fallback.data?.length) lookup = fallback;
   }
 
-  const INVALID_TENANT_VALUES = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
+  const INVALID_TENANT_VALUES = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score)$/i;
 
   const primaryTenant = cleanTenantValue(
     [
@@ -2806,7 +2806,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
   const safeGovPricePsf = govPricePsf || computedGovPricePsf || null;
 
   // Guard against section-header noise captured as tenant names (e.g. "Buyer")
-  const INVALID_TENANT = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied)$/i;
+  const INVALID_TENANT = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score)$/i;
   const tenantAgency = [
     metadata.tenants?.[0]?.name,
     metadata.tenant_name,
