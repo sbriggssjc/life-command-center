@@ -487,12 +487,25 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     const pickedFields = pickEntityFields(entity_type, fields);
     if (entity_type === 'asset' && pickedFields.address && pickedFields.city) {
       const normAddr = normalizeAddress(pickedFields.address);
-      const dedupPath = `entities?canonical_name=ilike.*${encodeURIComponent(normAddr)}*` +
-        `&city=ilike.${encodeURIComponent(pickedFields.city.trim())}` +
-        `&entity_type=eq.asset&workspace_id=eq.${workspaceId}&limit=1`;
+      const city = pickedFields.city.trim();
+      const state = pickedFields.state;
+      // Prefer entities with a known domain, then most recently updated
+      const dedupPath = `entities?entity_type=eq.asset` +
+        `&address=ilike.${encodeURIComponent(normAddr)}` +
+        `&city=ilike.${encodeURIComponent(city)}` +
+        (state ? `&state=eq.${encodeURIComponent(state)}` : '') +
+        `&workspace_id=eq.${workspaceId}` +
+        `&select=id,domain,metadata` +
+        `&order=domain.nullslast,updated_at.desc` +
+        `&limit=5`;
       const dupCheck = await opsQuery('GET', dedupPath);
       if (dupCheck.ok && dupCheck.data?.length) {
-        const existing = dupCheck.data[0];
+        // Among matches, prefer the one with domain + domain_property_id set
+        const candidates = dupCheck.data;
+        const existing = candidates.find(e =>
+          e.domain &&
+          e.metadata?.domain_property_id
+        ) || candidates[0];
 
         // Found existing entity — update metadata with new extraction data.
         // Merge: prefer incoming non-null values over existing values.
