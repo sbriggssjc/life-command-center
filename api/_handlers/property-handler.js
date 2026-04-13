@@ -34,6 +34,46 @@ function enc(v) {
   return encodeURIComponent(String(v));
 }
 
+// ── Address abbreviation expansion ──────────────────────────────────────────
+// Maps common street abbreviations ↔ full words so lookups match either form.
+const ABBREV_MAP = {
+  'S': 'South', 'N': 'North', 'E': 'East', 'W': 'West',
+  'St': 'Street', 'Ave': 'Avenue', 'Blvd': 'Boulevard', 'Dr': 'Drive', 'Rd': 'Road',
+};
+
+// Build a reverse map (full → abbreviated) for contracting addresses
+const EXPAND_MAP = {};  // abbrev → full  (same as ABBREV_MAP)
+const CONTRACT_MAP = {}; // full → abbrev
+for (const [abbr, full] of Object.entries(ABBREV_MAP)) {
+  EXPAND_MAP[abbr.toLowerCase()] = full;
+  CONTRACT_MAP[full.toLowerCase()] = abbr;
+}
+
+/**
+ * Replace standalone abbreviated words with their expanded forms.
+ * "601 S Boulder Ave" → "601 South Boulder Avenue"
+ */
+function expandAddress(address) {
+  return address.replace(/\b(\w+)\b/g, (match) => {
+    const expanded = EXPAND_MAP[match.toLowerCase()];
+    if (!expanded) return match;
+    // Preserve leading case: if input is uppercase "S", return "South"
+    return match[0] === match[0].toUpperCase() ? expanded : expanded.toLowerCase();
+  });
+}
+
+/**
+ * Replace standalone full words with their abbreviated forms.
+ * "601 South Boulder Avenue" → "601 S Boulder Ave"
+ */
+function contractAddress(address) {
+  return address.replace(/\b(\w+)\b/g, (match) => {
+    const contracted = CONTRACT_MAP[match.toLowerCase()];
+    if (!contracted) return match;
+    return contracted;
+  });
+}
+
 // Constant-time API key comparison (same pattern as _shared/auth.js verifyApiKey)
 // Exported so sibling handlers (e.g. contact-handler.js) can reuse the exact
 // same strict X-LCC-Key check without reimplementing it.
@@ -104,11 +144,34 @@ export async function propertyHandler(req, res) {
     );
     entity = r.data?.[0] || null;
   } else if (address) {
-    const r = await opsQuery(
+    const selectClause = `select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`;
+
+    const expanded = expandAddress(address);
+
+    // Try original address first (case-insensitive partial match)
+    const r1 = await opsQuery(
       'GET',
-      `entities?entity_type=eq.asset&or=(address.ilike.*${enc(address)}*,name.ilike.*${enc(address)}*)&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
+      `entities?entity_type=eq.asset&or=(address.ilike.*${enc(address)}*,name.ilike.*${enc(address)}*)&${selectClause}&limit=1`
     );
-    entity = r.data?.[0] || null;
+    entity = r1.data?.[0] || null;
+
+    // If not found, try with abbreviations expanded / contracted
+    if (!entity) {
+      const contracted = contractAddress(address);
+      // Build a set of unique variants (skip duplicates of original)
+      const variants = [...new Set([expanded, contracted])].filter(v => v !== address);
+
+      for (const variant of variants) {
+        const r2 = await opsQuery(
+          'GET',
+          `entities?entity_type=eq.asset&or=(address.ilike.*${enc(variant)}*,name.ilike.*${enc(variant)}*)&${selectClause}&limit=1`
+        );
+        entity = r2.data?.[0] || null;
+        if (entity) break;
+      }
+    }
+
+    console.log(`[property] address lookup: "${address}" → "${expanded}" result: ${entity ? 'found' : 'not-found'}`);
   }
 
   if (!entity) {
