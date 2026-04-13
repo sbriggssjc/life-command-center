@@ -494,20 +494,25 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       if (dupCheck.ok && dupCheck.data?.length) {
         const existing = dupCheck.data[0];
 
-        // Merge new metadata into the existing entity so the pipeline
-        // can pick up any data captured on this page view
+        // Found existing entity — update metadata with new extraction data.
+        // Merge: prefer incoming non-null values over existing values.
         if (metadata && Object.keys(metadata).length > 0) {
-          // Strip the processed flag so the pipeline re-runs
-          const mergedMeta = {
-            ...(existing.metadata || {}),
-            ...metadata,
-            _pipeline_processed_at: undefined,
-            _pipeline_status: undefined,
-          };
-          // Remove the undefined keys
-          for (const k of Object.keys(mergedMeta)) {
-            if (mergedMeta[k] === undefined) delete mergedMeta[k];
+          const existingMeta = existing.metadata || {};
+          const incomingMeta = metadata;
+
+          const mergedMeta = { ...existingMeta };
+          for (const [key, val] of Object.entries(incomingMeta)) {
+            if (val !== undefined && val !== null) {
+              mergedMeta[key] = val;
+            } else if (val === null) {
+              // Explicit null clears stale bad values for tracked fields
+              const TRACKED = ['cap_rate', 'noi', 'tenant_name', 'primary_tenant',
+                'city', 'state', 'zip_code', 'parcel_number', 'assessed_value',
+                'land_value', 'improvement_value'];
+              if (TRACKED.includes(key)) mergedMeta[key] = null;
+            }
           }
+          mergedMeta._pipeline_status = null; // reset so pipeline re-runs
 
           const patchResult = await opsQuery(
             'PATCH',
