@@ -159,6 +159,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         existing.address.toLowerCase().trim() ===
         incoming.address.toLowerCase().trim();
 
+      const INVALID_TENANT = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research)$/i;
+
       let merged = incoming;
       if (sameProperty) {
         // Merge tenants — preserve from either source, dedupe by name
@@ -168,12 +170,27 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             mergedTenants.push(t);
           }
         }
+
+        const cleanIncomingTenant = incoming.tenant_name &&
+          !INVALID_TENANT.test(incoming.tenant_name)
+          ? incoming.tenant_name : null;
+        const cleanExistingTenant = existing.tenant_name &&
+          !INVALID_TENANT.test(existing.tenant_name)
+          ? existing.tenant_name : null;
+
+        const cleanIncomingPrimary = incoming.primary_tenant &&
+          !INVALID_TENANT.test(incoming.primary_tenant)
+          ? incoming.primary_tenant : null;
+        const cleanExistingPrimary = existing.primary_tenant &&
+          !INVALID_TENANT.test(existing.primary_tenant)
+          ? existing.primary_tenant : null;
+
         merged = {
           ...existing,
           ...incoming,
           tenants: mergedTenants,
-          tenant_name: incoming.tenant_name || existing.tenant_name || null,
-          primary_tenant: incoming.primary_tenant || existing.primary_tenant || null,
+          tenant_name:    cleanIncomingTenant || cleanExistingTenant || null,
+          primary_tenant: cleanIncomingPrimary || cleanExistingPrimary || null,
           // Also preserve sales history — take the longer array
           sales_history: (incoming.sales_history || []).length >=
                          (existing.sales_history || []).length
