@@ -2318,6 +2318,18 @@ async function handleChatRoute(req, res) {
     return res.status(200).json({ ok: true, signal: 'copilot_result_acted_on' });
   }
 
+  // --- Copilot path-based action injection ---
+  // When Copilot calls /api/copilot/portfolio/get-daily-briefing-snapshot,
+  // vercel.json rewrites it to ?_route=chat&_copilot_path=get-daily-briefing-snapshot.
+  // Inject the action into the body so the dispatch logic picks it up.
+  if (req.query._copilot_path && !req.body?.copilot_action) {
+    const actionId = req.query._copilot_path.replace(/-/g, '_');
+    req.body = req.body || {};
+    req.body.copilot_action = actionId;
+    req.body.params = req.body.params || req.body || {};
+    req.body.surface = 'copilot_plugin';
+  }
+
   // --- Structured action dispatch ---
   // If the request includes an action field, dispatch it directly instead of
   // routing through the LLM. This is the programmatic entry point for Copilot
