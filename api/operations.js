@@ -780,6 +780,11 @@ async function executeReadAction(spec, params, user, workspaceId, req) {
   const headers = { 'Content-Type': 'application/json' };
   if (req?.headers?.['authorization']) headers['authorization'] = req.headers['authorization'];
   if (req?.headers?.['x-lcc-key']) headers['x-lcc-key'] = req.headers['x-lcc-key'];
+  // Copilot plugin requests arrive without auth headers — inject the API key
+  // so internal sub-calls to entity-hub, queue, etc. pass auth.
+  if (!headers['authorization'] && !headers['x-lcc-key'] && process.env.LCC_API_KEY && user?._copilot_plugin) {
+    headers['x-lcc-key'] = process.env.LCC_API_KEY;
+  }
   if (workspaceId) headers['x-lcc-workspace'] = workspaceId;
 
   try {
