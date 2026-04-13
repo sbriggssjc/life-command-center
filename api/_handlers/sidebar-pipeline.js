@@ -2444,6 +2444,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     cleaned.is_active = true;
 
     const tenantKey = record.tenant.toLowerCase().trim();
+    let leaseId = null;
     if (existingTenants.has(tenantKey)) {
       // PATCH existing lease — find its lease_id and update
       const existingLease = existing.data.find(
@@ -2452,6 +2453,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       const { property_id: _pid, ...patchData } = cleaned;
       await domainPatch(domain,
         `leases?lease_id=eq.${existingLease.lease_id}`, patchData, 'upsertDomainLeases');
+      leaseId = existingLease.lease_id;
     } else {
       // INSERT new lease
       const result = await domainQuery(domain, 'POST', 'leases', cleaned);
@@ -2468,10 +2470,56 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       }
       count++;
       existingTenants.add(tenantKey); // prevent double-insert within same run
+      leaseId = Array.isArray(result.data) ? result.data[0]?.lease_id : result.data?.lease_id;
+    }
+
+    // Write escalation data from CoStar estimated rent range
+    if (domain === 'dialysis' && leaseId) {
+      await upsertLeaseEscalations(propertyId, leaseId, metadata);
     }
   }
 
   return count;
+}
+
+// ── Step 5e-ii: Upsert lease_escalations (CoStar rent band) ───────────────
+
+/**
+ * Parse CoStar estimated rent range (e.g. "$24 - 29/NNN (Office)") and
+ * write a lease_escalations row capturing the rent band.
+ * Skips if the lease already has a costar_sidebar escalation row.
+ */
+async function upsertLeaseEscalations(propertyId, leaseId, metadata) {
+  const estRent = metadata.est_rent;
+  if (!estRent) return 0;
+
+  // Parse "$24 - 29/NNN" → low: 24, high: 29, structure: NNN
+  const match = estRent.match(/\$?([\d.]+)\s*[-–]\s*([\d.]+)\s*\/([\w\s]+)/);
+  if (!match) return 0;
+
+  const rentLow     = parseFloat(match[1]);
+  const rentHigh    = parseFloat(match[2]);
+  const structure   = match[3].trim().split(' ')[0]; // "NNN", "FS", "MG"
+  const midpoint    = Math.round((rentLow + rentHigh) / 2 * 100) / 100;
+
+  // Check if already have an escalation row for this lease from sidebar
+  const existing = await domainQuery('dialysis', 'GET',
+    `lease_escalations?lease_id=eq.${leaseId}&data_source=eq.costar_sidebar&select=id&limit=1`
+  );
+  if (existing.ok && existing.data?.length) return 0;
+
+  const r = await domainQuery('dialysis', 'POST', 'lease_escalations', {
+    lease_id:           leaseId,
+    property_id:        parseInt(propertyId, 10),
+    rent_low_psf:       rentLow,
+    rent_high_psf:      rentHigh,
+    rent_estimate_psf:  midpoint,
+    expense_structure:  structure,
+    escalation_source:  'costar_estimate',
+    data_source:        'costar_sidebar',
+    effective_date:     new Date().toISOString().split('T')[0],
+  });
+  return r.ok ? 1 : 0;
 }
 
 // ── Step 5f: Upsert available_listings ─────────────────────────────────────
