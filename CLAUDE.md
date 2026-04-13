@@ -10,7 +10,7 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 
 ## Rules
 
-0. LCC_API_KEY is set in Vercel env vars for Power Automate auth. The frontend works without auth via dual-mode transitional fallback (dev env only). Do NOT change LCC_ENV to production/staging until frontend JWT auth is implemented.
+0. LCC_API_KEY auth is production-ready (Phase 6b). Frontend auth.js auto-injects X-LCC-Key via global fetch interceptor. To enforce: set LCC_API_KEY + LCC_ENV=production in Vercel.
 1. NEVER create new .js files directly in /api/
 2. Add new endpoints as sub-routes (use ?action= or ?_route= query param patterns)
 3. New utility/handler code goes in /api/_shared/ or /api/_handlers/

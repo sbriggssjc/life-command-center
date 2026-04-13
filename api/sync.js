@@ -111,10 +111,7 @@ function connectorHeaders(connector) {
   return headers;
 }
 
-// ---- Connector constants ----
-const VALID_CONNECTOR_TYPES = ['salesforce', 'outlook', 'power_automate', 'supabase_domain', 'webhook'];
-const VALID_CONNECTOR_METHODS = ['direct_api', 'power_automate', 'webhook', 'manual'];
-const VALID_CONNECTOR_STATUSES = ['healthy', 'degraded', 'error', 'disconnected', 'pending_setup'];
+// NOTE: Connector CRUD moved to admin.js (Phase 4b). Constants removed in Phase 6a.
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -125,24 +122,12 @@ export default withErrorHandler(async function handler(req, res) {
     return res.status(301).json({ error: 'Connectors moved to /api/admin?_route=connectors', redirect: '/api/connectors' });
   }
 
-  // Dispatch to RCM ingest if routed via _route=rcm-ingest
-  // When edge_lead_ingest flag is enabled, proxy to Supabase Edge Function
+  // Dispatch to RCM ingest — always proxy to lead-ingest edge function (Phase 6a)
+  // Falls back to local handler only if edge function is unreachable
   if (req.query._route === 'rcm-ingest') {
-    try {
-      const wsId = req.headers['x-lcc-workspace'];
-      if (wsId) {
-        const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
-        const wsConfig = wsResult.data?.[0]?.config || {};
-        const flags = wsConfig.feature_flags || {};
-        if (flags.edge_lead_ingest) {
-          const proxyResult = await proxyToLeadIngest(req, res, 'rcm');
-          if (proxyResult) return;
-          console.warn('[rcm-proxy] Edge proxy failed, falling back to local handler');
-        }
-      }
-    } catch (err) {
-      console.warn('[rcm-proxy] Flag check failed, using local handler:', err.message);
-    }
+    const proxyResult = await proxyToLeadIngest(req, res, 'rcm');
+    if (proxyResult) return;
+    console.warn('[rcm-ingest] Edge proxy failed, falling back to local handler');
     return handleRcmIngest(req, res);
   }
 
@@ -151,24 +136,11 @@ export default withErrorHandler(async function handler(req, res) {
     return handleRcmBackfill(req, res);
   }
 
-  // Dispatch to LoopNet ingest
-  // When edge_lead_ingest flag is enabled, proxy to Supabase Edge Function
+  // Dispatch to LoopNet ingest — always proxy to lead-ingest edge function (Phase 6a)
   if (req.query._route === 'loopnet-ingest') {
-    try {
-      const wsId = req.headers['x-lcc-workspace'];
-      if (wsId) {
-        const wsResult = await opsQuery('GET', `workspaces?id=eq.${pgFilterVal(wsId)}&select=config`);
-        const wsConfig = wsResult.data?.[0]?.config || {};
-        const flags = wsConfig.feature_flags || {};
-        if (flags.edge_lead_ingest) {
-          const proxyResult = await proxyToLeadIngest(req, res, 'loopnet');
-          if (proxyResult) return;
-          console.warn('[loopnet-proxy] Edge proxy failed, falling back to local handler');
-        }
-      }
-    } catch (err) {
-      console.warn('[loopnet-proxy] Flag check failed, using local handler:', err.message);
-    }
+    const proxyResult = await proxyToLeadIngest(req, res, 'loopnet');
+    if (proxyResult) return;
+    console.warn('[loopnet-ingest] Edge proxy failed, falling back to local handler');
     return handleLoopNetIngest(req, res);
   }
 
@@ -1443,162 +1415,8 @@ async function handleIsolationCheck(req, res, user, workspaceId) {
   return res.status(200).json(results);
 }
 
-// ============================================================================
-// CONNECTORS — Connector Account Management (merged from connectors.js)
-// ============================================================================
-
-async function handleConnectors(req, res) {
-  const user = await authenticate(req, res);
-  if (!user) return;
-
-  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships[0]?.workspace_id;
-  if (!workspaceId) return res.status(400).json({ error: 'No workspace context. Set X-LCC-Workspace header.' });
-
-  const myMembership = user.memberships.find(m => m.workspace_id === workspaceId);
-  if (!myMembership) return res.status(403).json({ error: 'Not a member of this workspace' });
-
-  if (req.method === 'GET') {
-    const { id, user_id, action } = req.query;
-
-    if (action === 'health') {
-      const result = await opsQuery('GET',
-        `connector_accounts?workspace_id=eq.${workspaceId}&select=id,user_id,connector_type,status,last_sync_at,last_error,display_name`
-      );
-      if (!result.ok) return res.status(result.status).json({ error: 'Failed to fetch connectors' });
-
-      const connectors = Array.isArray(result.data) ? result.data : [];
-      return res.status(200).json({
-        total: connectors.length,
-        healthy: connectors.filter(c => c.status === 'healthy').length,
-        degraded: connectors.filter(c => c.status === 'degraded').length,
-        error: connectors.filter(c => c.status === 'error').length,
-        disconnected: connectors.filter(c => c.status === 'disconnected').length,
-        pending: connectors.filter(c => c.status === 'pending_setup').length,
-        connectors
-      });
-    }
-
-    if (id) {
-      const result = await opsQuery('GET',
-        `connector_accounts?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*`
-      );
-      if (!result.ok || !result.data?.length) return res.status(404).json({ error: 'Connector not found' });
-
-      const connector = result.data[0];
-      if (connector.user_id !== user.id && !requireRole(user, 'manager', workspaceId)) {
-        const { config, ...safe } = connector;
-        return res.status(200).json({ connector: safe });
-      }
-      return res.status(200).json({ connector });
-    }
-
-    if (user_id) {
-      if (user_id !== user.id && !requireRole(user, 'manager', workspaceId)) {
-        return res.status(403).json({ error: 'Cannot view other users\' connectors' });
-      }
-      const result = await opsQuery('GET',
-        `connector_accounts?workspace_id=eq.${workspaceId}&user_id=eq.${user_id}&select=*&order=connector_type`
-      );
-      if (!result.ok) return res.status(result.status).json({ error: 'Failed to fetch connectors' });
-      return res.status(200).json({ connectors: result.data || [] });
-    }
-
-    const isManager = !!requireRole(user, 'manager', workspaceId);
-    const select = isManager
-      ? '*'
-      : 'id,user_id,connector_type,execution_method,display_name,status,last_sync_at';
-
-    const result = await opsQuery('GET',
-      `connector_accounts?workspace_id=eq.${workspaceId}&select=${select}&order=connector_type,display_name`
-    );
-    if (!result.ok) return res.status(result.status).json({ error: 'Failed to fetch connectors' });
-    return res.status(200).json({ connectors: result.data || [] });
-  }
-
-  if (req.method === 'POST') {
-    const { connector_type, execution_method, display_name, config, external_user_id, target_user_id } = req.body || {};
-
-    if (!connector_type || !VALID_CONNECTOR_TYPES.includes(connector_type)) {
-      return res.status(400).json({ error: `connector_type must be one of: ${VALID_CONNECTOR_TYPES.join(', ')}` });
-    }
-    if (!display_name) return res.status(400).json({ error: 'display_name is required' });
-
-    const method = execution_method || 'power_automate';
-    if (!VALID_CONNECTOR_METHODS.includes(method)) {
-      return res.status(400).json({ error: `execution_method must be one of: ${VALID_CONNECTOR_METHODS.join(', ')}` });
-    }
-
-    let targetUserId = user.id;
-    if (target_user_id && target_user_id !== user.id) {
-      if (!requireRole(user, 'manager', workspaceId)) {
-        return res.status(403).json({ error: 'Only managers can create connectors for other users' });
-      }
-      targetUserId = target_user_id;
-    }
-
-    const result = await opsQuery('POST', 'connector_accounts', {
-      workspace_id: workspaceId, user_id: targetUserId, connector_type,
-      execution_method: method, display_name, status: 'pending_setup',
-      config: config || {}, external_user_id: external_user_id || null
-    });
-
-    if (!result.ok) return res.status(result.status).json({ error: 'Failed to create connector', detail: result.data });
-    return res.status(201).json({ connector: Array.isArray(result.data) ? result.data[0] : result.data });
-  }
-
-  if (req.method === 'PATCH') {
-    const { id } = req.query;
-    if (!id) return res.status(400).json({ error: 'id query parameter required' });
-
-    const existing = await opsQuery('GET',
-      `connector_accounts?id=eq.${id}&workspace_id=eq.${workspaceId}&select=user_id`
-    );
-    if (!existing.ok || !existing.data?.length) return res.status(404).json({ error: 'Connector not found' });
-
-    if (existing.data[0].user_id !== user.id && !requireRole(user, 'manager', workspaceId)) {
-      return res.status(403).json({ error: 'Can only update your own connectors' });
-    }
-
-    const { display_name, status, config, execution_method, external_user_id, last_sync_at, last_error } = req.body || {};
-    const updates = { updated_at: new Date().toISOString() };
-
-    if (display_name) updates.display_name = display_name;
-    if (status && VALID_CONNECTOR_STATUSES.includes(status)) updates.status = status;
-    if (config !== undefined) updates.config = config;
-    if (execution_method && VALID_CONNECTOR_METHODS.includes(execution_method)) updates.execution_method = execution_method;
-    if (external_user_id !== undefined) updates.external_user_id = external_user_id;
-    if (last_sync_at !== undefined) updates.last_sync_at = last_sync_at;
-    if (last_error !== undefined) updates.last_error = last_error;
-
-    const result = await opsQuery('PATCH',
-      `connector_accounts?id=eq.${id}&workspace_id=eq.${workspaceId}`, updates
-    );
-    if (!result.ok) return res.status(result.status).json({ error: 'Failed to update connector' });
-    return res.status(200).json({ connector: Array.isArray(result.data) ? result.data[0] : result.data });
-  }
-
-  if (req.method === 'DELETE') {
-    const { id } = req.query;
-    if (!id) return res.status(400).json({ error: 'id query parameter required' });
-
-    const existing = await opsQuery('GET',
-      `connector_accounts?id=eq.${id}&workspace_id=eq.${workspaceId}&select=user_id`
-    );
-    if (!existing.ok || !existing.data?.length) return res.status(404).json({ error: 'Connector not found' });
-
-    if (existing.data[0].user_id !== user.id && !requireRole(user, 'owner', workspaceId)) {
-      return res.status(403).json({ error: 'Only connector owner or workspace owner can delete connectors' });
-    }
-
-    await opsQuery('DELETE',
-      `connector_accounts?id=eq.${id}&workspace_id=eq.${workspaceId}`
-    );
-
-    return res.status(200).json({ id, removed: true });
-  }
-
-  return res.status(405).json({ error: `Method ${req.method} not allowed` });
-}
+// NOTE: handleConnectors removed in Phase 6a — CRUD moved to admin.js in Phase 4b.
+// The 301 redirect at the top of handler() catches any stale callers.
 
 // ============================================================================
 // RCM INGEST — Merged from rcm-ingest.js

@@ -1,13 +1,13 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
-  "manifestVersion": "1.17",
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.19",
   "version": "1.0.0",
   "id": "5d895bcf-ad7b-46ec-a676-9ce3c67b4e28",
   "developer": {
     "name": "Team Briggs — Northmarq",
-    "websiteUrl": "RAILWAY_URL",
-    "privacyUrl": "RAILWAY_URL/privacy",
-    "termsOfUseUrl": "RAILWAY_URL/terms"
+    "websiteUrl": "https://life-command-center-nine.vercel.app",
+    "privacyUrl": "https://life-command-center-nine.vercel.app/privacy",
+    "termsOfUseUrl": "https://life-command-center-nine.vercel.app/terms"
   },
   "name": {
     "short": "LCC Assistant",
@@ -31,7 +31,6 @@
     ]
   },
   "validDomains": [
-    "RAILWAY_DOMAIN",
     "life-command-center-nine.vercel.app"
   ],
   "permissions": [

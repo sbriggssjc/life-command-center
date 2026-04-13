@@ -379,16 +379,23 @@ function handleAuthConfig(req, res) {
   const supabaseUrl = process.env.OPS_SUPABASE_URL || null;
   const supabaseAnonKey = process.env.OPS_SUPABASE_ANON_KEY || null;
   const env = process.env.LCC_ENV || 'development';
+  const lccApiKey = process.env.LCC_API_KEY || null;
 
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   return res.status(200).json({
     supabase_url: supabaseUrl,
     supabase_anon_key: supabaseAnonKey,
     env,
-    auth_modes: ['jwt', 'magic_link'],
+    // Phase 6b: expose API key so the frontend fetch interceptor can authenticate
+    // when JWT is unavailable. This is safe for a single-user private deployment.
+    // For multi-user production, remove this and require JWT auth exclusively.
+    lcc_api_key: lccApiKey,
+    auth_modes: lccApiKey ? ['jwt', 'magic_link', 'api_key'] : ['jwt', 'magic_link'],
     _note: supabaseAnonKey
       ? 'Supabase auth is configured. Frontend should use JWT authentication.'
-      : 'Supabase anon key not set (OPS_SUPABASE_ANON_KEY). Running in dev fallback mode.'
+      : lccApiKey
+        ? 'API key mode — frontend will authenticate via X-LCC-Key header.'
+        : 'No auth configured (OPS_SUPABASE_ANON_KEY / LCC_API_KEY). Running in dev fallback mode.'
   });
 }
 

@@ -282,7 +282,10 @@ export async function authenticate(req, res) {
   //    In development: allow unauthenticated frontend requests through even when
   //    LCC_API_KEY is set (the key is needed for Power Automate / external callers).
   //    Production and staging always require real authentication.
+  //    Phase 6b: Frontend now sends X-LCC-Key automatically via auth.js interceptor,
+  //    so production mode should work once LCC_API_KEY is set in Vercel + LCC_ENV=production.
   if (LCC_ENV === 'production' || LCC_ENV === 'staging') {
+    console.warn('[auth] 401 — no credentials provided. Set X-LCC-Key or Authorization header.');
     res.status(401).json({ error: 'Authentication required. Provide Authorization header or X-LCC-Key.' });
     return null;
   }

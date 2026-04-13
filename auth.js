@@ -31,6 +31,7 @@ const LCC_AUTH = (() => {
   let config = {
     supabaseUrl: null,
     supabaseAnonKey: null,
+    lccApiKey: null,  // Phase 6b: API key fallback for single-user deployments
     env: 'development'
   };
 
@@ -47,6 +48,7 @@ const LCC_AUTH = (() => {
         const data = await resp.json();
         config.supabaseUrl = data.supabase_url || null;
         config.supabaseAnonKey = data.supabase_anon_key || null;
+        config.lccApiKey = data.lcc_api_key || null;
         config.env = data.env || 'development';
       }
     } catch (e) {
@@ -367,7 +369,8 @@ const LCC_AUTH = (() => {
     get user() { return lccUser || user; },
     get session() { return session; },
     get authMode() { return authMode; },
-    get accessToken() { return session?.access_token || null; }
+    get accessToken() { return session?.access_token || null; },
+    get apiKey() { return config.lccApiKey || null; }
   };
 })();
 
@@ -389,19 +392,31 @@ const LCC_AUTH = (() => {
 
     // Only intercept /api/ calls (same-origin API requests)
     if (url.startsWith('/api/') || url.startsWith(location.origin + '/api/')) {
-      // Only inject if LCC_AUTH is initialized and has a token
-      if (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.accessToken) {
+      if (typeof LCC_AUTH !== 'undefined') {
         init = init || {};
         init.headers = init.headers || {};
 
-        // Don't override if Authorization is already set
-        if (init.headers instanceof Headers) {
-          if (!init.headers.has('Authorization')) {
-            init.headers.set('Authorization', 'Bearer ' + LCC_AUTH.accessToken);
+        const isHeaders = init.headers instanceof Headers;
+        const hasAuth = isHeaders
+          ? init.headers.has('Authorization')
+          : (init.headers['Authorization'] || init.headers['authorization']);
+
+        if (!hasAuth) {
+          // 1. Prefer JWT if available
+          if (LCC_AUTH.accessToken) {
+            if (isHeaders) {
+              init.headers.set('Authorization', 'Bearer ' + LCC_AUTH.accessToken);
+            } else {
+              init.headers['Authorization'] = 'Bearer ' + LCC_AUTH.accessToken;
+            }
           }
-        } else {
-          if (!init.headers['Authorization'] && !init.headers['authorization']) {
-            init.headers['Authorization'] = 'Bearer ' + LCC_AUTH.accessToken;
+          // 2. Fall back to API key if configured (Phase 6b)
+          else if (LCC_AUTH.apiKey) {
+            if (isHeaders) {
+              init.headers.set('X-LCC-Key', LCC_AUTH.apiKey);
+            } else {
+              init.headers['X-LCC-Key'] = LCC_AUTH.apiKey;
+            }
           }
         }
       }
