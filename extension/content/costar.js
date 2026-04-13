@@ -83,6 +83,12 @@
     const contacts = extractContacts(lines);
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
+
+    // Derive tenant_name from tenants array if not already captured
+    if (!data.tenant_name && tenants.length > 0 && tenants[0].name) {
+      data.tenant_name = tenants[0].name;
+    }
+
     const location = findLocationInLines(lines);
 
     // Merge new data into accumulated (preserves data from prior tab views)
@@ -338,7 +344,7 @@
       // Tenant name — appears as a label/value pair on property detail pages
       // e.g. "Tenant" label followed by "VA Madison East Clinic" or "DaVita..."
       // Reject CoStar section header labels that follow a "Tenant" label in page text.
-      const TENANT_REJECT = /^(public\s+record|building|land|market|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none)$/i;
+      const TENANT_REJECT = /^(public\s+record|building|land|market|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type)$/i;
 
       if (!data.tenant_name && /^tenant\s*name?$/i.test(line) && next
           && next.length > 2 && next.length < 80
