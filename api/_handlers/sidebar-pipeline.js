@@ -1854,44 +1854,48 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
 
 /**
  * Upsert deed records into the government domain database.
- * Government schema uses parcel_id (not property_id) and state_code (not state).
+ * Government deed_records has no property_id — it uses parcel_id (UUID FK to
+ * parcel_records).  Since we may not have a parcel UUID, we write with
+ * available fields only, using document_number as the dedup key.
  * Filters out mortgage-type deeds via MORTGAGE_DEED_TYPES.
  */
 async function upsertGovernmentDeedRecords(entity, metadata) {
-  const deedSales = (metadata.sales_history || [])
-    .filter(s => s.document_number && !MORTGAGE_DEED_TYPES.test(s.deed_type || ''));
+  const deedSales = (metadata.sales_history || []).filter(s =>
+    s.document_number &&
+    s.deed_type &&
+    !MORTGAGE_DEED_TYPES.test(s.deed_type)
+  );
   if (deedSales.length === 0) return 0;
 
-  let inserted = 0;
-
+  let count = 0;
   for (const sale of deedSales) {
-    const datePart = parseDate(sale.recordation_date || sale.sale_date)
-      ?.split('T')[0] || null;
     const dataHash = Buffer.from(
-      `${sale.document_number}|${entity.state}|${datePart || ''}`
+      `${sale.document_number}|${entity.state || ''}|${sale.sale_date || ''}`
     ).toString('base64');
 
-    const lookup = await domainQuery('government', 'GET',
+    const existing = await domainQuery('government', 'GET',
       `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=deed_id&limit=1`
     );
-    if (lookup.ok && lookup.data?.length) continue;
+    if (existing.ok && existing.data?.length) continue;
 
-    const result = await domainQuery('government', 'POST', 'deed_records', {
-      document_number:  sale.document_number,
-      deed_type:        sale.deed_type || null,
-      grantor:          sale.seller || null,
-      grantee:          sale.buyer || null,
-      recording_date:   datePart,
-      consideration:    parseCurrency(sale.sale_price),
-      county:           entity.county || null,
-      state_code:       entity.state || null,
-      data_hash:        dataHash,
-      raw_payload:      sale,
+    const dateStr = parseDate(sale.recordation_date || sale.sale_date)
+      ?.split('T')[0] || null;
+
+    const r = await domainQuery('government', 'POST', 'deed_records', {
+      document_number: sale.document_number,
+      deed_type:       sale.deed_type || null,
+      grantor:         sale.seller    || null,
+      grantee:         sale.buyer     || null,
+      recording_date:  dateStr,
+      consideration:   parseCurrency(sale.sale_price),
+      county:          entity.county  || null,
+      state_code:      entity.state   || null,
+      data_hash:       dataHash,
+      raw_payload:     sale,
     });
-    if (result.ok) inserted++;
+    if (r.ok) count++;
   }
-
-  return inserted;
+  return count;
 }
 
 /**
