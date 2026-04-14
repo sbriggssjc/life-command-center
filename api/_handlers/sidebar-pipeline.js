@@ -1341,6 +1341,30 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
   const parsedSF = parseSF(metadata.square_footage);
   const primaryTenant = cleanTenantValue(selectPrimaryTenant(metadata, domain));
 
+  // Identify the "most recent" sale — the one whose sale_date most closely
+  // matches the CoStar Last Sale Date stat-card value. Only that row may
+  // carry the CoStar-stated cap rate; historical deed rows predate the
+  // current listing and must not inherit its cap rate.
+  const statCardLastSaleDate = parseDate(metadata.last_sale_date || metadata.sale_date);
+  let mostRecentSaleDatePart = null;
+  {
+    const dated = sales
+      .map(s => parseDate(s.sale_date))
+      .filter(Boolean)
+      .map(d => d.split('T')[0]);
+    if (dated.length) {
+      if (statCardLastSaleDate) {
+        const target = new Date(statCardLastSaleDate.split('T')[0]).getTime();
+        dated.sort((a, b) =>
+          Math.abs(new Date(a).getTime() - target) -
+          Math.abs(new Date(b).getTime() - target));
+      } else {
+        dated.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+      }
+      mostRecentSaleDatePart = dated[0];
+    }
+  }
+
   let count = 0;
   for (const sale of sales) {
     const saleDate = parseDate(sale.sale_date);
@@ -1413,6 +1437,16 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     const sellerVal = sale.seller || (isCurrentSale ? contactSeller : null);
     const procuringBrokerVal = isCurrentSale ? (buyerBroker?.name || null) : null;
 
+    // Cap-rate gating: only the most-recent sale (matching CoStar's Last
+    // Sale Date) with a real sold_price may carry the CoStar-stated cap
+    // rate. Historical deed rows still record provenance
+    // (confidence='low', rent_source='costar_stated') but get
+    // stated_cap_rate=NULL so they no longer inherit the current
+    // listing's cap rate. sale_date-null rows are already skipped above.
+    const isMostRecentSale = datePart === mostRecentSaleDatePart;
+    const allowStatedCapRate =
+      isMostRecentSale && soldPrice != null && capRateVal != null;
+
     const domainSaleFields = domain === 'government'
       ? {
           sold_cap_rate:    capRateVal,
@@ -1443,11 +1477,13 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           // confidence until an OM or lease confirms it. calculated_cap_rate
           // and rent_at_sale are intentionally left null here — they are
           // populated downstream when confirmed rent data arrives.
-          ...(capRateVal != null ? {
-            stated_cap_rate:     capRateVal,
-            cap_rate_confidence: 'low',
-            rent_source:         'costar_stated',
-          } : {}),
+          // Only the most-recent sale gets the stated cap rate value;
+          // historical rows keep provenance but no value. The explicit
+          // null on stated_cap_rate is re-applied after stripNulls below
+          // so PATCHes clear any previously-written stat-card value.
+          stated_cap_rate:     allowStatedCapRate ? capRateVal : null,
+          cap_rate_confidence: 'low',
+          rent_source:         'costar_stated',
           buyer_name:       buyerVal,
           seller_name:      sellerVal,
           procuring_broker: procuringBrokerVal,
@@ -1478,6 +1514,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     // Always write exclude flag since false is a valid value that should persist
     saleData.exclude_from_market_metrics = exclude_from_market_metrics ?? false;
     saleData.data_source                = 'costar_sidebar';
+    // Re-apply explicit null on historical dialysis rows: stripNulls above
+    // removes null values, but PATCH must actively clear stated_cap_rate
+    // on rows that previously inherited the stat-card cap rate.
+    if (domain !== 'government' && !allowStatedCapRate) {
+      saleData.stated_cap_rate = null;
+    }
 
     if (lookup.ok && lookup.data?.length) {
       // Update existing
