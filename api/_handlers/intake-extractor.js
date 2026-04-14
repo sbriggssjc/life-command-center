@@ -16,6 +16,7 @@
 
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
+import { matchIntakeToProperty } from './intake-matcher.js';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const EXTRACTION_MODEL = 'claude-sonnet-4-20250514';
@@ -352,6 +353,17 @@ export async function processIntakeExtraction(intakeId) {
   );
 
   console.log(`[intake-extractor] Done: intake_id=${intakeId}, extractions=${extractions.length}/${documentArtifacts.length}`);
+
+  // Run property matcher after extraction completes
+  if (mergedSnapshot) {
+    try {
+      const matchResult = await matchIntakeToProperty(intakeId, mergedSnapshot);
+      console.log('[intake-matcher]', intakeId, matchResult.status, matchResult.confidence);
+    } catch (err) {
+      console.error('[intake-matcher] Match failed:', intakeId, err.message);
+    }
+  }
+
   return { ok: true, extraction_snapshot: mergedSnapshot };
 }
 
