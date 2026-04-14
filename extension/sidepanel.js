@@ -577,7 +577,8 @@ function renderIngestDiff(ctx, lccEntity) {
   const meta = lccEntity.metadata || {};
   const comparisons = [
     { label: 'Asking Price', costar: ctx.asking_price, db: null },
-    { label: 'Cap Rate', costar: ctx.cap_rate, db: null },
+    { label: 'Cap Rate', costar: ctx.cap_rate, db: null,
+      sourceLabel: 'CoStar stated', confidence: 'low' },
     { label: 'Building Size', costar: ctx.square_footage,
       db: lccEntity.metadata?.square_footage },
     (() => {
@@ -608,6 +609,23 @@ function renderIngestDiff(ctx, lccEntity) {
     const costarStr = toDisplayString(c.costar);
     const dbStr = toDisplayString(c.db);
     if (!costarStr && !dbStr && !c.hint) continue;
+
+    // Rows flagged with a sourceLabel (e.g. Cap Rate) always render with
+    // amber styling to signal that the CoStar value is unverified and
+    // must be confirmed by an OM or lease.
+    if (c.sourceLabel && costarStr) {
+      html += `<div class="context-field" style="background:rgba(251,191,36,0.08)">
+        <span class="context-label">${escapeHtml(c.label)}</span>
+        <span class="context-value">
+          ${dbStr ? '<span style="color:var(--text3);font-size:10px">DB: ' +
+            escapeHtml(dbStr) + '</span><br>' : ''}
+          <span style="color:#fbbf24;font-size:11px">${escapeHtml(c.sourceLabel)}: ${escapeHtml(costarStr)}</span>
+          <span style="background:rgba(251,191,36,0.2);color:#fbbf24;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px">${escapeHtml(c.confidence)} confidence</span>
+        </span>
+      </div>`;
+      continue;
+    }
+
     const changed = costarStr && dbStr && costarStr !== dbStr;
     html += `<div class="context-field" style="background:${
       changed ? 'rgba(251,191,36,0.08)' : 'transparent'}">
