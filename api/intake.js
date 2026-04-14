@@ -13,7 +13,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
-import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -142,6 +142,39 @@ function firstNonEmpty(...values) {
   return null;
 }
 
+// Fetch a remote PDF as a base64 artifact. Limited to a small allowlist of
+// trusted file-host patterns so we don't blindly hit arbitrary URLs from email
+// bodies. Returns null on any failure (untrusted, non-PDF, network, timeout).
+async function fetchUrlArtifact(url) {
+  const TRUSTED_PATTERNS = [
+    /dropbox\.com\/s\//,
+    /drive\.google\.com\/file\//,
+    /app\.box\.com\/s\//,
+    /1drv\.ms\//,              // OneDrive share links
+    /sharepoint\.com\/.*\.pdf/i,
+    /\.pdf(\?|$)/i,            // Direct PDF URLs
+  ];
+  if (!TRUSTED_PATTERNS.some(p => p.test(url))) return null;
+
+  try {
+    const res = await fetchWithTimeout(url, {
+      headers: { 'User-Agent': 'LCC-Intake/1.0' },
+    }, 15000);
+    if (!res.ok) return null;
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!/pdf/i.test(contentType)) return null;
+
+    const buffer = await res.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+    const fileName = url.split('/').pop()?.split('?')[0] || 'document.pdf';
+
+    return { base64, contentType: 'application/pdf', fileName };
+  } catch {
+    return null;
+  }
+}
+
 async function handleOutlookMessage(req, res) {
   console.log('[intake-outlook-message] diag req:', JSON.stringify({ method: req.method, bodyKeys: Object.keys(req.body || {}), hasMessageId: !!(req.body?.message_id || req.body?.id || req.body?.internet_message_id || req.body?.internetMessageId), hasWorkspaceHeader: !!req.headers['x-lcc-workspace'], bodyType: typeof req.body }));
   if (req.method !== 'POST') {
@@ -168,6 +201,10 @@ async function handleOutlookMessage(req, res) {
   const messageId = internetMsgId || graphRestId;
   const subject = firstNonEmpty(payload.subject, '(No subject)');
   const bodyPreview = firstNonEmpty(payload.body_preview, payload.bodyPreview, payload.body, '');
+  // Power Automate's bodyPreview is capped at ~255 chars. If the flow attaches
+  // a full body via a "Get email (V3)" step (passed as body_text), prefer it
+  // for URL scanning so we can find PDF links beyond the preview window.
+  const bodyForUrlScan = firstNonEmpty(payload.body_text, payload.bodyText, bodyPreview, '');
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
   const receivedAtIso = isoOrNow(firstNonEmpty(payload.received_date_time, payload.receivedDateTime, payload.received_at));
   const sender = normalizeSender(firstNonEmpty(payload.from, payload.sender, payload.sender_email));
@@ -229,6 +266,25 @@ async function handleOutlookMessage(req, res) {
             inline_data:  att.inline_data || att.content || null,
           });
         }
+
+        // No direct attachments? Try to pull a PDF from URLs in the body.
+        if (atts.length === 0 && bodyForUrlScan) {
+          const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
+          for (const url of urlMatches.slice(0, 3)) {  // max 3 URLs to try
+            const fetched = await fetchUrlArtifact(url);
+            if (fetched) {
+              await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+                intake_id:    existing.id,
+                file_name:    fetched.fileName,
+                file_type:    fetched.contentType,
+                storage_path: url,            // keep the source URL
+                inline_data:  fetched.base64,
+              });
+              break;  // one OM per email is sufficient
+            }
+          }
+        }
+
         await Promise.race([
           processIntakeExtraction(existing.id),
           new Promise(r => setTimeout(r, 8000)),
@@ -324,6 +380,26 @@ async function handleOutlookMessage(req, res) {
           storage_path: att.storage_path || null,
           inline_data:  att.inline_data || att.content || null,
         });
+      }
+
+      // 2b. No direct attachments? Try to pull a PDF from URLs in the body.
+      // Power Automate sometimes signals has_attachments=true for inline
+      // images/signatures while the real OM is linked from the body instead.
+      if (atts.length === 0 && bodyForUrlScan) {
+        const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
+        for (const url of urlMatches.slice(0, 3)) {  // max 3 URLs to try
+          const fetched = await fetchUrlArtifact(url);
+          if (fetched) {
+            await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+              intake_id:    stagedIntakeId,
+              file_name:    fetched.fileName,
+              file_type:    fetched.contentType,
+              storage_path: url,            // keep the source URL
+              inline_data:  fetched.base64,
+            });
+            break;  // one OM per email is sufficient
+          }
+        }
       }
 
       // 3. Run extraction with a short timeout race.
