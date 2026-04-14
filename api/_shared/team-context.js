@@ -120,21 +120,27 @@ export function getTrackRecordSummary(domain) {
 export async function buildRecentSalesTable(domain, options = {}) {
   const { limit = 10, state } = options;
 
-  // Query domain DBs directly (GOV or DIA) for NorthMarq transactions
-  let path;
-  if (domain === 'government') {
-    path = `sales_transactions?select=address,city,state,agency,sf_leased,noi,noi_psf,firm_term_years,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer&is_northmarq=eq.true&order=sale_date.desc&limit=${limit}`;
-  } else {
-    // Dialysis DB: query by listing_broker containing 'Briggs' or 'NorthMarq'
-    path = `sales_transactions?select=address,city,state,tenant,building_size,noi,noi_psf,firm_term_years,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer,listing_broker&or=(listing_broker.ilike.*briggs*,listing_broker.ilike.*northmarq*)&order=sale_date.desc&limit=${limit}`;
+  // Query domain DBs directly for NorthMarq transactions.
+  // NOTE: DIA schema differs from GOV — sales_transactions there has no
+  // denormalized address/tenant/noi columns (those live on a separate
+  // properties table) and no is_northmarq flag. Until we build a proper
+  // view for it, short-circuit dialysis to the static TRACK_RECORD fallback
+  // so we don't spam 400s to the Vercel logs.
+  if (domain !== 'government') {
+    const record = TRACK_RECORD[domain] || TRACK_RECORD.government;
+    return {
+      table: null,
+      count: record.fallback_count,
+      volume: record.fallback_volume,
+    };
   }
 
+  let path = `sales_transactions?select=address,city,state,agency,sf_leased,noi,noi_psf,firm_term_years,sold_price,sold_price_psf,sold_cap_rate,sale_date,buyer&is_northmarq=eq.true&order=sale_date.desc&limit=${limit}`;
   if (state) {
     path += `&state=eq.${state}`;
   }
 
-  const source = domain === 'government' ? 'gov' : 'dia';
-  const result = await domainQuery(source, path);
+  const result = await domainQuery('gov', path);
 
   if (!result.ok || !result.data.length) {
     // Fall back to TRACK_RECORD constants if DB query fails
