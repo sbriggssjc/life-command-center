@@ -573,12 +573,122 @@ function renderCompareTable(ctx, lccEntity, sourceLabel) {
   return html;
 }
 
+// ── Cap rate provenance helpers ─────────────────────────────────────────────
+//
+// The dialysis pipeline (api/_shared/rent-projection.js) stores three fields
+// per sale once a confirmed rent anchor arrives: stated_cap_rate (raw CoStar),
+// calculated_cap_rate (projected from the anchor), and cap_rate_confidence
+// ('low' | 'medium' | 'high'). We mirror that three-state model in the UI.
+
+function formatCapPct(raw) {
+  if (raw == null || raw === '') return null;
+  // Accept '7.15%' strings or decimal numerics (0.0715 or 7.15) from LCC.
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.endsWith('%')) return trimmed;
+    const asNum = Number(trimmed);
+    if (Number.isFinite(asNum)) return formatCapPct(asNum);
+    return trimmed;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  // Values under 1 are assumed to be decimal fractions (0.0715 → 7.15%).
+  const pct = n < 1 ? n * 100 : n;
+  return pct.toFixed(2) + '%';
+}
+
+/**
+ * Read cap-rate provenance from whatever LCC has for this property.
+ * Returns { statedPct, calculatedPct, confidence, sourceLabel } where unset
+ * fields are null. Provenance fields live on the most recent sale in the
+ * LCC metadata sales_history (if the dialysis pipeline back-fills them),
+ * or on the property metadata itself as a fallback.
+ */
+function pickCapRateState(meta) {
+  const mostRecentSale = Array.isArray(meta?.sales_history) && meta.sales_history.length
+    ? [...meta.sales_history].sort((a, b) => {
+        const da = a.sale_date ? Date.parse(a.sale_date) : 0;
+        const db = b.sale_date ? Date.parse(b.sale_date) : 0;
+        return db - da;
+      })[0]
+    : null;
+
+  const source = mostRecentSale || meta || {};
+  const stated     = source.stated_cap_rate ?? source.cap_rate ?? null;
+  const calculated = source.calculated_cap_rate ?? null;
+  const confidence = source.cap_rate_confidence || null;
+  const rentSource = source.rent_source || meta?.anchor_rent_source || null;
+
+  // Human-readable provenance caption.
+  let sourceLabel = null;
+  if (confidence === 'high' || rentSource === 'projected_from_lease_confirmed'
+      || rentSource === 'lease_confirmed') {
+    sourceLabel = 'lease confirmed';
+  } else if (confidence === 'medium' || rentSource === 'projected_from_om_confirmed'
+      || rentSource === 'om_confirmed') {
+    sourceLabel = 'projected from OM';
+  } else {
+    sourceLabel = 'CoStar stated';
+  }
+
+  return {
+    statedPct:     formatCapPct(stated),
+    calculatedPct: formatCapPct(calculated),
+    confidence:    confidence || 'low',
+    sourceLabel,
+  };
+}
+
+/**
+ * Render a cap-rate cell using the three-state model. ``costarStr`` is the
+ * value we just scraped (may be null/empty if CoStar didn't surface one).
+ */
+function renderCapRateRow(label, costarStr, state) {
+  const confidence = state.confidence || 'low';
+  const sourceLabel = state.sourceLabel || 'CoStar stated';
+
+  // State 2 / 3 — calculated cap rate is available.
+  if (state.calculatedPct) {
+    const lock = confidence === 'high' ? '\uD83D\uDD12 ' : '';
+    const check = '\u2713';
+    const stated = state.statedPct || costarStr;
+    return `<div class="context-field" style="background:rgba(74,222,128,0.06)">
+      <span class="context-label">${escapeHtml(label)}</span>
+      <span class="context-value" style="display:block">
+        <span style="color:var(--text);font-size:11px">CoStar stated: ${escapeHtml(stated || '—')}</span><br>
+        <span style="color:#4ade80;font-size:11px;font-weight:600">Calculated: ${escapeHtml(state.calculatedPct)}</span>
+        <span style="color:#4ade80;font-size:11px;margin-left:4px">${check} ${lock}${escapeHtml(confidence)} confidence (${escapeHtml(sourceLabel)})</span>
+      </span>
+    </div>`;
+  }
+
+  // State 1 — no anchor rent yet; show low-confidence amber row.
+  const warn = '\u26A0';
+  return `<div class="context-field" style="background:rgba(251,191,36,0.08)">
+    <span class="context-label">${escapeHtml(label)}</span>
+    <span class="context-value">
+      <span style="color:#fbbf24;font-size:11px">CoStar: ${escapeHtml(costarStr)}</span>
+      <span style="background:rgba(251,191,36,0.2);color:#fbbf24;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px">${warn} low confidence (${escapeHtml(sourceLabel)})</span>
+    </span>
+  </div>`;
+}
+
 function renderIngestDiff(ctx, lccEntity) {
   const meta = lccEntity.metadata || {};
+
+  // Pull cap-rate provenance off whatever LCC has for this property. We look
+  // first at the most recent sale in LCC metadata (where the dialysis pipeline
+  // stores calculated_cap_rate / cap_rate_confidence / stated_cap_rate), and
+  // fall back to the property-level metadata fields if present.
+  const capRateState = pickCapRateState(meta);
+  const capRateLabel = capRateState.calculatedPct
+    ? 'Cap Rate (stated / calculated)'
+    : 'Cap Rate';
+
   const comparisons = [
     { label: 'Asking Price', costar: ctx.asking_price, db: null },
-    { label: 'Cap Rate', costar: ctx.cap_rate, db: null,
-      sourceLabel: 'CoStar stated', confidence: 'low' },
+    { label: capRateLabel, costar: ctx.cap_rate, db: null,
+      capRateState },
     { label: 'Building Size', costar: ctx.square_footage,
       db: lccEntity.metadata?.square_footage },
     (() => {
@@ -610,19 +720,13 @@ function renderIngestDiff(ctx, lccEntity) {
     const dbStr = toDisplayString(c.db);
     if (!costarStr && !dbStr && !c.hint) continue;
 
-    // Rows flagged with a sourceLabel (e.g. Cap Rate) always render with
-    // amber styling to signal that the CoStar value is unverified and
-    // must be confirmed by an OM or lease.
-    if (c.sourceLabel && costarStr) {
-      html += `<div class="context-field" style="background:rgba(251,191,36,0.08)">
-        <span class="context-label">${escapeHtml(c.label)}</span>
-        <span class="context-value">
-          ${dbStr ? '<span style="color:var(--text3);font-size:10px">DB: ' +
-            escapeHtml(dbStr) + '</span><br>' : ''}
-          <span style="color:#fbbf24;font-size:11px">${escapeHtml(c.sourceLabel)}: ${escapeHtml(costarStr)}</span>
-          <span style="background:rgba(251,191,36,0.2);color:#fbbf24;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px">${escapeHtml(c.confidence)} confidence</span>
-        </span>
-      </div>`;
+    // Cap Rate row — three-state display driven by what's in the LCC
+    // dialysis DB. When no anchor rent exists we show the unverified CoStar
+    // value with low-confidence (amber) styling. Once the pipeline has
+    // computed a calculated cap rate, we show stated + calculated side-by-
+    // side, with high confidence getting a lock icon.
+    if (c.capRateState && costarStr) {
+      html += renderCapRateRow(c.label, costarStr, c.capRateState);
       continue;
     }
 
@@ -1036,6 +1140,50 @@ function parseSaleYear(dateStr) {
   return m ? parseInt(m[0]) : null;
 }
 
+/**
+ * Render the cap-rate line for a single sale when the LCC dialysis pipeline
+ * has computed a calculated_cap_rate for it. Returns null when nothing has
+ * been computed yet and the caller should fall through to the plain
+ * "Cap: X%" details-line rendering.
+ */
+function renderSaleCapRateInline(sale) {
+  const stated     = sale.stated_cap_rate ?? null;
+  const calculated = sale.calculated_cap_rate ?? null;
+  const confidence = sale.cap_rate_confidence || null;
+  const rentSource = sale.rent_source || null;
+
+  // No provenance info at all → let the classic "Cap: 7.15%" detail render.
+  if (!calculated && !confidence) return null;
+
+  const statedPct     = formatCapPct(stated ?? sale.cap_rate);
+  const calculatedPct = formatCapPct(calculated);
+
+  let sourceLabel = 'CoStar stated';
+  if (confidence === 'high' || rentSource === 'projected_from_lease_confirmed') {
+    sourceLabel = 'lease confirmed';
+  } else if (confidence === 'medium' || rentSource === 'projected_from_om_confirmed') {
+    sourceLabel = 'projected from OM';
+  }
+
+  if (calculatedPct) {
+    const lock = confidence === 'high' ? '\uD83D\uDD12 ' : '';
+    const check = '\u2713';
+    return `<div class="sale-detail">
+      <span style="color:var(--text);">CoStar stated: ${escapeHtml(statedPct || '—')}</span>
+      &middot;
+      <span style="color:#4ade80;font-weight:600">Calculated: ${escapeHtml(calculatedPct)}</span>
+      <span style="color:#4ade80;margin-left:4px">${check} ${lock}${escapeHtml(confidence || 'medium')} confidence (${escapeHtml(sourceLabel)})</span>
+    </div>`;
+  }
+
+  // Provenance says "low" but no calculation done yet.
+  const warn = '\u26A0';
+  return `<div class="sale-detail">
+    <span style="color:#fbbf24">CoStar: ${escapeHtml(statedPct || '—')}</span>
+    <span style="color:#fbbf24;margin-left:4px">${warn} low confidence (${escapeHtml(sourceLabel)})</span>
+  </div>`;
+}
+
 function renderSalesHistory(sales, ctx) {
   if (!sales.length) return '';
   let html = '<div class="section-label">Sales History</div>';
@@ -1052,14 +1200,26 @@ function renderSalesHistory(sales, ctx) {
       html += `<div style="margin:2px 0;"><span style="background:#FEF3C7;color:#92400E;font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;">${tags.map((t) => escapeHtml(t)).join(' · ')}</span></div>`;
     }
 
-    // Transaction details line
+    // Transaction details line — cap rate uses the three-state display when
+    // the LCC dialysis pipeline has filled in calculated_cap_rate and
+    // cap_rate_confidence on this sale. Otherwise fall back to the flat
+    // CoStar-stated value.
     const details = [];
-    if (s.cap_rate) details.push(`Cap: ${s.cap_rate}`);
+    const saleCapRateHtml = renderSaleCapRateInline(s);
+    if (saleCapRateHtml) {
+      // Detail lines get rendered below via join — drop the cap rate in as a
+      // pre-rendered HTML fragment to avoid stomping the per-cell styling.
+    } else if (s.cap_rate) {
+      details.push(`Cap: ${s.cap_rate}`);
+    }
     if (s.sale_type) details.push(s.sale_type);
     if (s.sale_condition) details.push(s.sale_condition);
     if (s.transaction_type) details.push(s.transaction_type);
     if (s.deed_type) details.push(s.deed_type);
     if (s.hold_period) details.push(`Hold: ${s.hold_period}`);
+    if (saleCapRateHtml) {
+      html += saleCapRateHtml;
+    }
     if (details.length) {
       html += `<div class="sale-detail">${details.map((d) => escapeHtml(d)).join(' &middot; ')}</div>`;
     }
