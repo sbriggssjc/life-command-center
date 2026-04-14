@@ -218,7 +218,7 @@ async function handleOutlookMessage(req, res) {
   const item = Array.isArray(result.data) ? result.data[0] : result.data;
 
   // If email has attachments, bridge to staged intake pipeline
-  if (hasAttachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+  if (hasAttachments) {
 
     // 1. Create staged_intake_item
     const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
@@ -235,14 +235,27 @@ async function handleOutlookMessage(req, res) {
     });
 
     if (stageResult.ok) {
-      // 2. Create artifact rows for each attachment
-      for (const att of payload.attachments) {
+      // 2. Write artifacts if we have them
+      const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+      for (const att of atts) {
         await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
           intake_id:    correlationId,
-          file_name:    att.file_name || att.name,
+          file_name:    att.file_name || att.name || 'attachment',
           file_type:    att.file_type || att.contentType || 'application/octet-stream',
           storage_path: att.storage_path || null,
           inline_data:  att.inline_data || att.content || null,
+        });
+      }
+
+      // If no attachments provided but email has them, create a placeholder
+      // so the item is visible in the review queue for manual processing
+      if (atts.length === 0) {
+        await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+          intake_id:   correlationId,
+          file_name:   'pending_attachments',
+          file_type:   'pending',
+          storage_path: null,
+          inline_data:  null,
         });
       }
 
@@ -256,14 +269,6 @@ async function handleOutlookMessage(req, res) {
   // Fire-and-forget entity extraction — NEVER blocks the intake response
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
     .catch(err => console.error('[Intake extraction error]', err.message || err));
-
-  // Fire-and-forget document extraction — runs async for staged intake items
-  // Don't await — extraction runs async, doesn't block intake response
-  if (item?.intake_id) {
-    processIntakeExtraction(item.intake_id).catch(err =>
-      console.error('[intake-extractor] extraction failed:', item.intake_id, err.message)
-    );
-  }
 
   return res.status(200).json({
     ok: true,
