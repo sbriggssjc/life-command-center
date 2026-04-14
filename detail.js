@@ -307,6 +307,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       _udRenderSalesAsync(bodyEl);
     } else {
       if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
+      if (activeTab === 'Intel') _intelRenderPriorSaleSummaryAsync();
     }
 
   } catch (err) {
@@ -549,6 +550,7 @@ function switchUnifiedTab(tabName) {
     _udRenderSalesAsync(bodyEl);
   } else {
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
+    if (tabName === 'Intel') _intelRenderPriorSaleSummaryAsync();
   }
 }
 
@@ -2855,26 +2857,15 @@ function _udTabIntel() {
   html += _udResearchIntakeSection();
 
   // ── PRIOR SALE SECTION ──────────────────────────────────────────────────────
+  // Read-only summary. The editable form was removed — property_sale_events
+  // is now the single source of truth. To record a new sale, use the Sales
+  // tab "+ Add" form, which writes directly to property_sale_events and lets
+  // the DB trigger mark concurrent listings Sold.
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-prior-sale\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Prior Sale</div>';
   html += '<div class="intel-prior-sale" style="display:block">';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Sale Date</label>';
-  html += '<input id="intelSaleDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Sale Price ($)</label>';
-  html += '<input id="intelSalePrice" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Cap Rate at Sale (%)</label>';
-  html += '<input id="intelCapRateSale" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Buyer</label>';
-  html += '<input id="intelBuyer" type="text" placeholder="Entity name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Seller</label>';
-  html += '<input id="intelSeller" type="text" placeholder="Entity name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-  html += '</div>';
-  html += '<button onclick="_udBtnGuard(this, _intelSavePriorSale)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Prior Sale</button>';
+  html += '<div id="intelPriorSaleSummary" style="font-size:12px;color:var(--text2)"><span class="spinner"></span> Loading latest sale…</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text3);font-style:italic">Sale details are managed on the Sales tab. Open Sales → “+ Add” to record a new transaction.</div>';
   html += '</div></div>';
 
   // ── LOAN / DEBT SECTION ─────────────────────────────────────────────────────
@@ -2959,8 +2950,16 @@ function _udTabIntel() {
 }
 
 // ─── SALES TAB ──────────────────────────────────────────────────────────────
+//
+// Canonical data source: property_sale_events
+//   - Sales tab, Ownership History, and Intel → Prior Sale summary all read
+//     from this table. sales_transactions remains as a legacy compat source
+//     that the backfill migration has already mirrored into
+//     property_sale_events. Going forward new writes land in the canonical
+//     table and a DB trigger marks any concurrent active listings Sold.
 
-let _salesCache = null; // { property_id, transactions: [], listings: [] }
+let _salesCache = null; // { property_id, db, transactions: [], listings: [] }
+let _salesFilter = 'all'; // 'all' | 'listings' | 'sales'
 
 async function _udRenderSalesAsync(bodyEl) {
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
@@ -2982,20 +2981,33 @@ async function _udRenderSalesAsync(bodyEl) {
   if (propertyId) {
     try {
       const propId = encodeURIComponent(propertyId);
+      // Prefer the canonical property_sale_events table. If it isn't yet
+      // reachable (older environments), fall back to sales_transactions so
+      // the tab never goes empty during rollout.
+      const saleRes = await qFn('property_sale_events', '*', {
+        filter: `property_id=eq.${propId}`,
+        order: 'sale_date.desc.nullslast',
+        limit: 100
+      }).catch(() => null);
       const [listRes, txnRes] = await Promise.all([
         qFn('available_listings', '*', {
           filter: `property_id=eq.${propId}`,
           order: 'listing_date.desc.nullslast',
           limit: 50
         }).catch(() => []),
-        qFn('sales_transactions', '*', {
-          filter: `property_id=eq.${propId}&exclude_from_market_metrics=is.false`,
-          order: 'sale_date.desc',
-          limit: 100
-        }).catch(() => [])
+        saleRes != null
+          ? Promise.resolve(saleRes)
+          : qFn('sales_transactions', '*', {
+              filter: `property_id=eq.${propId}`,
+              order: 'sale_date.desc',
+              limit: 100
+            }).catch(() => [])
       ]);
       listings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
-      transactions = Array.isArray(txnRes) ? txnRes : (txnRes?.data || []);
+      const rawTxns = Array.isArray(txnRes) ? txnRes : (txnRes?.data || []);
+      // Normalize both sources to a common shape so renderers don't care
+      // which table the row came from.
+      transactions = rawTxns.map(_salesNormalizeSaleRow);
     } catch (e) {
       console.warn('Sales history fetch error:', e);
     }
@@ -3005,6 +3017,21 @@ async function _udRenderSalesAsync(bodyEl) {
   if (bodyEl) bodyEl.innerHTML = _udTabSales();
 }
 
+// Normalize rows from either property_sale_events OR sales_transactions into
+// a single shape: { sale_date, price, cap_rate, buyer_name, seller_name,
+// broker_name, source, notes, sale_event_id?, sale_id? }. This is what all
+// _salesRender* helpers expect.
+function _salesNormalizeSaleRow(r) {
+  if (!r || typeof r !== 'object') return r;
+  const price = r.price != null ? r.price : (r.sold_price != null ? r.sold_price : r.sale_price);
+  return Object.assign({}, r, {
+    price,
+    buyer_name: r.buyer_name || r.buyer || null,
+    seller_name: r.seller_name || r.seller || null,
+    broker_name: r.broker_name || r.listing_broker || null,
+  });
+}
+
 function _udTabSales() {
   const txns = _salesCache ? (_salesCache.transactions || []) : [];
   const listings = _salesCache ? (_salesCache.listings || []) : [];
@@ -3012,11 +3039,11 @@ function _udTabSales() {
 
   // Build a unified chronological timeline that pairs listings with their
   // corresponding sale where off_market_date ≈ sale_date (±30 days).
-  const events = _salesBuildTimeline(listings, txns);
+  const allEvents = _salesBuildTimeline(listings, txns);
 
   let html = '';
 
-  if (events.length === 0) {
+  if (allEvents.length === 0) {
     html += '<div class="detail-empty" style="text-align:center;padding:40px 20px">';
     html += '<div style="font-size:18px;margin-bottom:8px;color:var(--text2)">No listing or sales history</div>';
     html += '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Add a sales comp to start building the transaction history.</div>';
@@ -3028,19 +3055,47 @@ function _udTabSales() {
     return html;
   }
 
-  const saleCount = events.reduce((n, e) => n + (e.sale ? 1 : 0), 0);
-  const listingCount = events.reduce((n, e) => n + (e.listing ? 1 : 0), 0);
+  // Filter chips replace the old "X listings · Y sales" counter.
+  const filter = _salesFilter || 'all';
+  const events = allEvents.filter((e) => {
+    if (filter === 'listings') return !!e.listing;
+    if (filter === 'sales') return !!e.sale;
+    return true;
+  });
 
   html += '<div class="detail-section">';
-  html += `<div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between">`;
-  html += `<span>Sales &amp; Listing History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${listingCount} listing${listingCount !== 1 ? 's' : ''} · ${saleCount} sale${saleCount !== 1 ? 's' : ''}</span></span>`;
+  html += `<div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">`;
+  html += `<span>Sales &amp; Listing History</span>`;
   if (propertyId) {
     html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:5px 14px;border-radius:6px;font-size:12px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add</button>`;
   }
   html += '</div>';
 
+  // Filter chips row
+  const chips = [
+    { key: 'all',      label: 'All' },
+    { key: 'listings', label: 'Listings' },
+    { key: 'sales',    label: 'Sales' },
+  ];
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px 0">';
+  chips.forEach((c) => {
+    const isActive = filter === c.key;
+    const bg = isActive ? 'var(--accent)' : 'var(--s2)';
+    const fg = isActive ? '#fff' : 'var(--text2)';
+    const border = isActive ? 'var(--accent)' : 'var(--border)';
+    html += `<button onclick="_salesSetFilter('${c.key}')" style="padding:4px 12px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${border};background:${bg};color:${fg};text-transform:uppercase;letter-spacing:0.4px">${esc(c.label)}</button>`;
+  });
+  html += '</div>';
+
+  if (events.length === 0) {
+    html += `<div class="detail-empty" style="font-size:13px;padding:16px 8px">No ${filter === 'sales' ? 'sales' : 'listings'} match this filter.</div>`;
+    html += '</div>';
+    html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
+    return html;
+  }
+
   // Timeline
-  html += '<div style="position:relative;padding-left:24px;margin-top:8px">';
+  html += '<div style="position:relative;padding-left:24px">';
   html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
 
   events.forEach((ev, idx) => {
@@ -3068,6 +3123,12 @@ function _udTabSales() {
   return html;
 }
 
+function _salesSetFilter(f) {
+  _salesFilter = (f === 'listings' || f === 'sales') ? f : 'all';
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _udTabSales();
+}
+
 // ─── Sales tab helpers ──────────────────────────────────────────────────────
 
 function _salesParseDate(d) {
@@ -3084,9 +3145,12 @@ function _salesListingIsActive(l) {
 }
 
 function _salesListingStatus(l, matchedSale) {
-  if (matchedSale) return { label: 'Sold', color: 'var(--green)' };
-  if (_salesListingIsActive(l)) return { label: 'Active', color: 'var(--accent)' };
-  if (l.off_market_date) return { label: 'Withdrawn', color: 'var(--yellow)' };
+  const raw = (l && l.status ? String(l.status) : '').toLowerCase();
+  if (matchedSale || raw === 'sold') return { label: 'Sold',      color: 'var(--green)' };
+  if (raw === 'withdrawn')           return { label: 'Withdrawn', color: 'var(--yellow)' };
+  if (raw === 'expired')             return { label: 'Expired',   color: 'var(--text3)' };
+  if (_salesListingIsActive(l))      return { label: 'Active',    color: 'var(--accent)' };
+  if (l.off_market_date)             return { label: 'Withdrawn', color: 'var(--yellow)' };
   return { label: 'Inactive', color: 'var(--text3)' };
 }
 
@@ -3188,6 +3252,7 @@ function _salesRenderSale(s) {
 
   const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
   const isLand = s.exclude_from_market_metrics === true;
+  const price = s.price != null ? s.price : (s.sold_price != null ? s.sold_price : s.sale_price);
 
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
   html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
@@ -3201,9 +3266,8 @@ function _salesRenderSale(s) {
   }
   html += '</div>';
 
-  const soldPrice = s.sold_price != null ? s.sold_price : s.sale_price;
-  if (soldPrice != null) {
-    html += `<div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:6px">${fmt(soldPrice)}</div>`;
+  if (price != null) {
+    html += `<div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:6px">${fmt(price)}</div>`;
   }
 
   const metrics = [];
@@ -3213,15 +3277,12 @@ function _salesRenderSale(s) {
     html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
   }
 
-  if (s.buyer_name || s.buyer) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(s.buyer_name || s.buyer)}</span></div>`;
-  }
-  if (s.seller_name || s.seller) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(s.seller_name || s.seller)}</span></div>`;
-  }
-  if (s.listing_broker) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(s.listing_broker)}</span></div>`;
-  }
+  const buyer = s.buyer_name || s.buyer;
+  const seller = s.seller_name || s.seller;
+  const broker = s.broker_name || s.listing_broker;
+  if (buyer)  html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(buyer)}</span></div>`;
+  if (seller) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(seller)}</span></div>`;
+  if (broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
@@ -3235,7 +3296,7 @@ function _salesRenderSale(s) {
 function _salesRenderCombined(l, s) {
   const initial = l.initial_price != null ? l.initial_price : l.asking_price;
   const last = l.last_price != null ? l.last_price : null;
-  const soldPrice = s.sold_price != null ? s.sold_price : s.sale_price;
+  const soldPrice = s.price != null ? s.price : (s.sold_price != null ? s.sold_price : s.sale_price);
   const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
   const isLand = s.exclude_from_market_metrics === true;
 
@@ -3304,15 +3365,17 @@ function _salesRenderCombined(l, s) {
   }
 
   // Parties
-  if (s.buyer_name || s.buyer) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(s.buyer_name || s.buyer)}</span></div>`;
+  const buyer = s.buyer_name || s.buyer;
+  const seller = s.seller_name || s.seller;
+  if (buyer) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(buyer)}</span></div>`;
   }
-  if (s.seller_name || s.seller) {
-    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(s.seller_name || s.seller)}</span></div>`;
+  if (seller) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(seller)}</span></div>`;
   }
 
   // Broker: prefer sale record, fall back to listing
-  const broker = s.listing_broker || l.listing_broker;
+  const broker = s.broker_name || s.listing_broker || l.listing_broker;
   if (broker) {
     html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
   }
@@ -3358,23 +3421,23 @@ async function _salesSaveTransaction() {
   if (!propertyId) { alert('No property ID — cannot save transaction.'); return; }
 
   const db = _udCache.db;
-  const qFn = db === 'gov' ? govQuery : diaQuery;
 
+  // Writes land in the canonical property_sale_events table. The DB trigger
+  // then flips any concurrent active listings to status='Sold' automatically,
+  // so the Sales tab filter chips and Ownership History stay in sync.
   const payload = {
-    property_id: propertyId,
-    sale_date: document.getElementById('salesFDate')?.value || null,
-    sale_price: _dpf(document.getElementById('salesFPrice')?.value),
-    buyer: document.getElementById('salesFBuyer')?.value?.trim() || null,
-    seller: document.getElementById('salesFSeller')?.value?.trim() || null,
-    price_psf: _dpf(document.getElementById('salesFPsf')?.value),
-    cap_rate: _dpf(document.getElementById('salesFCap')?.value),
-    source: document.getElementById('salesFSource')?.value?.trim() || null,
-    notes: document.getElementById('salesFNotes')?.value?.trim() || null,
+    property_id: String(propertyId),
+    sale_date:  document.getElementById('salesFDate')?.value || null,
+    price:      _dpf(document.getElementById('salesFPrice')?.value),
+    cap_rate:   _dpf(document.getElementById('salesFCap')?.value),
+    buyer_name: document.getElementById('salesFBuyer')?.value?.trim() || null,
+    seller_name:document.getElementById('salesFSeller')?.value?.trim() || null,
+    source:     document.getElementById('salesFSource')?.value?.trim() || null,
+    notes:      document.getElementById('salesFNotes')?.value?.trim() || null,
   };
 
-  // Use the proxy to POST (insert) into sales_comps
   const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
-  const url = `${proxyBase}?table=sales_comps&method=POST`;
+  const url = `${proxyBase}?table=property_sale_events&method=POST`;
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -5759,6 +5822,61 @@ async function _udSaveOwnership(options = {}) {
 // INTEL TAB SAVE FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Read-only summary of the most recent sale for this property. Renders into
+// the #intelPriorSaleSummary slot on the Intel tab. Data source is the
+// canonical property_sale_events table (falls back to v_property_latest_sale
+// if the row already got there via a view).
+async function _intelRenderPriorSaleSummaryAsync() {
+  const slot = document.getElementById('intelPriorSaleSummary');
+  if (!slot) return;
+  const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+  if (!propertyId) {
+    slot.innerHTML = '<span style="color:var(--text3)">No property ID — cannot load sale history.</span>';
+    return;
+  }
+  const db = _udCache.db;
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+  const propId = encodeURIComponent(propertyId);
+
+  let latest = null;
+  try {
+    const res = await qFn('property_sale_events', '*', {
+      filter: `property_id=eq.${propId}`,
+      order: 'sale_date.desc.nullslast',
+      limit: 1,
+    }).catch(() => null);
+    const rows = Array.isArray(res) ? res : (res?.data || []);
+    latest = rows[0] || null;
+  } catch (e) {
+    console.warn('Prior sale summary fetch error:', e);
+  }
+
+  if (!latest) {
+    slot.innerHTML = '<span style="color:var(--text3)">No sale recorded for this property yet.</span>';
+    return;
+  }
+
+  const price = latest.price != null ? latest.price : latest.sold_price;
+  const bits = [];
+  if (latest.sale_date) bits.push(`<span style="color:var(--text3)">Date:</span> <span style="color:var(--text)">${esc(_fmtDate(latest.sale_date))}</span>`);
+  if (price != null)    bits.push(`<span style="color:var(--text3)">Price:</span> <span class="mono" style="color:var(--green);font-weight:600">${fmt(price)}</span>`);
+  if (latest.cap_rate != null) bits.push(`<span style="color:var(--text3)">Cap:</span> <span style="color:var(--text);font-weight:600">${Number(latest.cap_rate).toFixed(2)}%</span>`);
+  if (latest.buyer_name)  bits.push(`<span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(latest.buyer_name)}</span>`);
+  if (latest.seller_name) bits.push(`<span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(latest.seller_name)}</span>`);
+  if (latest.broker_name) bits.push(`<span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(latest.broker_name)}</span>`);
+
+  let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;font-size:12px">';
+  html += bits.map(b => `<div>${b}</div>`).join('');
+  html += '</div>';
+  if (latest.source) {
+    html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">Source: ${esc(latest.source)}</div>`;
+  }
+  if (latest.notes) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-top:4px;border-top:1px solid var(--border);padding-top:6px">${esc(latest.notes)}</div>`;
+  }
+  slot.innerHTML = html;
+}
+
 async function _intelSavePriorSale(options = {}) {
   const refresh = options.refresh !== false;
   const silent = options.silent === true;
@@ -5778,17 +5896,21 @@ async function _intelSavePriorSale(options = {}) {
   if (!_anySaleField) { showToast('Please fill in at least one sale field', 'info'); return; }
 
   try {
+    // Canonical target: property_sale_events. The legacy sales_transactions
+    // sink has been retired for write paths — the backfill migration mirrors
+    // old rows forward and new rows always land in property_sale_events so
+    // the DB trigger can mark concurrent listings Sold.
     const payload = {
-      property_id: propertyId,
+      property_id: String(propertyId),
       sale_date: saleDate || null,
-      sold_price: _dpf(salePrice),
+      price: _dpf(salePrice),
       cap_rate: _dpf(capRate),
       buyer_name: buyer,
       seller_name: seller
     };
     const res = await applyInsertWithFallback({
       proxyBase,
-      table: 'sales_transactions',
+      table: 'property_sale_events',
       idColumn: 'property_id',
       recordIdentifier: propertyId,
       data: payload,
