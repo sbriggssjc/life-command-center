@@ -2114,6 +2114,7 @@ async function enrichDraftContext(context) {
           title: rpt.report_title,
           quarter: rpt.report_quarter,
           filename: rpt.report_filename,
+          local_path: rpt.local_path || null,
           url: rpt.public_url || rpt.sharepoint_url || null,
           key_stats: rpt.key_stats || {}
         };
@@ -2196,6 +2197,11 @@ async function handleDraftRoute(req, res) {
           recommendation: cadenceInfo.recommendation,
           summary: cadenceInfo.summary
         };
+      }
+
+      // Attach report info for frontend attachment reminder
+      if (enrichedContext.report_info) {
+        result.report_attachment = enrichedContext.report_info;
       }
 
       return res.status(200).json(result);

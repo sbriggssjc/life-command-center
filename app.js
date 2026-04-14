@@ -3205,7 +3205,16 @@ async function _draftFromPipeline(templateId, ctxJson) {
     const mailto = `mailto:${encodeURIComponent(ctx.email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
 
-    showToast('Draft opened in email client (' + result.draft.template_name + ')', 'success');
+    // Show attachment reminder if report info is available
+    if (result.report_attachment && result.report_attachment.filename) {
+      const rpt = result.report_attachment;
+      const attachMsg = '📎 Attach: ' + rpt.filename + (rpt.quarter ? ' (' + rpt.quarter + ')' : '');
+      showToast(attachMsg, 'info', 15000);
+      // Show a persistent reminder bar at top of page
+      _showAttachmentReminder(rpt);
+    } else {
+      showToast('Draft opened in email client (' + result.draft.template_name + ')', 'success');
+    }
 
     // Record the send in background (non-blocking)
     try {
@@ -3243,7 +3252,33 @@ function openMktMeetingReq(email, name, deal) {
   _draftFromPipeline('T-002', JSON.stringify({email, contact_name: name, deal_name: deal, is_final_touch: true}));
 }
 
-// ── Call history ──
+// ── Attachment reminder bar ──
+function _showAttachmentReminder(rpt) {
+  // Remove any existing reminder
+  var existing = document.getElementById('attachmentReminder');
+  if (existing) existing.remove();
+
+  var bar = document.createElement('div');
+  bar.id = 'attachmentReminder';
+  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--accent,#2563eb);color:#fff;padding:10px 16px;font-size:13px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+
+  var folderHint = '';
+  if (rpt.local_path) {
+    // Show just the folder name for brevity
+    var parts = rpt.local_path.replace(/\\/g, '/').split('/');
+    var folder = parts.slice(-2, -1)[0] || '';
+    folderHint = ' &nbsp;·&nbsp; <span style="opacity:0.8;font-size:11px">Folder: ' + folder + '</span>';
+  }
+
+  bar.innerHTML = '<span>📎 <strong>Remember to attach:</strong> ' + (rpt.filename || rpt.title) + ' (' + (rpt.quarter || '') + ')' + folderHint + '</span>'
+    + '<button onclick="this.parentElement.remove()" style="background:rgba(255,255,255,.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">Dismiss</button>';
+
+  document.body.prepend(bar);
+
+  // Auto-dismiss after 30 seconds
+  setTimeout(function() { if (bar.parentElement) bar.remove(); }, 30000);
+}
+
 // ── Expandable contact detail — shows deal associations + call history ──
 async function toggleContactDetail(contactId) {
   const el = document.getElementById('contact-detail-' + contactId);

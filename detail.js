@@ -4447,6 +4447,16 @@ function _udSendDraft() {
   const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   window.open(mailto, '_blank', 'noopener');
 
+  // Show attachment reminder if report info is cached from draft generation
+  if (_udCurrentDraft?.report_attachment?.filename) {
+    const rpt = _udCurrentDraft.report_attachment;
+    if (typeof _showAttachmentReminder === 'function') {
+      _showAttachmentReminder(rpt);
+    } else {
+      showToast('Attach: ' + rpt.filename + ' (' + (rpt.quarter || '') + ')', 'info', 15000);
+    }
+  }
+
   // Show the "Log as Sent" button after opening email client
   const recordBtn = document.getElementById('udRecordSendBtn');
   if (recordBtn) recordBtn.style.display = 'inline-flex';

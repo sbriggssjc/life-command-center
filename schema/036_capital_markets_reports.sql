@@ -23,7 +23,8 @@ create table if not exists capital_markets_reports (
   report_title      text not null,              -- display title
   report_filename   text,                       -- original filename
 
-  -- Access URLs (at least one should be set)
+  -- Access paths (at least one should be set)
+  local_path        text,                       -- local OneDrive path for manual attachment
   public_url        text,                       -- publicly accessible URL (Vercel static, CDN, etc.)
   sharepoint_url    text,                       -- OneDrive/SharePoint sharing link
   vercel_path       text,                       -- relative path in /public/reports/
@@ -57,7 +58,7 @@ alter table capital_markets_reports enable row level security;
 -- ── Seed current reports ──────────────────────────────────────────────────
 
 INSERT INTO capital_markets_reports (
-  domain, report_quarter, report_title, report_filename,
+  domain, report_quarter, report_title, report_filename, local_path,
   page_count, data_ending_date, is_active, published_at, generation_mode,
   key_stats
 ) VALUES (
@@ -65,6 +66,7 @@ INSERT INTO capital_markets_reports (
   'Q2 2024',
   'State of the Government-Leased Market',
   'State of the Government-Leased Market (2024-Q2).pdf',
+  'OneDrive - NorthMarq Capital, LLC\Team Briggs - Documents\Brochures and Deliverables\GSA State of the Market - Quarterly Report\State of the Government-Leased Market (2024-Q2).pdf',
   42,
   '2024-06-30',
   true,
@@ -76,6 +78,7 @@ INSERT INTO capital_markets_reports (
   'Q4 2025',
   'The Dialysis Market Filter',
   'The Dialysis Market Filter (4Q-2025).pdf',
+  'OneDrive - NorthMarq Capital, LLC\Team Briggs - Documents\Brochures and Deliverables\Dialysis State of the Market - Quarterly Report\The Dialysis Market Filter (4Q-2025).pdf',
   44,
   '2025-12-31',
   true,
