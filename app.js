@@ -3159,6 +3159,19 @@ async function _draftFromPipeline(templateId, ctxJson) {
     // Build context matching the draft API's expected shape
     // Prefer pre-combined city_state from CRM, fall back to separate city/state fields
     const cityState = ctx.city_state || [ctx.city, ctx.state].filter(Boolean).join(', ');
+    // Normalize tenant: strip generic SF task suffixes and corporate tails so
+    // "DaVita Projects" / "DaVita Healthcare Partners" both render as "DaVita".
+    function _cleanTenant(raw) {
+      if (!raw) return '';
+      let t = String(raw).trim();
+      // Strip trailing SF task-style suffixes
+      t = t.replace(/\s+(Projects?|Follow[- ]?Up|Call|Meeting|Task|Outreach|Outbound|Lead|Inquiry|Prospects?)$/i, '');
+      // Strip common corporate suffixes
+      t = t.replace(/,?\s+(Inc\.?|LLC|L\.L\.C\.?|LP|L\.P\.?|Corp\.?|Corporation|Co\.?|Company|Holdings?|Healthcare Partners|Health Partners|Healthcare|Medical|Partners|Group|Trust|Enterprises?|Properties|Realty)\.?$/i, '');
+      return t.trim();
+    }
+    const rawTenant = ctx.deal_name || ctx.company_name || '';
+    const cleanTenant = _cleanTenant(rawTenant) || rawTenant;
     const context = {
       contact: {
         full_name: ctx.contact_name || '',
@@ -3167,7 +3180,7 @@ async function _draftFromPipeline(templateId, ctxJson) {
         email: ctx.email || ''
       },
       property: {
-        tenant: ctx.deal_name || '',
+        tenant: cleanTenant,
         city_state: cityState,
         domain: domain,
         page_title: ctx.deal_name || '',
