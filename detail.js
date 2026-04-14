@@ -1892,24 +1892,56 @@ function _udTabOwnership() {
   html += '</div>';
   html += '</div></div>';
 
-  // ── EMAIL TEMPLATE SECTION ──────────────────────────────────────────
+  // ── DRAFT EMAIL SECTION (LCC Template Engine) ──────────────────────
   html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Email Templates</div>';
+  html += '<div class="detail-section-title">Draft Email</div>';
   html += '<div class="detail-form">';
+
+  // Template selector + Draft button row
+  html += '<div style="display:flex;gap:8px;align-items:flex-end">';
+  html += '<div style="flex:1">';
   html += '<label>Template</label>';
-  html += '<select id="udTemplateSelect" onchange="_udPreviewTemplate()">';
-  html += '<option value="">— Select a template —</option>';
+  html += '<select id="udDraftTemplate">';
+  html += '<option value="auto">Auto-select best template</option>';
+  html += '<option value="T-001">First Touch (intro + report + BOV offer)</option>';
+  html += '<option value="T-002">Follow-Up (cadence touchpoint)</option>';
+  html += '<option value="T-003">Capital Markets Update (quarterly)</option>';
+  html += '<option value="T-013">GSA Lease Award Congratulations</option>';
   html += '</select>';
-  html += '<div id="udTemplatePreview" style="display:none;margin-top:12px">';
+  html += '</div>';
+  html += '<button class="act-btn primary" id="udDraftBtn" onclick="_udGenerateDraft()" style="white-space:nowrap;height:36px">Draft Email</button>';
+  html += '</div>';
+
+  // Draft preview area (hidden until generated)
+  html += '<div id="udDraftPreview" style="display:none;margin-top:16px">';
   html += '<label>Subject</label>';
-  html += '<div id="udTemplateSubject" style="font-size:13px;padding:8px 12px;background:var(--s2);border-radius:8px;color:var(--text);margin-bottom:8px"></div>';
-  html += '<label>Body Preview</label>';
-  html += '<div id="udTemplateBody" style="font-size:12px;padding:12px;background:var(--s2);border-radius:8px;color:var(--text2);max-height:200px;overflow-y:auto;line-height:1.5"></div>';
-  html += '<div style="display:flex;gap:8px;margin-top:12px">';
-  html += '<button class="act-btn primary" onclick="_udSendTemplate()">&#x2709; Open in Email Client</button>';
-  html += '<button class="act-btn" onclick="_udActionBtnGuard(this, _udCopyTemplate)">&#x1F4CB; Copy to Clipboard</button>';
+  html += '<input type="text" id="udDraftSubject" style="font-size:13px;width:100%;margin-bottom:8px">';
+  html += '<label>Body <span style="font-size:11px;color:var(--text3)">(editable — your changes will be tracked for template improvement)</span></label>';
+  html += '<textarea id="udDraftBody" style="font-size:12px;min-height:240px;line-height:1.6;font-family:inherit;width:100%"></textarea>';
+  html += '<div style="font-size:11px;color:var(--text3);margin-top:4px" id="udDraftMeta"></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
+  if (own?.contact_email) {
+    html += `<button class="act-btn primary" onclick="_udSendDraft()">Open in Email Client</button>`;
+  }
+  html += '<button class="act-btn" onclick="_udActionBtnGuard(this, _udCopyDraft)">Copy to Clipboard</button>';
+  html += '<button class="act-btn" onclick="_udRecordDraftSend()" id="udRecordSendBtn" style="display:none">Log as Sent</button>';
   html += '</div>';
   html += '</div>';
+
+  // Legacy template fallback (hidden, loads from Dia DB)
+  html += '<div id="udLegacyTemplates" style="margin-top:16px;display:none">';
+  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Legacy templates (Dialysis DB)</div>';
+  html += '<select id="udTemplateSelect" onchange="_udPreviewTemplate()" style="font-size:12px">';
+  html += '<option value="">— Select —</option>';
+  html += '</select>';
+  html += '<div id="udTemplatePreview" style="display:none;margin-top:8px">';
+  html += '<div id="udTemplateSubject" style="font-size:12px;padding:6px 10px;background:var(--s2);border-radius:6px;color:var(--text);margin-bottom:6px"></div>';
+  html += '<div id="udTemplateBody" style="font-size:11px;padding:10px;background:var(--s2);border-radius:6px;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.4"></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:8px">';
+  html += '<button class="act-btn" style="font-size:11px" onclick="_udSendTemplate()">Open in Client</button>';
+  html += '<button class="act-btn" style="font-size:11px" onclick="_udActionBtnGuard(this, _udCopyTemplate)">Copy</button>';
+  html += '</div></div></div>';
+
   html += '</div></div>';
 
   // Async loads after DOM renders
@@ -4078,6 +4110,288 @@ async function _udCopyTemplate() {
 }
 
 // ============================================================================
+// DRAFT EMAIL ENGINE — LCC Template System (v3)
+// ============================================================================
+
+/** Current draft state — holds the API response for record_send tracking */
+let _udCurrentDraft = null;
+
+/**
+ * Generate a draft email using the LCC template engine.
+ * Reads property/ownership from _udCache, builds context, calls the API,
+ * and populates the editable preview area.
+ */
+async function _udGenerateDraft() {
+  const btn = document.getElementById('udDraftBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Drafting…'; btn.style.opacity = '0.6'; }
+
+  try {
+    const prop = _udCache?.property || {};
+    const own = _udCache?.ownership || {};
+    const chain = _udCache?.chain || [];
+    const db = _udCache?.db || '';
+
+    // Determine domain from DB source
+    const domain = db === 'gov' ? 'government' : db === 'dia' ? 'dialysis' : '';
+
+    // Resolve contact name — owner, not tenant
+    const contactName = own.contact_1_name || own.contact_name || own.true_owner
+      || own.recorded_owner || chain[0]?.contact_name || '';
+
+    // Resolve tenant (the government agency or dialysis operator)
+    const tenant = prop.agency_full || prop.agency_short || prop.tenant
+      || prop.facility_name || prop.operator || '';
+
+    // City, State
+    const city = prop.city || '';
+    const state = prop.state || '';
+    const cityState = city + (state ? ', ' + state : '');
+
+    // Build context payload matching server-side enrichDraftContext expectations
+    const context = {
+      contact: {
+        full_name: contactName,
+        first_name: (contactName || '').split(' ')[0] || '',
+        company: own.company_name || own.owner_entity || chain[0]?.company_name || '',
+        email: own.contact_email || ''
+      },
+      property: {
+        tenant,
+        address: prop.address || '',
+        city,
+        state,
+        city_state: cityState,
+        domain,
+        sf_leased: prop.sf_leased || prop.rba || prop.building_size || '',
+        annual_rent: prop.annual_rent || prop.noi || '',
+        asking_price: prop.asking_price || '',
+        cap_rate: prop.cap_rate || '',
+        lease_expiration: prop.lease_expiration || prop.firm_term_expiry || '',
+        page_title: prop.page_title || '',
+        agency_short: prop.agency_short || '',
+        agency_full: prop.agency_full || '',
+        facility_name: prop.facility_name || '',
+        government_type: prop.government_type || ''
+      },
+      domain
+    };
+
+    // Template selection
+    let templateId = document.getElementById('udDraftTemplate')?.value || 'auto';
+
+    if (templateId === 'auto') {
+      templateId = _udAutoSelectTemplate(prop, own, domain);
+    }
+
+    // Call the LCC draft API
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const resp = await fetchFn('/api/operations?_route=draft&action=generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: templateId, context })
+    });
+
+    const result = await resp.json();
+
+    if (!result.ok) {
+      showToast(result.error || 'Failed to generate draft', 'error');
+      console.error('[DraftEmail] API error:', result);
+      return;
+    }
+
+    // Store draft state for record_send
+    _udCurrentDraft = {
+      template_id: result.draft.template_id,
+      template_version: result.draft.template_version,
+      template_name: result.draft.template_name,
+      rendered_subject: result.draft.subject,
+      rendered_body: result.draft.body,
+      entity_id: own.salesforce_id || own.sf_contact_id || own.contact_id || null,
+      domain,
+      unresolved: result.draft.unresolved_variables || []
+    };
+
+    // Populate the preview
+    const previewEl = document.getElementById('udDraftPreview');
+    const subjectEl = document.getElementById('udDraftSubject');
+    const bodyEl = document.getElementById('udDraftBody');
+    const metaEl = document.getElementById('udDraftMeta');
+    const recordBtn = document.getElementById('udRecordSendBtn');
+
+    if (subjectEl) subjectEl.value = result.draft.subject || '';
+    if (bodyEl) bodyEl.value = result.draft.body || '';
+    if (previewEl) previewEl.style.display = 'block';
+    if (recordBtn) recordBtn.style.display = 'inline-flex';
+
+    // Show metadata
+    if (metaEl) {
+      const unresolvedCount = _udCurrentDraft.unresolved.length;
+      let meta = `Template: ${esc(result.draft.template_name)} (${result.draft.template_id} v${result.draft.template_version})`;
+      if (unresolvedCount > 0) {
+        meta += ` · <span style="color:var(--yellow,#f59e0b)">${unresolvedCount} variable${unresolvedCount > 1 ? 's' : ''} unresolved</span>`;
+      }
+      metaEl.innerHTML = meta;
+    }
+
+    showToast('Draft generated — review and edit before sending', 'success');
+
+  } catch (err) {
+    console.error('[DraftEmail] Error:', err);
+    showToast('Error generating draft: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Draft Email'; btn.style.opacity = ''; }
+  }
+}
+
+/**
+ * Auto-select the best template based on property/ownership context.
+ * Logic:
+ *   - T-013: New GSA lease award (government + new_award signal or fresh lease)
+ *   - T-003: Quarterly capital markets update (if contact has been touched before)
+ *   - T-002: Follow-up (if prior touchpoints exist)
+ *   - T-001: First touch (default — intro + report + BOV offer)
+ */
+function _udAutoSelectTemplate(prop, own, domain) {
+  // T-013: GSA Lease Award congratulations — if it's a government property
+  // with a recent lease award (check for new_award flag or very recent lease start)
+  if (domain === 'government' && prop.government_type === 'Federal') {
+    // If we can detect a new award, use T-013
+    const leaseStart = prop.lease_commencement || prop.lease_start;
+    if (leaseStart) {
+      const startDate = new Date(leaseStart);
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      if (startDate >= sixMonthsAgo) {
+        return 'T-013';
+      }
+    }
+  }
+
+  // Check if we have prior touchpoints with this contact
+  const touchpointEl = document.getElementById('udTouchpoints');
+  const hasPriorTouches = touchpointEl && touchpointEl.querySelector('.tp-row');
+
+  if (hasPriorTouches) {
+    // Check how many touches — if many, use quarterly update (T-003)
+    const touchRows = touchpointEl.querySelectorAll('.tp-row');
+    if (touchRows.length >= 6) {
+      return 'T-003'; // Quarterly capital markets update
+    }
+    return 'T-002'; // Follow-up touchpoint
+  }
+
+  // Default: first touch intro
+  return 'T-001';
+}
+
+/**
+ * Open the draft in the user's email client via mailto: link.
+ * Uses the (potentially edited) subject and body from the preview fields.
+ */
+function _udSendDraft() {
+  const subject = document.getElementById('udDraftSubject')?.value || '';
+  const body = document.getElementById('udDraftBody')?.value || '';
+  const own = _udCache?.ownership || {};
+  const toEmail = own.contact_email || '';
+
+  if (!body.trim()) {
+    showToast('Generate a draft first', 'error');
+    return;
+  }
+
+  const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.open(mailto, '_blank', 'noopener');
+
+  // Show the "Log as Sent" button after opening email client
+  const recordBtn = document.getElementById('udRecordSendBtn');
+  if (recordBtn) recordBtn.style.display = 'inline-flex';
+}
+
+/**
+ * Copy the draft body to clipboard.
+ */
+async function _udCopyDraft() {
+  const body = document.getElementById('udDraftBody')?.value || '';
+  if (!body.trim()) {
+    showToast('Generate a draft first', 'error');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(body);
+    showToast('Draft copied to clipboard!', 'success');
+  } catch (e) {
+    // Fallback for older browsers
+    const ta = document.createElement('textarea');
+    ta.value = body;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    showToast('Draft copied!', 'success');
+  }
+}
+
+/**
+ * Record that the draft was sent — tracks template performance.
+ * Captures the final (edited) version so we can measure edit distance
+ * and improve templates over time.
+ */
+async function _udRecordDraftSend() {
+  if (!_udCurrentDraft) {
+    showToast('No draft to record — generate one first', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('udRecordSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Logging…'; btn.style.opacity = '0.6'; }
+
+  try {
+    const finalSubject = document.getElementById('udDraftSubject')?.value || '';
+    const finalBody = document.getElementById('udDraftBody')?.value || '';
+
+    const payload = {
+      template_id: _udCurrentDraft.template_id,
+      template_version: _udCurrentDraft.template_version,
+      entity_id: _udCurrentDraft.entity_id,
+      domain: _udCurrentDraft.domain,
+      rendered_subject: _udCurrentDraft.rendered_subject,
+      rendered_body: _udCurrentDraft.rendered_body,
+      final_subject: finalSubject,
+      final_body: finalBody,
+      original_draft: _udCurrentDraft.rendered_body,
+      sent_text: finalBody
+    };
+
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const resp = await fetchFn('/api/operations?_route=draft&action=record_send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await resp.json();
+
+    if (result.ok) {
+      showToast('Send recorded — template performance tracked', 'success');
+      // Reset draft state
+      _udCurrentDraft = null;
+      if (btn) btn.style.display = 'none';
+      // Refresh touchpoints to show the new activity
+      const own = _udCache?.ownership || {};
+      _loadTouchpoints(own);
+    } else {
+      showToast(result.error || 'Failed to record send', 'error');
+    }
+  } catch (err) {
+    console.error('[DraftEmail] Record send error:', err);
+    showToast('Error recording send: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Log as Sent'; btn.style.opacity = ''; }
+  }
+}
+
+// ============================================================================
 // CRM: TOUCHPOINT HISTORY
 // ============================================================================
 
@@ -4719,6 +5033,10 @@ window._udSubmitLogCall = _udSubmitLogCall;
 window._udPreviewTemplate = _udPreviewTemplate;
 window._udSendTemplate = _udSendTemplate;
 window._udCopyTemplate = _udCopyTemplate;
+window._udGenerateDraft = _udGenerateDraft;
+window._udSendDraft = _udSendDraft;
+window._udCopyDraft = _udCopyDraft;
+window._udRecordDraftSend = _udRecordDraftSend;
 window._udSaveOwnership = _udSaveOwnership;
 window._intelSavePriorSale = _intelSavePriorSale;
 window._intelSaveLoan = _intelSaveLoan;
