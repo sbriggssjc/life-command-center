@@ -104,6 +104,8 @@ async function loadUserContext() {
     try { LCC_USER.display_name = localStorage.getItem('lcc-user-name') || 'Scott Briggs'; } catch(e) { LCC_USER.display_name = 'Scott Briggs'; }
     LCC_USER.first_name = LCC_USER.display_name.split(' ')[0];
     LCC_USER.role = 'owner';
+    // Default workspace for single-tenant — ensures x-lcc-workspace header is always sent
+    if (!LCC_USER.workspace_id) LCC_USER.workspace_id = 'a0000000-0000-0000-0000-000000000001';
     LCC_USER._loaded = true;
   }
   applyUserContext();
@@ -1597,7 +1599,7 @@ async function loadMarketing() {
       // Fetch inbound leads
       // Load CRM client rollup — paginated fetch (Supabase caps at 1000 rows per request)
       const userName = LCC_USER.display_name || 'Scott Briggs';
-      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
+      const leanFields = 'sf_contact_id,sf_company_id,first_name,last_name,contact_name,company_name,company_city_state,company_address,email,phone,assigned_to,open_task_count,last_activity_date,completed_activity_count,last_call_notes';
       const BATCH_SIZE = 1000;
 
       function buildRollupUrl(selectFields, extraFilter, batchOffset) {
@@ -2400,7 +2402,8 @@ function renderUnifiedContacts() {
     if (c.email) html += ' · <a href="mailto:' + encodeURIComponent(c.email) + '">' + esc(c.email) + '</a>';
     html += '</div>';
     if (c.phone) html += '<div style="font-size:12px;color:var(--text3)">' + esc(c.phone) + (c.mobile_phone && c.mobile_phone !== c.phone ? ' · Mobile: ' + esc(c.mobile_phone) : '') + '</div>';
-    if (c.city || c.state) html += '<div style="font-size:11px;color:var(--text3)">' + esc([c.city, c.state].filter(Boolean).join(', ')) + '</div>';
+    var _loc = c.company_city_state || [c.city, c.state].filter(Boolean).join(', ');
+    if (_loc) html += '<div style="font-size:11px;color:var(--text3)">' + esc(_loc) + '</div>';
     // Source badges + stale flags
     if (sources.length > 0 || staleFlags.length > 0) {
       html += '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' + sources.join('') + staleFlags.join('') + '</div>';
@@ -2964,7 +2967,7 @@ function renderProspectCardsHTML(items, options = {}) {
       if (showEmailTemplates && c.email) {
         html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
         html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
-        var _draftCtx = encodeURIComponent(JSON.stringify({email:c.email||'',contact_name:c.contact_name||'',deal_name:group.displayName||'',sf_contact_id:c.sf_contact_id||'',company_name:c.company_name||'',domain:c.task_domain||'',city:c.city||'',state:c.state||'',address:c.address||'',property_id:c.property_id||''}));
+        var _draftCtx = encodeURIComponent(JSON.stringify({email:c.email||'',contact_name:c.contact_name||'',deal_name:group.displayName||'',sf_contact_id:c.sf_contact_id||'',company_name:c.company_name||'',domain:c.task_domain||'',city:c.city||'',state:c.state||'',city_state:c.company_city_state||'',address:c.address||c.company_address||'',property_id:c.property_id||''}));
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-001',decodeURIComponent('${_draftCtx}'))">First Touch</div>`;
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-002',decodeURIComponent('${_draftCtx}'))">Follow-Up</div>`;
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-003',decodeURIComponent('${_draftCtx}'))">Capital Markets Update</div>`;
@@ -3154,7 +3157,8 @@ async function _draftFromPipeline(templateId, ctxJson) {
     }
 
     // Build context matching the draft API's expected shape
-    const cityState = [ctx.city, ctx.state].filter(Boolean).join(', ');
+    // Prefer pre-combined city_state from CRM, fall back to separate city/state fields
+    const cityState = ctx.city_state || [ctx.city, ctx.state].filter(Boolean).join(', ');
     const context = {
       contact: {
         full_name: ctx.contact_name || '',
@@ -3167,7 +3171,7 @@ async function _draftFromPipeline(templateId, ctxJson) {
         city_state: cityState,
         domain: domain,
         page_title: ctx.deal_name || '',
-        address: ctx.address || '',
+        address: (ctx.address && ctx.address !== '0') ? ctx.address : '',
         property_id: ctx.property_id || ''
       },
       domain: domain

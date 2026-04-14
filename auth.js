@@ -419,6 +419,20 @@ const LCC_AUTH = (() => {
             }
           }
         }
+
+        // Auto-inject workspace header if available and not already set
+        if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) {
+          const hasWs = isHeaders
+            ? init.headers.has('x-lcc-workspace')
+            : (init.headers['x-lcc-workspace']);
+          if (!hasWs) {
+            if (isHeaders) {
+              init.headers.set('x-lcc-workspace', LCC_USER.workspace_id);
+            } else {
+              init.headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+            }
+          }
+        }
       }
     }
 

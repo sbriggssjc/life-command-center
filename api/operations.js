@@ -2033,13 +2033,13 @@ async function enrichDraftContext(context) {
   }
 
   // --- team.signature ---
+  // Intentionally left empty — Outlook appends the user's configured signature
+  // automatically when opening a new email via mailto:. Injecting a signature
+  // here would create a duplicate. Set to empty string so the {{team.signature}}
+  // variable resolves but renders nothing.
   if (!enriched.team?.signature) {
     enriched.team = enriched.team || {};
-    enriched.team.signature = [
-      'Scott Briggs',
-      'Senior Vice President | Northmarq Investment Sales',
-      'sabriggs@northmarq.com | (918) 794-9787'
-    ].join('\n');
+    enriched.team.signature = '';
   }
 
   // --- comp_highlights (recent sales from domain DB) ---
