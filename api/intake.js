@@ -11,7 +11,7 @@
 // See LCC_ARCHITECTURE_STRATEGY.md and .github/AI_INSTRUCTIONS.md
 // ============================================================================
 
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
@@ -219,18 +219,27 @@ async function handleOutlookMessage(req, res) {
 
   // If email has attachments, bridge to staged intake pipeline
   if (hasAttachments) {
+    // staged_intake_items.intake_id is a UUID column. correlationId is a
+    // synthetic "outlook-msg-<hash>-<ts>" string, so we can't use it here.
+    // Reuse the inbox_item's real UUID so re-runs for the same email map to
+    // the same staged row; fall back to a fresh UUID only if the insert above
+    // didn't return a row.
+    const stagedIntakeId = item?.id
+      ? item.id          // reuse the inbox_item UUID — same entity, same ID
+      : randomUUID();    // fallback for edge cases
 
     // 1. Create staged_intake_item
     const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
-      intake_id:            correlationId,
+      intake_id:            stagedIntakeId,
       source_type:          'email',
-      internet_message_id:  internetMsgId || correlationId,
+      internet_message_id:  internetMsgId || messageId || null,
       status:               'received',
       raw_payload: {
-        subject:        subject,
+        subject,
         from:           sender,
         received:       receivedAtIso,
         correlation_id: correlationId,
+        inbox_item_id:  item?.id,
       },
     });
 
@@ -239,7 +248,7 @@ async function handleOutlookMessage(req, res) {
       const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
       for (const att of atts) {
         await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-          intake_id:    correlationId,
+          intake_id:    stagedIntakeId,
           file_name:    att.file_name || att.name || 'attachment',
           file_type:    att.file_type || att.contentType || 'application/octet-stream',
           storage_path: att.storage_path || null,
@@ -251,7 +260,7 @@ async function handleOutlookMessage(req, res) {
       // so the item is visible in the review queue for manual processing
       if (atts.length === 0) {
         await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-          intake_id:   correlationId,
+          intake_id:   stagedIntakeId,
           file_name:   'pending_attachments',
           file_type:   'pending',
           storage_path: null,
@@ -260,8 +269,8 @@ async function handleOutlookMessage(req, res) {
       }
 
       // 3. Fire async extraction — does NOT block the response
-      processIntakeExtraction(correlationId).catch(err =>
-        console.error('[intake] staged extraction failed:', correlationId, err.message)
+      processIntakeExtraction(stagedIntakeId).catch(err =>
+        console.error('[intake] staged extraction failed:', stagedIntakeId, err.message)
       );
     }
   }
