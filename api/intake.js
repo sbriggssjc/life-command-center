@@ -11,7 +11,7 @@
 // See LCC_ARCHITECTURE_STRATEGY.md and .github/AI_INSTRUCTIONS.md
 // ============================================================================
 
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
@@ -218,37 +218,59 @@ async function handleOutlookMessage(req, res) {
   const item = Array.isArray(result.data) ? result.data[0] : result.data;
 
   // If email has attachments, bridge to staged intake pipeline
-  if (hasAttachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+  if (hasAttachments) {
+    // staged_intake_items.intake_id is a UUID column. correlationId is a
+    // synthetic "outlook-msg-<hash>-<ts>" string, so we can't use it here.
+    // Reuse the inbox_item's real UUID so re-runs for the same email map to
+    // the same staged row; fall back to a fresh UUID only if the insert above
+    // didn't return a row.
+    const stagedIntakeId = item?.id
+      ? item.id          // reuse the inbox_item UUID — same entity, same ID
+      : randomUUID();    // fallback for edge cases
 
     // 1. Create staged_intake_item
     const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
-      intake_id:            correlationId,
+      intake_id:            stagedIntakeId,
       source_type:          'email',
-      internet_message_id:  internetMsgId || correlationId,
+      internet_message_id:  internetMsgId || messageId || null,
       status:               'received',
       raw_payload: {
-        subject:        subject,
+        subject,
         from:           sender,
         received:       receivedAtIso,
         correlation_id: correlationId,
+        inbox_item_id:  item?.id,
       },
     });
 
     if (stageResult.ok) {
-      // 2. Create artifact rows for each attachment
-      for (const att of payload.attachments) {
+      // 2. Write artifacts if we have them
+      const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+      for (const att of atts) {
         await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-          intake_id:    correlationId,
-          file_name:    att.file_name || att.name,
+          intake_id:    stagedIntakeId,
+          file_name:    att.file_name || att.name || 'attachment',
           file_type:    att.file_type || att.contentType || 'application/octet-stream',
           storage_path: att.storage_path || null,
           inline_data:  att.inline_data || att.content || null,
         });
       }
 
+      // If no attachments provided but email has them, create a placeholder
+      // so the item is visible in the review queue for manual processing
+      if (atts.length === 0) {
+        await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+          intake_id:   stagedIntakeId,
+          file_name:   'pending_attachments',
+          file_type:   'pending',
+          storage_path: null,
+          inline_data:  null,
+        });
+      }
+
       // 3. Fire async extraction — does NOT block the response
-      processIntakeExtraction(correlationId).catch(err =>
-        console.error('[intake] staged extraction failed:', correlationId, err.message)
+      processIntakeExtraction(stagedIntakeId).catch(err =>
+        console.error('[intake] staged extraction failed:', stagedIntakeId, err.message)
       );
     }
   }
@@ -256,14 +278,6 @@ async function handleOutlookMessage(req, res) {
   // Fire-and-forget entity extraction — NEVER blocks the intake response
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
     .catch(err => console.error('[Intake extraction error]', err.message || err));
-
-  // Fire-and-forget document extraction — runs async for staged intake items
-  // Don't await — extraction runs async, doesn't block intake response
-  if (item?.intake_id) {
-    processIntakeExtraction(item.intake_id).catch(err =>
-      console.error('[intake-extractor] extraction failed:', item.intake_id, err.message)
-    );
-  }
 
   return res.status(200).json({
     ok: true,
