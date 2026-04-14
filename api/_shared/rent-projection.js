@@ -126,8 +126,13 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
   const confidence = prop.anchor_rent_source === 'lease_confirmed' ? 'high' : 'medium';
   const rentSource = `projected_from_${prop.anchor_rent_source || 'om_confirmed'}`;
 
+  // Filter out incomplete sale rows at the DB level so we never PATCH
+  // cap_rate_confidence / rent_source on a row that is missing the inputs
+  // required to compute calculated_cap_rate. A client-side guard below
+  // retains the same invariant for defense-in-depth.
   const salesRes = await domainQuery(DOMAIN, 'GET',
     `sales_transactions?property_id=eq.${encodeURIComponent(propertyId)}` +
+    `&sale_date=not.is.null&sold_price=not.is.null` +
     `&select=sale_id,sale_date,sold_price`
   );
   if (!salesRes.ok) {
@@ -139,6 +144,9 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
   let skipped = 0;
 
   for (const sale of sales) {
+    // Defensive: skip rows missing sale_date or sold_price without writing
+    // cap_rate_confidence or rent_source. The DB-level filter above should
+    // already exclude these, but belt-and-suspenders.
     if (sale.sold_price == null || !sale.sale_date) {
       skipped++;
       continue;

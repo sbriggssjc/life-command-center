@@ -10,6 +10,19 @@ import { opsQuery, isOpsConfigured, logPerfMetric, withErrorHandler } from './_s
 import {
   GOV_WRITE_TABLES, DIA_WRITE_TABLES, isAllowedTable, safeColumn
 } from './_shared/allowlist.js';
+import { domainQuery } from './_shared/domain-db.js';
+import { recalculateSaleCapRates } from './_shared/rent-projection.js';
+
+// Fields on the dialysis `properties` table whose write implies every
+// historical sale on that property must have its calculated_cap_rate
+// recomputed against the projected rent at the sale date.
+const CAP_RATE_ANCHOR_FIELDS = new Set([
+  'anchor_rent',
+  'anchor_rent_date',
+  'lease_commencement',
+  'lease_bump_pct',
+  'lease_bump_interval_mo',
+]);
 
 const SOURCE_CONFIG = {
   gov: { urlEnv: 'GOV_SUPABASE_URL', keyEnv: 'GOV_SUPABASE_KEY', writeTables: GOV_WRITE_TABLES },
@@ -231,6 +244,43 @@ export default withErrorHandler(async function handler(req, res) {
     reconciliation_present: !!reconciliation,
     propagation_present: !!propagation
   }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
+
+  // --- Cap-rate recalc trigger ---
+  // When a PATCH against the dialysis `properties` table touches any of the
+  // rent-anchor / lease-escalation columns, recompute calculated_cap_rate on
+  // every historical sale for that property. Fire-and-forget so the response
+  // isn't held up by sales-table scans. Only PATCH mutations are considered
+  // (INSERT-mode rows are handled by the sidebar ingest pipeline).
+  if (
+    mutationMode === 'patch' &&
+    target_source === 'dia' &&
+    target_table === 'properties' &&
+    record_identifier
+  ) {
+    const changedKeys = Object.keys(changed_fields || {});
+    const anchorFieldsTouched = changedKeys.filter(k => CAP_RATE_ANCHOR_FIELDS.has(k));
+    if (anchorFieldsTouched.length > 0) {
+      const pid = String(record_identifier);
+      console.log(
+        `[cap-rate-recalc] apply-change triggered property=${pid} ` +
+        `fields=${anchorFieldsTouched.join(',')}`
+      );
+      recalculateSaleCapRates(pid, domainQuery)
+        .then(result => {
+          console.log(
+            `[cap-rate-recalc] apply-change result property=${pid} ` +
+            `updated=${result.updated} skipped=${result.skipped} ` +
+            `reason=${result.reason || 'n/a'}`
+          );
+        })
+        .catch(err => {
+          console.error(
+            `[cap-rate-recalc] apply-change error property=${pid}:`,
+            err?.message || err
+          );
+        });
+    }
+  }
 
   return res.status(200).json({
     ok: true,
