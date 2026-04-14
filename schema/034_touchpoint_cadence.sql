@@ -87,15 +87,16 @@ create table if not exists touchpoint_cadence (
   -- ── Metadata ─────────────────────────────────────────────────────────────
 
   owner_user_id         uuid references auth.users(id),  -- assigned BD rep
-  notes                 text,
+  notes                 text
+);
 
-  -- Prevent duplicate cadences for same contact+property
-  constraint uq_cadence_contact_property unique (
+-- Prevent duplicate cadences for same contact+property (expressions require a unique index, not a constraint)
+create unique index if not exists uq_cadence_contact_property
+  on touchpoint_cadence (
     coalesce(entity_id, '00000000-0000-0000-0000-000000000000'::uuid),
     coalesce(property_id, '00000000-0000-0000-0000-000000000000'::uuid),
     coalesce(sf_contact_id, '')
-  )
-);
+  );
 
 -- ── INDEXES ────────────────────────────────────────────────────────────────
 
