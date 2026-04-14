@@ -238,20 +238,24 @@ async function handleOutlookMessage(req, res) {
 
   const item = Array.isArray(result.data) ? result.data[0] : result.data;
 
-  // If email has attachments, bridge to staged intake pipeline
+  // If email has attachments, bridge to staged intake pipeline.
+  // IMPORTANT: this must run BEFORE res.json() — Vercel serverless functions
+  // terminate immediately after the response is sent, so any async work started
+  // here and not awaited will be silently killed.
+  let stagedIntakeId = null;
   if (hasAttachments) {
     // staged_intake_items.intake_id is a UUID column. correlationId is a
     // synthetic "outlook-msg-<hash>-<ts>" string, so we can't use it here.
     // Reuse the inbox_item's real UUID so re-runs for the same email map to
     // the same staged row; fall back to a fresh UUID only if the insert above
     // didn't return a row.
-    const stagedIntakeId = item?.id
+    const candidateId = item?.id
       ? item.id          // reuse the inbox_item UUID — same entity, same ID
       : randomUUID();    // fallback for edge cases
 
     // 1. Create staged_intake_item
     const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
-      intake_id:            stagedIntakeId,
+      intake_id:            candidateId,
       source_type:          'email',
       internet_message_id:  internetMsgId || messageId || null,
       status:               'received',
@@ -265,6 +269,8 @@ async function handleOutlookMessage(req, res) {
     });
 
     if (stageResult.ok) {
+      stagedIntakeId = candidateId;
+
       // 2. Write artifacts if we have them
       const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
       for (const att of atts) {
@@ -289,8 +295,15 @@ async function handleOutlookMessage(req, res) {
         });
       }
 
-      // 3. Fire async extraction — does NOT block the response
-      processIntakeExtraction(stagedIntakeId).catch(err =>
+      // 3. Run extraction with a short timeout race.
+      // processIntakeExtraction calls OpenAI and can be long-running; we await
+      // up to 8s so it has a chance to complete within the same invocation
+      // (Vercel kills everything after res.json()). Staying under the 10s
+      // function limit preserves headroom for the response itself.
+      await Promise.race([
+        processIntakeExtraction(stagedIntakeId),
+        new Promise(resolve => setTimeout(resolve, 8000)),
+      ]).catch(err =>
         console.error('[intake] staged extraction failed:', stagedIntakeId, err.message)
       );
     }
@@ -304,6 +317,7 @@ async function handleOutlookMessage(req, res) {
     ok: true,
     correlation_id: correlationId,
     inbox_item_id: item?.id || null,
+    staged_intake_id: stagedIntakeId,
     external_id: String(messageId),
     status: item?.status || 'new'
   });
