@@ -25,6 +25,51 @@ chrome.runtime.onInstalled.addListener((details) => {
     .catch(() => {
       // Side panel API not available — popup fallback will work
     });
+
+  // Register the "Send to LCC" context menu item for links and pages
+  chrome.contextMenus.create({
+    id: 'send-to-lcc',
+    title: 'Send to LCC',
+    contexts: ['link', 'page'],
+  });
+});
+
+// ── Context menu: Send to LCC ───────────────────────────────────────────────
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== 'send-to-lcc') return;
+
+  const url = info.linkUrl || info.pageUrl;
+  const subject = tab.title || url;
+  const from = 'browser-extension@lcc';
+
+  // POST to intake as a URL-sourced item
+  const settings = await chrome.storage.local.get(['lccApiKey', 'lccWorkspace', 'lccHost']);
+  const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
+
+  const resp = await fetch(`${host}/api/intake-outlook-message`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-lcc-key': settings.lccApiKey,
+      'x-lcc-workspace': settings.lccWorkspace,
+    },
+    body: JSON.stringify({
+      message_id: `browser-${Date.now()}`,
+      subject,
+      from,
+      received_date_time: new Date().toISOString(),
+      has_attachments: true,
+      body_preview: url,        // URL goes here for the fetch-URL pipeline
+      source: 'browser_extension',
+    }),
+  });
+
+  const result = await resp.json();
+  if (result.ok) {
+    chrome.action.setBadgeText({ text: '✓', tabId: tab.id });
+    setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab.id }), 3000);
+  }
 });
 
 // ── Domain detection ────────────────────────────────────────────────────────
