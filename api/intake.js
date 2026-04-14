@@ -19,6 +19,7 @@ import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
+import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -88,9 +89,15 @@ export default withErrorHandler(async function handler(req, res) {
       return handleIntakeSummary(req, res);
     case 'extract':
       return handleExtractRoute(req, res);
+    case 'queue':
+      return handleIntakeQueue(req, res);
+    case 'promote':
+      return handleIntakePromote(req, res);
+    case 'discard':
+      return handleIntakeDiscard(req, res);
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard'
       });
   }
 });
@@ -791,4 +798,278 @@ async function handleIntakeSummary(req, res) {
     count: items.length,
     items
   });
+}
+
+// ============================================================================
+// INTAKE QUEUE — Staged items with extractions + match results
+// GET /api/intake?_route=queue[&domain=dialysis|government][&limit=50]
+// ============================================================================
+
+async function handleIntakeQueue(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  const limit = parseLimit(req.query.limit);
+  const domain = req.query.domain || null; // optional: 'dialysis' | 'government'
+
+  // Query staged_intake_items joined with extractions and matches
+  let path = `staged_intake_items?workspace_id=eq.${encodeURIComponent(workspaceId)}`
+    + `&status=in.(extracted,matched,review_needed)`
+    + `&select=intake_id,status,raw_payload,source_email_subject,source_email_sender,created_at,`
+    + `staged_intake_extractions(extraction_snapshot),`
+    + `staged_intake_matches(match_result,confidence,matched_property_id,matched_domain)`
+    + `&order=created_at.desc&limit=${limit}`;
+
+  // If domain filter requested, only show items whose match or extraction indicates that domain
+  if (domain) {
+    path += `&or=(staged_intake_matches.matched_domain.eq.${encodeURIComponent(domain)},`
+      + `raw_payload->>domain.eq.${encodeURIComponent(domain)})`;
+  }
+
+  const result = await opsQuery('GET', path);
+  if (!result.ok) {
+    return res.status(result.status || 500).json({ error: 'Failed to fetch intake queue' });
+  }
+
+  const rows = (result.data || []).map(row => {
+    const extraction = row.staged_intake_extractions?.[0]?.extraction_snapshot || null;
+    const match = row.staged_intake_matches?.[0] || null;
+    return {
+      intake_id: row.intake_id,
+      status: row.status,
+      source_email_subject: row.source_email_subject || row.raw_payload?.subject || '(No subject)',
+      source_email_sender: row.source_email_sender || row.raw_payload?.sender?.email || row.raw_payload?.from || 'Unknown',
+      created_at: row.created_at,
+      document_type: extraction?.document_type || 'unknown',
+      address: extraction?.address || null,
+      city: extraction?.city || null,
+      state: extraction?.state || null,
+      tenant_name: extraction?.tenant_name || null,
+      cap_rate: extraction?.cap_rate || null,
+      noi: extraction?.noi || null,
+      asking_price: extraction?.asking_price || null,
+      annual_rent: extraction?.annual_rent || null,
+      building_sf: extraction?.building_sf || null,
+      match_status: match?.match_result?.status || 'no_match',
+      match_reason: match?.match_result?.reason || null,
+      match_property_id: match?.matched_property_id || match?.match_result?.property_id || null,
+      match_domain: match?.matched_domain || match?.match_result?.domain || null,
+      match_candidates: match?.match_result?.candidates || [],
+      confidence: match?.confidence ?? null,
+      extraction_snapshot: extraction,
+    };
+  });
+
+  return res.status(200).json({
+    workspace_id: workspaceId,
+    domain: domain || 'all',
+    count: rows.length,
+    items: rows
+  });
+}
+
+// ============================================================================
+// PROMOTE — Push extraction data through sidebar pipeline into domain DB
+// POST /api/intake?_route=promote  { intake_id, property_id? }
+// ============================================================================
+
+async function handleIntakePromote(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  if (!requireRole(user, 'operator', workspaceId)) {
+    return res.status(403).json({ error: 'Operator role required' });
+  }
+
+  const { intake_id, property_id } = req.body || {};
+  if (!intake_id) return res.status(400).json({ error: 'intake_id required' });
+
+  // 1. Fetch the staged item + extraction
+  const itemResult = await opsQuery('GET',
+    `staged_intake_items?intake_id=eq.${encodeURIComponent(intake_id)}`
+    + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
+    + `&select=intake_id,status,raw_payload,source_email_subject,source_email_sender`
+  );
+  if (!itemResult.ok || !itemResult.data?.length) {
+    return res.status(404).json({ error: 'Intake item not found' });
+  }
+  const item = itemResult.data[0];
+
+  const extResult = await opsQuery('GET',
+    `staged_intake_extractions?intake_id=eq.${encodeURIComponent(intake_id)}&select=extraction_snapshot&limit=1`
+  );
+  const extraction = extResult.data?.[0]?.extraction_snapshot;
+  if (!extraction) {
+    return res.status(400).json({ error: 'No extraction data for this intake item' });
+  }
+
+  // 2. Build entity metadata in the same shape as a CoStar sidebar save
+  const metadata = {
+    address: extraction.address || null,
+    city: extraction.city || null,
+    state: extraction.state || null,
+    zip_code: extraction.zip_code || null,
+    property_type: extraction.property_type || null,
+    tenant_name: extraction.tenant_name || null,
+    tenant_guarantor: extraction.tenant_guarantor || null,
+    primary_tenant: extraction.tenant_name || null,
+    square_footage: extraction.building_sf || null,
+    lot_sf: extraction.lot_sf || null,
+    year_built: extraction.year_built || null,
+    asking_price: extraction.asking_price || null,
+    price_per_sf: extraction.price_per_sf || null,
+    cap_rate: extraction.cap_rate || null,
+    noi: extraction.noi || null,
+    annual_rent: extraction.annual_rent || null,
+    rent_per_sf: extraction.rent_per_sf || null,
+    lease_commencement: extraction.lease_commencement || null,
+    lease_expiration: extraction.lease_expiration || null,
+    lease_term_years: extraction.lease_term_years || null,
+    renewal_options: extraction.renewal_options || null,
+    expense_structure: extraction.expense_structure || null,
+    rent_escalations: extraction.rent_escalations || null,
+    document_type: extraction.document_type || null,
+    listing_broker: extraction.listing_broker || null,
+    listing_broker_email: extraction.listing_broker_email || null,
+    listing_firm: extraction.listing_firm || null,
+    contacts: [],
+    _intake_promoted: true,
+    _intake_id: intake_id,
+    _intake_source: item.source_email_subject || 'email-intake',
+  };
+
+  // Build contacts array from extraction for sidebar pipeline
+  if (extraction.listing_broker) {
+    metadata.contacts.push({
+      name: extraction.listing_broker,
+      email: extraction.listing_broker_email || null,
+      company: extraction.listing_firm || null,
+      role: 'listing_broker',
+    });
+  }
+  if (extraction.seller_name) {
+    metadata.contacts.push({
+      name: extraction.seller_name,
+      role: 'true_seller_contact',
+    });
+  }
+
+  // 3. Create or link entity
+  const entityName = extraction.address
+    ? `${extraction.address}${extraction.city ? ', ' + extraction.city : ''}${extraction.state ? ', ' + extraction.state : ''}`
+    : item.source_email_subject || 'Intake Property';
+
+  const linkResult = await ensureEntityLink({
+    workspaceId,
+    userId: user.user_id,
+    sourceSystem: 'email_intake',
+    sourceType: 'property',
+    externalId: intake_id,
+    domain: null, // let sidebar pipeline classify
+    seedFields: {
+      canonical_name: normalizeCanonicalName(entityName),
+      display_name: entityName,
+      entity_type: 'property',
+    },
+    metadata,
+  });
+
+  const entityId = linkResult.entity?.id || linkResult.entityId;
+  if (!entityId) {
+    return res.status(500).json({ error: 'Failed to create/link entity' });
+  }
+
+  // 4. Run sidebar extraction pipeline (classify domain, propagate to DB)
+  const pipelineResult = await processSidebarExtraction(entityId, workspaceId, user.user_id);
+
+  // 5. Record promotion result
+  await opsQuery('POST', 'staged_intake_promotions', {
+    intake_id,
+    workspace_id: workspaceId,
+    entity_id: entityId,
+    promoted_by: user.user_id,
+    pipeline_result: pipelineResult,
+    promoted_at: new Date().toISOString(),
+  });
+
+  // 6. Update intake item status
+  await opsQuery('PATCH',
+    `staged_intake_items?intake_id=eq.${encodeURIComponent(intake_id)}&workspace_id=eq.${encodeURIComponent(workspaceId)}`,
+    { status: 'promoted', updated_at: new Date().toISOString() }
+  );
+
+  // 7. Write signal
+  await writeSignal({
+    workspace_id: workspaceId,
+    signal_type: 'intake_promoted',
+    entity_id: entityId,
+    payload: {
+      intake_id,
+      domain: pipelineResult.domain,
+      property_id: pipelineResult.domain_property_id,
+      propagated: pipelineResult.domain_propagated,
+    },
+    user_id: user.user_id,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    intake_id,
+    entity_id: entityId,
+    domain: pipelineResult.domain || null,
+    domain_property_id: pipelineResult.domain_property_id || null,
+    propagated: pipelineResult.domain_propagated || false,
+    pipeline_summary: pipelineResult,
+  });
+}
+
+// ============================================================================
+// DISCARD — Mark intake item as discarded
+// POST /api/intake?_route=discard  { intake_id }
+// ============================================================================
+
+async function handleIntakeDiscard(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  if (!requireRole(user, 'operator', workspaceId)) {
+    return res.status(403).json({ error: 'Operator role required' });
+  }
+
+  const { intake_id } = req.body || {};
+  if (!intake_id) return res.status(400).json({ error: 'intake_id required' });
+
+  await opsQuery('PATCH',
+    `staged_intake_items?intake_id=eq.${encodeURIComponent(intake_id)}&workspace_id=eq.${encodeURIComponent(workspaceId)}`,
+    { status: 'discarded', updated_at: new Date().toISOString() }
+  );
+
+  return res.status(200).json({ ok: true, intake_id, status: 'discarded' });
 }
