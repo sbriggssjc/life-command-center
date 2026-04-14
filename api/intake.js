@@ -283,18 +283,6 @@ async function handleOutlookMessage(req, res) {
         });
       }
 
-      // If no attachments provided but email has them, create a placeholder
-      // so the item is visible in the review queue for manual processing
-      if (atts.length === 0) {
-        await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-          intake_id:   stagedIntakeId,
-          file_name:   'pending_attachments',
-          file_type:   'pending',
-          storage_path: null,
-          inline_data:  null,
-        });
-      }
-
       // 3. Run extraction with a short timeout race.
       // processIntakeExtraction calls OpenAI and can be long-running; we await
       // up to 8s so it has a chance to complete within the same invocation
