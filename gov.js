@@ -1106,6 +1106,68 @@ let govPipelineRuns = null;
 let govPipelineLoading = false;
 let govMonitorData = null;
 let govMonitorLoading = false;
+let govIntakeQueue = null;
+let govIntakeLoading = false;
+let govIntakeIdx = 0;
+
+/**
+ * Load email intake queue for government domain
+ */
+async function loadGovIntakeQueue() {
+  if (govIntakeLoading) return;
+  govIntakeLoading = true;
+  try {
+    const url = new URL('/api/intake-queue', window.location.origin);
+    url.searchParams.set('domain', 'government');
+    url.searchParams.set('limit', '50');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    govIntakeQueue = result.items || [];
+  } catch(e) {
+    console.error('loadGovIntakeQueue error:', e);
+    showToast('Intake queue load failed', 'error');
+    govIntakeQueue = [];
+  }
+  govIntakeLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'government') return;
+  renderGovTab();
+}
+
+/**
+ * Render government intake queue
+ */
+function renderGovIntakeQueue() {
+  if (govIntakeLoading || !govIntakeQueue) {
+    return '<div style="text-align:center;padding:40px;color:var(--text3)"><div class="spinner"></div><div style="margin-top:12px">Loading intake queue...</div></div>';
+  }
+
+  const items = govIntakeQueue;
+  if (items.length === 0) {
+    return '<div style="text-align:center;padding:40px">'
+      + '<div style="font-size:36px;margin-bottom:12px">📬</div>'
+      + '<div style="font-size:15px;font-weight:600;color:var(--text)">No intake items</div>'
+      + '<div style="font-size:12px;color:var(--text3);margin-top:4px">Documents from email intake will appear here for review</div>'
+      + '<button onclick="govIntakeQueue=null;loadGovIntakeQueue()" style="margin-top:12px;padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer;font-size:12px">Refresh</button>'
+      + '</div>';
+  }
+
+  let html = '<div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">';
+  html += `<div style="font-size:13px;color:var(--text2)">${items.length} item${items.length !== 1 ? 's' : ''} awaiting review</div>`;
+  html += '<button onclick="govIntakeQueue=null;loadGovIntakeQueue()" style="padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer;font-size:11px">Refresh</button>';
+  html += '</div>';
+
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+  items.forEach((item, idx) => {
+    html += renderIntakeCard(item, idx, 'gov');
+  });
+  html += '</div>';
+
+  return html;
+}
 
 function renderOwnershipResearchCard(rec) {
   // Track record changes to reset step and clear draft
@@ -4924,6 +4986,7 @@ function renderGovResearch() {
 
   // Queue counts for badges
   const puCount = govPendingUpdates ? govPendingUpdates.length : null;
+  const inCount = govIntakeQueue ? govIntakeQueue.length : null;
   const owCount = govData.ownership ? govData.ownership.filter(o => !o.sale_price && (!o.research_status || o.research_status === 'pending')).length : 0;
   const ldCount = govData.leads ? govData.leads.filter(l => !l.research_status || l.research_status === 'pending').length : 0;
   const portfolio = govData.portfolioProperties || [];
@@ -4933,10 +4996,11 @@ function renderGovResearch() {
   const pipelineSteps = [
     { key: 'pending_updates',    num: '1', label: 'Pending Updates',   count: puCount,    phase: 'quality',     desc: 'Approve or reject AI-proposed data changes' },
     { key: 'pipeline_control',   num: '2', label: 'Pipeline Control',  count: null,       phase: 'quality',     desc: 'Monitor ingestion runs and error rates' },
-    { key: 'ownership',          num: '3', label: 'Ownership',         count: owCount,    phase: 'enrichment',  desc: 'Research sale details, entity, and true owner' },
-    { key: 'leads',              num: '4', label: 'Leads',             count: ldCount,    phase: 'enrichment',  desc: 'Complete lead profiles with ownership and contact data' },
-    { key: 'intel',              num: '5', label: 'Intel',             count: intelCount, phase: 'enrichment',  desc: 'Fill property intelligence gaps (value, rent, condition)' },
-    { key: 'financial_overrides',num: '6', label: 'Financials',        count: null,       phase: 'prospecting', desc: 'Override financial metrics for pipeline properties' },
+    { key: 'intake',             num: '3', label: 'Intake',            count: inCount,    phase: 'quality',     desc: 'Review email intake documents before DB promotion' },
+    { key: 'ownership',          num: '4', label: 'Ownership',         count: owCount,    phase: 'enrichment',  desc: 'Research sale details, entity, and true owner' },
+    { key: 'leads',              num: '5', label: 'Leads',             count: ldCount,    phase: 'enrichment',  desc: 'Complete lead profiles with ownership and contact data' },
+    { key: 'intel',              num: '6', label: 'Intel',             count: intelCount, phase: 'enrichment',  desc: 'Fill property intelligence gaps (value, rent, condition)' },
+    { key: 'financial_overrides',num: '7', label: 'Financials',        count: null,       phase: 'prospecting', desc: 'Override financial metrics for pipeline properties' },
     { key: 'monitor',            num: '',  label: 'Monitor',           count: null,       phase: 'monitoring',  desc: 'Dashboard: lead gaps, data freshness, research progress' },
   ];
 
@@ -4998,7 +5062,7 @@ function renderGovResearch() {
   html += `<div style="padding:10px 14px;background:${currentPhase.color}10;border-radius:8px;border-left:3px solid ${currentPhase.color};margin-bottom:16px;display:flex;align-items:center;gap:10px;">`;
   html += `<span style="font-size:18px">${currentPhase.icon}</span>`;
   html += `<div>`;
-  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 6' : ''}</div>`;
+  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 7' : ''}</div>`;
   html += `<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>${currentStep.label}:</strong> ${currentStep.desc}</div>`;
   html += '</div></div>';
 
@@ -5052,6 +5116,9 @@ function renderGovResearch() {
 
   } else if (researchMode === 'pending_updates') {
     html += renderGovPendingUpdates();
+  } else if (researchMode === 'intake') {
+    if (!govIntakeQueue) loadGovIntakeQueue();
+    html += renderGovIntakeQueue();
   } else if (researchMode === 'financial_overrides') {
     html += renderGovFinancialOverrides();
   } else if (researchMode === 'pipeline_control') {
