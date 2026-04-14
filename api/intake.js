@@ -220,6 +220,7 @@ async function handleOutlookMessage(req, res) {
       });
       if (stageResult.ok) {
         for (const att of atts) {
+          if (!att.inline_data && !att.storage_path) continue;
           await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
             intake_id:    existing.id,
             file_name:    att.file_name || att.name || 'attachment',
