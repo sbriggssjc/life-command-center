@@ -813,6 +813,20 @@ async function executeReadAction(spec, params, user, workspaceId, req) {
 
 const GRAPH_API_URL = 'https://graph.microsoft.com/v1.0';
 
+// Convert plain-text draft body into HTML suitable for Graph message/body (contentType=HTML).
+// Preserves paragraph breaks and escapes HTML. Outlook will append the user's default
+// signature automatically when the draft is opened in New Outlook or Outlook Web.
+function _htmlizeDraftBody(text) {
+  if (!text) return '';
+  const esc = String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // Convert double-newlines to paragraph breaks, single newlines to <br>
+  const paragraphs = esc.split(/\n\n+/).map(p => '<p>' + p.replace(/\n/g, '<br>') + '</p>');
+  return paragraphs.join('');
+}
+
 async function createTodoTask(params, user, workspaceId) {
   const graphToken = process.env.MS_GRAPH_TOKEN;
   if (!graphToken) {
@@ -2205,6 +2219,140 @@ async function handleDraftRoute(req, res) {
       }
 
       return res.status(200).json(result);
+    }
+
+    // POST ?action=create_outlook_draft — create a real Outlook draft via Graph API
+    // with the capital markets PDF already attached. Returns a webLink that opens
+    // the draft in the user's default Outlook client (New Outlook, Outlook Web,
+    // or whatever is configured). Outlook auto-applies the user's default signature.
+    if (action === 'create_outlook_draft') {
+      const { template_id, context, cadence_ids, to, cc } = req.body || {};
+      if (!template_id) return res.status(400).json({ error: 'template_id is required' });
+      if (!context || typeof context !== 'object') {
+        return res.status(400).json({ error: 'context object is required' });
+      }
+      if (!to) return res.status(400).json({ error: 'to (recipient email) is required' });
+
+      // Enrich + render (same path as generate)
+      const enrichedContext = await enrichDraftContext(context);
+      if (cadence_ids && (cadence_ids.entity_id || cadence_ids.sf_contact_id || cadence_ids.contact_id)) {
+        try {
+          const cadenceInfo = await getCadenceForDraft(
+            cadence_ids,
+            { property_id: context.property?.property_id, domain: context.domain || context.property?.domain }
+          );
+          if (cadenceInfo?.ok && cadenceInfo.context_flags) {
+            Object.assign(enrichedContext, cadenceInfo.context_flags);
+          }
+        } catch (err) { /* non-blocking */ }
+      }
+
+      const rendered = await generateDraft(template_id, enrichedContext, { strict: false });
+      if (!rendered.ok) return res.status(422).json(rendered);
+
+      const subject = rendered.draft?.subject || '';
+      const bodyText = rendered.draft?.body || '';
+      const report = enrichedContext.report_info;
+
+      // ---- Fetch attachment from public URL (if configured) ----
+      let attachment = null;
+      let attachmentError = null;
+      if (report?.public_url) {
+        try {
+          const pdfRes = await fetch(report.public_url);
+          if (pdfRes.ok) {
+            const buf = Buffer.from(await pdfRes.arrayBuffer());
+            // Graph caps inline attachments at 3MB; files up to 150MB need the
+            // upload session flow. Most quarterly reports are 2–5MB, so we keep
+            // it simple and warn if we exceed the threshold.
+            if (buf.length > 3 * 1024 * 1024) {
+              attachmentError = 'PDF too large for inline attachment (>3MB). Draft created without attachment.';
+            } else {
+              attachment = {
+                name: report.filename || 'capital-markets-update.pdf',
+                contentBytes: buf.toString('base64'),
+                contentType: 'application/pdf'
+              };
+            }
+          } else {
+            attachmentError = `Could not fetch PDF (${pdfRes.status})`;
+          }
+        } catch (e) {
+          attachmentError = 'PDF fetch error: ' + e.message;
+        }
+      } else if (report) {
+        attachmentError = 'No public_url configured for this report. Upload the PDF to /public/reports/ and set capital_markets_reports.public_url.';
+      }
+
+      // ---- Build Graph message payload ----
+      const graphToken = process.env.MS_GRAPH_TOKEN;
+      if (!graphToken) {
+        return res.status(503).json({
+          ok: false,
+          error: 'MS_GRAPH_TOKEN not configured on Vercel — falling back to mailto',
+          subject, body: bodyText, report_attachment: report,
+          fallback: 'mailto'
+        });
+      }
+
+      const recipients = Array.isArray(to) ? to : [to];
+      const ccList = Array.isArray(cc) ? cc : (cc ? [cc] : []);
+
+      const messagePayload = {
+        subject,
+        body: { contentType: 'HTML', content: _htmlizeDraftBody(bodyText) },
+        toRecipients: recipients.map(addr => ({ emailAddress: { address: addr } })),
+        ccRecipients: ccList.map(addr => ({ emailAddress: { address: addr } }))
+      };
+      if (attachment) {
+        messagePayload.attachments = [{
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name: attachment.name,
+          contentType: attachment.contentType,
+          contentBytes: attachment.contentBytes
+        }];
+      }
+
+      try {
+        const graphRes = await fetch(`${GRAPH_API_URL}/me/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${graphToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(messagePayload)
+        });
+
+        if (!graphRes.ok) {
+          const errText = await graphRes.text().catch(() => '');
+          return res.status(502).json({
+            ok: false,
+            error: `Graph API error ${graphRes.status}`,
+            detail: errText.slice(0, 500),
+            subject, body: bodyText, report_attachment: report,
+            fallback: 'mailto'
+          });
+        }
+
+        const draft = await graphRes.json();
+        return res.status(200).json({
+          ok: true,
+          draft_id: draft.id,
+          web_link: draft.webLink,
+          subject: draft.subject,
+          body: bodyText,
+          has_attachment: !!attachment,
+          attachment_error: attachmentError,
+          report_attachment: report
+        });
+      } catch (e) {
+        return res.status(502).json({
+          ok: false,
+          error: 'Graph API fetch failed: ' + e.message,
+          subject, body: bodyText, report_attachment: report,
+          fallback: 'mailto'
+        });
+      }
     }
 
     // POST ?action=batch — generate drafts for multiple contacts

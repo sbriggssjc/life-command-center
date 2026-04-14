@@ -3198,39 +3198,77 @@ async function _draftFromPipeline(templateId, ctxJson) {
     const resolvedTemplate = templateId === 'auto' ? 'T-001' : templateId;
 
     const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
-    const resp = await fetchFn('/api/operations?_route=draft&action=generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        template_id: resolvedTemplate,
-        context,
-        cadence_ids: Object.keys(cadence_ids).length ? cadence_ids : undefined
-      })
-    });
 
-    const result = await resp.json();
-
-    if (!result.ok) {
-      showToast(result.error || 'Failed to generate draft', 'error');
-      console.error('[PipelineDraft] API error:', result);
-      return;
+    // Try Graph-based draft creation first (real Outlook draft w/ attachment + signature)
+    let result = null;
+    let usedGraph = false;
+    if (ctx.email) {
+      try {
+        const graphResp = await fetchFn('/api/operations?_route=draft&action=create_outlook_draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            template_id: resolvedTemplate,
+            context,
+            cadence_ids: Object.keys(cadence_ids).length ? cadence_ids : undefined,
+            to: ctx.email
+          })
+        });
+        const graphJson = await graphResp.json();
+        if (graphJson.ok && graphJson.web_link) {
+          // Success: open the real Outlook draft (signature + attachment applied)
+          window.open(graphJson.web_link, '_blank');
+          const attachNote = graphJson.has_attachment
+            ? ' with ' + (graphJson.report_attachment?.filename || 'attachment')
+            : (graphJson.attachment_error ? ' (no attachment: ' + graphJson.attachment_error + ')' : '');
+          showToast('✅ Draft created in Outlook' + attachNote, 'success', 10000);
+          usedGraph = true;
+          result = { ok: true, draft: { subject: graphJson.subject, body: graphJson.body, template_id: resolvedTemplate } };
+        } else if (graphJson.fallback === 'mailto') {
+          // Backend told us to fall back — use the rendered subject/body it returned
+          console.warn('[PipelineDraft] Graph unavailable, falling back to mailto:', graphJson.error);
+          result = { ok: true, draft: { subject: graphJson.subject, body: graphJson.body, template_id: resolvedTemplate }, report_attachment: graphJson.report_attachment };
+        }
+      } catch (e) {
+        console.warn('[PipelineDraft] Graph draft attempt failed, falling back:', e.message);
+      }
     }
 
-    // Open in email client via mailto
-    const subject = result.draft.subject || '';
-    const body = result.draft.body || '';
-    const mailto = `mailto:${encodeURIComponent(ctx.email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailto;
+    // Fallback: classic generate + mailto
+    if (!result) {
+      const resp = await fetchFn('/api/operations?_route=draft&action=generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template_id: resolvedTemplate,
+          context,
+          cadence_ids: Object.keys(cadence_ids).length ? cadence_ids : undefined
+        })
+      });
+      result = await resp.json();
+      if (!result.ok) {
+        showToast(result.error || 'Failed to generate draft', 'error');
+        console.error('[PipelineDraft] API error:', result);
+        return;
+      }
+    }
 
-    // Show attachment reminder if report info is available
-    if (result.report_attachment && result.report_attachment.filename) {
-      const rpt = result.report_attachment;
-      const attachMsg = '📎 Attach: ' + rpt.filename + (rpt.quarter ? ' (' + rpt.quarter + ')' : '');
-      showToast(attachMsg, 'info', 15000);
-      // Show a persistent reminder bar at top of page
-      _showAttachmentReminder(rpt);
-    } else {
-      showToast('Draft opened in email client (' + result.draft.template_name + ')', 'success');
+    // If we didn't already open via Graph, open via mailto
+    if (!usedGraph) {
+      const subject = result.draft.subject || '';
+      const body = result.draft.body || '';
+      const mailto = `mailto:${encodeURIComponent(ctx.email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = mailto;
+
+      // Show attachment reminder if report info is available
+      if (result.report_attachment && result.report_attachment.filename) {
+        const rpt = result.report_attachment;
+        const attachMsg = '📎 Attach: ' + rpt.filename + (rpt.quarter ? ' (' + rpt.quarter + ')' : '');
+        showToast(attachMsg, 'info', 15000);
+        _showAttachmentReminder(rpt);
+      } else {
+        showToast('Draft opened in email client', 'success');
+      }
     }
 
     // Record the send in background (non-blocking)

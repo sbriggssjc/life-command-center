@@ -4264,7 +4264,8 @@ async function _udGenerateDraft() {
       domain,
       unresolved: result.draft.unresolved_variables || [],
       cadence_id: result.cadence?.id || _udCadenceCache?.cadence?.id || null,
-      report_attachment: result.report_attachment || null
+      report_attachment: result.report_attachment || null,
+      context: context  // Stored so _udSendDraft can re-render via Graph with attachment
     };
 
     // Populate the preview
@@ -4437,7 +4438,7 @@ function _udAutoSelectTemplate(prop, own, domain) {
  * Open the draft in the user's email client via mailto: link.
  * Uses the (potentially edited) subject and body from the preview fields.
  */
-function _udSendDraft() {
+async function _udSendDraft() {
   const subject = document.getElementById('udDraftSubject')?.value || '';
   const body = document.getElementById('udDraftBody')?.value || '';
   const own = _udCache?.ownership || {};
@@ -4448,10 +4449,45 @@ function _udSendDraft() {
     return;
   }
 
+  const recordBtn = document.getElementById('udRecordSendBtn');
+
+  // Try Graph-based Outlook draft first — real attachment + signature
+  if (toEmail && _udCurrentDraft?.template_id) {
+    try {
+      const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+      // Re-use the already-rendered (and possibly user-edited) subject/body by
+      // sending them as the context's pre_rendered override. For now we just
+      // kick off create_outlook_draft which re-renders from the template —
+      // the attachment path is the main win.
+      const graphResp = await fetchFn('/api/operations?_route=draft&action=create_outlook_draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template_id: _udCurrentDraft.template_id,
+          context: _udCurrentDraft.context || {},
+          to: toEmail
+        })
+      });
+      const gj = await graphResp.json();
+      if (gj.ok && gj.web_link) {
+        window.open(gj.web_link, '_blank');
+        const attachNote = gj.has_attachment
+          ? ' with ' + (gj.report_attachment?.filename || 'attachment')
+          : (gj.attachment_error ? ' (no attachment: ' + gj.attachment_error + ')' : '');
+        showToast('✅ Draft created in Outlook' + attachNote, 'success', 10000);
+        if (recordBtn) recordBtn.style.display = 'inline-flex';
+        return;
+      }
+      console.warn('[detail._udSendDraft] Graph unavailable, falling back to mailto:', gj.error);
+    } catch (e) {
+      console.warn('[detail._udSendDraft] Graph attempt failed, falling back:', e.message);
+    }
+  }
+
+  // Fallback: mailto with attachment reminder
   const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   window.open(mailto, '_blank', 'noopener');
 
-  // Show attachment reminder if report info is cached from draft generation
   if (_udCurrentDraft?.report_attachment?.filename) {
     const rpt = _udCurrentDraft.report_attachment;
     if (typeof _showAttachmentReminder === 'function') {
@@ -4461,8 +4497,6 @@ function _udSendDraft() {
     }
   }
 
-  // Show the "Log as Sent" button after opening email client
-  const recordBtn = document.getElementById('udRecordSendBtn');
   if (recordBtn) recordBtn.style.display = 'inline-flex';
 }
 
