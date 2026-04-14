@@ -194,7 +194,6 @@ async function handleOutlookMessage(req, res) {
     source_connector_id: null,
     external_id: String(messageId),
     external_url: deepLink,
-    internet_message_id: internetMsgId || null,
     status: 'new',
     priority: 'normal',
     visibility: 'private',
