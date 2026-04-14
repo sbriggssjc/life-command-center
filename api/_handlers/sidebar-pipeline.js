@@ -1338,10 +1338,13 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     const loStr = lo.toISOString().split('T')[0];
     const hiStr = hi.toISOString().split('T')[0];
 
+    const lookupSelect = domain === 'government'
+      ? 'sale_id,sale_date'
+      : 'sale_id,sale_date,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
     const lookupPath =
       `sales_transactions?property_id=eq.${propertyId}` +
       `&sale_date=gte.${loStr}&sale_date=lte.${hiStr}` +
-      `&select=sale_id,sale_date&limit=1`;
+      `&select=${lookupSelect}&limit=1`;
     const lookup = await domainQuery(domain, 'GET', lookupPath);
 
     // Only apply current brokers to the current/most-recent sale. Historical
@@ -1405,7 +1408,20 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           transaction_type: null,  // set below by classifySaleType
           data_source:      'costar_sidebar',
         }
-      : { cap_rate: capRateVal, buyer_name: buyerVal, seller_name: sellerVal, procuring_broker: procuringBrokerVal };
+      : {
+          // Cap rate provenance: raw CoStar value is "stated" with low
+          // confidence until an OM or lease confirms it. calculated_cap_rate
+          // and rent_at_sale are intentionally left null here — they are
+          // populated downstream when confirmed rent data arrives.
+          ...(capRateVal != null ? {
+            stated_cap_rate:     capRateVal,
+            cap_rate_confidence: 'low',
+            rent_source:         'costar_stated',
+          } : {}),
+          buyer_name:       buyerVal,
+          seller_name:      sellerVal,
+          procuring_broker: procuringBrokerVal,
+        };
 
     const { transaction_type, exclude_from_market_metrics } = classifySaleType(sale);
 
@@ -1435,8 +1451,30 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
 
     if (lookup.ok && lookup.data?.length) {
       // Update existing
+      const existing = lookup.data[0];
+      let patchData = saleData;
+
+      // Preserve confirmed cap rate data: if a sale already has a
+      // calculated_cap_rate and its confidence is medium/high, the CoStar
+      // stated value must not downgrade confidence or clobber the anchor
+      // rent source. Only refresh stated_cap_rate, and only if it changed.
+      if (domain !== 'government'
+          && existing.calculated_cap_rate != null
+          && (existing.cap_rate_confidence === 'medium'
+              || existing.cap_rate_confidence === 'high')) {
+        patchData = { ...saleData };
+        delete patchData.cap_rate_confidence;
+        delete patchData.rent_source;
+        const newStated = patchData.stated_cap_rate;
+        const existingStated = existing.stated_cap_rate != null
+          ? Number(existing.stated_cap_rate) : null;
+        if (newStated == null || existingStated === Number(newStated)) {
+          delete patchData.stated_cap_rate;
+        }
+      }
+
       await domainPatch(domain,
-        `sales_transactions?sale_id=eq.${lookup.data[0].sale_id}`, saleData, 'upsertDomainSales');
+        `sales_transactions?sale_id=eq.${existing.sale_id}`, patchData, 'upsertDomainSales');
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -1458,7 +1496,7 @@ async function createSaleAlert(propertyId, saleData) {
   const price = saleData.sold_price
     ? '$' + Number(saleData.sold_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
     : 'undisclosed price';
-  const capRate = saleData.cap_rate ? ` at ${saleData.cap_rate}% cap` : '';
+  const capRate = saleData.stated_cap_rate ? ` at ${saleData.stated_cap_rate}% cap` : '';
   const buyer = saleData.buyer_name || 'unknown buyer';
 
   await domainQuery('dialysis', 'POST', 'alerts_unified', {
