@@ -12,6 +12,7 @@
     { "source": "/api/gov-evidence", "destination": "/api/admin?_route=edge-data&_edgeRoute=gov-evidence" },
     { "source": "/api/dia-query", "destination": "/api/admin?_route=edge-data&_source=dia" },
     { "source": "/api/daily-briefing", "destination": "/api/admin?_route=edge-brief&action=snapshot" },
+    { "source": "/api/cms-match", "destination": "/api/admin?_route=cms-match" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
