@@ -185,10 +185,19 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
       cap_rate_confidence: confidence,
     };
 
-    const res = await domainQuery(DOMAIN, 'PATCH',
-      `sales_transactions?sale_id=eq.${encodeURIComponent(sale.sale_id)}`,
-      patch
-    );
+    // Explicit table guard: calculated_cap_rate is a *transaction* cap rate
+    // and must NEVER be PATCHed into available_listings (whose cap_rate is
+    // the listing's asking cap rate, sourced only from CoStar). Refuse to
+    // issue the PATCH if the path is not targeted at sales_transactions.
+    const TARGET_TABLE = 'sales_transactions';
+    const patchPath = `${TARGET_TABLE}?sale_id=eq.${encodeURIComponent(sale.sale_id)}`;
+    if (!patchPath.startsWith(`${TARGET_TABLE}?`)) {
+      throw new Error(
+        `[cap-rate-recalc] refusing to PATCH non-${TARGET_TABLE} table: ${patchPath}`
+      );
+    }
+
+    const res = await domainQuery(DOMAIN, 'PATCH', patchPath, patch);
     if (res.ok) updated++;
     else        skipped++;
   }
