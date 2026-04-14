@@ -2964,10 +2964,11 @@ function renderProspectCardsHTML(items, options = {}) {
       if (showEmailTemplates && c.email) {
         html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
         html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktEmail(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Initial Outreach</div>`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktFollowUp(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Follow-Up</div>`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMarketUpdate(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Market Update</div>`;
-        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();openMktMeetingReq(decodeURIComponent('${encodeURIComponent(c.email)}'),decodeURIComponent('${encodeURIComponent(c.contact_name||'')}'),decodeURIComponent('${encodeURIComponent(group.displayName)}'))">Meeting Request</div>`;
+        var _draftCtx = encodeURIComponent(JSON.stringify({email:c.email||'',contact_name:c.contact_name||'',deal_name:group.displayName||'',sf_contact_id:c.sf_contact_id||'',company_name:c.company_name||'',domain:c.task_domain||''}));
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-001',decodeURIComponent('${_draftCtx}'))">First Touch</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-002',decodeURIComponent('${_draftCtx}'))">Follow-Up</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-003',decodeURIComponent('${_draftCtx}'))">Capital Markets Update</div>`;
+        html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('auto',decodeURIComponent('${_draftCtx}'))">Auto (Cadence)</div>`;
         html += '</div></div>';
       }
       if (c.phone) {
@@ -3133,48 +3134,101 @@ function closeEmailMenus() {
 }
 document.addEventListener('click', closeEmailMenus);
 
+// ── Pipeline Draft Bridge — routes to LCC Template Engine ──────────────────
+// Replaces legacy hardcoded openMktFollowUp / openMktMarketUpdate / openMktMeetingReq / openMktEmail
+// Called from pipeline email menu with template_id + JSON contact context
+async function _draftFromPipeline(templateId, ctxJson) {
+  const ctx = typeof ctxJson === 'string' ? JSON.parse(ctxJson) : ctxJson;
+  const toastId = showToast('Generating draft…', 'info', 10000);
+
+  try {
+    const domain = ctx.domain === 'government' ? 'government' : ctx.domain === 'dialysis' ? 'dialysis' : '';
+
+    // Build context matching the draft API's expected shape
+    const context = {
+      contact: {
+        full_name: ctx.contact_name || '',
+        first_name: (ctx.contact_name || '').split(' ')[0] || '',
+        company: ctx.company_name || '',
+        email: ctx.email || ''
+      },
+      property: {
+        tenant: ctx.deal_name || '',
+        city_state: '',
+        domain: domain,
+        page_title: ctx.deal_name || ''
+      },
+      domain: domain
+    };
+
+    // Cadence IDs for context flag injection
+    const cadence_ids = {};
+    if (ctx.sf_contact_id) cadence_ids.sf_contact_id = ctx.sf_contact_id;
+
+    // If auto, let the server cadence engine decide
+    const resolvedTemplate = templateId === 'auto' ? 'T-001' : templateId;
+
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const resp = await fetchFn('/api/operations?_route=draft&action=generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_id: resolvedTemplate,
+        context,
+        cadence_ids: Object.keys(cadence_ids).length ? cadence_ids : undefined
+      })
+    });
+
+    const result = await resp.json();
+
+    if (!result.ok) {
+      showToast(result.error || 'Failed to generate draft', 'error');
+      console.error('[PipelineDraft] API error:', result);
+      return;
+    }
+
+    // Open in email client via mailto
+    const subject = result.draft.subject || '';
+    const body = result.draft.body || '';
+    const mailto = `mailto:${encodeURIComponent(ctx.email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+
+    showToast('Draft opened in email client (' + result.draft.template_name + ')', 'success');
+
+    // Record the send in background (non-blocking)
+    try {
+      fetchFn('/api/operations?_route=draft&action=record_send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template_id: result.draft.template_id,
+          template_version: result.draft.template_version,
+          entity_id: ctx.sf_contact_id || null,
+          domain: domain || null,
+          rendered_subject: subject,
+          rendered_body: body,
+          final_subject: subject,
+          final_body: body,
+          cadence_id: result.cadence?.id || null
+        })
+      });
+    } catch (e) { console.warn('[PipelineDraft] record_send failed:', e.message); }
+
+  } catch (err) {
+    console.error('[PipelineDraft] Error:', err);
+    showToast('Error generating draft: ' + err.message, 'error');
+  }
+}
+
+// Legacy aliases — redirect to new system for any remaining callers
 function openMktFollowUp(email, name, deal) {
-  const first = (name || '').split(' ')[0] || 'there';
-  _composeOutlook(email,
-    'Following Up \u2014 ' + deal,
-    'Hi ' + first + ',\n\n' +
-    'I wanted to follow up on my previous outreach regarding ' + deal + '. I understand these decisions take time, and I am happy to work on your schedule.\n\n' +
-    'If you have a few minutes this week, I would love to share some recent market data and comparable transactions that may be useful as you evaluate your options.\n\n' +
-    'Please let me know if there is a good time to connect.' +
-    _sig()
-  );
+  _draftFromPipeline('T-002', JSON.stringify({email, contact_name: name, deal_name: deal}));
 }
-
 function openMktMarketUpdate(email, name, deal) {
-  const first = (name || '').split(' ')[0] || 'there';
-  _composeOutlook(email,
-    'Net Lease Market Update \u2014 ' + deal,
-    'Hi ' + first + ',\n\n' +
-    'I wanted to share a quick update on the net lease market as it relates to ' + deal + '.\n\n' +
-    'The 10-year Treasury is currently at [X.XX]%, and we are seeing [cap rate trends / buyer activity / pricing observations]. For government-leased properties in particular, [specific insight].\n\n' +
-    'Investment Highlights:\n' +
-    '  - Tenant: [Agency / Operator]\n' +
-    '  - Location: [City, State]\n' +
-    '  - Building Size: [XX,XXX SF]\n' +
-    '  - Lease Term Remaining: [X.X years]\n' +
-    '  - Annual Rent: [$X,XXX,XXX]\n' +
-    '  - Cap Rate: [X.XX%]\n\n' +
-    'Happy to walk through the offering memorandum if helpful.' +
-    _sig()
-  );
+  _draftFromPipeline('T-003', JSON.stringify({email, contact_name: name, deal_name: deal}));
 }
-
 function openMktMeetingReq(email, name, deal) {
-  const first = (name || '').split(' ')[0] || 'there';
-  _composeOutlook(email,
-    'Meeting Request \u2014 ' + deal,
-    'Hi ' + first + ',\n\n' +
-    'I would appreciate the opportunity to meet briefly to discuss ' + deal + ' and how Northmarq can be a resource for your capital markets needs.\n\n' +
-    'Would any of the following times work for a 15-minute call?\n\n' +
-    '  - [Day, Time]\n  - [Day, Time]\n  - [Day, Time]\n\n' +
-    'Alternatively, feel free to suggest a time that works best for you.' +
-    _sig()
-  );
+  _draftFromPipeline('T-002', JSON.stringify({email, contact_name: name, deal_name: deal, is_final_touch: true}));
 }
 
 // ── Call history ──
@@ -3697,30 +3751,14 @@ async function mktUpdateStatus(leadId, newStatus) {
   }
 }
 
-/** Open email template for a marketing deal contact */
-// Open email in Outlook desktop via mailto (Outlook intercepts when set as default mail client)
+// Legacy email helpers — kept as thin redirects to new template engine
 function _composeOutlook(email, subjectText, bodyText) {
-  const subject = encodeURIComponent(subjectText);
-  const body = encodeURIComponent(bodyText);
-  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
-}
-
-function _sig() {
-  const user = LCC_USER.display_name || 'Scott Briggs';
-  return '\n\nBest regards,\n' + user + '\nSenior Vice President\nNorthmarq Investment Sales\n(612) 555-0100';
+  // Preserved for any remaining callers outside pipeline
+  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subjectText)}&body=${encodeURIComponent(bodyText)}`;
 }
 
 function openMktEmail(email, contactName, dealName) {
-  const first = (contactName || '').split(' ')[0] || 'there';
-  const user = LCC_USER.display_name || 'Scott Briggs';
-  _composeOutlook(email,
-    'Northmarq Investment Sales \u2014 ' + dealName,
-    'Hi ' + first + ',\n\n' +
-    'I hope this message finds you well. My name is ' + user + ', and I am a Senior Vice President with Northmarq Investment Sales.\n\n' +
-    'I am reaching out regarding ' + dealName + '. Our team has been actively working in this market and I wanted to introduce myself as a resource for any future capital markets needs you may have.\n\n' +
-    'I would welcome the opportunity to share some recent market activity and comparable transactions that may be relevant to your portfolio. Would you have a few minutes for a brief call this week?' +
-    _sig()
-  );
+  _draftFromPipeline('T-001', JSON.stringify({email, contact_name: contactName, deal_name: dealName}));
 }
 
 // ============================================================

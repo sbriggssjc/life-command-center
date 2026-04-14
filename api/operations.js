@@ -1995,9 +1995,8 @@ async function enrichDraftContext(context) {
     enriched.team = enriched.team || {};
     enriched.team.signature = [
       'Scott Briggs',
-      'Senior Vice President | Northmarq',
-      'sabriggs@northmarq.com',
-      'Specializing in Government-Leased & Healthcare Net Lease Investment Sales'
+      'Senior Vice President | Northmarq Investment Sales',
+      'sabriggs@northmarq.com | (918) 794-9787'
     ].join('\n');
   }
 
