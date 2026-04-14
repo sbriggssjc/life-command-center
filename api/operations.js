@@ -2101,6 +2101,32 @@ async function enrichDraftContext(context) {
     }
   }
 
+  // --- report_info (from capital_markets_reports registry) ---
+  // Injects report_title, report_quarter, report_url for template use
+  if (!enriched.report_info && domain) {
+    try {
+      const reportResult = await opsQuery('GET',
+        `capital_markets_reports?domain=eq.${pgFilterVal(domain)}&is_active=eq.true&limit=1`
+      );
+      if (reportResult.ok && reportResult.data?.[0]) {
+        const rpt = reportResult.data[0];
+        enriched.report_info = {
+          title: rpt.report_title,
+          quarter: rpt.report_quarter,
+          filename: rpt.report_filename,
+          url: rpt.public_url || rpt.sharepoint_url || null,
+          key_stats: rpt.key_stats || {}
+        };
+        // Inject pricing advantage for dialysis (killer differentiator)
+        if (domain === 'dialysis' && rpt.key_stats?.pricing_advantage) {
+          enriched.pricing_advantage = `Over the trailing twelve months, marketed dialysis assets placed by Northmarq have achieved an average cap rate of ${rpt.key_stats.northmarq_cap_rate} versus ${rpt.key_stats.market_cap_rate} for non-Northmarq transactions — translating to approximately ${rpt.key_stats.pricing_advantage} in additional proceeds per sale (${rpt.key_stats.pricing_uplift_pct} uplift).`;
+        }
+      }
+    } catch (err) {
+      console.warn('[enrichDraftContext] Report lookup failed:', err.message);
+    }
+  }
+
   return enriched;
 }
 
