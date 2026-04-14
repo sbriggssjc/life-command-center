@@ -184,6 +184,27 @@ async function handleOutlookMessage(req, res) {
   const deepLink = webLink
     || (graphRestId ? `https://outlook.office.com/mail/deeplink/read/${encodeURIComponent(graphRestId)}` : null);
 
+  // Dedup guard: Power Automate's flagged-email trigger fires multiple times
+  // (typically 3–6) for the same email within a minute. Check if this
+  // correlation_id already exists in inbox_items before inserting a new row.
+  const existingCheck = await opsQuery('GET',
+    `inbox_items?metadata->>correlation_id=eq.${encodeURIComponent(correlationId)}` +
+    `&workspace_id=eq.${encodeURIComponent(workspaceId)}` +
+    `&select=id,status&limit=1`
+  );
+
+  if (existingCheck.ok && existingCheck.data?.length) {
+    const existing = existingCheck.data[0];
+    // Already ingested — return the existing item's correlation info
+    return res.status(200).json({
+      ok: true,
+      deduplicated: true,
+      correlation_id: correlationId,
+      inbox_item_id:  existing.id,
+      message: 'Already ingested',
+    });
+  }
+
   const result = await opsQuery('POST', 'inbox_items', {
     workspace_id: workspaceId,
     source_user_id: user.id,
