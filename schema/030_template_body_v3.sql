@@ -61,13 +61,13 @@
 -- Mark v2 templates as superseded (T-001, T-002, T-003 go v2→v3)
 UPDATE template_definitions
 SET deprecated = true, deprecated_at = now(), superseded_by = 3
-WHERE template_id IN (''T-001'', ''T-002'', ''T-003'')
+WHERE template_id IN ('T-001', 'T-002', 'T-003')
   AND template_version = 2;
 
 -- Mark T-013 v1 as superseded (v1→v2)
 UPDATE template_definitions
 SET deprecated = true, deprecated_at = now(), superseded_by = 2
-WHERE template_id = ''T-013''
+WHERE template_id = 'T-013'
   AND template_version = 1;
 
 -- ============================================================================
@@ -84,18 +84,18 @@ INSERT INTO template_definitions (
   subject_template, body_template, tone_notes, performance_targets
 )
 VALUES (
-  ''T-001'', 3, ''seller_bd'', ''First Touch'',
-  ''Initial outreach to net new owner identified through research. Anchored to specific property. Value-first: capital markets report + generous comp highlights + complimentary BOV offer.'',
+  'T-001', 3, 'seller_bd', 'First Touch',
+  'Initial outreach to net new owner identified through research. Anchored to specific property. Value-first: capital markets report + generous comp highlights + complimentary BOV offer.',
   NULL,
-  ARRAY[''contact'', ''property''],
-  ARRAY[''contact.full_name'', ''property.tenant'', ''property.city_state'', ''property.domain''],
-  ARRAY[''contact.firm'', ''property.name'', ''property.lease_expiration'', ''team.credentials_summary'', ''comp_highlights'', ''property.domain_label'', ''team.signature''],
+  ARRAY['contact', 'property'],
+  ARRAY['contact.full_name', 'property.tenant', 'property.city_state', 'property.domain'],
+  ARRAY['contact.firm', 'property.name', 'property.lease_expiration', 'team.credentials_summary', 'comp_highlights', 'property.domain_label', 'team.signature'],
   -- Subject: Direct, property-anchored, domain-aware using domain_label
-  ''{{property.city_state}} {{property.domain_label}} — Northmarq'',
+  '{{property.city_state}} {{property.domain_label}} — Northmarq',
   -- Body: Warm opening → context hook → value delivery → credentials → BOV offer → comps → signature
-  E''{{contact.full_name}},\n\nGood morning. Given your ownership of the {{property.tenant}}-leased property in {{property.city_state}}, I thought you might have some interest in reviewing our latest capital markets update report for the {{property.domain_label}} investment sales sector.\n\nI run a team of professionals at Northmarq that focuses on the sale of {{property.domain_label}} assets nationwide. Our market activity and deal flow give us direct insight into the buyer demand and pricing dynamics currently driving this space.\n\nPlease see attached our quarterly capital markets update. This is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades from a broad perspective in the {{property.domain_label}} investment sales sector. The pages included are intended to provide real-time value to you and your investment portfolio, as well as insight into the level of service and quality of work our team can provide.\n\n{{#if team.credentials_summary}}{{team.credentials_summary}}\n\n{{/if}}I would like to volunteer our opinion on valuation of any of your projects — completely complimentary and confidential. We often prepare a valuation analysis and disposition proposal for clients that will include a specific trade price range and target ask price, a detailed marketing strategy and disposition plan aimed at maximizing ownership value and net proceeds, and additional details about our competitive edge and value proposition.\n\n{{#if comp_highlights}}Also, I thought you might have an interest in reviewing the high-level facts of our recently completed transactions that parallel your portfolio:\n\n{{comp_highlights}}\n\n{{/if}}Please do not hesitate to reach out if there is anything we can do to assist. Let me know what dates and times work for you and we will make that time a priority.\n\nBest regards,\n{{team.signature}}'',
-  ''Professional, generous, value-first. Open with "Good morning." Anchor to their specific asset. Attach quarterly report. Always offer complimentary BOV with full benefit description. Include 3–4 recent comparable sales when available. Never pushy. Position Northmarq as specialization leader.'',
-  ''{\"open_rate_target\": 0.35, \"click_rate_target\": 0.12, \"response_rate_target\": 0.05, \"bov_request_rate_target\": 0.03}''
+  E'{{contact.full_name}},\n\nGood morning. Given your ownership of the {{property.tenant}}-leased property in {{property.city_state}}, I thought you might have some interest in reviewing our latest capital markets update report for the {{property.domain_label}} investment sales sector.\n\nI run a team of professionals at Northmarq that focuses on the sale of {{property.domain_label}} assets nationwide. Our market activity and deal flow give us direct insight into the buyer demand and pricing dynamics currently driving this space.\n\nPlease see attached our quarterly capital markets update. This is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades from a broad perspective in the {{property.domain_label}} investment sales sector. The pages included are intended to provide real-time value to you and your investment portfolio, as well as insight into the level of service and quality of work our team can provide.\n\n{{#if team.credentials_summary}}{{team.credentials_summary}}\n\n{{/if}}I would like to volunteer our opinion on valuation of any of your projects — completely complimentary and confidential. We often prepare a valuation analysis and disposition proposal for clients that will include a specific trade price range and target ask price, a detailed marketing strategy and disposition plan aimed at maximizing ownership value and net proceeds, and additional details about our competitive edge and value proposition.\n\n{{#if comp_highlights}}Also, I thought you might have an interest in reviewing the high-level facts of our recently completed transactions that parallel your portfolio:\n\n{{comp_highlights}}\n\n{{/if}}Please do not hesitate to reach out if there is anything we can do to assist. Let me know what dates and times work for you and we will make that time a priority.\n\nBest regards,\n{{team.signature}}',
+  'Professional, generous, value-first. Open with "Good morning." Anchor to their specific asset. Attach quarterly report. Always offer complimentary BOV with full benefit description. Include 3–4 recent comparable sales when available. Never pushy. Position Northmarq as specialization leader.',
+  '{\"open_rate_target\": 0.35, \"click_rate_target\": 0.12, \"response_rate_target\": 0.05, \"bov_request_rate_target\": 0.03}'
 )
 ON CONFLICT (template_id, template_version) DO NOTHING;
 
@@ -116,19 +116,19 @@ INSERT INTO template_definitions (
   subject_template, body_template, tone_notes, performance_targets
 )
 VALUES (
-  ''T-002'', 3, ''seller_bd'', ''Cadence Follow-Up'',
-  ''Periodic touchpoint delivering quarterly report or market intelligence. Adapted for touches 2–6 (light) vs. touch 7 (explicit ask). Always anchored to their specific ownership. Soft close on touches 2–6, stronger ask on touch 7.'',
+  'T-002', 3, 'seller_bd', 'Cadence Follow-Up',
+  'Periodic touchpoint delivering quarterly report or market intelligence. Adapted for touches 2–6 (light) vs. touch 7 (explicit ask). Always anchored to their specific ownership. Soft close on touches 2–6, stronger ask on touch 7.',
   NULL,
-  ARRAY[''contact'', ''property''],
-  ARRAY[''contact.full_name'', ''property.tenant'', ''property.city_state'', ''property.domain''],
-  ARRAY[''is_final_touch'', ''is_standard_touch'', ''value_delivery'', ''team.credentials_summary'', ''comp_highlights'', ''property.domain_label'', ''team.signature''],
+  ARRAY['contact', 'property'],
+  ARRAY['contact.full_name', 'property.tenant', 'property.city_state', 'property.domain'],
+  ARRAY['is_final_touch', 'is_standard_touch', 'value_delivery', 'team.credentials_summary', 'comp_highlights', 'property.domain_label', 'team.signature'],
   -- Subject: Friendly update tone
-  ''{{property.domain_label}} Market Update — {{property.city_state}}'',
+  '{{property.domain_label}} Market Update — {{property.city_state}}',
   -- Body: Two separate non-nested blocks for is_final_touch and is_standard_touch
   --   Nested comp_highlights inside is_standard_touch is safe due to upgraded renderer
-  E''{{contact.full_name}},\n\n{{#if is_final_touch}}Over the past several months, I\'ve shared quarterly market reports, recent comparable sales, and market insights specific to your {{property.domain_label}} portfolio in {{property.city_state}}.\n\nI\'m confident there\'s genuine value in a conversation about your {{property.tenant}}-leased assets and how we might assist with a disposition, refinance, portfolio review, or strategic planning.\n\n{{#if comp_highlights}}For reference, here are our most recent comparable transactions:\n\n{{comp_highlights}}\n\n{{/if}}Would you have 30 minutes in the next two weeks? I\'m flexible with scheduling.{{/if}}{{#if is_standard_touch}}Good morning. Given your ownership of the {{property.tenant}}-leased property in {{property.city_state}}, I wanted to pass along our latest capital markets update for the {{property.domain_label}} investment sales sector.\n\nPlease see attached our quarterly update. This is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades in this space.\n\n{{#if value_delivery}}{{value_delivery}}\n\n{{/if}}{{#if comp_highlights}}I thought you might have an interest in reviewing the high-level facts of our recently completed transactions that parallel your portfolio:\n\n{{comp_highlights}}\n\n{{/if}}Please do not hesitate to reach out if there is anything we can do to assist. I would also like to volunteer our opinion on valuation of any of your projects — completely complimentary and confidential.{{/if}}\n\nLet me know what dates and times work for you and we will make that time a priority.\n\nBest regards,\n{{team.signature}}'',
-  ''Value-delivery focused. Attach quarterly report. Reference their specific asset. Keep warm and professional. Standard (touches 2–6): soft close with nested comp_highlights. Final (touch 7): explicit 30-minute ask. Never pushy, but touch 7 is firmer. Nested comp_highlights within is_standard_touch handled safely by upgraded renderer.'',
-  ''{\"open_rate_target\": 0.40, \"click_rate_target\": 0.10, \"response_rate_target\": 0.08, \"meeting_conversion_target\": 0.05}''
+  E'{{contact.full_name}},\n\n{{#if is_final_touch}}Over the past several months, I\'ve shared quarterly market reports, recent comparable sales, and market insights specific to your {{property.domain_label}} portfolio in {{property.city_state}}.\n\nI\'m confident there\'s genuine value in a conversation about your {{property.tenant}}-leased assets and how we might assist with a disposition, refinance, portfolio review, or strategic planning.\n\n{{#if comp_highlights}}For reference, here are our most recent comparable transactions:\n\n{{comp_highlights}}\n\n{{/if}}Would you have 30 minutes in the next two weeks? I\'m flexible with scheduling.{{/if}}{{#if is_standard_touch}}Good morning. Given your ownership of the {{property.tenant}}-leased property in {{property.city_state}}, I wanted to pass along our latest capital markets update for the {{property.domain_label}} investment sales sector.\n\nPlease see attached our quarterly update. This is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades in this space.\n\n{{#if value_delivery}}{{value_delivery}}\n\n{{/if}}{{#if comp_highlights}}I thought you might have an interest in reviewing the high-level facts of our recently completed transactions that parallel your portfolio:\n\n{{comp_highlights}}\n\n{{/if}}Please do not hesitate to reach out if there is anything we can do to assist. I would also like to volunteer our opinion on valuation of any of your projects — completely complimentary and confidential.{{/if}}\n\nLet me know what dates and times work for you and we will make that time a priority.\n\nBest regards,\n{{team.signature}}',
+  'Value-delivery focused. Attach quarterly report. Reference their specific asset. Keep warm and professional. Standard (touches 2–6): soft close with nested comp_highlights. Final (touch 7): explicit 30-minute ask. Never pushy, but touch 7 is firmer. Nested comp_highlights within is_standard_touch handled safely by upgraded renderer.',
+  '{\"open_rate_target\": 0.40, \"click_rate_target\": 0.10, \"response_rate_target\": 0.08, \"meeting_conversion_target\": 0.05}'
 )
 ON CONFLICT (template_id, template_version) DO NOTHING;
 
@@ -147,18 +147,18 @@ INSERT INTO template_definitions (
   subject_template, body_template, tone_notes, performance_targets
 )
 VALUES (
-  ''T-003'', 3, ''mass_marketing'', ''Capital Markets Update'',
-  ''Quarterly capital markets report delivery. Flexible use cases: (1) Proactive outreach to known owners (is_outbound_anchored), (2) Inbound fulfillment (is_inbound_request), (3) Mass quarterly broadcast (is_mass_broadcast). Adapts opening and close based on context. Always uses {{property.domain_label}}.'',
+  'T-003', 3, 'mass_marketing', 'Capital Markets Update',
+  'Quarterly capital markets report delivery. Flexible use cases: (1) Proactive outreach to known owners (is_outbound_anchored), (2) Inbound fulfillment (is_inbound_request), (3) Mass quarterly broadcast (is_mass_broadcast). Adapts opening and close based on context. Always uses {{property.domain_label}}.',
   NULL,
-  ARRAY[''domain'', ''contact''],
-  ARRAY[''contact.full_name'', ''quarter_year''],
-  ARRAY[''property.tenant'', ''property.city_state'', ''team.credentials_summary'', ''comp_highlights'', ''property.domain_label'', ''is_inbound_request'', ''is_outbound_anchored'', ''is_mass_broadcast'', ''team.signature''],
+  ARRAY['domain', 'contact'],
+  ARRAY['contact.full_name', 'quarter_year'],
+  ARRAY['property.tenant', 'property.city_state', 'team.credentials_summary', 'comp_highlights', 'property.domain_label', 'is_inbound_request', 'is_outbound_anchored', 'is_mass_broadcast', 'team.signature'],
   -- Subject: Simple, quarter-focused
-  ''Capital Markets Update: {{property.domain_label}} ({{quarter_year}})'',
+  'Capital Markets Update: {{property.domain_label}} ({{quarter_year}})',
   -- Body: Three separate non-nested blocks for inbound, outbound anchored, and mass broadcast
-  E''{{contact.full_name}},\n\n{{#if is_inbound_request}}Thank you for your interest in our capital markets report for the {{property.domain_label}} space. I\'m grateful for the opportunity to stay connected. Please see the attached {{quarter_year}} update.{{/if}}{{#if is_outbound_anchored}}Good morning. Given your ownership of the {{property.tenant}}-leased property in {{property.city_state}}, I thought you might have some interest in reviewing our latest capital markets update report for the {{property.domain_label}} investment sales sector. Please see the attached {{quarter_year}} update.{{/if}}{{#if is_mass_broadcast}}Good morning. I wanted to pass along our latest capital markets update report for the {{property.domain_label}} investment sales sector. Please see the attached {{quarter_year}} update.{{/if}}\n\nThis is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades from a broad perspective in the {{property.domain_label}} investment sales markets. The pages included are intended to provide real-time value to you and your business, as well as insight into the level of service and quality of work our team can provide.\n\n{{#if team.credentials_summary}}{{team.credentials_summary}}\n\n{{/if}}{{#if comp_highlights}}I thought you might have an interest in reviewing the high-level facts of our recently completed transactions that parallel your portfolio:\n\n{{comp_highlights}}\n\n{{/if}}Please do not hesitate to reach out if there is anything we can do to assist. We look forward to the opportunity to leverage our firm\'s collective specialization, knowledge, track record, and expertise to your benefit.\n\nBest regards,\n{{team.signature}}'',
-  ''Three modes: inbound (thanks them for request), outbound anchored (anchors to their specific asset), mass broadcast (generic to broad list). All use {{property.domain_label}}. Always attach the report. Tone: professional, generous, never transactional. Context enrichment sets exactly one of is_inbound_request, is_outbound_anchored, or is_mass_broadcast to true.'',
-  ''{\"open_rate_target\": 0.25, \"click_rate_target\": 0.08, \"reply_rate_target\": 0.02, \"roi_lookback_months\": 12}''
+  E'{{contact.full_name}},\n\n{{#if is_inbound_request}}Thank you for your interest in our capital markets report for the {{property.domain_label}} space. I\'m grateful for the opportunity to stay connected. Please see the attached {{quarter_year}} update.{{/if}}{{#if is_outbound_anchored}}Good morning. Given your ownership of the {{property.tenant}}-leased property in {{property.city_state}}, I thought you might have some interest in reviewing our latest capital markets update report for the {{property.domain_label}} investment sales sector. Please see the attached {{quarter_year}} update.{{/if}}{{#if is_mass_broadcast}}Good morning. I wanted to pass along our latest capital markets update report for the {{property.domain_label}} investment sales sector. Please see the attached {{quarter_year}} update.{{/if}}\n\nThis is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades from a broad perspective in the {{property.domain_label}} investment sales markets. The pages included are intended to provide real-time value to you and your business, as well as insight into the level of service and quality of work our team can provide.\n\n{{#if team.credentials_summary}}{{team.credentials_summary}}\n\n{{/if}}{{#if comp_highlights}}I thought you might have an interest in reviewing the high-level facts of our recently completed transactions that parallel your portfolio:\n\n{{comp_highlights}}\n\n{{/if}}Please do not hesitate to reach out if there is anything we can do to assist. We look forward to the opportunity to leverage our firm\'s collective specialization, knowledge, track record, and expertise to your benefit.\n\nBest regards,\n{{team.signature}}',
+  'Three modes: inbound (thanks them for request), outbound anchored (anchors to their specific asset), mass broadcast (generic to broad list). All use {{property.domain_label}}. Always attach the report. Tone: professional, generous, never transactional. Context enrichment sets exactly one of is_inbound_request, is_outbound_anchored, or is_mass_broadcast to true.',
+  '{\"open_rate_target\": 0.25, \"click_rate_target\": 0.08, \"reply_rate_target\": 0.02, \"roi_lookback_months\": 12}'
 )
 ON CONFLICT (template_id, template_version) DO NOTHING;
 
@@ -175,18 +175,18 @@ INSERT INTO template_definitions (
   subject_template, body_template, tone_notes, performance_targets
 )
 VALUES (
-  ''T-013'', 2, ''seller_bd'', ''GSA Lease Award Congratulations'',
-  ''Trigger-based outreach when a new GSA lease is awarded. HIGH-INTENT: Congratulates owner on value creation, delivers market report, offers complimentary BOV, includes recent comps. More direct ask for call given strong signal. Domain: government-leased only.'',
-  ''government'',
-  ARRAY[''contact'', ''property''],
-  ARRAY[''contact.full_name'', ''property.city_state'', ''property.tenant''],
-  ARRAY[''property.name'', ''property.lease_expiration'', ''property.building_sf'', ''team.credentials_summary'', ''comp_highlights'', ''team.signature''],
+  'T-013', 2, 'seller_bd', 'GSA Lease Award Congratulations',
+  'Trigger-based outreach when a new GSA lease is awarded. HIGH-INTENT: Congratulates owner on value creation, delivers market report, offers complimentary BOV, includes recent comps. More direct ask for call given strong signal. Domain: government-leased only.',
+  'government',
+  ARRAY['contact', 'property'],
+  ARRAY['contact.full_name', 'property.city_state', 'property.tenant'],
+  ARRAY['property.name', 'property.lease_expiration', 'property.building_sf', 'team.credentials_summary', 'comp_highlights', 'team.signature'],
   -- Subject: Warm, direct
-  ''Congrats on Your New GSA Lease Award'',
+  'Congrats on Your New GSA Lease Award',
   -- Body: Warm opening → congrats → firm intro → report → credentials → BOV offer → comps → ask
-  E''{{contact.full_name}},\n\nGood afternoon. I\'m reaching out regarding your GSA-leased project in {{property.city_state}}. Congratulations on the new lease award — you\'ve created significant value with this transaction, and it positions your asset for strong investor demand.\n\nAs a brief introduction, I run a team of investment sales brokers at Northmarq that specializes in government-leased assets nationwide. We maintain one of the industry\'s leading government-leased practice groups, and our market activity and deal flow give us real-time insight into buyer demand, pricing dynamics, and disposition strategies that maximize value for ownership.\n\nI\'ve attached our latest capital markets update for the government-leased space. This is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades from a broad perspective in the government-leased investment sales sector. The pages included are intended to provide real-time value to you and your business, as well as demonstrate the level of service and quality of work our team delivers.\n\n{{#if team.credentials_summary}}{{team.credentials_summary}}\n\n{{/if}}I would like to volunteer our opinion on valuation of your new asset (completely complimentary and confidential). We often prepare a comprehensive valuation analysis and disposition proposal that includes a specific trade price range and target ask price, a detailed marketing strategy and disposition plan aimed at maximizing ownership value and net proceeds, and additional details about our competitive edge and firm value proposition. Given the strength of your new lease, this might be timely.\n\n{{#if comp_highlights}}For reference, here are some of our recently sold government-leased properties — these should help frame market conditions and buyer demand for your asset type:\n\n{{comp_highlights}}\n\n{{/if}}I\'d welcome the opportunity to connect for a 20-minute call this week or next to discuss your plans for the asset and how we might assist. Let me know what dates and times work for you and we will make that time a priority.\n\nBest regards,\n{{team.signature}}'',
-  ''Warm and congratulatory, but more direct than standard BD sequence. HIGH-INTENT trigger warrants firmer ask. Always attach quarterly government report. Always include comps. Detailed BOV benefit description. Never pushy, but expects positive response.'',
-  ''{\"open_rate_target\": 0.50, \"response_rate_target\": 0.15, \"call_conversion_target\": 0.08, \"listing_conversion_target\": 0.10}''
+  E'{{contact.full_name}},\n\nGood afternoon. I\'m reaching out regarding your GSA-leased project in {{property.city_state}}. Congratulations on the new lease award — you\'ve created significant value with this transaction, and it positions your asset for strong investor demand.\n\nAs a brief introduction, I run a team of investment sales brokers at Northmarq that specializes in government-leased assets nationwide. We maintain one of the industry\'s leading government-leased practice groups, and our market activity and deal flow give us real-time insight into buyer demand, pricing dynamics, and disposition strategies that maximize value for ownership.\n\nI\'ve attached our latest capital markets update for the government-leased space. This is a report that my team maintains daily and updates quarterly, aimed at tracking the trends and trades from a broad perspective in the government-leased investment sales sector. The pages included are intended to provide real-time value to you and your business, as well as demonstrate the level of service and quality of work our team delivers.\n\n{{#if team.credentials_summary}}{{team.credentials_summary}}\n\n{{/if}}I would like to volunteer our opinion on valuation of your new asset (completely complimentary and confidential). We often prepare a comprehensive valuation analysis and disposition proposal that includes a specific trade price range and target ask price, a detailed marketing strategy and disposition plan aimed at maximizing ownership value and net proceeds, and additional details about our competitive edge and firm value proposition. Given the strength of your new lease, this might be timely.\n\n{{#if comp_highlights}}For reference, here are some of our recently sold government-leased properties — these should help frame market conditions and buyer demand for your asset type:\n\n{{comp_highlights}}\n\n{{/if}}I\'d welcome the opportunity to connect for a 20-minute call this week or next to discuss your plans for the asset and how we might assist. Let me know what dates and times work for you and we will make that time a priority.\n\nBest regards,\n{{team.signature}}',
+  'Warm and congratulatory, but more direct than standard BD sequence. HIGH-INTENT trigger warrants firmer ask. Always attach quarterly government report. Always include comps. Detailed BOV benefit description. Never pushy, but expects positive response.',
+  '{\"open_rate_target\": 0.50, \"response_rate_target\": 0.15, \"call_conversion_target\": 0.08, \"listing_conversion_target\": 0.10}'
 )
 ON CONFLICT (template_id, template_version) DO NOTHING;
 
@@ -333,7 +333,7 @@ ON CONFLICT (template_id, template_version) DO NOTHING;
 --
 -- 4. WHITESPACE & ESCAPING:
 --    - Preserves newlines and formatting
---    - PostgreSQL string escaping: use '' for single quote, E''...'' for \n
+--    - PostgreSQL string escaping: use '' for single quote, E'...'' for \n
 --    - Template syntax: {{#if}}, {{/if}} (mustache-style)
 --
 -- 5. NO SUPPORT FOR:
