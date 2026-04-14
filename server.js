@@ -115,6 +115,9 @@ app.all('/api/entities', (req, res) => { req.query._domain = 'entities'; entityH
 // intake rewrites
 app.all('/api/intake-outlook-message', (req, res) => { req.query._route = 'outlook-message'; intakeHandler(req, res); });
 app.all('/api/intake-summary', (req, res) => { req.query._route = 'summary'; intakeHandler(req, res); });
+app.all('/api/intake-queue', (req, res) => { req.query._route = 'queue'; intakeHandler(req, res); });
+app.all('/api/intake-promote', (req, res) => { req.query._route = 'promote'; intakeHandler(req, res); });
+app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; intakeHandler(req, res); });
 
 // ── Primary handler routes (12 canonical endpoints) ─────────────────────────
 app.all('/api/actions', actionsHandler);

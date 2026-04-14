@@ -69,6 +69,9 @@ let diaStalenessData = null;
 let diaStalenessLoading = false;
 let diaRunHealthData = null;
 let diaRunHealthLoading = false;
+let diaIntakeQueue = null;
+let diaIntakeLoading = false;
+let diaIntakeIdx = 0;
 
 // ============================================================================
 // QUERY FUNCTION
@@ -1924,6 +1927,197 @@ async function loadDiaClarificationQueue() {
 }
 
 /**
+ * Load email intake queue — staged items with extraction + match data
+ */
+async function loadDiaIntakeQueue() {
+  if (diaIntakeLoading) return;
+  diaIntakeLoading = true;
+  try {
+    const url = new URL('/api/intake-queue', window.location.origin);
+    url.searchParams.set('domain', 'dialysis');
+    url.searchParams.set('limit', '50');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    diaIntakeQueue = result.items || [];
+  } catch(e) {
+    console.error('loadDiaIntakeQueue error:', e);
+    showToast('Intake queue load failed', 'error');
+    diaIntakeQueue = [];
+  }
+  diaIntakeLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
+  renderDiaTab();
+}
+
+/**
+ * Render email intake queue — documents awaiting review before DB promotion
+ */
+function renderDiaIntakeQueue() {
+  if (diaIntakeLoading || !diaIntakeQueue) {
+    return '<div style="text-align:center;padding:40px;color:var(--text3)"><div class="spinner"></div><div style="margin-top:12px">Loading intake queue...</div></div>';
+  }
+
+  const items = diaIntakeQueue;
+  if (items.length === 0) {
+    return '<div style="text-align:center;padding:40px">'
+      + '<div style="font-size:36px;margin-bottom:12px">📬</div>'
+      + '<div style="font-size:15px;font-weight:600;color:var(--text)">No intake items</div>'
+      + '<div style="font-size:12px;color:var(--text3);margin-top:4px">Documents from email intake will appear here for review</div>'
+      + '<button onclick="diaIntakeQueue=null;loadDiaIntakeQueue()" style="margin-top:12px;padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer;font-size:12px">Refresh</button>'
+      + '</div>';
+  }
+
+  let html = '<div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">';
+  html += `<div style="font-size:13px;color:var(--text2)">${items.length} item${items.length !== 1 ? 's' : ''} awaiting review</div>`;
+  html += '<button onclick="diaIntakeQueue=null;loadDiaIntakeQueue()" style="padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer;font-size:11px">Refresh</button>';
+  html += '</div>';
+
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+  items.forEach((item, idx) => {
+    html += renderIntakeCard(item, idx, 'dia');
+  });
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Shared intake card renderer — used by both dialysis and gov
+ */
+function renderIntakeCard(item, idx, prefix) {
+  const matchIcon = item.match_status === 'matched' ? '✅' : item.match_status === 'review_needed' ? '⚠️' : '❌';
+  const matchLabel = item.match_status === 'matched'
+    ? `Auto-matched to ${item.match_candidates?.[0]?.address || item.match_property_id || 'property'}`
+    : item.match_status === 'review_needed' ? 'Needs Review' : 'No Match';
+  const matchColor = item.match_status === 'matched' ? '#34d399' : item.match_status === 'review_needed' ? '#fbbf24' : '#f87171';
+
+  const docTypeLabel = { om: 'Offering Memo', rent_roll: 'Rent Roll', lease_abstract: 'Lease Abstract', unknown: 'Unknown' }[item.document_type] || item.document_type;
+  const docTypeColor = { om: '#6c8cff', rent_roll: '#34d399', lease_abstract: '#fbbf24', unknown: '#94a3b8' }[item.document_type] || '#94a3b8';
+
+  const fmt = (v, pre, suf) => v != null ? (pre || '') + v.toLocaleString() + (suf || '') : null;
+
+  let html = `<div style="border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--s1);transition:box-shadow 0.2s" class="intake-card">`;
+
+  // Header: subject + sender
+  html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">';
+  html += `<div style="flex:1;min-width:0">`;
+  html += `<div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${(item.source_email_subject || '').replace(/"/g, '&quot;')}">${item.source_email_subject || '(No subject)'}</div>`;
+  html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${item.source_email_sender || 'Unknown sender'}</div>`;
+  html += '</div>';
+  html += `<span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:600;background:${docTypeColor}18;color:${docTypeColor};white-space:nowrap;margin-left:8px">${docTypeLabel}</span>`;
+  html += '</div>';
+
+  // Extracted fields grid
+  const fields = [
+    item.address ? { label: 'Address', value: `${item.address}${item.city ? ', ' + item.city : ''}${item.state ? ', ' + item.state : ''}` } : null,
+    item.tenant_name ? { label: 'Tenant', value: item.tenant_name } : null,
+    fmt(item.cap_rate, '', '%') ? { label: 'Cap Rate', value: fmt(item.cap_rate, '', '%') } : null,
+    fmt(item.noi, '$') ? { label: 'NOI', value: fmt(item.noi, '$') } : null,
+    fmt(item.asking_price, '$') ? { label: 'Asking Price', value: fmt(item.asking_price, '$') } : null,
+    fmt(item.annual_rent, '$') ? { label: 'Annual Rent', value: fmt(item.annual_rent, '$') } : null,
+  ].filter(Boolean);
+
+  if (fields.length > 0) {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px 12px;margin-bottom:10px">';
+    fields.forEach(f => {
+      html += `<div><div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:1px">${f.label}</div><div style="font-size:12px;font-weight:500;color:var(--text)">${f.value}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Match status + confidence
+  html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:${matchColor}08;border:1px solid ${matchColor}30;border-radius:6px;margin-bottom:10px">`;
+  html += `<span style="font-size:14px">${matchIcon}</span>`;
+  html += `<span style="font-size:12px;color:var(--text);flex:1">${matchLabel}</span>`;
+  if (item.confidence != null) {
+    html += `<span style="font-size:11px;font-weight:600;color:${matchColor};background:${matchColor}15;padding:2px 8px;border-radius:4px">${Math.round(item.confidence * 100)}%</span>`;
+  }
+  html += '</div>';
+
+  // Action buttons
+  html += '<div style="display:flex;gap:8px">';
+  html += `<button onclick="intakePromote('${item.intake_id}','${prefix}')" style="flex:1;padding:7px 0;border-radius:6px;border:none;background:#34d399;color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:opacity 0.2s" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">Promote to DB</button>`;
+  if (item.match_status !== 'matched') {
+    html += `<button onclick="intakeLinkProperty('${item.intake_id}','${prefix}')" style="flex:1;padding:7px 0;border-radius:6px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-size:12px;font-weight:500;cursor:pointer;transition:background 0.2s" onmouseover="this.style.background='var(--s3)'" onmouseout="this.style.background='var(--s2)'">Link to Property</button>`;
+  }
+  html += `<button onclick="intakeDiscard('${item.intake_id}','${prefix}')" style="padding:7px 14px;border-radius:6px;border:1px solid #f8717130;background:#f8717110;color:#f87171;font-size:12px;font-weight:500;cursor:pointer;transition:background 0.2s" onmouseover="this.style.background='#f8717120'" onmouseout="this.style.background='#f8717110'">Discard</button>`;
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Promote an intake item to the domain database
+ */
+window.intakePromote = async function(intakeId, prefix) {
+  const btn = event.target;
+  const card = btn.closest('.intake-card');
+  btn.disabled = true;
+  btn.textContent = 'Promoting...';
+  try {
+    const response = await fetch('/api/intake-promote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intake_id: intakeId }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Promote failed');
+    showToast(`Promoted to ${result.domain || 'DB'}${result.domain_property_id ? ' (property ' + result.domain_property_id + ')' : ''}`, 'success');
+    if (card) card.style.opacity = '0.4';
+    // Refresh the queue
+    if (prefix === 'dia') { diaIntakeQueue = null; loadDiaIntakeQueue(); }
+    else { govIntakeQueue = null; loadGovIntakeQueue(); }
+  } catch(e) {
+    console.error('intakePromote error:', e);
+    showToast('Promote failed: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Promote to DB';
+  }
+};
+
+/**
+ * Link an intake item to an existing property (placeholder — opens search)
+ */
+window.intakeLinkProperty = async function(intakeId, prefix) {
+  showToast('Link to Property: select a property from search to link this intake item', 'info');
+  // Future: open a property search modal, then call promote with property_id
+};
+
+/**
+ * Discard an intake item
+ */
+window.intakeDiscard = async function(intakeId, prefix) {
+  if (!confirm('Discard this intake item? This cannot be undone.')) return;
+  const btn = event.target;
+  const card = btn.closest('.intake-card');
+  btn.disabled = true;
+  btn.textContent = 'Discarding...';
+  try {
+    const response = await fetch('/api/intake-discard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intake_id: intakeId }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Discard failed');
+    showToast('Intake item discarded', 'success');
+    if (card) card.style.opacity = '0.4';
+    if (prefix === 'dia') { diaIntakeQueue = null; loadDiaIntakeQueue(); }
+    else { govIntakeQueue = null; loadGovIntakeQueue(); }
+  } catch(e) {
+    console.error('intakeDiscard error:', e);
+    showToast('Discard failed: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Discard';
+  }
+};
+
+/**
  * Load staleness monitor data (v_source_health_dashboard or v_counts_freshness)
  */
 async function loadDiaStalenessData() {
@@ -2839,6 +3033,7 @@ function renderDiaResearch() {
   const qCount = diaQuarantineQueue ? diaQuarantineQueue.length : null;
   const umCount = diaUnmatchedQueue ? diaUnmatchedQueue.length : null;
   const clCount = diaClarificationQueue ? diaClarificationQueue.length : null;
+  const inCount = diaIntakeQueue ? diaIntakeQueue.length : null;
   const prCount = (diaData.propertyReviewQueue || []).length;
   const lbCount = (diaData.leaseBackfillRows || []).length;
   const clLeadCount = diaClinicLeadQueue ? diaClinicLeadQueue.length : null;
@@ -2848,9 +3043,10 @@ function renderDiaResearch() {
     { key: 'quarantine',     num: '1', label: 'Quarantine',       count: qCount,     phase: 'ingest',      desc: 'Fix bad data caught during ingest' },
     { key: 'unmatched',      num: '2', label: 'Unmatched',        count: umCount,    phase: 'ingest',      desc: 'Link clinics to property records' },
     { key: 'clarification',  num: '3', label: 'Clarification',    count: clCount,    phase: 'ingest',      desc: 'Answer missing required fields' },
-    { key: 'property',       num: '4', label: 'Property Review',  count: prCount,    phase: 'enrichment',  desc: 'Verify property-clinic links' },
-    { key: 'lease',          num: '5', label: 'Lease Backfill',   count: lbCount,    phase: 'enrichment',  desc: 'Research missing lease data' },
-    { key: 'clinic_leads',   num: '6', label: 'Clinic Leads',     count: clLeadCount, phase: 'prospecting', desc: 'Qualify leads for outreach' },
+    { key: 'intake',         num: '4', label: 'Intake',           count: inCount,    phase: 'ingest',      desc: 'Review email intake documents before DB promotion' },
+    { key: 'property',       num: '5', label: 'Property Review',  count: prCount,    phase: 'enrichment',  desc: 'Verify property-clinic links' },
+    { key: 'lease',          num: '6', label: 'Lease Backfill',   count: lbCount,    phase: 'enrichment',  desc: 'Research missing lease data' },
+    { key: 'clinic_leads',   num: '7', label: 'Clinic Leads',     count: clLeadCount, phase: 'prospecting', desc: 'Qualify leads for outreach' },
     { key: 'staleness',      num: '',  label: 'Staleness',        count: null,       phase: 'monitoring',  desc: 'Data freshness monitoring' },
     { key: 'run_health',     num: '',  label: 'Run Health',       count: null,       phase: 'monitoring',  desc: 'Pipeline run diagnostics' },
   ];
@@ -2917,7 +3113,7 @@ function renderDiaResearch() {
   html += `<div style="padding:10px 14px;background:${currentPhase.color}10;border-radius:8px;border-left:3px solid ${currentPhase.color};margin-bottom:16px;display:flex;align-items:center;gap:10px;">`;
   html += `<span style="font-size:18px">${currentPhase.icon}</span>`;
   html += `<div>`;
-  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 6' : ''}</div>`;
+  html += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:${currentPhase.color};margin-bottom:2px">${currentPhase.label}${currentStep.num ? ' — Step ' + currentStep.num + ' of 7' : ''}</div>`;
   html += `<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>${currentStep.label}:</strong> ${currentStep.desc}</div>`;
   html += '</div></div>';
 
@@ -2937,6 +3133,9 @@ function renderDiaResearch() {
   } else if (diaResearchMode === 'clarification') {
     if (!diaClarificationQueue) loadDiaClarificationQueue();
     html += renderDiaClarificationQueue();
+  } else if (diaResearchMode === 'intake') {
+    if (!diaIntakeQueue) loadDiaIntakeQueue();
+    html += renderDiaIntakeQueue();
   } else if (diaResearchMode === 'property') {
     html += renderDiaPropertyResearch();
   } else if (diaResearchMode === 'lease') {
