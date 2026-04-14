@@ -130,15 +130,20 @@ export async function recalculateSaleCapRates(propertyId, domainQuery) {
   // cap_rate_confidence / rent_source on a row that is missing the inputs
   // required to compute calculated_cap_rate. A client-side guard below
   // retains the same invariant for defense-in-depth.
+  const SALE_PRICE_COLUMN = 'sold_price';
   const salesRes = await domainQuery(DOMAIN, 'GET',
     `sales_transactions?property_id=eq.${encodeURIComponent(propertyId)}` +
-    `&sale_date=not.is.null&sold_price=not.is.null` +
-    `&select=sale_id,sale_date,sold_price`
+    `&sale_date=not.is.null&${SALE_PRICE_COLUMN}=not.is.null` +
+    `&select=sale_id,sale_date,${SALE_PRICE_COLUMN}`
   );
   if (!salesRes.ok) {
     return { updated: 0, skipped: 0, reason: 'sales_lookup_failed' };
   }
   const sales = Array.isArray(salesRes.data) ? salesRes.data : [];
+  console.log(
+    `[cap-rate-recalc] property=${propertyId} ` +
+    `sale_price_column=${SALE_PRICE_COLUMN} sales_found=${sales.length}`
+  );
 
   let updated = 0;
   let skipped = 0;
