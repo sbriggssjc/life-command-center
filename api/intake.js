@@ -258,7 +258,7 @@ async function handleOutlookMessage(req, res) {
       intake_id:            candidateId,
       source_type:          'email',
       internet_message_id:  internetMsgId || messageId || null,
-      status:               'received',
+      status:               'queued',
       raw_payload: {
         subject,
         from:           sender,
