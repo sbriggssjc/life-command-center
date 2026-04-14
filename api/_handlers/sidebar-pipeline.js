@@ -1331,6 +1331,95 @@ function classifySaleType(sale) {
 }
 
 /**
+ * Re-route a record that looked like a sale but is actually a listing
+ * (asking price, on-market, missing sale_date/sold_price) into
+ * available_listings. Logs with the [listing-misroute] prefix so the
+ * misroutes are auditable.
+ */
+async function routeListingMisroute(domain, propertyId, saleRow, reasons) {
+  const rawPrice = Number(saleRow?.sold_price);
+  const listPrice = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : null;
+  const notesVal = saleRow?.notes || null;
+
+  const record = {
+    property_id: domain === 'dialysis' ? parseInt(propertyId, 10) : propertyId,
+    list_price: listPrice,
+    status: 'off_market',
+    notes: notesVal,
+    data_source: 'costar_sidebar',
+  };
+
+  console.warn(
+    `[listing-misroute] rerouting ${domain} property=${propertyId} to available_listings`,
+    {
+      list_price: listPrice,
+      notes: notesVal,
+      transaction_type: saleRow?.transaction_type || null,
+      sale_date: saleRow?.sale_date || null,
+      reasons,
+    }
+  );
+
+  const result = await domainQuery(domain, 'POST', 'available_listings', record);
+  if (!result.ok) {
+    console.error('[listing-misroute] available_listings insert failed', {
+      domain,
+      propertyId,
+      status: result.status,
+      data: result.data,
+      record,
+    });
+  }
+  return result.ok;
+}
+
+/**
+ * One-time audit helper: scan sales_transactions in both dialysis and
+ * government DBs for rows where sale_date IS NULL and log them so we
+ * can review and backfill/remove manually. Runs at most once per
+ * process lifetime (guarded by `_nullSaleDateAuditDone`).
+ */
+let _nullSaleDateAuditDone = false;
+async function auditNullSaleDates() {
+  if (_nullSaleDateAuditDone) return;
+  _nullSaleDateAuditDone = true;
+
+  for (const domain of ['dialysis', 'government']) {
+    try {
+      if (!getDomainCredentials(domain)) continue;
+      const selectCols = domain === 'government'
+        ? 'sale_id,property_id,sale_date,sold_price,buyer,seller,transaction_type,data_source'
+        : 'sale_id,property_id,sale_date,sold_price,buyer_name,seller_name,transaction_type,notes,data_source';
+      const result = await domainQuery(domain, 'GET',
+        `sales_transactions?sale_date=is.null&select=${selectCols}&limit=500`
+      );
+      if (!result.ok) {
+        console.error(
+          `[null-sale-date-audit] ${domain}: query failed status=${result.status}`
+        );
+        continue;
+      }
+      const rows = result.data || [];
+      if (!rows.length) {
+        console.log(`[null-sale-date-audit] ${domain}: clean, 0 null-sale_date rows`);
+        continue;
+      }
+      console.warn(
+        `[null-sale-date-audit] ${domain}: ${rows.length} sales_transactions rows have sale_date IS NULL — review manually`
+      );
+      for (const row of rows) {
+        console.warn(`[null-sale-date-audit] ${domain} row`, JSON.stringify(row));
+      }
+    } catch (err) {
+      console.error(
+        `[null-sale-date-audit] ${domain}: error`,
+        err?.message || err
+      );
+    }
+  }
+}
+
+/**
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
  */
@@ -1519,6 +1608,34 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     // on rows that previously inherited the stat-card cap rate.
     if (domain !== 'government' && !allowStatedCapRate) {
       saleData.stated_cap_rate = null;
+    }
+
+    // Guard: block listing/asking-price rows from being written into
+    // sales_transactions. A valid sale requires a parseable sale_date, a
+    // positive sold_price, and no listing/asking/on-market markers in
+    // transaction_type or notes. Any failure reroutes the record to
+    // available_listings as an off-market listing.
+    const txTypeForGuard = [
+      saleData.transaction_type,
+      sale.transaction_type,
+      sale.sale_type,
+    ].filter(Boolean).join(' | ');
+    const notesForGuard = saleData.notes || '';
+    const priceNum = Number(saleData.sold_price);
+    const hasParseableDate = !!parseDate(saleData.sale_date);
+    const hasPositivePrice = Number.isFinite(priceNum) && priceNum > 0;
+    const hasListingTxMarker = /(listing|asking|on[\s-]?market)/i.test(txTypeForGuard);
+    const hasOnMarketNotes = /on[\s-]?market/i.test(notesForGuard);
+
+    if (!hasParseableDate || !hasPositivePrice
+        || hasListingTxMarker || hasOnMarketNotes) {
+      await routeListingMisroute(domain, propertyId, saleData, {
+        invalid_date: !hasParseableDate,
+        invalid_price: !hasPositivePrice,
+        listing_transaction_type: hasListingTxMarker,
+        on_market_notes: hasOnMarketNotes,
+      });
+      continue;
     }
 
     if (lookup.ok && lookup.data?.length) {
@@ -3087,6 +3204,12 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
   if (!hasSidebarData(metadata)) {
     return { ok: true, skipped: true, reason: 'No actionable sidebar data in metadata' };
   }
+
+  // One-time audit of legacy null-sale_date rows in both domain DBs
+  // (fire-and-forget; runs at most once per process lifetime).
+  auditNullSaleDates().catch(err =>
+    console.error('[null-sale-date-audit] unexpected error', err?.message || err)
+  );
 
   // Step 1 — classify domain (needed for entity creation in steps 2-3)
   const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId);
