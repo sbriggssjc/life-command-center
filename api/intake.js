@@ -223,9 +223,9 @@ async function handleOutlookMessage(req, res) {
 
   // Fire-and-forget document extraction — runs async for staged intake items
   // Don't await — extraction runs async, doesn't block intake response
-  if (item?.id) {
-    processIntakeExtraction(item.id).catch(err =>
-      console.error('[intake-extractor] extraction failed:', item.id, err.message)
+  if (item?.intake_id) {
+    processIntakeExtraction(item.intake_id).catch(err =>
+      console.error('[intake-extractor] extraction failed:', item.intake_id, err.message)
     );
   }
 
