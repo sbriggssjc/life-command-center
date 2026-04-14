@@ -2951,12 +2951,19 @@ async function upsertDialysisListings(propertyId, metadata) {
   // will reject a numeric-string with a silent 400. Cast once here and reuse.
   const propertyIdInt = parseInt(propertyId, 10);
 
+  // Listing cap rate — sourced ONLY from the CoStar listing cap rate field
+  // (the one tied to the current asking price). Must never be derived from
+  // a historical sale's calculated_cap_rate or sold_cap_rate. Named
+  // distinctly from the sales-context capRate/cap_rate to keep the source
+  // unambiguous in code review.
+  const listingCapRate = parsePercent(metadata.cap_rate);
+
   const record = stripNulls({
     property_id: propertyIdInt,
     initial_price: parseCurrency(metadata.asking_price),
     last_price: parseCurrency(metadata.asking_price),
-    current_cap_rate: parsePercent(metadata.cap_rate),
-    cap_rate: parsePercent(metadata.cap_rate),
+    current_cap_rate: listingCapRate,
+    cap_rate: listingCapRate,
     listing_date: new Date().toISOString().split('T')[0],
     status: 'Active',
     is_active: true,
@@ -2977,11 +2984,13 @@ async function upsertDialysisListings(propertyId, metadata) {
   );
 
   if (lookup.ok && lookup.data?.length) {
-    // Update price and cap rate on existing active listing
+    // Update price and cap rate on existing active listing. listingCapRate
+    // comes only from metadata.cap_rate (the CoStar listing's asking cap
+    // rate); never from a sale-derived calculated/sold cap rate.
     const patchData = stripNulls({
       last_price: parseCurrency(metadata.asking_price),
-      current_cap_rate: parsePercent(metadata.cap_rate),
-      cap_rate: parsePercent(metadata.cap_rate),
+      current_cap_rate: listingCapRate,
+      cap_rate: listingCapRate,
       price_per_sf: safePricePsf,
     });
     // Also update broker fields if currently empty
@@ -3010,12 +3019,17 @@ async function upsertDialysisListings(propertyId, metadata) {
     .toISOString().split('T')[0];
   const recentSales = await domainQuery('dialysis', 'GET',
     `sales_transactions?property_id=eq.${propertyIdInt}` +
-    `&sale_date=gte.${twoYearsAgo}&select=sale_id,sale_date,sold_price,cap_rate` +
+    `&sale_date=gte.${twoYearsAgo}&select=sale_id,sale_date,sold_price` +
     `&order=sale_date.desc&limit=1`
   );
 
   if (recentSales.ok && recentSales.data?.length) {
     const latestSale = recentSales.data[0];
+    // Do NOT copy any sale-derived cap rate into available_listings here.
+    // The listing's cap_rate / current_cap_rate columns must only ever
+    // reflect the CoStar listing's asking cap rate (listingCapRate above);
+    // leaking a sales_transactions cap rate into them was the root cause
+    // of the cap-rate-leak bug this branch fixes.
     await domainPatch('dialysis',
       `available_listings?property_id=eq.${propertyIdInt}&is_active=is.true`,
       {
@@ -3023,7 +3037,6 @@ async function upsertDialysisListings(propertyId, metadata) {
         status: 'Sold',
         off_market_date: latestSale.sale_date,
         last_price: parseCurrency(latestSale.sold_price) || null,
-        current_cap_rate: latestSale.cap_rate || null,
       },
       'upsertDialysisListings:autoClose'
     );
@@ -3093,6 +3106,13 @@ async function upsertGovListings(propertyId, entity, metadata) {
     metadata.primary_tenant,
   ].find(t => t && t.length > 2 && !INVALID_TENANT.test(t)) || null;
 
+  // Listing cap rate — sourced ONLY from the CoStar listing cap rate field
+  // (the one tied to the current asking price). Must never be derived from
+  // a historical sale's sold_cap_rate or calculated_cap_rate. Named
+  // distinctly from the sales-context capRate to keep the source
+  // unambiguous in code review.
+  const listingCapRate = parsePercent(metadata.cap_rate);
+
   const record = stripNulls({
     property_id: propertyId,
     listing_source: 'costar_sidebar',
@@ -3101,7 +3121,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
     state: entity.state || null,
     square_feet: sfInt != null ? Math.round(sfInt) : null,
     asking_price: parseCurrency(metadata.asking_price),
-    asking_cap_rate: parsePercent(metadata.cap_rate),
+    asking_cap_rate: listingCapRate,
     asking_price_psf: safeGovPricePsf,
     listing_date: listingDate,
     listing_status: 'Active',
@@ -3155,18 +3175,23 @@ async function upsertGovListings(propertyId, entity, metadata) {
     .toISOString().split('T')[0];
   const recentSales = await domainQuery('government', 'GET',
     `sales_transactions?property_id=eq.${propertyId}` +
-    `&sale_date=gte.${twoYearsAgo}&select=sale_id,sale_date,sold_price,sold_cap_rate` +
+    `&sale_date=gte.${twoYearsAgo}&select=sale_id,sale_date,sold_price` +
     `&order=sale_date.desc&limit=1`
   );
 
   if (recentSales.ok && recentSales.data?.length) {
     const latestSale = recentSales.data[0];
+    // Do NOT copy any sale-derived cap rate (sold_cap_rate /
+    // calculated_cap_rate) into available_listings.asking_cap_rate here.
+    // asking_cap_rate must only ever reflect the CoStar listing's asking
+    // cap rate (listingCapRate above); leaking a sales_transactions cap
+    // rate into it was the root cause of the cap-rate-leak bug this
+    // branch fixes.
     await domainPatch('government',
       `available_listings?property_id=eq.${propertyId}&listing_status=eq.Active`,
       {
         listing_status:  'Sold',
         off_market_date: latestSale.sale_date,
-        asking_cap_rate: latestSale.sold_cap_rate || null,
         updated_at:      new Date().toISOString(),
       },
       'upsertGovListings:autoClose'
