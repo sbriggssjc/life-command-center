@@ -3253,10 +3253,13 @@ async function _draftFromPipeline(templateId, ctxJson) {
       }
     }
 
+    // Hoist subject/body so the background record_send can see them even
+    // when the Graph branch opened the draft (no mailto fallback fired).
+    const subject = result.draft?.subject || '';
+    const body = result.draft?.body || '';
+
     // If we didn't already open via Graph, open via mailto
     if (!usedGraph) {
-      const subject = result.draft.subject || '';
-      const body = result.draft.body || '';
       const mailto = `mailto:${encodeURIComponent(ctx.email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       window.location.href = mailto;
 
