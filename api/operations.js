@@ -2254,37 +2254,40 @@ async function handleDraftRoute(req, res) {
       const bodyText = rendered.draft?.body || '';
       const report = enrichedContext.report_info;
 
+      // Build absolute URL for PDF fetch. Vercel serverless runtime's fetch
+      // requires an absolute URL, so we reconstruct from the request headers.
+      // public_url in the DB is stored as '/reports/filename.pdf' (site-relative).
+      function _absolutePdfUrl(pub) {
+        if (!pub) return null;
+        if (/^https?:\/\//i.test(pub)) return pub;
+        const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+        const host  = req.headers['x-forwarded-host'] || req.headers.host;
+        if (!host) return null;
+        return `${proto}://${host}${pub.startsWith('/') ? '' : '/'}${pub}`;
+      }
+
       // ---- Fetch attachment from public URL (if configured) ----
-      let attachment = null;
+      let pdfBuffer = null;
+      let attachmentName = null;
       let attachmentError = null;
       if (report?.public_url) {
+        const absUrl = _absolutePdfUrl(report.public_url);
         try {
-          const pdfRes = await fetch(report.public_url);
+          const pdfRes = await fetch(absUrl);
           if (pdfRes.ok) {
-            const buf = Buffer.from(await pdfRes.arrayBuffer());
-            // Graph caps inline attachments at 3MB; files up to 150MB need the
-            // upload session flow. Most quarterly reports are 2–5MB, so we keep
-            // it simple and warn if we exceed the threshold.
-            if (buf.length > 3 * 1024 * 1024) {
-              attachmentError = 'PDF too large for inline attachment (>3MB). Draft created without attachment.';
-            } else {
-              attachment = {
-                name: report.filename || 'capital-markets-update.pdf',
-                contentBytes: buf.toString('base64'),
-                contentType: 'application/pdf'
-              };
-            }
+            pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+            attachmentName = report.filename || 'capital-markets-update.pdf';
           } else {
-            attachmentError = `Could not fetch PDF (${pdfRes.status})`;
+            attachmentError = `Could not fetch PDF from ${absUrl} (${pdfRes.status})`;
           }
         } catch (e) {
           attachmentError = 'PDF fetch error: ' + e.message;
         }
       } else if (report) {
-        attachmentError = 'No public_url configured for this report. Upload the PDF to /public/reports/ and set capital_markets_reports.public_url.';
+        attachmentError = 'No public_url configured for this report.';
       }
 
-      // ---- Build Graph message payload ----
+      // ---- Build Graph message payload (no attachments yet) ----
       const graphToken = process.env.MS_GRAPH_TOKEN;
       if (!graphToken) {
         return res.status(503).json({
@@ -2304,15 +2307,21 @@ async function handleDraftRoute(req, res) {
         toRecipients: recipients.map(addr => ({ emailAddress: { address: addr } })),
         ccRecipients: ccList.map(addr => ({ emailAddress: { address: addr } }))
       };
-      if (attachment) {
+
+      // Inline attachments are capped by Graph at ~3MB. For larger files we
+      // create the draft first, then attach via createUploadSession.
+      const INLINE_LIMIT = 3 * 1024 * 1024;
+      const canInline = pdfBuffer && pdfBuffer.length <= INLINE_LIMIT;
+      if (canInline) {
         messagePayload.attachments = [{
           '@odata.type': '#microsoft.graph.fileAttachment',
-          name: attachment.name,
-          contentType: attachment.contentType,
-          contentBytes: attachment.contentBytes
+          name: attachmentName,
+          contentType: 'application/pdf',
+          contentBytes: pdfBuffer.toString('base64')
         }];
       }
 
+      let draft;
       try {
         const graphRes = await fetch(`${GRAPH_API_URL}/me/messages`, {
           method: 'POST',
@@ -2334,17 +2343,7 @@ async function handleDraftRoute(req, res) {
           });
         }
 
-        const draft = await graphRes.json();
-        return res.status(200).json({
-          ok: true,
-          draft_id: draft.id,
-          web_link: draft.webLink,
-          subject: draft.subject,
-          body: bodyText,
-          has_attachment: !!attachment,
-          attachment_error: attachmentError,
-          report_attachment: report
-        });
+        draft = await graphRes.json();
       } catch (e) {
         return res.status(502).json({
           ok: false,
@@ -2353,6 +2352,73 @@ async function handleDraftRoute(req, res) {
           fallback: 'mailto'
         });
       }
+
+      // ---- Upload-session attachment flow for files > 3MB ----
+      let hasAttachment = canInline;
+      if (pdfBuffer && !canInline) {
+        try {
+          const sessionRes = await fetch(
+            `${GRAPH_API_URL}/me/messages/${draft.id}/attachments/createUploadSession`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${graphToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                AttachmentItem: {
+                  attachmentType: 'file',
+                  name: attachmentName,
+                  size: pdfBuffer.length,
+                  contentType: 'application/pdf'
+                }
+              })
+            }
+          );
+          if (!sessionRes.ok) {
+            const errText = await sessionRes.text().catch(() => '');
+            attachmentError = `createUploadSession failed (${sessionRes.status}): ${errText.slice(0, 200)}`;
+          } else {
+            const { uploadUrl } = await sessionRes.json();
+            // Upload in chunks (4 MB aligned to match Graph's requirements).
+            const CHUNK = 4 * 1024 * 1024 - 1;
+            let start = 0;
+            const total = pdfBuffer.length;
+            while (start < total) {
+              const end = Math.min(start + CHUNK, total) - 1;
+              const chunk = pdfBuffer.slice(start, end + 1);
+              const putRes = await fetch(uploadUrl, {
+                method: 'PUT',
+                headers: {
+                  'Content-Length': String(chunk.length),
+                  'Content-Range': `bytes ${start}-${end}/${total}`
+                },
+                body: chunk
+              });
+              if (!putRes.ok) {
+                const errText = await putRes.text().catch(() => '');
+                attachmentError = `upload chunk failed (${putRes.status}): ${errText.slice(0, 200)}`;
+                break;
+              }
+              start = end + 1;
+            }
+            if (!attachmentError) hasAttachment = true;
+          }
+        } catch (e) {
+          attachmentError = 'upload-session error: ' + e.message;
+        }
+      }
+
+      return res.status(200).json({
+        ok: true,
+        draft_id: draft.id,
+        web_link: draft.webLink,
+        subject: draft.subject,
+        body: bodyText,
+        has_attachment: hasAttachment,
+        attachment_error: attachmentError,
+        report_attachment: report
+      });
     }
 
     // POST ?action=batch — generate drafts for multiple contacts
