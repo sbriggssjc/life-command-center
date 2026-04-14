@@ -118,6 +118,9 @@ export const DIA_READ_TABLES = new Set([
   'clinic_quality_metrics',
   'facility_cost_reports',
   'leases',
+  'lease_extensions',
+  'lease_rent_schedule',
+  'v_lease_extensions_summary',
   'v_clinic_payer_mix',
   'v_payer_mix_geo_averages',
 ]);

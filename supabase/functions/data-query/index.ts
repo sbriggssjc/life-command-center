@@ -57,7 +57,9 @@ const DIA_READ_TABLES = new Set([
   "v_property_detail", "v_lease_detail", "v_ownership_current",
   "v_ownership_chain", "v_property_rankings",
   "facility_patient_counts", "clinic_trends", "clinic_quality_metrics",
-  "facility_cost_reports", "leases", "v_clinic_payer_mix",
+  "facility_cost_reports", "leases",
+  "lease_extensions", "lease_rent_schedule", "v_lease_extensions_summary",
+  "v_clinic_payer_mix",
   "v_payer_mix_geo_averages",
   "property_cms_link", "property_cms_link_history",
 ]);
