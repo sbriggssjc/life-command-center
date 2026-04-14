@@ -4116,9 +4116,13 @@ async function _udCopyTemplate() {
 /** Current draft state — holds the API response for record_send tracking */
 let _udCurrentDraft = null;
 
+/** Cached cadence state for current property — avoids re-fetching on each draft */
+let _udCadenceCache = null;
+
 /**
  * Generate a draft email using the LCC template engine.
- * Reads property/ownership from _udCache, builds context, calls the API,
+ * Reads property/ownership from _udCache, fetches cadence state from the server,
+ * uses the cadence recommendation for auto-select, builds context, calls the API,
  * and populates the editable preview area.
  */
 async function _udGenerateDraft() {
@@ -4147,6 +4151,40 @@ async function _udGenerateDraft() {
     const state = prop.state || '';
     const cityState = city + (state ? ', ' + state : '');
 
+    // Contact identifiers for cadence lookup
+    const cadenceIds = {
+      entity_id: own.entity_id || null,
+      sf_contact_id: own.salesforce_id || own.sf_contact_id || null,
+      contact_id: own.contact_id || null
+    };
+
+    const propertyId = _udCache?.ids?.property_id || prop.property_id || null;
+
+    // ── Fetch cadence state (server-side) ────────────────────────────────
+    let cadenceInfo = null;
+    if (cadenceIds.entity_id || cadenceIds.sf_contact_id || cadenceIds.contact_id) {
+      try {
+        const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+        const cadResp = await fetchFn('/api/operations?_route=draft&action=cadence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...cadenceIds,
+            property_id: propertyId,
+            property_address: prop.address || '',
+            domain
+          })
+        });
+        cadenceInfo = await cadResp.json();
+        if (cadenceInfo.ok) {
+          _udCadenceCache = cadenceInfo;
+          _udRenderCadenceStatus(cadenceInfo);
+        }
+      } catch (err) {
+        console.warn('[DraftEmail] Cadence lookup failed (non-blocking):', err.message);
+      }
+    }
+
     // Build context payload matching server-side enrichDraftContext expectations
     const context = {
       contact: {
@@ -4162,6 +4200,7 @@ async function _udGenerateDraft() {
         state,
         city_state: cityState,
         domain,
+        property_id: propertyId,
         sf_leased: prop.sf_leased || prop.rba || prop.building_size || '',
         annual_rent: prop.annual_rent || prop.noi || '',
         asking_price: prop.asking_price || '',
@@ -4176,19 +4215,34 @@ async function _udGenerateDraft() {
       domain
     };
 
-    // Template selection
+    // Template selection — use cadence recommendation if auto
     let templateId = document.getElementById('udDraftTemplate')?.value || 'auto';
 
     if (templateId === 'auto') {
-      templateId = _udAutoSelectTemplate(prop, own, domain);
+      if (cadenceInfo?.ok && cadenceInfo.recommendation?.template) {
+        // Server-side cadence engine recommends the template
+        templateId = cadenceInfo.recommendation.template;
+        // If recommended type is 'phone', show guidance instead of generating email
+        if (cadenceInfo.recommendation.type === 'phone') {
+          _udShowPhoneGuidance(cadenceInfo.recommendation, contactName, tenant, cityState, domain);
+          return;
+        }
+      } else {
+        // Fallback to local heuristic if cadence unavailable
+        templateId = _udAutoSelectTemplate(prop, own, domain);
+      }
     }
 
-    // Call the LCC draft API
+    // Call the LCC draft API with cadence IDs for context flag injection
     const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
     const resp = await fetchFn('/api/operations?_route=draft&action=generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ template_id: templateId, context })
+      body: JSON.stringify({
+        template_id: templateId,
+        context,
+        cadence_ids: cadenceIds
+      })
     });
 
     const result = await resp.json();
@@ -4199,7 +4253,7 @@ async function _udGenerateDraft() {
       return;
     }
 
-    // Store draft state for record_send
+    // Store draft state for record_send (includes cadence info)
     _udCurrentDraft = {
       template_id: result.draft.template_id,
       template_version: result.draft.template_version,
@@ -4208,7 +4262,8 @@ async function _udGenerateDraft() {
       rendered_body: result.draft.body,
       entity_id: own.salesforce_id || own.sf_contact_id || own.contact_id || null,
       domain,
-      unresolved: result.draft.unresolved_variables || []
+      unresolved: result.draft.unresolved_variables || [],
+      cadence_id: result.cadence?.id || _udCadenceCache?.cadence?.id || null
     };
 
     // Populate the preview
@@ -4223,12 +4278,17 @@ async function _udGenerateDraft() {
     if (previewEl) previewEl.style.display = 'block';
     if (recordBtn) recordBtn.style.display = 'inline-flex';
 
-    // Show metadata
+    // Show metadata with cadence context
     if (metaEl) {
       const unresolvedCount = _udCurrentDraft.unresolved.length;
       let meta = `Template: ${esc(result.draft.template_name)} (${result.draft.template_id} v${result.draft.template_version})`;
+      if (result.cadence) {
+        const c = result.cadence;
+        meta += ` · Touch ${c.current_touch + 1}/7 · Tier ${esc(c.priority_tier)}`;
+        if (c.phase === 'maintenance') meta += ' · Quarterly';
+      }
       if (unresolvedCount > 0) {
-        meta += ` · <span style="color:var(--yellow,#f59e0b)">${unresolvedCount} variable${unresolvedCount > 1 ? 's' : ''} unresolved</span>`;
+        meta += ` · <span style="color:var(--yellow,#f59e0b)">${unresolvedCount} unresolved var${unresolvedCount > 1 ? 's' : ''}</span>`;
       }
       metaEl.innerHTML = meta;
     }
@@ -4244,43 +4304,128 @@ async function _udGenerateDraft() {
 }
 
 /**
- * Auto-select the best template based on property/ownership context.
- * Logic:
- *   - T-013: New GSA lease award (government + new_award signal or fresh lease)
- *   - T-003: Quarterly capital markets update (if contact has been touched before)
- *   - T-002: Follow-up (if prior touchpoints exist)
- *   - T-001: First touch (default — intro + report + BOV offer)
+ * Render cadence status bar above the draft preview.
+ * Shows current phase, touch position, tier, and next recommendation.
+ */
+function _udRenderCadenceStatus(cadenceInfo) {
+  let statusEl = document.getElementById('udCadenceStatus');
+  if (!statusEl) {
+    // Create it above the draft preview
+    const previewEl = document.getElementById('udDraftPreview');
+    if (!previewEl) return;
+    statusEl = document.createElement('div');
+    statusEl.id = 'udCadenceStatus';
+    statusEl.style.cssText = 'margin-top:12px;padding:10px 12px;background:var(--s2);border-radius:8px;font-size:11px;line-height:1.6;color:var(--text2)';
+    previewEl.parentNode.insertBefore(statusEl, previewEl);
+  }
+
+  const c = cadenceInfo.cadence;
+  const rec = cadenceInfo.recommendation;
+  if (!c) { statusEl.style.display = 'none'; return; }
+
+  // Build progress bar for prospecting phase
+  let progressHtml = '';
+  if (c.phase === 'prospecting') {
+    const pct = Math.round((c.current_touch / 7) * 100);
+    progressHtml = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">` +
+      `<div style="flex:1;height:4px;background:var(--s3);border-radius:2px;overflow:hidden">` +
+      `<div style="width:${pct}%;height:100%;background:var(--accent);border-radius:2px"></div></div>` +
+      `<span style="font-size:10px;font-weight:600;white-space:nowrap">${c.current_touch}/7 touches</span></div>`;
+  }
+
+  // Tier badge colors
+  const tierColors = { A: 'var(--red,#ef4444)', B: 'var(--accent,#3b82f6)', C: 'var(--text3)' };
+  const tierColor = tierColors[c.priority_tier] || 'var(--text3)';
+
+  // Next action
+  let nextHtml = '';
+  if (rec && !rec.blocked) {
+    const typeIcon = rec.type === 'phone' ? '&#x1F4DE;' : '&#x2709;';
+    const overdue = rec.is_overdue ? ` <span style="color:var(--red,#ef4444);font-weight:600">(${rec.overdue_days}d overdue)</span>` : '';
+    nextHtml = `<div style="margin-top:4px">${typeIcon} Next: <strong>${esc(rec.label)}</strong>${overdue}</div>`;
+    if (rec.is_escalation) {
+      nextHtml = `<div style="margin-top:4px;color:var(--yellow,#f59e0b)">&#x26A0; Escalation: <strong>${esc(rec.label)}</strong></div>`;
+    }
+  } else if (rec?.blocked) {
+    nextHtml = `<div style="margin-top:4px;color:var(--text3)">&#x23F8; ${esc(rec.reason || rec.label)}</div>`;
+  }
+
+  // Engagement stats
+  let statsHtml = '';
+  const stats = [];
+  if (c.emails_sent > 0) stats.push(`${c.emails_sent} sent`);
+  if (c.emails_opened > 0) stats.push(`${c.emails_opened} opened`);
+  if (c.emails_replied > 0) stats.push(`${c.emails_replied} replied`);
+  if (c.calls_made > 0) stats.push(`${c.calls_made} calls`);
+  if (stats.length > 0) statsHtml = `<div style="margin-top:4px;color:var(--text3)">${stats.join(' · ')}</div>`;
+
+  statusEl.innerHTML =
+    progressHtml +
+    `<div><span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;color:white;background:${tierColor}">Tier ${esc(c.priority_tier)}</span> ` +
+    `<span style="margin-left:6px">${esc(c.phase === 'prospecting' ? 'Prospecting' : c.phase === 'maintenance' ? 'Quarterly Maintenance' : c.phase)}</span></div>` +
+    nextHtml + statsHtml;
+
+  statusEl.style.display = 'block';
+}
+
+/**
+ * Show phone call guidance when cadence recommends a phone touch instead of email.
+ */
+function _udShowPhoneGuidance(recommendation, contactName, tenant, cityState, domain) {
+  const previewEl = document.getElementById('udDraftPreview');
+  const subjectEl = document.getElementById('udDraftSubject');
+  const bodyEl = document.getElementById('udDraftBody');
+  const metaEl = document.getElementById('udDraftMeta');
+
+  const firstName = (contactName || '').split(' ')[0] || 'there';
+  const domainLabel = domain === 'government' ? 'government-leased' : 'dialysis/medical';
+
+  // Generate voicemail script based on touch number
+  let script = '';
+  if (recommendation.touch_number === 2) {
+    script = `Hi ${firstName}, this is Scott Briggs from Northmarq. I sent you an email last week with our latest capital markets update for ${domainLabel} properties — wanted to make sure you received it. I'm specifically interested in your ${tenant}-leased asset in ${cityState} and would love to share some recent comps and market insights. Could we grab 15 minutes on the phone this week? Let me know what works best — I'm flexible.`;
+  } else if (recommendation.touch_number === 4) {
+    script = `Hi ${firstName}, Scott Briggs again from Northmarq. Following up on that quarterly report I sent about a week and a half ago — it includes some really relevant comp data for ${domainLabel} properties like yours. If you've had a chance to look at it, I'd love to walk through a few of the highlights. Do you have 20 minutes on your calendar this month?`;
+  } else if (recommendation.touch_number === 6) {
+    script = `Hi ${firstName}, Scott from Northmarq. Just wanted to follow up on that recent close I sent you last week — it's a solid comp for your portfolio in ${cityState}. Cap rates have shifted in that market, and I think a conversation about your positioning might be timely. Can we grab 20 minutes? I'm flexible with scheduling.`;
+  } else {
+    script = `Hi ${firstName}, this is Scott Briggs from Northmarq. I wanted to follow up regarding your ${tenant}-leased property in ${cityState}. Would you have 15–20 minutes for a quick call this week?`;
+  }
+
+  if (subjectEl) subjectEl.value = `Phone Touch ${recommendation.touch_number}: ${contactName}`;
+  if (bodyEl) bodyEl.value = `VOICEMAIL SCRIPT\n${'─'.repeat(40)}\n\n${script}\n\n${'─'.repeat(40)}\nCALL TIPS\n• Call between 9am–11am or 2pm–4pm local time\n• Keep under 30 seconds\n• Leave your direct number\n• Log the outcome after the call`;
+  if (previewEl) previewEl.style.display = 'block';
+  if (metaEl) metaEl.innerHTML = `<span style="color:var(--yellow,#f59e0b)">&#x1F4DE; Cadence recommends a phone touch</span> · ${esc(recommendation.label)}`;
+
+  showToast('Cadence recommends a phone call — voicemail script ready', 'info');
+}
+
+/**
+ * Fallback auto-select when cadence API is unavailable.
+ * Uses local DOM heuristics (prior touchpoint rows) + property signals.
  */
 function _udAutoSelectTemplate(prop, own, domain) {
-  // T-013: GSA Lease Award congratulations — if it's a government property
-  // with a recent lease award (check for new_award flag or very recent lease start)
+  // T-013: GSA Lease Award congratulations
   if (domain === 'government' && prop.government_type === 'Federal') {
-    // If we can detect a new award, use T-013
     const leaseStart = prop.lease_commencement || prop.lease_start;
     if (leaseStart) {
       const startDate = new Date(leaseStart);
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-      if (startDate >= sixMonthsAgo) {
-        return 'T-013';
-      }
+      if (startDate >= sixMonthsAgo) return 'T-013';
     }
   }
 
-  // Check if we have prior touchpoints with this contact
+  // Check DOM for prior touchpoints
   const touchpointEl = document.getElementById('udTouchpoints');
-  const hasPriorTouches = touchpointEl && touchpointEl.querySelector('.tp-row');
+  const hasPriorTouches = touchpointEl && touchpointEl.querySelector('.detail-card');
 
   if (hasPriorTouches) {
-    // Check how many touches — if many, use quarterly update (T-003)
-    const touchRows = touchpointEl.querySelectorAll('.tp-row');
-    if (touchRows.length >= 6) {
-      return 'T-003'; // Quarterly capital markets update
-    }
-    return 'T-002'; // Follow-up touchpoint
+    const touchCards = touchpointEl.querySelectorAll('.detail-card');
+    if (touchCards.length >= 6) return 'T-003';
+    return 'T-002';
   }
 
-  // Default: first touch intro
   return 'T-001';
 }
 
@@ -4360,7 +4505,8 @@ async function _udRecordDraftSend() {
       final_subject: finalSubject,
       final_body: finalBody,
       original_draft: _udCurrentDraft.rendered_body,
-      sent_text: finalBody
+      sent_text: finalBody,
+      cadence_id: _udCurrentDraft.cadence_id || null
     };
 
     const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
@@ -4373,10 +4519,21 @@ async function _udRecordDraftSend() {
     const result = await resp.json();
 
     if (result.ok) {
-      showToast('Send recorded — template performance tracked', 'success');
+      // Show next recommendation if cadence advanced
+      let toastMsg = 'Send recorded — template performance tracked';
+      if (result.cadence_advanced && result.next_recommendation) {
+        const next = result.next_recommendation;
+        const typeIcon = next.type === 'phone' ? '📞' : '✉️';
+        toastMsg += `. Next: ${typeIcon} ${next.label}`;
+      }
+      showToast(toastMsg, 'success');
       // Reset draft state
       _udCurrentDraft = null;
+      _udCadenceCache = null;
       if (btn) btn.style.display = 'none';
+      // Hide cadence status
+      const statusEl = document.getElementById('udCadenceStatus');
+      if (statusEl) statusEl.style.display = 'none';
       // Refresh touchpoints to show the new activity
       const own = _udCache?.ownership || {};
       _loadTouchpoints(own);

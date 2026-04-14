@@ -64,6 +64,7 @@ import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance } from './_shared/templates.js';
 import { runListingBdPipeline } from './_shared/listing-bd.js';
 import { buildTeamContextWithSales, getTrackRecordSummary } from './_shared/team-context.js';
+import { getCadenceForDraft, advanceCadence, getCadenceState } from './_shared/cadence-engine.js';
 import { evaluateTemplateHealth, flagTemplateForRevision, generateRevisionSuggestion } from './_shared/template-refinement.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
@@ -2083,7 +2084,7 @@ async function handleDraftRoute(req, res) {
 
     // POST ?action=generate — generate a single draft
     if (!action || action === 'generate') {
-      const { template_id, context, strict } = req.body || {};
+      const { template_id, context, strict, cadence_ids } = req.body || {};
       if (!template_id) return res.status(400).json({ error: 'template_id is required' });
       if (!context || typeof context !== 'object') {
         return res.status(400).json({ error: 'context object is required (merged packet payload)' });
@@ -2092,10 +2093,39 @@ async function handleDraftRoute(req, res) {
       // Auto-enrich context with team variables if not already provided
       const enrichedContext = await enrichDraftContext(context);
 
+      // If cadence IDs provided, fetch cadence state and merge context flags
+      let cadenceInfo = null;
+      if (cadence_ids && (cadence_ids.entity_id || cadence_ids.sf_contact_id || cadence_ids.contact_id)) {
+        try {
+          cadenceInfo = await getCadenceForDraft(
+            cadence_ids,
+            { property_id: context.property?.property_id, domain: context.domain || context.property?.domain }
+          );
+          if (cadenceInfo.ok && cadenceInfo.context_flags) {
+            Object.assign(enrichedContext, cadenceInfo.context_flags);
+          }
+        } catch (err) {
+          console.warn('[handleDraftRoute] Cadence lookup failed (non-blocking):', err.message);
+        }
+      }
+
       const result = await generateDraft(template_id, enrichedContext, { strict: !!strict });
       if (!result.ok) {
         return res.status(422).json(result);
       }
+
+      // Attach cadence info to response if available
+      if (cadenceInfo?.ok) {
+        result.cadence = {
+          id: cadenceInfo.cadence.id,
+          phase: cadenceInfo.cadence.phase,
+          current_touch: cadenceInfo.cadence.current_touch,
+          priority_tier: cadenceInfo.cadence.priority_tier,
+          recommendation: cadenceInfo.recommendation,
+          summary: cadenceInfo.summary
+        };
+      }
+
       return res.status(200).json(result);
     }
 
@@ -2119,7 +2149,8 @@ async function handleDraftRoute(req, res) {
       const { template_id, template_version, entity_id, domain,
               context_packet_id, rendered_subject, rendered_body,
               final_subject, final_body,
-              original_draft, sent_text, duration_ms } = req.body || {};
+              original_draft, sent_text, duration_ms,
+              cadence_id } = req.body || {};
 
       if (!template_id) return res.status(400).json({ error: 'template_id is required' });
 
@@ -2212,7 +2243,26 @@ async function handleDraftRoute(req, res) {
       }
 
       if (!result.ok) return res.status(500).json(result);
-      return res.status(201).json(result);
+
+      // Advance cadence if cadence_id provided (non-blocking)
+      let cadenceResult = null;
+      if (cadence_id) {
+        try {
+          cadenceResult = await advanceCadence(cadence_id, {
+            type: 'email',
+            template_id,
+            outcome: 'sent'
+          });
+        } catch (err) {
+          console.warn('[record_send] Cadence advance failed (non-blocking):', err.message);
+        }
+      }
+
+      return res.status(201).json({
+        ...result,
+        cadence_advanced: cadenceResult?.ok || false,
+        next_recommendation: cadenceResult?.recommendation || null
+      });
     }
 
     // POST ?action=listing_bd — run listing-as-BD pipeline
@@ -2364,8 +2414,39 @@ async function handleDraftRoute(req, res) {
       });
     }
 
+    // POST ?action=cadence — get cadence state + recommendation for a contact
+    if (action === 'cadence') {
+      const { entity_id, sf_contact_id, contact_id, property_id, property_address, domain } = req.body || {};
+      if (!entity_id && !sf_contact_id && !contact_id) {
+        return res.status(400).json({ error: 'At least one contact identifier required (entity_id, sf_contact_id, or contact_id)' });
+      }
+
+      const result = await getCadenceForDraft(
+        { entity_id, sf_contact_id, contact_id },
+        { property_id, property_address, domain }
+      );
+
+      if (!result.ok) {
+        return res.status(500).json(result);
+      }
+
+      return res.status(200).json(result);
+    }
+
+    // POST ?action=advance_cadence — manually advance cadence (e.g., after phone call)
+    if (action === 'advance_cadence') {
+      const { cadence_id, type, template_id, outcome, opened } = req.body || {};
+      if (!cadence_id) return res.status(400).json({ error: 'cadence_id is required' });
+
+      const result = await advanceCadence(cadence_id, { type, template_id, outcome, opened });
+      if (!result.ok) {
+        return res.status(500).json(result);
+      }
+      return res.status(200).json(result);
+    }
+
     return res.status(400).json({
-      error: 'Invalid draft action. Use: generate, batch, record_send, listing_bd, performance, health'
+      error: 'Invalid draft action. Use: generate, batch, record_send, cadence, advance_cadence, listing_bd, performance, health'
     });
   }
 
