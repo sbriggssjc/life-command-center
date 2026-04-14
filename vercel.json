@@ -43,6 +43,7 @@
     { "source": "/api/contact", "destination": "/api/entity-hub?_domain=contact" },
     { "source": "/api/search", "destination": "/api/entity-hub?_domain=search" },
     { "source": "/api/briefing-email", "destination": "/api/entity-hub?_domain=briefing-email" },
+    { "source": "/api/recalculate-cap-rates", "destination": "/api/entity-hub?_domain=cap-rate-recalc" },
     { "source": "/api/bridge", "destination": "/api/operations" },
     { "source": "/api/workflows", "destination": "/api/operations" },
     { "source": "/api/intake-outlook-message", "destination": "/api/intake?_route=outlook-message" },
