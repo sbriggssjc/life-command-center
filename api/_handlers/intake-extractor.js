@@ -1,10 +1,11 @@
 // ============================================================================
-// Intake Document Extractor — Claude AI extraction for CRE documents
+// Intake Document Extractor — AI extraction for CRE documents
 // Life Command Center
 //
 // Processes PDF/Excel attachments from staged_intake_artifacts,
-// extracts structured deal data via Claude API, and writes results
-// to staged_intake_extractions.
+// extracts structured deal data via the shared AI provider
+// (invokeChatProvider → OpenAI / edge / ollama based on AI_CHAT_* env),
+// and writes results to staged_intake_extractions.
 //
 // Usage:
 //   import { processIntakeExtraction } from './_handlers/intake-extractor.js';
@@ -16,50 +17,8 @@
 
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
+import { invokeChatProvider, getAiConfig } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
-
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const EXTRACTION_MODEL = 'claude-sonnet-4-20250514';
-
-const SYSTEM_PROMPT = `You are a commercial real estate data extraction specialist. Extract structured deal data from CRE documents. Respond ONLY with a JSON object — no preamble, no markdown, no explanation.
-
-For any field not present in the document, use null.
-For monetary values, return numbers only (no $ or commas).
-For percentages, return decimals (7.5% → 7.5).
-For dates, return YYYY-MM-DD format.`;
-
-const USER_PROMPT = `Extract all available deal data from this document. Return JSON with these fields:
-{
-  "document_type": "om | rent_roll | lease_abstract | unknown",
-  "address": "string",
-  "city": "string",
-  "state": "string",
-  "zip_code": "string",
-  "tenant_name": "string",
-  "tenant_guarantor": "string",
-  "property_type": "string",
-  "building_sf": "number",
-  "lot_sf": "number",
-  "year_built": "number",
-  "asking_price": "number",
-  "price_per_sf": "number",
-  "cap_rate": "number",
-  "noi": "number",
-  "annual_rent": "number",
-  "rent_per_sf": "number",
-  "lease_commencement": "string (YYYY-MM-DD)",
-  "lease_expiration": "string (YYYY-MM-DD)",
-  "lease_term_years": "number",
-  "renewal_options": "string",
-  "expense_structure": "string",
-  "rent_escalations": "string",
-  "listing_broker": "string",
-  "listing_broker_email": "string",
-  "listing_firm": "string",
-  "seller_name": "string",
-  "parcel_number": "string",
-  "confidence_notes": "string"
-}`;
 
 // Document type priority for merging — OM data wins over rent roll / lease abstract
 const DOC_TYPE_PRIORITY = { om: 3, lease_abstract: 2, rent_roll: 1, unknown: 0 };
@@ -70,10 +29,6 @@ const SUPPORTED_EXCEL_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel'
 ];
-
-function getAnthropicApiKey() {
-  return process.env.ANTHROPIC_API_KEY;
-}
 
 // ============================================================================
 // ARTIFACT DATA RETRIEVAL
@@ -125,82 +80,89 @@ async function fetchArtifactData(artifact) {
 }
 
 // ============================================================================
-// CLAUDE API EXTRACTION
+// AI PROVIDER EXTRACTION
 // ============================================================================
 
 /**
- * Send a document to Claude for structured data extraction.
- * PDFs are passed as native document blocks; Excel files as text placeholders
- * (binary Excel cannot be interpreted as a document block).
+ * Send a document to the configured AI provider for structured data extraction.
+ * PDFs are passed as file attachments; Excel / binary spreadsheets are handled
+ * as prompt-only best-effort extraction (binary xlsx cannot be parsed as text).
+ *
+ * Returns the parsed JSON extraction object, or throws on provider / parse error.
  */
-async function callClaudeExtraction(base64Data, mediaType) {
-  const apiKey = getAnthropicApiKey();
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
+async function callAiExtraction(base64Data, mediaType) {
+  const isPdf = mediaType === 'application/pdf';
+  const isExcel = /spreadsheet|excel|xlsx|xls/i.test(mediaType || '');
 
-  const isPdf = SUPPORTED_PDF_TYPES.includes(mediaType);
+  // Build the attachment for invokeChatProvider.
+  // OpenAI accepts base64 images; PDFs are passed as file attachments that
+  // downstream providers can interpret. Excel/other binary types get no
+  // attachment — the model does best-effort extraction from the prompt.
+  const attachment = isPdf && base64Data ? {
+    type: 'file',
+    name: 'document.pdf',
+    mimeType: 'application/pdf',
+    data: base64Data,
+  } : null;
 
-  const contentBlocks = [];
+  const prompt = `Extract all available deal data from this CRE document.
+Return ONLY a JSON object — no markdown, no explanation, no preamble.
 
-  if (isPdf) {
-    contentBlocks.push({
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: base64Data }
-    });
-  } else {
-    // Non-PDF (Excel) — Claude cannot read binary spreadsheets as document blocks.
-    // Pass a descriptor so the model still attempts best-effort extraction from
-    // any embedded text or metadata.
-    contentBlocks.push({
-      type: 'text',
-      text: `[Attached document: ${mediaType}. This is a spreadsheet file — extract any structured data you can identify from the content.]`
-    });
+For any field not present in the document, use null.
+For monetary values, return numbers only (no $ or commas).
+For percentages, return decimals (7.5% → 7.5).
+For dates, return YYYY-MM-DD format.
+
+${isExcel && !attachment ? '[Note: source is a binary spreadsheet the model cannot parse directly — extract any identifiable fields from context.]\n\n' : ''}{
+  "document_type": "om|rent_roll|lease_abstract|flyer|unknown",
+  "address": null,
+  "city": null,
+  "state": null,
+  "zip_code": null,
+  "tenant_name": null,
+  "tenant_guarantor": null,
+  "property_type": null,
+  "building_sf": null,
+  "lot_sf": null,
+  "year_built": null,
+  "asking_price": null,
+  "price_per_sf": null,
+  "cap_rate": null,
+  "noi": null,
+  "annual_rent": null,
+  "rent_per_sf": null,
+  "lease_commencement": null,
+  "lease_expiration": null,
+  "lease_term_years": null,
+  "renewal_options": null,
+  "expense_structure": null,
+  "rent_escalations": null,
+  "listing_broker": null,
+  "listing_broker_email": null,
+  "listing_firm": null,
+  "seller_name": null,
+  "parcel_number": null,
+  "confidence_notes": null
+}`;
+
+  const result = await invokeChatProvider({
+    message:     prompt,
+    attachments: attachment ? [attachment] : [],
+    context:     null,
+    history:     [],
+    user:        { id: 'system' },
+    workspaceId: null,
+  });
+
+  if (!result.ok) {
+    throw new Error(`AI provider error ${result.status}: ${JSON.stringify(result.data)}`);
   }
 
-  contentBlocks.push({ type: 'text', text: USER_PROMPT });
-
-  const body = {
-    model: EXTRACTION_MODEL,
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: contentBlocks }]
-  };
-
-  // 2-minute timeout — large PDFs can take a while
-  const res = await fetchWithTimeout(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify(body)
-  }, 120000);
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Claude API error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  const textBlock = data.content?.find(b => b.type === 'text');
-  return textBlock?.text || null;
-}
-
-/**
- * Parse Claude's JSON response, stripping any accidental markdown fences.
- */
-function parseExtractionJson(raw) {
-  if (!raw) return null;
-  let cleaned = raw.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-  }
-  try {
-    return JSON.parse(cleaned);
-  } catch (err) {
-    console.error('[intake-extractor] Failed to parse Claude response as JSON:', err.message);
-    return null;
-  }
+  // Extract JSON from response text
+  const text = result.data?.response || result.data?.content || '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON found in AI response');
+  return JSON.parse(jsonMatch[0]);
 }
 
 // ============================================================================
@@ -247,7 +209,7 @@ function mergeExtractions(results) {
  * Process all document artifacts for a staged intake item.
  *
  * 1. Fetches staged_intake_item + its artifacts
- * 2. Runs Claude extraction for each PDF/Excel artifact
+ * 2. Runs AI extraction for each PDF/Excel artifact
  * 3. Merges results (OM preferred over rent roll)
  * 4. Writes to staged_intake_extractions
  * 5. Updates staged_intake_items.status → 'extracted'
@@ -294,8 +256,7 @@ export async function processIntakeExtraction(intakeId) {
   for (const artifact of documentArtifacts) {
     try {
       const { base64, media_type } = await fetchArtifactData(artifact);
-      const rawResponse = await callClaudeExtraction(base64, media_type);
-      const parsed = parseExtractionJson(rawResponse);
+      const parsed = await callAiExtraction(base64, media_type);
       if (parsed) {
         extractions.push(parsed);
       } else {
@@ -394,9 +355,10 @@ export async function handleExtractRoute(req, res) {
     return res.status(400).json({ error: 'intake_id is required' });
   }
 
-  if (!getAnthropicApiKey()) {
-    return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  }
+  // AI provider key checks are handled by invokeChatProvider — a missing key
+  // returns { ok: false, status: 503 } which processIntakeExtraction surfaces
+  // per-artifact.  No pre-flight env check required.
+  void getAiConfig();
 
   try {
     const result = await processIntakeExtraction(intakeId);
