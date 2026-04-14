@@ -20,6 +20,7 @@ import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
+import { domainQuery } from './_shared/domain-db.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -216,6 +217,42 @@ async function handleOutlookMessage(req, res) {
   }
 
   const item = Array.isArray(result.data) ? result.data[0] : result.data;
+
+  // If email has attachments, bridge to staged intake pipeline
+  if (hasAttachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+
+    // 1. Create staged_intake_item
+    const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
+      intake_id:            correlationId,
+      source_type:          'email',
+      internet_message_id:  internetMsgId || correlationId,
+      status:               'received',
+      raw_payload: {
+        subject:        subject,
+        from:           sender,
+        received:       receivedAtIso,
+        correlation_id: correlationId,
+      },
+    });
+
+    if (stageResult.ok) {
+      // 2. Create artifact rows for each attachment
+      for (const att of payload.attachments) {
+        await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+          intake_id:    correlationId,
+          file_name:    att.file_name || att.name,
+          file_type:    att.file_type || att.contentType || 'application/octet-stream',
+          storage_path: att.storage_path || null,
+          inline_data:  att.inline_data || att.content || null,
+        });
+      }
+
+      // 3. Fire async extraction — does NOT block the response
+      processIntakeExtraction(correlationId).catch(err =>
+        console.error('[intake] staged extraction failed:', correlationId, err.message)
+      );
+    }
+  }
 
   // Fire-and-forget entity extraction — NEVER blocks the intake response
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
