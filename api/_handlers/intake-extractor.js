@@ -260,7 +260,7 @@ export async function processIntakeExtraction(intakeId) {
 
   // 1. Fetch the staged intake item
   const itemResult = await opsQuery('GET',
-    `staged_intake_items?id=eq.${encodeURIComponent(intakeId)}&select=*&limit=1`
+    `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}&select=*&limit=1`
   );
   if (!itemResult.ok || !itemResult.data?.length) {
     const msg = `Intake item not found: ${intakeId}`;
@@ -283,7 +283,7 @@ export async function processIntakeExtraction(intakeId) {
   if (!documentArtifacts.length) {
     console.log(`[intake-extractor] No extractable documents for intake_id=${intakeId}`);
     await opsQuery('PATCH',
-      `staged_intake_items?id=eq.${encodeURIComponent(intakeId)}`,
+      `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
       { status: 'extracted', updated_at: new Date().toISOString() }
     );
     return { ok: true, extraction_snapshot: null, error: 'No extractable documents' };
@@ -323,14 +323,14 @@ export async function processIntakeExtraction(intakeId) {
 
   // 6. Update staged_intake_items status + store extraction summary in raw_payload
   const currentItem = await opsQuery('GET',
-    `staged_intake_items?id=eq.${encodeURIComponent(intakeId)}&select=raw_payload&limit=1`
+    `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}&select=raw_payload&limit=1`
   );
   const currentPayload = currentItem.ok && currentItem.data?.length
     ? (currentItem.data[0].raw_payload || {})
     : {};
 
   await opsQuery('PATCH',
-    `staged_intake_items?id=eq.${encodeURIComponent(intakeId)}`,
+    `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
     {
       status: 'extracted',
       raw_payload: {
