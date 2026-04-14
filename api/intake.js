@@ -4,6 +4,7 @@
 //
 // POST /api/intake?_route=outlook-message   — deterministic single-message intake
 // GET  /api/intake?_route=summary           — Teams/Automation formatted summary
+// POST /api/intake?_route=extract           — manual document extraction trigger
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -17,6 +18,7 @@ import { getAiConfig } from './_shared/ai.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -84,9 +86,11 @@ export default withErrorHandler(async function handler(req, res) {
     }
     case 'summary':
       return handleIntakeSummary(req, res);
+    case 'extract':
+      return handleExtractRoute(req, res);
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary'
+        error: 'Invalid _route. Use: outlook-message, summary, extract'
       });
   }
 });
@@ -209,6 +213,14 @@ async function handleOutlookMessage(req, res) {
   // Fire-and-forget entity extraction — NEVER blocks the intake response
   runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
     .catch(err => console.error('[Intake extraction error]', err.message || err));
+
+  // Fire-and-forget document extraction — runs async for staged intake items
+  // Don't await — extraction runs async, doesn't block intake response
+  if (item?.id) {
+    processIntakeExtraction(item.id).catch(err =>
+      console.error('[intake-extractor] extraction failed:', item.id, err.message)
+    );
+  }
 
   return res.status(200).json({
     ok: true,
