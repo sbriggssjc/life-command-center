@@ -2964,7 +2964,7 @@ function renderProspectCardsHTML(items, options = {}) {
       if (showEmailTemplates && c.email) {
         html += `<div style="position:relative;display:inline-block"><button class="act-btn" style="font-size:11px;padding:4px 8px" onclick="event.stopPropagation();toggleEmailMenu(this)">&#x2709; Email</button>`;
         html += `<div class="email-tpl-menu" style="display:none;position:absolute;right:0;top:28px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:20;min-width:180px;padding:4px 0;font-size:12px">`;
-        var _draftCtx = encodeURIComponent(JSON.stringify({email:c.email||'',contact_name:c.contact_name||'',deal_name:group.displayName||'',sf_contact_id:c.sf_contact_id||'',company_name:c.company_name||'',domain:c.task_domain||''}));
+        var _draftCtx = encodeURIComponent(JSON.stringify({email:c.email||'',contact_name:c.contact_name||'',deal_name:group.displayName||'',sf_contact_id:c.sf_contact_id||'',company_name:c.company_name||'',domain:c.task_domain||'',city:c.city||'',state:c.state||'',address:c.address||'',property_id:c.property_id||''}));
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-001',decodeURIComponent('${_draftCtx}'))">First Touch</div>`;
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-002',decodeURIComponent('${_draftCtx}'))">Follow-Up</div>`;
         html += `<div style="padding:6px 12px;cursor:pointer;color:var(--text)" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''" onclick="event.stopPropagation();closeEmailMenus();_draftFromPipeline('T-003',decodeURIComponent('${_draftCtx}'))">Capital Markets Update</div>`;
@@ -3142,9 +3142,19 @@ async function _draftFromPipeline(templateId, ctxJson) {
   const toastId = showToast('Generating draft…', 'info', 10000);
 
   try {
-    const domain = ctx.domain === 'government' ? 'government' : ctx.domain === 'dialysis' ? 'dialysis' : '';
+    // Resolve domain — prefer explicit, fall back to tenant name inference
+    let domain = ctx.domain === 'government' ? 'government' : ctx.domain === 'dialysis' ? 'dialysis' : '';
+    if (!domain && ctx.deal_name) {
+      const dn = ctx.deal_name.toLowerCase();
+      if (dn.includes('davita') || dn.includes('fresenius') || dn.includes('dialysis') || dn.includes('us renal') || dn.includes('satellite')) {
+        domain = 'dialysis';
+      } else if (dn.includes('gsa') || dn.includes('government') || dn.includes('federal') || dn.includes('irs') || dn.includes('fbi') || dn.includes('dea') || dn.includes('ice') || dn.includes('uscis') || dn.includes('va ') || dn.includes('usps')) {
+        domain = 'government';
+      }
+    }
 
     // Build context matching the draft API's expected shape
+    const cityState = [ctx.city, ctx.state].filter(Boolean).join(', ');
     const context = {
       contact: {
         full_name: ctx.contact_name || '',
@@ -3154,9 +3164,11 @@ async function _draftFromPipeline(templateId, ctxJson) {
       },
       property: {
         tenant: ctx.deal_name || '',
-        city_state: '',
+        city_state: cityState,
         domain: domain,
-        page_title: ctx.deal_name || ''
+        page_title: ctx.deal_name || '',
+        address: ctx.address || '',
+        property_id: ctx.property_id || ''
       },
       domain: domain
     };
@@ -4241,15 +4253,50 @@ function openLogAndReschedule(sfContactId, sfCompanyId, contactName, taskSubject
   const dateEl = document.getElementById('lrNextDate');
   const btnEl = document.getElementById('lrSubmit');
   const modalEl = document.getElementById('logRescheduleModal');
+  const reasonEl = document.getElementById('lrDateReason');
   if (ctxEl) ctxEl.textContent = 'Contact: ' + (contactName || 'Unknown');
   if (infoEl) infoEl.innerHTML = 'Task: <strong>' + (taskSubject || '—') + '</strong>' + (currentDate ? ' (current date: ' + currentDate + ')' : '');
   if (notesEl) notesEl.value = '';
-  // Default next date: 2 weeks from today
-  var next = new Date();
-  next.setDate(next.getDate() + 14);
-  if (dateEl) dateEl.value = next.toISOString().split('T')[0];
+  // Default to 90 days while smart date loads
+  var defaultNext = new Date();
+  defaultNext.setDate(defaultNext.getDate() + 90);
+  if (dateEl) dateEl.value = defaultNext.toISOString().split('T')[0];
+  if (reasonEl) { reasonEl.textContent = 'Loading smart date…'; reasonEl.style.display = 'block'; }
   if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Log & Reschedule'; }
   if (modalEl) modalEl.classList.add('open');
+
+  // Fetch smart reschedule date from cadence engine (non-blocking)
+  _fetchSmartRescheduleDate(sfContactId).then(function(result) {
+    if (result && result.ok && dateEl) {
+      dateEl.value = result.next_date;
+      if (reasonEl) {
+        reasonEl.textContent = result.reason;
+        reasonEl.style.color = result.overrides && result.overrides.length > 0 ? 'var(--accent)' : 'var(--text3)';
+      }
+    } else if (reasonEl) {
+      reasonEl.textContent = 'Quarterly cadence (90 days)';
+      reasonEl.style.color = 'var(--text3)';
+    }
+  }).catch(function() {
+    if (reasonEl) { reasonEl.textContent = 'Quarterly cadence (90 days)'; reasonEl.style.color = 'var(--text3)'; }
+  });
+}
+
+async function _fetchSmartRescheduleDate(sfContactId) {
+  try {
+    var headers = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+    var resp = await fetch('/api/operations?_route=draft&action=smart_reschedule', {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ sf_contact_id: sfContactId || undefined })
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (e) {
+    console.warn('[SmartReschedule] Failed:', e.message);
+    return null;
+  }
 }
 
 function closeLogReschedule() {
@@ -4285,9 +4332,11 @@ async function submitLogReschedule() {
       force: true
     };
 
+    var logHeaders = { 'Content-Type': 'application/json' };
+    if (LCC_USER.workspace_id) logHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
     var logRes = await fetch('/api/sync?action=outbound', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: logHeaders,
       body: JSON.stringify({ command: 'log_to_sf', payload: logPayload })
     });
     if (!logRes.ok) { showToast('Server error (' + logRes.status + ')', 'error'); btn.disabled = false; btn.textContent = 'Log & Reschedule'; return; }
@@ -4322,6 +4371,23 @@ async function submitLogReschedule() {
 
     // 3. Push the new date to the original SF task via Power Automate (non-blocking)
     _updateSfTaskDate(_lrData.sfContactId, _lrData.taskSubject, nextDate);
+
+    // 3b. Advance cadence state in background (fire-and-forget)
+    try {
+      var cadenceHeaders = { 'Content-Type': 'application/json' };
+      if (LCC_USER.workspace_id) cadenceHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
+      fetch('/api/operations?_route=draft&action=advance_cadence', {
+        method: 'POST',
+        headers: cadenceHeaders,
+        body: JSON.stringify({
+          cadence_id: null, // server will match by sf_contact_id
+          sf_contact_id: _lrData.sfContactId || undefined,
+          type: actType === 'Call' ? 'phone' : 'email',
+          template_id: null,
+          outcome: actType === 'Call' ? 'connected' : 'sent'
+        })
+      }).catch(function(e) { console.warn('[Cadence] Advance failed:', e.message); });
+    } catch (e) { /* non-blocking */ }
 
     // 4. Remove this task from the current view (it'll reappear on next load with future date)
     _updateTaskInAllStores(_lrData.sfContactId, _lrData.taskSubject, 'complete');
@@ -4468,9 +4534,11 @@ async function applyManualChange(payload) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
+    const amHeaders = { 'Content-Type': 'application/json' };
+    if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) amHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
     const res = await fetch('/api/apply-change', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: amHeaders,
       body: JSON.stringify(payload),
       signal: controller.signal
     });
@@ -4535,9 +4603,11 @@ async function applyChangeWithFallback(opts) {
       });
       const fc = new AbortController();
       const ft = setTimeout(() => fc.abort(), 15000);
+      const fbHeaders = { 'Content-Type': 'application/json' };
+      if (typeof LCC_USER !== 'undefined' && LCC_USER.workspace_id) fbHeaders['x-lcc-workspace'] = LCC_USER.workspace_id;
       const res = await fetch(url.toString(), {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: fbHeaders,
         body: JSON.stringify(opts.data),
         signal: fc.signal
       });

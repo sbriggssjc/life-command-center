@@ -1984,6 +1984,48 @@ async function enrichDraftContext(context) {
   // Resolve domain from property or top-level
   const domain = enriched.property?.domain || enriched.domain || null;
 
+  // --- Resolve missing property.city_state from domain databases ---
+  if (enriched.property && !enriched.property.city_state && domain) {
+    try {
+      // Try to look up city/state from property_id or tenant name
+      const propId = enriched.property.property_id;
+      const tenant = enriched.property.tenant;
+
+      if (propId || tenant) {
+        const DIA_URL = process.env.DIA_SUPABASE_URL;
+        const DIA_KEY = process.env.DIA_SUPABASE_KEY;
+        const GOV_URL = process.env.GOV_SUPABASE_URL;
+        const GOV_KEY = process.env.GOV_SUPABASE_KEY;
+
+        let lookupUrl, lookupKey;
+        if (domain === 'dialysis' && DIA_URL && DIA_KEY) {
+          lookupUrl = DIA_URL; lookupKey = DIA_KEY;
+        } else if (domain === 'government' && GOV_URL && GOV_KEY) {
+          lookupUrl = GOV_URL; lookupKey = GOV_KEY;
+        }
+
+        if (lookupUrl && lookupKey) {
+          const table = domain === 'dialysis' ? 'properties' : 'properties';
+          let filter = propId ? `id=eq.${pgFilterVal(propId)}` : `tenant_name=ilike.*${pgFilterVal(tenant)}*`;
+          const propResult = await fetch(
+            `${lookupUrl}/rest/v1/${table}?${filter}&select=city,state,address&limit=1`,
+            { headers: { 'apikey': lookupKey, 'Authorization': `Bearer ${lookupKey}` } }
+          );
+          if (propResult.ok) {
+            const rows = await propResult.json();
+            if (rows?.[0]) {
+              const p = rows[0];
+              enriched.property.city_state = [p.city, p.state].filter(Boolean).join(', ');
+              if (!enriched.property.address && p.address) enriched.property.address = p.address;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[enrichDraftContext] Property city_state lookup failed:', err.message);
+    }
+  }
+
   // --- team.credentials_summary ---
   if (!enriched.team?.credentials_summary && domain) {
     enriched.team = enriched.team || {};
@@ -2003,7 +2045,8 @@ async function enrichDraftContext(context) {
   // --- comp_highlights (recent sales from domain DB) ---
   if (!enriched.comp_highlights && domain) {
     try {
-      const state = enriched.property?.state || null;
+      const state = enriched.property?.state ||
+        (enriched.property?.city_state ? enriched.property.city_state.split(', ').pop() : null);
       const teamCtx = await buildTeamContextWithSales(domain, {
         limit: 5,
         state // prefer comps in same state as property
@@ -2023,9 +2066,13 @@ async function enrichDraftContext(context) {
   }
 
   // --- property.domain_label (display-friendly domain name) ---
-  if (enriched.property && !enriched.property.domain_label && domain) {
-    const labels = { government: 'Government-Leased', dialysis: 'Net Lease Medical/Dialysis' };
-    enriched.property.domain_label = labels[domain] || domain;
+  if (enriched.property && !enriched.property.domain_label) {
+    if (domain) {
+      const labels = { government: 'Government-Leased', dialysis: 'Net Lease Medical/Dialysis' };
+      enriched.property.domain_label = labels[domain] || domain;
+    } else {
+      enriched.property.domain_label = 'Net Lease';
+    }
   }
 
   // --- quarter_year ---
@@ -2434,18 +2481,140 @@ async function handleDraftRoute(req, res) {
 
     // POST ?action=advance_cadence — manually advance cadence (e.g., after phone call)
     if (action === 'advance_cadence') {
-      const { cadence_id, type, template_id, outcome, opened } = req.body || {};
-      if (!cadence_id) return res.status(400).json({ error: 'cadence_id is required' });
+      const { cadence_id, sf_contact_id, entity_id, contact_id,
+              type, template_id, outcome, opened } = req.body || {};
 
-      const result = await advanceCadence(cadence_id, { type, template_id, outcome, opened });
+      // Resolve cadence_id from contact identifiers if not provided
+      let resolvedCadenceId = cadence_id;
+      if (!resolvedCadenceId && (sf_contact_id || entity_id || contact_id)) {
+        try {
+          const ids = {};
+          if (sf_contact_id) ids.sf_contact_id = sf_contact_id;
+          if (entity_id) ids.entity_id = entity_id;
+          if (contact_id) ids.contact_id = contact_id;
+          const stateResult = await getCadenceState(ids);
+          if (stateResult.ok && stateResult.cadence?.id) {
+            resolvedCadenceId = stateResult.cadence.id;
+          }
+        } catch (err) {
+          console.warn('[advance_cadence] Cadence lookup by contact failed:', err.message);
+        }
+      }
+
+      if (!resolvedCadenceId) {
+        return res.status(400).json({ error: 'cadence_id is required (or provide sf_contact_id/entity_id to auto-resolve)' });
+      }
+
+      const result = await advanceCadence(resolvedCadenceId, { type, template_id, outcome, opened });
       if (!result.ok) {
         return res.status(500).json(result);
       }
       return res.status(200).json(result);
     }
 
+    // POST ?action=smart_reschedule — compute optimal next date for task rescheduling
+    // Default: 90 days out (quarterly cadence), overridden by:
+    //   - Lease expiration within 12 months → 30-60 days before expiry
+    //   - Debt maturity approaching → 60-90 days before maturity
+    //   - New award/event detected → 7-14 days
+    //   - Active prospecting sequence → next touch due date from cadence engine
+    if (action === 'smart_reschedule') {
+      const { sf_contact_id, entity_id, contact_id, property_id, domain } = req.body || {};
+
+      const now = new Date();
+      const DEFAULT_DAYS = 90; // quarterly default
+      let nextDate = new Date(now.getTime() + DEFAULT_DAYS * 24 * 60 * 60 * 1000);
+      let reason = 'Quarterly cadence (90 days)';
+      const overrides = [];
+
+      // 1. Check cadence state — if in prospecting, use cadence engine timing
+      try {
+        const ids = {};
+        if (entity_id) ids.entity_id = entity_id;
+        if (sf_contact_id) ids.sf_contact_id = sf_contact_id;
+        if (contact_id) ids.contact_id = contact_id;
+
+        if (Object.keys(ids).length > 0) {
+          const cadenceResult = await getCadenceForDraft(ids, { property_id, domain });
+          if (cadenceResult.ok && cadenceResult.recommendation) {
+            const rec = cadenceResult.recommendation;
+
+            // If in prospecting sequence, use the cadence-computed due date
+            if (rec.due_at && cadenceResult.cadence?.phase === 'prospecting') {
+              const cadenceDue = new Date(rec.due_at);
+              if (cadenceDue > now) {
+                nextDate = cadenceDue;
+                reason = `Cadence: ${rec.label} (touch ${rec.touch_number}/7)`;
+                overrides.push({ source: 'cadence_engine', date: cadenceDue.toISOString().split('T')[0], reason });
+              }
+            }
+
+            // Escalation overrides from cadence flags
+            if (cadenceResult.cadence?.new_award_flag) {
+              const awardDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+              nextDate = awardDate;
+              reason = 'New lease award detected — follow up in 7 days';
+              overrides.push({ source: 'new_award', date: awardDate.toISOString().split('T')[0], reason });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[smart_reschedule] Cadence lookup failed (non-blocking):', err.message);
+      }
+
+      // 2. Check property-level signals (lease expiration, debt maturity)
+      try {
+        if (sf_contact_id || entity_id) {
+          // Look for property context with lease/debt dates
+          const contactFilter = sf_contact_id
+            ? `sf_contact_id=eq.${pgFilterVal(sf_contact_id)}`
+            : `entity_id=eq.${pgFilterVal(entity_id)}`;
+
+          // Check cadence record for lease_expiry_date
+          const cadenceCheck = await opsQuery('GET',
+            `touchpoint_cadence?${contactFilter}&select=lease_expiry_flag,lease_expiry_date,market_shift_flag&limit=1`
+          );
+
+          if (cadenceCheck.ok && cadenceCheck.data?.[0]) {
+            const tc = cadenceCheck.data[0];
+
+            // Lease expiration: reschedule to 60 days before expiry
+            if (tc.lease_expiry_flag && tc.lease_expiry_date) {
+              const expiryDate = new Date(tc.lease_expiry_date);
+              const preExpiryDate = new Date(expiryDate.getTime() - 60 * 24 * 60 * 60 * 1000);
+              if (preExpiryDate > now && preExpiryDate < nextDate) {
+                nextDate = preExpiryDate;
+                reason = `Lease expiration ${tc.lease_expiry_date} — follow up 60 days prior`;
+                overrides.push({ source: 'lease_expiry', date: preExpiryDate.toISOString().split('T')[0], reason, lease_expiry_date: tc.lease_expiry_date });
+              }
+            }
+
+            // Market shift: accelerate to 30 days
+            if (tc.market_shift_flag) {
+              const shiftDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+              if (shiftDate < nextDate) {
+                nextDate = shiftDate;
+                reason = 'Market shift detected — accelerated follow-up (30 days)';
+                overrides.push({ source: 'market_shift', date: shiftDate.toISOString().split('T')[0], reason });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[smart_reschedule] Property signal check failed (non-blocking):', err.message);
+      }
+
+      return res.status(200).json({
+        ok: true,
+        next_date: nextDate.toISOString().split('T')[0],
+        reason,
+        overrides,
+        default_days: DEFAULT_DAYS
+      });
+    }
+
     return res.status(400).json({
-      error: 'Invalid draft action. Use: generate, batch, record_send, cadence, advance_cadence, listing_bd, performance, health'
+      error: 'Invalid draft action. Use: generate, batch, record_send, cadence, advance_cadence, smart_reschedule, listing_bd, performance, health'
     });
   }
 
