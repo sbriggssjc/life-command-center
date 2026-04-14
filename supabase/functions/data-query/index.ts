@@ -59,6 +59,7 @@ const DIA_READ_TABLES = new Set([
   "facility_patient_counts", "clinic_trends", "clinic_quality_metrics",
   "facility_cost_reports", "leases", "v_clinic_payer_mix",
   "v_payer_mix_geo_averages",
+  "property_cms_link", "property_cms_link_history",
 ]);
 
 const DIA_WRITE_TABLES = new Set([
@@ -66,6 +67,7 @@ const DIA_WRITE_TABLES = new Set([
   "properties", "recorded_owners", "true_owners", "contacts",
   "sales_transactions", "loans", "v_clinic_property_link_review_queue",
   "salesforce_activities",
+  "property_cms_link", "property_cms_link_history",
   "rpc/upsert_research_outcome", "rpc/save_outbound_activity",
   "rpc/match_marketing_lead_to_sf", "rpc/refresh_crm_rollup",
 ]);

@@ -232,6 +232,30 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
 
     _setUdCache({ db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, entityMeta, _fallbackOnly: allEmpty });
 
+    // ── Dialysis Operations tab: auto-match CMS facility when rankings is empty ──
+    // Uses the /api/cms-match?action=resolve endpoint to fuzzy-match the property's
+    // address to medicare_clinics.medicare_id, cache the match in property_cms_link,
+    // and return a compact CMS snapshot (rankings/quality/patient/payer/operator).
+    if (db === 'dia' && propertyId && !rankings) {
+      try {
+        await _udResolveCmsFacility(propertyId);
+      } catch (e) {
+        console.warn('cms-match resolve failed:', e);
+      }
+    } else if (db === 'dia' && rankings && !_udCache.cms) {
+      // Even when rankings exist (linked via medicare_clinics), derive operator/QIP/etc
+      // for the enriched Operations tab from the medicare_id on the rankings row.
+      if (rankings.medicare_id) {
+        _udCache.cms = {
+          medicare_id: rankings.medicare_id,
+          match_score: 1.0,
+          match_method: 'auto:medicare_clinics',
+          source: 'rankings',
+          operator: _udDetectOperator(rankings),
+        };
+      }
+    }
+
     // Update header with real data (page_title or fallback to tenant/address)
     if (synthProperty) {
       const realTitle = synthProperty.page_title || synthProperty.facility_name || fallback.tenant_operator || fallback.agency || synthProperty.address || fallback.address || '(Unknown)';
@@ -508,11 +532,250 @@ function switchUnifiedTab(tabName) {
   }
 }
 
+// ─── CMS FACILITY MATCH (property ↔ medicare_id) ─────────────────────────────
+// Backs the Operations tab. When v_property_rankings has no row for a property,
+// we call /api/cms-match?action=resolve to fuzzy-match the property address to
+// a CMS medicare_id and cache the link in the Dialysis DB (property_cms_link).
+
+function _udDetectOperator(row) {
+  const raw = (row && (row.chain_organization || row.operator_name || row.facility_name)) || '';
+  const name = String(raw).toLowerCase();
+  if (!name) return { label: 'Unknown', key: 'unknown', color: 'var(--text3)' };
+  if (/davita/.test(name))                   return { label: 'DaVita',          key: 'davita',  color: '#dc2626' };
+  if (/fresenius|fmc|fkc/.test(name))        return { label: 'Fresenius (FMC)', key: 'fmc',     color: '#f59e0b' };
+  if (/u\.?s\.?\s*renal|usrc/.test(name))    return { label: 'US Renal',        key: 'usrenal', color: '#3b82f6' };
+  if (/satellite/.test(name))                return { label: 'Satellite',       key: 'satellite', color: '#8b5cf6' };
+  if (/dialyze\s*direct/.test(name))         return { label: 'Dialyze Direct',  key: 'dialyzedirect', color: '#10b981' };
+  return { label: 'Independent', key: 'indy', color: 'var(--text2)' };
+}
+
+/** Call /api/cms-match?action=resolve and merge the snapshot into _udCache. */
+async function _udResolveCmsFacility(propertyId) {
+  if (!_udCache) return null;
+  const url = new URL('/api/cms-match', window.location.origin);
+  url.searchParams.set('action', 'resolve');
+  url.searchParams.set('property_id', propertyId);
+  const headers = {};
+  if (window._lccApiKey) headers['X-LCC-Key'] = window._lccApiKey;
+  let resp;
+  try {
+    const r = await fetch(url.toString(), { headers, signal: AbortSignal.timeout(25000) });
+    if (!r.ok) { console.warn('cms-match resolve http', r.status); resp = { match: null, candidates: [] }; }
+    else resp = await r.json();
+  } catch (err) {
+    console.warn('cms-match resolve fetch failed', err);
+    return null;
+  }
+  // Populate cache
+  _udCache.cms = {
+    medicare_id: resp.medicare_id || null,
+    match_score: resp.match_score || null,
+    match_method: resp.match_method || null,
+    source: resp.source || null,
+    facility: resp.facility || null,
+    quality: resp.quality || null,
+    patient: resp.patient || null,
+    trends: resp.trends || null,
+    payer: resp.payer || null,
+    cost: resp.cost || null,
+    operator: resp.operator || _udDetectOperator(resp.facility || resp.rankings || {}),
+    candidates: resp.candidates || [],
+  };
+  // If the resolver returned a rankings row, use it so Operations tab renders normally.
+  if (resp.rankings) _udCache.rankings = resp.rankings;
+  _setUdCache(_udCache);
+  return resp;
+}
+
+/** Show the Match-facility typeahead card (fallback when auto-match fails). */
+function _udRenderMatchFacilityCard() {
+  const fb = _udCache?.fallback || {};
+  const p  = _udCache?.property || {};
+  const cms = _udCache?.cms || {};
+  const candidates = cms.candidates || [];
+  const addr   = p.address || fb.address || '';
+  const city   = p.city || fb.city || '';
+  const state  = p.state || fb.state || '';
+  const zip    = p.zip_code || p.zip || fb.zip || fb.zip_code || '';
+
+  let html = '<div class="detail-empty" style="text-align:left;padding:24px;background:var(--s2);border-radius:12px">';
+  html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">';
+  html += '<div style="font-size:24px">&#x1F50D;</div>';
+  html += '<div><div style="font-weight:700;color:var(--text)">No CMS facility linked to this property</div>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">Auto-match tried <strong>' + esc(addr || '—') + '</strong>' + (zip ? ' (' + esc(zip) + ')' : '') + ' — no confident match found.</div>';
+  html += '</div></div>';
+
+  // Candidate suggestions (from fuzzy match, score ≥ 0.55)
+  if (candidates.length > 0) {
+    html += '<div style="font-size:11px;color:var(--text3);margin-top:8px;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Suggested matches</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">';
+    candidates.forEach(c => {
+      const scorePct = Math.round((Number(c.match_score) || 0) * 100);
+      html += '<div style="display:flex;gap:10px;padding:10px 12px;background:var(--s1);border-radius:8px;border:1px solid var(--border)">';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-weight:600;color:var(--text);font-size:13px">' + esc(c.facility_name || '(unnamed)') + '</div>';
+      html += '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc(c.address || '') + (c.city ? ', ' + esc(c.city) : '') + (c.state ? ', ' + esc(c.state) : '') + (c.zip ? ' ' + esc(c.zip) : '') + '</div>';
+      html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">CCN ' + esc(c.medicare_id) + (c.chain_organization ? ' · ' + esc(c.chain_organization) : '') + '</div>';
+      html += '</div>';
+      html += '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">';
+      html += '<span style="font-size:10px;padding:2px 6px;border-radius:8px;background:' + (scorePct >= 70 ? 'rgba(16,185,129,0.18);color:#10b981' : 'rgba(251,191,36,0.18);color:#f59e0b') + ';font-weight:700">' + scorePct + '% match</span>';
+      html += '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'auto:address_zip\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Use this</button>';
+      html += '</div></div>';
+    });
+    html += '</div>';
+  }
+
+  // Typeahead search
+  html += '<div style="margin-top:12px">';
+  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Search the CMS facility registry</div>';
+  html += '<div style="position:relative">';
+  html += '<input id="cmsMatchQuery" type="text" placeholder="Facility name, CCN, or street address…" oninput="_udCmsTypeahead(this.value)" ';
+  html += 'style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--s1);color:var(--text);font-size:13px;box-sizing:border-box" />';
+  html += '<div id="cmsMatchResults" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto"></div>';
+  html += '</div>';
+  if (state || zip) {
+    html += '<div style="font-size:10px;color:var(--text3);margin-top:6px">Search scoped to ' + (state ? 'state ' + esc(state) : '') + (state && zip ? ', ' : '') + (zip ? 'zip ' + esc(String(zip).substring(0,5)) : '') + '.</div>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+// Debounced typeahead search against /api/cms-match?action=search
+let _cmsTypeaheadTimer = null;
+function _udCmsTypeahead(q) {
+  clearTimeout(_cmsTypeaheadTimer);
+  const resultsEl = document.getElementById('cmsMatchResults');
+  if (!q || q.length < 2) { if (resultsEl) resultsEl.innerHTML = ''; return; }
+  _cmsTypeaheadTimer = setTimeout(async () => {
+    const p = _udCache?.property || {};
+    const fb = _udCache?.fallback || {};
+    const state = p.state || fb.state || '';
+    const zip = p.zip_code || p.zip || fb.zip || fb.zip_code || '';
+    const url = new URL('/api/cms-match', window.location.origin);
+    url.searchParams.set('action', 'search');
+    url.searchParams.set('q', q);
+    if (state) url.searchParams.set('state', state);
+    // Scope by zip only when the user's query looks like a facility name (letters)
+    if (zip && !/^\d/.test(q)) url.searchParams.set('zip', String(zip).substring(0,5));
+    url.searchParams.set('limit', '10');
+    const headers = {};
+    if (window._lccApiKey) headers['X-LCC-Key'] = window._lccApiKey;
+    try {
+      const r = await fetch(url.toString(), { headers, signal: AbortSignal.timeout(10000) });
+      const data = await r.json();
+      const rows = (data && data.candidates) || [];
+      if (!resultsEl) return;
+      if (rows.length === 0) { resultsEl.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text3)">No facilities found.</div>'; return; }
+      resultsEl.innerHTML = rows.map(c => {
+        const line2 = [c.address, c.city, c.state, c.zip_code || c.zip].filter(Boolean).map(esc).join(', ');
+        return '<div style="display:flex;gap:10px;padding:8px 10px;background:var(--s1);border-radius:6px;border:1px solid var(--border);align-items:center">' +
+          '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:600;color:var(--text);font-size:12px">' + esc(c.facility_name || '(unnamed)') + '</div>' +
+          '<div style="font-size:11px;color:var(--text2)">' + line2 + '</div>' +
+          '<div style="font-size:10px;color:var(--text3);margin-top:1px">CCN ' + esc(c.medicare_id) + (c.chain_organization ? ' · ' + esc(c.chain_organization) : '') + '</div>' +
+          '</div>' +
+          '<button onclick="_udCmsLinkCandidate(\'' + esc(c.medicare_id) + '\', \'manual:typeahead\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer">Link</button>' +
+        '</div>';
+      }).join('');
+    } catch (err) {
+      console.warn('cms typeahead failed', err);
+      if (resultsEl) resultsEl.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--red)">Search failed.</div>';
+    }
+  }, 250);
+}
+
+/** Apply a manual link (from the typeahead or a suggested candidate) and re-render. */
+async function _udCmsLinkCandidate(medicareId, method) {
+  if (!_udCache) return;
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  if (!propertyId) { showToast('Property ID not available', 'error'); return; }
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Linking CMS facility…</p></div>';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (window._lccApiKey) headers['X-LCC-Key'] = window._lccApiKey;
+    const r = await fetch('/api/cms-match?action=link', {
+      method: 'POST', headers,
+      body: JSON.stringify({ property_id: propertyId, medicare_id: medicareId, match_method: method || 'manual' }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    // Merge response into cache and re-render
+    _udCache.cms = {
+      medicare_id: medicareId,
+      match_score: data.link?.match_score || null,
+      match_method: data.link?.match_method || method,
+      source: 'manual',
+      facility: data.facility || null,
+      quality: data.quality || null,
+      patient: data.patient || null,
+      trends: data.trends || null,
+      payer: data.payer || null,
+      cost: data.cost || null,
+      operator: data.operator || _udDetectOperator(data.facility || {}),
+      candidates: [],
+    };
+    if (data.rankings) _udCache.rankings = data.rankings;
+    _opsExtraCache = null; // invalidate extra cache so next render refetches
+    _setUdCache(_udCache);
+    showToast('Linked CMS facility ' + medicareId, 'success');
+    if (bodyEl) _udRenderOperationsAsync(bodyEl);
+  } catch (err) {
+    console.error('link failed', err);
+    showToast('Link failed: ' + (err.message || 'unknown'), 'error');
+    if (bodyEl) bodyEl.innerHTML = _udTabOperations();
+  }
+}
+
+/** Remove a cached link (admin / correction path). */
+async function _udCmsClearLink() {
+  if (!_udCache) return;
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  if (!propertyId) return;
+  if (!confirm('Remove the CMS facility link for this property? The Operations tab will re-run auto-match next open.')) return;
+  try {
+    const headers = {};
+    if (window._lccApiKey) headers['X-LCC-Key'] = window._lccApiKey;
+    const r = await fetch('/api/cms-match?action=link&property_id=' + encodeURIComponent(propertyId), {
+      method: 'DELETE', headers, signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _udCache.cms = null;
+    _udCache.rankings = null;
+    _opsExtraCache = null;
+    _setUdCache(_udCache);
+    showToast('CMS link removed', 'success');
+    const bodyEl = document.getElementById('detailBody');
+    if (bodyEl) _udRenderOperationsAsync(bodyEl);
+  } catch (err) {
+    showToast('Unlink failed: ' + err.message, 'error');
+  }
+}
+
 /** Lazy-load additional clinic data for the Operations tab, then render */
 let _opsExtraCache = null; // { medicare_id, patientHistory, trends, quality, financialDetail, costReports, payerMix, lease }
 async function _udRenderOperationsAsync(bodyEl) {
   const fb = _udCache.fallback || {};
-  const clinicId = fb.clinic_id || fb.medicare_id || fb.ccn;
+  // Resolve the medicare_id in priority order:
+  //   1) cached/resolved CMS facility match (property_cms_link)
+  //   2) rankings row (v_property_rankings.medicare_id)
+  //   3) fallback/search-card clinic identifier
+  let clinicId = (_udCache.cms && _udCache.cms.medicare_id)
+    || (_udCache.rankings && _udCache.rankings.medicare_id)
+    || fb.clinic_id || fb.medicare_id || fb.ccn;
+
+  // If we have no clinicId and no rankings yet, try to auto-match now.
+  // This covers the case where the user opens the Operations tab directly
+  // on a property that hasn't been resolved yet.
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  if (!clinicId && !_udCache.rankings && _udCache.db === 'dia' && propertyId) {
+    if (bodyEl) bodyEl.innerHTML = _opsLoadingSkeleton();
+    try { await _udResolveCmsFacility(propertyId); } catch (e) { console.warn(e); }
+    clinicId = (_udCache.cms && _udCache.cms.medicare_id)
+      || (_udCache.rankings && _udCache.rankings.medicare_id)
+      || clinicId;
+  }
 
   // If we already loaded extra data for this clinic, just render
   if (_opsExtraCache && _opsExtraCache.medicare_id === clinicId) {
@@ -954,19 +1217,71 @@ function _udTabOperations() {
       '</div>';
   }
 
-  if (!rankings) return '<div class="detail-empty">No operational data available</div>';
+  // When v_property_rankings has no row but we have a resolved CMS link, build
+  // a synthetic rankings object from the snapshot the resolver returned.
+  const cmsLink = _udCache.cms || null;
+  let effectiveRankings = rankings;
+  if (!effectiveRankings && cmsLink && cmsLink.medicare_id) {
+    const f = cmsLink.facility || {};
+    const q = cmsLink.quality || {};
+    const pm = cmsLink.payer || {};
+    const pt = cmsLink.patient || {};
+    effectiveRankings = {
+      medicare_id:                cmsLink.medicare_id,
+      latest_estimated_patients:  pt.total_patients || pt.patient_count || null,
+      number_of_chairs:           f.number_of_chairs || f.stations || null,
+      stations:                   f.stations || f.number_of_chairs || null,
+      star_rating:                q.star_rating != null ? q.star_rating : null,
+      payer_mix_medicare_pct:     pm.medicare_pct != null ? pm.medicare_pct : null,
+      payer_mix_medicaid_pct:     pm.medicaid_pct != null ? pm.medicaid_pct : null,
+      payer_mix_private_pct:      pm.private_pct != null ? pm.private_pct : null,
+      chain_organization:         f.chain_organization || null,
+      operator_name:              f.operator_name || null,
+      offers_in_center_hemodialysis:    f.offers_in_center_hemodialysis || false,
+      offers_home_hemodialysis_training: f.offers_home_hemodialysis_training || false,
+      offers_peritoneal_dialysis:       f.offers_peritoneal_dialysis || false,
+      state:                      f.state || null,
+      county:                     f.county || null,
+      _synthetic_from_cms_link:   true,
+    };
+  }
 
-  const r = rankings;
+  // If we still have nothing, show the "Match facility" fallback card.
+  if (!effectiveRankings) {
+    return _udRenderMatchFacilityCard();
+  }
+
+  const r = effectiveRankings;
   const ext = _opsExtraCache || {};
-  const trends = ext.trends || {};
-  const quality = ext.quality || {};
+  const trends = ext.trends || (cmsLink && cmsLink.trends) || {};
+  const quality = ext.quality || (cmsLink && cmsLink.quality) || {};
   const finDetail = ext.financialDetail || {};
-  const costRpt = ext.costReports || {};
-  const payerMixHcris = ext.payerMix || null;
+  const costRpt = ext.costReports || (cmsLink && cmsLink.cost) || {};
+  const payerMixHcris = ext.payerMix || (cmsLink && cmsLink.payer) || null;
   const geoPayerMix = ext.geoPayerMix || null;
   const lease = ext.lease || {};
   const patientHistory = ext.patientHistory || [];
+  const operator = (cmsLink && cmsLink.operator) || _udDetectOperator(r);
   let html = '';
+
+  // ── Link provenance banner (only shown when we resolved via cms-match) ──
+  if (cmsLink && cmsLink.match_method) {
+    const pct = cmsLink.match_score != null ? Math.round(Number(cmsLink.match_score) * 100) + '%' : '—';
+    const methodLabel = {
+      'auto:address_zip':       'Auto (address + zip)',
+      'auto:medicare_clinics':  'Auto (medicare_clinics)',
+      'manual':                 'Manually linked',
+      'manual:typeahead':       'Manually selected',
+    }[cmsLink.match_method] || cmsLink.match_method;
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;font-size:11px">';
+    html += '<span style="color:#3b82f6;font-weight:600">&#x1F517; CMS link:</span>';
+    html += '<span style="color:var(--text)">CCN ' + esc(String(cmsLink.medicare_id)) + '</span>';
+    html += '<span style="color:var(--text3)">·</span>';
+    html += '<span style="color:var(--text2)">' + esc(methodLabel) + (cmsLink.match_score != null ? ' · ' + pct + ' confidence' : '') + '</span>';
+    html += '<span style="flex:1"></span>';
+    html += '<button onclick="_udCmsClearLink()" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer">Change</button>';
+    html += '</div>';
+  }
 
   // ── Reconcile patient census: prefer latest snapshot over rankings aggregate ──
   const latestSnapshotPt = patientHistory.length > 0
@@ -1074,6 +1389,68 @@ function _udTabOperations() {
     if (k.trend) html += '<div style="margin-top:2px">' + k.trend + '</div>';
     html += '</div>';
   });
+  html += '</div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 1b. CMS FACILITY PROFILE — operator, CCN, QIP, last survey, staffing, treatment count
+  // ════════════════════════════════════════════════════════════════════════════
+
+  const facility = (cmsLink && cmsLink.facility) || {};
+  const latestPt = (cmsLink && cmsLink.patient) || {};
+  const qipScore = quality.quality_incentive_program_score
+                ?? quality.qip_total_score
+                ?? quality.qip_score
+                ?? r.qip_total_score
+                ?? r.quality_incentive_program_score
+                ?? null;
+  const lastSurveyDate = quality.last_survey_date
+                      || quality.survey_date
+                      || facility.last_survey_date
+                      || facility.last_inspection_date
+                      || r.last_survey_date
+                      || null;
+  const totalStaff = facility.total_employees
+                  || facility.staff_total
+                  || costRpt.total_employees
+                  || costRpt.staff_total
+                  || r.total_employees
+                  || null;
+  const latestTreatments = (costRpt.total_medicare_treatments != null ? costRpt.total_medicare_treatments : null)
+                        || r.ttm_total_treatments
+                        || r.estimated_annual_treatments
+                        || null;
+  const treatmentYoYPct = r.treatment_yoy_pct != null ? Number(r.treatment_yoy_pct)
+                        : (r.patient_yoy_pct != null ? Number(r.patient_yoy_pct) : null);
+  const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || facility.medicare_id || '';
+  const npi = facility.npi || r.npi || '';
+  const stationsVal = r.number_of_chairs || r.stations || facility.number_of_chairs || facility.stations || null;
+
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title" style="display:flex;align-items:center;gap:8px">';
+  html += 'CMS Facility Profile';
+  html += '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:' + operator.color + '22;color:' + operator.color + ';font-size:10px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase">' + esc(operator.label) + '</span>';
+  html += '</div>';
+  html += '<div class="detail-grid">';
+  if (ccn) html += _row('Medicare ID (CCN)', ccn);
+  if (npi) html += _row('NPI', npi);
+  html += _row('Operator / Chain', r.chain_organization || r.operator_name || facility.chain_organization || facility.operator_name);
+  html += _row('Stations', stationsVal != null ? fmtN(stationsVal) : null);
+  html += _row('Total Staff', totalStaff != null ? fmtN(totalStaff) : null);
+  if (latestTreatments != null) {
+    const txTrend = treatmentYoYPct != null
+      ? ' <span style="font-size:11px;color:' + (treatmentYoYPct >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (treatmentYoYPct >= 0 ? '&#9650; +' : '&#9660; ') + treatmentYoYPct.toFixed(1) + '% YoY</span>'
+      : '';
+    html += _rowHtml('Treatments (latest)', fmtN(latestTreatments) + txTrend);
+  }
+  if (qipScore != null) {
+    const qipNum = Number(qipScore);
+    const qipColor = qipNum >= 80 ? 'var(--green)' : qipNum >= 60 ? 'var(--yellow)' : 'var(--red)';
+    html += _rowHtml('QIP Total Score', '<span style="color:' + qipColor + ';font-weight:600">' + qipNum.toFixed(0) + '</span> <span style="font-size:10px;color:var(--text3)">/ 100</span>');
+  }
+  const starVal2 = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
+  if (starVal2 != null) html += _rowHtml('5-Star Rating', _starsCompact(starVal2));
+  if (lastSurveyDate) html += _row('Last CMS Survey', _fmtDate(lastSurveyDate));
+  html += '</div>';
   html += '</div>';
 
   // ════════════════════════════════════════════════════════════════════════════

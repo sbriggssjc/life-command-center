@@ -15,6 +15,7 @@
 //   /api/gov-write   → /api/admin?_route=edge-data&_edgeRoute=gov-write
 //   /api/gov-evidence→ /api/admin?_route=edge-data&_edgeRoute=gov-evidence
 //   /api/daily-briefing → /api/admin?_route=edge-brief
+//   /api/cms-match   → /api/admin?_route=cms-match
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
@@ -71,6 +72,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'treasury':    return handleTreasury(req, res);
     case 'edge-data':   return handleEdgeDataProxy(req, res);
     case 'edge-brief':  return handleEdgeBriefingProxy(req, res);
+    case 'cms-match':   return handleCmsMatch(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -828,4 +830,457 @@ async function handleEdgeBriefingProxy(req, res) {
     console.error('[admin/edge-brief] Edge proxy failed:', err.message);
     return res.status(502).json({ error: 'Edge function unavailable', detail: err.message });
   }
+}
+
+// ============================================================================
+// CMS MATCH — resolve property_id → CMS medicare_id via fuzzy address match
+// ============================================================================
+// Routes:
+//   GET  /api/cms-match?action=resolve&property_id=UUID
+//     → { medicare_id, match_score, match_method, facility, cms } | { match: null, candidates: [...] }
+//   GET  /api/cms-match?action=search&q=string&state=CA&zip=92392&limit=10
+//     → { candidates: [ { medicare_id, facility_name, address, ... }, ... ] }
+//   POST /api/cms-match?action=link
+//     body: { property_id, medicare_id, match_method?: 'manual' }
+//     → { ok: true, link: {...} }
+//   DELETE /api/cms-match?action=link&property_id=UUID
+//     → { ok: true }
+// ----------------------------------------------------------------------------
+
+const US_STREET_SUFFIX_MAP = {
+  st: 'street', str: 'street', 'st.': 'street',
+  rd: 'road', 'rd.': 'road',
+  ave: 'avenue', av: 'avenue', 'ave.': 'avenue',
+  blvd: 'boulevard', 'blvd.': 'boulevard',
+  dr: 'drive', 'dr.': 'drive',
+  ln: 'lane', 'ln.': 'lane',
+  ct: 'court', 'ct.': 'court',
+  cir: 'circle', 'cir.': 'circle',
+  pkwy: 'parkway', 'pkwy.': 'parkway',
+  hwy: 'highway', 'hwy.': 'highway',
+  pl: 'place', 'pl.': 'place',
+  ter: 'terrace', 'ter.': 'terrace',
+  trl: 'trail', 'trl.': 'trail',
+  way: 'way', wy: 'way',
+  n: 'north', s: 'south', e: 'east', w: 'west',
+  ne: 'northeast', nw: 'northwest',
+  se: 'southeast', sw: 'southwest',
+};
+
+function normalizeAddress(addr) {
+  if (!addr || typeof addr !== 'string') return { raw: '', tokens: [], number: null, canonical: '' };
+  const raw = addr.trim().toLowerCase();
+  // Strip unit suffixes (#, ste, suite, unit, apt) — everything after
+  const stripped = raw
+    .replace(/[.,]/g, ' ')
+    .replace(/\b(suite|ste|unit|apt|apartment|#)\s*[a-z0-9-]+/gi, ' ')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const parts = stripped.split(/\s+/).filter(Boolean);
+  // Extract leading house number
+  let number = null;
+  if (parts.length && /^\d+[a-z]?$/.test(parts[0])) {
+    number = parts[0].replace(/[a-z]$/, '');
+  }
+  // Expand abbreviations
+  const expanded = parts.map(t => US_STREET_SUFFIX_MAP[t] || t);
+  const canonical = expanded.join(' ');
+  return { raw, tokens: expanded, number, canonical };
+}
+
+function jaccardSimilarity(aTokens, bTokens) {
+  if (!aTokens.length || !bTokens.length) return 0;
+  const a = new Set(aTokens);
+  const b = new Set(bTokens);
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+function scoreAddressMatch(propAddr, candAddr, propZip, candZip) {
+  const pn = normalizeAddress(propAddr);
+  const cn = normalizeAddress(candAddr);
+  if (!pn.tokens.length || !cn.tokens.length) return 0;
+
+  // House number: must match if both present
+  let numScore = 0;
+  if (pn.number && cn.number) {
+    numScore = pn.number === cn.number ? 1 : 0;
+  } else {
+    numScore = 0.5; // partial credit if one is missing
+  }
+
+  // Street name tokens (drop leading number)
+  const pTail = pn.tokens.filter(t => !/^\d/.test(t));
+  const cTail = cn.tokens.filter(t => !/^\d/.test(t));
+  const nameScore = jaccardSimilarity(pTail, cTail);
+
+  // Zip exact match
+  const zipScore = (propZip && candZip && String(propZip).substring(0, 5) === String(candZip).substring(0, 5)) ? 1 : 0;
+
+  // Weighted: number 40%, street name 50%, zip 10%
+  return numScore * 0.40 + nameScore * 0.50 + zipScore * 0.10;
+}
+
+function requireDiaEnv(res) {
+  const url = process.env.DIA_SUPABASE_URL;
+  const key = process.env.DIA_SUPABASE_KEY;
+  if (!url || !key) {
+    res.status(503).json({ error: 'DIA_SUPABASE_URL / DIA_SUPABASE_KEY not configured' });
+    return null;
+  }
+  return { url, key };
+}
+
+async function diaRest(env, method, path, body) {
+  const fullUrl = `${env.url.replace(/\/+$/, '')}/rest/v1/${path}`;
+  const opts = {
+    method,
+    headers: {
+      apikey: env.key,
+      Authorization: `Bearer ${env.key}`,
+      'Content-Type': 'application/json',
+      Prefer: method === 'GET' ? '' : 'return=representation,resolution=merge-duplicates',
+    },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(fullUrl, opts);
+  const text = await r.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: r.ok, status: r.status, data };
+}
+
+async function fetchPropertyForMatch(env, propertyId) {
+  const select = 'property_id,address,city,state,zip_code,zip,property_name';
+  const r = await diaRest(env, 'GET',
+    `properties?select=${select}&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
+  if (!r.ok || !Array.isArray(r.data) || !r.data.length) return null;
+  const p = r.data[0];
+  return {
+    property_id: p.property_id,
+    address: p.address || p.property_name || '',
+    city: p.city || '',
+    state: p.state || '',
+    zip: p.zip_code || p.zip || '',
+  };
+}
+
+async function fetchCandidateClinics(env, { zip, state, city }) {
+  const cols = 'medicare_id,facility_name,address,city,state,zip_code,zip,chain_organization,operator_name,npi';
+  // Prefer zip match (±0). Fall back to state+city.
+  const filters = [];
+  const zip5 = zip ? String(zip).substring(0, 5) : '';
+  if (zip5) {
+    filters.push(`or=(zip_code.like.${zip5}%25,zip.like.${zip5}%25)`);
+  } else if (state) {
+    filters.push(`state=eq.${encodeURIComponent(state)}`);
+    if (city) filters.push(`city=ilike.${encodeURIComponent(city)}`);
+  }
+  const query = filters.length
+    ? `medicare_clinics?select=${cols}&${filters.join('&')}&limit=200`
+    : null;
+  if (!query) return [];
+  const r = await diaRest(env, 'GET', query);
+  if (!r.ok || !Array.isArray(r.data)) return [];
+  return r.data;
+}
+
+async function fetchCmsSnapshot(env, medicareId) {
+  // Pull a compact operational snapshot for the Operations tab.
+  // Best-effort across several tables — any missing piece returns null.
+  const id = encodeURIComponent(medicareId);
+  const jobs = [
+    diaRest(env, 'GET',
+      `medicare_clinics?select=*&medicare_id=eq.${id}&limit=1`),
+    diaRest(env, 'GET',
+      `v_property_rankings?select=*&medicare_id=eq.${id}&limit=1`),
+    diaRest(env, 'GET',
+      `clinic_quality_metrics?select=*&medicare_id=eq.${id}&order=snapshot_date.desc&limit=1`),
+    diaRest(env, 'GET',
+      `facility_patient_counts?select=*&medicare_id=eq.${id}&order=snapshot_date.desc&limit=1`),
+    diaRest(env, 'GET',
+      `clinic_trends?select=*&medicare_id=eq.${id}&limit=1`),
+    diaRest(env, 'GET',
+      `v_clinic_payer_mix?select=*&medicare_id=eq.${id}&limit=1`),
+    diaRest(env, 'GET',
+      `facility_cost_reports?select=*&medicare_id=eq.${id}&order=fiscal_year.desc&limit=1`),
+  ];
+  const [clinic, rankings, quality, patient, trends, payer, cost] = await Promise.all(
+    jobs.map(j => j.catch(() => ({ ok: false, data: [] })))
+  );
+  const first = r => (r && r.ok && Array.isArray(r.data) && r.data[0]) || null;
+  return {
+    clinic: first(clinic),
+    rankings: first(rankings),
+    quality: first(quality),
+    patient: first(patient),
+    trends: first(trends),
+    payer: first(payer),
+    cost: first(cost),
+  };
+}
+
+function detectOperator(clinic, rankings) {
+  const name = (
+    (rankings && (rankings.chain_organization || rankings.operator_name)) ||
+    (clinic && (clinic.chain_organization || clinic.operator_name)) ||
+    ''
+  ).toString().toLowerCase();
+  if (!name) return { label: 'Unknown', key: 'unknown' };
+  if (/davita/.test(name)) return { label: 'DaVita', key: 'davita' };
+  if (/fresenius|fmc|fkc/.test(name)) return { label: 'Fresenius (FMC)', key: 'fmc' };
+  if (/u\.?s\.?\s*renal|usrc/.test(name)) return { label: 'US Renal', key: 'usrenal' };
+  if (/satellite/.test(name)) return { label: 'Satellite', key: 'satellite' };
+  if (/dialyze\s*direct/.test(name)) return { label: 'Dialyze Direct', key: 'dialyzedirect' };
+  return { label: 'Independent', key: 'indy' };
+}
+
+async function handleCmsMatch(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const action = req.query.action || 'resolve';
+  const env = requireDiaEnv(res);
+  if (!env) return;
+
+  // ── action=search (typeahead) ─────────────────────────────────────────────
+  if (action === 'search') {
+    if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+    const q = (req.query.q || '').toString().trim();
+    const state = (req.query.state || '').toString().trim();
+    const zip = (req.query.zip || '').toString().trim();
+    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 25);
+    if (!q && !zip) {
+      return res.status(400).json({ error: 'q or zip required' });
+    }
+    const cols = 'medicare_id,facility_name,address,city,state,zip_code,zip,chain_organization,operator_name,npi';
+    const filters = [];
+    if (q) {
+      // match facility_name OR address OR medicare_id
+      const qEnc = encodeURIComponent(q);
+      filters.push(
+        `or=(facility_name.ilike.*${qEnc}*,address.ilike.*${qEnc}*,medicare_id.eq.${qEnc})`
+      );
+    }
+    if (state) filters.push(`state=eq.${encodeURIComponent(state)}`);
+    if (zip) {
+      const zip5 = zip.substring(0, 5);
+      filters.push(`or=(zip_code.like.${zip5}%25,zip.like.${zip5}%25)`);
+    }
+    const qs = `medicare_clinics?select=${cols}&${filters.join('&')}&limit=${limit}`;
+    try {
+      const r = await diaRest(env, 'GET', qs);
+      if (!r.ok) return res.status(r.status).json({ error: 'Search failed', detail: r.data });
+      const rows = Array.isArray(r.data) ? r.data : [];
+      return res.status(200).json({ candidates: rows });
+    } catch (err) {
+      console.error('[cms-match/search] error:', err.message);
+      return res.status(502).json({ error: 'Search unavailable', detail: err.message });
+    }
+  }
+
+  // ── action=link (manual / upsert) ─────────────────────────────────────────
+  if (action === 'link') {
+    if (req.method === 'DELETE') {
+      const propertyId = req.query.property_id;
+      if (!propertyId) return res.status(400).json({ error: 'property_id required' });
+      try {
+        const r = await diaRest(env, 'DELETE',
+          `property_cms_link?property_id=eq.${encodeURIComponent(propertyId)}`);
+        if (!r.ok) return res.status(r.status).json({ error: 'Delete failed', detail: r.data });
+        return res.status(200).json({ ok: true });
+      } catch (err) {
+        return res.status(502).json({ error: 'Delete failed', detail: err.message });
+      }
+    }
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST or DELETE' });
+    const body = req.body || {};
+    const { property_id, medicare_id, match_method = 'manual', match_notes } = body;
+    if (!property_id || !medicare_id) {
+      return res.status(400).json({ error: 'property_id and medicare_id required' });
+    }
+    if (!['manual', 'manual:typeahead', 'auto:address_zip', 'auto:medicare_clinics'].includes(match_method)) {
+      return res.status(400).json({ error: 'invalid match_method' });
+    }
+    const row = {
+      property_id,
+      medicare_id,
+      match_method,
+      match_notes: match_notes || null,
+      match_score: match_method.startsWith('manual') ? null : (body.match_score ?? null),
+      matched_by: user.email || user.display_name || user.id,
+      matched_at: new Date().toISOString(),
+    };
+    try {
+      const r = await diaRest(env, 'POST', 'property_cms_link', row);
+      if (!r.ok) return res.status(r.status).json({ error: 'Upsert failed', detail: r.data });
+      // Audit history
+      diaRest(env, 'POST', 'property_cms_link_history', {
+        property_id, medicare_id,
+        match_method, match_score: row.match_score,
+        action: 'created', matched_by: row.matched_by,
+      }).catch(() => {});
+      const snap = await fetchCmsSnapshot(env, medicare_id);
+      const operator = detectOperator(snap.clinic, snap.rankings);
+      return res.status(200).json({
+        ok: true,
+        link: Array.isArray(r.data) ? r.data[0] : r.data,
+        facility: snap.clinic,
+        rankings: snap.rankings,
+        quality: snap.quality,
+        patient: snap.patient,
+        trends: snap.trends,
+        payer: snap.payer,
+        cost: snap.cost,
+        operator,
+      });
+    } catch (err) {
+      console.error('[cms-match/link] error:', err.message);
+      return res.status(502).json({ error: 'Link failed', detail: err.message });
+    }
+  }
+
+  // ── action=resolve (auto fuzzy match + cache) ─────────────────────────────
+  if (action === 'resolve') {
+    if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+    const propertyId = req.query.property_id;
+    if (!propertyId) return res.status(400).json({ error: 'property_id required' });
+
+    try {
+      // 1. Check cache
+      const cached = await diaRest(env, 'GET',
+        `property_cms_link?select=*&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
+      if (cached.ok && Array.isArray(cached.data) && cached.data[0]) {
+        const link = cached.data[0];
+        const snap = await fetchCmsSnapshot(env, link.medicare_id);
+        return res.status(200).json({
+          source: 'cache',
+          medicare_id: link.medicare_id,
+          match_score: link.match_score,
+          match_method: link.match_method,
+          facility: snap.clinic,
+          rankings: snap.rankings,
+          quality: snap.quality,
+          patient: snap.patient,
+          trends: snap.trends,
+          payer: snap.payer,
+          cost: snap.cost,
+          operator: detectOperator(snap.clinic, snap.rankings),
+        });
+      }
+
+      // 2. Load the property
+      const prop = await fetchPropertyForMatch(env, propertyId);
+      if (!prop) return res.status(404).json({ error: 'property not found' });
+
+      // 3. Check if medicare_clinics already links this property_id
+      const mc = await diaRest(env, 'GET',
+        `medicare_clinics?select=medicare_id,facility_name,address,city,state,zip_code,zip,chain_organization,operator_name,npi&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
+      if (mc.ok && Array.isArray(mc.data) && mc.data[0] && mc.data[0].medicare_id) {
+        const mid = mc.data[0].medicare_id;
+        await diaRest(env, 'POST', 'property_cms_link', {
+          property_id: propertyId,
+          medicare_id: mid,
+          match_method: 'auto:medicare_clinics',
+          match_score: 1.0,
+          matched_by: 'system',
+          matched_at: new Date().toISOString(),
+        }).catch(() => {});
+        const snap = await fetchCmsSnapshot(env, mid);
+        return res.status(200).json({
+          source: 'medicare_clinics',
+          medicare_id: mid,
+          match_score: 1.0,
+          match_method: 'auto:medicare_clinics',
+          facility: snap.clinic || mc.data[0],
+          rankings: snap.rankings,
+          quality: snap.quality,
+          patient: snap.patient,
+          trends: snap.trends,
+          payer: snap.payer,
+          cost: snap.cost,
+          operator: detectOperator(snap.clinic || mc.data[0], snap.rankings),
+        });
+      }
+
+      // 4. Fuzzy address match — pull candidates by zip (or state+city)
+      const candidates = await fetchCandidateClinics(env, {
+        zip: prop.zip, state: prop.state, city: prop.city,
+      });
+
+      const scored = candidates.map(c => ({
+        ...c,
+        _score: scoreAddressMatch(prop.address, c.address, prop.zip, c.zip_code || c.zip),
+      }))
+        .sort((a, b) => b._score - a._score);
+
+      const top = scored[0];
+      const CONFIDENT_THRESHOLD = 0.80;
+      const CANDIDATE_THRESHOLD = 0.55;
+
+      if (top && top._score >= CONFIDENT_THRESHOLD) {
+        // Cache and return
+        await diaRest(env, 'POST', 'property_cms_link', {
+          property_id: propertyId,
+          medicare_id: top.medicare_id,
+          match_method: 'auto:address_zip',
+          match_score: Number(top._score.toFixed(3)),
+          match_notes: `auto-matched ${prop.address} → ${top.address}`,
+          matched_by: user.email || user.display_name || user.id,
+          matched_at: new Date().toISOString(),
+        }).catch(err => console.warn('[cms-match] cache write failed:', err.message));
+        diaRest(env, 'POST', 'property_cms_link_history', {
+          property_id: propertyId, medicare_id: top.medicare_id,
+          match_method: 'auto:address_zip', match_score: Number(top._score.toFixed(3)),
+          action: 'created', matched_by: user.email || user.display_name || user.id,
+        }).catch(() => {});
+        const snap = await fetchCmsSnapshot(env, top.medicare_id);
+        return res.status(200).json({
+          source: 'fuzzy',
+          medicare_id: top.medicare_id,
+          match_score: Number(top._score.toFixed(3)),
+          match_method: 'auto:address_zip',
+          facility: snap.clinic || top,
+          rankings: snap.rankings,
+          quality: snap.quality,
+          patient: snap.patient,
+          trends: snap.trends,
+          payer: snap.payer,
+          cost: snap.cost,
+          operator: detectOperator(snap.clinic || top, snap.rankings),
+        });
+      }
+
+      // 5. No confident match — return top candidates for manual selection
+      const hints = scored
+        .filter(s => s._score >= CANDIDATE_THRESHOLD)
+        .slice(0, 5)
+        .map(s => ({
+          medicare_id: s.medicare_id,
+          facility_name: s.facility_name,
+          address: s.address,
+          city: s.city,
+          state: s.state,
+          zip: s.zip_code || s.zip,
+          chain_organization: s.chain_organization,
+          operator_name: s.operator_name,
+          match_score: Number(s._score.toFixed(3)),
+        }));
+      return res.status(200).json({
+        source: 'none',
+        medicare_id: null,
+        match: null,
+        property: prop,
+        candidates: hints,
+      });
+    } catch (err) {
+      console.error('[cms-match/resolve] error:', err.message, err.stack);
+      return res.status(502).json({ error: 'Resolve failed', detail: err.message });
+    }
+  }
+
+  return res.status(400).json({ error: 'Unknown action. Use: resolve, search, link' });
 }
