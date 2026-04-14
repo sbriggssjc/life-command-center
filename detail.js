@@ -199,10 +199,15 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     };
 
     const property = safeExtract(0)[0] || null;
-    const leases = safeExtract(1) || [];
+    const leasesRaw = safeExtract(1) || [];
     const ownership = safeExtract(2)[0] || null;
     const chain = safeExtract(3) || [];
     const rankings = safeExtract(4)[0] || null;
+
+    // Strip buyer-side stubs and duplicate rows. The DB unique index prevents
+    // new duplicates, but historical rows may still arrive from v_lease_detail
+    // until the backfill ships. See supabase/migrations/20260414213000_*.sql.
+    const leases = _udFilterAndDedupeLeases(leasesRaw);
 
     if (_partialFail) showToast('Some detail sections failed to load — showing available data', 'error');
 
@@ -231,6 +236,23 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     }
 
     _setUdCache({ db, ids, property: synthProperty, leases, ownership, chain, rankings, fallback, entityMeta, _fallbackOnly: allEmpty });
+
+    // Kick off a best-effort fetch for lease extensions + rent schedule.
+    // These fill in the "No. of Extensions / Last Extension" and the Rent Roll
+    // sub-view on the Lease tab. Never blocks the main render; on failure the
+    // Lease tab simply renders without the enriched values.
+    if (db === 'dia' && Array.isArray(leases) && leases.length > 0) {
+      _udFetchLeaseEnrichment(leases).then((enrichment) => {
+        if (!_udCache) return;
+        _setUdCache({ ..._udCache, leaseExtensions: enrichment.extensions, leaseRentSchedule: enrichment.schedule });
+        // Re-render if the Lease tab is currently active
+        const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
+        if (activeTabEl && activeTabEl.textContent.trim() === 'Lease') {
+          const bodyEl = document.getElementById('detailBody');
+          if (bodyEl) bodyEl.innerHTML = _udRenderTab('Lease');
+        }
+      }).catch((e) => { console.warn('lease enrichment fetch failed', e); });
+    }
 
     // Update header with real data (page_title or fallback to tenant/address)
     if (synthProperty) {
@@ -783,6 +805,377 @@ function _udTabFallbackSummary(fb) {
 
 // ─── LEASE TAB ───────────────────────────────────────────────────────────────
 
+// ── Placeholder-tenant + dedup helpers ────────────────────────────────────
+//
+// Mirrors the public.is_placeholder_tenant() SQL function from the
+// 20260414213000 migration. Keep the two in sync — a placeholder tenant here
+// must also be flagged in SQL so the dedup + unique index stays coherent.
+const _UD_PLACEHOLDER_TENANTS = new Set([
+  'buyerest.', 'buyer est.', 'buyer est', 'buyerest',
+  'est.', 'est', 'tbd', 'tbd.', 'unknown', 'n/a', 'na'
+]);
+const _UD_PLACEHOLDER_DATA_SOURCES = new Set([
+  'buyer_est', 'sales_comp_est'
+]);
+
+function _udIsPlaceholderTenant(t) {
+  if (t == null) return true;
+  const s = String(t).trim();
+  if (!s) return true;
+  const lo = s.toLowerCase();
+  if (_UD_PLACEHOLDER_TENANTS.has(lo)) return true;
+  if (lo.startsWith('buyer est')) return true;
+  if (lo.startsWith('buyerest')) return true;
+  return false;
+}
+
+/**
+ * Filter out buyer-estimate / placeholder leases and dedupe remaining rows by
+ * (property_id, normalized tenant, lease_start). Mirrors the DB unique index
+ * so stale rows in v_lease_detail don't slip through to the UI.
+ */
+function _udFilterAndDedupeLeases(leases) {
+  if (!Array.isArray(leases) || leases.length === 0) return [];
+
+  const kept = [];
+  const seen = new Map(); // key -> index into kept[]
+
+  // Sort so that higher-authority rows come first (kept on collision).
+  const ranked = leases.slice().sort((a, b) => {
+    const tierA = _udIsPlaceholderTenant(a?.tenant) ? 2
+                : _UD_PLACEHOLDER_DATA_SOURCES.has(String(a?.data_source || '').toLowerCase()) ? 1 : 0;
+    const tierB = _udIsPlaceholderTenant(b?.tenant) ? 2
+                : _UD_PLACEHOLDER_DATA_SOURCES.has(String(b?.data_source || '').toLowerCase()) ? 1 : 0;
+    if (tierA !== tierB) return tierA - tierB;
+
+    const confRank = (c) => ({ documented: 0, estimated: 1, inferred: 2 })[c] ?? 3;
+    const cA = confRank(a?.source_confidence);
+    const cB = confRank(b?.source_confidence);
+    if (cA !== cB) return cA - cB;
+
+    const aHasRent = (a?.annual_rent != null || a?.rent_psf != null) ? 0 : 1;
+    const bHasRent = (b?.annual_rent != null || b?.rent_psf != null) ? 0 : 1;
+    if (aHasRent !== bHasRent) return aHasRent - bHasRent;
+
+    return (a?.lease_id || 0) - (b?.lease_id || 0);
+  });
+
+  for (const l of ranked) {
+    // Filter 1: explicit buyer-estimate data_source
+    const ds = String(l?.data_source || '').toLowerCase();
+    if (_UD_PLACEHOLDER_DATA_SOURCES.has(ds)) continue;
+    // Filter 2: placeholder tenant string
+    if (_udIsPlaceholderTenant(l?.tenant)) continue;
+
+    const tenantKey = String(l.tenant).trim().toLowerCase();
+    const startKey = l.lease_start || '1900-01-01';
+    const key = `${l.property_id || ''}|${tenantKey}|${startKey}`;
+    if (seen.has(key)) continue;
+    seen.set(key, kept.length);
+    kept.push(l);
+  }
+  return kept;
+}
+
+/**
+ * Best-effort fetch of lease_extensions + lease_rent_schedule for the leases
+ * currently in the cache. Returns {extensions, schedule} keyed by lease_id.
+ * Tolerates missing views (returns empty maps) so the Lease tab still renders
+ * before the migration is applied.
+ */
+async function _udFetchLeaseEnrichment(leases) {
+  const extensions = new Map();
+  const schedule = new Map();
+  if (!Array.isArray(leases) || leases.length === 0) return { extensions, schedule };
+
+  const leaseIds = leases.map(l => l.lease_id).filter(id => id != null);
+  if (leaseIds.length === 0) return { extensions, schedule };
+
+  const idList = leaseIds.join(',');
+  const filter = `lease_id=in.(${idList})`;
+
+  const [extRes, schRes] = await Promise.allSettled([
+    diaQuery('v_lease_extensions_summary', '*', { filter, limit: 100 }).catch(() => []),
+    diaQuery('lease_rent_schedule', '*', { filter, order: 'lease_year.asc', limit: 500 }).catch(() => []),
+  ]);
+
+  const extract = (r) => {
+    if (r.status !== 'fulfilled') return [];
+    const v = r.value;
+    if (Array.isArray(v)) return v;
+    if (v && v.data) return v.data;
+    return [];
+  };
+
+  for (const row of extract(extRes)) {
+    extensions.set(row.lease_id, {
+      extension_count: Number(row.extension_count_live ?? 0),
+      last_extension_date: row.last_extension_date_live || null,
+    });
+  }
+  for (const row of extract(schRes)) {
+    if (!schedule.has(row.lease_id)) schedule.set(row.lease_id, []);
+    schedule.get(row.lease_id).push(row);
+  }
+  return { extensions, schedule };
+}
+
+// ── Rent escalation parser ────────────────────────────────────────────────
+//
+// Parses freeform rent-escalation strings into a structured schedule.
+// Supported phrasings (case-insensitive):
+//   "2% annually"            → { stepPct: 0.02, intervalYears: 1 }
+//   "2% per year"            → same
+//   "3.5% yearly"            → { stepPct: 0.035, intervalYears: 1 }
+//   "10% every 5 years"      → { stepPct: 0.10, intervalYears: 5 }
+//   "$0.50/sf per year"      → { stepPsf: 0.50, intervalYears: 1 }
+//   "CPI" / "FMV" / unparsed → null (caller falls back to flat rent)
+function _udParseRentEscalation(text) {
+  if (!text) return null;
+  const s = String(text).toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  if (/\bcpi\b/.test(s) || /\bfmv\b/.test(s) || /\bmarket\b/.test(s)) {
+    // Index-linked or FMV reset — not a deterministic step, skip.
+    return null;
+  }
+
+  // "X% every N years"
+  let m = s.match(/(\d+(?:\.\d+)?)\s*%\s*every\s*(\d+)\s*year/);
+  if (m) return { stepPct: parseFloat(m[1]) / 100, intervalYears: parseInt(m[2], 10) };
+
+  // "X% annually" / "X% per year" / "X% yearly" / "X% / year"
+  m = s.match(/(\d+(?:\.\d+)?)\s*%\s*(?:annually|per\s*year|yearly|\/\s*year|a\s*year|p\.?a\.?)/);
+  if (m) return { stepPct: parseFloat(m[1]) / 100, intervalYears: 1 };
+
+  // "$X/sf per year" (rent/psf bump in dollars, e.g. "$0.50/SF annually")
+  m = s.match(/\$?(\d+(?:\.\d+)?)\s*\/\s*sf\s*(?:annually|per\s*year|yearly)/);
+  if (m) return { stepPsf: parseFloat(m[1]), intervalYears: 1 };
+
+  // Bare "X%" with no interval — assume annual (safe default for triple-net).
+  m = s.match(/^(\d+(?:\.\d+)?)\s*%$/);
+  if (m) return { stepPct: parseFloat(m[1]) / 100, intervalYears: 1 };
+
+  return null;
+}
+
+/**
+ * Build a structured rent schedule for a lease. Prefers rows from
+ * lease_rent_schedule when present; otherwise synthesizes one from the
+ * parsed escalation string + base rent + term.
+ * Returns an array of { year, period_start, period_end, base_rent, rent_psf,
+ * bump_pct, cumulative_rent, is_option_window }.
+ */
+function _udBuildRentSchedule(lease, storedRows, em) {
+  // Case 1: DB-sourced rows — use as-is (authoritative).
+  if (Array.isArray(storedRows) && storedRows.length > 0) {
+    let cum = 0;
+    return storedRows
+      .slice()
+      .sort((a, b) => (a.lease_year || 0) - (b.lease_year || 0))
+      .map(r => {
+        const base = r.base_rent != null ? Number(r.base_rent) : null;
+        cum += base || 0;
+        return {
+          year: r.lease_year,
+          period_start: r.period_start,
+          period_end: r.period_end,
+          base_rent: base,
+          rent_psf: r.rent_psf != null ? Number(r.rent_psf) : null,
+          bump_pct: r.bump_pct != null ? Number(r.bump_pct) : null,
+          cumulative_rent: r.cumulative_rent != null ? Number(r.cumulative_rent) : cum,
+          is_option_window: !!r.is_option_window,
+          source: r.source || 'db',
+        };
+      });
+  }
+
+  // Case 2: synthesize from base rent + escalation string.
+  const baseRent =
+    (lease?.annual_rent != null ? Number(lease.annual_rent) : null) ??
+    (em?.annual_rent != null ? Number(em.annual_rent) : null);
+  if (!baseRent || baseRent <= 0) return [];
+
+  const start = lease?.lease_start || em?.lease_commencement;
+  const end   = lease?.lease_expiration || em?.lease_expiration;
+  if (!start) return [];
+  const startD = new Date(start);
+  const endD   = end ? new Date(end) : null;
+  if (isNaN(startD)) return [];
+  let termYears;
+  if (endD && !isNaN(endD)) {
+    termYears = Math.max(1, Math.round((endD - startD) / (365.25 * 24 * 3600 * 1000)));
+  } else if (lease?.initial_term_years) {
+    termYears = Math.round(Number(lease.initial_term_years));
+  } else {
+    termYears = 10; // reasonable default for NNN single-tenant
+  }
+  termYears = Math.min(termYears, 40); // cap runaway synthesis
+
+  // Prefer verified rent_cagr; else parse escalation strings; else 0%.
+  let stepPct = 0;
+  let intervalYears = 1;
+  let stepPsf = 0;
+  if (lease?.rent_cagr != null) {
+    stepPct = Number(lease.rent_cagr);
+    intervalYears = 1;
+  } else {
+    const parsed =
+      _udParseRentEscalation(lease?.renewal_options) ||
+      _udParseRentEscalation(em?.rent_escalations);
+    if (parsed) {
+      stepPct = parsed.stepPct || 0;
+      stepPsf = parsed.stepPsf || 0;
+      intervalYears = parsed.intervalYears || 1;
+    }
+  }
+
+  const leasedSF = lease?.leased_area != null ? Number(lease.leased_area)
+                 : (em?.sf_leased != null ? Number(em.sf_leased) : null);
+
+  const rows = [];
+  let rent = baseRent;
+  let cum = 0;
+  for (let y = 1; y <= termYears; y++) {
+    // Apply step at each interval boundary (y > 1 and (y-1) % interval === 0)
+    if (y > 1 && (y - 1) % intervalYears === 0) {
+      if (stepPct) rent = rent * (1 + stepPct);
+      else if (stepPsf && leasedSF) rent = rent + (stepPsf * leasedSF);
+    }
+    const yearStart = new Date(startD);
+    yearStart.setFullYear(startD.getFullYear() + (y - 1));
+    const yearEnd = new Date(startD);
+    yearEnd.setFullYear(startD.getFullYear() + y);
+    yearEnd.setDate(yearEnd.getDate() - 1);
+    cum += rent;
+    rows.push({
+      year: y,
+      period_start: yearStart.toISOString().slice(0, 10),
+      period_end:   yearEnd.toISOString().slice(0, 10),
+      base_rent: Math.round(rent * 100) / 100,
+      rent_psf:  leasedSF ? Math.round((rent / leasedSF) * 100) / 100 : null,
+      bump_pct:  (y > 1 && (y - 1) % intervalYears === 0) ? stepPct : 0,
+      cumulative_rent: Math.round(cum * 100) / 100,
+      is_option_window: false,
+      source: 'parsed_estimate',
+    });
+  }
+  return rows;
+}
+
+/**
+ * Render a stepped-line SVG chart of annual rent vs lease year.
+ * Pure SVG — no external chart library.
+ */
+function _udRenderRentChart(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const W = 560, H = 200, PAD_L = 60, PAD_R = 20, PAD_T = 20, PAD_B = 36;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+
+  const rents = rows.map(r => r.base_rent || 0);
+  const minR = Math.min(...rents);
+  const maxR = Math.max(...rents);
+  const yMin = Math.max(0, minR - (maxR - minR) * 0.1);
+  const yMax = maxR + (maxR - minR) * 0.1 || maxR + 1;
+  const xFor = (i) => PAD_L + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+  const yFor = (v) => PAD_T + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
+
+  // Build stepped path: move to first point, then for each subsequent year,
+  // draw horizontal to the new x, then vertical to the new y.
+  let d = '';
+  rows.forEach((r, i) => {
+    const x = xFor(i);
+    const y = yFor(r.base_rent || 0);
+    if (i === 0) d += `M ${x.toFixed(1)} ${y.toFixed(1)}`;
+    else          d += ` H ${x.toFixed(1)} V ${y.toFixed(1)}`;
+  });
+
+  // Y-axis ticks (3 levels)
+  const ticks = [yMin, (yMin + yMax) / 2, yMax];
+  const yAxisLabels = ticks.map(v => {
+    const y = yFor(v);
+    const label = '$' + Math.round(v).toLocaleString();
+    return `<text x="${PAD_L - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--text3,#888)">${label}</text>` +
+           `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W - PAD_R}" y2="${y.toFixed(1)}" stroke="var(--border,#2a2a2a)" stroke-dasharray="2,3" stroke-width="1"/>`;
+  }).join('');
+
+  // X-axis labels (every few years)
+  const xStep = rows.length <= 10 ? 1 : Math.ceil(rows.length / 10);
+  const xAxisLabels = rows.map((r, i) => {
+    if (i % xStep !== 0 && i !== rows.length - 1) return '';
+    const x = xFor(i);
+    return `<text x="${x.toFixed(1)}" y="${(H - PAD_B + 16).toFixed(1)}" text-anchor="middle" font-size="10" fill="var(--text3,#888)">Y${r.year}</text>`;
+  }).join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="max-width:100%;background:var(--s2,#141414);border:1px solid var(--border,#2a2a2a);border-radius:8px">
+    ${yAxisLabels}
+    <path d="${d}" stroke="var(--purple,#a78bfa)" stroke-width="2" fill="none" stroke-linejoin="miter"/>
+    ${rows.map((r, i) => `<circle cx="${xFor(i).toFixed(1)}" cy="${yFor(r.base_rent || 0).toFixed(1)}" r="3" fill="var(--purple,#a78bfa)"><title>Year ${r.year}: $${Math.round(r.base_rent || 0).toLocaleString()}</title></circle>`).join('')}
+    ${xAxisLabels}
+  </svg>`;
+}
+
+/**
+ * Render the Rent Roll sub-view: stepped line chart + tabular schedule.
+ */
+function _udRenderRentRoll(leases, storedScheduleMap, em) {
+  if (!Array.isArray(leases) || leases.length === 0) {
+    return '<div class="detail-empty">No lease data available for Rent Roll</div>';
+  }
+
+  let html = '';
+  leases.forEach((l, idx) => {
+    const title = leases.length === 1 ? 'Rent Schedule' : `Rent Schedule — ${esc(l.tenant || ('Lease ' + (idx + 1)))}`;
+    const storedRows = storedScheduleMap?.get(l.lease_id) || null;
+    const rows = _udBuildRentSchedule(l, storedRows, em);
+
+    html += '<div class="detail-section">';
+    html += `<div class="detail-section-title">${title}</div>`;
+
+    if (rows.length === 0) {
+      html += '<div class="detail-empty" style="padding:12px">Not enough data to build a schedule. Need base rent, commencement, and either an escalation term (e.g., "2% annually") or a documented rent_cagr.</div>';
+      html += '</div>';
+      return;
+    }
+
+    const sourceNote = storedRows && storedRows.length
+      ? 'Source: lease_rent_schedule (documented)'
+      : 'Source: parsed from escalation string — estimate';
+    html += `<div style="color:var(--text3,#888);font-size:11px;margin-bottom:8px">${esc(sourceNote)}</div>`;
+
+    html += _udRenderRentChart(rows);
+
+    html += '<div style="overflow-x:auto;margin-top:12px"><table class="detail-table" style="width:100%;border-collapse:collapse;font-size:12px">';
+    html += '<thead><tr>' +
+      ['Year','Period','Base Rent','Rent / SF','Bump %','Cumulative','Option'].map(h =>
+        `<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a);color:var(--text3,#888);font-weight:600">${h}</th>`
+      ).join('') + '</tr></thead><tbody>';
+    rows.forEach(r => {
+      html += '<tr>' +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">Y${r.year}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.period_start ? _fmtDate(r.period_start) : '—'}${r.period_end ? ' → ' + _fmtDate(r.period_end) : ''}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.base_rent != null ? '$' + Math.round(r.base_rent).toLocaleString() : '—'}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.rent_psf != null ? '$' + r.rent_psf.toFixed(2) : '—'}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.bump_pct ? (r.bump_pct * 100).toFixed(2) + '%' : '—'}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.cumulative_rent != null ? '$' + Math.round(r.cumulative_rent).toLocaleString() : '—'}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.is_option_window ? 'Option' : ''}</td>` +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+    html += '</div>';
+  });
+  return html;
+}
+
+/** Switch the active sub-view on the Lease tab (Details | Rent Roll). */
+function switchLeaseSubView(view) {
+  if (!_udCache) return;
+  _udCache.leaseSubView = view;
+  const body = document.getElementById('detailBody');
+  if (body) body.innerHTML = _udRenderTab('Lease');
+}
+window.switchLeaseSubView = switchLeaseSubView;
+
 /**
  * Compute a friendly term-remaining string from an expiration date.
  * Used on the Lease tab when v_lease_detail has no computed term_remaining_years
@@ -814,10 +1207,28 @@ function _udLeaseRowH(label, valueHtml, isEst) {
 function _udTabLease() {
   const leases = _udCache.leases || [];
   const em = _udCache.entityMeta || {};
+  const extMap = _udCache.leaseExtensions instanceof Map ? _udCache.leaseExtensions : new Map();
+  const schedMap = _udCache.leaseRentSchedule instanceof Map ? _udCache.leaseRentSchedule : new Map();
   const hasEntityMeta = !!(em && (em.tenant_name || em.lease_commencement ||
     em.lease_expiration || em.annual_rent || em.rent_per_sf ||
     em.expense_structure || em.renewal_options || em.guarantor ||
     em.rent_escalations));
+
+  // Sub-view toggle (Details | Rent Roll). Default to Details.
+  const subView = _udCache.leaseSubView === 'rentroll' ? 'rentroll' : 'details';
+  const subTabBar = `
+    <div style="display:flex;gap:8px;padding:8px 0 12px;border-bottom:1px solid var(--border,#2a2a2a);margin-bottom:12px">
+      <button class="detail-subtab" onclick="switchLeaseSubView('details')" style="padding:6px 12px;border-radius:6px;border:1px solid ${subView === 'details' ? 'var(--purple,#a78bfa)' : 'var(--border,#2a2a2a)'};background:${subView === 'details' ? 'rgba(167,139,250,0.12)' : 'transparent'};color:${subView === 'details' ? 'var(--purple,#a78bfa)' : 'var(--text,#e5e5e5)'};font-size:12px;font-weight:600;cursor:pointer">Details</button>
+      <button class="detail-subtab" onclick="switchLeaseSubView('rentroll')" style="padding:6px 12px;border-radius:6px;border:1px solid ${subView === 'rentroll' ? 'var(--purple,#a78bfa)' : 'var(--border,#2a2a2a)'};background:${subView === 'rentroll' ? 'rgba(167,139,250,0.12)' : 'transparent'};color:${subView === 'rentroll' ? 'var(--purple,#a78bfa)' : 'var(--text,#e5e5e5)'};font-size:12px;font-weight:600;cursor:pointer">Rent Roll</button>
+    </div>`;
+
+  if (subView === 'rentroll') {
+    if (leases.length === 0 && !hasEntityMeta) {
+      return subTabBar + '<div class="detail-empty">No lease data available for Rent Roll</div>';
+    }
+    const leasesForRoll = leases.length > 0 ? leases : [{}];
+    return subTabBar + _udRenderRentRoll(leasesForRoll, schedMap, em);
+  }
 
   // If no lease view data AND no CoStar metadata, try the search fallback record
   if (leases.length === 0 && !hasEntityMeta) {
@@ -842,6 +1253,9 @@ function _udTabLease() {
   // empty lease so the renderer produces a single estimates-only section.
   const leasesToRender = leases.length > 0 ? leases : [{}];
   const estimatesOnly = leases.length === 0;
+
+  // Details sub-view always prefixed by the sub-tab bar.
+  let _outHtml = subTabBar;
 
   // Pick verified lease field if present, else fall through to the CoStar
   // estimate from entity metadata. Returns { html, est } where est=true when
@@ -916,8 +1330,23 @@ function _udTabLease() {
     if (!estimatesOnly) {
       html += _row('Guarantor Type', l.guarantor_type);
       html += _row('Original Occupancy', _fmtDate(l.original_occupancy));
-      html += _row('Last Extension', _fmtDate(l.last_extension_date));
-      html += _row('No. of Extensions', l.extension_count != null ? fmtN(Number(l.extension_count)) : null);
+
+      // Extension count + last extension — prefer the LIVE values from
+      // v_lease_extensions_summary. Fall back only when the enrichment fetch
+      // hasn't landed yet (still loading). Never display a value derived from
+      // v_lease_detail's stale columns (which defaulted to 3 and/or the
+      // commencement date when unknown).
+      const live = extMap.get(l.lease_id);
+      if (live) {
+        // Authoritative: 0 shows as "0"; date is null when no rows exist,
+        // which _row() filters out entirely (no row rendered).
+        html += _row('Last Extension', live.last_extension_date ? _fmtDate(live.last_extension_date) : null);
+        html += _row('No. of Extensions', fmtN(Number(live.extension_count)));
+      } else {
+        // Enrichment still loading — leave both rows empty rather than
+        // render the stale v_lease_detail values.
+      }
+
       html += _row('Termination', _fmtDate(l.termination_date));
       html += _row('Initial Term', l.initial_term_years ? Number(l.initial_term_years).toFixed(1) + ' yrs' : null);
       html += _row('Total Term', l.total_term_years ? Number(l.total_term_years).toFixed(1) + ' yrs' : null);
@@ -936,7 +1365,7 @@ function _udTabLease() {
     html += '</div></div>';
   });
 
-  return html;
+  return _outHtml + html;
 }
 
 // ─── OPERATIONS TAB ──────────────────────────────────────────────────────────
