@@ -4253,7 +4253,7 @@ async function _udGenerateDraft() {
       return;
     }
 
-    // Store draft state for record_send (includes cadence info)
+    // Store draft state for record_send (includes cadence info + report attachment)
     _udCurrentDraft = {
       template_id: result.draft.template_id,
       template_version: result.draft.template_version,
@@ -4263,7 +4263,8 @@ async function _udGenerateDraft() {
       entity_id: own.salesforce_id || own.sf_contact_id || own.contact_id || null,
       domain,
       unresolved: result.draft.unresolved_variables || [],
-      cadence_id: result.cadence?.id || _udCadenceCache?.cadence?.id || null
+      cadence_id: result.cadence?.id || _udCadenceCache?.cadence?.id || null,
+      report_attachment: result.report_attachment || null
     };
 
     // Populate the preview
@@ -4289,6 +4290,9 @@ async function _udGenerateDraft() {
       }
       if (unresolvedCount > 0) {
         meta += ` · <span style="color:var(--yellow,#f59e0b)">${unresolvedCount} unresolved var${unresolvedCount > 1 ? 's' : ''}</span>`;
+      }
+      if (result.report_attachment?.filename) {
+        meta += ` · <span style="color:var(--accent,#2563eb)">📎 Attach: ${esc(result.report_attachment.filename)}</span>`;
       }
       metaEl.innerHTML = meta;
     }
