@@ -1394,7 +1394,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
 
     const lookupSelect = domain === 'government'
       ? 'sale_id,sale_date'
-      : 'sale_id,sale_date,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
+      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
     const lookupPath =
       `sales_transactions?property_id=eq.${propertyId}` +
       `&sale_date=gte.${loStr}&sale_date=lte.${hiStr}` +
@@ -1522,8 +1522,40 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     }
 
     if (lookup.ok && lookup.data?.length) {
-      // Update existing
       const existing = lookup.data[0];
+
+      // Tighter dialysis dedup: if an existing row is within 30 days of the
+      // incoming sale_date AND within 2% of the incoming sold_price, treat
+      // it as the same economic transaction (deed date vs. contract date vs.
+      // recording date variants) and skip entirely. Land sales can
+      // legitimately cluster, so skip this tighter check when the price is
+      // under $1M and no tenant is present.
+      if (domain === 'dialysis'
+          && soldPrice != null
+          && existing.sold_price != null) {
+        const isLandSale = soldPrice < 1_000_000 && !primaryTenant;
+        if (!isLandSale) {
+          const existingDatePart = String(existing.sale_date).split('T')[0];
+          const existingTime = new Date(existingDatePart).getTime();
+          const incomingTime = new Date(datePart).getTime();
+          const daysDiff = Math.abs(existingTime - incomingTime) / (1000 * 60 * 60 * 24);
+          const existingPrice = Number(existing.sold_price);
+          const priceDelta = existingPrice > 0
+            ? Math.abs(existingPrice - soldPrice) / existingPrice
+            : Infinity;
+          if (daysDiff <= 30 && priceDelta <= 0.02) {
+            console.log(
+              `[sales-dedup] skipping duplicate property=${propertyId} ` +
+              `existing_date=${existingDatePart} existing_price=${existingPrice} ` +
+              `incoming_date=${datePart} incoming_price=${soldPrice} ` +
+              `days_diff=${daysDiff.toFixed(1)} price_delta=${(priceDelta * 100).toFixed(2)}%`
+            );
+            continue;
+          }
+        }
+      }
+
+      // Update existing
       let patchData = saleData;
 
       // Preserve confirmed cap rate data: if a sale already has a
