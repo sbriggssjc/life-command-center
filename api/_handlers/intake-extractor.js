@@ -212,7 +212,7 @@ function mergeExtractions(results) {
  * 2. Runs AI extraction for each PDF/Excel artifact
  * 3. Merges results (OM preferred over rent roll)
  * 4. Writes to staged_intake_extractions
- * 5. Updates staged_intake_items.status → 'extracted'
+ * 5. Updates staged_intake_items.status → 'review_required' (or 'failed')
  *
  * @param {string} intakeId — UUID of the staged_intake_item
  * @returns {{ ok: boolean, extraction_snapshot: object|null, error?: string }}
@@ -246,7 +246,7 @@ export async function processIntakeExtraction(intakeId) {
     console.log(`[intake-extractor] No extractable documents for intake_id=${intakeId}`);
     await opsQuery('PATCH',
       `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
-      { status: 'extracted', updated_at: new Date().toISOString() }
+      { status: 'failed', updated_at: new Date().toISOString() }
     );
     return { ok: true, extraction_snapshot: null, error: 'No extractable documents' };
   }
@@ -293,7 +293,7 @@ export async function processIntakeExtraction(intakeId) {
   await opsQuery('PATCH',
     `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
     {
-      status: 'extracted',
+      status: mergedSnapshot ? 'review_required' : 'failed',
       raw_payload: {
         ...currentPayload,
         extraction_result: mergedSnapshot
