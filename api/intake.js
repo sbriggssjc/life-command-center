@@ -195,12 +195,54 @@ async function handleOutlookMessage(req, res) {
 
   if (existingCheck.ok && existingCheck.data?.length) {
     const existing = existingCheck.data[0];
-    // Already ingested — return the existing item's correlation info
+
+    // Check if a staged intake item already exists for this inbox item
+    const stagedCheck = await domainQuery('dialysis', 'GET',
+      `staged_intake_items?intake_id=eq.${existing.id}&select=intake_id&limit=1`
+    );
+    const alreadyStaged = stagedCheck.ok && stagedCheck.data?.length > 0;
+
+    // If not yet staged and this email has attachments, run the bridge
+    if (!alreadyStaged && hasAttachments) {
+      const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+      const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
+        intake_id:            existing.id,
+        source_type:          'email',
+        internet_message_id:  internetMsgId || messageId || null,
+        status:               'queued',
+        raw_payload: {
+          subject,
+          from:           sender,
+          received:       receivedAtIso,
+          correlation_id: correlationId,
+          inbox_item_id:  existing.id,
+        },
+      });
+      if (stageResult.ok) {
+        for (const att of atts) {
+          await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+            intake_id:    existing.id,
+            file_name:    att.file_name || att.name || 'attachment',
+            file_type:    att.file_type || att.contentType || 'application/octet-stream',
+            storage_path: att.storage_path || null,
+            inline_data:  att.inline_data || att.content || null,
+          });
+        }
+        await Promise.race([
+          processIntakeExtraction(existing.id),
+          new Promise(r => setTimeout(r, 8000)),
+        ]).catch(err =>
+          console.error('[intake] dedup-path extraction failed:', existing.id, err.message)
+        );
+      }
+    }
+
     return res.status(200).json({
       ok: true,
       deduplicated: true,
       correlation_id: correlationId,
       inbox_item_id:  existing.id,
+      staged_intake_id: (!alreadyStaged && hasAttachments) ? existing.id : null,
       message: 'Already ingested',
     });
   }
