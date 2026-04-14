@@ -20,6 +20,7 @@ import { ensureEntityLink, normalizeCanonicalName, normalizeAddress } from '../_
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
+import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 
 // ── Role → relationship_type mapping ────────────────────────────────────────
 
@@ -850,6 +851,19 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     await autoEnqueueOwnerResearch(propertyId, entity, metadata);
   }
 
+  // Step 5g: Recalculate sale cap rates from confirmed rent anchor (dialysis).
+  // No-op when no anchor rent has been set, so this is safe to run on every
+  // save — it only does work once an OM or lease has populated anchor_rent.
+  if (domain === 'dialysis') {
+    try {
+      const { updated, skipped } = await recalculateSaleCapRates(propertyId, domainQuery);
+      console.log(`[cap-rate-recalc] property=${propertyId} updated=${updated} skipped=${skipped}`);
+      results.records.cap_rate_recalc = { updated, skipped };
+    } catch (err) {
+      console.error('[cap-rate-recalc] post-propagate error:', err?.message || err);
+    }
+  }
+
   return { propagated: true, ...results };
 }
 
@@ -953,6 +967,14 @@ async function upsertDomainProperty(domain, entity, metadata) {
     property_ownership_type: metadata.ownership_type || null,
     recorded_owner_name: ownerContact?.name || null,
     land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
+    // Rent anchor + lease escalation (dialysis only — gov schema has no
+    // anchor_rent columns). Only applied below when domain === 'dialysis'.
+    anchor_rent:            parseCurrency(metadata.anchor_rent),
+    anchor_rent_date:       parseDate(metadata.anchor_rent_date)?.split('T')[0] || null,
+    anchor_rent_source:     metadata.anchor_rent_source || null,
+    lease_commencement:     parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+    lease_bump_pct:         metadata.lease_bump_pct != null ? Number(metadata.lease_bump_pct) : null,
+    lease_bump_interval_mo: parseIntSafe(metadata.lease_bump_interval_mo),
   });
 
   if (domain === 'government') {
@@ -993,10 +1015,18 @@ async function upsertDomainProperty(domain, entity, metadata) {
     delete propertyData.land_area;
     delete propertyData.is_single_tenant;
     delete propertyData.building_size;
+    // Rent anchor columns live on the dialysis properties table only
+    delete propertyData.anchor_rent;
+    delete propertyData.anchor_rent_date;
+    delete propertyData.anchor_rent_source;
+    delete propertyData.lease_bump_pct;
+    delete propertyData.lease_bump_interval_mo;
   }
 
   if (lookup.ok && lookup.data?.length) {
-    // Update existing property
+    // Update existing property. Cap-rate anchor fields that get written here
+    // are picked up by the end-of-propagateToDomainDbDirect recalc step
+    // (Step 5g), which fires on every dialysis save and is idempotent.
     const propertyId = lookup.data[0].property_id;
     await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
     if (domain === 'government' && metadata.lease_number) {
