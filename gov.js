@@ -75,6 +75,23 @@ function _pf(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); 
 // Parse int from string or element value, handling zero correctly
 function _pi(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseInt(v, 10) : null; }
 
+// Parse a 4-digit year (year_built / year_renovated). Returns null for
+// blank/non-numeric/zero/out-of-range so we never persist year_built = 0 and
+// never trip the DB CHECK constraint (1600-2100) added in
+// sql/20260415_properties_year_built_null_zero.sql. Mirrors parseYearSafe()
+// in api/_handlers/sidebar-pipeline.js. Accepts an element, a string, or a
+// raw scalar — so both `_py(q('#id'))` and `_py(_d['key'])` work.
+function _py(src) {
+  const raw = (src && typeof src === 'object' && 'value' in src) ? src.value : src;
+  if (raw == null) return null;
+  const str = String(raw).trim();
+  if (!str) return null;
+  const num = parseInt(str, 10);
+  if (isNaN(num) || num <= 0) return null;
+  if (num < 1600 || num > 2100) return null;
+  return num;
+}
+
 // ============================================================================
 // CORE API FUNCTION
 // ============================================================================
@@ -1948,8 +1965,8 @@ async function saveOwnership(rec) {
       mailing_address_2: _fv('res-own-mailing-2'),
       rba: _pf(q('#res-own-rba')) || (_d['res-own-rba'] ? parseFloat(_d['res-own-rba']) : null),
       land_acres: _pf(q('#res-own-land-acres')) || (_d['res-own-land-acres'] ? parseFloat(_d['res-own-land-acres']) : null),
-      year_built: _pi(q('#res-own-year-built')) || (_d['res-own-year-built'] ? parseInt(_d['res-own-year-built']) : null),
-      year_renovated: _pi(q('#res-own-year-renovated')) || (_d['res-own-year-renovated'] ? parseInt(_d['res-own-year-renovated']) : null),
+      year_built: _py(q('#res-own-year-built')) ?? _py(_d['res-own-year-built']),
+      year_renovated: _py(q('#res-own-year-renovated')) ?? _py(_d['res-own-year-renovated']),
       research_notes: researchNotes,
       research_status: 'completed',
       evidence_artifact_id: (typeof govEvidenceState !== 'undefined' && govEvidenceState.artifactId) ? govEvidenceState.artifactId : null
@@ -2114,8 +2131,8 @@ async function saveLead(rec) {
     const propPatch = {};
     const rba = _pf(q('#res-lead-rba'));
     const landAcres = _pf(q('#res-lead-land-acres'));
-    const yearBuilt = _pi(q('#res-lead-year-built'));
-    const yearRenovated = _pi(q('#res-lead-year-renovated'));
+    const yearBuilt = _py(q('#res-lead-year-built'));
+    const yearRenovated = _py(q('#res-lead-year-renovated'));
     const buildingClass = q('#res-lead-building-class')?.value || null;
     const stories = _pi(q('#res-lead-stories'));
     const parking = _pi(q('#res-lead-parking'));
@@ -2290,8 +2307,8 @@ async function saveIntel(rec) {
   const propertyPatch = {};
   const rba = _pf(q('#res-intel-rba'));
   const landAcres = _pf(q('#res-intel-land-acres'));
-  const yearBuilt = _pi(q('#res-intel-year-built'));
-  const yearRenovated = _pi(q('#res-intel-year-renovated'));
+  const yearBuilt = _py(q('#res-intel-year-built'));
+  const yearRenovated = _py(q('#res-intel-year-renovated'));
   const buildingClass = q('#res-intel-building-class')?.value || null;
   const stories = _pi(q('#res-intel-stories'));
   const parking = _pi(q('#res-intel-parking'));
