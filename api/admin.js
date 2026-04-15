@@ -936,13 +936,17 @@ function requireDiaEnv(res) {
 
 async function diaRest(env, method, path, body) {
   const fullUrl = `${env.url.replace(/\/+$/, '')}/rest/v1/${path}`;
+  // POST uses resolution=merge-duplicates for upsert; DELETE/PATCH only need return=representation
+  let prefer = '';
+  if (method === 'POST') prefer = 'return=representation,resolution=merge-duplicates';
+  else if (method !== 'GET') prefer = 'return=representation';
   const opts = {
     method,
     headers: {
       apikey: env.key,
       Authorization: `Bearer ${env.key}`,
       'Content-Type': 'application/json',
-      Prefer: method === 'GET' ? '' : 'return=representation,resolution=merge-duplicates',
+      Prefer: prefer,
     },
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -1143,7 +1147,12 @@ async function handleCmsMatch(req, res) {
     };
     try {
       const r = await diaRest(env, 'POST', 'property_cms_link', row);
-      if (!r.ok) return res.status(r.status).json({ error: 'Upsert failed', detail: r.data });
+      if (!r.ok) {
+        console.error('[cms-match/link] upsert failed:', r.status, JSON.stringify(r.data));
+        return res.status(r.status).json({ error: 'Upsert failed', detail: r.data });
+      }
+      console.log('[cms-match/link] upsert ok:', property_id, '→', medicare_id,
+        'method=', match_method, 'response=', Array.isArray(r.data) ? r.data.length + ' rows' : typeof r.data);
       // Audit history
       diaRest(env, 'POST', 'property_cms_link_history', {
         property_id, medicare_id,
@@ -1202,6 +1211,9 @@ async function handleCmsMatch(req, res) {
       // 2. Load the property
       const prop = await fetchPropertyForMatch(env, propertyId);
       if (!prop) return res.status(404).json({ error: 'property not found' });
+      console.log('[cms-match/resolve] property loaded:',
+        'addr=', JSON.stringify(prop.address), 'city=', prop.city,
+        'state=', prop.state, 'zip=', prop.zip);
 
       // 3. Check if medicare_clinics already links this property_id
       //    SELECT * — the exact column set varies across ingestions.
@@ -1238,6 +1250,8 @@ async function handleCmsMatch(req, res) {
       const candidates = await fetchCandidateClinics(env, {
         zip: prop.zip, state: prop.state, city: prop.city,
       });
+      console.log('[cms-match/resolve] candidates found:', candidates.length,
+        'for zip=', prop.zip, 'state=', prop.state, 'city=', prop.city);
 
       const scored = candidates.map(c => ({
         ...c,
@@ -1246,6 +1260,12 @@ async function handleCmsMatch(req, res) {
         .sort((a, b) => b._score - a._score);
 
       const top = scored[0];
+      if (top) {
+        console.log('[cms-match/resolve] top candidate:', top.medicare_id,
+          'name=', top.facility_name, 'addr=', top.address,
+          'city=', top.city, 'zip=', top.zip_code || top.zip,
+          'score=', top._score.toFixed(3));
+      }
       const CONFIDENT_THRESHOLD = 0.80;
       const CANDIDATE_THRESHOLD = 0.55;
 
