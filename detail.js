@@ -105,11 +105,14 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     </div>
     <button class="detail-close" onclick="closeDetail()">&times;</button>`;
 
-  // Render tab bar — highlight initialTab if provided, else first tab
-  const tabs = ['Property', 'Lease', 'Operations', 'Ownership', 'Sales', 'Intel', 'History'];
-  const activeTab = (initialTab && tabs.includes(initialTab)) ? initialTab : tabs[0];
+  // Render tab bar — highlight initialTab if provided, else first tab.
+  // Tabs restructured to match broker workflow (2026-04-15).
+  // Legacy tab names still resolve to the correct new tab via _udMapLegacyTab().
+  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Ownership & CRM', 'Deal History', 'Intel', 'Activity Log'];
+  const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
+  const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
-    `<button class="detail-tab ${t === activeTab ? 'active' : ''}" onclick="switchUnifiedTab('${t}')">${t}</button>`
+    `<button class="detail-tab ${t === activeTab ? 'active' : ''}" onclick="switchUnifiedTab(decodeURIComponent('${encodeURIComponent(t)}'))">${esc(t)}</button>`
   ).join('');
   // Store requested initial tab for use after data loads
   window._udInitialTab = activeTab;
@@ -271,11 +274,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       _udFetchLeaseEnrichment(leases).then((enrichment) => {
         if (!_udCache) return;
         _setUdCache({ ..._udCache, leaseExtensions: enrichment.extensions, leaseRentSchedule: enrichment.schedule });
-        // Re-render if the Lease tab is currently active
+        // Re-render if the Rent Roll tab is currently active
         const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
-        if (activeTabEl && activeTabEl.textContent.trim() === 'Lease') {
+        const activeLabel = activeTabEl ? activeTabEl.textContent.trim() : '';
+        if (activeLabel === 'Rent Roll' || activeLabel === 'Lease') {
           const bodyEl = document.getElementById('detailBody');
-          if (bodyEl) bodyEl.innerHTML = _udRenderTab('Lease');
+          if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeLabel);
         }
       }).catch((e) => { console.warn('lease enrichment fetch failed', e); });
     }
@@ -301,17 +305,20 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         </div>`;
     }
 
-    // Render active tab (preserve on refresh) or default to Property
+    // Render active tab (preserve on refresh) or default to Overview
     const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
-    const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Property';
-    // Operations and Sales tabs need async data loading
+    const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Overview';
+    // Operations and Deal History tabs need async data loading
     if (activeTab === 'Operations' && db === 'dia') {
       _udRenderOperationsAsync(bodyEl);
-    } else if (activeTab === 'Sales') {
-      _udRenderSalesAsync(bodyEl);
+    } else if (activeTab === 'Deal History') {
+      _udRenderDealHistoryAsync(bodyEl);
+    } else if (activeTab === 'Activity Log') {
+      _udRenderActivityLogAsync(bodyEl);
     } else {
       if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
       if (activeTab === 'Intel') _intelRenderPriorSaleSummaryAsync();
+      if (activeTab === 'Overview') _udHydratePipelineStage();
     }
 
   } catch (err) {
@@ -543,6 +550,7 @@ window._udSubmitDismiss = _udSubmitDismiss;
 /** Switch tabs without re-fetching data */
 function switchUnifiedTab(tabName) {
   if (!_udCache) return;
+  tabName = _udMapLegacyTab(tabName);
   document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
@@ -550,13 +558,43 @@ function switchUnifiedTab(tabName) {
   // Operations tab may need async data loading
   if (tabName === 'Operations' && _udCache.db === 'dia') {
     _udRenderOperationsAsync(bodyEl);
-  } else if (tabName === 'Sales') {
-    _udRenderSalesAsync(bodyEl);
+  } else if (tabName === 'Deal History') {
+    _udRenderDealHistoryAsync(bodyEl);
+  } else if (tabName === 'Activity Log') {
+    _udRenderActivityLogAsync(bodyEl);
   } else {
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
     if (tabName === 'Intel') _intelRenderPriorSaleSummaryAsync();
+    if (tabName === 'Overview') _udHydratePipelineStage();
   }
 }
+
+/**
+ * Translate legacy tab names (Property, Lease, Ownership, Sales, History)
+ * into the new restructured names. Keeps deep-links & older callers working
+ * after the 2026-04-15 tab restructure.
+ */
+function _udMapLegacyTab(name) {
+  if (!name) return name;
+  const n = String(name).trim();
+  // Case-insensitive match so legacy callers like "sales"/"history" still resolve.
+  switch (n.toLowerCase()) {
+    case 'property':         return 'Overview';
+    case 'lease':            return 'Rent Roll';
+    case 'ownership':        return 'Ownership & CRM';
+    case 'sales':            return 'Deal History';
+    case 'history':          return 'Activity Log';
+    case 'overview':         return 'Overview';
+    case 'rent roll':        return 'Rent Roll';
+    case 'operations':       return 'Operations';
+    case 'ownership & crm':  return 'Ownership & CRM';
+    case 'deal history':     return 'Deal History';
+    case 'intel':            return 'Intel';
+    case 'activity log':     return 'Activity Log';
+    default:                 return n;
+  }
+}
+window._udMapLegacyTab = _udMapLegacyTab;
 
 // ─── CMS FACILITY MATCH (property ↔ medicare_id) ─────────────────────────────
 // Backs the Operations tab. When v_property_rankings has no row for a property,
@@ -937,17 +975,310 @@ function _udRenderFallbackHeader(db, fb) {
 
 function _udRenderTab(tab) {
   if (!_udCache) return '<div class="detail-empty">No data loaded</div>';
+  // Translate any legacy names so other call sites keep working.
+  tab = _udMapLegacyTab(tab);
   switch (tab) {
-    case 'Property': return _udTabProperty();
-    case 'Lease': return _udTabLease();
-    case 'Operations': return _udTabOperations();
-    case 'Ownership': return _udTabOwnership();
-    case 'Intel': return _udTabIntel();
-    case 'Sales': return _udTabSales();
-    case 'History': return _udTabHistory();
+    case 'Overview':        return _udTabOverview();
+    case 'Rent Roll':       return _udTabRentRoll();
+    case 'Operations':      return _udTabOperations();
+    case 'Ownership & CRM': return _udTabOwnership();
+    case 'Deal History':    return _udTabDealHistory();
+    case 'Intel':           return _udTabIntel();
+    case 'Activity Log':    return _udTabActivityLog();
     default: return '<div class="detail-empty">Unknown tab</div>';
   }
 }
+
+// ─── PIPELINE STAGE PILL ─────────────────────────────────────────────────────
+// Broker pipeline stages, rendered as a one-click stepper at the top of the
+// sidebar. Clicking a stage advances the property and, when a Salesforce
+// account is linked, fires an SF opportunity upsert via /api/sync?action=outbound.
+// Stage persistence is best-effort: we PATCH properties.pipeline_stage but
+// tolerate a missing column (older schemas) by falling back to in-memory only.
+
+const _UD_PIPELINE_STAGES = [
+  { key: 'prospect',       label: 'Prospect',        color: 'var(--text3)' },
+  { key: 'pitched',        label: 'Pitched',         color: 'var(--accent)' },
+  { key: 'engaged',        label: 'Engaged',         color: '#8b5cf6' },
+  { key: 'listed',         label: 'Listed',          color: '#f59e0b' },
+  { key: 'under_contract', label: 'Under Contract',  color: '#10b981' },
+  { key: 'sold',           label: 'Sold',            color: 'var(--green)' },
+];
+
+/** Derive pipeline stage from whatever cache signals we already have. */
+function _udInferPipelineStage() {
+  if (!_udCache) return 'prospect';
+  // Explicit persisted stage wins (properties.pipeline_stage or intel.pipeline_stage).
+  const explicit = _udCache.property?.pipeline_stage
+    || _udCache.intel?.pipeline_stage
+    || _udCache.fallback?.pipeline_stage;
+  if (explicit && _UD_PIPELINE_STAGES.some(s => s.key === explicit)) return explicit;
+
+  const sales = _salesCache && _salesCache.property_id === (_udCache.ids?.property_id || _udCache.property?.property_id)
+    ? _salesCache
+    : null;
+
+  // Sold — any completed sale event
+  const hasSale = sales && (sales.transactions || []).some(t => t.sale_date);
+  if (hasSale) return 'sold';
+  // Under contract — sale event with status pending or listing marked under_contract
+  const underContract = sales && (
+    (sales.transactions || []).some(t => ['pending','under_contract'].includes(String(t.status || '').toLowerCase())) ||
+    (sales.listings || []).some(l => String(l.status || '').toLowerCase() === 'under_contract')
+  );
+  if (underContract) return 'under_contract';
+  // Listed — any active listing
+  const listed = sales && (sales.listings || []).some(l => {
+    if (l.is_active === true) return true;
+    if (l.is_active === false) return false;
+    return !l.off_market_date;
+  });
+  if (listed) return 'listed';
+  // SF-linked owner → Engaged / Pitched heuristic
+  const own = _udCache.ownership || {};
+  if (own.sf_opportunity_id) return 'engaged';
+  if (own.sf_account_id || own.sf_company_id) return 'pitched';
+  return 'prospect';
+}
+
+/** Render the pipeline-stage pill stepper (horizontal chips). */
+function _udRenderPipelinePill() {
+  const current = _udInferPipelineStage();
+  const currentIdx = Math.max(0, _UD_PIPELINE_STAGES.findIndex(s => s.key === current));
+
+  let html = '<div class="detail-pipeline" id="udPipelinePill" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:12px 14px;margin:0 0 14px 0;background:var(--s2);border:1px solid var(--border);border-radius:10px">';
+  html += '<div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;margin-right:4px">Pipeline</div>';
+
+  _UD_PIPELINE_STAGES.forEach((s, i) => {
+    const isActive = i === currentIdx;
+    const isPast = i < currentIdx;
+    const bg = isActive ? s.color : (isPast ? 'rgba(46,204,113,0.12)' : 'var(--s1,#0f172a)');
+    const fg = isActive ? '#fff' : (isPast ? 'var(--text)' : 'var(--text2)');
+    const border = isActive ? s.color : (isPast ? 'rgba(46,204,113,0.3)' : 'var(--border)');
+    const weight = isActive ? 700 : 600;
+    html += `<button type="button" onclick="_udAdvancePipelineStage('${s.key}')"
+      title="${isActive ? 'Current stage' : 'Advance to ' + s.label + ' — creates/updates SF opportunity'}"
+      style="padding:4px 10px;border-radius:14px;font-size:11px;font-weight:${weight};cursor:pointer;
+      border:1px solid ${border};background:${bg};color:${fg};
+      text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap">
+      ${esc(s.label)}
+    </button>`;
+    if (i < _UD_PIPELINE_STAGES.length - 1) {
+      html += `<span style="color:var(--text3);font-size:11px">→</span>`;
+    }
+  });
+
+  html += '</div>';
+  return html;
+}
+
+/** Kick off a best-effort fetch for pipeline_stage from property_intel. */
+async function _udHydratePipelineStage() {
+  if (!_udCache) return;
+  // Avoid refetching within the same panel session
+  if (_udCache._pipelineHydrated) return;
+  _udCache._pipelineHydrated = true;
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  if (!propertyId) return;
+  try {
+    const qFn = _udCache.db === 'gov' ? govQuery : diaQuery;
+    const res = await qFn('property_intel', 'pipeline_stage', {
+      filter: `property_id=eq.${propertyId}`,
+      limit: 1,
+    });
+    const rows = Array.isArray(res) ? res : (res?.data || []);
+    const stage = rows[0]?.pipeline_stage;
+    if (stage) {
+      _udCache.intel = Object.assign({}, _udCache.intel || {}, { pipeline_stage: stage });
+      const pillEl = document.getElementById('udPipelinePill');
+      if (pillEl) pillEl.outerHTML = _udRenderPipelinePill();
+    }
+  } catch (e) {
+    // property_intel may not have a pipeline_stage column yet — ignore.
+  }
+}
+
+/**
+ * Advance the property to a new pipeline stage.
+ *  1. Updates in-memory cache and re-renders the pill
+ *  2. Best-effort PATCH of property_intel.pipeline_stage
+ *  3. Fires SF opportunity upsert via /api/sync?action=outbound (log_to_sf)
+ */
+async function _udAdvancePipelineStage(stageKey) {
+  if (!_udCache) return;
+  const stage = _UD_PIPELINE_STAGES.find(s => s.key === stageKey);
+  if (!stage) return;
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  if (!propertyId) { showToast('No property ID — cannot advance pipeline', 'error'); return; }
+
+  // 1. Local state
+  _udCache.intel = Object.assign({}, _udCache.intel || {}, { pipeline_stage: stage.key });
+  const pillEl = document.getElementById('udPipelinePill');
+  if (pillEl) pillEl.outerHTML = _udRenderPipelinePill();
+  showToast('Pipeline stage → ' + stage.label, 'info');
+
+  // 2. Persist (best-effort)
+  try {
+    const db = _udCache.db;
+    const proxyBase = db === 'gov' ? '/api/gov-query' : '/api/dia-query';
+    if (typeof applyInsertWithFallback === 'function') {
+      await applyInsertWithFallback({
+        proxyBase,
+        table: 'property_intel',
+        idColumn: 'property_id',
+        recordIdentifier: propertyId,
+        data: {
+          property_id: propertyId,
+          pipeline_stage: stage.key,
+          pipeline_stage_updated_at: new Date().toISOString(),
+        },
+        source_surface: db === 'gov' ? 'gov_property_detail' : 'dialysis_property_detail',
+        propagation_scope: 'pipeline_stage'
+      });
+    }
+  } catch (e) {
+    console.warn('pipeline_stage persist failed (column may not exist yet)', e);
+  }
+
+  // 3. SF opportunity upsert — only when the owner has an SF account link.
+  const own = _udCache.ownership || {};
+  const sfAccountId = own.sf_account_id || own.sf_company_id || null;
+  const sfOpportunityId = own.sf_opportunity_id || null;
+  try {
+    const p = _udCache.property || {};
+    const propertyName = p.page_title || p.facility_name || p.address || 'Property ' + propertyId;
+    const payload = {
+      command: 'upsert_sf_opportunity',
+      payload: {
+        property_id: propertyId,
+        property_name: propertyName,
+        sf_account_id: sfAccountId,
+        sf_opportunity_id: sfOpportunityId,
+        stage: stage.label,
+        stage_key: stage.key,
+        amount: p.estimated_value || null,
+        close_date: stage.key === 'sold' ? new Date().toISOString().split('T')[0] : null,
+      }
+    };
+    const res = await fetch('/api/sync?action=outbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      showToast('SF opportunity synced: ' + stage.label, 'success');
+    } else if (res.status === 404 || res.status === 400) {
+      // Backend may not yet handle upsert_sf_opportunity — don't alarm the user.
+      console.warn('SF opportunity upsert returned', res.status, '— backend handler may be pending');
+    }
+  } catch (e) {
+    console.warn('SF opportunity upsert failed', e);
+  }
+}
+
+window._udAdvancePipelineStage = _udAdvancePipelineStage;
+
+// ─── OVERVIEW TAB ────────────────────────────────────────────────────────────
+// Prepends the pipeline pill + research quick links to the existing
+// Property identity/KPI grid.
+
+function _udTabOverview() {
+  const pill = _udRenderPipelinePill();
+  const body = _udTabProperty();
+  return pill + body;
+}
+
+// ─── RENT ROLL TAB ───────────────────────────────────────────────────────────
+// Promotes the Lease → Rent Roll sub-view into a first-class tab. Also surfaces
+// the tenant as a clickable link that opens the TenantDrawer.
+
+function _udTabRentRoll() {
+  const leases = _udCache.leases || [];
+  const em = _udCache.entityMeta || {};
+  const schedMap = _udCache.leaseRentSchedule instanceof Map ? _udCache.leaseRentSchedule : new Map();
+  const extMap = _udCache.leaseExtensions instanceof Map ? _udCache.leaseExtensions : new Map();
+
+  const hasEntityMeta = !!(em && (em.tenant_name || em.lease_commencement ||
+    em.lease_expiration || em.annual_rent || em.rent_per_sf ||
+    em.expense_structure || em.renewal_options || em.guarantor ||
+    em.rent_escalations));
+
+  if (leases.length === 0 && !hasEntityMeta) {
+    return '<div class="detail-empty">No lease data available for Rent Roll</div>';
+  }
+
+  const leasesForRoll = leases.length > 0 ? leases : [{}];
+  let html = '';
+
+  // Tenant summary header — each tenant is a link that opens the TenantDrawer.
+  leasesForRoll.forEach((l) => {
+    const tenantName = l.tenant || em.tenant_name || '';
+    if (!tenantName) return;
+    const commencement = _fmtDate(l.lease_start || em.lease_commencement);
+    const expiration = _fmtDate(l.lease_expiration || em.lease_expiration);
+    const rent = l.annual_rent || em.annual_rent;
+    const rentPsf = l.rent_psf || em.rent_per_sf;
+    const live = l.lease_id ? extMap.get(l.lease_id) : null;
+    html += '<div class="detail-section"><div class="detail-section-title">Tenant</div>';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">';
+    html += `<div style="font-size:15px;font-weight:700">${_udTenantLink(tenantName, l, em)}</div>`;
+    if (l.guarantor || em.guarantor) {
+      html += `<div style="font-size:11px;color:var(--text3)">Guarantor: <span style="color:var(--text)">${esc(l.guarantor || em.guarantor)}</span></div>`;
+    }
+    html += '</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;font-size:12px">';
+    if (commencement && commencement !== '—') html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Commencement</div><div>${esc(commencement)}</div></div>`;
+    if (expiration && expiration !== '—') html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Expiration</div><div>${esc(expiration)}</div></div>`;
+    if (rent != null) html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Annual Rent</div><div>${esc(fmt(rent))}</div></div>`;
+    if (rentPsf != null) html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Rent / SF</div><div>${esc(fmt(rentPsf))}</div></div>`;
+    if (live) {
+      html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Extensions</div><div>${fmtN(Number(live.extension_count))}${live.last_extension_date ? ' · ' + esc(_fmtDate(live.last_extension_date)) : ''}</div></div>`;
+    }
+    html += '</div></div>';
+  });
+
+  // Structured schedule with bumps (existing renderer).
+  html += _udRenderRentRoll(leasesForRoll, schedMap, em);
+  return html;
+}
+
+/** Build a clickable tenant link that opens the TenantDrawer. */
+function _udTenantLink(tenantName, leaseRow, em) {
+  if (!tenantName) return '<span style="color:var(--text3)">\u2014</span>';
+  const ctx = {
+    name: tenantName,
+    tenant_id: leaseRow?.tenant_id || em?.tenant_id || null,
+    sf_contact_id: leaseRow?.tenant_sf_contact_id || null,
+    sf_account_id: leaseRow?.tenant_sf_account_id || null,
+    property_id: _udCache?.ids?.property_id || null,
+    lease_number: leaseRow?.lease_number || _udCache?.ids?.lease_number || null,
+    db: _udCache?.db || null,
+  };
+  const payload = encodeURIComponent(JSON.stringify(ctx));
+  return `<span class="tenant-link" role="button" tabindex="0" data-tenant-ctx="${payload}"
+    style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;font-weight:600"
+    title="View tenant profile, contacts, and activity">${esc(tenantName)}</span>`;
+}
+
+/** Build a clickable broker link that opens the BrokerDrawer. */
+function _udBrokerLink(brokerName, record) {
+  if (!brokerName) return '<span style="color:var(--text3)">\u2014</span>';
+  const ctx = {
+    name: brokerName,
+    broker_firm: record?.broker_firm || null,
+    sf_contact_id: record?.broker_sf_contact_id || null,
+    sf_account_id: record?.broker_sf_account_id || null,
+    property_id: _udCache?.ids?.property_id || null,
+    db: _udCache?.db || null,
+  };
+  const payload = encodeURIComponent(JSON.stringify(ctx));
+  return `<span class="broker-link" role="button" tabindex="0" data-broker-ctx="${payload}"
+    style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;font-weight:600"
+    title="View broker profile and activity">${esc(brokerName)}</span>`;
+}
+
+window._udTenantLink = _udTenantLink;
+window._udBrokerLink = _udBrokerLink;
 
 // ─── PROPERTY TAB ────────────────────────────────────────────────────────────
 
@@ -3805,7 +4136,417 @@ async function _salesSaveTransaction() {
   _udRenderSalesAsync(bodyEl);
 }
 
-// ─── HISTORY TAB ─────────────────────────────────────────────────────────────
+// ─── DEAL HISTORY TAB ────────────────────────────────────────────────────────
+// Combines the legacy Sales timeline (property_sale_events + available_listings)
+// with the Ownership History chain (v_ownership_chain) into one chronological
+// ribbon. Each row links out to the Owner/Tenant/Broker drawer when relevant.
+
+async function _udRenderDealHistoryAsync(bodyEl) {
+  if (!bodyEl) return;
+  // Ensure sales cache is populated (reuse the existing async loader).
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  const db = _udCache.db;
+  const sameSales = _salesCache && _salesCache.property_id === propertyId && _salesCache.db === db;
+  if (!sameSales) {
+    // _udRenderSalesAsync fetches and paints — but we want to paint ourselves.
+    // Spin while it loads, then re-render.
+    bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading deal history...</p></div>';
+    try {
+      // Fetch by mimicking _udRenderSalesAsync's data calls, but without rendering Sales.
+      const qFn = db === 'gov' ? govQuery : diaQuery;
+      const propId = encodeURIComponent(propertyId || '');
+      const saleRes = propertyId ? await qFn('property_sale_events', '*', {
+        filter: `property_id=eq.${propId}`,
+        order: 'sale_date.desc.nullslast',
+        limit: 100
+      }).catch(() => null) : null;
+      const [listRes, txnRes] = propertyId ? await Promise.all([
+        qFn('available_listings', '*', { filter: `property_id=eq.${propId}`, order: 'listing_date.desc.nullslast', limit: 50 }).catch(() => []),
+        saleRes != null ? Promise.resolve(saleRes) : qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
+      ]) : [[], []];
+      const txnArr = Array.isArray(txnRes) ? txnRes : (txnRes && txnRes.data) || [];
+      const listArr = Array.isArray(listRes) ? listRes : (listRes && listRes.data) || [];
+      _salesCache = { property_id: propertyId, db, transactions: txnArr, listings: listArr };
+    } catch (e) {
+      console.warn('Deal History: sales fetch failed', e);
+      _salesCache = { property_id: propertyId, db, transactions: [], listings: [] };
+    }
+  }
+
+  bodyEl.innerHTML = _udTabDealHistory();
+}
+
+function _udTabDealHistory() {
+  const txns = _salesCache ? (_salesCache.transactions || []) : [];
+  const listings = _salesCache ? (_salesCache.listings || []) : [];
+  const chain = _udCache?.chain || [];
+  const db = _udCache?.db;
+  const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+
+  // Build unified timeline
+  const saleEvents = _salesBuildTimeline(listings, txns).map(ev => Object.assign({}, ev, { kind: 'sale', date: ev.sortKey }));
+  const ownerEvents = (chain || []).map(h => ({
+    kind: 'ownership',
+    chain: h,
+    date: _salesParseDate(h.transfer_date) || 0,
+  }));
+  const events = [...saleEvents, ...ownerEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
+
+  let html = '';
+
+  if (events.length === 0) {
+    html += '<div class="detail-empty" style="text-align:center;padding:40px 20px">';
+    html += '<div style="font-size:18px;margin-bottom:8px;color:var(--text2)">No deal history</div>';
+    html += '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">No listings, sales, or ownership transfers on record.</div>';
+    if (propertyId) {
+      html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:8px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add Transaction</button>`;
+    }
+    html += '</div>';
+    html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
+    return html;
+  }
+
+  // Filter chips
+  const filter = _salesFilter || 'all';
+  const filtered = events.filter(e => {
+    if (filter === 'listings') return e.kind === 'sale' && !!e.listing;
+    if (filter === 'sales')    return e.kind === 'sale' && !!e.sale;
+    if (filter === 'ownership') return e.kind === 'ownership';
+    return true;
+  });
+
+  html += '<div class="detail-section">';
+  html += `<div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">`;
+  html += `<span>Deal History</span>`;
+  if (propertyId) {
+    html += `<button class="btn-accent" onclick="_salesToggleForm()" style="padding:5px 14px;border-radius:6px;font-size:12px;cursor:pointer;border:none;background:var(--accent);color:#fff">+ Add</button>`;
+  }
+  html += '</div>';
+
+  const chips = [
+    { key: 'all',       label: 'All' },
+    { key: 'listings',  label: 'Listings' },
+    { key: 'sales',     label: 'Sales' },
+    { key: 'ownership', label: 'Ownership' },
+  ];
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px 0">';
+  chips.forEach((c) => {
+    const isActive = filter === c.key;
+    const bg = isActive ? 'var(--accent)' : 'var(--s2)';
+    const fg = isActive ? '#fff' : 'var(--text2)';
+    const border = isActive ? 'var(--accent)' : 'var(--border)';
+    html += `<button onclick="_dealHistorySetFilter('${c.key}')" style="padding:4px 12px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${border};background:${bg};color:${fg};text-transform:uppercase;letter-spacing:0.4px">${esc(c.label)}</button>`;
+  });
+  html += '</div>';
+
+  // Unified timeline
+  html += '<div style="position:relative;padding-left:24px">';
+  html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
+
+  filtered.forEach((ev, idx) => {
+    const isFirst = idx === 0;
+    let dotColor = 'var(--text3)';
+    if (ev.kind === 'sale') {
+      dotColor = ev.sale ? 'var(--green)' : (ev.listing && _salesListingIsActive(ev.listing) ? 'var(--accent)' : 'var(--text3)');
+    } else if (ev.kind === 'ownership') {
+      dotColor = '#a55eea';
+    }
+
+    html += '<div style="position:relative;margin-bottom:16px">';
+    html += `<div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:${dotColor};border:2px solid var(--bg)${isFirst ? ';box-shadow:0 0 0 3px rgba(46,204,113,0.15)' : ''}"></div>`;
+    html += '<div style="background:var(--s2);border-radius:10px;padding:14px;border:1px solid var(--border)">';
+
+    if (ev.kind === 'sale') {
+      if (ev.listing && ev.sale) html += _udDealRenderCombined(ev.listing, ev.sale);
+      else if (ev.sale) html += _udDealRenderSale(ev.sale);
+      else if (ev.listing) html += _udDealRenderListing(ev.listing);
+    } else {
+      html += _udDealRenderOwnership(ev.chain, db);
+    }
+
+    html += '</div></div>';
+  });
+
+  html += '</div></div>';
+  html += `<div id="salesAddForm" style="display:none">${_salesFormHtml()}</div>`;
+  return html;
+}
+
+function _dealHistorySetFilter(f) {
+  _salesFilter = (['listings', 'sales', 'ownership'].includes(f)) ? f : 'all';
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _udTabDealHistory();
+}
+window._dealHistorySetFilter = _dealHistorySetFilter;
+
+// Listing/sale renderers that upgrade broker/buyer/seller names to links.
+function _udDealRenderListing(l) {
+  let html = _salesRenderListing(l);
+  if (l.listing_broker) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(l.listing_broker)) + '</span>'),
+      '$1' + _udBrokerLink(l.listing_broker, l)
+    );
+  }
+  return html;
+}
+
+function _udDealRenderSale(s) {
+  let html = _salesRenderSale(s);
+  const buyer = s.buyer_name || s.buyer;
+  const seller = s.seller_name || s.seller;
+  const broker = s.broker_name || s.listing_broker;
+  if (buyer) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Buyer:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(buyer)) + '</span>'),
+      '$1' + entityLink(buyer, 'buyer', null, _udCache?.db)
+    );
+  }
+  if (seller) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Seller:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(seller)) + '</span>'),
+      '$1' + entityLink(seller, 'seller', null, _udCache?.db)
+    );
+  }
+  if (broker) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Listing Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(broker)) + '</span>'),
+      '$1' + _udBrokerLink(broker, s)
+    );
+  }
+  return html;
+}
+
+function _udDealRenderCombined(l, s) {
+  let html = _salesRenderCombined(l, s);
+  const buyer = s.buyer_name || s.buyer;
+  const seller = s.seller_name || s.seller;
+  const broker = s.broker_name || s.listing_broker || l.listing_broker;
+  if (buyer) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Buyer:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(buyer)) + '</span>'),
+      '$1' + entityLink(buyer, 'buyer', null, _udCache?.db)
+    );
+  }
+  if (seller) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Seller:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(seller)) + '</span>'),
+      '$1' + entityLink(seller, 'seller', null, _udCache?.db)
+    );
+  }
+  if (broker) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Listing Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(broker)) + '</span>'),
+      '$1' + _udBrokerLink(broker, s)
+    );
+  }
+  return html;
+}
+
+function _udDealRenderOwnership(h, db) {
+  const ownerName = h.recorded_owner_name || h.true_owner_name || h.to_owner || '—';
+  const transferDate = _fmtDate(h.transfer_date);
+  const endDate = h.ownership_end ? _fmtDate(h.ownership_end) : 'Present';
+  let html = '';
+
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
+  html += '<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#a55eea;padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid #a55eea">Ownership</span>';
+  html += `<span style="font-size:11px;color:var(--text3)">${esc(transferDate)} → ${esc(endDate)}</span>`;
+  html += '</div>';
+
+  html += `<div style="font-size:14px;font-weight:700;margin-bottom:6px">${_ownerLink(ownerName, _ownerCtxFromChain(h, db))}</div>`;
+
+  if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-bottom:4px"><span style="color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}</div>`;
+  }
+  if (h.from_owner) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">From:</span> <span style="color:var(--text)">${esc(h.from_owner)}</span></div>`;
+  if (h.sale_price) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Sale:</span> <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span></div>`;
+  if (h.cap_rate) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${Number(h.cap_rate).toFixed(2)}%</span></div>`;
+  if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:4px">Type: ${esc(h.ownership_type)}</div>`;
+  if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
+
+  return html;
+}
+
+function _reEsc(s) { return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// ─── ACTIVITY LOG TAB ────────────────────────────────────────────────────────
+// Unified chronological event stream. Pulls from:
+//   - v_sf_activity_feed        (SF tasks, events, emails, calls)
+//   - property_sale_events      (sales)
+//   - available_listings        (listing status changes)
+//   - v_ownership_chain         (ownership changes)
+//   - v_lease_extensions_summary (lease amendments)
+//   - (best-effort) CMS survey history via property_cms_link.last_survey_date
+
+async function _udRenderActivityLogAsync(bodyEl) {
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading activity log...</p></div>';
+
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  const db = _udCache.db;
+  const own = _udCache.ownership || {};
+  const sfAccountId = own.sf_account_id || own.sf_company_id || null;
+  const sfContactId = own.sf_contact_id || own.salesforce_id || null;
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+
+  const events = [];
+
+  // Ensure sales cache populated (reuse Deal History loader).
+  if (!(_salesCache && _salesCache.property_id === propertyId && _salesCache.db === db)) {
+    try { await _udRenderDealHistoryAsync({ innerHTML: '' }); } catch (_) { /* ignore */ }
+  }
+
+  // 1. Sales + listing events (always present)
+  (_salesCache?.transactions || []).forEach(t => {
+    if (!t.sale_date) return;
+    events.push({
+      kind: 'sale',
+      date: t.sale_date,
+      title: (t.transaction_type || 'Sale') + (t.price ? ' · ' + fmt(t.price) : ''),
+      detail: [t.buyer_name && 'Buyer ' + t.buyer_name, t.seller_name && 'Seller ' + t.seller_name, t.broker_name && 'Broker ' + t.broker_name].filter(Boolean).join(' · '),
+      color: 'var(--green)'
+    });
+  });
+  (_salesCache?.listings || []).forEach(l => {
+    if (l.listing_date) {
+      events.push({
+        kind: 'listing',
+        date: l.listing_date,
+        title: 'Listed for sale' + (l.initial_price ? ' · ' + fmt(l.initial_price) : ''),
+        detail: l.listing_broker ? 'Broker ' + l.listing_broker : '',
+        color: 'var(--accent)'
+      });
+    }
+    if (l.off_market_date) {
+      events.push({
+        kind: 'listing_status',
+        date: l.off_market_date,
+        title: 'Listing off-market' + (l.status ? ' · ' + l.status : ''),
+        detail: '',
+        color: 'var(--yellow)'
+      });
+    }
+  });
+
+  // 2. Ownership chain
+  (_udCache.chain || []).forEach(h => {
+    events.push({
+      kind: 'ownership',
+      date: h.transfer_date,
+      title: 'Ownership transfer to ' + (h.recorded_owner_name || h.true_owner_name || h.to_owner || 'Unknown'),
+      detail: [h.from_owner && 'From ' + h.from_owner, h.sale_price && fmt(h.sale_price)].filter(Boolean).join(' · '),
+      color: '#a55eea',
+      ownerCtx: _ownerCtxFromChain(h, db)
+    });
+  });
+
+  // 3. SF activity feed (tasks, events, emails, calls)
+  try {
+    let actRes = [];
+    if (sfAccountId) {
+      actRes = await qFn('v_sf_activity_feed', '*', { filter: 'sf_account_id=eq.' + encodeURIComponent(sfAccountId), order: 'activity_date.desc', limit: 200 });
+    } else if (sfContactId) {
+      actRes = await qFn('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(sfContactId), order: 'activity_date.desc', limit: 200 });
+    }
+    const sfAll = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
+    sfAll.forEach(a => {
+      const feedType = (a.feed_type || a.activity_type || '').toLowerCase();
+      let color = 'var(--accent)';
+      if (feedType.includes('call')) color = 'var(--green)';
+      else if (feedType.includes('email')) color = '#3b82f6';
+      else if (feedType.includes('task')) color = 'var(--yellow)';
+      events.push({
+        kind: 'sf_' + (feedType || 'activity'),
+        date: a.activity_date,
+        title: a.subject || a.activity_type || 'Activity',
+        detail: [a.feed_type, a.status, a.contact_name && 'Contact ' + a.contact_name, a.assigned_to && 'Owner ' + a.assigned_to].filter(Boolean).join(' · '),
+        notes: a.notes || null,
+        color
+      });
+    });
+  } catch (e) { console.warn('Activity Log: SF feed load failed', e); }
+
+  // 4. Lease amendments (v_lease_extensions_summary)
+  try {
+    if (propertyId && db === 'dia') {
+      const extRes = await qFn('v_lease_extensions_summary', '*', { filter: `property_id=eq.${encodeURIComponent(propertyId)}`, limit: 50 });
+      const extArr = Array.isArray(extRes) ? extRes : (extRes && extRes.data) || [];
+      extArr.forEach(e => {
+        if (!e.last_extension_date) return;
+        events.push({
+          kind: 'lease_amendment',
+          date: e.last_extension_date,
+          title: 'Lease amendment / extension',
+          detail: (e.extension_count ? fmtN(e.extension_count) + ' extensions on file' : ''),
+          color: '#8b5cf6'
+        });
+      });
+    }
+  } catch (e) { /* v_lease_extensions_summary may not be available */ }
+
+  // 5. CMS survey (last inspection date)
+  try {
+    const cms = _udCache.cms?.facility || _udCache.cms || null;
+    const surveyDate = cms?.last_survey_date || cms?.survey_date;
+    if (surveyDate) {
+      events.push({
+        kind: 'cms_survey',
+        date: surveyDate,
+        title: 'CMS survey completed',
+        detail: cms.deficiency_count != null ? fmtN(cms.deficiency_count) + ' deficiencies' : '',
+        color: '#ef4444'
+      });
+    }
+  } catch (_) {}
+
+  // Sort newest → oldest
+  events.sort((a, b) => {
+    const ta = Date.parse(a.date || '') || 0;
+    const tb = Date.parse(b.date || '') || 0;
+    return tb - ta;
+  });
+
+  bodyEl.innerHTML = _udRenderActivityLog(events);
+}
+
+function _udRenderActivityLog(events) {
+  let html = '<div class="detail-section">';
+  html += '<div class="detail-section-title">Activity Log <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">' + events.length + ' events</span></div>';
+
+  if (events.length === 0) {
+    html += '<div class="detail-empty">No activity on record. As you log calls, send emails, list the property, or record ownership changes, they will appear here.</div>';
+    html += '</div>';
+    return html;
+  }
+
+  html += '<div style="position:relative;padding-left:24px">';
+  html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
+
+  events.forEach(ev => {
+    html += '<div style="position:relative;margin-bottom:14px">';
+    html += `<div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:${ev.color};border:2px solid var(--bg)"></div>`;
+    html += '<div style="background:var(--s2);border-radius:8px;padding:10px 12px;border:1px solid var(--border)">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:4px">';
+    html += `<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${ev.color};padding:1px 6px;border-radius:10px;border:1px solid ${ev.color}">${esc((ev.kind || 'event').replace(/_/g, ' '))}</span>`;
+    html += `<span style="font-size:11px;color:var(--text3)">${esc(_fmtDate(ev.date))}</span>`;
+    html += '</div>';
+    html += `<div style="font-size:13px;font-weight:600;color:var(--text)">${ev.ownerCtx ? _ownerLink(ev.title.replace(/^Ownership transfer to /, ''), ev.ownerCtx) : esc(ev.title || '')}</div>`;
+    if (ev.detail) html += `<div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(ev.detail)}</div>`;
+    if (ev.notes) html += `<div style="font-size:11px;color:var(--text3);margin-top:4px;white-space:pre-wrap">${esc(String(ev.notes).substring(0, 240))}${ev.notes.length > 240 ? '…' : ''}</div>`;
+    html += '</div></div>';
+  });
+
+  html += '</div></div>';
+  return html;
+}
+
+function _udTabActivityLog() {
+  // Synchronous fallback — called only when navigator lacks async path.
+  return '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading activity log...</p></div>';
+}
+
+// ─── HISTORY TAB (legacy, retained as fallback) ──────────────────────────────
 
 function _udTabHistory() {
   const chain = _udCache.chain;
@@ -5049,11 +5790,20 @@ window.entityLink = function(text, type, id, db) {
     case 'transaction':
       if (!id) return esc(text);
       return '<span style="' + style + '" onclick="navToTransaction(' + id + ')" title="View transaction details">' + esc(text) + '</span>';
+    case 'tenant': {
+      const ctxPayload = encodeURIComponent(JSON.stringify({ name: text, db: db || null }));
+      return '<span class="tenant-link" role="button" tabindex="0" data-tenant-ctx="' + ctxPayload +
+        '" style="' + style + ';font-weight:600" title="View tenant profile">' + esc(text) + '</span>';
+    }
+    case 'broker': {
+      const ctxPayload = encodeURIComponent(JSON.stringify({ name: text, db: db || null }));
+      return '<span class="broker-link" role="button" tabindex="0" data-broker-ctx="' + ctxPayload +
+        '" style="' + style + ';font-weight:600" title="View broker profile">' + esc(text) + '</span>';
+    }
     case 'operator':
     case 'owner':
     case 'buyer':
     case 'seller':
-    case 'broker':
     case 'investor':
       return '<span style="' + style + '" onclick="openEntityDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
     case 'state':
@@ -7757,3 +8507,454 @@ window._ownerLink = _ownerLink;
 window._ownerCtxFromCurrent = _ownerCtxFromCurrent;
 window._ownerCtxFromChain = _ownerCtxFromChain;
 window._switchContactTab = _switchContactTab;
+
+// ============================================================================
+// TENANT DRAWER — Click-through panel for tenant names on Rent Roll / Leases
+// ============================================================================
+//
+// Lightweight sibling to OwnerDrawer. Resolves the tenant into a contact
+// profile (unified_contacts / available SF contact) and shows:
+// - Overview: tenant name, lease summary, firm, SF badge
+// - Contacts: unified_contacts linked to tenant company_name / sf_account_id
+// - Activities: v_sf_activity_feed scoped to tenant sf_account_id/sf_contact_id
+// - Begin Prospecting: creates SF task on the tenant account.
+
+let _tenantDrawerCache = null;
+
+async function openTenantDrawer(ctxJson) {
+  let ctx;
+  try { ctx = (typeof ctxJson === 'string') ? JSON.parse(ctxJson) : ctxJson; }
+  catch (e) { console.error('TenantDrawer: bad ctx', e); return; }
+  if (!ctx) return;
+
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+
+  if (headerEl) headerEl.innerHTML =
+    '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+    '<div class="detail-header-info">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="detail-title">' + esc(ctx.name || 'Tenant') + '</div>' +
+        '<div class="detail-subtitle">Loading tenant profile...</div>' +
+      '</div>' +
+      '<span class="detail-badge" style="background:#3b82f6;color:#fff">TENANT</span>' +
+    '</div>' +
+    '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+  if (tabsEl) tabsEl.innerHTML = '';
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading tenant profile...</p></div>';
+
+  try {
+    const resolved = await _resolveTenantProfile(ctx);
+    _tenantDrawerCache = resolved;
+
+    const sfBadge = resolved.sf_account_id
+      ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#00a1e0;color:#fff;margin-left:6px">SF linked</span>'
+      : '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2);margin-left:6px">No SF match</span>';
+    if (headerEl) headerEl.innerHTML =
+      '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+      '<div class="detail-header-info">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="detail-title">' + esc(resolved.name || 'Tenant') + sfBadge + '</div>' +
+          '<div class="detail-subtitle">Tenant · Lease ' + esc(resolved.lease_number || '—') + '</div>' +
+        '</div>' +
+        '<span class="detail-badge" style="background:#3b82f6;color:#fff">TENANT</span>' +
+      '</div>' +
+      '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+
+    const tabs = ['Overview', 'Contacts', 'Activities'];
+    if (tabsEl) tabsEl.innerHTML = tabs.map(function(t, i) {
+      return '<button class="detail-tab ' + (i === 0 ? 'active' : '') + '" onclick="_switchTenantDrawerTab(\'' + t + '\')">' + t + '</button>';
+    }).join('');
+
+    if (bodyEl) bodyEl.innerHTML = _renderTenantDrawerTab('Overview');
+  } catch (err) {
+    console.error('TenantDrawer error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading tenant profile: ' + esc(err.message || String(err)) + '</div>';
+  }
+}
+
+async function _resolveTenantProfile(ctx) {
+  const out = Object.assign({}, ctx);
+  out.contacts = [];
+  out.activities = [];
+
+  // Activity feed by sf_account_id or sf_contact_id
+  try {
+    let actRes = [];
+    if (out.sf_account_id) {
+      actRes = await diaQuery('v_sf_activity_feed', '*', { filter: 'sf_account_id=eq.' + encodeURIComponent(out.sf_account_id), order: 'activity_date.desc', limit: 100 });
+    } else if (out.sf_contact_id) {
+      actRes = await diaQuery('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(out.sf_contact_id), order: 'activity_date.desc', limit: 100 });
+    }
+    out.activities = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
+  } catch (e) { console.warn('TenantDrawer: activity feed failed', e); }
+
+  // Contacts by company name match
+  try {
+    if (out.name) {
+      const like = encodeURIComponent('*' + out.name + '*');
+      const cRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=unified_id,full_name,first_name,last_name,title,email,phone,mobile_phone,sf_contact_id,company_name&filter=company_name%3Dilike.' + like + '&limit=25');
+      out.contacts = (cRes && cRes.data) || [];
+    }
+  } catch (e) { console.warn('TenantDrawer: contacts lookup failed', e); }
+
+  return out;
+}
+
+function _renderTenantDrawerTab(tab) {
+  const c = _tenantDrawerCache;
+  if (!c) return '<div class="detail-empty">No tenant data loaded</div>';
+  switch (tab) {
+    case 'Overview':   return _tenantDrawerOverview(c);
+    case 'Contacts':   return _ownerDrawerContacts(c); // reuse: same shape
+    case 'Activities': return _tenantDrawerActivities(c);
+    default: return '<div class="detail-empty">Unknown tab</div>';
+  }
+}
+
+function _switchTenantDrawerTab(tabName) {
+  if (!_tenantDrawerCache) return;
+  document.querySelectorAll('#detailTabs .detail-tab').forEach(function(t) {
+    t.classList.toggle('active', t.textContent.trim() === tabName);
+  });
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _renderTenantDrawerTab(tabName);
+}
+
+function _tenantDrawerOverview(c) {
+  let html = '<div class="detail-section"><div class="detail-section-title">Tenant</div><div class="detail-grid">';
+  html += _row('Name', c.name);
+  if (c.lease_number) html += _row('Lease Number', c.lease_number);
+  if (c.property_id) html += _row('Property ID', c.property_id);
+  html += '</div></div>';
+
+  if (!c.sf_account_id && !c.sf_contact_id) {
+    html += '<div class="detail-section"><div class="detail-section-title">Salesforce</div>';
+    html += '<div style="background:rgba(0,161,224,0.08);border:1px solid rgba(0,161,224,0.3);border-radius:10px;padding:14px 16px">';
+    html += '<div style="font-size:13px;color:var(--text);margin-bottom:8px">No Salesforce match found for <strong>' + esc(c.name || 'this tenant') + '</strong>.</div>';
+    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Create the SF Account so tenant-level activities can be tracked.</div>';
+    html += '<button class="act-btn primary" onclick="_tenantDrawerCreateSfAccount()">+ Create Salesforce Account</button>';
+    html += '</div></div>';
+  }
+
+  html += '<div class="detail-section"><div class="detail-section-title">Prospecting</div>';
+  html += '<div style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(0,161,224,0.08));border:1px solid rgba(59,130,246,0.25);border-radius:10px;padding:14px 16px">';
+  html += '<div style="font-size:13px;color:var(--text);margin-bottom:6px;font-weight:600">Begin Prospecting</div>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Creates a Salesforce task on <strong>' + esc(c.name) + '</strong> and opens the activity log.</div>';
+  html += '<button class="act-btn primary" onclick="_tenantDrawerBeginProspecting()" style="background:#3b82f6;color:#fff">\u2192 Begin Prospecting</button>';
+  html += '</div></div>';
+
+  html += '<div class="detail-section"><div class="detail-section-title">Engagement Snapshot</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + (c.contacts?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.activities?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Activities</div></div>';
+  html += '</div></div>';
+
+  return html;
+}
+
+function _tenantDrawerActivities(c) {
+  const list = c.activities || [];
+  if (list.length === 0) {
+    return '<div class="detail-section"><div class="detail-section-title">Activities</div><div class="detail-empty">No activity on file for this tenant.</div></div>';
+  }
+  let html = '<div class="detail-section"><div class="detail-section-title">Activities (' + list.length + ')</div>';
+  list.forEach(function(a) {
+    const typeColor = (a.feed_type === 'task') ? 'var(--yellow)'
+      : (a.feed_type === 'call_outcome') ? 'var(--green)' : 'var(--accent)';
+    html += '<div class="detail-card">';
+    html += '<div class="detail-card-header">';
+    html += '<div class="detail-card-title">' + esc(a.subject || a.activity_type || 'Activity') + '</div>';
+    html += '<div class="detail-card-date">' + esc(_fmtDate(a.activity_date)) + '</div>';
+    html += '</div><div class="detail-card-body">';
+    html += '<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:' + typeColor + ';color:#fff;margin-bottom:4px">' + esc(a.feed_type || a.activity_type || '') + '</span>';
+    if (a.notes) html += '<br><span style="font-size:12px;color:var(--text2);white-space:pre-wrap">' + esc(String(a.notes).substring(0, 220)) + (a.notes.length > 220 ? '...' : '') + '</span>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+async function _tenantDrawerBeginProspecting() {
+  const c = _tenantDrawerCache;
+  if (!c) return;
+  try {
+    const payload = {
+      sf_company_id: c.sf_account_id || undefined,
+      sf_contact_id: c.sf_contact_id || undefined,
+      activity_type: 'Tenant Outreach',
+      activity_date: new Date().toISOString().split('T')[0],
+      outcome: 'no_answer',
+      notes: 'Tenant prospecting opened for ' + c.name,
+      force: true
+    };
+    const res = await fetch('/api/sync?action=outbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'log_to_sf', payload })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showToast('Prospecting task created for ' + c.name, 'success');
+  } catch (e) {
+    showToast('Could not create SF task: ' + e.message, 'error');
+  }
+}
+
+function _tenantDrawerCreateSfAccount() {
+  const c = _tenantDrawerCache;
+  if (!c) return;
+  const sfNewUrl = _SF_BASE + '/lightning/o/Account/new?defaultFieldValues=Name=' + encodeURIComponent(c.name || '');
+  window.open(sfNewUrl, '_blank', 'noopener');
+  showToast('Opening Salesforce — New Account form (' + c.name + ')', 'info');
+}
+
+// Delegated click handler for .tenant-link elements
+document.addEventListener('click', function (e) {
+  const el = e.target && e.target.closest && e.target.closest('.tenant-link[data-tenant-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-tenant-ctx') || '');
+    if (raw) openTenantDrawer(raw);
+  } catch (err) { console.warn('tenant-link click: bad payload', err); }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target && e.target.closest && e.target.closest('.tenant-link[data-tenant-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-tenant-ctx') || '');
+    if (raw) openTenantDrawer(raw);
+  } catch (err) { /* ignore */ }
+});
+
+window.openTenantDrawer = openTenantDrawer;
+window._switchTenantDrawerTab = _switchTenantDrawerTab;
+window._tenantDrawerBeginProspecting = _tenantDrawerBeginProspecting;
+window._tenantDrawerCreateSfAccount = _tenantDrawerCreateSfAccount;
+
+// ============================================================================
+// BROKER DRAWER — Click-through panel for listing/sale broker names
+// ============================================================================
+//
+// Shows the broker's firm, past deals on this property, and SF activity feed.
+// Resolves by broker name against unified_contacts.
+
+let _brokerDrawerCache = null;
+
+async function openBrokerDrawer(ctxJson) {
+  let ctx;
+  try { ctx = (typeof ctxJson === 'string') ? JSON.parse(ctxJson) : ctxJson; }
+  catch (e) { console.error('BrokerDrawer: bad ctx', e); return; }
+  if (!ctx) return;
+
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+
+  if (headerEl) headerEl.innerHTML =
+    '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+    '<div class="detail-header-info">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="detail-title">' + esc(ctx.name || 'Broker') + '</div>' +
+        '<div class="detail-subtitle">Loading broker profile...</div>' +
+      '</div>' +
+      '<span class="detail-badge" style="background:#f59e0b;color:#fff">BROKER</span>' +
+    '</div>' +
+    '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+  if (tabsEl) tabsEl.innerHTML = '';
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading broker profile...</p></div>';
+
+  try {
+    const resolved = await _resolveBrokerProfile(ctx);
+    _brokerDrawerCache = resolved;
+
+    const sfBadge = resolved.sf_contact_id || resolved.sf_account_id
+      ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#00a1e0;color:#fff;margin-left:6px">SF linked</span>'
+      : '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2);margin-left:6px">No SF match</span>';
+    if (headerEl) headerEl.innerHTML =
+      '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+      '<div class="detail-header-info">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="detail-title">' + esc(resolved.name || 'Broker') + sfBadge + '</div>' +
+          '<div class="detail-subtitle">Broker' + (resolved.broker_firm ? ' · ' + esc(resolved.broker_firm) : '') + '</div>' +
+        '</div>' +
+        '<span class="detail-badge" style="background:#f59e0b;color:#fff">BROKER</span>' +
+      '</div>' +
+      '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+
+    const tabs = ['Overview', 'Activities', 'Deals'];
+    if (tabsEl) tabsEl.innerHTML = tabs.map(function(t, i) {
+      return '<button class="detail-tab ' + (i === 0 ? 'active' : '') + '" onclick="_switchBrokerDrawerTab(\'' + t + '\')">' + t + '</button>';
+    }).join('');
+
+    if (bodyEl) bodyEl.innerHTML = _renderBrokerDrawerTab('Overview');
+  } catch (err) {
+    console.error('BrokerDrawer error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading broker profile: ' + esc(err.message || String(err)) + '</div>';
+  }
+}
+
+async function _resolveBrokerProfile(ctx) {
+  const out = Object.assign({}, ctx);
+  out.activities = [];
+  out.deals = [];
+
+  // Lookup contact by name
+  try {
+    const like = encodeURIComponent('*' + (out.name || '') + '*');
+    const cRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=unified_id,full_name,title,email,phone,sf_contact_id,sf_account_id,company_name&filter=full_name%3Dilike.' + like + '&limit=5');
+    const matches = (cRes && cRes.data) || [];
+    if (matches.length) {
+      out.sf_contact_id = out.sf_contact_id || matches[0].sf_contact_id || null;
+      out.sf_account_id = out.sf_account_id || matches[0].sf_account_id || null;
+      out.broker_firm = out.broker_firm || matches[0].company_name || null;
+      out.email = matches[0].email || null;
+      out.phone = matches[0].phone || null;
+    }
+  } catch (e) { /* ignore */ }
+
+  // Activity feed by sf_contact_id
+  if (out.sf_contact_id) {
+    try {
+      const actRes = await diaQuery('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(out.sf_contact_id), order: 'activity_date.desc', limit: 50 });
+      out.activities = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
+    } catch (e) { /* ignore */ }
+  }
+
+  // Past deals by broker name on this property (from current sales cache)
+  if (_salesCache) {
+    out.deals = (_salesCache.transactions || []).filter(t => (t.broker_name || t.listing_broker) && String(t.broker_name || t.listing_broker).toLowerCase() === String(out.name || '').toLowerCase());
+  }
+
+  return out;
+}
+
+function _renderBrokerDrawerTab(tab) {
+  const c = _brokerDrawerCache;
+  if (!c) return '<div class="detail-empty">No broker data loaded</div>';
+  switch (tab) {
+    case 'Overview':   return _brokerDrawerOverview(c);
+    case 'Activities': return _tenantDrawerActivities(c);
+    case 'Deals':      return _brokerDrawerDeals(c);
+    default: return '<div class="detail-empty">Unknown tab</div>';
+  }
+}
+
+function _switchBrokerDrawerTab(tabName) {
+  if (!_brokerDrawerCache) return;
+  document.querySelectorAll('#detailTabs .detail-tab').forEach(function(t) {
+    t.classList.toggle('active', t.textContent.trim() === tabName);
+  });
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _renderBrokerDrawerTab(tabName);
+}
+
+function _brokerDrawerOverview(c) {
+  let html = '<div class="detail-section"><div class="detail-section-title">Broker</div><div class="detail-grid">';
+  html += _row('Name', c.name);
+  if (c.broker_firm) html += _row('Firm', c.broker_firm);
+  if (c.email) html += _rowLink('Email', c.email, 'mailto:' + c.email);
+  if (c.phone) html += _rowLink('Phone', c.phone, 'tel:' + c.phone);
+  html += '</div></div>';
+
+  html += '<div class="detail-section"><div class="detail-section-title">Prospecting</div>';
+  html += '<div style="background:linear-gradient(135deg,rgba(245,158,11,0.12),rgba(0,161,224,0.08));border:1px solid rgba(245,158,11,0.25);border-radius:10px;padding:14px 16px">';
+  html += '<div style="font-size:13px;color:var(--text);margin-bottom:6px;font-weight:600">Begin Prospecting</div>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Creates a Salesforce task on <strong>' + esc(c.name) + '</strong>.</div>';
+  html += '<button class="act-btn primary" onclick="_brokerDrawerBeginProspecting()" style="background:#f59e0b;color:#fff">\u2192 Begin Prospecting</button>';
+  html += '</div></div>';
+
+  html += '<div class="detail-section"><div class="detail-section-title">Engagement Snapshot</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + (c.activities?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Activities</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + (c.deals?.length || 0) + '</div><div style="font-size:11px;color:var(--text3)">Deals (this property)</div></div>';
+  html += '</div></div>';
+  return html;
+}
+
+function _brokerDrawerDeals(c) {
+  const deals = c.deals || [];
+  if (deals.length === 0) {
+    return '<div class="detail-section"><div class="detail-section-title">Deals</div><div class="detail-empty">No deals recorded for this broker on this property.</div></div>';
+  }
+  let html = '<div class="detail-section"><div class="detail-section-title">Deals (' + deals.length + ')</div>';
+  deals.forEach(d => {
+    html += '<div class="detail-card"><div class="detail-card-header">';
+    html += '<div class="detail-card-title">' + esc(d.transaction_type || 'Sale') + (d.price ? ' — ' + fmt(d.price) : '') + '</div>';
+    html += '<div class="detail-card-date">' + esc(_fmtDate(d.sale_date)) + '</div>';
+    html += '</div><div class="detail-card-body">';
+    if (d.buyer_name) html += '<div>Buyer: ' + esc(d.buyer_name) + '</div>';
+    if (d.seller_name) html += '<div>Seller: ' + esc(d.seller_name) + '</div>';
+    if (d.cap_rate) html += '<div>Cap: ' + Number(d.cap_rate).toFixed(2) + '%</div>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+async function _brokerDrawerBeginProspecting() {
+  const c = _brokerDrawerCache;
+  if (!c) return;
+  try {
+    const payload = {
+      sf_company_id: c.sf_account_id || undefined,
+      sf_contact_id: c.sf_contact_id || undefined,
+      activity_type: 'Broker Outreach',
+      activity_date: new Date().toISOString().split('T')[0],
+      outcome: 'no_answer',
+      notes: 'Broker prospecting opened for ' + c.name,
+      force: true
+    };
+    const res = await fetch('/api/sync?action=outbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'log_to_sf', payload })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showToast('Prospecting task created for ' + c.name, 'success');
+  } catch (e) {
+    showToast('Could not create SF task: ' + e.message, 'error');
+  }
+}
+
+// Delegated click handler for .broker-link elements
+document.addEventListener('click', function (e) {
+  const el = e.target && e.target.closest && e.target.closest('.broker-link[data-broker-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
+    if (raw) openBrokerDrawer(raw);
+  } catch (err) { console.warn('broker-link click: bad payload', err); }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target && e.target.closest && e.target.closest('.broker-link[data-broker-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
+    if (raw) openBrokerDrawer(raw);
+  } catch (err) { /* ignore */ }
+});
+
+window.openBrokerDrawer = openBrokerDrawer;
+window._switchBrokerDrawerTab = _switchBrokerDrawerTab;
+window._brokerDrawerBeginProspecting = _brokerDrawerBeginProspecting;
