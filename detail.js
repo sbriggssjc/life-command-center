@@ -108,7 +108,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // Render tab bar — highlight initialTab if provided, else first tab.
   // Tabs restructured to match broker workflow (2026-04-15).
   // Legacy tab names still resolve to the correct new tab via _udMapLegacyTab().
-  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Ownership & CRM', 'Deal History', 'Intel', 'Activity Log'];
+  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Ownership & CRM', 'Deal History', 'Activity Log'];
   const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
   const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
@@ -317,8 +317,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       _udRenderActivityLogAsync(bodyEl);
     } else {
       if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
-      if (activeTab === 'Intel') _intelRenderPriorSaleSummaryAsync();
-      if (activeTab === 'Overview') _udHydratePipelineStage();
+      if (activeTab === 'Overview') { _udHydratePipelineStage(); _intelRenderPriorSaleSummaryAsync(); }
     }
 
   } catch (err) {
@@ -564,8 +563,7 @@ function switchUnifiedTab(tabName) {
     _udRenderActivityLogAsync(bodyEl);
   } else {
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(tabName);
-    if (tabName === 'Intel') _intelRenderPriorSaleSummaryAsync();
-    if (tabName === 'Overview') _udHydratePipelineStage();
+    if (tabName === 'Overview') { _udHydratePipelineStage(); _intelRenderPriorSaleSummaryAsync(); }
   }
 }
 
@@ -589,7 +587,7 @@ function _udMapLegacyTab(name) {
     case 'operations':       return 'Operations';
     case 'ownership & crm':  return 'Ownership & CRM';
     case 'deal history':     return 'Deal History';
-    case 'intel':            return 'Intel';
+    case 'intel':            return 'Overview';
     case 'activity log':     return 'Activity Log';
     default:                 return n;
   }
@@ -984,7 +982,6 @@ function _udRenderTab(tab) {
     case 'Operations':      return _udTabOperations();
     case 'Ownership & CRM': return _udTabOwnership();
     case 'Deal History':    return _udTabDealHistory();
-    case 'Intel':           return _udTabIntel();
     case 'Activity Log':    return _udTabActivityLog();
     default: return '<div class="detail-empty">Unknown tab</div>';
   }
@@ -1186,7 +1183,85 @@ window._udAdvancePipelineStage = _udAdvancePipelineStage;
 function _udTabOverview() {
   const pill = _udRenderPipelinePill();
   const body = _udTabProperty();
-  return pill + body;
+  const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+
+  let extra = '';
+
+  // ── LOAN / DEBT (moved from Intel tab) ──────────────────────────────────
+  if (propertyId) {
+    extra += '<div class="detail-section">';
+    extra += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-loan\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Loan / Debt</div>';
+    extra += '<div class="intel-loan" style="display:none">';
+    extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Lender</label>';
+    extra += '<input id="intelLender" type="text" placeholder="Bank or fund name" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Amount ($)</label>';
+    extra += '<input id="intelLoanAmount" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '</div>';
+    extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Interest Rate (%)</label>';
+    extra += '<input id="intelInterestRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Loan Type</label>';
+    extra += '<select id="intelLoanType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
+    extra += '<option value="">—</option>';
+    ['Fixed', 'Variable', 'Bridge', 'CMBS', 'Agency', 'Other'].forEach(t => {
+      extra += `<option value="${t}">${t}</option>`;
+    });
+    extra += '</select></div>';
+    extra += '</div>';
+    extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Origination Date</label>';
+    extra += '<input id="intelOrigDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Maturity Date</label>';
+    extra += '<input id="intelMatDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '</div>';
+    extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Amortization (years)</label>';
+    extra += '<input id="intelAmortization" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Recourse</label>';
+    extra += '<select id="intelRecourse" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
+    extra += '<option value="">—</option>';
+    ['Recourse', 'Non-Recourse', 'Partial'].forEach(t => {
+      extra += `<option value="${t}">${t}</option>`;
+    });
+    extra += '</select></div>';
+    extra += '</div>';
+    extra += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">LTV (%)</label>';
+    extra += '<input id="intelLTV" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<button onclick="_udBtnGuard(this, _intelSaveLoan)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Loan Info</button>';
+    extra += '</div></div>';
+
+    // ── CASH FLOW / VALUATION (moved from Intel tab) ────────────────────────
+    extra += '<div class="detail-section">';
+    extra += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-cashflow\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Cash Flow / Valuation</div>';
+    extra += '<div class="intel-cashflow" style="display:none">';
+    extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Annual Rent / NOI ($)</label>';
+    extra += '<input id="intelAnnualRent" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Rent Per SF ($/SF)</label>';
+    extra += '<input id="intelRentPerSF" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '</div>';
+    extra += '<div style="margin-top:8px"><label style="font-size:11px;font-weight:600;color:var(--text2)">Expense Type (NNN, Gross, etc.)</label>';
+    extra += '<input id="intelExpenseType" type="text" placeholder="e.g., NNN, Modified Gross" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Estimated Value ($)</label>';
+    extra += '<input id="intelEstValue" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Current Cap Rate (%)</label>';
+    extra += '<input id="intelCurrentCapRate" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '</div>';
+    extra += '<button onclick="_udBtnGuard(this, _intelSaveCashFlow)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Cash Flow</button>';
+    extra += '</div></div>';
+
+    // ── AI RESEARCH (moved from Intel tab) ──────────────────────────────────
+    extra += '<div class="detail-section">';
+    extra += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.overview-ai-research\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">AI Research</div>';
+    extra += '<div class="overview-ai-research" style="display:none">';
+    extra += _udAssistantSection('intel', 'Research Assistant', 'Turn the current notes and property context into a clean analyst summary and recommended next actions.');
+    extra += _udResearchIntakeSection();
+    extra += '</div></div>';
+  }
+
+  return pill + body + extra;
 }
 
 // ─── RENT ROLL TAB ───────────────────────────────────────────────────────────
@@ -1300,8 +1375,8 @@ function _udTabProperty() {
   html += _row('City / State', (p.city || '') + (p.state ? ', ' + p.state : ''));
   html += _row('County', p.county);
   html += _row('Zip Code', p.zip_code);
-  html += _row('Building Size', p.building_sf ? fmtN(p.building_sf) + ' SF' : null);
-  html += _row('Land Size', p.land_acres ? Number(p.land_acres).toFixed(2) + ' acres' : null);
+  html += _rowEditable('Building Size', p.building_sf ? fmtN(p.building_sf) + ' SF' : null, 'building_sf', 'properties');
+  html += _rowEditable('Land Size', p.land_acres ? Number(p.land_acres).toFixed(2) + ' acres' : null, 'land_acres', 'properties');
   html += _row('Occupancy Type', p.is_single_tenant === true ? 'Single-Tenant' : p.is_single_tenant === false ? 'Multi-Tenant' : null);
   // Year Built: treat 0 / null / non-positive as "unknown" and offer a
   // ChromeConnector resolve affordance. DB-level the 0 backfill already ran
@@ -1309,12 +1384,12 @@ function _udTabProperty() {
   // rows or race conditions can still surface 0 so we guard here too.
   const yb = Number(p.year_built);
   if (p.year_built != null && p.year_built !== '' && yb >= 1600 && yb <= 2100) {
-    html += _row('Year Built', yb);
+    html += _rowEditable('Year Built', yb, 'year_built', 'properties');
   } else {
     html += _rowResolve('Year Built', 'year_built');
   }
-  html += _row('Building Type', p.building_type);
-  html += _row('Building Condition', p.building_condition);
+  html += _rowEditable('Building Type', p.building_type, 'building_type', 'properties');
+  html += _rowEditable('Building Condition', p.building_condition, 'building_condition', 'properties');
 
   // Dialysis-specific — canonical field is `stations`. `number_of_chairs` is
   // a legacy alias kept around for compatibility with older CMS-derived rows.
@@ -3327,6 +3402,23 @@ function _udTabOwnership() {
 
   html += '</div></div>';
 
+  // ── RESEARCH NOTES (moved from Intel tab) ────────────────────────────────
+  const _ownPropertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+  if (_ownPropertyId) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-notes\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Research Notes</div>';
+    html += '<div class="intel-notes" style="display:none">';
+    html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Source / Date</label>';
+    html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    html += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Date Found</label>';
+    html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    html += '</div>';
+    html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
+    html += '</div></div>';
+  }
+
   // Async loads after DOM renders
   _loadEmailTemplates(own);
   _loadTouchpoints(own);
@@ -4192,6 +4284,7 @@ async function _udRenderDealHistoryAsync(bodyEl) {
   }
 
   bodyEl.innerHTML = _udTabDealHistory();
+  _intelRenderPriorSaleSummaryAsync();
 }
 
 function _udTabDealHistory() {
@@ -4211,6 +4304,17 @@ function _udTabDealHistory() {
   const events = [...saleEvents, ...ownerEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
 
   let html = '';
+
+  // ── PRIOR SALE SUMMARY (moved from Intel tab) ─────────────────────────────
+  // Read-only summary populated async by _intelRenderPriorSaleSummaryAsync().
+  if (propertyId) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-prior-sale\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Prior Sale</div>';
+    html += '<div class="intel-prior-sale" style="display:block">';
+    html += '<div id="intelPriorSaleSummary" style="font-size:12px;color:var(--text2)"><span class="spinner"></span> Loading latest sale\u2026</div>';
+    html += '<div style="margin-top:10px;font-size:11px;color:var(--text3);font-style:italic">Sale details are managed on the Deal History tab. Use \u201c+ Add Transaction\u201d below to record a new sale.</div>';
+    html += '</div></div>';
+  }
 
   if (events.length === 0) {
     html += '<div class="detail-empty" style="text-align:center;padding:40px 20px">';
@@ -5671,6 +5775,69 @@ function _rowResolve(label, field) {
     </div>
   </div>`;
 }
+
+/**
+ * Editable row: double-click the value to edit inline.
+ * @param {string} label  - display label
+ * @param {*}      value  - current display value
+ * @param {string} field  - DB column name (e.g. 'year_built')
+ * @param {string} table  - DB table name (e.g. 'properties')
+ */
+function _rowEditable(label, value, field, table) {
+  if (value == null || value === '' || value === '—') return '';
+  const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id || '';
+  return `<div class="detail-row">
+    <div class="detail-lbl">${esc(label)}</div>
+    <div class="detail-val"><span class="inline-editable" data-field="${esc(field)}" data-table="${esc(table)}" data-id="${esc(String(propertyId))}" ondblclick="_udInlineEdit(this)" title="Double-click to edit" style="border-bottom:1px dashed var(--text3);cursor:pointer">${esc(String(value))}</span></div>
+  </div>`;
+}
+
+/**
+ * Inline-edit handler: replaces a span with an input, saves on blur/Enter.
+ */
+function _udInlineEdit(el) {
+  if (el.querySelector('input')) return; // already editing
+  const origValue = el.textContent.trim();
+  const field = el.dataset.field;
+  const table = el.dataset.table;
+  const id = el.dataset.id;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = origValue;
+  input.style.cssText = 'width:100%;font-size:12px;padding:4px 6px;border:1px solid var(--accent);border-radius:4px;background:var(--s2);color:var(--text);box-sizing:border-box;outline:none';
+  el.textContent = '';
+  el.appendChild(input);
+  input.focus();
+  input.select();
+
+  const save = async () => {
+    const newVal = input.value.trim();
+    el.textContent = newVal || origValue;
+    if (newVal === origValue || !newVal) return;
+    try {
+      const qFn = _udCache?.db === 'gov' ? govQuery : diaQuery;
+      await qFn(table, null, {
+        method: 'PATCH',
+        filter: `property_id=eq.${encodeURIComponent(id)}`,
+        body: { [field]: newVal }
+      });
+      showToast(`Updated ${field.replace(/_/g, ' ')}`, 'success');
+      // Update local cache so re-render shows new value
+      if (_udCache?.property) _udCache.property[field] = newVal;
+    } catch (e) {
+      console.error('Inline edit error:', e);
+      showToast('Save failed: ' + e.message, 'error');
+      el.textContent = origValue;
+    }
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { el.textContent = origValue; }
+  });
+}
+window._udInlineEdit = _udInlineEdit;
 
 /**
  * Deep-link to CoStar (or the last-known source URL) for the current
