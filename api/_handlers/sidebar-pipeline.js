@@ -1466,6 +1466,101 @@ async function auditNullSaleDates() {
 }
 
 /**
+ * Find the available_listings.listing_id that best represents the listing
+ * campaign a given sale came from. Matches on property_id with a
+ * listing_date within 180 days of sale_date — the closest preceding
+ * listing wins; if none precede, the closest listing within the 180-day
+ * window (future direction) is used. Returns null when no listing is in
+ * range, signalling an off-market / private sale.
+ *
+ * Dialysis only (government sales_transactions has no listing_sale_id
+ * column in the current schema).
+ */
+async function findMatchingListingForSale(domain, propertyId, saleDate) {
+  if (domain !== 'dialysis') return null;
+  const datePart = String(saleDate || '').split('T')[0];
+  if (!datePart) return null;
+  try {
+    const propertyIdInt = parseInt(propertyId, 10);
+    const lookup = await domainQuery('dialysis', 'GET',
+      `available_listings?property_id=eq.${propertyIdInt}` +
+      `&select=listing_id,listing_date&limit=200`
+    );
+    if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) {
+      return null;
+    }
+    const saleMs = new Date(datePart).getTime();
+    const WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
+    let best = null;
+    for (const row of lookup.data) {
+      if (!row.listing_date) continue;
+      const listMs = new Date(String(row.listing_date).split('T')[0]).getTime();
+      if (!Number.isFinite(listMs)) continue;
+      const diff = saleMs - listMs; // positive = listing preceded sale
+      if (Math.abs(diff) > WINDOW_MS) continue;
+      // Prefer listings that preceded the sale; among those pick closest.
+      const candidate = { listingId: row.listing_id, diff };
+      if (!best) { best = candidate; continue; }
+      const bestPreceded = best.diff >= 0;
+      const candPreceded = candidate.diff >= 0;
+      if (bestPreceded && !candPreceded) continue;
+      if (!bestPreceded && candPreceded) { best = candidate; continue; }
+      if (Math.abs(candidate.diff) < Math.abs(best.diff)) best = candidate;
+    }
+    return best?.listingId ?? null;
+  } catch (err) {
+    console.error('[listing-match] error', {
+      domain, propertyId, saleDate: datePart, error: err?.message || String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * After a listing is inserted or updated, link any sales_transactions rows
+ * for the same property whose sale_date is within 180 days of this
+ * listing's listing_date and which currently have listing_sale_id=null.
+ * This handles the normal pipeline ordering (sales written before the
+ * listing that produced them): the sale-time match returns null for the
+ * just-being-created listing, then this backfill associates them.
+ * Dialysis only. Never throws.
+ */
+async function backfillListingSaleIdForListing(domain, { listingId, propertyId, listingDate }) {
+  if (domain !== 'dialysis') return 0;
+  if (listingId == null) return 0;
+  const listDatePart = String(listingDate || '').split('T')[0];
+  if (!listDatePart) return 0;
+  try {
+    const listMs = new Date(listDatePart).getTime();
+    if (!Number.isFinite(listMs)) return 0;
+    const WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
+    const loStr = new Date(listMs - WINDOW_MS).toISOString().split('T')[0];
+    const hiStr = new Date(listMs + WINDOW_MS).toISOString().split('T')[0];
+    const patchPath =
+      `sales_transactions?property_id=eq.${propertyId}` +
+      `&sale_date=gte.${loStr}&sale_date=lte.${hiStr}` +
+      `&listing_sale_id=is.null`;
+    const res = await domainPatch('dialysis', patchPath,
+      { listing_sale_id: listingId },
+      'backfillListingSaleIdForListing'
+    );
+    if (res?.ok !== false) {
+      console.log(
+        `[listing-backfill] domain=dialysis listing_id=${listingId} ` +
+        `property_id=${propertyId} window=${loStr}..${hiStr}`
+      );
+    }
+    return 1;
+  } catch (err) {
+    console.error('[listing-backfill] error', {
+      listingId, propertyId, listingDate: listDatePart,
+      error: err?.message || String(err),
+    });
+    return 0;
+  }
+}
+
+/**
  * After a sales_transactions row is written for a property, close any
  * available_listings rows still flagged as active/Active for the same
  * property. Applies to both dialysis and government domains, using each
@@ -1473,7 +1568,6 @@ async function auditNullSaleDates() {
  *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date,
  *               sold_price (when provided)
  *   government: listing_status='Sold', off_market_date, updated_at
- *               (plus sold_date when the column exists)
  * Logs one line per closed listing with the [listing-close] prefix.
  * Never throws — listing-close failures must not abort the sales write.
  */
@@ -1488,7 +1582,7 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
       const propertyIdInt = parseInt(propertyId, 10);
       const lookup = await domainQuery('dialysis', 'GET',
         `available_listings?property_id=eq.${propertyIdInt}` +
-        `&is_active=is.true&select=listing_id&limit=100`
+        `&is_active=is.true&select=listing_id,listing_date&limit=100`
       );
       if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) return 0;
       let closed = 0;
@@ -1515,37 +1609,64 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
           closed++;
         }
       }
-      return closed;
+      const listingId = target.listing_id;
+      const patch = {
+        is_active:        false,
+        status:           'Sold',
+        sold_date:        datePart,
+        off_market_date:  datePart,
+      };
+      const res = await domainPatch('dialysis',
+        `available_listings?listing_id=eq.${listingId}`,
+        patch,
+        'closeActiveListingsOnSale'
+      );
+      if (res?.ok !== false) {
+        console.log(
+          `[listing-close] domain=dialysis listing_id=${listingId} ` +
+          `property_id=${propertyIdInt} sale_date=${datePart} ` +
+          `listing_date=${target.listing_date || 'null'}`
+        );
+        return 1;
+      }
+      return 0;
     }
 
     if (domain === 'government') {
       const lookup = await domainQuery('government', 'GET',
         `available_listings?property_id=eq.${propertyId}` +
-        `&listing_status=eq.Active&select=listing_id&limit=100`
+        `&listing_status=eq.Active&select=listing_id,listing_date&limit=100`
       );
       if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) return 0;
-      let closed = 0;
-      for (const row of lookup.data) {
-        const listingId = row.listing_id;
-        const patch = {
-          listing_status:   'Sold',
-          off_market_date:  datePart,
-          updated_at:       new Date().toISOString(),
-        };
-        const res = await domainPatch('government',
-          `available_listings?listing_id=eq.${listingId}`,
-          patch,
-          'closeActiveListingsOnSale'
+      const target = pickClosestListing(lookup.data);
+      if (!target) {
+        console.log(
+          `[listing-close] domain=government property_id=${propertyId} ` +
+          `sale_date=${datePart} skipped=no_match_in_3yr_window ` +
+          `candidates=${lookup.data.length}`
         );
-        if (res?.ok !== false) {
-          console.log(
-            `[listing-close] domain=government listing_id=${listingId} ` +
-            `property_id=${propertyId} sale_date=${datePart}`
-          );
-          closed++;
-        }
+        return 0;
       }
-      return closed;
+      const listingId = target.listing_id;
+      const patch = {
+        listing_status:   'Sold',
+        off_market_date:  datePart,
+        updated_at:       new Date().toISOString(),
+      };
+      const res = await domainPatch('government',
+        `available_listings?listing_id=eq.${listingId}`,
+        patch,
+        'closeActiveListingsOnSale'
+      );
+      if (res?.ok !== false) {
+        console.log(
+          `[listing-close] domain=government listing_id=${listingId} ` +
+          `property_id=${propertyId} sale_date=${datePart} ` +
+          `listing_date=${target.listing_date || 'null'}`
+        );
+        return 1;
+      }
+      return 0;
     }
   } catch (err) {
     console.error('[listing-close] error', {
@@ -1739,6 +1860,19 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     // Always write exclude flag since false is a valid value that should persist
     saleData.exclude_from_market_metrics = exclude_from_market_metrics ?? false;
     saleData.data_source                = 'costar_sidebar';
+
+    // Link the sale to the listing campaign that produced it, if any.
+    // Only written for dialysis — government sales_transactions does not
+    // carry a listing_sale_id column. Nullable: off-market sales or sales
+    // that predate any captured listing get null and stay unlinked.
+    if (domain === 'dialysis') {
+      const matchedListingId = await findMatchingListingForSale(
+        domain, propertyId, datePart
+      );
+      if (matchedListingId != null) {
+        saleData.listing_sale_id = matchedListingId;
+      }
+    }
     // Re-apply explicit null on historical dialysis rows: stripNulls above
     // removes null values, but PATCH must actively clear stated_cap_rate
     // on rows that previously inherited the stat-card cap rate.
@@ -3120,15 +3254,30 @@ async function upsertDialysisListings(propertyId, metadata) {
   record.status = 'Active';
   record.is_active = true;
 
-  // Dedup: one active listing per property
+  // Dedup: an existing active listing whose listing_date is within 90 days
+  // of now represents the SAME listing campaign — PATCH it in place. An
+  // older active listing (>90 days) is a separate prior campaign for the
+  // same property; we leave it alone and INSERT a new row for the new
+  // campaign (avoids collapsing distinct campaigns into a single listing
+  // record that then gets associated with multiple sales).
+  const ingestionDatePart = new Date().toISOString().split('T')[0];
+  const ninetyDaysAgoPart = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+    .toISOString().split('T')[0];
   const lookup = await domainQuery('dialysis', 'GET',
-    `available_listings?property_id=eq.${propertyId}&is_active=is.true&select=property_id&limit=1`
+    `available_listings?property_id=eq.${propertyIdInt}` +
+    `&is_active=is.true` +
+    `&listing_date=gte.${ninetyDaysAgoPart}` +
+    `&select=listing_id,listing_date` +
+    `&order=listing_date.desc.nullslast&limit=1`
   );
 
+  let currentListingId = null;
+
   if (lookup.ok && lookup.data?.length) {
-    // Update price and cap rate on existing active listing. listingCapRate
+    // Update price and cap rate on the in-window active listing. listingCapRate
     // comes only from metadata.cap_rate (the CoStar listing's asking cap
     // rate); never from a sale-derived calculated/sold cap rate.
+    currentListingId = lookup.data[0].listing_id;
     const patchData = stripNulls({
       last_price: parseCurrency(metadata.asking_price),
       current_cap_rate: listingCapRate,
@@ -3139,7 +3288,14 @@ async function upsertDialysisListings(propertyId, metadata) {
     if (primaryBroker?.name)  patchData.listing_broker = primaryBroker.name;
     if (primaryBroker?.email) patchData.broker_email   = primaryBroker.email;
     await domainPatch('dialysis',
-      `available_listings?property_id=eq.${propertyId}&is_active=is.true`, patchData, 'upsertDialysisListings');
+      `available_listings?listing_id=eq.${currentListingId}`,
+      patchData, 'upsertDialysisListings'
+    );
+    await backfillListingSaleIdForListing('dialysis', {
+      listingId: currentListingId,
+      propertyId: propertyIdInt,
+      listingDate: lookup.data[0].listing_date || ingestionDatePart,
+    });
     return 1;
   }
 
@@ -3152,6 +3308,29 @@ async function upsertDialysisListings(propertyId, metadata) {
       record,
     });
     return 0;
+  }
+
+  // Recover the new listing_id from the insert response (PostgREST returns
+  // the row when Prefer: return=representation is set — domainQuery sets it
+  // for POSTs). Fall back to a property_id lookup if unavailable.
+  if (Array.isArray(result.data) && result.data.length && result.data[0].listing_id != null) {
+    currentListingId = result.data[0].listing_id;
+  } else if (result.data?.listing_id != null) {
+    currentListingId = result.data.listing_id;
+  } else {
+    const idLookup = await domainQuery('dialysis', 'GET',
+      `available_listings?property_id=eq.${propertyIdInt}` +
+      `&is_active=is.true&select=listing_id&order=listing_date.desc.nullslast&limit=1`
+    );
+    currentListingId = idLookup.ok && idLookup.data?.[0]?.listing_id || null;
+  }
+
+  if (currentListingId != null) {
+    await backfillListingSaleIdForListing('dialysis', {
+      listingId: currentListingId,
+      propertyId: propertyIdInt,
+      listingDate: record.listing_date || ingestionDatePart,
+    });
   }
 
   // Post-insert check: if a closed sale already exists for this property
@@ -3172,8 +3351,14 @@ async function upsertDialysisListings(propertyId, metadata) {
     // reflect the CoStar listing's asking cap rate (listingCapRate above);
     // leaking a sales_transactions cap rate into them was the root cause
     // of the cap-rate-leak bug this branch fixes.
+    // Scope the close to the listing we just inserted (not every active
+    // listing for the property) — older campaigns stay open per the 3-year
+    // rule in closeActiveListingsOnSale.
+    const closeFilter = currentListingId != null
+      ? `listing_id=eq.${currentListingId}`
+      : `property_id=eq.${propertyIdInt}&is_active=is.true`;
     await domainPatch('dialysis',
-      `available_listings?property_id=eq.${propertyIdInt}&is_active=is.true`,
+      `available_listings?${closeFilter}`,
       {
         is_active: false,
         status: 'Sold',
