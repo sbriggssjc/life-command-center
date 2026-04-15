@@ -8971,4 +8971,26 @@ async function _brokerDrawerBeginProspecting() {
 
 // Delegated click handler for .broker-link elements
 document.addEventListener('click', function (e) {
-  c
+  const el = e.target && e.target.closest && e.target.closest('.broker-link[data-broker-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
+    if (raw) openBrokerDrawer(raw);
+  } catch (err) { console.warn('broker-link click: bad payload', err); }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target && e.target.closest && e.target.closest('.broker-link[data-broker-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
+    if (raw) openBrokerDrawer(raw);
+  } catch (err) { /* ignore */ }
+});
+
+window.openBrokerDrawer = openBrokerDrawer;
+window._switchBrokerDrawerTab = _switchBrokerDrawerTab;
+window._brokerDrawerBeginProspecting = _brokerDrawerBeginProspecting;
