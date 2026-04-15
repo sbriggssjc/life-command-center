@@ -957,13 +957,23 @@ function _udTabProperty() {
   html += _row('Building Size', p.building_sf ? fmtN(p.building_sf) + ' SF' : null);
   html += _row('Land Size', p.land_acres ? Number(p.land_acres).toFixed(2) + ' acres' : null);
   html += _row('Occupancy Type', p.is_single_tenant === true ? 'Single-Tenant' : p.is_single_tenant === false ? 'Multi-Tenant' : null);
-  html += _row('Year Built', p.year_built);
+  // Year Built: treat 0 / null / non-positive as "unknown" and offer a
+  // ChromeConnector resolve affordance. DB-level the 0 backfill already ran
+  // (see sql/20260415_properties_year_built_null_zero.sql), but older cached
+  // rows or race conditions can still surface 0 so we guard here too.
+  const yb = Number(p.year_built);
+  if (p.year_built != null && p.year_built !== '' && yb >= 1600 && yb <= 2100) {
+    html += _row('Year Built', yb);
+  } else {
+    html += _rowResolve('Year Built', 'year_built');
+  }
   html += _row('Building Type', p.building_type);
   html += _row('Building Condition', p.building_condition);
 
-  // Dialysis-specific
-  if (p.number_of_chairs) html += _row('No. of Chairs', fmtN(p.number_of_chairs));
-  if (p.stations) html += _row('Stations', fmtN(p.stations));
+  // Dialysis-specific — canonical field is `stations`. `number_of_chairs` is
+  // a legacy alias kept around for compatibility with older CMS-derived rows.
+  const stationsValue = p.stations || p.number_of_chairs;
+  if (stationsValue) html += _row('Stations', fmtN(stationsValue));
 
   html += '</div></div>';
 
@@ -4744,6 +4754,43 @@ function _row(label, value) {
     <div class="detail-lbl">${esc(label)}</div>
     <div class="detail-val">${esc(String(value))}</div>
   </div>`;
+}
+
+/**
+ * Row that renders an em-dash placeholder with an inline "Resolve via
+ * ChromeConnector" link. Used for fields like year_built that CoStar
+ * sometimes omits — lets the user jump back to the source page so the
+ * extension can repopulate the missing field.
+ */
+function _rowResolve(label, field) {
+  const handler = `_udResolveViaConnector('${esc(field)}')`;
+  return `<div class="detail-row">
+    <div class="detail-lbl">${esc(label)}</div>
+    <div class="detail-val" style="color:var(--text3)">—
+      <a href="#" onclick="event.preventDefault();${handler}" style="margin-left:8px;font-size:11px;color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent)">Resolve via ChromeConnector</a>
+    </div>
+  </div>`;
+}
+
+/**
+ * Deep-link to CoStar (or the last-known source URL) for the current
+ * property so the ChromeConnector extension's content script can re-extract
+ * a missing field. Extension auto-POSTs back into the sidebar pipeline.
+ */
+function _udResolveViaConnector(field) {
+  const p = _udCache && _udCache.property || {};
+  const fb = _udCache && _udCache.fallback || {};
+  const sourceUrl = p.costar_url || p.source_url || p.page_url || fb.costar_url || fb.source_url || null;
+  const addr = p.address || fb.address || '';
+  const target = sourceUrl
+    || (addr ? 'https://product.costar.com/home/search?q=' + encodeURIComponent(addr) : null);
+
+  if (!target) {
+    if (typeof showToast === 'function') showToast('No source URL on file — open CoStar/LoopNet manually to resolve ' + field, 'warn');
+    return;
+  }
+  if (typeof showToast === 'function') showToast('Opening source — ChromeConnector will re-extract ' + field, 'info');
+  window.open(target, '_blank', 'noopener');
 }
 
 /** Row with raw HTML value (for utilization bars, trend arrows, margin badges, etc.) */
