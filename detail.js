@@ -259,6 +259,8 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
           operator: _udDetectOperator(rankings),
         };
       }
+    }
+
     // Kick off a best-effort fetch for lease extensions + rent schedule.
     // These fill in the "No. of Extensions / Last Extension" and the Rent Roll
     // sub-view on the Lease tab. Never blocks the main render; on failure the
@@ -2427,6 +2429,133 @@ function _rankingBar(label, rank, total, context) {
 
 // ─── OWNERSHIP + CRM TAB ────────────────────────────────────────────────────
 
+/**
+ * Dedup ownership_history rows for the chain timeline.
+ * Merges entries that point at the same owner_entity (recorded_owner_id,
+ * true_owner_id, or normalized recorded_owner_name) so that the same shell
+ * LLC doesn't appear as both the current owner AND a historical owner.
+ * Earliest transfer_date wins; latest ownership_end wins; counts how many
+ * source rows were merged so the UI can surface it.
+ */
+function _udDedupChain(chain, currentOwn) {
+  if (!Array.isArray(chain) || chain.length === 0) return [];
+
+  const _key = (h) => {
+    if (h.owner_entity_id) return 'oe:' + h.owner_entity_id;
+    if (h.recorded_owner_id) return 'ro:' + h.recorded_owner_id;
+    if (h.true_owner_id) return 'to:' + h.true_owner_id;
+    const name = (h.recorded_owner_name || h.to_owner || h.true_owner_name || '').trim().toLowerCase();
+    return name ? 'nm:' + name.replace(/[\s,.]+/g, ' ') : null;
+  };
+
+  const _ts = (s) => { if (!s) return null; const t = new Date(s).getTime(); return isNaN(t) ? null : t; };
+
+  const groups = new Map();
+  const order = [];
+  for (const h of chain) {
+    const k = _key(h) || ('row:' + order.length);
+    if (!groups.has(k)) {
+      const cloned = Object.assign({}, h);
+      cloned._merged_count = 1;
+      groups.set(k, cloned);
+      order.push(k);
+    } else {
+      const g = groups.get(k);
+      g._merged_count = (g._merged_count || 1) + 1;
+      // Earliest transfer_date wins
+      const t1 = _ts(g.transfer_date), t2 = _ts(h.transfer_date);
+      if (t2 != null && (t1 == null || t2 < t1)) g.transfer_date = h.transfer_date;
+      // Latest ownership_end wins; if any row is still open (null), prefer null
+      if (h.ownership_end == null) {
+        g.ownership_end = null;
+      } else if (g.ownership_end != null) {
+        const e1 = _ts(g.ownership_end), e2 = _ts(h.ownership_end);
+        if (e2 != null && (e1 == null || e2 > e1)) g.ownership_end = h.ownership_end;
+      }
+      // Backfill any missing fields from later rows
+      ['sale_price','cap_rate','ownership_type','ownership_source','principal_names',
+       'true_owner_name','true_owner_id','recorded_owner_name','recorded_owner_id',
+       'sf_account_id','sf_company_id','sf_contact_id','from_owner','to_owner',
+       'state_of_incorporation','recorded_owner_state','annual_rent','square_feet',
+       'research_status'].forEach(function(f) {
+        if (g[f] == null && h[f] != null) g[f] = h[f];
+      });
+    }
+  }
+
+  // If the current owner (from v_ownership_current) matches a chain entry,
+  // mark that entry as "is open" so the timeline shows "Present" correctly.
+  if (currentOwn) {
+    const curKey = currentOwn.recorded_owner_id ? 'ro:' + currentOwn.recorded_owner_id
+      : currentOwn.true_owner_id ? 'to:' + currentOwn.true_owner_id
+      : (currentOwn.recorded_owner ? 'nm:' + String(currentOwn.recorded_owner).trim().toLowerCase().replace(/[\s,.]+/g, ' ') : null);
+    if (curKey && groups.has(curKey)) {
+      const g = groups.get(curKey);
+      g.ownership_end = null;
+    }
+  }
+
+  // Re-sort by transfer_date desc (most recent first)
+  return order.map(function(k) { return groups.get(k); }).sort(function(a, b) {
+    const ta = _ts(a.transfer_date) || 0;
+    const tb = _ts(b.transfer_date) || 0;
+    return tb - ta;
+  });
+}
+
+/**
+ * One-click resolver for Data Gap chips on the Ownership tab.
+ * Routes the chip's action to the appropriate input or workflow.
+ */
+function _udResolveGap(action) {
+  if (!action) return;
+  if (action.indexOf('focus:') === 0) {
+    const id = action.slice('focus:'.length);
+    const el = document.getElementById(id);
+    if (el) {
+      // Make sure the Resolve Ownership form is on screen
+      const sec = el.closest('.detail-section');
+      if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(function() { try { el.focus(); el.select && el.select(); } catch (e) {} }, 280);
+    } else {
+      showToast('Open the Resolve Ownership section to fill this in', 'info');
+    }
+    return;
+  }
+  if (action === 'sf-lookup') {
+    // Open the SF account lookup for the current owner name in a new tab
+    const own = _udCache && _udCache.ownership;
+    const name = (own && (own.true_owner || own.recorded_owner)) || '';
+    if (!name) { showToast('Enter the owner name first', 'info'); return; }
+    const url = _SF_BASE + '/lightning/o/Account/list?filterName=Recent&searchKey=' + encodeURIComponent(name);
+    window.open(url, '_blank', 'noopener');
+    showToast('Searching Salesforce for "' + name + '"', 'info');
+    return;
+  }
+  if (action === 'research-history') {
+    // Jump the user to the Research Quick Links section if present
+    const ql = document.querySelector('.ql-grid');
+    if (ql) {
+      ql.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showToast('Use Research Quick Links to fetch ownership history (CoStar, Reonomy, county recorder)', 'info');
+    } else {
+      showToast('No research links available for this property', 'info');
+    }
+    return;
+  }
+  console.warn('_udResolveGap: unknown action', action);
+}
+
+window._udResolveGap = _udResolveGap;
+
+/**
+ * Dedup ownership_history rows for the chain timeline.
+ * Merges entries that point at the same owner_entity (recorded_owner_id,
+ * true_owner_id, or normalized recorded_owner_name) so that the same shell
+ * LLC doesn't appear as both the current owner AND a historical owner.
+ * Earliest transfer_date wins; latest ownership_end wins; counts how many
+ * source rows were merged so the UI can surface it.
+ */
 function _udTabOwnership() {
   const own = _udCache.ownership;
   const chain = _udCache.chain || [];
@@ -2450,24 +2579,29 @@ function _udTabOwnership() {
   }
 
   // ── DATA GAP INDICATOR ──────────────────────────────────────────────
+  // Each gap badge is a one-click resolver that focuses the relevant input
+  // or triggers a lookup action.
   const gaps = [];
-  if (!own) gaps.push('ownership record');
+  if (!own) gaps.push({ label: 'ownership record', action: 'focus:udOwnRecorded' });
   else {
-    if (!own.true_owner && !own.recorded_owner) gaps.push('owner name');
-    if (!own.contact_email) gaps.push('contact email');
-    if (!own.contact_phone) gaps.push('contact phone');
-    if (!own.contact_name && !own.contact_1_name) gaps.push('contact name');
-    if (!own.sf_contact_id && !own.salesforce_id) gaps.push('Salesforce link');
-    if (db === 'gov' && !own.true_owner) gaps.push('true owner (behind LLC)');
-    if (db === 'gov' && !own.true_owner_state) gaps.push('true owner state');
+    if (!own.true_owner && !own.recorded_owner) gaps.push({ label: 'owner name', action: 'focus:udOwnRecorded' });
+    if (!own.contact_email) gaps.push({ label: 'contact email', action: 'focus:udOwnEmail' });
+    if (!own.contact_phone) gaps.push({ label: 'contact phone', action: 'focus:udOwnPhone' });
+    if (!own.contact_name && !own.contact_1_name) gaps.push({ label: 'contact name', action: 'focus:udOwnContact' });
+    if (!own.sf_contact_id && !own.salesforce_id) gaps.push({ label: 'Salesforce link', action: 'sf-lookup' });
+    if (db === 'gov' && !own.true_owner) gaps.push({ label: 'true owner (behind LLC)', action: 'focus:udOwnTrue' });
+    if (db === 'gov' && !own.true_owner_state) gaps.push({ label: 'true owner state', action: 'focus:udOwnState' });
   }
-  if (chain.length === 0) gaps.push('ownership history');
+  if (chain.length === 0) gaps.push({ label: 'ownership history', action: 'research-history' });
 
   if (gaps.length > 0) {
     html += '<div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;">';
-    html += '<div style="font-size: 12px; font-weight: 600; color: var(--yellow); margin-bottom: 4px;">Data Gaps (' + gaps.length + ')</div>';
+    html += '<div style="font-size: 12px; font-weight: 600; color: var(--yellow); margin-bottom: 4px;">Data Gaps (' + gaps.length + ') <span style="font-weight:400;color:var(--text3);font-size:11px">\u2014 click to resolve</span></div>';
     html += '<div style="font-size: 12px; color: var(--text2); line-height: 1.6;">';
-    html += gaps.map(g => '<span style="display:inline-block;background:var(--s2);padding:2px 8px;border-radius:4px;margin:2px 4px 2px 0;font-size:11px;">' + esc(g) + '</span>').join('');
+    html += gaps.map(function(g) {
+      const safeAction = String(g.action).replace(/'/g, "\\'");
+      return '<span class="gap-chip" onclick="_udResolveGap(\'' + safeAction + '\')" style="display:inline-block;background:var(--s2);padding:2px 8px;border-radius:4px;margin:2px 4px 2px 0;font-size:11px;cursor:pointer;border:1px solid transparent;transition:all 0.15s" onmouseover="this.style.background=\'var(--s3)\';this.style.borderColor=\'var(--yellow)\'" onmouseout="this.style.background=\'var(--s2)\';this.style.borderColor=\'transparent\'" title="Click to resolve this gap">' + esc(g.label) + ' \u2192</span>';
+    }).join('');
     html += '</div></div>';
   }
 
@@ -2485,8 +2619,8 @@ function _udTabOwnership() {
     html += '<div class="detail-grid">';
 
     if (db === 'dia') {
-      html += _row('Recorded Owner', own.recorded_owner);
-      html += _row('True Owner', own.true_owner);
+      html += _rowHtml('Recorded Owner', own.recorded_owner ? _ownerLink(own.recorded_owner, _ownerCtxFromCurrent(own, db, 'recorded')) : '');
+      html += _rowHtml('True Owner', own.true_owner ? _ownerLink(own.true_owner, _ownerCtxFromCurrent(own, db, 'true')) : '');
       html += _row('Owner Type', own.owner_type);
       html += _row('Address', own.recorded_owner_address);
       html += _row('City', own.recorded_owner_city);
@@ -2504,10 +2638,10 @@ function _udTabOwnership() {
       html += _row('Is Prospect', own.is_prospect ? 'Yes' : 'No');
     } else {
       // Gov
-      html += _row('Recorded Owner', own.recorded_owner);
+      html += _rowHtml('Recorded Owner', own.recorded_owner ? _ownerLink(own.recorded_owner, _ownerCtxFromCurrent(own, db, 'recorded')) : '');
       html += _row('Type', own.recorded_owner_type);
       html += _row('State', own.recorded_owner_state);
-      html += _row('True Owner', own.true_owner);
+      html += _rowHtml('True Owner', own.true_owner ? _ownerLink(own.true_owner, _ownerCtxFromCurrent(own, db, 'true')) : '');
       html += _row('True Owner Type', own.true_owner_type);
       html += _row('True Owner State', own.true_owner_state);
       html += _rowHtml('Contact', own.contact_name && own.contact_id ? entityLink(own.contact_name, 'contact', own.contact_id, db) : esc(own.contact_name || ''));
@@ -2568,10 +2702,15 @@ function _udTabOwnership() {
   html += '</div>';
 
   // ── OWNERSHIP HISTORY (CHAIN) ──────────────────────────────────────
+  // Dedup: collapse repeat rows that point at the same owner_entity_id /
+  // recorded_owner_id / true_owner_id. This prevents "Mds Dv Victorville"
+  // from appearing as both the current owner AND a 2015–2016 historical
+  // owner. Earliest transfer_date and latest ownership_end win.
+  const dedupedChain = _udDedupChain(chain, own);
   html += '<div class="detail-section">';
-  html += `<div class="detail-section-title">Ownership History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${chain.length} records</span></div>`;
+  html += `<div class="detail-section-title">Ownership History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${dedupedChain.length} records</span></div>`;
 
-  if (chain.length === 0) {
+  if (dedupedChain.length === 0) {
     html += '<div class="detail-empty" style="font-size:13px">No ownership transfer history found for this property. Check the History tab or use Research Quick Links to trace prior owners.</div>';
   } else {
     // Determine if the most recent chain entry should be treated as "current".
@@ -2589,31 +2728,31 @@ function _udTabOwnership() {
     };
 
     html += '<div class="detail-timeline">';
-    chain.forEach((h, idx) => {
+    dedupedChain.forEach((h, idx) => {
       const isFirst = idx === 0;
 
       if (db === 'gov') {
         const statusClass = isFirst ? 'green' : '';
+        const govOwnerName = h.to_owner || h.recorded_owner_name || h.true_owner_name || '';
         html += `<div class="detail-timeline-item ${statusClass}">`;
         html += `<div class="detail-card-date">${esc(_fmtDate(h.transfer_date) || 'Unknown date')}</div>`;
-        html += `<div class="detail-card-title">${esc(h.to_owner || '—')}</div>`;
+        html += `<div class="detail-card-title">${govOwnerName ? _ownerLink(govOwnerName, _ownerCtxFromChain(h, db)) : '\u2014'}</div>`;
         html += '<div class="detail-card-body">';
         if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
         if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
         if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
         if (h.annual_rent) html += `Rent: ${fmt(h.annual_rent)}<br>`;
         if (h.square_feet) html += `SF: ${fmtN(h.square_feet)}<br>`;
-        if (h.recorded_owner_name) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${esc(h.recorded_owner_name)}<br>`;
-        if (h.true_owner_name) html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
+        if (h.recorded_owner_name && h.recorded_owner_name !== govOwnerName) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${_ownerLink(h.recorded_owner_name, _ownerCtxFromChain(h, db))}<br>`;
+        if (h.true_owner_name && h.true_owner_name !== govOwnerName) html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}<br>`;
         if (h.principal_names) html += `<span style="font-size:12px;color:var(--text3)">Principals:</span> ${esc(h.principal_names)}<br>`;
+        if (h._merged_count > 1) html += `<span class="detail-badge" style="background:var(--s3);color:var(--text2);margin-top:4px">${h._merged_count} entries merged</span>`;
         if (h.research_status) html += `<span class="detail-badge">${esc(cleanLabel(h.research_status))}</span>`;
         html += '</div>';
         html += '</div>';
       } else {
-        // Dia: render as an ownership timeline row per LCC spec.
-        //   [Owner Name]  — [transfer_date] → [ownership_end | "Present"]
-        //   Sale price: $X | Cap rate: X%
-        const ownerLabel = h.recorded_owner_name || h.true_owner_name || '—';
+        // Dia: timeline row — [Owner]  start → end | sale price | cap rate
+        const ownerLabel = h.recorded_owner_name || h.true_owner_name || '\u2014';
         const isCurrent = _isChainEntryCurrent(h, isFirst);
         const statusClass = isCurrent ? 'green' : '';
         const startStr = _fmtDate(h.transfer_date) || 'Unknown';
@@ -2621,20 +2760,19 @@ function _udTabOwnership() {
         const priceStr = h.sale_price
           ? '$' + Number(h.sale_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
           : 'Not Disclosed';
-        const capStr = h.cap_rate ? Number(h.cap_rate).toFixed(2) + '%' : '—';
+        const capStr = h.cap_rate ? Number(h.cap_rate).toFixed(2) + '%' : '\u2014';
 
         html += `<div class="detail-timeline-item ${statusClass}">`;
-        html += `<div class="detail-card-date">${esc(startStr)} → ${esc(endStr)}${isCurrent ? ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>' : ''}</div>`;
-        // Clickable owner name — opens the entity/contact by name so the user
-        // can jump from the ownership chain into LCC Contacts.
-        html += `<div class="detail-card-title">${entityLink(ownerLabel, 'contact', null)}</div>`;
+        html += `<div class="detail-card-date">${esc(startStr)} \u2192 ${esc(endStr)}${isCurrent ? ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>' : ''}</div>`;
+        html += `<div class="detail-card-title">${_ownerLink(ownerLabel, _ownerCtxFromChain(h, db))}</div>`;
         html += '<div class="detail-card-body">';
         if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
-          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${entityLink(h.true_owner_name, 'contact', null)}<br>`;
+          html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}<br>`;
         }
         html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span style="color:var(--text3)">|</span> Cap rate: ${esc(capStr)}</div>`;
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
         if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
+        if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
         html += '</div>';
         html += '</div>';
       }
@@ -2770,47 +2908,83 @@ async function _loadActivityFeed(own) {
 
   try {
     let activities = [];
+    let resolvedAccountId = own?.sf_account_id || own?.sf_company_id || null;
+    let resolvedAccountName = null;
 
-    if (db === 'dia') {
-      // Direct query — Dia DB has the SF tables
+    // Step 1: Resolve to a Salesforce Account ID. Shell LLC owners
+    // (e.g. "Mds Dv Victorville") have no direct sf_contact_id, but their
+    // parent (Davita Inc.) is reachable via unified_contacts.true_owner_id.
+    if (!resolvedAccountId && own) {
+      try {
+        if (own.true_owner_id) {
+          const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name&filter=true_owner_id%3Deq.' + encodeURIComponent(own.true_owner_id) + '&limit=5');
+          const hit = ((ucRes && ucRes.data) || []).find(function(r) { return r.sf_account_id; });
+          if (hit) { resolvedAccountId = hit.sf_account_id; resolvedAccountName = hit.company_name || null; }
+        }
+        if (!resolvedAccountId && own.recorded_owner_id) {
+          const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name&filter=recorded_owner_id%3Deq.' + encodeURIComponent(own.recorded_owner_id) + '&limit=5');
+          const hit = ((ucRes && ucRes.data) || []).find(function(r) { return r.sf_account_id; });
+          if (hit) { resolvedAccountId = hit.sf_account_id; resolvedAccountName = hit.company_name || null; }
+        }
+        if (!resolvedAccountId) {
+          const lookupName = own.true_owner || own.recorded_owner;
+          if (lookupName) {
+            const like = encodeURIComponent('*' + lookupName + '*');
+            const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name&filter=company_name%3Dilike.' + like + '&limit=5');
+            const hit = ((ucRes && ucRes.data) || []).find(function(r) { return r.sf_account_id; });
+            if (hit) { resolvedAccountId = hit.sf_account_id; resolvedAccountName = hit.company_name || null; }
+          }
+        }
+      } catch (e) { console.warn('activity feed: sf_account_id resolution failed', e); }
+    }
+
+    // Step 2: Query v_sf_activity_feed by SF Account ID first (covers all
+    // contacts on that account, even when the recorded owner is a shell LLC).
+    if (resolvedAccountId) {
+      try {
+        activities = await diaQuery('v_sf_activity_feed', '*', {
+          filter: 'sf_account_id=eq.' + encodeURIComponent(resolvedAccountId),
+          order: 'activity_date.desc',
+          limit: 25
+        });
+        if (Array.isArray(activities) && activities.length === 0) {
+          // Some deployments expose the SF Account FK as sf_company_id
+          activities = await diaQuery('v_sf_activity_feed', '*', {
+            filter: 'sf_company_id=eq.' + encodeURIComponent(resolvedAccountId),
+            order: 'activity_date.desc',
+            limit: 25
+          });
+        }
+      } catch (e) { console.warn('activity feed: sf_account_id query failed', e); }
+    }
+
+    // Step 3: Legacy fallback paths — sf_contact_id, true_owner_id, contact_id
+    if (!activities || activities.length === 0) {
       const sfId = own?.sf_contact_id || own?.salesforce_id;
       const toId = own?.true_owner_id;
       const cId = own?.contact_id;
-
-      // Try sf_contact_id first, then true_owner_id
       if (sfId) {
-        activities = await diaQuery('v_sf_activity_feed', '*', {
-          filter: `sf_contact_id=eq.${sfId}`,
-          order: 'activity_date.desc',
-          limit: 25
-        });
+        activities = await diaQuery('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(sfId), order: 'activity_date.desc', limit: 25 });
       } else if (toId) {
-        activities = await diaQuery('v_sf_activity_feed', '*', {
-          filter: `true_owner_id=eq.${toId}`,
-          order: 'activity_date.desc',
-          limit: 25
-        });
-      } else if (cId) {
-        activities = await diaQuery('v_sf_activity_feed', '*', {
-          filter: `contact_id=eq.${cId}`,
-          order: 'activity_date.desc',
-          limit: 25
-        });
-      }
-    } else {
-      // Gov cross-DB bridge: use sf_contact_id from v_ownership_current to query Dia DB
-      const sfId = own?.sf_contact_id;
-      if (sfId) {
-        activities = await diaQuery('v_sf_activity_feed', '*', {
-          filter: `sf_contact_id=eq.${sfId}`,
-          order: 'activity_date.desc',
-          limit: 25
-        });
+        activities = await diaQuery('v_sf_activity_feed', '*', { filter: 'true_owner_id=eq.' + encodeURIComponent(toId), order: 'activity_date.desc', limit: 25 });
+      } else if (cId && db === 'dia') {
+        activities = await diaQuery('v_sf_activity_feed', '*', { filter: 'contact_id=eq.' + encodeURIComponent(cId), order: 'activity_date.desc', limit: 25 });
       }
     }
 
     if (!activities || activities.length === 0) {
-      feedEl.innerHTML = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div><div class="detail-empty">No CRM activity found for this owner</div></div>';
+      let emptyHtml = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div>';
+      emptyHtml += '<div class="detail-empty">No CRM activity found for this owner';
+      if (resolvedAccountName) emptyHtml += ' <span style="color:var(--text3)">(searched ' + esc(resolvedAccountName) + ')</span>';
+      emptyHtml += '</div>';
+      if (!resolvedAccountId) {
+        emptyHtml += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">';
+        emptyHtml += '<button class="act-btn primary" onclick="_udFeedCreateSfAccount()">+ Create Salesforce Account</button>';
+        emptyHtml += '<button class="act-btn" onclick="_udFeedAddContact()">+ Add Contact</button>';
+        emptyHtml += '</div>';
+      }
+      emptyHtml += '</div>';
+      feedEl.innerHTML = emptyHtml;
       return;
     }
 
@@ -2843,6 +3017,30 @@ async function _loadActivityFeed(own) {
     feedEl.innerHTML = '<div class="detail-section"><div class="detail-section-title">Salesforce Activity Feed</div><div class="detail-empty">Error loading activity feed</div></div>';
   }
 }
+
+/** Empty-state action: open the SF "New Account" form prefilled with the current owner. */
+function _udFeedCreateSfAccount() {
+  const own = _udCache && _udCache.ownership;
+  const name = (own && (own.true_owner || own.recorded_owner)) || '';
+  const url = _SF_BASE + '/lightning/o/Account/new?defaultFieldValues=Name=' + encodeURIComponent(name);
+  window.open(url, '_blank', 'noopener');
+  showToast('Opening Salesforce \u2014 New Account (' + (name || 'Owner') + ')', 'info');
+}
+
+/** Empty-state action: open the OwnerDrawer's Add Contact prompt scoped to the current owner. */
+function _udFeedAddContact() {
+  const own = _udCache && _udCache.ownership;
+  const db = _udCache && _udCache.db;
+  if (!own) { showToast('No owner record loaded', 'error'); return; }
+  const ctx = _ownerCtxFromCurrent(own, db, 'recorded') || _ownerCtxFromCurrent(own, db, 'true');
+  if (!ctx) return;
+  // Stash a temporary cache so _ownerDrawerAddContact() can reuse its prompts
+  _ownerDrawerCache = Object.assign({ contacts: [], open_activities: [], activity_history: [] }, ctx);
+  _ownerDrawerAddContact();
+}
+
+window._udFeedCreateSfAccount = _udFeedCreateSfAccount;
+window._udFeedAddContact = _udFeedAddContact;
 
 // ─── INTEL TAB ────────────────────────────────────────────────────────────────
 
@@ -6825,4 +7023,539 @@ window.openEntityDetailByName = openEntityDetailByName;
 window.openContactDetail = openContactDetail;
 window.openContactDetailByName = openContactDetailByName;
 window._switchEntityTab = _switchEntityTab;
+
+// ============================================================================
+// OWNER DRAWER — Click-through panel for ownership_history / current owner
+// ============================================================================
+//
+// Opens over the existing detail panel and shows the unified owner profile:
+// - Company: address, state of incorp, entity type, parent (true owner)
+// - Contacts: name, title, phone, email
+// - Open Activities: incomplete SF tasks for this owner's SF Account
+// - Activity History: completed SF activities for this owner's SF Account
+// - Begin Prospecting: creates SF task + scrolls Log Activity / Draft Email
+//
+// Resolves shell LLCs ("Mds Dv Victorville") to their parent SF Account
+// (Davita Inc.) by walking true_owner_id -> unified_contacts.sf_account_id.
+//
+// Empty state (no SF match): shows "Create Salesforce Account" + "Add Contact".
+
+let _ownerDrawerCache = null;
+
+/**
+ * Build a clickable owner-name link that opens the OwnerDrawer.
+ * Accepts a context object with whatever owner identity hints we have.
+ * Always renders the display text — only the click handler differs.
+ */
+function _ownerLink(displayName, ctx) {
+  if (!displayName) return '<span style="color:var(--text3)">\u2014</span>';
+  const payload = encodeURIComponent(JSON.stringify(ctx || { name: displayName }));
+  const style = 'color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;font-weight:600';
+  return '<span class="owner-link" style="' + style + '" onclick="openOwnerDrawer(decodeURIComponent(\'' + payload + '\'))" title="View owner profile, contacts, and SF activity">' + esc(displayName) + '</span>';
+}
+
+/**
+ * Build an owner context object from a v_ownership_chain row.
+ * Standardizes fields across gov/dia rows and current ownership.
+ */
+function _ownerCtxFromChain(h, db) {
+  const recordedName = h.recorded_owner_name || h.to_owner || h.new_owner || '';
+  const trueName = h.true_owner_name || '';
+  return {
+    name: recordedName || trueName,
+    recorded_owner_name: recordedName,
+    recorded_owner_id: h.recorded_owner_id || null,
+    true_owner_name: trueName,
+    true_owner_id: h.true_owner_id || null,
+    sf_account_id: h.sf_account_id || h.sf_company_id || null,
+    sf_contact_id: h.sf_contact_id || null,
+    state_of_incorporation: h.state_of_incorporation || h.recorded_owner_state || null,
+    entity_type: h.ownership_type || h.owner_type || null,
+    transfer_date: h.transfer_date || null,
+    ownership_end: h.ownership_end || null,
+    db: db || null
+  };
+}
+
+/** Build owner context from a v_ownership_current row (own object). */
+function _ownerCtxFromCurrent(own, db, which) {
+  if (!own) return null;
+  if (which === 'true' && own.true_owner) {
+    return {
+      name: own.true_owner,
+      recorded_owner_name: null,
+      recorded_owner_id: null,
+      true_owner_name: own.true_owner,
+      true_owner_id: own.true_owner_id || null,
+      sf_account_id: own.sf_account_id || own.sf_company_id || null,
+      sf_contact_id: own.sf_contact_id || own.salesforce_id || null,
+      state_of_incorporation: own.true_owner_state || null,
+      entity_type: own.true_owner_type || own.owner_type || null,
+      address: own.recorded_owner_address || null,
+      city: own.true_owner_city || null,
+      is_current: true,
+      db: db || null
+    };
+  }
+  return {
+    name: own.recorded_owner || own.true_owner,
+    recorded_owner_name: own.recorded_owner,
+    recorded_owner_id: own.recorded_owner_id || null,
+    true_owner_name: own.true_owner || null,
+    true_owner_id: own.true_owner_id || null,
+    sf_account_id: own.sf_account_id || own.sf_company_id || null,
+    sf_contact_id: own.sf_contact_id || own.salesforce_id || null,
+    state_of_incorporation: own.recorded_owner_state || own.true_owner_state || null,
+    entity_type: own.owner_type || own.recorded_owner_type || null,
+    address: own.recorded_owner_address || null,
+    city: own.recorded_owner_city || null,
+    contact_name: own.contact_1_name || own.contact_name || null,
+    contact_email: own.contact_email || null,
+    contact_phone: own.contact_phone || null,
+    is_current: true,
+    db: db || null
+  };
+}
+
+/**
+ * Public entry: open the OwnerDrawer for a given owner context.
+ * ctxJson may be a JSON string (from the inline onclick) or an object.
+ */
+async function openOwnerDrawer(ctxJson) {
+  let ctx;
+  try {
+    ctx = (typeof ctxJson === 'string') ? JSON.parse(ctxJson) : ctxJson;
+  } catch (e) {
+    console.error('OwnerDrawer: bad ctx', e);
+    return;
+  }
+  if (!ctx) return;
+
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  if (!panel || !overlay) return;
+
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+
+  if (headerEl) headerEl.innerHTML =
+    '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+    '<div class="detail-header-info">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="detail-title">' + esc(ctx.name || 'Owner') + '</div>' +
+        '<div class="detail-subtitle">Loading owner profile...</div>' +
+      '</div>' +
+      '<span class="detail-badge" style="background:#a55eea;color:#fff">OWNER</span>' +
+    '</div>' +
+    '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+  if (tabsEl) tabsEl.innerHTML = '';
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Resolving owner &amp; loading Salesforce activity...</p></div>';
+
+  try {
+    const resolved = await _resolveOwnerProfile(ctx);
+    _ownerDrawerCache = resolved;
+
+    const parentNote = (resolved.parent_account_name && resolved.parent_account_name !== resolved.name)
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:2px">Shell LLC \u2192 ' + esc(resolved.parent_account_name) + '</div>'
+      : '';
+    const sfBadge = resolved.sf_account_id
+      ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#00a1e0;color:#fff;margin-left:6px">SF linked</span>'
+      : '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2);margin-left:6px">No SF match</span>';
+    if (headerEl) headerEl.innerHTML =
+      '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+      '<div class="detail-header-info">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="detail-title">' + esc(resolved.name || 'Owner') + sfBadge + '</div>' +
+          '<div class="detail-subtitle">' + esc((resolved.entity_type || 'Owner Entity').toString().toUpperCase()) +
+            (resolved.state_of_incorporation ? ' &middot; ' + esc(resolved.state_of_incorporation) : '') +
+          '</div>' +
+          parentNote +
+        '</div>' +
+        '<span class="detail-badge" style="background:#a55eea;color:#fff">OWNER</span>' +
+      '</div>' +
+      '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+
+    const tabs = ['Overview', 'Contacts', 'Open Activities', 'Activity History'];
+    if (tabsEl) tabsEl.innerHTML = tabs.map(function(t, i) {
+      return '<button class="detail-tab ' + (i === 0 ? 'active' : '') + '" onclick="_switchOwnerDrawerTab(\'' + t + '\')">' + t + '</button>';
+    }).join('');
+
+    if (bodyEl) bodyEl.innerHTML = _renderOwnerDrawerTab('Overview');
+  } catch (err) {
+    console.error('OwnerDrawer error:', err);
+    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading owner profile: ' + esc(err.message || String(err)) + '</div>';
+  }
+}
+
+/**
+ * Resolve the owner identity into a single profile bundle:
+ * walks shell LLC -> true_owner -> unified_contacts.sf_account_id, then
+ * loads contacts, open activities, and activity history scoped to that
+ * SF Account id.
+ */
+async function _resolveOwnerProfile(ctx) {
+  const out = Object.assign({}, ctx);
+  out.contacts = [];
+  out.open_activities = [];
+  out.activity_history = [];
+  out.parent_account_name = null;
+
+  // Step 1: Resolve sf_account_id
+  if (!out.sf_account_id) {
+    try {
+      if (out.true_owner_id) {
+        const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=true_owner_id%3Deq.' + encodeURIComponent(out.true_owner_id) + '&limit=5');
+        const rows = (ucRes && ucRes.data) || [];
+        const hit = rows.find(function(r) { return r.sf_account_id; });
+        if (hit) {
+          out.sf_account_id = hit.sf_account_id;
+          out.parent_account_name = hit.company_name || null;
+        }
+      }
+      if (!out.sf_account_id && out.recorded_owner_id) {
+        const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=recorded_owner_id%3Deq.' + encodeURIComponent(out.recorded_owner_id) + '&limit=5');
+        const rows = (ucRes && ucRes.data) || [];
+        const hit = rows.find(function(r) { return r.sf_account_id; });
+        if (hit) {
+          out.sf_account_id = hit.sf_account_id;
+          out.parent_account_name = hit.company_name || null;
+        }
+      }
+      if (!out.sf_account_id) {
+        const lookupName = out.true_owner_name || out.recorded_owner_name || out.name;
+        if (lookupName) {
+          const like = encodeURIComponent('*' + lookupName + '*');
+          const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=company_name%3Dilike.' + like + '&limit=5');
+          const rows = (ucRes && ucRes.data) || [];
+          const hit = rows.find(function(r) { return r.sf_account_id; });
+          if (hit) {
+            out.sf_account_id = hit.sf_account_id;
+            out.parent_account_name = hit.company_name || null;
+          }
+        }
+      }
+    } catch (e) { console.warn('OwnerDrawer: sf_account_id resolution failed', e); }
+  }
+
+  // Step 2: Activity feed by sf_account_id
+  if (out.sf_account_id) {
+    try {
+      const actRes = await diaQuery('v_sf_activity_feed', '*', {
+        filter: 'sf_account_id=eq.' + encodeURIComponent(out.sf_account_id),
+        order: 'activity_date.desc',
+        limit: 100
+      });
+      const all = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
+      out.open_activities = all.filter(function(a) {
+        return a.is_completed === false || a.status === 'Open' || a.status === 'open' || a.status === 'In Progress';
+      });
+      out.activity_history = all.filter(function(a) {
+        return !(a.is_completed === false || a.status === 'Open' || a.status === 'open' || a.status === 'In Progress');
+      });
+    } catch (e) { console.warn('OwnerDrawer: activity feed by sf_account_id failed', e); }
+  }
+  // Fallback: legacy by sf_contact_id / true_owner_id
+  if (out.activity_history.length === 0 && out.open_activities.length === 0) {
+    try {
+      let actRes = [];
+      if (out.sf_contact_id) {
+        actRes = await diaQuery('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(out.sf_contact_id), order: 'activity_date.desc', limit: 100 });
+      } else if (out.true_owner_id) {
+        actRes = await diaQuery('v_sf_activity_feed', '*', { filter: 'true_owner_id=eq.' + encodeURIComponent(out.true_owner_id), order: 'activity_date.desc', limit: 100 });
+      }
+      const all = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
+      out.open_activities = all.filter(function(a) {
+        return a.is_completed === false || a.status === 'Open' || a.status === 'open' || a.status === 'In Progress';
+      });
+      out.activity_history = all.filter(function(a) {
+        return !(a.is_completed === false || a.status === 'Open' || a.status === 'open' || a.status === 'In Progress');
+      });
+    } catch (e) { console.warn('OwnerDrawer: legacy activity fallback failed', e); }
+  }
+
+  // Step 3: Contacts
+  if (out.sf_account_id) {
+    try {
+      const cRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=unified_id,full_name,first_name,last_name,title,email,phone,mobile_phone,sf_contact_id,company_name&filter=sf_account_id%3Deq.' + encodeURIComponent(out.sf_account_id) + '&order=engagement_score.desc.nullslast&limit=25');
+      out.contacts = (cRes && cRes.data) || [];
+    } catch (e) { console.warn('OwnerDrawer: contacts load failed', e); }
+  }
+  if (out.contacts.length === 0) {
+    try {
+      const lookupName = out.parent_account_name || out.true_owner_name || out.recorded_owner_name || out.name;
+      if (lookupName) {
+        const like = encodeURIComponent('*' + lookupName + '*');
+        const cRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=unified_id,full_name,first_name,last_name,title,email,phone,mobile_phone,sf_contact_id,company_name&filter=company_name%3Dilike.' + like + '&limit=25');
+        out.contacts = (cRes && cRes.data) || [];
+      }
+    } catch (e) { console.warn('OwnerDrawer: contacts company_name fallback failed', e); }
+  }
+
+  // Step 4: Recorded owner address / state of incorp / entity type backfill
+  if ((!out.address || !out.state_of_incorporation || !out.entity_type) && out.recorded_owner_id) {
+    try {
+      const src = (out.db === 'gov') ? 'gov' : 'dia';
+      const roRes = await _entityApiFetch('/api/data-query?_source=' + src + '&table=recorded_owners&select=*&filter=recorded_owner_id%3Deq.' + encodeURIComponent(out.recorded_owner_id) + '&limit=1');
+      const ro = ((roRes && roRes.data) || [])[0];
+      if (ro) {
+        out.address = out.address || ro.address || ro.recorded_owner_address || null;
+        out.city = out.city || ro.city || null;
+        out.state_of_incorporation = out.state_of_incorporation || ro.state || ro.recorded_owner_state || null;
+        out.entity_type = out.entity_type || ro.type || ro.owner_type || null;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  return out;
+}
+
+function _renderOwnerDrawerTab(tab) {
+  const c = _ownerDrawerCache;
+  if (!c) return '<div class="detail-empty">No owner data loaded</div>';
+  switch (tab) {
+    case 'Overview': return _ownerDrawerOverview(c);
+    case 'Contacts': return _ownerDrawerContacts(c);
+    case 'Open Activities': return _ownerDrawerActivities(c, 'open');
+    case 'Activity History': return _ownerDrawerActivities(c, 'history');
+    default: return '<div class="detail-empty">Unknown tab</div>';
+  }
+}
+
+function _switchOwnerDrawerTab(tabName) {
+  if (!_ownerDrawerCache) return;
+  document.querySelectorAll('#detailTabs .detail-tab').forEach(function(t) {
+    t.classList.toggle('active', t.textContent.trim() === tabName);
+  });
+  const bodyEl = document.getElementById('detailBody');
+  if (bodyEl) bodyEl.innerHTML = _renderOwnerDrawerTab(tabName);
+}
+
+function _ownerDrawerOverview(c) {
+  let html = '';
+
+  html += '<div class="detail-section"><div class="detail-section-title">Company Profile</div><div class="detail-grid">';
+  html += _row('Name', c.name);
+  if (c.parent_account_name && c.parent_account_name !== c.name) html += _row('Parent (SF Account)', c.parent_account_name);
+  html += _row('Entity Type', c.entity_type);
+  html += _row('State of Incorporation', c.state_of_incorporation);
+  html += _row('Address', c.address);
+  if (c.city) html += _row('City', c.city);
+  if (c.transfer_date) html += _row('Owned Since', _fmtDate(c.transfer_date));
+  if (c.ownership_end) html += _row('Owned Through', _fmtDate(c.ownership_end));
+  html += '</div></div>';
+
+  if (!c.sf_account_id) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Salesforce</div>';
+    html += '<div style="background:rgba(0,161,224,0.08);border:1px solid rgba(0,161,224,0.3);border-radius:10px;padding:14px 16px">';
+    html += '<div style="font-size:13px;color:var(--text);margin-bottom:8px">No Salesforce match found for <strong>' + esc(c.name || 'this owner') + '</strong>.</div>';
+    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Create the SF Account so future activities and contacts can be tracked here.</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    html += '<button class="act-btn primary" onclick="_ownerDrawerCreateSfAccount()">+ Create Salesforce Account</button>';
+    html += '<button class="act-btn" onclick="_ownerDrawerAddContact()">+ Add Contact</button>';
+    html += '</div></div></div>';
+  } else {
+    html += '<div class="detail-section"><div class="detail-section-title">Salesforce</div>';
+    html += '<div class="ql-grid">';
+    html += _qlBtn('SF Account', _SF_BASE + '/Account/' + c.sf_account_id + '/view', '\uD83C\uDFEC', '#a55eea');
+    html += '</div></div>';
+  }
+
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Prospecting</div>';
+  html += '<div style="background:linear-gradient(135deg,rgba(165,94,234,0.12),rgba(0,161,224,0.08));border:1px solid rgba(165,94,234,0.25);border-radius:10px;padding:14px 16px">';
+  html += '<div style="font-size:13px;color:var(--text);margin-bottom:6px;font-weight:600">Begin Prospecting</div>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Creates a Salesforce task on this account, then jumps to Log Activity / Draft Email scoped to <strong>' + esc(c.name) + '</strong>.</div>';
+  html += '<button class="act-btn primary" onclick="_ownerDrawerBeginProspecting()" style="background:#a55eea;color:#fff">\u2192 Begin Prospecting</button>';
+  html += '</div></div>';
+
+  html += '<div class="detail-section"><div class="detail-section-title">Engagement Snapshot</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--purple)">' + (c.contacts ? c.contacts.length : 0) + '</div><div style="font-size:11px;color:var(--text3)">Contacts</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--accent)">' + c.open_activities.length + '</div><div style="font-size:11px;color:var(--text3)">Open Tasks</div></div>';
+  html += '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:var(--green)">' + c.activity_history.length + '</div><div style="font-size:11px;color:var(--text3)">Activities Logged</div></div>';
+  html += '</div></div>';
+
+  return html;
+}
+
+function _ownerDrawerContacts(c) {
+  if (!c.contacts || c.contacts.length === 0) {
+    let html = '<div class="detail-section"><div class="detail-section-title">Contacts</div>';
+    html += '<div class="detail-empty">No contacts linked to this owner yet.</div>';
+    html += '<div style="margin-top:12px"><button class="act-btn primary" onclick="_ownerDrawerAddContact()">+ Add Contact</button></div>';
+    html += '</div>';
+    return html;
+  }
+  let html = '<div class="detail-section"><div class="detail-section-title">Contacts (' + c.contacts.length + ')</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:6px">';
+  c.contacts.forEach(function(ct) {
+    const name = ct.full_name || ((ct.first_name || '') + ' ' + (ct.last_name || '')).trim() || 'Unknown';
+    const initial = (name[0] || '?').toUpperCase();
+    html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContactDetail(decodeURIComponent(\'' + encodeURIComponent(ct.unified_id || ct.sf_contact_id || '') + '\'))">';
+    html += '<div style="display:flex;align-items:center;gap:10px">';
+    html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">' + esc(initial) + '</div>';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="font-weight:600;color:var(--text)">' + esc(name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text3)">' + esc(ct.title || '') + '</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;font-size:11px">';
+    if (ct.email) html += '<div><a href="mailto:' + esc(ct.email) + '" onclick="event.stopPropagation()" style="color:var(--accent)">' + esc(ct.email) + '</a></div>';
+    if (ct.phone || ct.mobile_phone) html += '<div><a href="tel:' + esc(ct.phone || ct.mobile_phone) + '" onclick="event.stopPropagation()" style="color:var(--text2)">' + esc(ct.phone || ct.mobile_phone) + '</a></div>';
+    html += '</div></div></div>';
+  });
+  html += '</div></div>';
+  html += '<div style="margin-top:12px"><button class="act-btn" onclick="_ownerDrawerAddContact()">+ Add Contact</button></div>';
+  return html;
+}
+
+function _ownerDrawerActivities(c, mode) {
+  const list = (mode === 'open') ? c.open_activities : c.activity_history;
+  const title = (mode === 'open') ? 'Open Activities' : 'Activity History';
+  if (!list || list.length === 0) {
+    let html = '<div class="detail-section"><div class="detail-section-title">' + title + '</div>';
+    if (!c.sf_account_id) {
+      html += '<div class="detail-empty">No SF Account linked yet \u2014 create one to see activities.</div>';
+      html += '<div style="margin-top:12px"><button class="act-btn primary" onclick="_ownerDrawerCreateSfAccount()">+ Create Salesforce Account</button></div>';
+    } else {
+      html += '<div class="detail-empty">No ' + title.toLowerCase() + ' for this owner.</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+  let html = '<div class="detail-section"><div class="detail-section-title">' + title + ' (' + list.length + ')</div>';
+  list.forEach(function(a) {
+    const typeColor = (a.feed_type === 'task' || mode === 'open') ? 'var(--yellow)'
+      : (a.feed_type === 'call_outcome') ? 'var(--green)' : 'var(--accent)';
+    html += '<div class="detail-card">';
+    html += '<div class="detail-card-header">';
+    html += '<div class="detail-card-title">' + esc(a.subject || a.activity_type || 'Activity') + '</div>';
+    html += '<div class="detail-card-date">' + esc(_fmtDate(a.activity_date)) + '</div>';
+    html += '</div>';
+    html += '<div class="detail-card-body">';
+    html += '<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;background:' + typeColor + ';color:#fff;margin-bottom:4px">' + esc(a.feed_type || a.activity_type || '') + '</span>';
+    if (a.activity_type) html += ' <span style="font-size:12px;color:var(--text2)">' + esc(a.activity_type) + '</span>';
+    if (a.status) html += '<br><span style="font-size:12px;color:var(--text3)">Status: ' + esc(a.status) + '</span>';
+    if (a.assigned_to) html += '<br><span style="font-size:12px;color:var(--text3)">Assigned: ' + esc(a.assigned_to) + '</span>';
+    if (a.contact_name) html += '<br><span style="font-size:12px;color:var(--text3)">Contact: ' + esc(a.contact_name) + '</span>';
+    if (a.notes) html += '<br><span style="font-size:12px;color:var(--text2);white-space:pre-wrap">' + esc(String(a.notes).substring(0, 220)) + (a.notes.length > 220 ? '...' : '') + '</span>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+/** Begin Prospecting: create a SF task on this owner's account + scroll to Log Activity. */
+async function _ownerDrawerBeginProspecting() {
+  const c = _ownerDrawerCache;
+  if (!c) return;
+
+  if (!c.sf_account_id) {
+    showToast('No SF Account linked yet \u2014 create the account first.', 'info');
+    return;
+  }
+
+  try {
+    const payload = {
+      sf_company_id: c.sf_account_id,
+      sf_contact_id: c.sf_contact_id || undefined,
+      activity_type: 'Client Outreach',
+      activity_date: new Date().toISOString().split('T')[0],
+      outcome: 'no_answer',
+      notes: 'Investment Sales - Prospecting opened',
+      force: true
+    };
+    const res = await fetch('/api/sync?action=outbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'log_to_sf', payload })
+    });
+    if (!res.ok) throw new Error('Server returned ' + res.status);
+    showToast('Prospecting task created on ' + (c.parent_account_name || c.name), 'success');
+  } catch (e) {
+    console.warn('Begin Prospecting: SF task creation failed', e);
+    showToast('Could not create SF task: ' + e.message, 'error');
+  }
+
+  closeDetail();
+  setTimeout(function() {
+    const logForm = document.getElementById('udLogCallForm');
+    if (logForm) {
+      logForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const notes = document.getElementById('udLogNotes');
+      if (notes) {
+        notes.value = 'Prospecting ' + (c.parent_account_name || c.name) + ' \u2014 ';
+        notes.focus();
+      }
+    }
+  }, 250);
+}
+
+/** Open SF account creation in a new tab, prefilled with this owner's name. */
+function _ownerDrawerCreateSfAccount() {
+  const c = _ownerDrawerCache;
+  if (!c) return;
+  const name = c.parent_account_name || c.true_owner_name || c.recorded_owner_name || c.name || '';
+  const sfNewUrl = _SF_BASE + '/lightning/o/Account/new?defaultFieldValues=Name=' + encodeURIComponent(name);
+  window.open(sfNewUrl, '_blank', 'noopener');
+  showToast('Opening Salesforce \u2014 New Account form (' + name + ')', 'info');
+}
+
+/** Inline Add Contact: writes to unified_contacts via /api/data-query. */
+async function _ownerDrawerAddContact() {
+  const c = _ownerDrawerCache;
+  if (!c) return;
+  const fullName = window.prompt('Contact full name:', '');
+  if (!fullName) return;
+  const email = window.prompt('Email (optional):', '') || '';
+  const phone = window.prompt('Phone (optional):', '') || '';
+  const title = window.prompt('Title (optional):', '') || '';
+
+  const parts = fullName.trim().split(/\s+/);
+  const firstName = parts[0] || '';
+  const lastName = parts.slice(1).join(' ') || '';
+  const companyName = c.parent_account_name || c.true_owner_name || c.recorded_owner_name || c.name || '';
+
+  try {
+    const body = {
+      first_name: firstName,
+      last_name: lastName,
+      email: email || null,
+      phone: phone || null,
+      title: title || null,
+      company_name: companyName,
+      contact_class: 'business',
+      contact_type: 'owner',
+      sf_account_id: c.sf_account_id || null,
+      true_owner_id: c.true_owner_id || null,
+      recorded_owner_id: c.recorded_owner_id || null,
+      match_method: 'manual',
+      match_confidence: 1.0
+    };
+    const res = await fetch('/api/data-query?_source=gov&table=unified_contacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showToast('Contact added to ' + companyName, 'success');
+    openOwnerDrawer(c);
+  } catch (e) {
+    console.error('Add Contact failed', e);
+    showToast('Add Contact failed: ' + e.message, 'error');
+  }
+}
+
+window.openOwnerDrawer = openOwnerDrawer;
+window._switchOwnerDrawerTab = _switchOwnerDrawerTab;
+window._ownerDrawerBeginProspecting = _ownerDrawerBeginProspecting;
+window._ownerDrawerCreateSfAccount = _ownerDrawerCreateSfAccount;
+window._ownerDrawerAddContact = _ownerDrawerAddContact;
+window._ownerLink = _ownerLink;
+window._ownerCtxFromCurrent = _ownerCtxFromCurrent;
+window._ownerCtxFromChain = _ownerCtxFromChain;
 window._switchContactTab = _switchContactTab;
