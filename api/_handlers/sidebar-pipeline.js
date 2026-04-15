@@ -1470,15 +1470,19 @@ async function auditNullSaleDates() {
  * available_listings rows still flagged as active/Active for the same
  * property. Applies to both dialysis and government domains, using each
  * domain's native column set:
- *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date
+ *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date,
+ *               sold_price (when provided)
  *   government: listing_status='Sold', off_market_date, updated_at
  *               (plus sold_date when the column exists)
  * Logs one line per closed listing with the [listing-close] prefix.
  * Never throws — listing-close failures must not abort the sales write.
  */
-async function closeActiveListingsOnSale(domain, propertyId, saleDate) {
+async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice) {
   const datePart = String(saleDate || '').split('T')[0];
   if (!datePart) return 0;
+  const priceNum = soldPrice != null && Number.isFinite(Number(soldPrice)) && Number(soldPrice) > 0
+    ? Number(soldPrice)
+    : null;
   try {
     if (domain === 'dialysis') {
       const propertyIdInt = parseInt(propertyId, 10);
@@ -1496,6 +1500,7 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate) {
           sold_date:        datePart,
           off_market_date:  datePart,
         };
+        if (priceNum != null) patch.sold_price = priceNum;
         const res = await domainPatch('dialysis',
           `available_listings?listing_id=eq.${listingId}`,
           patch,
@@ -1504,7 +1509,8 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate) {
         if (res?.ok !== false) {
           console.log(
             `[listing-close] domain=dialysis listing_id=${listingId} ` +
-            `property_id=${propertyIdInt} sale_date=${datePart}`
+            `property_id=${propertyIdInt} sale_date=${datePart}` +
+            (priceNum != null ? ` sold_price=${priceNum}` : '')
           );
           closed++;
         }
@@ -1829,7 +1835,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
       // Close any still-active listings for this property now that a
       // confirmed sale exists. Fire-and-forget relative to the sale write —
       // failures are logged but do not affect the sales_transactions result.
-      await closeActiveListingsOnSale(domain, propertyId, datePart);
+      await closeActiveListingsOnSale(domain, propertyId, datePart, saleData.sold_price);
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -1840,7 +1846,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           await createSaleAlert(propertyId, saleData);
         }
         // Close any still-active listings for this property on a new sale.
-        await closeActiveListingsOnSale(domain, propertyId, datePart);
+        await closeActiveListingsOnSale(domain, propertyId, datePart, saleData.sold_price);
       }
     }
   }
