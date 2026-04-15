@@ -1466,6 +1466,90 @@ async function auditNullSaleDates() {
 }
 
 /**
+ * After a sales_transactions row is written for a property, close any
+ * available_listings rows still flagged as active/Active for the same
+ * property. Applies to both dialysis and government domains, using each
+ * domain's native column set:
+ *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date
+ *   government: listing_status='Sold', off_market_date, updated_at
+ *               (plus sold_date when the column exists)
+ * Logs one line per closed listing with the [listing-close] prefix.
+ * Never throws — listing-close failures must not abort the sales write.
+ */
+async function closeActiveListingsOnSale(domain, propertyId, saleDate) {
+  const datePart = String(saleDate || '').split('T')[0];
+  if (!datePart) return 0;
+  try {
+    if (domain === 'dialysis') {
+      const propertyIdInt = parseInt(propertyId, 10);
+      const lookup = await domainQuery('dialysis', 'GET',
+        `available_listings?property_id=eq.${propertyIdInt}` +
+        `&is_active=is.true&select=listing_id&limit=100`
+      );
+      if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) return 0;
+      let closed = 0;
+      for (const row of lookup.data) {
+        const listingId = row.listing_id;
+        const patch = {
+          is_active:        false,
+          status:           'Sold',
+          sold_date:        datePart,
+          off_market_date:  datePart,
+        };
+        const res = await domainPatch('dialysis',
+          `available_listings?listing_id=eq.${listingId}`,
+          patch,
+          'closeActiveListingsOnSale'
+        );
+        if (res?.ok !== false) {
+          console.log(
+            `[listing-close] domain=dialysis listing_id=${listingId} ` +
+            `property_id=${propertyIdInt} sale_date=${datePart}`
+          );
+          closed++;
+        }
+      }
+      return closed;
+    }
+
+    if (domain === 'government') {
+      const lookup = await domainQuery('government', 'GET',
+        `available_listings?property_id=eq.${propertyId}` +
+        `&listing_status=eq.Active&select=listing_id&limit=100`
+      );
+      if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) return 0;
+      let closed = 0;
+      for (const row of lookup.data) {
+        const listingId = row.listing_id;
+        const patch = {
+          listing_status:   'Sold',
+          off_market_date:  datePart,
+          updated_at:       new Date().toISOString(),
+        };
+        const res = await domainPatch('government',
+          `available_listings?listing_id=eq.${listingId}`,
+          patch,
+          'closeActiveListingsOnSale'
+        );
+        if (res?.ok !== false) {
+          console.log(
+            `[listing-close] domain=government listing_id=${listingId} ` +
+            `property_id=${propertyId} sale_date=${datePart}`
+          );
+          closed++;
+        }
+      }
+      return closed;
+    }
+  } catch (err) {
+    console.error('[listing-close] error', {
+      domain, propertyId, saleDate: datePart, error: err?.message || String(err),
+    });
+  }
+  return 0;
+}
+
+/**
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
  */
@@ -1742,6 +1826,10 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
 
       await domainPatch(domain,
         `sales_transactions?sale_id=eq.${existing.sale_id}`, patchData, 'upsertDomainSales');
+      // Close any still-active listings for this property now that a
+      // confirmed sale exists. Fire-and-forget relative to the sale write —
+      // failures are logged but do not affect the sales_transactions result.
+      await closeActiveListingsOnSale(domain, propertyId, datePart);
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -1751,6 +1839,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
         if (domain === 'dialysis') {
           await createSaleAlert(propertyId, saleData);
         }
+        // Close any still-active listings for this property on a new sale.
+        await closeActiveListingsOnSale(domain, propertyId, datePart);
       }
     }
   }
