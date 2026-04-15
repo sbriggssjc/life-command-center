@@ -5076,7 +5076,7 @@ function renderDiaDetailOverview(record) {
   html += _detRow('NPI', r.npi || r.medicare_npi || '—');
   html += _detRow('Operator', (r.operator_name || r.chain_organization) ? entityLink(r.operator_name || r.chain_organization, 'operator', null) : '—');
   html += _detRow('Parent Org', r.parent_organization || '—');
-  html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
+  html += _detRow('Stations', r.stations || r.number_of_chairs || '—');
 
   // Modality & Patient metrics
   const modLabel = r.modality_type === 'hybrid' ? 'Hybrid (IC + Home)' : r.modality_type === 'home' ? 'Home Only' : 'In-Center';
@@ -5170,8 +5170,10 @@ function renderDiaDetailProperty(record) {
   html += _detRow('Property ID', r.property_id != null ? r.property_id : 'Not linked');
   html += _detRow('Building Size', r.building_size ? fmtN(Math.round(Number(r.building_size))) + ' SF' : '—');
   html += _detRow('Land Area', r.land_area ? fmtN(Math.round(Number(r.land_area))) + ' SF' : '—');
-  html += _detRow('Year Built', r.year_built || '—');
-  html += _detRow('Stations / Chairs', r.stations || r.number_of_chairs || '—');
+  // Treat 0 as "unknown" — CoStar sometimes sends blank Year Built as 0.
+  const ybNum = Number(r.year_built);
+  html += _detRow('Year Built', (r.year_built && ybNum >= 1600 && ybNum <= 2100) ? ybNum : '—');
+  html += _detRow('Stations', r.stations || r.number_of_chairs || '—');
 
   // Ownership vs operator — never conflate the two.
   // "Recorded Owner" is the deed holder (e.g. Agree Central LLC) sourced from the

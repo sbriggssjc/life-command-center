@@ -141,6 +141,50 @@ function parseIntSafe(val) {
   return isNaN(num) ? null : num;
 }
 
+/**
+ * Parse a 4-digit "year built" value. Returns NULL for blank, non-numeric,
+ * zero, or out-of-range inputs so we never persist year_built = 0.
+ * Matches the DB CHECK constraint added in
+ * sql/20260415_properties_year_built_null_zero.sql (1600–2100).
+ */
+function parseYearSafe(val) {
+  if (val == null) return null;
+  const str = String(val).trim();
+  if (!str) return null;
+  const num = parseInt(str, 10);
+  if (isNaN(num) || num <= 0) return null;
+  if (num < 1600 || num > 2100) return null;
+  return num;
+}
+
+/**
+ * Classify a CoStar-style property_type into the LCC building_type taxonomy.
+ * CoStar routinely tags dialysis clinics, nephrology offices, and MOBs as a
+ * generic "Office" subtype. When the tenant/entity signals are medical, we
+ * promote that to a medical taxonomy value so the Property sidebar shows the
+ * right label. Returns null when we have nothing confident to assert (caller
+ * should leave the DB column untouched).
+ */
+function classifyBuildingType(metadata, entity, primaryTenant) {
+  const rawType = (metadata.property_type || metadata.property_subtype || '').toString().trim();
+  const signalText = [
+    primaryTenant,
+    entity?.name,
+    metadata.tenant_name,
+    metadata.asset_type,
+    metadata.property_subtype,
+    metadata.facility_name,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const isDialysis = /dialysis|fresenius|davita|fmc\b|us\s+renal|american\s+renal|kidney|nephrology|satellite\s+healthcare|dci\b/.test(signalText);
+  const isMedical  = isDialysis || /medical|clinic|physician|healthcare|health\s+care|hospital|imaging|surgery|oncology|cardiology/.test(signalText);
+
+  if (isDialysis) return 'Medical Office – Dialysis Clinic';
+  if (isMedical && /office/i.test(rawType)) return 'Medical Office';
+  if (isMedical) return 'Medical Office';
+  return rawType || null;
+}
+
 /** Strip null/undefined values from an object (for PATCH — avoids overwriting with null) */
 function stripNulls(obj) {
   const result = {};
@@ -955,8 +999,9 @@ async function upsertDomainProperty(domain, entity, metadata) {
     zip_code: entity.zip || null,
     county: metadata.county || entity.county || null,
     building_size: parsedSF,
-    year_built: parseIntSafe(metadata.year_built),
-    year_renovated: parseIntSafe(metadata.year_renovated),
+    year_built: parseYearSafe(metadata.year_built),
+    year_renovated: parseYearSafe(metadata.year_renovated),
+    building_type: classifyBuildingType(metadata, entity, primaryTenant),
     tenant: primaryTenant,
     zoning: metadata.zoning || null,
     occupancy_percent: parsePercent(metadata.occupancy),
@@ -986,8 +1031,8 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
     Object.assign(propertyData, stripNulls({
       rba:               parsedSF,
-      year_built:        parseIntSafe(metadata.year_built),
-      year_renovated:    parseIntSafe(metadata.year_renovated),
+      year_built:        parseYearSafe(metadata.year_built),
+      year_renovated:    parseYearSafe(metadata.year_renovated),
       county:            metadata.county || entity.county || null,
       zip_code:          entity.zip || null,
       land_acres:        landAcresRaw || lotAcres,
@@ -1015,6 +1060,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
     delete propertyData.land_area;
     delete propertyData.is_single_tenant;
     delete propertyData.building_size;
+    delete propertyData.building_type;
     // Rent anchor columns live on the dialysis properties table only
     delete propertyData.anchor_rent;
     delete propertyData.anchor_rent_date;
