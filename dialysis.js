@@ -182,6 +182,26 @@ async function diaQueryPage(table, select, params = {}) {
  */
 function _pf(el) { const v = (typeof el === 'string' ? el : el?.value)?.trim(); return v ? parseFloat(v) : null; }
 
+/**
+ * Safely parse a 4-digit year-built style value. Returns NULL for blank,
+ * non-numeric, zero, negative, or out-of-range inputs so we never persist
+ * year_built = 0 and never trip the DB CHECK constraint added in
+ * sql/20260415_properties_year_built_null_zero.sql (valid range 1600–2100).
+ * Mirrors parseYearSafe() in api/_handlers/sidebar-pipeline.js.
+ * @param {HTMLElement|string|any} el
+ * @returns {number|null}
+ */
+function _py(el) {
+  const raw = (typeof el === 'string' ? el : el?.value);
+  if (raw == null) return null;
+  const str = String(raw).trim();
+  if (!str) return null;
+  const num = parseInt(str, 10);
+  if (isNaN(num) || num <= 0) return null;
+  if (num < 1600 || num > 2100) return null;
+  return num;
+}
+
 // ============================================================================
 // DATA LOADING
 // ============================================================================
@@ -7805,7 +7825,7 @@ async function saveSaleProperty() {
   const tenant = q('#dia-prop-tenant')?.value?.trim() || null;
   const rba = _pf(q('#dia-prop-rba'));
   const land = _pf(q('#dia-prop-land'));
-  const year = parseInt(q('#dia-prop-year')?.value, 10) || null;
+  const year = _py(q('#dia-prop-year'));
 
   const data = {
     address: address || null,
