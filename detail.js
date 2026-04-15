@@ -710,7 +710,7 @@ function _udRenderMatchFacilityCard() {
   html += '<div id="cmsMatchResults" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto"></div>';
   html += '</div>';
   if (state || zip) {
-    html += '<div style="font-size:10px;color:var(--text3);margin-top:6px">Search scoped to ' + (state ? 'state ' + esc(state) : '') + (state && zip ? ', ' : '') + (zip ? 'zip ' + esc(String(zip).substring(0,5)) : '') + '.</div>';
+    html += '<div style="font-size:10px;color:var(--text3);margin-top:6px">Search scoped to ' + (state ? 'state ' + esc(state) : '') + (state && zip ? ', ' : '') + (zip ? 'zip area ' + esc(String(zip).substring(0,3)) + 'xx' : '') + '.</div>';
   }
   html += '</div></div>';
   return html;
@@ -731,8 +731,9 @@ function _udCmsTypeahead(q) {
     url.searchParams.set('action', 'search');
     url.searchParams.set('q', q);
     if (state) url.searchParams.set('state', state);
-    // Scope by zip only when the user's query looks like a facility name (letters)
-    if (zip && !/^\d/.test(q)) url.searchParams.set('zip', String(zip).substring(0,5));
+    // Scope by zip prefix (3-digit) for broader geographic matching;
+    // exact 5-digit zip was too restrictive for nearby facilities
+    if (zip && !/^\d/.test(q)) url.searchParams.set('zip', String(zip).substring(0,3));
     url.searchParams.set('limit', '10');
     const headers = {};
     if (window._lccApiKey) headers['X-LCC-Key'] = window._lccApiKey;
@@ -1490,8 +1491,25 @@ function _udFilterAndDedupeLeases(leases) {
     const tenantKey = String(l.tenant).trim().toLowerCase();
     const startKey = l.lease_start || '1900-01-01';
     const key = `${l.property_id || ''}|${tenantKey}|${startKey}`;
+    // Secondary key: tenant+property without start date. If we already kept
+    // a row for this tenant on this property (with a real start date), skip
+    // any subsequent row that has no start date (and vice-versa). This
+    // collapses "same tenant, one row has commencement, other doesn't" dupes.
+    const tenantOnlyKey = `${l.property_id || ''}|${tenantKey}`;
     if (seen.has(key)) continue;
+    if (!l.lease_start && seen.has('__tenant__' + tenantOnlyKey)) continue;
+    if (l.lease_start && seen.has('__tenant__' + tenantOnlyKey)) {
+      // We have a real start date but already kept a no-start-date row.
+      // Replace the earlier (weaker) row with this one.
+      const prevIdx = seen.get('__tenant__' + tenantOnlyKey);
+      if (prevIdx != null && kept[prevIdx] && !kept[prevIdx].lease_start) {
+        kept[prevIdx] = l;
+        seen.set(key, prevIdx);
+        continue;
+      }
+    }
     seen.set(key, kept.length);
+    seen.set('__tenant__' + tenantOnlyKey, kept.length);
     kept.push(l);
   }
   return kept;
@@ -4344,7 +4362,7 @@ function _udDealRenderCombined(l, s) {
 }
 
 function _udDealRenderOwnership(h, db) {
-  const ownerName = h.recorded_owner_name || h.true_owner_name || h.to_owner || '—';
+  const ownerName = h.recorded_owner_name || h.true_owner_name || h.to_owner || h.new_owner || h.owner_name || h.buyer || '—';
   const transferDate = _fmtDate(h.transfer_date);
   const endDate = h.ownership_end ? _fmtDate(h.ownership_end) : 'Present';
   let html = '';
@@ -4434,7 +4452,7 @@ async function _udRenderActivityLogAsync(bodyEl) {
     events.push({
       kind: 'ownership',
       date: h.transfer_date,
-      title: 'Ownership transfer to ' + (h.recorded_owner_name || h.true_owner_name || h.to_owner || 'Unknown'),
+      title: 'Ownership transfer to ' + (h.recorded_owner_name || h.true_owner_name || h.to_owner || h.new_owner || h.owner_name || h.buyer || 'Unknown'),
       detail: [h.from_owner && 'From ' + h.from_owner, h.sale_price && fmt(h.sale_price)].filter(Boolean).join(' · '),
       color: '#a55eea',
       ownerCtx: _ownerCtxFromChain(h, db)
@@ -6987,6 +7005,24 @@ async function _intelRenderPriorSaleSummaryAsync() {
     console.warn('Prior sale summary fetch error:', e);
   }
 
+  // If property_sale_events is empty, fall back to ownership chain sale data
+  if (!latest) {
+    const chain = _udCache?.chain || [];
+    const chainSale = chain.find(h => h.sale_price && h.sale_price > 0);
+    if (chainSale) {
+      latest = {
+        sale_date: chainSale.transfer_date,
+        price: chainSale.sale_price,
+        cap_rate: chainSale.cap_rate || null,
+        buyer_name: chainSale.recorded_owner_name || chainSale.true_owner_name || chainSale.to_owner || chainSale.new_owner || null,
+        seller_name: chainSale.from_owner || null,
+        broker_name: null,
+        source: 'Ownership chain',
+        notes: null
+      };
+    }
+  }
+
   if (!latest) {
     slot.innerHTML = '<span style="color:var(--text3)">No sale recorded for this property yet.</span>';
     return;
@@ -8935,26 +8971,4 @@ async function _brokerDrawerBeginProspecting() {
 
 // Delegated click handler for .broker-link elements
 document.addEventListener('click', function (e) {
-  const el = e.target && e.target.closest && e.target.closest('.broker-link[data-broker-ctx]');
-  if (!el) return;
-  e.preventDefault();
-  e.stopPropagation();
-  try {
-    const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
-    if (raw) openBrokerDrawer(raw);
-  } catch (err) { console.warn('broker-link click: bad payload', err); }
-});
-document.addEventListener('keydown', function (e) {
-  if (e.key !== 'Enter' && e.key !== ' ') return;
-  const el = e.target && e.target.closest && e.target.closest('.broker-link[data-broker-ctx]');
-  if (!el) return;
-  e.preventDefault();
-  try {
-    const raw = decodeURIComponent(el.getAttribute('data-broker-ctx') || '');
-    if (raw) openBrokerDrawer(raw);
-  } catch (err) { /* ignore */ }
-});
-
-window.openBrokerDrawer = openBrokerDrawer;
-window._switchBrokerDrawerTab = _switchBrokerDrawerTab;
-window._brokerDrawerBeginProspecting = _brokerDrawerBeginProspecting;
+  c

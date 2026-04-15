@@ -1091,8 +1091,13 @@ async function handleCmsMatch(req, res) {
       for (const filters of attempts) {
         const qs = `medicare_clinics?select=*&${filters.join('&')}&limit=${limit}`;
         const r = await diaRest(env, 'GET', qs);
-        if (r.ok) { rows = Array.isArray(r.data) ? r.data : []; lastErr = null; break; }
-        lastErr = { status: r.status, detail: r.data };
+        if (r.ok) {
+          rows = Array.isArray(r.data) ? r.data : [];
+          lastErr = null;
+          if (rows.length > 0) break; // keep trying broader scopes if no results
+        } else {
+          lastErr = { status: r.status, detail: r.data };
+        }
       }
       if (lastErr && !rows.length) {
         return res.status(lastErr.status || 502).json({ error: 'Search failed', detail: lastErr.detail });

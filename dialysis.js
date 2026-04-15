@@ -6001,6 +6001,20 @@ async function renderDiaSales() {
   // Filter out blank/empty records — require at least an address or operator name
   data = data.filter(r => (r.address && r.address.trim()) || (r.tenant_operator && r.tenant_operator.trim()) || (r.facility_name && r.facility_name.trim()));
 
+  // Deduplicate rows — v_sales_comps view can return duplicates from joins
+  {
+    const seen = new Set();
+    data = data.filter(r => {
+      const addr = (r.address || '').trim().toLowerCase();
+      const dateKey = isComps ? (r.sold_date || '') : (r.listing_date || '');
+      const priceKey = r.price || r.ask_price || '';
+      const key = `${addr}|${dateKey}|${priceKey}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   // Apply state filter
   let filtered = data;
   if (diaSalesStateFilter) {
