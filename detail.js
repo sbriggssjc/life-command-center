@@ -1651,6 +1651,10 @@ function _udParseRentEscalation(text) {
     // Index-linked or FMV reset — not a deterministic step, skip.
     return null;
   }
+  // "Fixed" rent — explicitly 0% bump.
+  if (/\bfixed\b/.test(s) || /\bflat\b/.test(s)) {
+    return { stepPct: 0, intervalYears: 1 };
+  }
 
   // "X% every N years"
   let m = s.match(/(\d+(?:\.\d+)?)\s*%\s*every\s*(\d+)\s*year/);
@@ -1742,8 +1746,9 @@ function _udBuildRentSchedule(lease, storedRows, em) {
     }
   }
 
-  const leasedSF = lease?.leased_area != null ? Number(lease.leased_area)
+  let leasedSF = lease?.leased_area != null ? Number(lease.leased_area)
                  : (em?.sf_leased != null ? Number(em.sf_leased) : null);
+  if (!leasedSF && _udCache.property?.rba) leasedSF = Number(_udCache.property.rba);
 
   const rows = [];
   let rent = baseRent;
@@ -1780,7 +1785,13 @@ function _udBuildRentSchedule(lease, storedRows, em) {
  * Pure SVG — no external chart library.
  */
 function _udRenderRentChart(rows) {
-  if (!Array.isArray(rows) || rows.length === 0) return '';
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return '<div style="min-height:200px;display:flex;align-items:center;justify-content:center;color:var(--text3,#888);font-size:13px;background:var(--s2,#141414);border:1px solid var(--border,#2a2a2a);border-radius:8px">No rent data for chart</div>';
+  }
+  const allZero = rows.every(r => !r.base_rent);
+  if (allZero) {
+    return '<div style="min-height:200px;display:flex;align-items:center;justify-content:center;color:var(--text3,#888);font-size:13px;background:var(--s2,#141414);border:1px solid var(--border,#2a2a2a);border-radius:8px">No rent data for chart</div>';
+  }
   const W = 560, H = 200, PAD_L = 60, PAD_R = 20, PAD_T = 20, PAD_B = 36;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
@@ -1820,12 +1831,12 @@ function _udRenderRentChart(rows) {
     return `<text x="${x.toFixed(1)}" y="${(H - PAD_B + 16).toFixed(1)}" text-anchor="middle" font-size="10" fill="var(--text3,#888)">Y${r.year}</text>`;
   }).join('');
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="max-width:100%;background:var(--s2,#141414);border:1px solid var(--border,#2a2a2a);border-radius:8px">
+  return `<div style="min-height:200px"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="max-width:100%;min-height:200px;background:var(--s2,#141414);border:1px solid var(--border,#2a2a2a);border-radius:8px">
     ${yAxisLabels}
     <path d="${d}" stroke="var(--purple,#a78bfa)" stroke-width="2" fill="none" stroke-linejoin="miter"/>
     ${rows.map((r, i) => `<circle cx="${xFor(i).toFixed(1)}" cy="${yFor(r.base_rent || 0).toFixed(1)}" r="3" fill="var(--purple,#a78bfa)"><title>Year ${r.year}: $${Math.round(r.base_rent || 0).toLocaleString()}</title></circle>`).join('')}
     ${xAxisLabels}
-  </svg>`;
+  </svg></div>`;
 }
 
 /**
@@ -1860,18 +1871,25 @@ function _udRenderRentRoll(leases, storedScheduleMap, em) {
 
     html += '<div style="overflow-x:auto;margin-top:12px"><table class="detail-table" style="width:100%;border-collapse:collapse;font-size:12px">';
     html += '<thead><tr>' +
-      ['Year','Period','Base Rent','Rent / SF','Bump %','Cumulative','Option'].map(h =>
+      ['Year','Period','Base Rent','Rent / SF','Bump %'].map(h =>
         `<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a);color:var(--text3,#888);font-weight:600">${h}</th>`
       ).join('') + '</tr></thead><tbody>';
+    const curYear = new Date().getFullYear();
     rows.forEach(r => {
-      html += '<tr>' +
-        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">Y${r.year}</td>` +
+      const calYear = r.period_start ? new Date(r.period_start).getFullYear() : null;
+      const isCurrent = calYear === curYear;
+      const rowStyle = isCurrent
+        ? 'background:rgba(52,211,153,0.12);font-weight:700;border-left:3px solid var(--green,#34d399)'
+        : '';
+      const yearLabel = isCurrent
+        ? `Y${r.year} <span style="font-size:9px;background:var(--green,#34d399);color:#000;padding:1px 5px;border-radius:3px;margin-left:4px;font-weight:600">Current</span>`
+        : `Y${r.year}`;
+      html += `<tr style="${rowStyle}">` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${yearLabel}</td>` +
         `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.period_start ? _fmtDate(r.period_start) : '—'}${r.period_end ? ' → ' + _fmtDate(r.period_end) : ''}</td>` +
         `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.base_rent != null ? '$' + Math.round(r.base_rent).toLocaleString() : '—'}</td>` +
-        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.rent_psf != null ? '$' + r.rent_psf.toFixed(2) : '—'}</td>` +
-        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.bump_pct ? (r.bump_pct * 100).toFixed(2) + '%' : '—'}</td>` +
-        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.cumulative_rent != null ? '$' + Math.round(r.cumulative_rent).toLocaleString() : '—'}</td>` +
-        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.is_option_window ? 'Option' : ''}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.rent_psf != null ? '$' + r.rent_psf.toFixed(2) + '/SF' : '—'}</td>` +
+        `<td style="padding:6px 8px;border-bottom:1px solid var(--border,#2a2a2a)">${r.bump_pct ? (r.bump_pct * 100).toFixed(1) + '%' : (r.year === 1 ? '—' : '0.0%')}</td>` +
         '</tr>';
     });
     html += '</tbody></table></div>';
