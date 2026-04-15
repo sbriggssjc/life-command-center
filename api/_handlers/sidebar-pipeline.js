@@ -1566,16 +1566,31 @@ async function backfillListingSaleIdForListing(domain, { listingId, propertyId, 
  * property. Applies to both dialysis and government domains, using each
  * domain's native column set:
  *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date,
- *               sold_price (when provided)
+ *               sale_transaction_id (when provided), sold_price (when provided)
  *   government: listing_status='Sold', off_market_date, updated_at
  * Logs one line per closed listing with the [listing-close] prefix.
  * Never throws — listing-close failures must not abort the sales write.
+ *
+ * @param {'dialysis'|'government'} domain
+ * @param {string|number} propertyId
+ * @param {string} saleDate        — YYYY-MM-DD (sale_date of the transaction)
+ * @param {number|null} [soldPrice] — sold_price from that sales_transactions
+ *                                    row; written onto the dialysis listing
+ *                                    row as sold_price.
+ * @param {number|null} [saleId]   — sales_transactions.sale_id of the sale that
+ *                                   just closed; written onto the dialysis
+ *                                   listing row as sale_transaction_id (see
+ *                                   the available_listings_sale_fk migration).
+ *                                   Omit when no confirmed sale_id is available.
  */
-async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice) {
+async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice, saleId = null) {
   const datePart = String(saleDate || '').split('T')[0];
   if (!datePart) return 0;
   const priceNum = soldPrice != null && Number.isFinite(Number(soldPrice)) && Number(soldPrice) > 0
     ? Number(soldPrice)
+    : null;
+  const saleIdNum = Number.isFinite(Number(saleId)) && Number(saleId) > 0
+    ? Number(saleId)
     : null;
   try {
     if (domain === 'dialysis') {
@@ -1595,6 +1610,7 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
           off_market_date:  datePart,
         };
         if (priceNum != null) patch.sold_price = priceNum;
+        if (saleIdNum != null) patch.sale_transaction_id = saleIdNum;
         const res = await domainPatch('dialysis',
           `available_listings?listing_id=eq.${listingId}`,
           patch,
@@ -1604,32 +1620,13 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
           console.log(
             `[listing-close] domain=dialysis listing_id=${listingId} ` +
             `property_id=${propertyIdInt} sale_date=${datePart}` +
-            (priceNum != null ? ` sold_price=${priceNum}` : '')
+            (priceNum != null ? ` sold_price=${priceNum}` : '') +
+            (saleIdNum != null ? ` sale_transaction_id=${saleIdNum}` : '')
           );
           closed++;
         }
       }
-      const listingId = target.listing_id;
-      const patch = {
-        is_active:        false,
-        status:           'Sold',
-        sold_date:        datePart,
-        off_market_date:  datePart,
-      };
-      const res = await domainPatch('dialysis',
-        `available_listings?listing_id=eq.${listingId}`,
-        patch,
-        'closeActiveListingsOnSale'
-      );
-      if (res?.ok !== false) {
-        console.log(
-          `[listing-close] domain=dialysis listing_id=${listingId} ` +
-          `property_id=${propertyIdInt} sale_date=${datePart} ` +
-          `listing_date=${target.listing_date || 'null'}`
-        );
-        return 1;
-      }
-      return 0;
+      return closed;
     }
 
     if (domain === 'government') {
@@ -1969,7 +1966,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
       // Close any still-active listings for this property now that a
       // confirmed sale exists. Fire-and-forget relative to the sale write —
       // failures are logged but do not affect the sales_transactions result.
-      await closeActiveListingsOnSale(domain, propertyId, datePart, saleData.sold_price);
+      // Pass the existing sale_id + incoming soldPrice so the dialysis
+      // listing row persists sale_transaction_id + sold_price (see the
+      // available_listings_sale_fk migration).
+      await closeActiveListingsOnSale(
+        domain, propertyId, datePart, saleData.sold_price, existing.sale_id
+      );
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -1980,7 +1982,14 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           await createSaleAlert(propertyId, saleData);
         }
         // Close any still-active listings for this property on a new sale.
-        await closeActiveListingsOnSale(domain, propertyId, datePart, saleData.sold_price);
+        // The POST uses Prefer: return=representation (see domain-db.js) so
+        // result.data is the inserted row(s) — grab sale_id off it to stamp
+        // onto the dialysis listing row as sale_transaction_id.
+        const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
+        const newSaleId = inserted?.sale_id ?? null;
+        await closeActiveListingsOnSale(
+          domain, propertyId, datePart, saleData.sold_price, newSaleId
+        );
       }
     }
   }
@@ -3346,6 +3355,10 @@ async function upsertDialysisListings(propertyId, metadata) {
 
   if (recentSales.ok && recentSales.data?.length) {
     const latestSale = recentSales.data[0];
+    const latestSalePrice = parseCurrency(latestSale.sold_price);
+    const latestSaleId = Number.isFinite(Number(latestSale.sale_id))
+      && Number(latestSale.sale_id) > 0
+        ? Number(latestSale.sale_id) : null;
     // Do NOT copy any sale-derived cap rate into available_listings here.
     // The listing's cap_rate / current_cap_rate columns must only ever
     // reflect the CoStar listing's asking cap rate (listingCapRate above);
@@ -3354,18 +3367,32 @@ async function upsertDialysisListings(propertyId, metadata) {
     // Scope the close to the listing we just inserted (not every active
     // listing for the property) — older campaigns stay open per the 3-year
     // rule in closeActiveListingsOnSale.
+    //
+    // Bulk-close FK linkage: populate sale_transaction_id + sold_price so
+    // the closed listing resolves to the specific sales_transactions row
+    // that closed it (matched by property_id + closest sale_date above, via
+    // the sale_date.desc limit=1 lookup). See available_listings_sale_fk
+    // migration.
     const closeFilter = currentListingId != null
       ? `listing_id=eq.${currentListingId}`
       : `property_id=eq.${propertyIdInt}&is_active=is.true`;
+    const patch = {
+      is_active: false,
+      status: 'Sold',
+      off_market_date: latestSale.sale_date,
+      last_price: latestSalePrice || null,
+    };
+    if (latestSaleId != null) patch.sale_transaction_id = latestSaleId;
+    if (latestSalePrice != null) patch.sold_price = latestSalePrice;
     await domainPatch('dialysis',
       `available_listings?${closeFilter}`,
-      {
-        is_active: false,
-        status: 'Sold',
-        off_market_date: latestSale.sale_date,
-        last_price: parseCurrency(latestSale.sold_price) || null,
-      },
+      patch,
       'upsertDialysisListings:autoClose'
+    );
+    console.log(
+      `[listing-fk-backfill] auto-close property_id=${propertyIdInt} ` +
+      `sale_transaction_id=${latestSaleId ?? 'null'} ` +
+      `sold_price=${latestSalePrice ?? 'null'} sale_date=${latestSale.sale_date}`
     );
     // Return 0 — don't count as "new active listing" since it's already sold
     return 0;
