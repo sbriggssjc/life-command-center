@@ -954,38 +954,48 @@ async function diaRest(env, method, path, body) {
 }
 
 async function fetchPropertyForMatch(env, propertyId) {
-  const select = 'property_id,address,city,state,zip_code,zip,property_name';
+  // SELECT * — the Dialysis `properties` table has gone through several
+  // normalization passes (see sql/20260410_normalize_properties_address*.sql)
+  // and the exact set of columns isn't guaranteed. Pulling all columns
+  // avoids 400 errors from PostgREST when a named column no longer exists.
   const r = await diaRest(env, 'GET',
-    `properties?select=${select}&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
+    `properties?select=*&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
   if (!r.ok || !Array.isArray(r.data) || !r.data.length) return null;
   const p = r.data[0];
   return {
     property_id: p.property_id,
-    address: p.address || p.property_name || '',
+    address: p.address || p.street_address || p.address_1 || p.property_name || '',
     city: p.city || '',
     state: p.state || '',
-    zip: p.zip_code || p.zip || '',
+    zip: p.zip_code || p.zip || p.postal_code || '',
   };
 }
 
 async function fetchCandidateClinics(env, { zip, state, city }) {
-  const cols = 'medicare_id,facility_name,address,city,state,zip_code,zip,chain_organization,operator_name,npi';
-  // Prefer zip match (±0). Fall back to state+city.
-  const filters = [];
+  // SELECT * so callers can read whichever zip/address column exists. The
+  // CMS dataset uses `zip_code`, but older ingestions may still carry `zip`.
+  // Filtering on a column that doesn't exist returns 400 from PostgREST,
+  // so we try `zip_code` first and fall back to `zip`/state+city.
   const zip5 = zip ? String(zip).substring(0, 5) : '';
+  const tryQueries = [];
   if (zip5) {
-    filters.push(`or=(zip_code.like.${zip5}%25,zip.like.${zip5}%25)`);
-  } else if (state) {
-    filters.push(`state=eq.${encodeURIComponent(state)}`);
-    if (city) filters.push(`city=ilike.${encodeURIComponent(city)}`);
+    tryQueries.push(`medicare_clinics?select=*&zip_code=like.${zip5}%25&limit=200`);
+    tryQueries.push(`medicare_clinics?select=*&zip=like.${zip5}%25&limit=200`);
   }
-  const query = filters.length
-    ? `medicare_clinics?select=${cols}&${filters.join('&')}&limit=200`
-    : null;
-  if (!query) return [];
-  const r = await diaRest(env, 'GET', query);
-  if (!r.ok || !Array.isArray(r.data)) return [];
-  return r.data;
+  if (state) {
+    const stateFilter = `state=eq.${encodeURIComponent(state)}`;
+    const cityFilter = city ? `&city=ilike.${encodeURIComponent(city)}` : '';
+    tryQueries.push(`medicare_clinics?select=*&${stateFilter}${cityFilter}&limit=200`);
+  }
+  for (const q of tryQueries) {
+    try {
+      const r = await diaRest(env, 'GET', q);
+      if (r.ok && Array.isArray(r.data) && r.data.length) return r.data;
+    } catch (e) {
+      console.warn('[cms-match] candidate fetch failed for', q, e.message);
+    }
+  }
+  return [];
 }
 
 async function fetchCmsSnapshot(env, medicareId) {
@@ -1056,25 +1066,37 @@ async function handleCmsMatch(req, res) {
     if (!q && !zip) {
       return res.status(400).json({ error: 'q or zip required' });
     }
-    const cols = 'medicare_id,facility_name,address,city,state,zip_code,zip,chain_organization,operator_name,npi';
-    const filters = [];
+    // Try `zip_code` first, fall back to `zip` if PostgREST 400s on the column.
+    // SELECT * guards against schema drift between ingestions.
+    const baseFilters = [];
     if (q) {
-      // match facility_name OR address OR medicare_id
       const qEnc = encodeURIComponent(q);
-      filters.push(
+      baseFilters.push(
         `or=(facility_name.ilike.*${qEnc}*,address.ilike.*${qEnc}*,medicare_id.eq.${qEnc})`
       );
     }
-    if (state) filters.push(`state=eq.${encodeURIComponent(state)}`);
-    if (zip) {
-      const zip5 = zip.substring(0, 5);
-      filters.push(`or=(zip_code.like.${zip5}%25,zip.like.${zip5}%25)`);
+    if (state) baseFilters.push(`state=eq.${encodeURIComponent(state)}`);
+
+    const zip5 = zip ? zip.substring(0, 5) : '';
+    const attempts = [];
+    if (zip5) {
+      attempts.push([...baseFilters, `zip_code=like.${zip5}%25`]);
+      attempts.push([...baseFilters, `zip=like.${zip5}%25`]);
     }
-    const qs = `medicare_clinics?select=${cols}&${filters.join('&')}&limit=${limit}`;
+    attempts.push(baseFilters); // final fallback — no zip filter
+
     try {
-      const r = await diaRest(env, 'GET', qs);
-      if (!r.ok) return res.status(r.status).json({ error: 'Search failed', detail: r.data });
-      const rows = Array.isArray(r.data) ? r.data : [];
+      let rows = [];
+      let lastErr = null;
+      for (const filters of attempts) {
+        const qs = `medicare_clinics?select=*&${filters.join('&')}&limit=${limit}`;
+        const r = await diaRest(env, 'GET', qs);
+        if (r.ok) { rows = Array.isArray(r.data) ? r.data : []; lastErr = null; break; }
+        lastErr = { status: r.status, detail: r.data };
+      }
+      if (lastErr && !rows.length) {
+        return res.status(lastErr.status || 502).json({ error: 'Search failed', detail: lastErr.detail });
+      }
       return res.status(200).json({ candidates: rows });
     } catch (err) {
       console.error('[cms-match/search] error:', err.message);
@@ -1177,8 +1199,9 @@ async function handleCmsMatch(req, res) {
       if (!prop) return res.status(404).json({ error: 'property not found' });
 
       // 3. Check if medicare_clinics already links this property_id
+      //    SELECT * — the exact column set varies across ingestions.
       const mc = await diaRest(env, 'GET',
-        `medicare_clinics?select=medicare_id,facility_name,address,city,state,zip_code,zip,chain_organization,operator_name,npi&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
+        `medicare_clinics?select=*&property_id=eq.${encodeURIComponent(propertyId)}&limit=1`);
       if (mc.ok && Array.isArray(mc.data) && mc.data[0] && mc.data[0].medicare_id) {
         const mid = mc.data[0].medicare_id;
         await diaRest(env, 'POST', 'property_cms_link', {
@@ -1269,12 +1292,35 @@ async function handleCmsMatch(req, res) {
           operator_name: s.operator_name,
           match_score: Number(s._score.toFixed(3)),
         }));
+      // If no hints cleared the 0.55 threshold, still expose the top 3 raw
+      // candidates so the Match-facility card can show "Did you mean…?"
+      // suggestions instead of showing nothing.
+      const fallbackHints = hints.length ? hints : scored.slice(0, 3).map(s => ({
+        medicare_id: s.medicare_id,
+        facility_name: s.facility_name,
+        address: s.address,
+        city: s.city,
+        state: s.state,
+        zip: s.zip_code || s.zip,
+        chain_organization: s.chain_organization,
+        operator_name: s.operator_name,
+        match_score: Number((s._score || 0).toFixed(3)),
+      }));
+      console.warn('[cms-match/resolve] no confident match for', prop.property_id,
+        'addr=', prop.address, 'zip=', prop.zip,
+        'candidates=', candidates.length, 'topScore=', top ? top._score : null);
       return res.status(200).json({
         source: 'none',
         medicare_id: null,
         match: null,
         property: prop,
-        candidates: hints,
+        candidates: fallbackHints,
+        debug: {
+          candidate_count: candidates.length,
+          top_score: top ? Number(top._score.toFixed(3)) : null,
+          confident_threshold: CONFIDENT_THRESHOLD,
+          candidate_threshold: CANDIDATE_THRESHOLD,
+        },
       });
     } catch (err) {
       console.error('[cms-match/resolve] error:', err.message, err.stack);
