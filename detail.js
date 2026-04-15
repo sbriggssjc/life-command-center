@@ -2464,67 +2464,98 @@ function _rankingBar(label, rank, total, context) {
 function _udDedupChain(chain, currentOwn) {
   if (!Array.isArray(chain) || chain.length === 0) return [];
 
-  const _key = (h) => {
-    if (h.owner_entity_id) return 'oe:' + h.owner_entity_id;
-    if (h.recorded_owner_id) return 'ro:' + h.recorded_owner_id;
-    if (h.true_owner_id) return 'to:' + h.true_owner_id;
-    const name = (h.recorded_owner_name || h.to_owner || h.true_owner_name || '').trim().toLowerCase();
-    return name ? 'nm:' + name.replace(/[\s,.]+/g, ' ') : null;
+  // Normalize a name so "Mds Dv Victorville, LLC." == "mds dv victorville llc"
+  const _normName = (s) => {
+    if (!s) return '';
+    return String(s).toLowerCase()
+      .replace(/[.,]/g, ' ')
+      .replace(/\b(llc|inc|l\.p\.|lp|corp|corporation|company|co|ltd|trust)\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  // Collect every identity hint on a row — any of these matching another row
+  // means they reference the same owner entity.
+  const _candidateKeys = (h) => {
+    const keys = [];
+    // Primary: owner_entity_id (the true canonical entity key)
+    if (h.owner_entity_id) keys.push('id:' + h.owner_entity_id);
+    // All other id columns live in the SAME namespace so cross-column matches
+    // (e.g. chain.recorded_owner_id === currentOwn.true_owner_id) still merge.
+    if (h.recorded_owner_id) keys.push('id:' + h.recorded_owner_id);
+    if (h.true_owner_id)     keys.push('id:' + h.true_owner_id);
+    // Name fallback (normalized, so "LLC" suffix differences don't split).
+    const names = [h.recorded_owner_name, h.to_owner, h.true_owner_name, h.name]
+      .map(_normName).filter(Boolean);
+    names.forEach(function(n) { keys.push('nm:' + n); });
+    return keys;
   };
 
   const _ts = (s) => { if (!s) return null; const t = new Date(s).getTime(); return isNaN(t) ? null : t; };
 
-  const groups = new Map();
-  const order = [];
+  const groups = [];     // array of group objects
+  const keyToGroup = new Map(); // key → group reference
+
   for (const h of chain) {
-    const k = _key(h) || ('row:' + order.length);
-    if (!groups.has(k)) {
-      const cloned = Object.assign({}, h);
-      cloned._merged_count = 1;
-      groups.set(k, cloned);
-      order.push(k);
+    const keys = _candidateKeys(h);
+    // Find any existing group that shares at least one key with this row.
+    let group = null;
+    for (const k of keys) {
+      if (keyToGroup.has(k)) { group = keyToGroup.get(k); break; }
+    }
+    if (!group) {
+      group = Object.assign({}, h);
+      group._merged_count = 1;
+      group._keys = new Set(keys);
+      groups.push(group);
     } else {
-      const g = groups.get(k);
-      g._merged_count = (g._merged_count || 1) + 1;
+      group._merged_count = (group._merged_count || 1) + 1;
       // Earliest transfer_date wins
-      const t1 = _ts(g.transfer_date), t2 = _ts(h.transfer_date);
-      if (t2 != null && (t1 == null || t2 < t1)) g.transfer_date = h.transfer_date;
+      const t1 = _ts(group.transfer_date), t2 = _ts(h.transfer_date);
+      if (t2 != null && (t1 == null || t2 < t1)) group.transfer_date = h.transfer_date;
       // Latest ownership_end wins; if any row is still open (null), prefer null
       if (h.ownership_end == null) {
-        g.ownership_end = null;
-      } else if (g.ownership_end != null) {
-        const e1 = _ts(g.ownership_end), e2 = _ts(h.ownership_end);
-        if (e2 != null && (e1 == null || e2 > e1)) g.ownership_end = h.ownership_end;
+        group.ownership_end = null;
+      } else if (group.ownership_end != null) {
+        const e1 = _ts(group.ownership_end), e2 = _ts(h.ownership_end);
+        if (e2 != null && (e1 == null || e2 > e1)) group.ownership_end = h.ownership_end;
       }
       // Backfill any missing fields from later rows
       ['sale_price','cap_rate','ownership_type','ownership_source','principal_names',
        'true_owner_name','true_owner_id','recorded_owner_name','recorded_owner_id',
-       'sf_account_id','sf_company_id','sf_contact_id','from_owner','to_owner',
-       'state_of_incorporation','recorded_owner_state','annual_rent','square_feet',
-       'research_status'].forEach(function(f) {
-        if (g[f] == null && h[f] != null) g[f] = h[f];
+       'owner_entity_id','sf_account_id','sf_company_id','sf_contact_id',
+       'from_owner','to_owner','state_of_incorporation','recorded_owner_state',
+       'annual_rent','square_feet','research_status'].forEach(function(f) {
+        if (group[f] == null && h[f] != null) group[f] = h[f];
       });
+      keys.forEach(function(k) { group._keys.add(k); });
     }
+    // Index every key onto this group so later rows can find it.
+    keys.forEach(function(k) { keyToGroup.set(k, group); });
   }
 
-  // If the current owner (from v_ownership_current) matches a chain entry,
-  // mark that entry as "is open" so the timeline shows "Present" correctly.
+  // If the current owner (from v_ownership_current) matches a chain group,
+  // mark that group as "is open" so the timeline shows "Present" correctly.
   if (currentOwn) {
-    const curKey = currentOwn.recorded_owner_id ? 'ro:' + currentOwn.recorded_owner_id
-      : currentOwn.true_owner_id ? 'to:' + currentOwn.true_owner_id
-      : (currentOwn.recorded_owner ? 'nm:' + String(currentOwn.recorded_owner).trim().toLowerCase().replace(/[\s,.]+/g, ' ') : null);
-    if (curKey && groups.has(curKey)) {
-      const g = groups.get(curKey);
-      g.ownership_end = null;
+    const curKeys = [];
+    if (currentOwn.owner_entity_id)   curKeys.push('id:' + currentOwn.owner_entity_id);
+    if (currentOwn.recorded_owner_id) curKeys.push('id:' + currentOwn.recorded_owner_id);
+    if (currentOwn.true_owner_id)     curKeys.push('id:' + currentOwn.true_owner_id);
+    [currentOwn.recorded_owner, currentOwn.true_owner]
+      .map(_normName).filter(Boolean)
+      .forEach(function(n) { curKeys.push('nm:' + n); });
+    for (const k of curKeys) {
+      if (keyToGroup.has(k)) { keyToGroup.get(k).ownership_end = null; break; }
     }
   }
 
-  // Re-sort by transfer_date desc (most recent first)
-  return order.map(function(k) { return groups.get(k); }).sort(function(a, b) {
-    const ta = _ts(a.transfer_date) || 0;
-    const tb = _ts(b.transfer_date) || 0;
-    return tb - ta;
-  });
+  // Strip internal fields and re-sort by transfer_date desc (most recent first).
+  return groups.map(function(g) { const c = Object.assign({}, g); delete c._keys; return c; })
+    .sort(function(a, b) {
+      const ta = _ts(a.transfer_date) || 0;
+      const tb = _ts(b.transfer_date) || 0;
+      return tb - ta;
+    });
 }
 
 /**
@@ -2547,13 +2578,41 @@ function _udResolveGap(action) {
     return;
   }
   if (action === 'sf-lookup') {
-    // Open the SF account lookup for the current owner name in a new tab
+    // Try to resolve the owner → sf_account_id via the shared helper first.
+    // If we find a match, open that account directly. Otherwise fall back to
+    // the SF global search.
     const own = _udCache && _udCache.ownership;
     const name = (own && (own.true_owner || own.recorded_owner)) || '';
     if (!name) { showToast('Enter the owner name first', 'info'); return; }
-    const url = _SF_BASE + '/lightning/o/Account/list?filterName=Recent&searchKey=' + encodeURIComponent(name);
-    window.open(url, '_blank', 'noopener');
-    showToast('Searching Salesforce for "' + name + '"', 'info');
+    (async function () {
+      try {
+        const ctx = _ownerCtxFromCurrent(own, _udCache.db, 'true') || _ownerCtxFromCurrent(own, _udCache.db, 'recorded');
+        const resolved = ctx ? await _resolveSfAccountId(ctx) : null;
+        if (resolved && resolved.sf_account_id) {
+          const url = _SF_BASE + '/lightning/r/Account/' + resolved.sf_account_id + '/view';
+          window.open(url, '_blank', 'noopener');
+          showToast('Linked to SF Account: ' + (resolved.company_name || name), 'success');
+        } else {
+          const url = _SF_BASE + '/lightning/o/Account/list?filterName=Recent&searchKey=' + encodeURIComponent(name);
+          window.open(url, '_blank', 'noopener');
+          showToast('No SF match yet — searching Salesforce for "' + name + '"', 'info');
+        }
+      } catch (e) {
+        console.warn('sf-lookup failed', e);
+        const url = _SF_BASE + '/lightning/o/Account/list?filterName=Recent&searchKey=' + encodeURIComponent(name);
+        window.open(url, '_blank', 'noopener');
+      }
+    })();
+    return;
+  }
+  if (action === 'add-contact') {
+    // Route straight to the OwnerDrawer's Add Contact flow scoped to the
+    // current owner so contact name/email/phone gaps can be resolved inline.
+    _udFeedAddContact();
+    return;
+  }
+  if (action === 'create-sf-account') {
+    _udFeedCreateSfAccount();
     return;
   }
   if (action === 'research-history') {
@@ -2609,10 +2668,17 @@ function _udTabOwnership() {
   if (!own) gaps.push({ label: 'ownership record', action: 'focus:udOwnRecorded' });
   else {
     if (!own.true_owner && !own.recorded_owner) gaps.push({ label: 'owner name', action: 'focus:udOwnRecorded' });
-    if (!own.contact_email) gaps.push({ label: 'contact email', action: 'focus:udOwnEmail' });
-    if (!own.contact_phone) gaps.push({ label: 'contact phone', action: 'focus:udOwnPhone' });
-    if (!own.contact_name && !own.contact_1_name) gaps.push({ label: 'contact name', action: 'focus:udOwnContact' });
-    if (!own.sf_contact_id && !own.salesforce_id) gaps.push({ label: 'Salesforce link', action: 'sf-lookup' });
+    // Contact fields: offer one-click Add Contact inline (writes to
+    // unified_contacts scoped to this owner) instead of just focusing a
+    // form field that's downstream of the Resolve Ownership flow.
+    if (!own.contact_email) gaps.push({ label: 'contact email', action: 'add-contact' });
+    if (!own.contact_phone) gaps.push({ label: 'contact phone', action: 'add-contact' });
+    if (!own.contact_name && !own.contact_1_name) gaps.push({ label: 'contact name', action: 'add-contact' });
+    // Salesforce link: resolve sf_account_id on the fly; if still unknown,
+    // offer to create the SF Account inline.
+    if (!own.sf_contact_id && !own.salesforce_id && !own.sf_account_id && !own.sf_company_id) {
+      gaps.push({ label: 'Salesforce link', action: 'sf-lookup' });
+    }
     if (db === 'gov' && !own.true_owner) gaps.push({ label: 'true owner (behind LLC)', action: 'focus:udOwnTrue' });
     if (db === 'gov' && !own.true_owner_state) gaps.push({ label: 'true owner state', action: 'focus:udOwnState' });
   }
@@ -2920,6 +2986,74 @@ function _udTabOwnership() {
   return html;
 }
 
+/**
+ * Shared helper: walk an owner context → Salesforce Account ID.
+ *
+ * Covers the shell-LLC case (e.g. recorded_owner="Mds Dv Victorville" whose
+ * true_owner is "Davita Inc.") by querying unified_contacts keyed on the
+ * true_owner_id / recorded_owner_id / owner_entity_id hierarchy. Falls back
+ * to a normalized company_name ilike lookup when no FK is available.
+ *
+ * Returns { sf_account_id, company_name, sf_contact_id } or null.
+ * The caller is responsible for catching exceptions — this function logs
+ * but does not throw.
+ */
+async function _resolveSfAccountId(ctx) {
+  if (!ctx) return null;
+  if (ctx.sf_account_id) {
+    return { sf_account_id: ctx.sf_account_id, company_name: ctx.parent_account_name || ctx.name || null, sf_contact_id: ctx.sf_contact_id || null };
+  }
+
+  const _pick = function (rows) {
+    return (rows || []).find(function (r) { return r && r.sf_account_id; }) || null;
+  };
+  const _fetch = async function (url) {
+    try {
+      const res = await _entityApiFetch(url);
+      return (res && res.data) || [];
+    } catch (e) {
+      console.warn('_resolveSfAccountId fetch failed', url, e);
+      return [];
+    }
+  };
+
+  // Step 1 — FK-based lookups against unified_contacts. Ordered most-specific
+  // first so we match the TRUE owner (parent account) before a shell LLC.
+  const idCandidates = [
+    { col: 'owner_entity_id',   val: ctx.owner_entity_id },
+    { col: 'true_owner_id',     val: ctx.true_owner_id },
+    { col: 'recorded_owner_id', val: ctx.recorded_owner_id }
+  ].filter(function (c) { return c.val; });
+
+  for (const { col, val } of idCandidates) {
+    const rows = await _fetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=' + col + '%3Deq.' + encodeURIComponent(val) + '&limit=5');
+    const hit = _pick(rows);
+    if (hit) return { sf_account_id: hit.sf_account_id, company_name: hit.company_name || null, sf_contact_id: hit.sf_contact_id || null };
+  }
+
+  // Step 2 — name-based fuzzy lookup. Normalize the owner name so suffix
+  // drift ("LLC", "Inc.", commas) doesn't sink the match.
+  const rawName = ctx.true_owner_name || ctx.recorded_owner_name || ctx.name || '';
+  if (rawName) {
+    const stripped = String(rawName)
+      .replace(/[.,]/g, ' ')
+      .replace(/\b(llc|inc|l\.?p\.?|corp|corporation|company|co|ltd|trust)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const variants = [rawName, stripped].filter(function (v) { return v && v.length >= 3; });
+    for (const v of variants) {
+      const like = encodeURIComponent('*' + v + '*');
+      const rows = await _fetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=company_name%3Dilike.' + like + '&limit=10');
+      const hit = _pick(rows);
+      if (hit) return { sf_account_id: hit.sf_account_id, company_name: hit.company_name || null, sf_contact_id: hit.sf_contact_id || null };
+    }
+  }
+
+  return null;
+}
+
+window._resolveSfAccountId = _resolveSfAccountId;
+
 /** Async load of SF activity feed (inserted into DOM after tab renders) */
 async function _loadActivityFeed(own) {
   // Small delay to ensure DOM is ready
@@ -2935,31 +3069,24 @@ async function _loadActivityFeed(own) {
     let resolvedAccountId = own?.sf_account_id || own?.sf_company_id || null;
     let resolvedAccountName = null;
 
-    // Step 1: Resolve to a Salesforce Account ID. Shell LLC owners
-    // (e.g. "Mds Dv Victorville") have no direct sf_contact_id, but their
-    // parent (Davita Inc.) is reachable via unified_contacts.true_owner_id.
+    // Step 1: Resolve to a Salesforce Account ID via the shared helper —
+    // walks the shell-LLC → true_owner → unified_contacts FK chain, then
+    // falls back to normalized company_name fuzzy match. This is how we
+    // find Davita Inc.'s SF Account from a "Mds Dv Victorville" recorded
+    // owner.
     if (!resolvedAccountId && own) {
-      try {
-        if (own.true_owner_id) {
-          const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name&filter=true_owner_id%3Deq.' + encodeURIComponent(own.true_owner_id) + '&limit=5');
-          const hit = ((ucRes && ucRes.data) || []).find(function(r) { return r.sf_account_id; });
-          if (hit) { resolvedAccountId = hit.sf_account_id; resolvedAccountName = hit.company_name || null; }
-        }
-        if (!resolvedAccountId && own.recorded_owner_id) {
-          const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name&filter=recorded_owner_id%3Deq.' + encodeURIComponent(own.recorded_owner_id) + '&limit=5');
-          const hit = ((ucRes && ucRes.data) || []).find(function(r) { return r.sf_account_id; });
-          if (hit) { resolvedAccountId = hit.sf_account_id; resolvedAccountName = hit.company_name || null; }
-        }
-        if (!resolvedAccountId) {
-          const lookupName = own.true_owner || own.recorded_owner;
-          if (lookupName) {
-            const like = encodeURIComponent('*' + lookupName + '*');
-            const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name&filter=company_name%3Dilike.' + like + '&limit=5');
-            const hit = ((ucRes && ucRes.data) || []).find(function(r) { return r.sf_account_id; });
-            if (hit) { resolvedAccountId = hit.sf_account_id; resolvedAccountName = hit.company_name || null; }
-          }
-        }
-      } catch (e) { console.warn('activity feed: sf_account_id resolution failed', e); }
+      const resolved = await _resolveSfAccountId({
+        owner_entity_id:   own.owner_entity_id   || null,
+        true_owner_id:     own.true_owner_id     || null,
+        recorded_owner_id: own.recorded_owner_id || null,
+        true_owner_name:   own.true_owner        || null,
+        recorded_owner_name: own.recorded_owner  || null,
+        name:              own.true_owner || own.recorded_owner || null
+      });
+      if (resolved) {
+        resolvedAccountId = resolved.sf_account_id;
+        resolvedAccountName = resolved.company_name;
+      }
     }
 
     // Step 2: Query v_sf_activity_feed by SF Account ID first (covers all
@@ -7107,13 +7234,49 @@ let _ownerDrawerCache = null;
  * Build a clickable owner-name link that opens the OwnerDrawer.
  * Accepts a context object with whatever owner identity hints we have.
  * Always renders the display text — only the click handler differs.
+ *
+ * Uses a data-owner-ctx attribute + document-level delegated click listener
+ * so the link keeps working even if the span is moved, cloned, or re-wrapped.
+ * This avoids inline-onclick JS-string quoting fragility when owner names
+ * contain apostrophes, backslashes, or non-ASCII characters.
  */
 function _ownerLink(displayName, ctx) {
   if (!displayName) return '<span style="color:var(--text3)">\u2014</span>';
-  const payload = encodeURIComponent(JSON.stringify(ctx || { name: displayName }));
+  const ctxObj = ctx || { name: displayName };
+  // Encode payload for safe embedding in the HTML attribute. Double-encoded
+  // (JSON → URI) so ampersands, quotes, and braces can't break the attribute
+  // or the eventual JSON.parse.
+  const payload = encodeURIComponent(JSON.stringify(ctxObj));
   const style = 'color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;font-weight:600';
-  return '<span class="owner-link" style="' + style + '" onclick="openOwnerDrawer(decodeURIComponent(\'' + payload + '\'))" title="View owner profile, contacts, and SF activity">' + esc(displayName) + '</span>';
+  return '<span class="owner-link" role="button" tabindex="0" data-owner-ctx="' + payload +
+    '" style="' + style + '" title="View owner profile, contacts, and SF activity">' +
+    esc(displayName) + '</span>';
 }
+
+// Delegated click handler — runs for every .owner-link on the page, regardless
+// of how/where it was rendered. Keyboard-accessible via Enter/Space.
+document.addEventListener('click', function (e) {
+  const el = e.target && e.target.closest && e.target.closest('.owner-link[data-owner-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
+    if (raw) openOwnerDrawer(raw);
+  } catch (err) {
+    console.warn('owner-link click: bad payload', err);
+  }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target && e.target.closest && e.target.closest('.owner-link[data-owner-ctx]');
+  if (!el) return;
+  e.preventDefault();
+  try {
+    const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
+    if (raw) openOwnerDrawer(raw);
+  } catch (err) { /* ignore */ }
+});
 
 /**
  * Build an owner context object from a v_ownership_chain row.
@@ -7265,41 +7428,15 @@ async function _resolveOwnerProfile(ctx) {
   out.activity_history = [];
   out.parent_account_name = null;
 
-  // Step 1: Resolve sf_account_id
+  // Step 1: Resolve sf_account_id via the shared helper (shell-LLC → true
+  // owner → unified_contacts chain, with normalized company_name fallback).
   if (!out.sf_account_id) {
-    try {
-      if (out.true_owner_id) {
-        const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=true_owner_id%3Deq.' + encodeURIComponent(out.true_owner_id) + '&limit=5');
-        const rows = (ucRes && ucRes.data) || [];
-        const hit = rows.find(function(r) { return r.sf_account_id; });
-        if (hit) {
-          out.sf_account_id = hit.sf_account_id;
-          out.parent_account_name = hit.company_name || null;
-        }
-      }
-      if (!out.sf_account_id && out.recorded_owner_id) {
-        const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=recorded_owner_id%3Deq.' + encodeURIComponent(out.recorded_owner_id) + '&limit=5');
-        const rows = (ucRes && ucRes.data) || [];
-        const hit = rows.find(function(r) { return r.sf_account_id; });
-        if (hit) {
-          out.sf_account_id = hit.sf_account_id;
-          out.parent_account_name = hit.company_name || null;
-        }
-      }
-      if (!out.sf_account_id) {
-        const lookupName = out.true_owner_name || out.recorded_owner_name || out.name;
-        if (lookupName) {
-          const like = encodeURIComponent('*' + lookupName + '*');
-          const ucRes = await _entityApiFetch('/api/data-query?_source=gov&table=unified_contacts&select=sf_account_id,company_name,sf_contact_id&filter=company_name%3Dilike.' + like + '&limit=5');
-          const rows = (ucRes && ucRes.data) || [];
-          const hit = rows.find(function(r) { return r.sf_account_id; });
-          if (hit) {
-            out.sf_account_id = hit.sf_account_id;
-            out.parent_account_name = hit.company_name || null;
-          }
-        }
-      }
-    } catch (e) { console.warn('OwnerDrawer: sf_account_id resolution failed', e); }
+    const resolved = await _resolveSfAccountId(out);
+    if (resolved) {
+      out.sf_account_id = resolved.sf_account_id;
+      out.parent_account_name = resolved.company_name;
+      if (!out.sf_contact_id && resolved.sf_contact_id) out.sf_contact_id = resolved.sf_contact_id;
+    }
   }
 
   // Step 2: Activity feed by sf_account_id
