@@ -1562,55 +1562,21 @@ async function backfillListingSaleIdForListing(domain, { listingId, propertyId, 
 
 /**
  * After a sales_transactions row is written for a property, close any
- * available_listings row that represents the listing campaign ending in
- * this sale. Never close listings that predate the sale by more than 3
- * years — those are separate older campaigns for the same property and
- * must stay open until explicitly closed. When multiple active listings
- * are in range, only the one whose listing_date most closely precedes
- * the sale_date is closed.
- * Applies to both dialysis and government domains, using each domain's
- * native column set:
- *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date
+ * available_listings rows still flagged as active/Active for the same
+ * property. Applies to both dialysis and government domains, using each
+ * domain's native column set:
+ *   dialysis:   is_active=false, status='Sold', sold_date, off_market_date,
+ *               sold_price (when provided)
  *   government: listing_status='Sold', off_market_date, updated_at
  * Logs one line per closed listing with the [listing-close] prefix.
  * Never throws — listing-close failures must not abort the sales write.
  */
-async function closeActiveListingsOnSale(domain, propertyId, saleDate) {
+async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice) {
   const datePart = String(saleDate || '').split('T')[0];
   if (!datePart) return 0;
-  const saleMs = new Date(datePart).getTime();
-  const THREE_YEARS_MS = 3 * 365.25 * 24 * 60 * 60 * 1000;
-
-  // Select, from candidate listings, only the one whose listing_date most
-  // closely precedes the sale_date and is within 3 years. Listings that
-  // follow the sale (data-entry slop) are also allowed within 180 days so
-  // a backdated sale still closes a very recent listing.
-  const pickClosestListing = (rows) => {
-    let best = null;
-    const FUTURE_WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
-    for (const row of rows) {
-      if (!row.listing_date) {
-        // Listings without a listing_date fall through as a weak match
-        // (only if nothing better is found).
-        if (!best) best = { row, diff: Number.POSITIVE_INFINITY, dated: false };
-        continue;
-      }
-      const listMs = new Date(String(row.listing_date).split('T')[0]).getTime();
-      if (!Number.isFinite(listMs)) continue;
-      const diff = saleMs - listMs; // + = listing preceded sale
-      if (diff > THREE_YEARS_MS) continue; // stale older campaign
-      if (diff < 0 && Math.abs(diff) > FUTURE_WINDOW_MS) continue;
-      const candidate = { row, diff, dated: true };
-      if (!best || !best.dated) { best = candidate; continue; }
-      const bestPreceded = best.diff >= 0;
-      const candPreceded = candidate.diff >= 0;
-      if (bestPreceded && !candPreceded) continue;
-      if (!bestPreceded && candPreceded) { best = candidate; continue; }
-      if (Math.abs(candidate.diff) < Math.abs(best.diff)) best = candidate;
-    }
-    return best?.row || null;
-  };
-
+  const priceNum = soldPrice != null && Number.isFinite(Number(soldPrice)) && Number(soldPrice) > 0
+    ? Number(soldPrice)
+    : null;
   try {
     if (domain === 'dialysis') {
       const propertyIdInt = parseInt(propertyId, 10);
@@ -1619,14 +1585,29 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate) {
         `&is_active=is.true&select=listing_id,listing_date&limit=100`
       );
       if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) return 0;
-      const target = pickClosestListing(lookup.data);
-      if (!target) {
-        console.log(
-          `[listing-close] domain=dialysis property_id=${propertyIdInt} ` +
-          `sale_date=${datePart} skipped=no_match_in_3yr_window ` +
-          `candidates=${lookup.data.length}`
+      let closed = 0;
+      for (const row of lookup.data) {
+        const listingId = row.listing_id;
+        const patch = {
+          is_active:        false,
+          status:           'Sold',
+          sold_date:        datePart,
+          off_market_date:  datePart,
+        };
+        if (priceNum != null) patch.sold_price = priceNum;
+        const res = await domainPatch('dialysis',
+          `available_listings?listing_id=eq.${listingId}`,
+          patch,
+          'closeActiveListingsOnSale'
         );
-        return 0;
+        if (res?.ok !== false) {
+          console.log(
+            `[listing-close] domain=dialysis listing_id=${listingId} ` +
+            `property_id=${propertyIdInt} sale_date=${datePart}` +
+            (priceNum != null ? ` sold_price=${priceNum}` : '')
+          );
+          closed++;
+        }
       }
       const listingId = target.listing_id;
       const patch = {
@@ -1988,7 +1969,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
       // Close any still-active listings for this property now that a
       // confirmed sale exists. Fire-and-forget relative to the sale write —
       // failures are logged but do not affect the sales_transactions result.
-      await closeActiveListingsOnSale(domain, propertyId, datePart);
+      await closeActiveListingsOnSale(domain, propertyId, datePart, saleData.sold_price);
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -1999,7 +1980,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           await createSaleAlert(propertyId, saleData);
         }
         // Close any still-active listings for this property on a new sale.
-        await closeActiveListingsOnSale(domain, propertyId, datePart);
+        await closeActiveListingsOnSale(domain, propertyId, datePart, saleData.sold_price);
       }
     }
   }
