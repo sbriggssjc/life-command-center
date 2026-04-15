@@ -241,24 +241,26 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Uses the /api/cms-match?action=resolve endpoint to fuzzy-match the property's
     // address to medicare_clinics.medicare_id, cache the match in property_cms_link,
     // and return a compact CMS snapshot (rankings/quality/patient/payer/operator).
-    if (db === 'dia' && propertyId && !rankings) {
+    // We also resolve when rankings exists but has no medicare_id — the Operations
+    // tab still needs CMS quality/trends/payer/cost data which live on medicare_id.
+    const rankingsHasCcn = !!(rankings && rankings.medicare_id);
+    if (db === 'dia' && propertyId && (!rankings || !rankingsHasCcn)) {
       try {
         await _udResolveCmsFacility(propertyId);
       } catch (e) {
         console.warn('cms-match resolve failed:', e);
       }
-    } else if (db === 'dia' && rankings && !_udCache.cms) {
-      // Even when rankings exist (linked via medicare_clinics), derive operator/QIP/etc
-      // for the enriched Operations tab from the medicare_id on the rankings row.
-      if (rankings.medicare_id) {
-        _udCache.cms = {
-          medicare_id: rankings.medicare_id,
-          match_score: 1.0,
-          match_method: 'auto:medicare_clinics',
-          source: 'rankings',
-          operator: _udDetectOperator(rankings),
-        };
-      }
+    } else if (db === 'dia' && rankingsHasCcn && !_udCache.cms) {
+      // Rankings already carry the CCN (pre-linked via medicare_clinics).
+      // Seed a minimal cms cache so the Operations tab can find the CCN for
+      // its secondary fetches (quality/trend/payer/cost) without a round-trip.
+      _udCache.cms = {
+        medicare_id: rankings.medicare_id,
+        match_score: 1.0,
+        match_method: 'auto:medicare_clinics',
+        source: 'rankings',
+        operator: _udDetectOperator(rankings),
+      };
     }
 
     // Kick off a best-effort fetch for lease extensions + rent schedule.
@@ -596,6 +598,7 @@ async function _udResolveCmsFacility(propertyId) {
     match_score: resp.match_score || null,
     match_method: resp.match_method || null,
     source: resp.source || null,
+    debug: resp.debug || null,
     facility: resp.facility || null,
     quality: resp.quality || null,
     patient: resp.patient || null,
@@ -628,6 +631,17 @@ function _udRenderMatchFacilityCard() {
   html += '<div><div style="font-weight:700;color:var(--text)">No CMS facility linked to this property</div>';
   html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">Auto-match tried <strong>' + esc(addr || '—') + '</strong>' + (zip ? ' (' + esc(zip) + ')' : '') + ' — no confident match found.</div>';
   html += '</div></div>';
+
+  // Debug context (visible when all candidates fell below the auto-match threshold)
+  if (cms.debug && cms.debug.candidate_count != null) {
+    const d = cms.debug;
+    const topPct = d.top_score != null ? Math.round(d.top_score * 100) + '%' : '—';
+    html += '<div style="margin-top:8px;padding:6px 10px;background:rgba(148,163,184,0.08);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text3)">';
+    html += 'Scanned ' + d.candidate_count + ' nearby CMS facility record' + (d.candidate_count === 1 ? '' : 's') + '. ';
+    html += 'Best score: <strong style="color:var(--text2)">' + topPct + '</strong> ';
+    html += '(needs ≥ ' + Math.round((d.confident_threshold || 0.8) * 100) + '% to auto-link).';
+    html += '</div>';
+  }
 
   // Candidate suggestions (from fuzzy match, score ≥ 0.55)
   if (candidates.length > 0) {
