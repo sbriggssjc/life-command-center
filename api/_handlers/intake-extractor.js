@@ -137,13 +137,22 @@ ${isExcel && !attachment ? '[Note: source is a binary spreadsheet the model cann
   "renewal_options": null,
   "expense_structure": null,
   "rent_escalations": null,
+  "roof_responsibility": null,
+  "hvac_responsibility": null,
+  "structure_responsibility": null,
+  "parking_responsibility": null,
   "listing_broker": null,
   "listing_broker_email": null,
   "listing_firm": null,
   "seller_name": null,
   "parcel_number": null,
   "confidence_notes": null
-}`;
+}
+
+Responsibility fields: for roof, hvac, structure, parking — return "tenant", "landlord", or "shared" based on lease language.
+Look for keywords like "repair", "replace", "maintain", "responsible" near "roof", "HVAC"/"heating"/"cooling", "structural"/"foundation"/"walls", "parking"/"lot"/"striping".
+If the document is an OM, these may appear in the lease abstract section.
+If not determinable, use null.`;
 
   const result = await invokeChatProvider({
     message:     prompt,
