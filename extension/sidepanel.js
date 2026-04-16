@@ -929,6 +929,7 @@ function buildMetadata(ctx, domain) {
   const m = {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
+    _version: ctx._version || null,
     costar_comp_id: ctx.costar_comp_id || null,
     extracted_at: new Date().toISOString(),
     // Financials
