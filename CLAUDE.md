@@ -30,3 +30,24 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 - pg_cron (Phase 5): 6 scheduled jobs on LCC Opps — refresh_work_counts (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup
 - `lcc_cron_post()` helper reads API key from Supabase Vault, POSTs via pg_net to Vercel or Edge endpoints
 - All rewrites defined in vercel.json — order matters (specific before catch-all)
+
+## Dialysis `v_sales_comps` — `rent` semantics
+
+As of `supabase/migrations/20260416120000_v_sales_comps_projected_rent.sql`,
+the dialysis `v_sales_comps` view returns rent *projected to CURRENT_DATE*,
+not Year-1 base rent. Consumers need to know:
+
+- `rent` — current rent, escalated from the anchor (property `anchor_rent` when
+  `anchor_rent_source IN ('lease_confirmed','om_confirmed')`, else
+  `leases.annual_rent`) through `properties.lease_bump_pct` /
+  `lease_bump_interval_mo`. Projection math lives in
+  `api/_shared/rent-projection.js` (`projectRentAtDate`) and is mirrored in
+  SQL by the `public.dia_project_rent_at_date()` helper.
+- `base_rent` — the Y1 `leases.annual_rent` figure (what `rent` used to be).
+  Render it as a secondary value when you need to show the unescalated rent.
+- `rent_per_sf` — projected rent / `leases.leased_area`, NOT the Y1 figure.
+
+Downstream writers that still need Y1 rent should pull `base_rent`. The
+current dialysis.js Sales Comps loader (`loadDiaSalesCompsFromTxns`) bypasses
+the view and assembles rows from `sales_transactions` + `leases` directly, so
+it continues to show Y1 rent until switched over to the view.
