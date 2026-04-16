@@ -185,11 +185,18 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       promises.push(Promise.resolve(db === 'gov' ? { data: [], count: 0 } : []));
     }
 
-    // Dia: pull the denormalized CMS link columns directly from `properties`.
-    // v_property_detail does NOT expose these, but they are the authoritative
-    // source for the Operations tab when set (e.g. curated by ingest pipeline).
+    // Dia: pull denormalized CMS link columns + rent-anchor / escalation fields
+    // directly from `properties`. v_property_detail does not currently expose
+    // the anchor_rent / lease_bump_* fields, but the Rent Roll tab needs them
+    // to compute per-year escalations when lease metadata has no explicit
+    // escalation string or rent_cagr.
     if (db === 'dia' && propFilter) {
-      promises.push(diaQuery('properties', 'property_id,medicare_id,linked_medicare_facility_id', { filter: propFilter, limit: 1 }));
+      promises.push(diaQuery('properties',
+        'property_id,medicare_id,linked_medicare_facility_id,' +
+        'anchor_rent,anchor_rent_date,anchor_rent_source,lease_commencement,' +
+        'lease_bump_pct,lease_bump_interval_mo,last_known_rent,rba',
+        { filter: propFilter, limit: 1 }
+      ));
     } else {
       promises.push(Promise.resolve([]));
     }
@@ -232,6 +239,22 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // If all views returned empty, use the fallback record's fields as a synthetic property
     const allEmpty = !property && leases.length === 0 && !ownership && chain.length === 0;
     const synthProperty = allEmpty ? _udSynthPropertyFromFallback(fallback, db) : property;
+
+    // Merge rent-anchor / escalation fields from `properties` onto the view-based
+    // property object. v_property_detail may not surface these, so the Rent Roll
+    // synthesizer would otherwise see flat 0% escalations even when the anchor
+    // fields are populated.
+    if (synthProperty && propertyCmsRow) {
+      for (const key of [
+        'anchor_rent', 'anchor_rent_date', 'anchor_rent_source',
+        'lease_commencement', 'lease_bump_pct', 'lease_bump_interval_mo',
+        'last_known_rent', 'rba',
+      ]) {
+        if (synthProperty[key] == null && propertyCmsRow[key] != null) {
+          synthProperty[key] = propertyCmsRow[key];
+        }
+      }
+    }
 
     // Fetch LCC entity metadata (CoStar estimates) for this property by address.
     // These supplement v_lease_detail on the Lease tab when no executed lease
@@ -1723,7 +1746,18 @@ function _udParseRentEscalation(text) {
  * bump_pct, cumulative_rent, is_option_window }.
  */
 function _udBuildRentSchedule(lease, storedRows, em) {
-  // Case 1: DB-sourced rows — use as-is (authoritative).
+  // Resolve leased SF once — needed in both branches to backfill rent_psf when
+  // upstream rows carry a base_rent but no rent_psf.
+  const prop = _udCache?.property || {};
+  let leasedSF = lease?.leased_area != null ? Number(lease.leased_area)
+                 : (em?.sf_leased != null ? Number(em.sf_leased) : null);
+  if (!leasedSF && prop.rba)           leasedSF = Number(prop.rba);
+  if (!leasedSF && prop.building_sf)   leasedSF = Number(prop.building_sf);
+  if (!leasedSF && prop.building_size) leasedSF = Number(prop.building_size);
+  if (!(leasedSF > 0)) leasedSF = null;
+
+  // Case 1: DB-sourced rows — use as-is (authoritative), but compute rent_psf
+  // from base_rent / leasedSF when the stored row has a null rent_psf.
   if (Array.isArray(storedRows) && storedRows.length > 0) {
     let cum = 0;
     return storedRows
@@ -1732,12 +1766,16 @@ function _udBuildRentSchedule(lease, storedRows, em) {
       .map(r => {
         const base = r.base_rent != null ? Number(r.base_rent) : null;
         cum += base || 0;
+        let rentPsf = r.rent_psf != null ? Number(r.rent_psf) : null;
+        if (rentPsf == null && base != null && leasedSF) {
+          rentPsf = Math.round((base / leasedSF) * 100) / 100;
+        }
         return {
           year: r.lease_year,
           period_start: r.period_start,
           period_end: r.period_end,
           base_rent: base,
-          rent_psf: r.rent_psf != null ? Number(r.rent_psf) : null,
+          rent_psf: rentPsf,
           bump_pct: r.bump_pct != null ? Number(r.bump_pct) : null,
           cumulative_rent: r.cumulative_rent != null ? Number(r.cumulative_rent) : cum,
           is_option_window: !!r.is_option_window,
@@ -1746,13 +1784,13 @@ function _udBuildRentSchedule(lease, storedRows, em) {
       });
   }
 
-  // Case 2: synthesize from base rent + escalation string.
+  // Case 2: synthesize from base rent + escalation info.
   const baseRent =
     (lease?.annual_rent != null ? Number(lease.annual_rent) : null) ??
     (em?.annual_rent != null ? Number(em.annual_rent) : null);
   if (!baseRent || baseRent <= 0) return [];
 
-  const start = lease?.lease_start || em?.lease_commencement;
+  const start = lease?.lease_start || em?.lease_commencement || prop.lease_commencement;
   const end   = lease?.lease_expiration || em?.lease_expiration;
   if (!start) return [];
   const startD = new Date(start);
@@ -1768,7 +1806,8 @@ function _udBuildRentSchedule(lease, storedRows, em) {
   }
   termYears = Math.min(termYears, 40); // cap runaway synthesis
 
-  // Prefer verified rent_cagr; else parse escalation strings; else 0%.
+  // Escalation source priority: verified lease.rent_cagr → parsed escalation
+  // text → property-level lease_bump_pct / lease_bump_interval_mo → 0%.
   let stepPct = 0;
   let intervalYears = 1;
   let stepPsf = 0;
@@ -1783,19 +1822,22 @@ function _udBuildRentSchedule(lease, storedRows, em) {
       stepPct = parsed.stepPct || 0;
       stepPsf = parsed.stepPsf || 0;
       intervalYears = parsed.intervalYears || 1;
+    } else if (prop.lease_bump_pct != null) {
+      // properties.lease_bump_pct is stored as a decimal (0.02 = 2%);
+      // lease_bump_interval_mo is months (60 = every 5 years).
+      stepPct = Number(prop.lease_bump_pct);
+      const mo = Number(prop.lease_bump_interval_mo);
+      intervalYears = Number.isFinite(mo) && mo >= 12 ? Math.max(1, Math.round(mo / 12)) : 1;
     }
   }
-
-  let leasedSF = lease?.leased_area != null ? Number(lease.leased_area)
-                 : (em?.sf_leased != null ? Number(em.sf_leased) : null);
-  if (!leasedSF && _udCache.property?.rba) leasedSF = Number(_udCache.property.rba);
 
   const rows = [];
   let rent = baseRent;
   let cum = 0;
   for (let y = 1; y <= termYears; y++) {
     // Apply step at each interval boundary (y > 1 and (y-1) % interval === 0)
-    if (y > 1 && (y - 1) % intervalYears === 0) {
+    const bumpThisYear = (y > 1 && (y - 1) % intervalYears === 0);
+    if (bumpThisYear) {
       if (stepPct) rent = rent * (1 + stepPct);
       else if (stepPsf && leasedSF) rent = rent + (stepPsf * leasedSF);
     }
@@ -1811,7 +1853,7 @@ function _udBuildRentSchedule(lease, storedRows, em) {
       period_end:   yearEnd.toISOString().slice(0, 10),
       base_rent: Math.round(rent * 100) / 100,
       rent_psf:  leasedSF ? Math.round((rent / leasedSF) * 100) / 100 : null,
-      bump_pct:  (y > 1 && (y - 1) % intervalYears === 0) ? stepPct : 0,
+      bump_pct:  bumpThisYear ? stepPct : 0,
       cumulative_rent: Math.round(cum * 100) / 100,
       is_option_window: false,
       source: 'parsed_estimate',
