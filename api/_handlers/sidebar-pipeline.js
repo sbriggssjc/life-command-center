@@ -157,6 +157,16 @@ function parseYearSafe(val) {
   return num;
 }
 
+/** Parse a latitude or longitude value. Returns a valid numeric coordinate or null. */
+function parseCoord(val) {
+  if (val == null) return null;
+  const num = typeof val === 'number' ? val : parseFloat(String(val).trim());
+  if (isNaN(num) || num === 0) return null;
+  // Sanity: lat [-90,90], lng [-180,180] — accept anything in the wider range
+  if (num < -180 || num > 180) return null;
+  return Math.round(num * 1e6) / 1e6; // 6 decimal places (~11cm precision)
+}
+
 /**
  * Classify a CoStar-style property_type into the LCC building_type taxonomy.
  * CoStar routinely tags dialysis clinics, nephrology offices, and MOBs as a
@@ -1078,6 +1088,9 @@ async function upsertDomainProperty(domain, entity, metadata) {
     property_ownership_type: metadata.ownership_type || null,
     recorded_owner_name: ownerContact?.name || null,
     land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
+    // Coordinates from CoStar Public Record tab (shared across both domains)
+    latitude:  parseCoord(metadata.public_record?.latitude) || parseCoord(metadata.location?.latitude) || parseCoord(metadata.property?.latitude) || parseCoord(metadata.latitude),
+    longitude: parseCoord(metadata.public_record?.longitude) || parseCoord(metadata.location?.longitude) || parseCoord(metadata.property?.longitude) || parseCoord(metadata.longitude),
     // Rent anchor + lease escalation (dialysis only — gov schema has no
     // anchor_rent columns). Only applied below when domain === 'dialysis'.
     anchor_rent:            parseCurrency(metadata.anchor_rent),
