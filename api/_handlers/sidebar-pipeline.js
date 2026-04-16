@@ -809,6 +809,90 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
     }
   }
 
+  // ── Entity/org-level contacts (owners, buyers, sellers) ──────────────
+  // These are high-value CRM contacts — true buyers/sellers often have
+  // direct email/phone from CoStar that is critical for prospecting.
+
+  const ENTITY_ROLE_MAP = {
+    true_buyer:  'buyer',
+    true_seller: 'seller',
+    owner:       'owner',
+    buyer:       'buyer',
+    seller:      'seller',
+  };
+
+  const entities = contacts.filter(c =>
+    ENTITY_ROLE_MAP[c.role] &&
+    c.name &&
+    c.name.length > 2 &&
+    c.name.length < 80
+  );
+
+  for (const ent of entities) {
+    const email   = ent.email || null;
+    const phone   = ent.phones?.[0] || ent.phone || null;
+    const website = ent.website || null;
+    const mappedRole = ENTITY_ROLE_MAP[ent.role];
+
+    // Normalize for dedup
+    const normName = ent.name.trim().toLowerCase();
+
+    // Dedup by email first, then name + role
+    let existingId = null;
+    if (email) {
+      const emailLookup = await domainQuery(domain, 'GET',
+        `contacts?email=eq.${encodeURIComponent(email)}&select=id&limit=1`
+      );
+      if (emailLookup.ok && emailLookup.data?.length) {
+        existingId = emailLookup.data[0].id;
+      }
+    }
+    if (!existingId) {
+      const nameLookup = await domainQuery(domain, 'GET',
+        `contacts?name=ilike.${encodeURIComponent(normName)}&role=eq.${mappedRole}&select=id&limit=1`
+      );
+      if (nameLookup.ok && nameLookup.data?.length) {
+        existingId = nameLookup.data[0].id;
+      }
+    }
+
+    const contactData = {
+      name:        ent.name.trim(),
+      email:       email,
+      phone:       phone,
+      company:     ent.name.trim(),   // entity name IS the company
+      title:       website ? `Website: ${website}` : null,
+      role:        mappedRole,
+      website:     website,
+      address:     ent.address || null,
+      city:        ent.city || null,
+      state:       ent.state || null,
+      data_source: 'costar_sidebar',
+    };
+
+    if (existingId) {
+      // Enrich existing record with any new info
+      const patch = {};
+      if (email) patch.email = email;
+      if (phone) patch.phone = phone;
+      if (website) { patch.website = website; patch.title = `Website: ${website}`; }
+      if (ent.address) patch.address = ent.address;
+      if (ent.city) patch.city = ent.city;
+      if (ent.state) patch.state = ent.state;
+      if (Object.keys(patch).length) {
+        await domainPatch(domain,
+          `contacts?id=eq.${existingId}`,
+          patch,
+          'upsertSidebarContacts:entityUpdate'
+        );
+      }
+    } else {
+      // Only insert if we have at least name (entities don't always have contact details)
+      const r = await domainQuery(domain, 'POST', 'contacts', contactData);
+      if (r.ok) count++;
+    }
+  }
+
   return count;
 }
 
