@@ -2200,12 +2200,38 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
             ? Math.abs(existingPrice - soldPrice) / existingPrice
             : Infinity;
           if (daysDiff <= 30 && priceDelta <= 0.02) {
-            console.log(
-              `[sales-dedup] skipping duplicate property=${propertyId} ` +
-              `existing_date=${existingDatePart} existing_price=${existingPrice} ` +
-              `incoming_date=${datePart} incoming_price=${soldPrice} ` +
-              `days_diff=${daysDiff.toFixed(1)} price_delta=${(priceDelta * 100).toFixed(2)}%`
-            );
+            // Dedup match — same economic transaction. Don't create a duplicate,
+            // but DO patch enrichment fields (sale notes, brokers, etc.) that may
+            // have been added since the original ingestion.
+            const enrichPatch = {};
+            if (saleNotesRaw && !existing.sale_notes_raw) {
+              enrichPatch.sale_notes_raw = saleNotesRaw;
+              enrichPatch.sale_notes_extracted = Object.keys(saleNotesExtracted).length > 0
+                ? saleNotesExtracted : null;
+            }
+            if (saleData.listing_broker && !existing.listing_broker) {
+              enrichPatch.listing_broker = saleData.listing_broker;
+            }
+            if (saleData.procuring_broker && !existing.procuring_broker) {
+              enrichPatch.procuring_broker = saleData.procuring_broker;
+            }
+            if (saleData.buyer_name && !existing.buyer_name) {
+              enrichPatch.buyer_name = saleData.buyer_name;
+            }
+            if (saleData.seller_name && !existing.seller_name) {
+              enrichPatch.seller_name = saleData.seller_name;
+            }
+            // Also enrich notes if sale notes are new
+            if (saleNotesRaw && existing.notes && !existing.notes.includes('Sale Notes')) {
+              enrichPatch.notes = existing.notes + '; --- Sale Notes ---\n' + saleNotesRaw;
+            }
+            if (Object.keys(enrichPatch).length > 0) {
+              console.log(`[sales-dedup] enriching existing sale_id=${existing.sale_id} with ${Object.keys(enrichPatch).join(', ')}`);
+              await domainPatch(domain,
+                `sales_transactions?sale_id=eq.${existing.sale_id}`, enrichPatch, 'sales-dedup-enrich');
+            } else {
+              console.log(`[sales-dedup] skipping duplicate property=${propertyId} (no new enrichment data)`);
+            }
             continue;
           }
         }
