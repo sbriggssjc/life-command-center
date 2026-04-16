@@ -185,6 +185,15 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       promises.push(Promise.resolve(db === 'gov' ? { data: [], count: 0 } : []));
     }
 
+    // Dia: pull the denormalized CMS link columns directly from `properties`.
+    // v_property_detail does NOT expose these, but they are the authoritative
+    // source for the Operations tab when set (e.g. curated by ingest pipeline).
+    if (db === 'dia' && propFilter) {
+      promises.push(diaQuery('properties', 'property_id,medicare_id,linked_medicare_facility_id', { filter: propFilter, limit: 1 }));
+    } else {
+      promises.push(Promise.resolve([]));
+    }
+
     const settled = await Promise.allSettled(promises);
     let _partialFail = false;
 
@@ -206,6 +215,12 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     const ownership = safeExtract(2)[0] || null;
     const chain = safeExtract(3) || [];
     const rankings = safeExtract(4)[0] || null;
+    const propertyCmsRow = safeExtract(5)[0] || null;
+    // Authoritative denormalized CMS link from `properties`. Either column may
+    // hold the CCN; treat them equivalently for short-circuit purposes.
+    const denormCcn = propertyCmsRow
+      ? (propertyCmsRow.linked_medicare_facility_id || propertyCmsRow.medicare_id || null)
+      : null;
 
     // Strip buyer-side stubs and duplicate rows. The DB unique index prevents
     // new duplicates, but historical rows may still arrive from v_lease_detail
@@ -246,8 +261,33 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // and return a compact CMS snapshot (rankings/quality/patient/payer/operator).
     // We also resolve when rankings exists but has no medicare_id — the Operations
     // tab still needs CMS quality/trends/payer/cost data which live on medicare_id.
+    //
+    // Priority order for the CCN:
+    //   1) properties.linked_medicare_facility_id / properties.medicare_id
+    //      (authoritative denormalized link — never run fuzzy auto-match when set)
+    //   2) v_property_rankings.medicare_id (pre-linked via medicare_clinics)
+    //   3) /api/cms-match?action=resolve (fuzzy match fallback)
     const rankingsHasCcn = !!(rankings && rankings.medicare_id);
-    if (db === 'dia' && propertyId && (!rankings || !rankingsHasCcn)) {
+    if (db === 'dia' && denormCcn) {
+      // Seed cms cache from the property's curated CCN so the Operations tab
+      // never falls into the "No CMS facility linked" card. If rankings is
+      // missing, also call resolve — the backend will short-circuit on the
+      // denormalized field (no fuzzy match) and return a full snapshot.
+      _udCache.cms = {
+        medicare_id: denormCcn,
+        match_score: 1.0,
+        match_method: 'auto:property_field',
+        source: 'property_field',
+        operator: _udDetectOperator(rankings || {}),
+      };
+      if (!rankings && propertyId) {
+        try {
+          await _udResolveCmsFacility(propertyId);
+        } catch (e) {
+          console.warn('cms-match resolve (snapshot fetch) failed:', e);
+        }
+      }
+    } else if (db === 'dia' && propertyId && (!rankings || !rankingsHasCcn)) {
       try {
         await _udResolveCmsFacility(propertyId);
       } catch (e) {

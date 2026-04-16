@@ -1022,6 +1022,10 @@ async function fetchPropertyForMatch(env, propertyId) {
     city: p.city || '',
     state: p.state || '',
     zip: p.zip_code || p.zip || p.postal_code || '',
+    // Denormalized CMS link columns on properties — when populated, they are
+    // an authoritative manual/curated link and short-circuit fuzzy matching.
+    medicare_id: p.medicare_id || null,
+    linked_medicare_facility_id: p.linked_medicare_facility_id || null,
   };
 }
 
@@ -1264,6 +1268,42 @@ async function handleCmsMatch(req, res) {
       console.log('[cms-match/resolve] property loaded:',
         'addr=', JSON.stringify(prop.address), 'city=', prop.city,
         'state=', prop.state, 'zip=', prop.zip);
+
+      // 2b. Authoritative denormalized link on the property record itself.
+      // When properties.linked_medicare_facility_id (or properties.medicare_id)
+      // is populated, treat it as a curated/manual link and skip fuzzy match.
+      // This fixes the bug where Operations tab showed "No CMS facility linked"
+      // for properties whose CCN was already known but absent from
+      // property_cms_link cache and medicare_clinics.property_id back-link.
+      const denormCcn = prop.linked_medicare_facility_id || prop.medicare_id;
+      if (denormCcn) {
+        console.log('[cms-match/resolve] using denormalized property CCN:', denormCcn,
+          '(', prop.linked_medicare_facility_id ? 'linked_medicare_facility_id' : 'medicare_id', ')');
+        // Persist to property_cms_link so subsequent loads short-circuit on cache.
+        await diaRest(env, 'POST', 'property_cms_link', {
+          property_id: propertyId,
+          medicare_id: denormCcn,
+          match_method: 'auto:property_field',
+          match_score: 1.0,
+          matched_by: 'system',
+          matched_at: new Date().toISOString(),
+        }).catch(() => {});
+        const snap = await fetchCmsSnapshot(env, denormCcn);
+        return res.status(200).json({
+          source: 'property_field',
+          medicare_id: denormCcn,
+          match_score: 1.0,
+          match_method: 'auto:property_field',
+          facility: snap.clinic,
+          rankings: snap.rankings,
+          quality: snap.quality,
+          patient: snap.patient,
+          trends: snap.trends,
+          payer: snap.payer,
+          cost: snap.cost,
+          operator: detectOperator(snap.clinic, snap.rankings),
+        });
+      }
 
       // 3. Check if medicare_clinics already links this property_id
       //    SELECT * — the exact column set varies across ingestions.
