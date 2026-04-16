@@ -521,6 +521,7 @@ async function loadPropertyTab() {
 
       const result = await apiCall('/api/entities?action=process_sidebar_extraction', {
         entity_id: lccEntity.id,
+        force: true,
       });
 
       if (result.ok) {
@@ -806,6 +807,11 @@ function wirePropertyActions(ctx, lccEntity) {
       // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(ctx);
       const metadata = { ...(lccEntity.metadata || {}), ...buildMetadata(ctx, domain) };
+      // Clear pipeline gate so re-ingestion triggers a fresh pipeline run
+      delete metadata._pipeline_processed_at;
+      delete metadata._pipeline_status;
+      delete metadata._pipeline_summary;
+      delete metadata._pipeline_last_error;
       const result = await apiCall(`/api/entities?id=${lccEntity.id}`, {
         ...fields,
         metadata,
