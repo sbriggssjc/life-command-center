@@ -584,6 +584,38 @@ export const ACTION_SCHEMAS = {
     }
   },
 
+  ingest_pdf_document: {
+    description: 'Ingest an uploaded PDF into the LCC intake queue for triage. Used when a user uploads a document in Copilot chat (deed, offering memorandum, lease, brochure, financials, etc.) and wants it captured into LCC.',
+    category: 'workflow',
+    inputs: {
+      type: 'object',
+      properties: {
+        file_name: { type: 'string', description: 'Original filename including extension, e.g. "deed.pdf"' },
+        file_content_base64: { type: 'string', description: 'Base64-encoded PDF content. Provide this OR file_url.' },
+        file_url: { type: 'string', format: 'uri', description: 'Publicly accessible HTTPS download URL (SharePoint or OneDrive share link, direct PDF URL). Provide this OR file_content_base64.' },
+        entity_id: { type: 'string', format: 'uuid', description: 'Optional UUID of a property or organization this document relates to. Pre-links the intake item to that entity.' },
+        note: { type: 'string', description: 'Optional one-line user description of what the document is.' }
+      },
+      required: ['file_name'],
+      additionalProperties: false
+    },
+    outputs: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        ok: { type: 'boolean' },
+        inbox_item_id: { type: 'string', format: 'uuid' },
+        file_name: { type: 'string' },
+        page_count: { type: 'integer' },
+        size_bytes: { type: 'integer' },
+        text_preview: { type: 'string' },
+        extraction_ok: { type: 'boolean' },
+        entity_id: { type: 'string' },
+        message: { type: 'string', description: 'Human-readable summary for Copilot to display to the user.' }
+      }
+    }
+  },
+
   triage_inbox_item: {
     description: 'Triage an inbox item — change status, set priority, assign.',
     category: 'workflow',
