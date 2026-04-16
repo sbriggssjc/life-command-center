@@ -168,9 +168,13 @@ BEGIN
     FROM (SELECT website FROM contacts WHERE contact_id = ANY(loser_ids) AND website IS NOT NULL LIMIT 1) sub
     WHERE contacts.contact_id = winner_id AND contacts.website IS NULL;
 
-    -- Re-point FKs
-    UPDATE true_owners SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
-    UPDATE recorded_owners SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    -- Re-point ALL FK references before delete
+    UPDATE true_owners         SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE recorded_owners     SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE contact_aliases     SET canonical_contact_id = winner_id WHERE canonical_contact_id = ANY(loser_ids);
+    UPDATE sales_transactions  SET buyer_contact_id = winner_id WHERE buyer_contact_id = ANY(loser_ids);
+    UPDATE sales_transactions  SET seller_contact_id = winner_id WHERE seller_contact_id = ANY(loser_ids);
+    UPDATE properties          SET original_developer_contact_id = winner_id WHERE original_developer_contact_id = ANY(loser_ids);
 
     -- Delete losers
     DELETE FROM contacts WHERE contact_id = ANY(loser_ids);

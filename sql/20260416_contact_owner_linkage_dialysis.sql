@@ -19,6 +19,10 @@ ALTER TABLE contacts ADD COLUMN IF NOT EXISTS city TEXT;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS state TEXT;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS data_source TEXT;
 
+-- recorded_owners lacks contact_id — add it
+ALTER TABLE recorded_owners ADD COLUMN IF NOT EXISTS contact_id UUID
+  REFERENCES contacts(contact_id);
+
 CREATE INDEX IF NOT EXISTS idx_contacts_true_owner_id
   ON contacts (true_owner_id) WHERE true_owner_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_contacts_recorded_owner_id
@@ -165,9 +169,16 @@ BEGIN
     FROM (SELECT website FROM contacts WHERE contact_id = ANY(loser_ids) AND website IS NOT NULL LIMIT 1) sub
     WHERE contacts.contact_id = winner_id AND contacts.website IS NULL;
 
-    -- Re-point FKs
-    UPDATE true_owners SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
-    UPDATE recorded_owners SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    -- Re-point ALL FK references before delete
+    UPDATE true_owners         SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE recorded_owners     SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE contact_links       SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE user_interactions   SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE touchpoint_schedule SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE call_outcomes       SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE brokers             SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE lenders             SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
+    UPDATE guarantors          SET contact_id = winner_id WHERE contact_id = ANY(loser_ids);
 
     -- Delete losers
     DELETE FROM contacts WHERE contact_id = ANY(loser_ids);
