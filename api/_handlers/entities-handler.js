@@ -264,12 +264,12 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
     // On-demand sidebar extraction processing
     if (req.query.action === 'process_sidebar_extraction') {
-      const { entity_id } = req.body || {};
+      const { entity_id, force } = req.body || {};
       if (!entity_id) {
         return res.status(400).json({ error: 'entity_id is required' });
       }
       try {
-        const result = await processSidebarExtraction(entity_id, workspaceId, user.id);
+        const result = await processSidebarExtraction(entity_id, workspaceId, user.id, { force: !!force });
         if (!result.ok) {
           return res.status(result.error === 'Entity not found' ? 404 : 500).json(result);
         }
