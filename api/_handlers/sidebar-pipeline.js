@@ -3285,6 +3285,16 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   const tenants = metadata.tenants;
   let leaseRecords = [];
 
+  // Determine data_source and source_confidence based on origin
+  const leaseDataSource = metadata._intake_promoted
+    ? 'email_intake'
+    : 'costar_sidebar';
+  // Dialysis leases.source_confidence CHECK: 'documented' | 'estimated' | 'inferred'
+  // lease_abstract docs → 'documented'; OM / other intake → 'estimated'
+  const leaseConfidence = metadata._intake_promoted
+    ? (metadata.document_type === 'lease_abstract' ? 'documented' : 'estimated')
+    : 'estimated';
+
   if (Array.isArray(tenants) && tenants.length > 0) {
     // Build one lease record per tenant entry
     for (const t of tenants) {
@@ -3302,11 +3312,8 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         guarantor: metadata.guarantor || null,
         status: 'active',
         is_active: true,
-        data_source: 'costar_sidebar',
-        // Dialysis leases.source_confidence has a CHECK constraint; 'estimated'
-        // matches the allowed enum values ('documented' | 'estimated' | 'inferred').
-        // 'costar_estimate' was rejected and caused every INSERT to 400 silently.
-        source_confidence: 'estimated',
+        data_source: leaseDataSource,
+        source_confidence: leaseConfidence,
       });
     }
   } else {
@@ -3327,9 +3334,8 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       guarantor: metadata.guarantor || null,
       status: 'active',
       is_active: true,
-      data_source: 'costar_sidebar',
-      // Same CHECK-constraint-safe value as above.
-      source_confidence: 'estimated',
+      data_source: leaseDataSource,
+      source_confidence: leaseConfidence,
     });
   }
 
@@ -3387,15 +3393,38 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       // ── Lease field provenance: track underwriting-critical fields ──
       // Uses upsert_lease_field() which checks source tier before overwriting,
       // so CoStar data (tier 5) never clobbers lease-document data (tier 1-3).
+      //
+      // When data arrives via intake promotion (_intake_promoted), the source
+      // tier is determined by the document type:
+      //   lease_abstract → tier 1 (lease_document)
+      //   om             → tier 3 (om_lease_abstract)
+      //   otherwise      → tier 4 (broker_package)
+      const isIntake = metadata._intake_promoted === true;
+      const intakeDocType = metadata.document_type;
+      const intakeTier = intakeDocType === 'lease_abstract' ? 1
+        : intakeDocType === 'om' ? 3
+        : 4;
+      const sourceTier   = isIntake ? intakeTier : 5;
+      const sourceLabel  = isIntake
+        ? (intakeDocType === 'lease_abstract' ? 'lease_document'
+           : intakeDocType === 'om' ? 'om_lease_abstract'
+           : 'broker_package')
+        : 'costar_verified';
+      const capturedBy   = isIntake ? 'intake_pipeline' : 'sidebar_pipeline';
+      const sourceFile   = isIntake ? (metadata._intake_source || null) : null;
+      const provenanceNote = isIntake
+        ? `Auto-captured from intake promotion (${intakeDocType || 'unknown'} document)`
+        : 'Auto-captured from CoStar sidebar ingestion';
+
       const provenanceFields = {
         expense_structure: record.expense_structure,
         rent:              record.annual_rent,
         rent_per_sf:       record.rent_per_sf,
         leased_area:       record.leased_area,
-        roof_responsibility:      null,  // not captured from CoStar sidebar
-        hvac_responsibility:      null,
-        structure_responsibility: null,
-        parking_responsibility:   null,
+        roof_responsibility:      metadata.roof_responsibility || null,
+        hvac_responsibility:      metadata.hvac_responsibility || null,
+        structure_responsibility: metadata.structure_responsibility || null,
+        parking_responsibility:   metadata.parking_responsibility || null,
       };
       for (const [field, value] of Object.entries(provenanceFields)) {
         if (value == null) continue;
@@ -3403,12 +3432,12 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
           p_lease_id:      leaseId,
           p_field_name:    field,
           p_field_value:   String(value),
-          p_source_tier:   5,
-          p_source_label:  'costar_verified',
-          p_captured_by:   'sidebar_pipeline',
-          p_source_file:   null,
+          p_source_tier:   sourceTier,
+          p_source_label:  sourceLabel,
+          p_captured_by:   capturedBy,
+          p_source_file:   sourceFile,
           p_source_detail: null,
-          p_notes:         'Auto-captured from CoStar sidebar ingestion',
+          p_notes:         provenanceNote,
         });
       }
 
