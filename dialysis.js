@@ -6180,11 +6180,21 @@ async function renderDiaSales() {
 
   // Metrics
   html += '<div class="dia-grid dia-grid-4" style="margin-bottom: 16px;">';
-  // Helper: compute average cap rate, filtering outliers (only 0.01–0.25 i.e. 1%–25%)
+  // Helper: compute average cap rate, normalizing mixed formats.
+  // DB stores some rows as decimals (0.07 = 7%) and others as percentages (7.15 = 7.15%).
+  // Normalize everything to decimal before averaging, then display as percentage.
   const avgCapRate = (arr, field) => {
-    const valid = arr.filter(r => { const v = parseFloat(r[field]); return v > 0.01 && v < 0.25; });
-    if (valid.length === 0) return { val: '—', n: 0 };
-    return { val: (valid.reduce((s, r) => s + parseFloat(r[field]), 0) / valid.length * 100).toFixed(2) + '%', n: valid.length };
+    const normalized = [];
+    arr.forEach(r => {
+      const v = parseFloat(r[field]);
+      if (!v || v <= 0) return;
+      // Same threshold as fmtCap: v < 1 means decimal format, else percentage format
+      const dec = v < 1 ? v : v / 100;
+      // Filter outliers: keep 1%–25% (0.01–0.25 in decimal)
+      if (dec > 0.01 && dec < 0.25) normalized.push(dec);
+    });
+    if (normalized.length === 0) return { val: '—', n: 0 };
+    return { val: (normalized.reduce((s, d) => s + d, 0) / normalized.length * 100).toFixed(2) + '%', n: normalized.length };
   };
   if (isComps) {
     const withPrice = data.filter(r => r.price > 0);
@@ -7017,7 +7027,7 @@ function renderDiaPlayers() {
               if (!buyerMap[key]) buyerMap[key] = { name: r.buyer_name, type: r.buyer_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
               buyerMap[key].deals++;
               buyerMap[key].volume += (r.sold_price || 0);
-              if (r.cap_rate) buyerMap[key].capRates.push(r.cap_rate);
+              if (r.cap_rate) { var _cr = parseFloat(r.cap_rate); buyerMap[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
               buyerMap[key].records.push(r);
             }
           });
@@ -7081,7 +7091,7 @@ function renderDiaPlayers() {
               if (!sellerMap[key]) sellerMap[key] = { name: r.seller_name, type: r.seller_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
               sellerMap[key].deals++;
               sellerMap[key].volume += (r.sold_price || 0);
-              if (r.cap_rate) sellerMap[key].capRates.push(r.cap_rate);
+              if (r.cap_rate) { var _cr = parseFloat(r.cap_rate); sellerMap[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
               sellerMap[key].records.push(r);
             }
           });
@@ -7170,7 +7180,7 @@ function renderDiaPlayers() {
               }
               brokerStats[key].deals++;
               brokerStats[key].volume += (sale.sold_price || 0);
-              if (sale.cap_rate) brokerStats[key].capRates.push(sale.cap_rate);
+              if (sale.cap_rate) { var _cr = parseFloat(sale.cap_rate); brokerStats[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
               brokerStats[key].roles.add(sb.role);
               brokerStats[key].records.push({ ...sb, broker: broker, sale: sale });
             }

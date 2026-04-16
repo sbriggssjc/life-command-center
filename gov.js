@@ -4011,7 +4011,8 @@ function renderGovSalesMetrics() {
   const ttmSales = sales.filter(r => r.sale_date && new Date(r.sale_date) >= ttmStart);
   const ttmWithPrice = ttmSales.filter(r => (r.sold_price || r.sale_price) > 0);
   const ttmVolume = ttmWithPrice.reduce((s, r) => s + parseFloat(r.sold_price || r.sale_price || 0), 0);
-  const validCaps = ttmSales.filter(r => { const v = parseFloat(r.sold_cap_rate || r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.sold_cap_rate || r.cap_rate)).sort((a,b) => a - b);
+  // Normalize mixed cap rate formats (0.07 decimal vs 7.15 percentage) to decimal
+  const validCaps = ttmSales.map(r => { const v = parseFloat(r.sold_cap_rate || r.cap_rate); return v > 0 ? (v < 1 ? v : v / 100) : null; }).filter(v => v && v > 0.01 && v < 0.25).sort((a,b) => a - b);
   const avgCap = validCaps.length > 0 ? (validCaps.reduce((s,v) => s+v, 0) / validCaps.length * 100).toFixed(2) + '%' : '—';
   const q1 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.25)] * 100).toFixed(2) + '%' : '—';
   const q3 = validCaps.length > 4 ? (validCaps[Math.floor(validCaps.length * 0.75)] * 100).toFixed(2) + '%' : '—';
@@ -6048,11 +6049,17 @@ async function renderGovSales() {
   if (govSalesPage >= totalPages) govSalesPage = totalPages - 1;
   const pageRows = filtered.slice(govSalesPage * GOV_SALES_PAGE_SIZE, (govSalesPage + 1) * GOV_SALES_PAGE_SIZE);
 
-  // Cap rate helper (filter outliers 1-25%)
+  // Cap rate helper — normalizes mixed formats (0.07 decimal vs 7.15 percentage)
   const avgCapRate = (arr, field) => {
-    const valid = arr.filter(r => { const v = r[field]; return v != null && v > 0.01 && v < 0.25; });
-    if (valid.length === 0) return { val: '—', n: 0 };
-    return { val: (valid.reduce((s, r) => s + r[field], 0) / valid.length * 100).toFixed(2) + '%', n: valid.length };
+    const normalized = [];
+    arr.forEach(r => {
+      const v = parseFloat(r[field]);
+      if (!v || v <= 0) return;
+      const dec = v < 1 ? v : v / 100;
+      if (dec > 0.01 && dec < 0.25) normalized.push(dec);
+    });
+    if (normalized.length === 0) return { val: '—', n: 0 };
+    return { val: (normalized.reduce((s, d) => s + d, 0) / normalized.length * 100).toFixed(2) + '%', n: normalized.length };
   };
 
   let html = '<div class="biz-section">';
