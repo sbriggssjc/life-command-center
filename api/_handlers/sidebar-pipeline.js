@@ -168,6 +168,63 @@ function parseCoord(val) {
 }
 
 /**
+ * Extract structured data from CoStar "Sale Notes" narrative text.
+ * Returns an object of parsed values (empty if nothing matched).
+ */
+function parseSaleNotes(text) {
+  if (!text) return {};
+  const extracted = {};
+
+  // NOI
+  const noiMatch = text.match(/(?:net\s+operating\s+income|noi)\s+(?:of\s+)?\$?([\d,]+)/i);
+  if (noiMatch) extracted.noi = parseFloat(noiMatch[1].replace(/,/g, ''));
+
+  // Cap rate from notes (cross-reference against structured cap_rate)
+  const capMatch = text.match(/(\d+\.?\d*)\s*%\s*cap\s*rate/i) ||
+                   text.match(/cap\s*rate.*?(\d+\.?\d*)\s*%/i);
+  if (capMatch) extracted.stated_cap_rate = parseFloat(capMatch[1]);
+
+  // Lease term remaining
+  const termMatch = text.match(/(\d+)\s*(?:remaining\s+)?years?\s+remaining/i) ||
+                    text.match(/(\d+)\s+years?\s+remain/i);
+  if (termMatch) extracted.years_remaining = parseInt(termMatch[1]);
+
+  // Building SF (cross-reference against RBA)
+  const sfMatch = text.match(/([\d,]+)\s*[-–]?\s*square[-\s]?foot/i);
+  if (sfMatch) extracted.building_sf = parseInt(sfMatch[1].replace(/,/g, ''));
+
+  // Acreage
+  const acreMatch = text.match(/([\d.]+)\s*acres?/i);
+  if (acreMatch) extracted.acreage = parseFloat(acreMatch[1]);
+
+  // Days on market
+  const domMatch = text.match(/(?:market\s+for|on\s+the\s+market)\s+(\d+)\s+days/i);
+  if (domMatch) extracted.days_on_market = parseInt(domMatch[1]);
+
+  // Asking price
+  const askMatch = text.match(/asking\s+price\s+of\s+\$?([\d,]+)/i) ||
+                   text.match(/initial\s+asking.*?\$?([\d,]+(?:\.\d+)?)/i);
+  if (askMatch) extracted.asking_price = parseFloat(askMatch[1].replace(/,/g, ''));
+
+  // Construction type
+  const constMatch = text.match(/(?:features?\s+)?(?:reinforced\s+)?(\w+\s+(?:concrete|construction|frame|masonry))/i);
+  if (constMatch) extracted.construction_type = constMatch[1].trim();
+
+  // Verification method
+  const verifyMatch = text.match(/verified\s+(?:through|via|by)\s+(.+?)(?:\.|$)/i);
+  if (verifyMatch) extracted.verification_method = verifyMatch[1].trim();
+
+  // Lease type (e.g. "15-year triple net", "20 year NNN")
+  const leaseMatch = text.match(/(\d+)[-\s]year\s+(triple\s+net|nnn|nn|gross|absolute)/i);
+  if (leaseMatch) {
+    extracted.lease_term_years = parseInt(leaseMatch[1]);
+    extracted.lease_type = leaseMatch[2];
+  }
+
+  return extracted;
+}
+
+/**
  * Classify a CoStar-style property_type into the LCC building_type taxonomy.
  * CoStar routinely tags dialysis clinics, nephrology offices, and MOBs as a
  * generic "Office" subtype. When the tenant/entity signals are medical, we
@@ -1843,6 +1900,26 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
   const parsedSF = parseSF(metadata.square_footage);
   const primaryTenant = cleanTenantValue(selectPrimaryTenant(metadata, domain));
 
+  // ── Sale Notes extraction ──────────────────────────────────────────────
+  const saleNotesRaw = metadata.sale_notes_raw || null;
+  const saleNotesExtracted = parseSaleNotes(saleNotesRaw);
+
+  // Cross-reference sale notes values against structured fields
+  if (saleNotesRaw && Object.keys(saleNotesExtracted).length > 0) {
+    // NOI + cap rate → price validation
+    if (saleNotesExtracted.noi && saleNotesExtracted.stated_cap_rate) {
+      const impliedPrice = Math.round(saleNotesExtracted.noi / (saleNotesExtracted.stated_cap_rate / 100));
+      console.log(`[sale-notes-xref] NOI=$${saleNotesExtracted.noi} / ${saleNotesExtracted.stated_cap_rate}% = implied price $${impliedPrice.toLocaleString()}`);
+    }
+    // Building SF cross-reference
+    if (saleNotesExtracted.building_sf && parsedSF) {
+      const sfDelta = Math.abs(saleNotesExtracted.building_sf - parsedSF);
+      if (sfDelta > 100) {
+        console.log(`[sale-notes-xref] SF mismatch: notes=${saleNotesExtracted.building_sf} vs RBA=${parsedSF} (delta=${sfDelta})`);
+      }
+    }
+  }
+
   // Identify the "most recent" sale — the one whose sale_date most closely
   // matches the CoStar Last Sale Date stat-card value. Only that row may
   // carry the CoStar-stated cap rate; historical deed rows predate the
@@ -2009,7 +2086,11 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           sale.transaction_type ? `Type: ${sale.transaction_type}` : null,
           sale.document_number ? `Doc#: ${sale.document_number}` : null,
           sale.buyer_address ? `Buyer addr: ${sale.buyer_address}` : null,
+          saleNotesRaw ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
         ].filter(Boolean).join('; ') || null,
+        sale_notes_raw: saleNotesRaw,
+        sale_notes_extracted: Object.keys(saleNotesExtracted).length > 0
+          ? saleNotesExtracted : null,
       } : {}),
     });
     if (transaction_type !== null) saleData.transaction_type = transaction_type;
