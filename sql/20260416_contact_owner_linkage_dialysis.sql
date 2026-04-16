@@ -62,14 +62,21 @@ WHERE normalized_name IS NULL AND contact_name IS NOT NULL;
 
 -- ── 4. Link contacts → true_owners ──────────────────────────────────────────
 
+-- Forward: name match (no role filter — SF imports have NULL role)
 UPDATE contacts c
 SET true_owner_id = t.true_owner_id
 FROM true_owners t
 WHERE c.true_owner_id IS NULL
-  AND c.role IN ('owner', 'buyer', 'seller')
   AND c.normalized_name IS NOT NULL
   AND c.normalized_name != ''
   AND normalize_entity_name(t.name) = c.normalized_name;
+
+-- Reverse: true_owners.contact_id already set → fill contacts.true_owner_id
+UPDATE contacts c
+SET true_owner_id = t.true_owner_id
+FROM true_owners t
+WHERE t.contact_id = c.contact_id
+  AND c.true_owner_id IS NULL;
 
 -- Back-link: true_owners.contact_id (prefer contacts with email)
 UPDATE true_owners t
@@ -85,11 +92,11 @@ WHERE t.contact_id IS NULL
 
 -- ── 5. Link contacts → recorded_owners ──────────────────────────────────────
 
+-- No role filter — SF imports have NULL role
 UPDATE contacts c
 SET recorded_owner_id = r.recorded_owner_id
 FROM recorded_owners r
 WHERE c.recorded_owner_id IS NULL
-  AND c.role IN ('owner', 'buyer', 'seller')
   AND c.normalized_name IS NOT NULL
   AND c.normalized_name != ''
   AND normalize_entity_name(r.name) = c.normalized_name;
@@ -200,12 +207,7 @@ BEGIN
   NEW.normalized_name := normalize_entity_name(NEW.contact_name);
   NEW.updated_at := now();
 
-  -- Only auto-link for owner/buyer/seller roles
-  IF NEW.role IS NULL OR NEW.role NOT IN ('owner', 'buyer', 'seller') THEN
-    RETURN NEW;
-  END IF;
-
-  -- Match true_owner
+  -- Match true_owner (no role filter — SF imports have NULL role)
   IF NEW.true_owner_id IS NULL AND NEW.normalized_name IS NOT NULL AND NEW.normalized_name != '' THEN
     SELECT t.true_owner_id INTO v_true_owner_id
     FROM true_owners t
@@ -303,15 +305,21 @@ BEGIN
   WHERE normalized_name IS NULL AND contact_name IS NOT NULL;
   GET DIAGNOSTICS v_normalized = ROW_COUNT;
 
+  -- Forward: name match (no role filter)
   UPDATE contacts c SET true_owner_id = t.true_owner_id
   FROM true_owners t
-  WHERE c.true_owner_id IS NULL AND c.role IN ('owner','buyer','seller')
+  WHERE c.true_owner_id IS NULL
     AND c.normalized_name IS NOT NULL AND normalize_entity_name(t.name) = c.normalized_name;
   GET DIAGNOSTICS v_linked_true = ROW_COUNT;
 
+  -- Reverse: true_owners.contact_id → contacts.true_owner_id
+  UPDATE contacts c SET true_owner_id = t.true_owner_id
+  FROM true_owners t
+  WHERE t.contact_id = c.contact_id AND c.true_owner_id IS NULL;
+
   UPDATE contacts c SET recorded_owner_id = r.recorded_owner_id
   FROM recorded_owners r
-  WHERE c.recorded_owner_id IS NULL AND c.role IN ('owner','buyer','seller')
+  WHERE c.recorded_owner_id IS NULL
     AND c.normalized_name IS NOT NULL AND normalize_entity_name(r.name) = c.normalized_name;
   GET DIAGNOSTICS v_linked_rec = ROW_COUNT;
 
