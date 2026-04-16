@@ -108,198 +108,60 @@ ON CONFLICT DO NOTHING;
 
 
 -- ── 5. Main resolver function ───────────────────────────────────────────────
+-- NOTE: Gov tables are large (8k contacts × 14k recorded_owners). Trigram
+-- cross-joins timeout within Supabase's statement limit. This function does
+-- alias-based linking + back-links only (fast). Heavy trigram matching is
+-- run manually via ad-hoc SQL with SET pg_trgm.similarity_threshold = 0.6
+-- and batch LIMITs.
 
-CREATE OR REPLACE FUNCTION resolve_entity_matches(
-  p_high_threshold NUMERIC DEFAULT 0.85,
-  p_low_threshold  NUMERIC DEFAULT 0.5
-)
+CREATE OR REPLACE FUNCTION resolve_entity_matches()
 RETURNS JSONB LANGUAGE plpgsql AS $$
 DECLARE
-  v_alias_links      INT := 0;
-  v_auto_links       INT := 0;
-  v_candidates       INT := 0;
-  v_aliases_total    INT := 0;
-  v_cross_links      INT := 0;
-  rec                RECORD;
+  v_alias_links   INT := 0;
+  v_aliases_total INT := 0;
+  rec             RECORD;
 BEGIN
-
-  -- ── Phase 1: Alias-based linking ──────────────────────────────────────
-  -- Gov contact_aliases stores (canonical_contact_id, alias_name, canonical_name)
-  -- Match unlinked contacts by checking if their normalized name appears as an alias_name
-
-  -- 1a. contacts → true_owners via alias
+  -- Phase 1: Alias-based linking (indexed, fast)
   FOR rec IN
-    SELECT c.contact_id, a.entity_id AS true_owner_id
+    SELECT c.contact_id, a.entity_id AS owner_id
     FROM contacts c
-    JOIN contact_aliases a
-      ON a.alias_name = c.normalized_name AND a.entity_table = 'true_owners'
-    WHERE c.true_owner_id IS NULL
-      AND c.normalized_name IS NOT NULL AND c.normalized_name != ''
-      AND a.entity_id IS NOT NULL
+    JOIN contact_aliases a ON a.alias_name = c.normalized_name AND a.entity_table = 'true_owners'
+    WHERE c.true_owner_id IS NULL AND c.normalized_name IS NOT NULL AND c.normalized_name != '' AND a.entity_id IS NOT NULL
+    LIMIT 500
   LOOP
-    UPDATE contacts SET true_owner_id = rec.true_owner_id WHERE contact_id = rec.contact_id;
+    UPDATE contacts SET true_owner_id = rec.owner_id WHERE contact_id = rec.contact_id;
     v_alias_links := v_alias_links + 1;
   END LOOP;
 
-  -- 1b. contacts → recorded_owners via alias
   FOR rec IN
-    SELECT c.contact_id, a.entity_id AS recorded_owner_id
+    SELECT c.contact_id, a.entity_id AS owner_id
     FROM contacts c
-    JOIN contact_aliases a
-      ON a.alias_name = c.normalized_name AND a.entity_table = 'recorded_owners'
-    WHERE c.recorded_owner_id IS NULL
-      AND c.normalized_name IS NOT NULL AND c.normalized_name != ''
-      AND a.entity_id IS NOT NULL
+    JOIN contact_aliases a ON a.alias_name = c.normalized_name AND a.entity_table = 'recorded_owners'
+    WHERE c.recorded_owner_id IS NULL AND c.normalized_name IS NOT NULL AND c.normalized_name != '' AND a.entity_id IS NOT NULL
+    LIMIT 500
   LOOP
-    UPDATE contacts SET recorded_owner_id = rec.recorded_owner_id WHERE contact_id = rec.contact_id;
+    UPDATE contacts SET recorded_owner_id = rec.owner_id WHERE contact_id = rec.contact_id;
     v_alias_links := v_alias_links + 1;
   END LOOP;
 
-  -- ── Phase 2: High-confidence trigram auto-linking ─────────────────────
-
-  -- contacts ↔ true_owners
-  FOR rec IN
-    SELECT c.contact_id, c.name AS c_name, c.normalized_name AS c_norm,
-           t.true_owner_id, t.name AS t_name,
-           similarity(c.normalized_name, lower(t.canonical_name)) AS sim
-    FROM contacts c
-    JOIN true_owners t
-      ON c.normalized_name % lower(t.canonical_name)
-    WHERE c.true_owner_id IS NULL
-      AND c.normalized_name IS NOT NULL AND c.normalized_name != ''
-      AND t.canonical_name IS NOT NULL AND t.canonical_name != ''
-      AND similarity(c.normalized_name, lower(t.canonical_name)) > p_high_threshold
-    ORDER BY sim DESC
-  LOOP
-    UPDATE contacts SET true_owner_id = rec.true_owner_id
-    WHERE contact_id = rec.contact_id AND true_owner_id IS NULL;
-
-    INSERT INTO contact_aliases (canonical_contact_id, alias_name, canonical_name, source, match_method, entity_table, entity_id)
-    VALUES (rec.contact_id, normalize_entity_name(rec.t_name), rec.c_norm, 'auto_high_confidence', 'trigram', 'true_owners', rec.true_owner_id)
-    ON CONFLICT DO NOTHING;
-
-    INSERT INTO entity_match_candidates (source_table, source_id, source_name, target_table, target_id, target_name, match_method, similarity, status, resolved_by, resolved_at)
-    VALUES ('contacts', rec.contact_id, rec.c_name, 'true_owners', rec.true_owner_id, rec.t_name, 'trigram', rec.sim, 'auto_linked', 'system', now())
-    ON CONFLICT (source_table, source_id, target_table, target_id) DO NOTHING;
-
-    v_auto_links := v_auto_links + 1;
-  END LOOP;
-
-  -- contacts ↔ recorded_owners
-  FOR rec IN
-    SELECT c.contact_id, c.name AS c_name, c.normalized_name AS c_norm,
-           r.recorded_owner_id, r.name AS r_name,
-           similarity(c.normalized_name, lower(r.canonical_name)) AS sim
-    FROM contacts c
-    JOIN recorded_owners r
-      ON c.normalized_name % lower(r.canonical_name)
-    WHERE c.recorded_owner_id IS NULL
-      AND c.normalized_name IS NOT NULL AND c.normalized_name != ''
-      AND r.canonical_name IS NOT NULL AND r.canonical_name != ''
-      AND similarity(c.normalized_name, lower(r.canonical_name)) > p_high_threshold
-    ORDER BY sim DESC
-  LOOP
-    UPDATE contacts SET recorded_owner_id = rec.recorded_owner_id
-    WHERE contact_id = rec.contact_id AND recorded_owner_id IS NULL;
-
-    INSERT INTO contact_aliases (canonical_contact_id, alias_name, canonical_name, source, match_method, entity_table, entity_id)
-    VALUES (rec.contact_id, normalize_entity_name(rec.r_name), rec.c_norm, 'auto_high_confidence', 'trigram', 'recorded_owners', rec.recorded_owner_id)
-    ON CONFLICT DO NOTHING;
-
-    INSERT INTO entity_match_candidates (source_table, source_id, source_name, target_table, target_id, target_name, match_method, similarity, status, resolved_by, resolved_at)
-    VALUES ('contacts', rec.contact_id, rec.c_name, 'recorded_owners', rec.recorded_owner_id, rec.r_name, 'trigram', rec.sim, 'auto_linked', 'system', now())
-    ON CONFLICT (source_table, source_id, target_table, target_id) DO NOTHING;
-
-    v_auto_links := v_auto_links + 1;
-  END LOOP;
-
-  -- ── Phase 3: Medium-confidence candidates ─────────────────────────────
-
-  INSERT INTO entity_match_candidates (source_table, source_id, source_name, target_table, target_id, target_name, match_method, similarity, status)
-  SELECT DISTINCT ON (c.contact_id)
-    'contacts', c.contact_id, c.name,
-    'true_owners', t.true_owner_id, t.name,
-    'trigram',
-    similarity(c.normalized_name, lower(t.canonical_name)),
-    'pending_review'
-  FROM contacts c
-  JOIN true_owners t ON c.normalized_name % lower(t.canonical_name)
-  WHERE c.true_owner_id IS NULL
-    AND c.normalized_name IS NOT NULL AND c.normalized_name != ''
-    AND t.canonical_name IS NOT NULL
-    AND similarity(c.normalized_name, lower(t.canonical_name)) BETWEEN p_low_threshold AND p_high_threshold
-  ORDER BY c.contact_id, similarity(c.normalized_name, lower(t.canonical_name)) DESC
-  ON CONFLICT (source_table, source_id, target_table, target_id) DO NOTHING;
-  GET DIAGNOSTICS v_candidates = ROW_COUNT;
-
-  INSERT INTO entity_match_candidates (source_table, source_id, source_name, target_table, target_id, target_name, match_method, similarity, status)
-  SELECT DISTINCT ON (c.contact_id)
-    'contacts', c.contact_id, c.name,
-    'recorded_owners', r.recorded_owner_id, r.name,
-    'trigram',
-    similarity(c.normalized_name, lower(r.canonical_name)),
-    'pending_review'
-  FROM contacts c
-  JOIN recorded_owners r ON c.normalized_name % lower(r.canonical_name)
-  WHERE c.recorded_owner_id IS NULL
-    AND c.normalized_name IS NOT NULL AND c.normalized_name != ''
-    AND r.canonical_name IS NOT NULL
-    AND similarity(c.normalized_name, lower(r.canonical_name)) BETWEEN p_low_threshold AND p_high_threshold
-  ORDER BY c.contact_id, similarity(c.normalized_name, lower(r.canonical_name)) DESC
-  ON CONFLICT (source_table, source_id, target_table, target_id) DO NOTHING;
-  GET DIAGNOSTICS v_cross_links = ROW_COUNT;
-  v_candidates := v_candidates + v_cross_links;
-
-  -- ── Phase 4: Cross-table (true_owners ↔ recorded_owners) ─────────────
-
-  INSERT INTO entity_match_candidates (source_table, source_id, source_name, target_table, target_id, target_name, match_method, similarity, status)
-  SELECT DISTINCT ON (t.true_owner_id)
-    'true_owners', t.true_owner_id, t.name,
-    'recorded_owners', r.recorded_owner_id, r.name,
-    'trigram',
-    similarity(lower(t.canonical_name), lower(r.canonical_name)),
-    CASE WHEN similarity(lower(t.canonical_name), lower(r.canonical_name)) > p_high_threshold
-         THEN 'auto_linked' ELSE 'pending_review' END
-  FROM true_owners t
-  JOIN recorded_owners r
-    ON lower(t.canonical_name) % lower(r.canonical_name)
-  WHERE t.canonical_name IS NOT NULL AND t.canonical_name != ''
-    AND r.canonical_name IS NOT NULL AND r.canonical_name != ''
-    AND similarity(lower(t.canonical_name), lower(r.canonical_name)) > p_low_threshold
-    AND NOT EXISTS (
-      SELECT 1 FROM properties p
-      WHERE p.true_owner_id = t.true_owner_id AND p.recorded_owner_id = r.recorded_owner_id
-    )
-  ORDER BY t.true_owner_id, similarity(lower(t.canonical_name), lower(r.canonical_name)) DESC
-  ON CONFLICT (source_table, source_id, target_table, target_id) DO NOTHING;
-
-  -- ── Phase 5: Back-link maintenance ────────────────────────────────────
-
+  -- Phase 2: Back-links + property chain
   UPDATE true_owners t SET contact_id = (
     SELECT c.contact_id FROM contacts c WHERE c.true_owner_id = t.true_owner_id
     ORDER BY (c.email IS NOT NULL)::int DESC, c.updated_at DESC NULLS LAST LIMIT 1
-  ) WHERE t.contact_id IS NULL
-    AND EXISTS (SELECT 1 FROM contacts c WHERE c.true_owner_id = t.true_owner_id);
+  ) WHERE t.contact_id IS NULL AND EXISTS (SELECT 1 FROM contacts c WHERE c.true_owner_id = t.true_owner_id);
 
   UPDATE recorded_owners r SET contact_id = (
     SELECT c.contact_id FROM contacts c WHERE c.recorded_owner_id = r.recorded_owner_id
     ORDER BY (c.email IS NOT NULL)::int DESC, c.updated_at DESC NULLS LAST LIMIT 1
-  ) WHERE r.contact_id IS NULL
-    AND EXISTS (SELECT 1 FROM contacts c WHERE c.recorded_owner_id = r.recorded_owner_id);
+  ) WHERE r.contact_id IS NULL AND EXISTS (SELECT 1 FROM contacts c WHERE c.recorded_owner_id = r.recorded_owner_id);
 
   UPDATE contacts c SET property_id = p.property_id
-  FROM properties p
-  WHERE c.property_id IS NULL AND c.true_owner_id IS NOT NULL AND p.true_owner_id = c.true_owner_id;
+  FROM properties p WHERE c.property_id IS NULL AND c.true_owner_id IS NOT NULL AND p.true_owner_id = c.true_owner_id;
 
   SELECT count(*) INTO v_aliases_total FROM contact_aliases;
 
   RETURN jsonb_build_object(
-    'alias_links', v_alias_links,
-    'auto_links', v_auto_links,
-    'candidates_staged', v_candidates,
-    'total_aliases', v_aliases_total,
-    'timestamp', now()
-  );
+    'alias_links', v_alias_links, 'total_aliases', v_aliases_total, 'timestamp', now());
 END $$;
 
 
