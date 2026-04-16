@@ -32,7 +32,7 @@ let diaCmsSelectedIdx = undefined; // selected row in CMS table
 let diaNpiFilter = null; // filter by signal_type
 let diaNpiSelectedIdx = undefined; // selected row in NPI table
 let diaSalesView = 'comps'; // 'comps' | 'available'
-let diaSalesComps = null;   // lazy-loaded from v_sales_comps
+let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
 let diaSalesLoading = false;
@@ -169,6 +169,123 @@ async function diaQueryPage(table, select, params = {}) {
     else console.error('diaQueryPage error:', err);
     return { data: [], count: 0 };
   }
+}
+
+// ============================================================================
+// SALES COMPS LOADER
+// ============================================================================
+// The Sales Comps table queries EXCLUSIVELY from sales_transactions joined
+// with properties (and leases). The legacy v_sales_comps view mixed in entity
+// metadata sales_history, which produced duplicate rows (e.g. deed date vs
+// CoStar recordation date), conflicting prices/cap rates, and stale RBA/land
+// area values. sales_transactions is the deduplicated authoritative source
+// populated by the sidebar pipeline; properties holds the canonical RBA/land
+// area; leases holds the current rent/expiration data.
+async function loadDiaSalesCompsFromTxns() {
+  // Embed properties (1:1) and leases (1:many). Use !inner on properties so
+  // orphan sales without a property drop out — v_sales_comps filtered those
+  // too. Leases are a left-side embed so sales on vacant/land parcels still
+  // show up.
+  const select = [
+    '*',
+    'properties!inner(property_id,address,city,state,zip_code,county,building_size,',
+    'land_area,lot_sf,year_built,year_renovated,tenant,building_type,zoning,',
+    'latitude,longitude,lease_bump_pct,lease_bump_interval_mo)',
+    ',leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
+    'expense_structure,rent_per_sf,annual_rent,renewal_options,is_active,',
+    'status,data_source,source_confidence)',
+  ].join('');
+  let all = [];
+  for (let pg = 0; pg <= 20; pg++) {
+    const batch = await diaQuery('sales_transactions', select, {
+      order: 'sale_date.desc.nullslast',
+      limit: 1000,
+      offset: pg * 1000,
+    });
+    all = all.concat(batch || []);
+    if (!batch || batch.length < 1000) break;
+  }
+  return all.map(normalizeSalesTxnRow);
+}
+
+function pickCurrentLease(leases) {
+  if (!Array.isArray(leases) || leases.length === 0) return null;
+  const scored = leases.slice().sort((a, b) => {
+    const aActive = (a.is_active === true || a.status === 'active') ? 1 : 0;
+    const bActive = (b.is_active === true || b.status === 'active') ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    const aStart = a.lease_start || '';
+    const bStart = b.lease_start || '';
+    return bStart.localeCompare(aStart);
+  });
+  return scored[0] || null;
+}
+
+function normalizeSalesTxnRow(r) {
+  const p = r.properties || {};
+  const lease = pickCurrentLease(r.leases);
+
+  const buildingSize = p.building_size != null ? Number(p.building_size) : null;
+  const soldPrice    = r.sold_price    != null ? Number(r.sold_price)    : null;
+  const pricePerSF   = (soldPrice && buildingSize && buildingSize > 0)
+    ? soldPrice / buildingSize : null;
+
+  const capRateRaw = r.cap_rate != null ? r.cap_rate
+                   : r.calculated_cap_rate != null ? r.calculated_cap_rate
+                   : r.stated_cap_rate;
+  const capRate = capRateRaw != null ? Number(capRateRaw) : null;
+
+  let termYrs = null;
+  if (lease && lease.lease_expiration) {
+    const exp = new Date(lease.lease_expiration);
+    if (!isNaN(exp.getTime())) {
+      termYrs = (exp.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 365.25);
+    }
+  }
+
+  let bumps = null;
+  if (p.lease_bump_pct != null && p.lease_bump_interval_mo) {
+    const pct = Number(p.lease_bump_pct) * 100;
+    bumps = pct.toFixed(pct >= 10 ? 0 : 2) + '% / ' + p.lease_bump_interval_mo + 'mo';
+  }
+
+  const annualRent = lease
+    ? (lease.annual_rent != null ? Number(lease.annual_rent) : null)
+    : null;
+  const rentPsf = lease && lease.rent_per_sf != null ? Number(lease.rent_per_sf) : null;
+
+  return {
+    sale_id:           r.sale_id,
+    property_id:       r.property_id || p.property_id || null,
+    tenant_operator:   (lease && lease.tenant) || p.tenant || null,
+    address:           p.address || null,
+    city:              p.city    || null,
+    state:             p.state   || null,
+    land_area:         p.land_area != null ? Number(p.land_area) : null,
+    year_built:        p.year_built || null,
+    rba:               buildingSize,
+    rent:              annualRent,
+    rent_per_sf:       rentPsf,
+    lease_expiration:  lease ? lease.lease_expiration : null,
+    term_remaining_yrs: termYrs,
+    expenses:          lease ? lease.expense_structure : null,
+    bumps:             bumps,
+    price:             soldPrice,
+    price_per_sf:      pricePerSF,
+    cap_rate:          capRate,
+    sold_date:         r.sale_date || null,
+    recorded_date:     r.recorded_date || null,
+    seller:            r.seller_name || null,
+    buyer:             r.buyer_name  || null,
+    listing_broker:    r.listing_broker   || null,
+    procuring_broker:  r.procuring_broker || null,
+    bid_ask_spread:    null,
+    dom:               null,
+    transaction_type:  r.transaction_type || null,
+    exclude_from_market_metrics: r.exclude_from_market_metrics === true,
+    notes:             r.notes || null,
+    data_source:       r.data_source || null,
+  };
 }
 
 // ============================================================================
@@ -483,15 +600,7 @@ function renderDiaOverview() {
     diaSalesLoading = true;
     (async () => {
       try {
-        let all = [], pg = 0;
-        while (true) {
-          const batch = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
-          all = all.concat(batch || []);
-          if (!batch || batch.length < 1000) break;
-          pg++;
-          if (pg > 20) break; // safety cap
-        }
-        diaSalesComps = all;
+        diaSalesComps = await loadDiaSalesCompsFromTxns();
       } catch(e) { diaSalesComps = []; console.warn('Sales comps load failed:', e.message); }
       diaSalesLoading = false;
       // Re-render sales sections once loaded (check for DOM elements)
@@ -5964,15 +6073,7 @@ async function renderDiaSales() {
     const inner = q('#bizPageInner');
     if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales comps...</p></div>';
     try {
-      // Paginate: PostgREST limits to 1000 rows per request
-      let all = [], pg = 0;
-      while (true) {
-        const batch = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
-        all = all.concat(batch || []);
-        if (!batch || batch.length < 1000) break;
-        pg++;
-      }
-      diaSalesComps = all;
+      diaSalesComps = await loadDiaSalesCompsFromTxns();
     } catch (e) { console.error('Sales comps load error:', e); showToast('Sales comps load failed', 'error'); diaSalesComps = []; }
     diaSalesLoading = false;
   }
@@ -6001,13 +6102,15 @@ async function renderDiaSales() {
   // Filter out blank/empty records — require at least an address or operator name
   data = data.filter(r => (r.address && r.address.trim()) || (r.tenant_operator && r.tenant_operator.trim()) || (r.facility_name && r.facility_name.trim()));
 
-  // Deduplicate rows — v_sales_comps view can return duplicates from joins
-  {
+  // Deduplicate rows — Sales Comps are already DB-deduped by sale_id in
+  // sales_transactions, so the dedup pass runs only for Available Listings
+  // (v_available_listings can still return duplicates from joins).
+  if (!isComps) {
     const seen = new Set();
     data = data.filter(r => {
       const addr = (r.address || '').trim().toLowerCase();
-      const dateKey = isComps ? (r.sold_date || '') : (r.listing_date || '');
-      const priceKey = r.price || r.ask_price || '';
+      const dateKey = r.listing_date || '';
+      const priceKey = r.ask_price || '';
       const key = `${addr}|${dateKey}|${priceKey}`;
       if (seen.has(key)) return false;
       seen.add(key);
