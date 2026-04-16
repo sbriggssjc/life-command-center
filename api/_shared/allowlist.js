@@ -144,6 +144,7 @@ export const DIA_WRITE_TABLES = new Set([
   'sales_transactions',
   'property_sale_events',
   'loans',
+  'leases',
   'v_clinic_property_link_review_queue',
   'salesforce_activities',
   // RPC calls

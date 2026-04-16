@@ -189,23 +189,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // metadata directly from `properties`. v_property_detail may not expose
     // these. The anchor_rent triplet is tier 1 of the rent-of-record policy
     // (see _udPickCurrentRent below); the escalation pair is needed to
-    // project the anchor to any target date.
-    if (db === 'dia' && propFilter) {
-      promises.push(diaQuery(
-        'properties',
-        'property_id,medicare_id,linked_medicare_facility_id,' +
-        'anchor_rent,anchor_rent_date,anchor_rent_source,' +
-        'lease_commencement,lease_bump_pct,lease_bump_interval_mo',
-    // Dia: pull denormalized CMS link columns + rent-anchor / escalation fields
-    // directly from `properties`. v_property_detail does not currently expose
-    // the anchor_rent / lease_bump_* fields, but the Rent Roll tab needs them
-    // to compute per-year escalations when lease metadata has no explicit
-    // escalation string or rent_cagr.
+    // project the anchor to any target date. `rba` feeds leased-SF fallbacks
+    // in _udBuildRentSchedule / _udPickCurrentRent.
     if (db === 'dia' && propFilter) {
       promises.push(diaQuery('properties',
         'property_id,medicare_id,linked_medicare_facility_id,' +
         'anchor_rent,anchor_rent_date,anchor_rent_source,lease_commencement,' +
-        'lease_bump_pct,lease_bump_interval_mo,last_known_rent,rba',
+        'lease_bump_pct,lease_bump_interval_mo,rba',
         { filter: propFilter, limit: 1 }
       ));
     } else {
@@ -259,7 +249,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       for (const key of [
         'anchor_rent', 'anchor_rent_date', 'anchor_rent_source',
         'lease_commencement', 'lease_bump_pct', 'lease_bump_interval_mo',
-        'last_known_rent', 'rba',
+        'rba',
       ]) {
         if (synthProperty[key] == null && propertyCmsRow[key] != null) {
           synthProperty[key] = propertyCmsRow[key];
@@ -1273,6 +1263,23 @@ function _udTabOverview() {
   const body = _udTabProperty();
   const propertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
 
+  // Pre-populate the Annual Rent input with the rent-of-record projected to
+  // today (same source-tier policy the Rent Roll header uses). Prefer the
+  // newest active lease so a CoStar/OM row on an ancient expired lease
+  // doesn't leak through as the current figure.
+  const _ovLeases = Array.isArray(_udCache?.leases) ? _udCache.leases : [];
+  const _ovActiveLease =
+    _ovLeases.filter(l => l && String(l.status || '').toLowerCase() === 'active' && l.is_active === true)
+             .sort((a, b) => String(b.lease_start || '').localeCompare(String(a.lease_start || '')))[0]
+    || _ovLeases[0]
+    || null;
+  const _ovPicked = typeof _udPickCurrentRent === 'function'
+    ? _udPickCurrentRent(_udCache?.property || null, _ovActiveLease, _udCache?.entityMeta || null)
+    : null;
+  const _ovPrefillRent = _ovPicked && _ovPicked.rent != null
+    ? String(Math.round(Number(_ovPicked.rent) * 100) / 100)
+    : '';
+
   let extra = '';
 
   // ── LOAN / DEBT (moved from Intel tab) ──────────────────────────────────
@@ -1325,7 +1332,7 @@ function _udTabOverview() {
     extra += '<div class="intel-cashflow" style="display:none">';
     extra += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
     extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Annual Rent / NOI ($)</label>';
-    extra += '<input id="intelAnnualRent" type="number" placeholder="0" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+    extra += '<input id="intelAnnualRent" type="number" placeholder="0" value="' + esc(_ovPrefillRent) + '" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '<div><label style="font-size:11px;font-weight:600;color:var(--text2)">Rent Per SF ($/SF)</label>';
     extra += '<input id="intelRentPerSF" type="number" placeholder="0.00" step="0.01" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
     extra += '</div>';
@@ -1767,6 +1774,8 @@ async function _udFetchLeaseEnrichment(leases) {
 //   3  leases.annual_rent with source_confidence='documented'
 //   4  leases.annual_rent with source_confidence='estimated' (OM intake)
 //   5  leases.annual_rent with source_confidence='inferred' (CoStar sidebar)
+//   5  properties.anchor_rent with anchor_rent_source='manual_entry'
+//        (user-typed via Intel → Cash Flow when the property has no lease row)
 //   6  properties.anchor_rent with anchor_rent_source='costar_stated'
 //
 // properties.last_known_rent is NEVER read as authoritative here — it is
@@ -1826,11 +1835,12 @@ function _udPickCurrentRent(property, lease, em, targetDate) {
                      : (e.sf_leased != null ? Number(e.sf_leased)
                      : (p.rba != null ? Number(p.rba) : null));
 
-  // Tier 1/2/6: property.anchor_rent triplet — canonical cross-sale anchor.
+  // Tier 1/2/5/6: property.anchor_rent triplet — canonical cross-sale anchor.
   if (p.anchor_rent != null && p.anchor_rent_date && bumpPct != null && bumpInterval) {
     const src = String(p.anchor_rent_source || '').toLowerCase();
     const tier = src === 'lease_confirmed' ? 1
                : src === 'om_confirmed'    ? 2
+               : src === 'manual_entry'    ? 5
                : src === 'costar_stated'   ? 6
                : 3;
     const proj = _udProjectRent({
@@ -7736,23 +7746,125 @@ async function _intelSaveCashFlow(options = {}) {
   const _anyCfField = [annualRent, rentPerSF, expenseType, estValue, currentCapRate].some(v => v !== null && v !== undefined && String(v).trim() !== '');
   if (!_anyCfField) { showToast('Please fill in at least one cash flow field', 'info'); return; }
 
+  const annualRentN = _dpf(annualRent);
+  const estValueN = _dpf(estValue);
+  const partialWarns = [];
+  let rentTarget = null; // 'lease' | 'anchor' | null
+
   try {
-    const payload = {
-      last_known_rent: _dpf(annualRent),
-      current_value_estimate: _dpf(estValue)
-    };
-    const result = await applyChangeWithFallback({
-      proxyBase,
-      table: 'properties',
-      idColumn: 'property_id',
-      idValue: propertyId,
-      data: payload,
-      source_surface: 'clinic_workspace',
-      notes: 'Cash flow / valuation update'
-    });
-    if (!result.ok) { console.error('Cash flow update error:', (result.errors || []).join(', ')); showToast('Error saving cash flow', 'error'); return; }
+    // ── 1) ANNUAL RENT — route through leases (if active) else properties.anchor_rent.
+    //    Never writes properties.last_known_rent: that legacy column has no
+    //    provenance link and is never displayed as authoritative. See the
+    //    rent-of-record policy in _udPickCurrentRent.
+    if (annualRentN != null) {
+      const activeLease = (_udCache.leases || [])
+        .filter(l => l && l.lease_id
+                  && String(l.status || '').toLowerCase() === 'active'
+                  && l.is_active === true)
+        .sort((a, b) => String(b.lease_start || '').localeCompare(String(a.lease_start || '')))[0];
+
+      if (activeLease) {
+        rentTarget = 'lease';
+        const leasePayload = { annual_rent: annualRentN };
+        // Don't downgrade from 'documented' — only promote null/inferred/estimated.
+        if (String(activeLease.source_confidence || '').toLowerCase() !== 'documented') {
+          leasePayload.source_confidence = 'estimated';
+        }
+        const leaseRes = await applyChangeWithFallback({
+          proxyBase,
+          table: 'leases',
+          idColumn: 'lease_id',
+          idValue: activeLease.lease_id,
+          data: leasePayload,
+          source_surface: 'clinic_workspace',
+          notes: 'Intel → Cash Flow rent update'
+        });
+        if (!leaseRes.ok) {
+          console.error('Lease rent update error:', (leaseRes.errors || []).join(', '));
+          partialWarns.push('lease rent');
+        }
+
+        // Tier-guarded provenance write. If an existing tier-1 lease_document
+        // rent exists, the RPC rejects the write and the denormalized column
+        // change above is cosmetic — the provenance table still protects
+        // downstream readers that consult lease_field_provenance.
+        try {
+          const url = new URL(proxyBase, window.location.origin);
+          url.searchParams.set('table', 'rpc/upsert_lease_field');
+          const rpcRes = await fetch(url.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              p_lease_id:      activeLease.lease_id,
+              p_field_name:    'rent',
+              p_field_value:   String(annualRentN),
+              p_source_tier:   4,
+              p_source_label:  'broker_package',
+              p_captured_by:   'intel_form',
+              p_source_file:   null,
+              p_source_detail: null,
+              p_notes:         'Intel → Cash Flow form'
+            })
+          });
+          if (!rpcRes.ok) {
+            const errText = await rpcRes.text();
+            console.warn('upsert_lease_field non-OK:', rpcRes.status, errText);
+          }
+        } catch (e) {
+          console.warn('upsert_lease_field call failed:', e);
+        }
+      } else {
+        // No active lease row on the property — seed properties.anchor_rent so
+        // _udPickCurrentRent has something to project. 'manual_entry' is tier 5
+        // in the rent-of-record tier map (below documented lease rent, above
+        // costar_stated anchors).
+        rentTarget = 'anchor';
+        const today = new Date().toISOString().slice(0, 10);
+        const anchorRes = await applyChangeWithFallback({
+          proxyBase,
+          table: 'properties',
+          idColumn: 'property_id',
+          idValue: propertyId,
+          data: {
+            anchor_rent:        annualRentN,
+            anchor_rent_date:   today,
+            anchor_rent_source: 'manual_entry'
+          },
+          source_surface: 'clinic_workspace',
+          notes: 'Intel → Cash Flow manual anchor rent'
+        });
+        if (!anchorRes.ok) {
+          console.error('Anchor rent update error:', (anchorRes.errors || []).join(', '));
+          partialWarns.push('anchor rent');
+        }
+      }
+    }
+
+    // ── 2) ESTIMATED VALUE — stays on properties.current_value_estimate.
+    if (estValueN != null) {
+      const propResult = await applyChangeWithFallback({
+        proxyBase,
+        table: 'properties',
+        idColumn: 'property_id',
+        idValue: propertyId,
+        data: { current_value_estimate: estValueN },
+        source_surface: 'clinic_workspace',
+        notes: 'Cash flow / valuation update'
+      });
+      if (!propResult.ok) {
+        console.error('Estimated value update error:', (propResult.errors || []).join(', '));
+        partialWarns.push('estimated value');
+      }
+    }
+
     _udFormDirty = false;
-    if (!silent) showToast('Cash flow / valuation saved!', 'success');
+    if (!silent) {
+      if (partialWarns.length > 0) {
+        showToast('Cash flow saved with issues: ' + partialWarns.join(', '), 'error');
+      } else {
+        showToast('Cash flow / valuation saved!', 'success');
+      }
+    }
     canonicalBridge('log_activity', {
       title: 'Cash flow estimate saved',
       domain: db === 'gov' ? 'government' : 'dialysis',
@@ -7760,7 +7872,7 @@ async function _intelSaveCashFlow(options = {}) {
       external_id: String(propertyId),
       user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
       property_name: _udCache.property?.page_title || _udCache.property?.facility_name || _udCache.property?.address || null,
-      metadata: { annual_rent: annualRent, estimated_value: estValue, cap_rate: currentCapRate }
+      metadata: { annual_rent: annualRent, rent_target: rentTarget, estimated_value: estValue, cap_rate: currentCapRate }
     });
     if (refresh) refreshDetailPanel();
   } catch (e) {

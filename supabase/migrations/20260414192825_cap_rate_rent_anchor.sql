@@ -53,7 +53,7 @@ COMMENT ON COLUMN public.properties.anchor_rent
 COMMENT ON COLUMN public.properties.anchor_rent_date
     IS 'Effective date of the anchor rent.';
 COMMENT ON COLUMN public.properties.anchor_rent_source
-    IS 'Source of anchor rent: costar_stated | om_confirmed | lease_confirmed';
+    IS 'Source of anchor rent: costar_stated | om_confirmed | lease_confirmed | manual_entry';
 COMMENT ON COLUMN public.properties.lease_commencement
     IS 'Lease start date.';
 COMMENT ON COLUMN public.properties.lease_bump_pct
