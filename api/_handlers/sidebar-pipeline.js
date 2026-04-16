@@ -2853,20 +2853,90 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     }
   }
 
-  // Link the current owner to the property record
-  const currentOwner = ownerContacts[0];
-  if (currentOwner) {
-    const ownerId = ownerIds.get(normalizeOwnerName(currentOwner.name));
-    if (ownerId) {
-      await domainPatch(domain,
-        `properties?property_id=eq.${propertyId}`,
-        { recorded_owner_id: ownerId },
-        'upsertDomainOwners:linkCurrentOwner'
-      );
-    }
-  }
+  // Reconcile: set properties.recorded_owner_id to the most-recent
+  // ownership_history buyer, and update current_value_estimate from the
+  // latest sold_price.  This covers the gap where CoStar sidebar ingests
+  // a new sale (with buyer) but never explicitly marks that buyer as
+  // role=owner in contacts.
+  await reconcilePropertyOwnership(domain, propertyId);
 
   return results;
+}
+
+// ── Ownership reconciliation ───────────────────────────────────────────────
+// Ensures properties.recorded_owner_id always points to the most-recent buyer
+// from ownership_history, and back-fills current_value_estimate from the latest
+// sold_price.  Called per-property after upsertDomainOwners and also exposed
+// for batch repair via admin diagnostics.
+
+export async function reconcilePropertyOwnership(domain, propertyId) {
+  const dateCol  = domain === 'government' ? 'transfer_date' : 'ownership_start';
+  const priceCol = domain === 'government' ? 'transfer_price' : 'sold_price';
+
+  // 1. Fetch the most recent ownership_history record for this property
+  const ohRes = await domainQuery(domain, 'GET',
+    `ownership_history?property_id=eq.${propertyId}` +
+    `&recorded_owner_id=not.is.null` +
+    `&order=${dateCol}.desc.nullslast` +
+    `&select=recorded_owner_id,${dateCol},${priceCol}` +
+    `&limit=1`
+  );
+  if (!ohRes.ok || !ohRes.data?.length) return { updated: false };
+
+  const latest = ohRes.data[0];
+  const latestOwnerId = latest.recorded_owner_id;
+  const latestDate    = latest[dateCol];
+  const latestPrice   = latest[priceCol];
+
+  // 2. Fetch the property's current recorded_owner_id so we know whether to
+  //    update.  Also grab the current owner's transfer date for comparison.
+  const propRes = await domainQuery(domain, 'GET',
+    `properties?property_id=eq.${propertyId}` +
+    `&select=recorded_owner_id,current_value_estimate` +
+    `&limit=1`
+  );
+  if (!propRes.ok || !propRes.data?.length) return { updated: false };
+
+  const prop = propRes.data[0];
+  const patch = {};
+
+  // If the property already points to this owner, skip the owner update but
+  // still check whether current_value_estimate needs back-filling.
+  if (prop.recorded_owner_id !== latestOwnerId) {
+    // Verify the new owner is actually newer than the existing one
+    if (prop.recorded_owner_id && latestDate) {
+      const curOwnerOh = await domainQuery(domain, 'GET',
+        `ownership_history?property_id=eq.${propertyId}` +
+        `&recorded_owner_id=eq.${prop.recorded_owner_id}` +
+        `&order=${dateCol}.desc.nullslast` +
+        `&select=${dateCol}` +
+        `&limit=1`
+      );
+      if (curOwnerOh.ok && curOwnerOh.data?.length) {
+        const curDate = curOwnerOh.data[0][dateCol];
+        if (curDate && new Date(curDate) >= new Date(latestDate)) {
+          // Current owner is same-date-or-newer; don't overwrite
+          return { updated: false, reason: 'current_owner_is_newer' };
+        }
+      }
+    }
+    patch.recorded_owner_id = latestOwnerId;
+    patch.true_owner_id    = latestOwnerId;
+  }
+
+  // 3. Back-fill current_value_estimate from the latest sold price
+  if (latestPrice && !prop.current_value_estimate) {
+    patch.current_value_estimate = latestPrice;
+  }
+
+  if (Object.keys(patch).length === 0) return { updated: false, reason: 'no_change' };
+
+  await domainPatch(domain,
+    `properties?property_id=eq.${propertyId}`,
+    patch,
+    'reconcilePropertyOwnership'
+  );
+  return { updated: true, patch };
 }
 
 // ── Step 5d2: Upsert true owners (true buyer / true seller) ────────────────
