@@ -65,7 +65,6 @@ UPDATE contacts c
 SET true_owner_id = t.true_owner_id
 FROM true_owners t
 WHERE c.true_owner_id IS NULL
-  AND c.contact_type IN ('owner', 'buyer', 'seller')
   AND c.normalized_name IS NOT NULL
   AND c.normalized_name != ''
   AND normalize_entity_name(t.name) = c.normalized_name;
@@ -88,7 +87,6 @@ UPDATE contacts c
 SET recorded_owner_id = r.recorded_owner_id
 FROM recorded_owners r
 WHERE c.recorded_owner_id IS NULL
-  AND c.contact_type IN ('owner', 'buyer', 'seller')
   AND c.normalized_name IS NOT NULL
   AND c.normalized_name != ''
   AND normalize_entity_name(r.name) = c.normalized_name;
@@ -196,12 +194,7 @@ BEGIN
   NEW.normalized_name := normalize_entity_name(NEW.name);
   NEW.updated_at := now();
 
-  -- Only auto-link for owner/buyer/seller types
-  IF NEW.contact_type IS NULL OR NEW.contact_type NOT IN ('owner', 'buyer', 'seller') THEN
-    RETURN NEW;
-  END IF;
-
-  -- Match true_owner
+  -- Match true_owner by name (no role filter for broad matching)
   IF NEW.true_owner_id IS NULL AND NEW.normalized_name IS NOT NULL AND NEW.normalized_name != '' THEN
     SELECT t.true_owner_id INTO v_true_owner_id
     FROM true_owners t
@@ -301,13 +294,13 @@ BEGIN
 
   UPDATE contacts c SET true_owner_id = t.true_owner_id
   FROM true_owners t
-  WHERE c.true_owner_id IS NULL AND c.contact_type IN ('owner','buyer','seller')
+  WHERE c.true_owner_id IS NULL
     AND c.normalized_name IS NOT NULL AND normalize_entity_name(t.name) = c.normalized_name;
   GET DIAGNOSTICS v_linked_true = ROW_COUNT;
 
   UPDATE contacts c SET recorded_owner_id = r.recorded_owner_id
   FROM recorded_owners r
-  WHERE c.recorded_owner_id IS NULL AND c.contact_type IN ('owner','buyer','seller')
+  WHERE c.recorded_owner_id IS NULL
     AND c.normalized_name IS NOT NULL AND normalize_entity_name(r.name) = c.normalized_name;
   GET DIAGNOSTICS v_linked_rec = ROW_COUNT;
 
