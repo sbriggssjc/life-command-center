@@ -738,21 +738,45 @@ async function propagateToDomainDb(entity, metadata, domain) {
 }
 
 // ── Upsert sidebar contacts (brokers, true owner contacts → contacts table) ─
+//
+// Column mapping differs between domain databases:
+//   Dialysis:    contact_id (PK), contact_name, contact_email, contact_phone, role
+//   Government:  contact_id (PK), name, email, phone, contact_type
+//
+const CONTACT_COLS = {
+  dialysis:   { id: 'contact_id', name: 'contact_name', email: 'contact_email', phone: 'contact_phone', role: 'role' },
+  government: { id: 'contact_id', name: 'name',         email: 'email',         phone: 'phone',         role: 'contact_type' },
+};
 
 async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
   const contacts = metadata.contacts || [];
   let count = 0;
+  const col = CONTACT_COLS[domain];
+  if (!col) return 0;
 
-  // Roles that represent real individuals with contact info
+  // ── Helper: find existing contact by email then by name ──────────────
+  async function findExisting(email, normName, roleFilter) {
+    if (email) {
+      const r = await domainQuery(domain, 'GET',
+        `contacts?${col.email}=eq.${encodeURIComponent(email)}&select=${col.id}&limit=1`
+      );
+      if (r.ok && r.data?.length) return r.data[0][col.id];
+    }
+    const nameQ = roleFilter
+      ? `contacts?${col.name}=ilike.${encodeURIComponent(normName)}&${col.role}=eq.${roleFilter}&select=${col.id}&limit=1`
+      : `contacts?${col.name}=ilike.${encodeURIComponent(normName)}&select=${col.id}&limit=1`;
+    const r2 = await domainQuery(domain, 'GET', nameQ);
+    if (r2.ok && r2.data?.length) return r2.data[0][col.id];
+    return null;
+  }
+
+  // ── Person contacts (brokers, true buyer/seller individuals) ─────────
   const PERSON_ROLES = ['listing_broker', 'buyer_broker',
     'true_buyer_contact', 'true_seller_contact'];
 
   const people = contacts.filter(c =>
     PERSON_ROLES.includes(c.role) &&
-    c.name &&
-    c.name.length > 2 &&
-    c.name.length < 80 &&
-    // Must have at least one contact detail
+    c.name && c.name.length > 2 && c.name.length < 80 &&
     (c.email || c.phones?.length || c.phone)
   );
 
@@ -760,58 +784,39 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
     const email   = person.email || null;
     const phone   = person.phones?.[0] || person.phone || null;
     const company = person.company || null;
-
-    // Normalize name for dedup
     const normName = person.name.trim().toLowerCase();
 
-    // Check if contact already exists by email (most reliable dedup key)
-    let existingId = null;
-    if (email) {
-      const emailLookup = await domainQuery(domain, 'GET',
-        `contacts?email=eq.${encodeURIComponent(email)}&select=id&limit=1`
-      );
-      if (emailLookup.ok && emailLookup.data?.length) {
-        existingId = emailLookup.data[0].id;
-      }
-    }
-
-    // Fall back to name dedup if no email match
-    if (!existingId) {
-      const nameLookup = await domainQuery(domain, 'GET',
-        `contacts?name=ilike.${encodeURIComponent(normName)}&select=id&limit=1`
-      );
-      if (nameLookup.ok && nameLookup.data?.length) {
-        existingId = nameLookup.data[0].id;
-      }
-    }
-
-    const contactData = {
-      name:        person.name.trim(),
-      email:       email,
-      phone:       phone,
-      company:     company,
-      title:       person.title || null,
-      role:        person.role,
-      data_source: 'costar_sidebar',
-    };
+    const existingId = await findExisting(email, normName, null);
 
     if (existingId) {
-      // Update with any new info
-      await domainPatch(domain,
-        `contacts?id=eq.${existingId}`,
-        { email: email || undefined, phone: phone || undefined,
-          company: company || undefined },
-        'upsertSidebarContacts:update'
-      );
+      const patch = {};
+      if (email) patch[col.email] = email;
+      if (phone) patch[col.phone] = phone;
+      if (company) patch.company = company;
+      if (Object.keys(patch).length) {
+        await domainPatch(domain,
+          `contacts?${col.id}=eq.${existingId}`, patch,
+          'upsertSidebarContacts:personUpdate'
+        );
+      }
     } else {
-      const r = await domainQuery(domain, 'POST', 'contacts', contactData);
+      const row = {
+        [col.name]:  person.name.trim(),
+        [col.email]: email,
+        [col.phone]: phone,
+        company:     company,
+        title:       person.title || null,
+        [col.role]:  person.role,
+        data_source: 'costar_sidebar',
+      };
+      const r = await domainQuery(domain, 'POST', 'contacts', row);
       if (r.ok) count++;
     }
   }
 
   // ── Entity/org-level contacts (owners, buyers, sellers) ──────────────
-  // These are high-value CRM contacts — true buyers/sellers often have
-  // direct email/phone from CoStar that is critical for prospecting.
+  // High-value CRM contacts — true buyers/sellers often have direct
+  // email/phone from CoStar that is critical for prospecting.
 
   const ENTITY_ROLE_MAP = {
     true_buyer:  'buyer',
@@ -823,72 +828,47 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
 
   const entities = contacts.filter(c =>
     ENTITY_ROLE_MAP[c.role] &&
-    c.name &&
-    c.name.length > 2 &&
-    c.name.length < 80
+    c.name && c.name.length > 2 && c.name.length < 80
   );
 
   for (const ent of entities) {
-    const email   = ent.email || null;
-    const phone   = ent.phones?.[0] || ent.phone || null;
-    const website = ent.website || null;
+    const email      = ent.email || null;
+    const phone      = ent.phones?.[0] || ent.phone || null;
+    const website    = ent.website || null;
     const mappedRole = ENTITY_ROLE_MAP[ent.role];
+    const normName   = ent.name.trim().toLowerCase();
 
-    // Normalize for dedup
-    const normName = ent.name.trim().toLowerCase();
-
-    // Dedup by email first, then name + role
-    let existingId = null;
-    if (email) {
-      const emailLookup = await domainQuery(domain, 'GET',
-        `contacts?email=eq.${encodeURIComponent(email)}&select=id&limit=1`
-      );
-      if (emailLookup.ok && emailLookup.data?.length) {
-        existingId = emailLookup.data[0].id;
-      }
-    }
-    if (!existingId) {
-      const nameLookup = await domainQuery(domain, 'GET',
-        `contacts?name=ilike.${encodeURIComponent(normName)}&role=eq.${mappedRole}&select=id&limit=1`
-      );
-      if (nameLookup.ok && nameLookup.data?.length) {
-        existingId = nameLookup.data[0].id;
-      }
-    }
-
-    const contactData = {
-      name:        ent.name.trim(),
-      email:       email,
-      phone:       phone,
-      company:     ent.name.trim(),   // entity name IS the company
-      title:       website ? `Website: ${website}` : null,
-      role:        mappedRole,
-      website:     website,
-      address:     ent.address || null,
-      city:        ent.city || null,
-      state:       ent.state || null,
-      data_source: 'costar_sidebar',
-    };
+    const existingId = await findExisting(email, normName, mappedRole);
 
     if (existingId) {
-      // Enrich existing record with any new info
       const patch = {};
-      if (email) patch.email = email;
-      if (phone) patch.phone = phone;
-      if (website) { patch.website = website; patch.title = `Website: ${website}`; }
+      if (email)       patch[col.email] = email;
+      if (phone)       patch[col.phone] = phone;
+      if (website)     { patch.website = website; patch.title = `Website: ${website}`; }
       if (ent.address) patch.address = ent.address;
-      if (ent.city) patch.city = ent.city;
-      if (ent.state) patch.state = ent.state;
+      if (ent.city)    patch.city = ent.city;
+      if (ent.state)   patch.state = ent.state;
       if (Object.keys(patch).length) {
         await domainPatch(domain,
-          `contacts?id=eq.${existingId}`,
-          patch,
+          `contacts?${col.id}=eq.${existingId}`, patch,
           'upsertSidebarContacts:entityUpdate'
         );
       }
     } else {
-      // Only insert if we have at least name (entities don't always have contact details)
-      const r = await domainQuery(domain, 'POST', 'contacts', contactData);
+      const row = {
+        [col.name]:  ent.name.trim(),
+        [col.email]: email,
+        [col.phone]: phone,
+        company:     ent.name.trim(),
+        title:       website ? `Website: ${website}` : null,
+        [col.role]:  mappedRole,
+        website:     website,
+        address:     ent.address || null,
+        city:        ent.city || null,
+        state:       ent.state || null,
+        data_source: 'costar_sidebar',
+      };
+      const r = await domainQuery(domain, 'POST', 'contacts', row);
       if (r.ok) count++;
     }
   }
