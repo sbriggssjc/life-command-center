@@ -4633,6 +4633,13 @@ async function _udRenderActivityLogAsync(bodyEl) {
     } else if (sfContactId) {
       actRes = await qFn('v_sf_activity_feed', '*', { filter: 'sf_contact_id=eq.' + encodeURIComponent(sfContactId), order: 'activity_date.desc', limit: 200 });
     }
+    // Fallback: search by entity name if no SF IDs matched
+    if ((!sfAccountId && !sfContactId) || (Array.isArray(actRes) ? actRes : (actRes && actRes.data) || []).length === 0) {
+      const ownerName = own.recorded_owner_name || own.true_owner_name || own.owner_name || null;
+      if (ownerName) {
+        actRes = await qFn('v_sf_activity_feed', '*', { filter: 'account_name=ilike.*' + encodeURIComponent(ownerName) + '*', order: 'activity_date.desc', limit: 200 });
+      }
+    }
     const sfAll = Array.isArray(actRes) ? actRes : (actRes && actRes.data) || [];
     sfAll.forEach(a => {
       const feedType = (a.feed_type || a.activity_type || '').toLowerCase();
@@ -4684,14 +4691,35 @@ async function _udRenderActivityLogAsync(bodyEl) {
     }
   } catch (_) {}
 
-  // Sort newest → oldest
+  // Sort oldest → newest (chronological)
   events.sort((a, b) => {
     const ta = Date.parse(a.date || '') || 0;
     const tb = Date.parse(b.date || '') || 0;
-    return tb - ta;
+    return ta - tb;
   });
 
   bodyEl.innerHTML = _udRenderActivityLog(events);
+
+  // Pagination: show first 30 with "Show more" button
+  if (events.length > 30) {
+    const timelineEl = bodyEl.querySelector('[data-activity-timeline]');
+    if (timelineEl) {
+      const cards = timelineEl.querySelectorAll(':scope > [data-activity-item]');
+      let shown = 30;
+      cards.forEach((c, i) => { if (i >= 30) c.style.display = 'none'; });
+      const moreBtn = bodyEl.querySelector('[data-activity-show-more]');
+      if (moreBtn) {
+        moreBtn.style.display = '';
+        moreBtn.onclick = () => {
+          const next = Math.min(shown + 30, cards.length);
+          for (let i = shown; i < next; i++) cards[i].style.display = '';
+          shown = next;
+          moreBtn.querySelector('span').textContent = `Show more (${cards.length - shown} remaining)`;
+          if (shown >= cards.length) moreBtn.style.display = 'none';
+        };
+      }
+    }
+  }
 }
 
 function _udRenderActivityLog(events) {
@@ -4704,11 +4732,11 @@ function _udRenderActivityLog(events) {
     return html;
   }
 
-  html += '<div style="position:relative;padding-left:24px">';
+  html += '<div data-activity-timeline style="position:relative;padding-left:24px">';
   html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
 
   events.forEach(ev => {
-    html += '<div style="position:relative;margin-bottom:14px">';
+    html += '<div data-activity-item style="position:relative;margin-bottom:14px">';
     html += `<div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:${ev.color};border:2px solid var(--bg)"></div>`;
     html += '<div style="background:var(--s2);border-radius:8px;padding:10px 12px;border:1px solid var(--border)">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:4px">';
@@ -4721,7 +4749,12 @@ function _udRenderActivityLog(events) {
     html += '</div></div>';
   });
 
-  html += '</div></div>';
+  html += '</div>';
+  // "Show more" button (hidden by default, activated by JS if >30 events)
+  if (events.length > 30) {
+    html += '<div data-activity-show-more style="text-align:center;padding:8px 0"><button class="btn btn-secondary btn-sm" style="font-size:12px;cursor:pointer"><span>Show more (' + (events.length - 30) + ' remaining)</span></button></div>';
+  }
+  html += '</div>';
   return html;
 }
 
