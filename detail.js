@@ -3109,14 +3109,20 @@ function _udTabOwnership() {
   if (chain.length === 0) gaps.push({ label: 'ownership history', action: 'research-history' });
 
   if (gaps.length > 0) {
-    html += '<div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;">';
-    html += '<div style="font-size: 12px; font-weight: 600; color: var(--yellow); margin-bottom: 4px;">Data Gaps (' + gaps.length + ') <span style="font-weight:400;color:var(--text3);font-size:11px">\u2014 click to resolve</span></div>';
-    html += '<div style="font-size: 12px; color: var(--text2); line-height: 1.6;">';
+    const gapId = '_udGapPanel_' + Date.now();
+    html += '<div style="margin-bottom: 16px;">';
+    html += '<button onclick="var p=document.getElementById(\'' + gapId + '\');if(p){p.style.display=p.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'span.gap-arrow\').textContent=p.style.display===\'none\'?\'\\u25B6\':\'\\u25BC\'}" style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:8px 14px;font-size:12px;color:var(--yellow);cursor:pointer;display:flex;align-items:center;gap:6px;width:auto">';
+    html += '<span class="gap-arrow" style="font-size:10px">&#x25B6;</span>';
+    html += '<span style="font-weight:600">Resolve Data Gaps</span>';
+    html += '<span style="background:var(--yellow);color:#000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:16px;text-align:center">' + gaps.length + '</span>';
+    html += '</button>';
+    html += '<div id="' + gapId + '" style="display:none;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:0 0 10px 10px;padding:12px 16px;margin-top:-1px">';
+    html += '<div style="font-size:12px;color:var(--text2);line-height:1.6">';
     html += gaps.map(function(g) {
       const safeAction = String(g.action).replace(/'/g, "\\'");
       return '<span class="gap-chip" onclick="_udResolveGap(\'' + safeAction + '\')" style="display:inline-block;background:var(--s2);padding:2px 8px;border-radius:4px;margin:2px 4px 2px 0;font-size:11px;cursor:pointer;border:1px solid transparent;transition:all 0.15s" onmouseover="this.style.background=\'var(--s3)\';this.style.borderColor=\'var(--yellow)\'" onmouseout="this.style.background=\'var(--s2)\';this.style.borderColor=\'transparent\'" title="Click to resolve this gap">' + esc(g.label) + ' \u2192</span>';
     }).join('');
-    html += '</div></div>';
+    html += '</div></div></div>';
   }
 
   html += _udAssistantSection('ownership', 'Ownership Assistant', 'Summarize the ownership picture, identify the likely owner or decision-maker, and suggest the next research steps.');
@@ -3132,32 +3138,48 @@ function _udTabOwnership() {
     html += '<div class="detail-section-title">Current Ownership</div>';
     html += '<div class="detail-grid">';
 
+    // ── SIDE-BY-SIDE OWNER CARDS ──────────────────────────────────────
+    const _hasTrueOwner = own.true_owner && own.true_owner !== own.recorded_owner;
+    html += '</div></div>'; // close detail-grid opened above — we'll use cards instead
+    html += '<div style="display:grid;grid-template-columns:' + (_hasTrueOwner ? '1fr 1fr' : '1fr') + ';gap:12px;margin-bottom:12px">';
+
+    // Recorded Owner card
+    html += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
+    html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">Recorded Owner</div>';
+    html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + (own.recorded_owner ? _ownerLink(own.recorded_owner, _ownerCtxFromCurrent(own, db, 'recorded')) : '<span style="color:var(--text3)">\u2014</span>') + '</div>';
+    if (own.recorded_owner_type || own.owner_type) html += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
+    if (own.recorded_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.recorded_owner_state) + '</div>';
+    if (own.recorded_owner_address) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.recorded_owner_address) + (own.recorded_owner_city ? ', ' + esc(own.recorded_owner_city) : '') + '</div>';
+    const _sfAccId = own.sf_account_id || own.sf_company_id;
+    if (_sfAccId) html += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce \u2192</a>';
+    html += '</div>';
+
+    // True Owner card
+    if (_hasTrueOwner) {
+      html += '<div style="background:linear-gradient(135deg,rgba(165,94,234,0.08),rgba(165,94,234,0.04));border:1px solid rgba(165,94,234,0.3);border-radius:10px;padding:14px 16px">';
+      html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--purple);margin-bottom:6px">True Owner / Decision Maker</div>';
+      html += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(own.true_owner, _ownerCtxFromCurrent(own, db, 'true')) + '</div>';
+      if (own.true_owner_type) html += '<div style="font-size:11px;color:var(--text2)">' + esc(own.true_owner_type) + '</div>';
+      if (own.true_owner_state) html += '<div style="font-size:11px;color:var(--text3)">' + esc(own.true_owner_state) + '</div>';
+      if (own.true_owner_city) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(own.true_owner_city) + '</div>';
+      if (_sfAccId) html += '<a href="' + _SF_BASE + '/Account/' + esc(_sfAccId) + '/view" target="_blank" rel="noopener" style="font-size:11px;color:#00a1e0;display:inline-block;margin-top:6px">View in Salesforce \u2192</a>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Additional details below cards
+    html += '<div class="detail-grid" style="margin-bottom:0">';
     if (db === 'dia') {
-      html += _rowHtml('Recorded Owner', own.recorded_owner ? _ownerLink(own.recorded_owner, _ownerCtxFromCurrent(own, db, 'recorded')) : '');
-      html += _rowHtml('True Owner', own.true_owner ? _ownerLink(own.true_owner, _ownerCtxFromCurrent(own, db, 'true')) : '');
-      html += _row('Owner Type', own.owner_type);
-      html += _row('Address', own.recorded_owner_address);
-      html += _row('City', own.recorded_owner_city);
-      html += _row('State', own.recorded_owner_state);
-      html += _row('True Owner City', own.true_owner_city);
-      html += _row('True Owner State', own.true_owner_state);
       html += _rowHtml('Contact 1', own.contact_1_name && own.contact_1_id ? entityLink(own.contact_1_name, 'contact', own.contact_1_id, db) : esc(own.contact_1_name || ''));
       html += _rowHtml('Contact 2', own.contact_2_name && own.contact_2_id ? entityLink(own.contact_2_name, 'contact', own.contact_2_id, db) : esc(own.contact_2_name || ''));
       html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
       html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
       html += _row('Priority', own.priority_level);
-      html += _row('Developer', own.developer_flag ? 'Yes' + (own.developer_tier ? ' · Tier ' + own.developer_tier : '') : null);
+      html += _row('Developer', own.developer_flag ? 'Yes' + (own.developer_tier ? ' \u00b7 Tier ' + own.developer_tier : '') : null);
       html += _row('Total Properties', own.total_properties_owned ? fmtN(own.total_properties_owned) : null);
       html += _row('Current Count', own.current_property_count ? fmtN(own.current_property_count) : null);
       html += _row('Is Prospect', own.is_prospect ? 'Yes' : 'No');
     } else {
-      // Gov
-      html += _rowHtml('Recorded Owner', own.recorded_owner ? _ownerLink(own.recorded_owner, _ownerCtxFromCurrent(own, db, 'recorded')) : '');
-      html += _row('Type', own.recorded_owner_type);
-      html += _row('State', own.recorded_owner_state);
-      html += _rowHtml('True Owner', own.true_owner ? _ownerLink(own.true_owner, _ownerCtxFromCurrent(own, db, 'true')) : '');
-      html += _row('True Owner Type', own.true_owner_type);
-      html += _row('True Owner State', own.true_owner_state);
       html += _rowHtml('Contact', own.contact_name && own.contact_id ? entityLink(own.contact_name, 'contact', own.contact_id, db) : esc(own.contact_name || ''));
       html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
       html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
@@ -8182,6 +8204,7 @@ window._switchEntityTab = _switchEntityTab;
 // Empty state (no SF match): shows "Create Salesforce Account" + "Add Contact".
 
 let _ownerDrawerCache = null;
+let _ownerDrawerNavStack = [];
 
 /**
  * Build a clickable owner-name link that opens the OwnerDrawer.
@@ -8312,15 +8335,28 @@ async function openOwnerDrawer(ctxJson) {
   const overlay = document.getElementById('detailOverlay');
   if (!panel || !overlay) return;
 
-  panel.style.display = 'block';
-  overlay.classList.add('open');
-
   const headerEl = document.getElementById('detailHeader');
   const tabsEl = document.getElementById('detailTabs');
   const bodyEl = document.getElementById('detailBody');
 
+  // Save current panel state to nav stack so Back restores it
+  if (headerEl && bodyEl && bodyEl.innerHTML) {
+    _ownerDrawerNavStack.push({
+      header: headerEl.innerHTML,
+      tabs: tabsEl ? tabsEl.innerHTML : '',
+      body: bodyEl.innerHTML,
+      detailRecord: window._detailRecord || null,
+      detailSource: window._detailSource || null,
+      detailTab: window._detailTab || null,
+      ownerDrawerCache: _ownerDrawerCache
+    });
+  }
+
+  panel.style.display = 'block';
+  overlay.classList.add('open');
+
   if (headerEl) headerEl.innerHTML =
-    '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+    '<button class="detail-back" onclick="_ownerDrawerGoBack()">&#x2190;<span>Back</span></button>' +
     '<div class="detail-header-info">' +
       '<div style="flex:1;min-width:0">' +
         '<div class="detail-title">' + esc(ctx.name || 'Owner') + '</div>' +
@@ -8328,7 +8364,7 @@ async function openOwnerDrawer(ctxJson) {
       '</div>' +
       '<span class="detail-badge" style="background:#a55eea;color:#fff">OWNER</span>' +
     '</div>' +
-    '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+    '<button class="detail-close" onclick="closeDetail(); _ownerDrawerNavStack=[];">&times;</button>';
   if (tabsEl) tabsEl.innerHTML = '';
   if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Resolving owner &amp; loading Salesforce activity...</p></div>';
 
@@ -8343,7 +8379,7 @@ async function openOwnerDrawer(ctxJson) {
       ? '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#00a1e0;color:#fff;margin-left:6px">SF linked</span>'
       : '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2);margin-left:6px">No SF match</span>';
     if (headerEl) headerEl.innerHTML =
-      '<button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>' +
+      '<button class="detail-back" onclick="_ownerDrawerGoBack()">&#x2190;<span>Back</span></button>' +
       '<div class="detail-header-info">' +
         '<div style="flex:1;min-width:0">' +
           '<div class="detail-title">' + esc(resolved.name || 'Owner') + sfBadge + '</div>' +
@@ -8354,9 +8390,9 @@ async function openOwnerDrawer(ctxJson) {
         '</div>' +
         '<span class="detail-badge" style="background:#a55eea;color:#fff">OWNER</span>' +
       '</div>' +
-      '<button class="detail-close" onclick="closeDetail()">&times;</button>';
+      '<button class="detail-close" onclick="closeDetail(); _ownerDrawerNavStack=[];">&times;</button>';
 
-    const tabs = ['Overview', 'Contacts', 'Open Activities', 'Activity History'];
+    const tabs = ['Overview', 'Contacts', 'Open Activities', 'Activity History', 'Portfolio'];
     if (tabsEl) tabsEl.innerHTML = tabs.map(function(t, i) {
       return '<button class="detail-tab ' + (i === 0 ? 'active' : '') + '" onclick="_switchOwnerDrawerTab(\'' + t + '\')">' + t + '</button>';
     }).join('');
@@ -8472,6 +8508,7 @@ function _renderOwnerDrawerTab(tab) {
     case 'Contacts': return _ownerDrawerContacts(c);
     case 'Open Activities': return _ownerDrawerActivities(c, 'open');
     case 'Activity History': return _ownerDrawerActivities(c, 'history');
+    case 'Portfolio': return _ownerDrawerPortfolio(c);
     default: return '<div class="detail-empty">Unknown tab</div>';
   }
 }
@@ -8600,6 +8637,71 @@ function _ownerDrawerActivities(c, mode) {
   return html;
 }
 
+/** Portfolio tab: shows other properties owned by this entity. Loads async then replaces placeholder. */
+function _ownerDrawerPortfolio(c) {
+  const ownerName = c.parent_account_name || c.true_owner_name || c.recorded_owner_name || c.name || '';
+  if (!ownerName) {
+    return '<div class="detail-section"><div class="detail-section-title">Ownership Portfolio</div><div class="detail-empty">No owner name to search portfolio.</div></div>';
+  }
+  const placeholderId = '_odPortfolio_' + Date.now();
+  // Fire async load
+  setTimeout(function() { _loadOwnerPortfolio(ownerName, c.db, placeholderId); }, 0);
+  return '<div class="detail-section"><div class="detail-section-title">Ownership Portfolio</div>' +
+    '<div id="' + placeholderId + '" style="text-align:center;padding:24px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:8px">Loading portfolio for ' + esc(ownerName) + '...</p></div></div>';
+}
+
+async function _loadOwnerPortfolio(ownerName, db, elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  try {
+    const like = encodeURIComponent('*' + ownerName + '*');
+    const src = db || 'gov';
+    // Query v_ownership_current for properties matching this owner as true_owner or recorded_owner
+    const [trueRes, recRes] = await Promise.all([
+      _entityApiFetch('/api/data-query?_source=' + src + '&table=v_ownership_current&select=property_name,address,city,state,recorded_owner,true_owner,sale_price,transfer_date,sf_account_id&filter=true_owner%3Dilike.' + like + '&order=transfer_date.desc.nullslast&limit=50'),
+      _entityApiFetch('/api/data-query?_source=' + src + '&table=v_ownership_current&select=property_name,address,city,state,recorded_owner,true_owner,sale_price,transfer_date,sf_account_id&filter=recorded_owner%3Dilike.' + like + '&order=transfer_date.desc.nullslast&limit=50')
+    ]);
+    const trueArr = (trueRes && trueRes.data) || [];
+    const recArr = (recRes && recRes.data) || [];
+    // Deduplicate by address
+    const seen = new Set();
+    const all = [];
+    trueArr.concat(recArr).forEach(function(p) {
+      const key = (p.address || p.property_name || '').toLowerCase().trim();
+      if (key && !seen.has(key)) { seen.add(key); all.push(p); }
+    });
+
+    if (all.length === 0) {
+      el.innerHTML = '<div class="detail-empty">No other properties found for this owner.</div>';
+      return;
+    }
+
+    let html = '<div style="font-size:12px;color:var(--text2);margin-bottom:10px">' + all.length + ' properties found</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px">';
+    all.forEach(function(p) {
+      const propName = p.property_name || p.address || 'Unknown';
+      const loc = [p.city, p.state].filter(Boolean).join(', ');
+      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
+      html += '<div style="font-weight:600;color:var(--text);font-size:13px">' + esc(propName) + '</div>';
+      if (p.address && p.address !== propName) html += '<div style="font-size:11px;color:var(--text2)">' + esc(p.address) + '</div>';
+      if (loc) html += '<div style="font-size:11px;color:var(--text3)">' + esc(loc) + '</div>';
+      html += '<div style="display:flex;gap:12px;margin-top:4px;font-size:11px;color:var(--text3)">';
+      if (p.sale_price) html += '<span>Sale: <span class="mono" style="color:var(--green)">' + fmt(p.sale_price) + '</span></span>';
+      if (p.transfer_date) html += '<span>' + esc(_fmtDate(p.transfer_date)) + '</span>';
+      html += '</div>';
+      if (p.recorded_owner && p.true_owner && p.recorded_owner !== p.true_owner) {
+        html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(p.recorded_owner) + ' \u2192 ' + esc(p.true_owner) + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    console.warn('Portfolio load failed', e);
+    el.innerHTML = '<div class="detail-empty">Failed to load portfolio: ' + esc(e.message || String(e)) + '</div>';
+  }
+}
+
 /** Begin Prospecting: create a SF task on this owner's account + scroll to Log Activity. */
 async function _ownerDrawerBeginProspecting() {
   const c = _ownerDrawerCache;
@@ -8701,6 +8803,28 @@ async function _ownerDrawerAddContact() {
   }
 }
 
+/** Navigate back from OwnerDrawer — pops from the nav stack to restore previous panel content. */
+function _ownerDrawerGoBack() {
+  if (_ownerDrawerNavStack.length === 0) {
+    // Nothing on stack — fall back to closing the panel
+    closeDetail();
+    return;
+  }
+  const prev = _ownerDrawerNavStack.pop();
+  const headerEl = document.getElementById('detailHeader');
+  const tabsEl = document.getElementById('detailTabs');
+  const bodyEl = document.getElementById('detailBody');
+  if (headerEl) headerEl.innerHTML = prev.header;
+  if (tabsEl) tabsEl.innerHTML = prev.tabs;
+  if (bodyEl) bodyEl.innerHTML = prev.body;
+  // Restore detail state so tab switching works if we're back on a property detail
+  if (prev.detailRecord) window._detailRecord = prev.detailRecord;
+  if (prev.detailSource) window._detailSource = prev.detailSource;
+  if (prev.detailTab) window._detailTab = prev.detailTab;
+  _ownerDrawerCache = prev.ownerDrawerCache || null;
+}
+
+window._ownerDrawerGoBack = _ownerDrawerGoBack;
 window.openOwnerDrawer = openOwnerDrawer;
 window._switchOwnerDrawerTab = _switchOwnerDrawerTab;
 window._ownerDrawerBeginProspecting = _ownerDrawerBeginProspecting;
