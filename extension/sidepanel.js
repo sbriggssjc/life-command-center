@@ -448,12 +448,37 @@ async function loadPropertyTab() {
     html += renderSalesHistory(salesHistory, ctx);
   }
 
-  // ── SECTION 5: Diff preview (what this save would update) ────────
+  // ── SECTION 5: Documents from source ──────────────────────────
+  const documentLinks = ctx?.document_links || [];
+  if (documentLinks.length) {
+    html += renderDocuments(documentLinks);
+  }
+
+  // ── SECTION 6: Diff preview (what this save would update) ────────
   if (matched && ctx && ctx.address) {
     html += renderIngestDiff(ctx, lccEntity);
   }
 
   body.innerHTML = html;
+
+  // Document button handlers
+  body.querySelectorAll('.doc-open-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const url = btn.dataset.url;
+      if (url) chrome.tabs.create({ url });
+    });
+  });
+  body.querySelectorAll('.doc-ingest-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const url = btn.dataset.url;
+      if (url) chrome.tabs.create({ url });
+      const toast = document.createElement('div');
+      toast.className = 'update-toast';
+      toast.textContent = 'Document opened — PDF extraction coming soon';
+      btn.closest('.doc-card').appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    });
+  });
 
   // Action buttons
   if (ctx && ctx.address) {
@@ -1248,6 +1273,37 @@ function renderSalesHistory(sales, ctx) {
     if (s.title_company) html += `<div class="sale-detail" style="color:var(--text-secondary);">Title: ${escapeHtml(s.title_company)}</div>`;
     if (s.document_number) html += `<div class="sale-detail" style="color:var(--text-secondary);">Doc #${escapeHtml(s.document_number)}</div>`;
 
+    html += '</div>';
+  }
+  return html;
+}
+
+// ── Document links display ──────────────────────────────────────────────────
+
+const DOC_TYPE_ICONS = {
+  deed: 'D', om: 'OM', brochure: 'B', lease: 'L', survey: 'S', other: '?',
+};
+
+function renderDocuments(docs) {
+  if (!docs || !docs.length) return '';
+  let html = '<div class="section-label">Documents</div>';
+  for (const doc of docs) {
+    const icon = DOC_TYPE_ICONS[doc.type] || '?';
+    const name = escapeHtml(doc.label || doc.url || 'Untitled');
+    const statusClass = 'captured';
+    const statusLabel = 'URL Captured';
+    html += '<div class="doc-card">';
+    html += '<div class="doc-card-header">';
+    html += `<span class="doc-type-icon">${escapeHtml(icon)}</span>`;
+    html += `<span class="doc-name" title="${escapeHtml(doc.label || '')}">${name}</span>`;
+    html += `<span class="doc-status ${statusClass}">${statusLabel}</span>`;
+    html += '</div>';
+    html += '<div class="doc-actions">';
+    if (doc.url) {
+      html += `<button class="btn btn-sm btn-secondary doc-open-btn" data-url="${escapeHtml(doc.url)}">Open</button>`;
+    }
+    html += `<button class="btn btn-sm btn-confirm doc-ingest-btn" data-url="${escapeHtml(doc.url || '')}">Ingest</button>`;
+    html += '</div>';
     html += '</div>';
   }
   return html;
