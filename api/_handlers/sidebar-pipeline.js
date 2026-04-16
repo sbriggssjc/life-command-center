@@ -1304,7 +1304,27 @@ async function upsertPropertyAgency(propertyId, metadata) {
  *       assessed_value, data_hash
  */
 async function upsertPublicRecords(domain, propertyId, entity, metadata) {
-  if (!metadata.parcel_number) return 0;
+  // ── Diagnostic: log what the extension actually sent ──────────────────
+  const pubRecFields = {
+    parcel_number: metadata.parcel_number || null,
+    land_value: metadata.land_value || null,
+    improvement_value: metadata.improvement_value || null,
+    assessed_value: metadata.assessed_value || null,
+    county: metadata.county || null,
+    tax_amount: metadata.tax_amount || null,
+    assessment_years: metadata.assessment_years || null,   // multi-year (if extension sends)
+    census_tract: metadata.census_tract || null,
+    legal_description: metadata.legal_description || null,
+    latitude: metadata.latitude || null,
+    longitude: metadata.longitude || null,
+  };
+  console.log(`[PublicRecords] domain=${domain} property=${propertyId} input:`, JSON.stringify(pubRecFields));
+
+  if (!metadata.parcel_number) {
+    console.warn(`[PublicRecords] SKIP — no parcel_number in metadata for property ${propertyId}. ` +
+      `Extension may not be scraping CoStar Public Record tab. Keys received: [${Object.keys(metadata).join(', ')}]`);
+    return 0;
+  }
   let count = 0;
 
   const apn       = metadata.parcel_number;
@@ -1327,13 +1347,22 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         county,
         state:          entity.state || null,
         assessed_value: assessed,
-        raw_payload:    { source: 'costar_sidebar', property_id: propertyId },
+        raw_payload:    {
+          source: 'costar_sidebar', property_id: propertyId,
+          census_tract: metadata.census_tract || null,
+          legal_description: metadata.legal_description || null,
+          construction_type: metadata.construction_type || null,
+          far: metadata.far || null,
+          assessment_years: metadata.assessment_years || null,
+          tax_amount: metadata.tax_amount || null,
+        },
         fetched_at:     metadata.extracted_at || new Date().toISOString(),
         data_hash:      parcelHash,
       });
       parcelData.data_hash = parcelHash;  // NOT NULL — ensure present after stripNulls
       const r = await domainQuery('dialysis', 'POST', 'parcel_records', parcelData);
-      if (r.ok) count++;
+      if (r.ok) { count++; console.log(`[PublicRecords] INSERT dialysis parcel_records OK — apn=${apn}`); }
+      else console.error(`[PublicRecords] INSERT dialysis parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
     } else {
       await domainPatch('dialysis',
         `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
@@ -1358,12 +1387,22 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         total_assessed_value: assessed,
         assessment_year:      taxYear,
         situs_address:        entity.address || null,
-        raw_payload:          { source: 'costar_sidebar', property_id: propertyId },
+        raw_payload:          {
+          source: 'costar_sidebar', property_id: propertyId,
+          census_tract: metadata.census_tract || null,
+          legal_description: metadata.legal_description || null,
+          fips_code: metadata.fips_code || null,
+          construction_type: metadata.construction_type || null,
+          far: metadata.far || null,
+          assessment_years: metadata.assessment_years || null,
+          tax_amount: metadata.tax_amount || null,
+        },
         fetched_at:           metadata.extracted_at || new Date().toISOString(),
         data_hash:            parcelHash,
       });
       const r = await domainQuery('government', 'POST', 'parcel_records', parcelData);
-      if (r.ok) count++;
+      if (r.ok) { count++; console.log(`[PublicRecords] INSERT gov parcel_records OK — apn=${apn}`); }
+      else console.error(`[PublicRecords] INSERT gov parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
     } else {
       await domainPatch('government',
         `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
@@ -1379,35 +1418,54 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
   }
 
   // ── tax_records ─────────────────────────────────────────────────────────
-  if (domain === 'dialysis' && assessed) {
-    const taxHash = Buffer.from(`tax|${apn}|${taxYear}`).toString('base64');
-    const taxLookup = await domainQuery('dialysis', 'GET',
-      `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${taxYear}&select=id&limit=1`
-    );
-    if (!taxLookup.ok || !taxLookup.data?.length) {
-      const taxData = stripNulls({
-        apn,
-        county,
-        state:          entity.state || null,
-        tax_year:       taxYear,
-        assessed_value: assessed,
-        raw_payload:    { source: 'costar_sidebar', land_value: landVal, improvement_value: impVal },
-        fetched_at:     metadata.extracted_at || new Date().toISOString(),
-        data_hash:      taxHash,
-      });
-      taxData.data_hash = taxHash;  // NOT NULL — ensure present after stripNulls
-      const r = await domainQuery('dialysis', 'POST', 'tax_records', taxData);
-      if (r.ok) count++;
-    } else {
-      await domainPatch('dialysis',
-        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${taxYear}`,
-        { assessed_value: assessed },
-        'upsertPublicRecords:dialysis:tax'
+  // Build list of year/value pairs — prefer multi-year from extension, fallback to single current year
+  const taxYears = [];
+  if (Array.isArray(metadata.assessment_years) && metadata.assessment_years.length > 0) {
+    for (const row of metadata.assessment_years) {
+      const yr = row.year || row.tax_year;
+      const val = parseCurrency(row.total) || parseCurrency(row.assessed_value)
+                  || (parseCurrency(row.land) && parseCurrency(row.improvements)
+                      ? parseCurrency(row.land) + parseCurrency(row.improvements) : null);
+      if (yr && val) taxYears.push({ year: yr, assessed: val, land: parseCurrency(row.land), imp: parseCurrency(row.improvements) });
+    }
+    console.log(`[PublicRecords] Multi-year assessment data: ${taxYears.length} years from extension`);
+  }
+  if (taxYears.length === 0 && assessed) {
+    taxYears.push({ year: taxYear, assessed, land: landVal, imp: impVal });
+  }
+
+  if (domain === 'dialysis') {
+    for (const ty of taxYears) {
+      const taxHash = Buffer.from(`tax|${apn}|${ty.year}`).toString('base64');
+      const taxLookup = await domainQuery('dialysis', 'GET',
+        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}&select=id&limit=1`
       );
+      if (!taxLookup.ok || !taxLookup.data?.length) {
+        const taxData = stripNulls({
+          apn,
+          county,
+          state:          entity.state || null,
+          tax_year:       ty.year,
+          assessed_value: ty.assessed,
+          raw_payload:    { source: 'costar_sidebar', land_value: ty.land, improvement_value: ty.imp },
+          fetched_at:     metadata.extracted_at || new Date().toISOString(),
+          data_hash:      taxHash,
+        });
+        taxData.data_hash = taxHash;  // NOT NULL — ensure present after stripNulls
+        const r = await domainQuery('dialysis', 'POST', 'tax_records', taxData);
+        if (r.ok) { count++; console.log(`[PublicRecords] INSERT dialysis tax_records OK — apn=${apn} year=${ty.year}`); }
+        else console.error(`[PublicRecords] INSERT dialysis tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
+      } else {
+        await domainPatch('dialysis',
+          `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}`,
+          { assessed_value: ty.assessed },
+          'upsertPublicRecords:dialysis:tax'
+        );
+      }
     }
   }
 
-  if (domain === 'government' && assessed) {
+  if (domain === 'government' && taxYears.length > 0) {
     // Gov tax_records requires parcel_id FK — look up parcel first
     const parcelLookup = await domainQuery('government', 'GET',
       `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=parcel_id&limit=1`
@@ -1416,31 +1474,34 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
       ? parcelLookup.data[0].parcel_id
       : null;
 
-    const taxLookup = parcelId
-      ? await domainQuery('government', 'GET',
-          `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${taxYear}&select=tax_record_id&limit=1`)
-      : { ok: false, data: [] };
+    for (const ty of taxYears) {
+      const taxLookup = parcelId
+        ? await domainQuery('government', 'GET',
+            `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}&select=tax_record_id&limit=1`)
+        : { ok: false, data: [] };
 
-    if (!taxLookup.ok || !taxLookup.data?.length) {
-      const taxHash = Buffer.from(`tax|${apn}|${entity.state || ''}|${taxYear}`).toString('base64');
-      const taxData = stripNulls({
-        parcel_id:      parcelId,
-        county:         county || 'Unknown',
-        state_code:     entity.state || 'XX',
-        tax_year:       taxYear,
-        assessed_value: assessed,
-        raw_payload:    { source: 'costar_sidebar', land_value: landVal, improvement_value: impVal },
-        fetched_at:     metadata.extracted_at || new Date().toISOString(),
-        data_hash:      taxHash,
-      });
-      const r = await domainQuery('government', 'POST', 'tax_records', taxData);
-      if (r.ok) count++;
-    } else {
-      await domainPatch('government',
-        `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${taxYear}`,
-        { assessed_value: assessed },
-        'upsertPublicRecords:gov:tax'
-      );
+      if (!taxLookup.ok || !taxLookup.data?.length) {
+        const taxHash = Buffer.from(`tax|${apn}|${entity.state || ''}|${ty.year}`).toString('base64');
+        const taxData = stripNulls({
+          parcel_id:      parcelId,
+          county:         county || 'Unknown',
+          state_code:     entity.state || 'XX',
+          tax_year:       ty.year,
+          assessed_value: ty.assessed,
+          raw_payload:    { source: 'costar_sidebar', land_value: ty.land, improvement_value: ty.imp },
+          fetched_at:     metadata.extracted_at || new Date().toISOString(),
+          data_hash:      taxHash,
+        });
+        const r = await domainQuery('government', 'POST', 'tax_records', taxData);
+        if (r.ok) { count++; console.log(`[PublicRecords] INSERT gov tax_records OK — apn=${apn} year=${ty.year}`); }
+        else console.error(`[PublicRecords] INSERT gov tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
+      } else {
+        await domainPatch('government',
+          `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}`,
+          { assessed_value: ty.assessed },
+          'upsertPublicRecords:gov:tax'
+        );
+      }
     }
   }
 
