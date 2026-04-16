@@ -871,7 +871,7 @@ export function generateOpenApiSpec(registry, baseUrl = 'https://life-command-ce
               type: 'object',
               properties: {
                 copilot_action: { type: 'string', description: 'Action ID from the registry', enum: Object.keys(registry) },
-                params: { type: 'object', description: 'Action-specific parameters (see individual action schemas)' },
+                params: { type: 'object', additionalProperties: true, description: 'Action-specific parameters (see individual action schemas)' },
                 surface: { type: 'string', enum: ['copilot_chat', 'teams', 'outlook', 'power_automate'], description: 'Which Microsoft surface is calling' }
               },
               required: ['copilot_action']
@@ -889,7 +889,7 @@ export function generateOpenApiSpec(registry, baseUrl = 'https://life-command-ce
                 properties: {
                   ok: { type: 'boolean' },
                   source: { type: 'string', const: 'copilot_action_dispatch' },
-                  data: { type: 'object', description: 'Action-specific response data' },
+                  data: { type: 'object', additionalProperties: true, description: 'Action-specific response data' },
                   requires_confirmation: { type: 'boolean', description: 'True if action needs _confirmed: true' },
                   action: { type: 'string' },
                   tier: { type: 'integer' }
@@ -918,7 +918,7 @@ export function generateOpenApiSpec(registry, baseUrl = 'https://life-command-ce
             required: true,
             content: {
               'application/json': {
-                schema: schema.inputs || { type: 'object', properties: {} }
+                schema: schema.inputs || { type: 'object', additionalProperties: true }
               }
             }
           },
@@ -927,19 +927,13 @@ export function generateOpenApiSpec(registry, baseUrl = 'https://life-command-ce
               description: 'Success',
               content: {
                 'application/json': {
-                  schema: schema.outputs || { type: 'object' }
+                  schema: schema.outputs || { type: 'object', additionalProperties: true }
                 }
               }
             }
           }
         }
       };
-
-      // Register component schemas
-      const inputSchemaName = `${actionId}_input`;
-      const outputSchemaName = `${actionId}_output`;
-      spec.components.schemas[inputSchemaName] = schema.inputs;
-      spec.components.schemas[outputSchemaName] = schema.outputs;
     }
   }
 
