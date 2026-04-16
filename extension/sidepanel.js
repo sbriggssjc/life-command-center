@@ -990,6 +990,9 @@ function buildMetadata(ctx, domain) {
     tenants: ctx.tenants || [],
     contacts: ctx.contacts || [],
     sales_history: ctx.sales_history || [],
+    // Sale notes & document links from CoStar comp detail pages
+    sale_notes_raw: ctx.sale_notes_raw || null,
+    document_links: ctx.document_links || [],
   };
   // Strip null values to keep metadata clean
   for (const key of Object.keys(m)) {
