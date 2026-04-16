@@ -187,13 +187,13 @@ async function loadDiaSalesCompsFromTxns() {
   // too. Leases are a left-side embed so sales on vacant/land parcels still
   // show up.
   const select = [
-    '*',
+    '*,',
     'properties!inner(property_id,address,city,state,zip_code,county,building_size,',
     'land_area,lot_sf,year_built,year_renovated,tenant,building_type,zoning,',
-    'latitude,longitude,lease_bump_pct,lease_bump_interval_mo)',
-    ',leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
+    'latitude,longitude,lease_bump_pct,lease_bump_interval_mo,',
+    'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
     'expense_structure,rent_per_sf,annual_rent,renewal_options,is_active,',
-    'status,data_source,source_confidence)',
+    'status,data_source,source_confidence))',
   ].join('');
   let all = [];
   for (let pg = 0; pg <= 20; pg++) {
@@ -223,7 +223,7 @@ function pickCurrentLease(leases) {
 
 function normalizeSalesTxnRow(r) {
   const p = r.properties || {};
-  const lease = pickCurrentLease(r.leases);
+  const lease = pickCurrentLease(p.leases || r.leases);
 
   const buildingSize = p.building_size != null ? Number(p.building_size) : null;
   const soldPrice    = r.sold_price    != null ? Number(r.sold_price)    : null;
@@ -8322,3 +8322,4 @@ async function saveDiaOwnershipResolution() {
     metadata: { property_id: propertyId, clinic_id: record.clinic_id || record.medicare_id || null, notes: notes }
   });
 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               

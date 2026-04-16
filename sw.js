@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v238';
+const CACHE_NAME = 'lcc-v239';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -98,10 +98,4 @@ self.addEventListener('fetch', event => {
       .then(response => {
         if (response.ok) {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request))
-  );
-});
+          caches.open(CACHE_NAME).then(cache => cache.put(event.re
