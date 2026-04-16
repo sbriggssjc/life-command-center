@@ -3419,6 +3419,76 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
 
 // ── Step 5e: Upsert leases (dialysis only) ────────────────────────────────
 
+// Rent-anchor source tier ranking. Lower = more authoritative. Mirrors the
+// guard in migrations/dialysis_db/20260416_lease_data_provenance_03_guard_upsert_functions.sql
+// (upsert_lease_field) so a lower-tier source never clobbers a higher-tier one.
+const ANCHOR_SOURCE_RANK = {
+  lease_confirmed: 0,
+  om_confirmed:    1,
+  costar_stated:   2,
+};
+function anchorSourceRank(src) {
+  if (src == null) return 3;
+  return ANCHOR_SOURCE_RANK[src] ?? 3;
+}
+
+/**
+ * Map a promoted-intake document_type to the anchor_rent_source label.
+ * Returns null when the intake path doesn't correspond to a known anchor
+ * source (leaves properties.anchor_rent_source alone).
+ */
+function promotedAnchorSource(metadata) {
+  if (!metadata || metadata._intake_promoted !== true) return null;
+  if (metadata.document_type === 'lease_abstract') return 'lease_confirmed';
+  if (metadata.document_type === 'om')             return 'om_confirmed';
+  return null;
+}
+
+/**
+ * Promote properties.anchor_rent/date/source from a freshly-ingested lease
+ * record iff the incoming source outranks (or matches) the existing anchor.
+ * No-op when a strictly higher-tier source is already present.
+ */
+async function promotePropertyAnchorRent(domain, propertyId, candidate) {
+  if (domain !== 'dialysis') return false;
+  if (!candidate?.anchor_rent || !candidate.anchor_rent_source) return false;
+  if (!(Number(candidate.anchor_rent) > 0)) return false;
+  if (!candidate.anchor_rent_date) return false;
+
+  const lookup = await domainQuery(domain, 'GET',
+    `properties?property_id=eq.${encodeURIComponent(propertyId)}` +
+    `&select=anchor_rent_source&limit=1`
+  );
+  if (!lookup.ok) {
+    console.error('[promotePropertyAnchorRent] lookup failed:', lookup.status);
+    return false;
+  }
+  const existingSource = lookup.data?.[0]?.anchor_rent_source || null;
+  if (anchorSourceRank(existingSource) < anchorSourceRank(candidate.anchor_rent_source)) {
+    console.log(
+      `[promotePropertyAnchorRent] skipping property=${propertyId}: ` +
+      `existing=${existingSource} outranks incoming=${candidate.anchor_rent_source}`
+    );
+    return false;
+  }
+
+  await domainPatch(domain,
+    `properties?property_id=eq.${encodeURIComponent(propertyId)}`,
+    {
+      anchor_rent:        Number(candidate.anchor_rent),
+      anchor_rent_date:   candidate.anchor_rent_date,
+      anchor_rent_source: candidate.anchor_rent_source,
+    },
+    'promotePropertyAnchorRent'
+  );
+  console.log(
+    `[promotePropertyAnchorRent] promoted property=${propertyId} ` +
+    `rent=${candidate.anchor_rent} date=${candidate.anchor_rent_date} ` +
+    `source=${candidate.anchor_rent_source} (was=${existingSource || 'null'})`
+  );
+  return true;
+}
+
 /**
  * Upsert lease records in the domain database.
  * Builds one lease record per tenant from metadata.tenants[].
@@ -3602,6 +3672,32 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
           );
         }
       }
+    }
+  }
+
+  // ── Anchor-rent promotion ──────────────────────────────────────────────
+  // When a lease_abstract or OM promotes through intake, update the
+  // property's rent anchor so Step 5g (recalculateSaleCapRates) re-stamps
+  // historical sales against the confirmed rent. CoStar sidebar ingests set
+  // _intake_promoted=false and leave the existing anchor alone — the only
+  // CoStar path that writes anchor_rent is the explicit metadata.anchor_rent
+  // branch in upsertDomainProperty.
+  const incomingAnchorSource = promotedAnchorSource(metadata);
+  if (domain === 'dialysis' && incomingAnchorSource) {
+    const anchorRecord = leaseRecords.find(r => Number(r.annual_rent) > 0);
+    if (anchorRecord) {
+      // For OMs the rent-effective date is lease_commencement when known
+      // (the rent figure is anchored to the documented start of the lease);
+      // otherwise fall back to today (the OM as-of date).
+      const rawDate = anchorRecord.lease_start
+        || parseDate(metadata.lease_commencement)
+        || new Date().toISOString();
+      const anchorDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : null;
+      await promotePropertyAnchorRent(domain, propertyId, {
+        anchor_rent:        Number(anchorRecord.annual_rent),
+        anchor_rent_date:   anchorDate,
+        anchor_rent_source: incomingAnchorSource,
+      });
     }
   }
 
