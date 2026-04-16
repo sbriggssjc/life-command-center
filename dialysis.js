@@ -32,7 +32,7 @@ let diaCmsSelectedIdx = undefined; // selected row in CMS table
 let diaNpiFilter = null; // filter by signal_type
 let diaNpiSelectedIdx = undefined; // selected row in NPI table
 let diaSalesView = 'comps'; // 'comps' | 'available'
-let diaSalesComps = null;   // lazy-loaded from v_sales_comps
+let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
 let diaSalesLoading = false;
@@ -223,7 +223,7 @@ function pickCurrentLease(leases) {
 
 function normalizeSalesTxnRow(r) {
   const p = r.properties || {};
-  const lease = pickCurrentLease(r.properties?.leases || r.leases);
+  const lease = pickCurrentLease(p.leases || r.leases);
 
   const buildingSize = p.building_size != null ? Number(p.building_size) : null;
   const soldPrice    = r.sold_price    != null ? Number(r.sold_price)    : null;
@@ -600,15 +600,7 @@ function renderDiaOverview() {
     diaSalesLoading = true;
     (async () => {
       try {
-        let all = [], pg = 0;
-        while (true) {
-          const batch = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
-          all = all.concat(batch || []);
-          if (!batch || batch.length < 1000) break;
-          pg++;
-          if (pg > 20) break; // safety cap
-        }
-        diaSalesComps = all;
+        diaSalesComps = await loadDiaSalesCompsFromTxns();
       } catch(e) { diaSalesComps = []; console.warn('Sales comps load failed:', e.message); }
       diaSalesLoading = false;
       // Re-render sales sections once loaded (check for DOM elements)
@@ -6081,15 +6073,7 @@ async function renderDiaSales() {
     const inner = q('#bizPageInner');
     if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales comps...</p></div>';
     try {
-      // Paginate: PostgREST limits to 1000 rows per request
-      let all = [], pg = 0;
-      while (true) {
-        const batch = await diaQuery('v_sales_comps', '*', { order: 'sold_date.desc.nullslast', limit: 1000, offset: pg * 1000 });
-        all = all.concat(batch || []);
-        if (!batch || batch.length < 1000) break;
-        pg++;
-      }
-      diaSalesComps = all;
+      diaSalesComps = await loadDiaSalesCompsFromTxns();
     } catch (e) { console.error('Sales comps load error:', e); showToast('Sales comps load failed', 'error'); diaSalesComps = []; }
     diaSalesLoading = false;
   }
@@ -6118,13 +6102,15 @@ async function renderDiaSales() {
   // Filter out blank/empty records — require at least an address or operator name
   data = data.filter(r => (r.address && r.address.trim()) || (r.tenant_operator && r.tenant_operator.trim()) || (r.facility_name && r.facility_name.trim()));
 
-  // Deduplicate rows — v_sales_comps view can return duplicates from joins
-  {
+  // Deduplicate rows — Sales Comps are already DB-deduped by sale_id in
+  // sales_transactions, so the dedup pass runs only for Available Listings
+  // (v_available_listings can still return duplicates from joins).
+  if (!isComps) {
     const seen = new Set();
     data = data.filter(r => {
       const addr = (r.address || '').trim().toLowerCase();
-      const dateKey = isComps ? (r.sold_date || '') : (r.listing_date || '');
-      const priceKey = r.price || r.ask_price || '';
+      const dateKey = r.listing_date || '';
+      const priceKey = r.ask_price || '';
       const key = `${addr}|${dateKey}|${priceKey}`;
       if (seen.has(key)) return false;
       seen.add(key);

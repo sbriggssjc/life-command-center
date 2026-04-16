@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v237';
+const CACHE_NAME = 'lcc-v239';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -63,6 +63,9 @@ self.addEventListener('fetch', event => {
   // Skip non-GET requests (POST to APIs, etc.)
   if (event.request.method !== 'GET') return;
 
+  // Never intercept API calls — let the browser handle them directly
+  if (url.pathname.startsWith('/api/')) return;
+
   // Network-first with 4s timeout for same-origin resources
   // Uses cache: 'no-cache' for JS/CSS/HTML to always revalidate with server
   // Falls back to SW cache if network is slow or unavailable (critical for mobile)
@@ -95,10 +98,4 @@ self.addEventListener('fetch', event => {
       .then(response => {
         if (response.ok) {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request))
-  );
-});
+          caches.open(CACHE_NAME).then(cache => cache.put(event.re
