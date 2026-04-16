@@ -131,6 +131,10 @@ COMMENT ON FUNCTION public.dia_project_rent_at_date(
 -- safe because no DB objects depend on this view (it is a read-only surface
 -- for PostgREST).
 
+-- The live dialysis DB currently holds v_sales_comps as a MATERIALIZED VIEW
+-- (converted out-of-band by an earlier fix). Drop both shapes so this
+-- migration is idempotent regardless of which form the target DB has.
+DROP MATERIALIZED VIEW IF EXISTS public.v_sales_comps;
 DROP VIEW IF EXISTS public.v_sales_comps;
 
 CREATE VIEW public.v_sales_comps AS
@@ -350,5 +354,10 @@ COMMENT ON COLUMN public.v_sales_comps.base_rent IS
 
 COMMENT ON COLUMN public.v_sales_comps.rent_per_sf IS
 'Projected current rent / leases.leased_area. Not the Y1 figure.';
+
+-- Restore the PostgREST read grants that existed on the prior matview/view
+-- and poke PostgREST so the new view shape is picked up immediately.
+GRANT SELECT ON public.v_sales_comps TO anon, authenticated;
+NOTIFY pgrst, 'reload schema';
 
 COMMIT;
