@@ -4339,9 +4339,31 @@ function _udTabDealHistory() {
   const ownerEvents = (chain || []).map(h => ({
     kind: 'ownership',
     chain: h,
-    date: _salesParseDate(h.transfer_date) || 0,
+    date: _salesParseDate(h.transfer_date) || _salesParseDate(h.recording_date) || _salesParseDate(h.ownership_start) || 0,
   }));
-  const events = [...saleEvents, ...ownerEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
+
+  // Deduplicate: if a sale event and ownership event share the same date+price, merge them
+  const mergedSaleEvents = [...saleEvents];
+  const dedupedOwnerEvents = ownerEvents.filter(oe => {
+    const oDate = oe.date;
+    const oPrice = parseFloat(oe.chain?.sale_price || oe.chain?.price || 0);
+    if (!oDate && !oPrice) return true; // keep if no date/price to match on
+    const matchIdx = mergedSaleEvents.findIndex(se => {
+      const sDate = se.date;
+      const sPrice = parseFloat(se.sale?.sale_price || se.sale?.price || 0);
+      // Match if dates are within 1 day and prices match (or one is zero)
+      return sDate && oDate && Math.abs(sDate - oDate) < 86400000 && (oPrice === 0 || sPrice === 0 || Math.abs(oPrice - sPrice) < 1);
+    });
+    if (matchIdx >= 0) {
+      // Merge ownership chain data into the sale event
+      mergedSaleEvents[matchIdx] = Object.assign({}, mergedSaleEvents[matchIdx], { chain: oe.chain });
+      return false; // remove this ownership event
+    }
+    return true;
+  });
+
+  // Sort chronologically oldest-first (timeline reads top-to-bottom as history)
+  const events = [...mergedSaleEvents, ...dedupedOwnerEvents].sort((a, b) => (a.date || 0) - (b.date || 0));
 
   let html = '';
 
@@ -4406,7 +4428,7 @@ function _udTabDealHistory() {
   html += '<div style="position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
 
   filtered.forEach((ev, idx) => {
-    const isFirst = idx === 0;
+    const isFirst = idx === filtered.length - 1; // highlight most recent event (last in oldest-first order)
     let dotColor = 'var(--text3)';
     if (ev.kind === 'sale') {
       dotColor = ev.sale ? 'var(--green)' : (ev.listing && _salesListingIsActive(ev.listing) ? 'var(--accent)' : 'var(--text3)');
