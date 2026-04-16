@@ -1053,7 +1053,6 @@ async function upsertDomainProperty(domain, entity, metadata) {
     delete propertyData.lot_sf;
     delete propertyData.parking_ratio;
     delete propertyData.property_ownership_type;
-    delete propertyData.recorded_owner_name;
     delete propertyData.tenant;
     delete propertyData.occupancy_percent;
     delete propertyData.zoning;
@@ -2922,6 +2921,29 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
     }
     patch.recorded_owner_id = latestOwnerId;
     patch.true_owner_id    = latestOwnerId;
+
+    // 2b. Back-fill recorded_owner_name (and true_owner_name if available)
+    //     from the recorded_owners / true_owners tables so the denormalized
+    //     cache on the properties row stays in sync with the new owner ID.
+    const roRes = await domainQuery(domain, 'GET',
+      `recorded_owners?recorded_owner_id=eq.${latestOwnerId}` +
+      `&select=name,true_owner_id` +
+      `&limit=1`
+    );
+    if (roRes.ok && roRes.data?.length) {
+      const ro = roRes.data[0];
+      if (ro.name) patch.recorded_owner_name = ro.name;
+      if (ro.true_owner_id) {
+        const truRes = await domainQuery(domain, 'GET',
+          `true_owners?true_owner_id=eq.${ro.true_owner_id}` +
+          `&select=name` +
+          `&limit=1`
+        );
+        if (truRes.ok && truRes.data?.length && truRes.data[0].name) {
+          patch.true_owner_name = truRes.data[0].name;
+        }
+      }
+    }
   }
 
   // 3. Back-fill current_value_estimate from the latest sold price
