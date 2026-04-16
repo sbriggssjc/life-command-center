@@ -107,6 +107,9 @@
       if (noteLines.length) data.sale_notes_raw = noteLines.join(' ');
     }
 
+    // ── Extract "Documents" section links (deeds, OMs, brochures) ─────
+    data.document_links = extractDocumentLinks();
+
     // Derive tenant_name from tenants array if not already captured
     if (!data.tenant_name && tenants.length > 0 && tenants[0].name) {
       data.tenant_name = tenants[0].name;
@@ -1462,6 +1465,61 @@
       ancestor = ancestor.parentElement;
     }
     return false;
+  }
+
+  // ── Document links extraction (deeds, OMs, brochures) ────────────────
+
+  function inferDocType(label) {
+    const lower = (label || '').toLowerCase();
+    if (lower.includes('deed')) return 'deed';
+    if (lower.includes('om') || lower.includes('offering')
+        || lower.includes('memorandum')) return 'om';
+    if (lower.includes('brochure')) return 'brochure';
+    if (lower.includes('lease')) return 'lease';
+    if (lower.includes('survey') || lower.includes('plat')) return 'survey';
+    return 'other';
+  }
+
+  function extractDocumentLinks() {
+    const docLinks = [];
+    try {
+      // Strategy 1: Find by DOM selectors (CoStar uses various class patterns)
+      let docContainer = document.querySelector(
+        '[class*="document"], [data-testid*="document"]'
+      );
+
+      // Strategy 2: Walk headings to find "Documents" and grab next sibling
+      if (!docContainer) {
+        const headings = document.querySelectorAll(
+          'h1, h2, h3, h4, h5, h6, [class*="heading"], [class*="title"]'
+        );
+        for (const h of headings) {
+          if (/^\s*documents\s*$/i.test(h.textContent)) {
+            docContainer = h.nextElementSibling
+              || h.closest('section')
+              || h.parentElement;
+            break;
+          }
+        }
+      }
+
+      if (docContainer) {
+        docContainer.querySelectorAll('a[href]').forEach(a => {
+          const label = a.textContent?.trim() || a.getAttribute('title') || '';
+          const href = a.href;
+          if (href && !href.startsWith('javascript:') && label) {
+            docLinks.push({
+              label,
+              url: href,
+              type: inferDocType(label),
+            });
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[LCC CoStar] document link extraction error:', err);
+    }
+    return docLinks;
   }
 
   // ── Sales history extraction ──────────────────────────────────────────

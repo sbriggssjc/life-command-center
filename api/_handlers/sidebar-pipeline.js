@@ -815,6 +815,35 @@ const CONTACT_COLS = {
   government: { id: 'contact_id', name: 'name',         email: 'email',         phone: 'phone',         role: 'contact_type' },
 };
 
+// ── Upsert document links from CoStar "Documents" section ─────────────
+
+async function upsertDocumentLinks(domain, propertyId, metadata) {
+  const docs = metadata.document_links;
+  if (!Array.isArray(docs) || docs.length === 0) return 0;
+
+  let count = 0;
+  for (const doc of docs) {
+    if (!doc.url) continue;
+    const fileName = doc.label || doc.url.split('/').pop() || 'unknown';
+    const row = {
+      property_id: propertyId,
+      file_name:   fileName,
+      document_type: doc.type || 'other',
+      source_url:  doc.url,
+      ingestion_status: 'url_captured',
+    };
+    const r = await domainQuery(
+      domain, 'POST',
+      'property_documents?on_conflict=property_id,file_name',
+      row,
+      { 'Prefer': 'return=representation,resolution=merge-duplicates' }
+    );
+    if (r.ok) count++;
+    else console.error(`[doc-links] upsert failed for ${fileName}:`, r.status, r.data);
+  }
+  return count;
+}
+
 async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
   const contacts = metadata.contacts || [];
   let count = 0;
@@ -970,6 +999,9 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
 
   // Step 5b: Upsert sales transactions
   results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata);
+
+  // Step 5b0: Upsert document links from CoStar "Documents" section
+  results.records.document_links = await upsertDocumentLinks(domain, propertyId, metadata);
 
   // Step 5b0.5: Auto-stage gov comp to sf_comps_staging for Salesforce sync
   if (domain === 'government' && results.records.sales > 0) {
