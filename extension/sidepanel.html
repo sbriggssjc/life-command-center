@@ -239,6 +239,32 @@
     .contact-detail { color: var(--text-secondary); margin-top: 1px; }
     .contact-detail a { color: var(--accent); text-decoration: none; }
 
+    /* Document cards */
+    .doc-card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .doc-card-header {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .doc-type-icon {
+      display: inline-block; width: 22px; height: 18px; line-height: 18px;
+      text-align: center; font-size: 9px; font-weight: 700;
+      background: var(--navy); color: white; border-radius: 3px;
+      margin-right: 6px; flex-shrink: 0;
+    }
+    .doc-name { font-weight: 600; font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-status {
+      font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 3px;
+      white-space: nowrap; margin-left: 6px;
+    }
+    .doc-status.captured { background: #FEF3C7; color: #92400E; }
+    .doc-status.ingested { background: #DBEAFE; color: #1E40AF; }
+    .doc-status.extracted { background: #D1FAE5; color: #065F46; }
+    .doc-actions { display: flex; gap: 4px; margin-top: 4px; }
+    .doc-actions .btn { font-size: 10px; padding: 2px 8px; cursor: pointer; }
+
     /* Sale history rows */
     .sale-row {
       background: var(--card-bg); border: 1px solid var(--border);
