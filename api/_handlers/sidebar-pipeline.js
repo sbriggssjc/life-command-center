@@ -832,14 +832,23 @@ async function upsertDocumentLinks(domain, propertyId, metadata) {
       source_url:  doc.url,
       ingestion_status: 'url_captured',
     };
-    const r = await domainQuery(
+
+    // Try upsert first
+    let r = await domainQuery(
       domain, 'POST',
       'property_documents?on_conflict=property_id,file_name',
       row,
       { 'Prefer': 'return=representation,resolution=merge-duplicates' }
     );
+
+    // If upsert fails, try plain insert (may be first time)
+    if (!r.ok) {
+      console.warn(`[doc-links] upsert failed for ${fileName} (${r.status}), trying plain insert`);
+      r = await domainQuery(domain, 'POST', 'property_documents', row);
+    }
+
     if (r.ok) count++;
-    else console.error(`[doc-links] upsert failed for ${fileName}:`, r.status, r.data);
+    else console.error(`[doc-links] insert also failed for ${fileName}:`, r.status, JSON.stringify(r.data));
   }
   return count;
 }
