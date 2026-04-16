@@ -3383,6 +3383,48 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     // Write escalation data from CoStar estimated rent range
     if (domain === 'dialysis' && leaseId) {
       await upsertLeaseEscalations(propertyId, leaseId, metadata);
+
+      // ── Lease field provenance: track underwriting-critical fields ──
+      // Uses upsert_lease_field() which checks source tier before overwriting,
+      // so CoStar data (tier 5) never clobbers lease-document data (tier 1-3).
+      const provenanceFields = {
+        expense_structure: record.expense_structure,
+        rent:              record.annual_rent,
+        rent_per_sf:       record.rent_per_sf,
+        leased_area:       record.leased_area,
+        roof_responsibility:      null,  // not captured from CoStar sidebar
+        hvac_responsibility:      null,
+        structure_responsibility: null,
+        parking_responsibility:   null,
+      };
+      for (const [field, value] of Object.entries(provenanceFields)) {
+        if (value == null) continue;
+        await domainQuery(domain, 'POST', 'rpc/upsert_lease_field', {
+          p_lease_id:      leaseId,
+          p_field_name:    field,
+          p_field_value:   String(value),
+          p_source_tier:   5,
+          p_source_label:  'costar_verified',
+          p_captured_by:   'sidebar_pipeline',
+          p_source_file:   null,
+          p_source_detail: null,
+          p_notes:         'Auto-captured from CoStar sidebar ingestion',
+        });
+      }
+
+      // Sync expense_structure_canonical from the mapping table
+      if (record.expense_structure) {
+        const canonical = await domainQuery(domain, 'GET',
+          `expense_structure_canonical?raw_value=eq.${encodeURIComponent(record.expense_structure)}&select=canonical&limit=1`
+        );
+        if (canonical.ok && canonical.data?.[0]?.canonical) {
+          await domainPatch(domain,
+            `leases?lease_id=eq.${leaseId}`,
+            { expense_structure_canonical: canonical.data[0].canonical },
+            'upsertDomainLeases:canonical'
+          );
+        }
+      }
     }
   }
 
