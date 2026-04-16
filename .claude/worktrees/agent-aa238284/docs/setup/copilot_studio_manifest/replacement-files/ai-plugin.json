@@ -1,0 +1,48 @@
+{
+    "$schema": "https://aka.ms/json-schemas/copilot-extensions/v2.1/plugin.schema.json",
+    "schema_version": "v2.1",
+    "name_for_human": "Life Command Center",
+    "namespace": "LifeCommandCenter",
+    "description_for_human": "Access LCC deal intelligence, daily priorities, property context, and queue management.",
+    "description_for_model": "Use Life Command Center to get real CRE data. Call get_daily_briefing_snapshot for daily priorities. Call get_hot_business_contacts for prospecting targets. Call search_entity_targets to find properties or contacts. Call get_pipeline_intelligence for deal pipeline status. Call get_work_counts for task counts.",
+    "functions": [
+        {
+            "name": "get_daily_briefing_snapshot",
+            "description": "Get today's prioritized daily briefing with deal responses, pipeline status, and action items. Call this when the user asks what to focus on, for a morning briefing, or daily priorities."
+        },
+        {
+            "name": "get_hot_business_contacts",
+            "description": "List high-priority contacts for outreach with engagement scores and recent activity. Call this when user asks who to call, prospecting targets, or warm contacts."
+        },
+        {
+            "name": "search_entity_targets",
+            "description": "Search for properties, contacts, or organizations by name. Call this when user asks about a specific property, contact, or company."
+        },
+        {
+            "name": "get_pipeline_intelligence",
+            "description": "Get deal pipeline health including velocity, conversion rates, and bottlenecks. Call this when user asks about pipeline, deals, or what is stuck."
+        },
+        {
+            "name": "get_work_counts",
+            "description": "Get aggregate work counts including open actions, inbox items, and overdue tasks. Call this when user asks about workload, task counts, or what is overdue."
+        }
+    ],
+    "runtimes": [
+        {
+            "type": "OpenApi",
+            "auth": {
+                "type": "None"
+            },
+            "spec": {
+                "url": "openapi.json"
+            },
+            "run_for_functions": [
+                "get_daily_briefing_snapshot",
+                "get_hot_business_contacts",
+                "search_entity_targets",
+                "get_pipeline_intelligence",
+                "get_work_counts"
+            ]
+        }
+    ]
+}

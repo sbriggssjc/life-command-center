@@ -1,0 +1,21 @@
+# Wave 0 Configuration Values — Collected 2026-04-06
+# =====================================================
+
+# Vercel Environment Variables (Option B)
+LCC_ENV=development  (default, not explicitly set)
+LCC_API_KEY=2e046e98d331df549b23a8f15a5a07de7ab16737c5dbd5db692ff42c3bb8b64c
+MORNING_BRIEFING_STRUCTURED_URL=<pending>
+MORNING_BRIEFING_HTML_URL=<pending>
+
+# Teams IDs (Team Briggs)
+TEAMS_TEAM_ID=6fc86bbe-2f43-4a1d-b9b8-79885f794f0d
+TENANT_ID=fccf69d3-58a4-4c10-a59d-14937a5f5d3f
+
+# Channel IDs
+GENERAL_CHANNEL_ID=19:M9xWnx_d6uWADWj6pLYHBSkBQo8DJUwaLhK-wsa21tk1@thread.tacv2
+BRIEFING_CHANNEL_ID=19:1002e32b7379470ba8fbc30440d46035@thread.tacv2
+INTAKE_CHANNEL_ID=19:6e8428a7c5874f55a523ed0c83f1f61f3@thread.tacv2
+
+# LCC Context
+LCC_HOST=https://life-command-center-nine.vercel.app
+WORKSPACE_ID=<from LCC admin panel or ops database>

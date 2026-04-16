@@ -1,0 +1,41 @@
+{
+    "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.19",
+    "version": "1.0.8",
+    "id": "b2a68aca-83a3-4644-b448-642691296f89",
+    "developer": {
+        "name": "Team Briggs - Northmarq",
+        "websiteUrl": "https://life-command-center-nine.vercel.app",
+        "privacyUrl": "https://life-command-center-nine.vercel.app/privacy",
+        "termsOfUseUrl": "https://life-command-center-nine.vercel.app/terms"
+    },
+    "name": {
+        "short": "LCC Assistant",
+        "full": "Life Command Center Assistant"
+    },
+    "description": {
+        "short": "CRE deal intelligence for Team Briggs",
+        "full": "Access GovLease and Dialysis DB intelligence, daily priorities, property context, contact history, and pipeline queue management from Teams and Microsoft Copilot."
+    },
+    "icons": {
+        "outline": "outline.png",
+        "color": "color.png"
+    },
+    "accentColor": "#1F3864",
+    "composeExtensions": [],
+    "permissions": [
+        "identity",
+        "messageTeamMembers"
+    ],
+    "validDomains": [
+        "life-command-center-nine.vercel.app"
+    ],
+    "copilotAgents": {
+        "declarativeAgents": [
+            {
+                "id": "declarativeAgent",
+                "file": "declarativeAgent.json"
+            }
+        ]
+    }
+}

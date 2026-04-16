@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:type="TaskPaneApp">
+
+  <Id>6ba77e4e-1b8a-4c67-9d0e-3f5a8e9b2c03</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Team Briggs — NorthMarq</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="LCC Document Assistant"/>
+  <Description DefaultValue="Insert LCC property and market context into BOV and OM documents"/>
+  <IconUrl DefaultValue="RAILWAY_URL/icon-192.png"/>
+  <HighResolutionIconUrl DefaultValue="RAILWAY_URL/icon-192.png"/>
+  <SupportUrl DefaultValue="RAILWAY_URL"/>
+
+  <AppDomains>
+    <AppDomain>RAILWAY_URL</AppDomain>
+  </AppDomains>
+
+  <Hosts>
+    <Host Name="Document"/>
+  </Hosts>
+
+  <Requirements>
+    <Sets>
+      <Set Name="WordApi" MinVersion="1.1"/>
+    </Sets>
+  </Requirements>
+
+  <DefaultSettings>
+    <SourceLocation DefaultValue="RAILWAY_URL/office-addins/word/taskpane.html"/>
+  </DefaultSettings>
+
+  <Permissions>ReadWriteDocument</Permissions>
+
+</OfficeApp>
