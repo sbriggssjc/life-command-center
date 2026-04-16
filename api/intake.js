@@ -6,6 +6,7 @@
 // GET  /api/intake?_route=summary           — Teams/Automation formatted summary
 // POST /api/intake?_route=extract           — manual document extraction trigger
 // POST /api/intake?_route=copilot-action    — Copilot action gateway (dispatches by action_id)
+// POST /api/intake?_route=parse-om          — OM lease abstract parser + provenance push
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -21,6 +22,7 @@ import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
+import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.js';
 import { domainQuery } from './_shared/domain-db.js';
 
 // ============================================================================
@@ -99,9 +101,11 @@ export default withErrorHandler(async function handler(req, res) {
       return handleIntakeDiscard(req, res);
     case 'copilot-action':
       return handleCopilotAction(req, res);
+    case 'parse-om':
+      return handleParseOm(req, res);
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action, parse-om'
       });
   }
 });
@@ -1379,4 +1383,51 @@ async function handleIntakeDiscard(req, res) {
   );
 
   return res.status(200).json({ ok: true, intake_id, status: 'discarded' });
+}
+
+// ============================================================================
+// PARSE OM — Extract lease data from raw OM text + push through provenance
+// POST /api/intake?_route=parse-om  { text, lease_id?, domain?, filename? }
+//
+// Two modes:
+//   1. Parse only (no lease_id): returns parsed data for preview/review
+//   2. Parse + provenance (with lease_id + domain): parses AND pushes
+//      responsibility fields through lease_field_provenance at tier 3
+// ============================================================================
+
+async function handleParseOm(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const { text, lease_id, domain, filename } = req.body || {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text (raw OM text) required' });
+  }
+
+  // Mode 1: Parse only — return structured data for preview
+  const parsed = parseOmLeaseAbstract(text);
+
+  if (!lease_id) {
+    return res.status(200).json({ ok: true, mode: 'parse_only', parsed });
+  }
+
+  // Mode 2: Parse + push through provenance
+  if (!domain || !['dialysis', 'government'].includes(domain)) {
+    return res.status(400).json({ error: 'domain (dialysis|government) required when lease_id is provided' });
+  }
+
+  const result = await processOmDocument(domain, lease_id, text, filename || 'manual-om-paste');
+
+  return res.status(200).json({
+    ok: true,
+    mode: 'parse_and_provenance',
+    parsed: result.parsed,
+    provenance_results: result.provenanceResults,
+    lease_id,
+    domain,
+  });
 }
