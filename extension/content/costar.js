@@ -87,6 +87,7 @@
     if (!lines) lines = getPageLines();
     const data = extractFields(lines);
     const contacts = extractContacts(lines);
+    enrichContactsFromDOM(contacts);
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
 
@@ -1175,6 +1176,53 @@
 
     pushCurrent();
     return people;
+  }
+
+  // ── DOM-based contact enrichment ─────────────────────────────────────
+  // CoStar renders some emails only as mailto: icon links (no visible text),
+  // which innerText scanning misses. Query the DOM for mailto: hrefs and
+  // match them to contacts that are missing an email, by proximity to the
+  // contact's name in the page.
+
+  function enrichContactsFromDOM(contacts) {
+    if (!contacts || contacts.length === 0) return;
+
+    // Collect all mailto links on the page
+    const mailtoEls = document.querySelectorAll('a[href^="mailto:"]');
+    if (mailtoEls.length === 0) return;
+
+    // Build a list of { email, element } from mailto links
+    const mailtoEntries = [];
+    for (const el of mailtoEls) {
+      const email = el.href.replace(/^mailto:/i, '').split('?')[0].trim();
+      if (email && /@/.test(email) && /\.\w{2,}$/.test(email)) {
+        mailtoEntries.push({ email, element: el });
+      }
+    }
+    if (mailtoEntries.length === 0) return;
+
+    // For contacts missing emails, try to find a mailto link near their name
+    for (const contact of contacts) {
+      if (contact.email || contact.type !== 'person') continue;
+      if (!contact.name) continue;
+
+      // Walk up from each mailto link and check if the contact's name
+      // appears in a nearby ancestor container (card, list item, row)
+      for (const entry of mailtoEntries) {
+        let ancestor = entry.element.parentElement;
+        let depth = 0;
+        while (ancestor && depth < 6) {
+          const text = ancestor.textContent || '';
+          if (text.includes(contact.name)) {
+            contact.email = entry.email;
+            break;
+          }
+          ancestor = ancestor.parentElement;
+          depth++;
+        }
+        if (contact.email) break;
+      }
+    }
   }
 
   // ── Sales history extraction ──────────────────────────────────────────
