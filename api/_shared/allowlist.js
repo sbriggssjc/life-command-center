@@ -125,6 +125,8 @@ export const DIA_READ_TABLES = new Set([
   'leases',
   'lease_extensions',
   'lease_rent_schedule',
+  'lease_field_provenance',
+  'expense_structure_canonical',
   'v_lease_extensions_summary',
   'v_clinic_payer_mix',
   'v_payer_mix_geo_averages',
@@ -149,6 +151,7 @@ export const DIA_WRITE_TABLES = new Set([
   'rpc/save_outbound_activity',
   'rpc/match_marketing_lead_to_sf',
   'rpc/refresh_crm_rollup',
+  'rpc/upsert_lease_field',
 ]);
 
 // Government tables where writes MUST go through Gov write services (not raw proxy).
