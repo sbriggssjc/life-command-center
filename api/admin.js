@@ -16,11 +16,14 @@
 //   /api/gov-evidence→ /api/admin?_route=edge-data&_edgeRoute=gov-evidence
 //   /api/daily-briefing → /api/admin?_route=edge-brief
 //   /api/cms-match   → /api/admin?_route=cms-match
+//   /api/ownership-reconcile → /api/admin?_route=ownership-reconcile
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
+import { domainQuery } from './_shared/domain-db.js';
+import { reconcilePropertyOwnership } from './_handlers/sidebar-pipeline.js';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -73,6 +76,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'edge-data':   return handleEdgeDataProxy(req, res);
     case 'edge-brief':  return handleEdgeBriefingProxy(req, res);
     case 'cms-match':   return handleCmsMatch(req, res);
+    case 'ownership-reconcile': return handleOwnershipReconcile(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -645,6 +649,52 @@ async function handleDiag(req, res) {
     }
   } else {
     results.dia = { error: 'DIA_SUPABASE_URL not configured', keySet: false };
+  }
+
+  return res.status(200).json(results);
+}
+
+// ============================================================================
+// OWNERSHIP RECONCILIATION — batch-fix stale properties.recorded_owner_id
+// ============================================================================
+
+async function handleOwnershipReconcile(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const secret = process.env.DIAG_SECRET || 'lcc-diag-2024';
+  if (req.query.secret !== secret) {
+    return res.status(403).json({ error: 'Forbidden — pass ?secret=<DIAG_SECRET>' });
+  }
+
+  const domain = req.query.domain || 'government';
+  if (!['government', 'dialysis'].includes(domain)) {
+    return res.status(400).json({ error: 'domain must be government or dialysis' });
+  }
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
+
+  // Fetch properties that have ownership_history records
+  const propsRes = await domainQuery(domain, 'GET',
+    `properties?select=property_id&limit=${limit}`
+  );
+  if (!propsRes.ok) {
+    return res.status(502).json({ error: 'Failed to fetch properties', detail: propsRes.data });
+  }
+
+  const results = { total: 0, updated: 0, skipped: 0, errors: 0 };
+  for (const row of (propsRes.data || [])) {
+    results.total++;
+    try {
+      const r = await reconcilePropertyOwnership(domain, row.property_id);
+      if (r.updated) results.updated++;
+      else results.skipped++;
+    } catch (e) {
+      results.errors++;
+      console.error(`[ownership-reconcile] property ${row.property_id}:`, e.message);
+    }
   }
 
   return res.status(200).json(results);
