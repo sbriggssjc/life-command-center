@@ -86,7 +86,12 @@
 
     if (!lines) lines = getPageLines();
     const data = extractFields(lines);
-    const contacts = extractContacts(lines);
+    // Try DOM-based contact extraction first (captures mailto:/tel: icon links);
+    // fall back to text-based parsing for older layouts or when DOM yields nothing
+    let contacts = extractContactsFromDOM();
+    if (contacts.length === 0) {
+      contacts = extractContacts(lines);
+    }
     enrichContactsFromDOM(contacts);
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
@@ -1178,51 +1183,274 @@
     return people;
   }
 
-  // ── DOM-based contact enrichment ─────────────────────────────────────
-  // CoStar renders some emails only as mailto: icon links (no visible text),
-  // which innerText scanning misses. Query the DOM for mailto: hrefs and
-  // match them to contacts that are missing an email, by proximity to the
-  // contact's name in the page.
+  // ── DOM-based contact extraction ──────────────────────────────────────
+  // CoStar renders some emails/phones only as mailto:/tel: icon links with
+  // no visible text, which innerText scanning misses. This function queries
+  // the DOM for contact section headers and their associated contact blocks,
+  // extracting emails from mailto: hrefs and phones from tel: hrefs.
+  // Returns an array of contacts with roles, or empty array if DOM querying
+  // finds nothing (caller falls back to text-based parsing).
 
+  // Map section header text → contact role
+  const SECTION_ROLE_MAP = [
+    [/^true\s+buyer$/i,       'true_buyer_contact'],
+    [/^true\s+seller$/i,      'true_seller_contact'],
+    [/^recorded\s+buyer$/i,   'buyer'],
+    [/^recorded\s+seller$/i,  'seller'],
+    [/^listing\s+broker$/i,   'listing_broker'],
+    [/^buyer\s+broker$/i,     'buyer_broker'],
+    [/^lender$/i,             'lender'],
+    [/^recorded\s+owner$/i,   'owner'],
+    [/^current\s+owner$/i,    'owner'],
+  ];
+
+  function roleFromHeader(headerText) {
+    const t = (headerText || '').trim();
+    for (const [re, role] of SECTION_ROLE_MAP) {
+      if (re.test(t)) return role;
+    }
+    return null;
+  }
+
+  function extractContactsFromDOM() {
+    const contacts = [];
+
+    // Find all mailto: links on the page — if none, DOM extraction won't help
+    const allMailtoLinks = document.querySelectorAll('a[href^="mailto:"]');
+    const allTelLinks    = document.querySelectorAll('a[href^="tel:"]');
+    if (allMailtoLinks.length === 0 && allTelLinks.length === 0) return contacts;
+
+    // Find contact section headers in the page. CoStar uses text labels like
+    // "True Buyer", "Listing Broker", etc. as section dividers.
+    const sectionHeaders = [];
+    const allElements = document.querySelectorAll('h1,h2,h3,h4,h5,h6,div,span,p,td,th,label');
+    for (const el of allElements) {
+      // Only consider elements whose own direct text matches a role header
+      // (skip containers whose children happen to contain the text)
+      const ownText = getOwnText(el).trim();
+      const role = roleFromHeader(ownText);
+      if (role) {
+        sectionHeaders.push({ element: el, role, text: ownText });
+      }
+    }
+    if (sectionHeaders.length === 0) return contacts;
+
+    // For each section header, find the containing block and extract contacts
+    for (const header of sectionHeaders) {
+      // Walk up to find the section container (the card/panel holding this group)
+      const container = findContactContainer(header.element);
+      if (!container) continue;
+
+      // Find individual contact blocks within this container
+      // CoStar often uses divs with "logo" images as separators between people
+      const contactBlocks = findContactBlocks(container, header.element);
+
+      for (const block of contactBlocks) {
+        const person = extractPersonFromBlock(block);
+        if (person && person.name) {
+          person.role = header.role;
+          contacts.push(person);
+        }
+      }
+    }
+
+    return contacts;
+  }
+
+  // Get an element's own text (excluding children's text)
+  function getOwnText(el) {
+    let text = '';
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
+    }
+    return text;
+  }
+
+  // Walk up from a section header to find its containing block
+  function findContactContainer(headerEl) {
+    let el = headerEl;
+    for (let i = 0; i < 5; i++) {
+      el = el.parentElement;
+      if (!el || el === document.body) return null;
+      // A good container has mailto or tel links inside it
+      if (el.querySelector('a[href^="mailto:"],a[href^="tel:"]')) return el;
+    }
+    return null;
+  }
+
+  // Within a container, find blocks that each represent a single contact.
+  // Try common DOM patterns: list items, cards, then fall back to grouping
+  // around mailto/tel links.
+  function findContactBlocks(container, headerEl) {
+    // Strategy 1: look for structured list items or card-like elements
+    const cards = container.querySelectorAll(
+      'li, [class*="contact"], [class*="person"], [class*="broker"], [class*="card"]'
+    );
+    // Filter out cards that are ancestors of headerEl or the header itself
+    const validCards = Array.from(cards).filter(c =>
+      !c.contains(headerEl) && c !== headerEl &&
+      (c.querySelector('a[href^="mailto:"],a[href^="tel:"]') ||
+       c.textContent.length > 5)
+    );
+    if (validCards.length > 0) return validCards;
+
+    // Strategy 2: group by mailto/tel link ancestry — each link's nearest
+    // common container with a name-like text is a contact block
+    const linkEls = container.querySelectorAll('a[href^="mailto:"],a[href^="tel:"]');
+    const blocks = [];
+    const seen = new Set();
+    for (const link of linkEls) {
+      // Walk up to a reasonable parent that contains name + contact info
+      let block = link.parentElement;
+      for (let i = 0; i < 4; i++) {
+        if (!block || block === container) break;
+        const text = block.textContent || '';
+        // Stop when we find a block with enough text to contain a name
+        if (text.length > 10 && text.length < 500) break;
+        block = block.parentElement;
+      }
+      if (block && block !== container && !seen.has(block)) {
+        seen.add(block);
+        blocks.push(block);
+      }
+    }
+    return blocks;
+  }
+
+  // Extract a person's name, email, phone from a DOM block
+  function extractPersonFromBlock(block) {
+    const person = { type: 'person' };
+
+    // Email from mailto: link (primary goal of DOM extraction)
+    const emailEl = block.querySelector('a[href^="mailto:"]');
+    if (emailEl) {
+      const raw = emailEl.href.replace(/^mailto:/i, '').split('?')[0].trim();
+      if (raw && /@/.test(raw) && /\.\w{2,}$/.test(raw)) {
+        person.email = raw;
+      }
+    }
+
+    // Phone from tel: link
+    const telEl = block.querySelector('a[href^="tel:"]');
+    if (telEl) {
+      const raw = telEl.href.replace(/^tel:/i, '').replace(/\s+/g, '').trim();
+      if (raw && /\d{7,}/.test(raw.replace(/\D/g, ''))) {
+        person.phones = [raw];
+      }
+    }
+    // Also check for phone text patterns not in tel: links
+    if (!person.phones) {
+      const phonePattern = /\(?\d{3}\)?\s*[-.]?\s*\d{3}[-.]?\d{4}/;
+      const text = block.textContent || '';
+      const phoneMatch = text.match(phonePattern);
+      if (phoneMatch) person.phones = [phoneMatch[0].trim()];
+    }
+
+    // Name: look for prominent text elements (strong, heading, first link)
+    const nameEl = block.querySelector(
+      'strong, b, h3, h4, h5, [class*="name"], [class*="Name"]'
+    );
+    if (nameEl) {
+      const candidate = nameEl.textContent.replace(/\s+/g, ' ').trim();
+      if (candidate.length >= 3 && candidate.length <= 60 &&
+          /^[A-Z]/.test(candidate) && !/@/.test(candidate) &&
+          !/^\d/.test(candidate) && !/^(logo|http)/i.test(candidate)) {
+        person.name = candidate;
+      }
+    }
+
+    // Fallback name: use block's own text, take first name-like line
+    if (!person.name) {
+      const lines = (block.textContent || '').split('\n')
+        .map(l => l.replace(/\s+/g, ' ').trim())
+        .filter(l => l.length >= 3 && l.length <= 60);
+      for (const line of lines) {
+        if (/^[A-Z][a-z]/.test(line) && !/@/.test(line) &&
+            !/^\d/.test(line) && !/^(logo|http|www\.)/i.test(line) &&
+            !/^(no\s+|source:|united states)/i.test(line)) {
+          person.name = line;
+          break;
+        }
+      }
+    }
+
+    // Title: look for job title patterns
+    const text = block.textContent || '';
+    const titleMatch = text.match(/\b((?:Senior|Managing|Executive|Vice|Chief)\s+)?(?:Director|Manager|Analyst|Advisor|Associate|VP|President|Officer|Agent|Broker|Partner|Principal|Consultant)\b/i);
+    if (titleMatch) {
+      // Get the full line containing the title
+      const titleLines = text.split('\n').map(l => l.trim()).filter(l =>
+        new RegExp(titleMatch[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(l)
+      );
+      if (titleLines.length > 0 && titleLines[0].length < 80) {
+        person.title = titleLines[0];
+      }
+    }
+
+    return person;
+  }
+
+  // Enrich text-parsed contacts with DOM-based email/phone data.
+  // For each contact missing an email or phone, find the closest mailto:/tel:
+  // link by walking up from the link to check if the contact's name appears
+  // in a nearby ancestor container.
   function enrichContactsFromDOM(contacts) {
     if (!contacts || contacts.length === 0) return;
 
-    // Collect all mailto links on the page
     const mailtoEls = document.querySelectorAll('a[href^="mailto:"]');
-    if (mailtoEls.length === 0) return;
+    const telEls    = document.querySelectorAll('a[href^="tel:"]');
+    if (mailtoEls.length === 0 && telEls.length === 0) return;
 
-    // Build a list of { email, element } from mailto links
+    // Build { email/phone, element } entries
     const mailtoEntries = [];
     for (const el of mailtoEls) {
       const email = el.href.replace(/^mailto:/i, '').split('?')[0].trim();
       if (email && /@/.test(email) && /\.\w{2,}$/.test(email)) {
-        mailtoEntries.push({ email, element: el });
+        mailtoEntries.push({ value: email, element: el });
       }
     }
-    if (mailtoEntries.length === 0) return;
+    const telEntries = [];
+    for (const el of telEls) {
+      const phone = el.href.replace(/^tel:/i, '').replace(/\s+/g, '').trim();
+      if (phone && /\d{7,}/.test(phone.replace(/\D/g, ''))) {
+        telEntries.push({ value: phone, element: el });
+      }
+    }
 
-    // For contacts missing emails, try to find a mailto link near their name
     for (const contact of contacts) {
-      if (contact.email || contact.type !== 'person') continue;
       if (!contact.name) continue;
 
-      // Walk up from each mailto link and check if the contact's name
-      // appears in a nearby ancestor container (card, list item, row)
-      for (const entry of mailtoEntries) {
-        let ancestor = entry.element.parentElement;
-        let depth = 0;
-        while (ancestor && depth < 6) {
-          const text = ancestor.textContent || '';
-          if (text.includes(contact.name)) {
-            contact.email = entry.email;
+      // Enrich missing email
+      if (!contact.email && contact.type === 'person') {
+        for (const entry of mailtoEntries) {
+          if (nameInAncestor(contact.name, entry.element)) {
+            contact.email = entry.value;
             break;
           }
-          ancestor = ancestor.parentElement;
-          depth++;
         }
-        if (contact.email) break;
+      }
+
+      // Enrich missing phone
+      if ((!contact.phones || contact.phones.length === 0) && contact.type === 'person') {
+        for (const entry of telEntries) {
+          if (nameInAncestor(contact.name, entry.element)) {
+            if (!contact.phones) contact.phones = [];
+            contact.phones.push(entry.value);
+            break;
+          }
+        }
       }
     }
+  }
+
+  // Check if a contact name appears in an ancestor of the given element
+  function nameInAncestor(name, el) {
+    let ancestor = el.parentElement;
+    for (let depth = 0; ancestor && depth < 6; depth++) {
+      if ((ancestor.textContent || '').includes(name)) return true;
+      ancestor = ancestor.parentElement;
+    }
+    return false;
   }
 
   // ── Sales history extraction ──────────────────────────────────────────
