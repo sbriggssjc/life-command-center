@@ -113,7 +113,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 16,
+        _version: 17,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -401,20 +401,83 @@
         else if (/^\$?[\d,.]+/.test(prev)) data.price_per_sf = prev;
       }
 
-      // Tab-separated assessment table
+      // ── Public Record tab: Assessment table (multi-year rows) ────────
+      // CoStar renders assessment data as tab-separated rows:
+      //   "Year\tLand\tImprovements\tTotal Value"
+      //   "2025\t$1,200,000\t$3,126,000\t$4,326,000"
       if (line.includes('\t')) {
         const parts = line.split('\t').map((p) => p.trim()).filter(Boolean);
         if (parts.length >= 2) {
           const label = parts[0].toLowerCase();
           const value = parts[1];
+          // Single-value assessment rows (older CoStar layout)
           if (!data.improvement_value && label === 'improvements') data.improvement_value = value;
           if (!data.assessed_value && label === 'total value') data.assessed_value = value;
           if (!data.land_value && label === 'land') data.land_value = value;
+          // Tax amount row
+          if (!data.tax_amount && (label === 'tax amount' || label === 'total tax' || label === 'taxes')) data.tax_amount = value;
+        }
+        // Multi-column assessment rows: Year | Land | Improvements | Total
+        if (parts.length >= 3 && /^\d{4}$/.test(parts[0])) {
+          if (!data.assessment_years) data.assessment_years = [];
+          const row = { year: parseInt(parts[0]) };
+          for (let p = 1; p < parts.length; p++) {
+            if (/^\$?[\d,]+/.test(parts[p])) {
+              if (!row.land) row.land = parts[p];
+              else if (!row.improvements) row.improvements = parts[p];
+              else if (!row.total) row.total = parts[p];
+            }
+          }
+          data.assessment_years.push(row);
+          // Use most recent year as primary values
+          if (!data.land_value && row.land) data.land_value = row.land;
+          if (!data.improvement_value && row.improvements) data.improvement_value = row.improvements;
+          if (!data.assessed_value && row.total) data.assessed_value = row.total;
         }
       }
 
+      // ── Public Record tab: Parcel number ──────────────────────────
       if (!data.parcel_number && /^parcels?\t?$/i.test(line)) {
         if (next && /[\d-]{5,}/.test(next)) data.parcel_number = next;
+      }
+      // Also match "APN" or "Parcel Number" labels (some CoStar layouts)
+      if (!data.parcel_number && /^(apn|parcel\s*(number|no\.?|id|#)?)\s*$/i.test(line)) {
+        if (next && /[\d-]{5,}/.test(next)) data.parcel_number = next;
+      }
+
+      // ── Public Record tab: Census / FIPS / Legal description ──────
+      if (!data.census_tract && /^census\s+tract$/i.test(line) && next && /[\d.]+/.test(next)) {
+        data.census_tract = next;
+      }
+      if (!data.fips_code && /^fips\s*(code)?$/i.test(line) && next && /^\d{4,}/.test(next)) {
+        data.fips_code = next;
+      }
+      if (!data.legal_description && /^legal\s+desc(ription)?$/i.test(line) && next && next.length > 5) {
+        data.legal_description = next.length <= 300 ? next : next.substring(0, 300);
+      }
+
+      // ── Public Record tab: Building improvements ──────────────────
+      if (!data.construction_type && /^construction\s+(type|class)$/i.test(line) && next && next.length < 60) {
+        data.construction_type = next;
+      }
+      if (!data.far && /^far$/i.test(line) && next && /[\d.]+/.test(next)) {
+        data.far = next;
+      }
+
+      // ── Public Record tab: Latitude / Longitude ───────────────────
+      if (!data.latitude && /^lat(itude)?$/i.test(line) && next && /^-?\d+\.\d+/.test(next)) {
+        data.latitude = next;
+      }
+      if (!data.longitude && /^lon(g(itude)?)?$/i.test(line) && next && /^-?\d+\.\d+/.test(next)) {
+        data.longitude = next;
+      }
+      // Combined "Lat/Long" or "Coordinates" line: "34.0522, -118.2437"
+      if (!data.latitude && /^(lat\s*\/\s*lon|coordinates?)$/i.test(line)) {
+        const coordMatch = (next || '').match(/(-?\d+\.\d+)\s*[,/]\s*(-?\d+\.\d+)/);
+        if (coordMatch) {
+          data.latitude = coordMatch[1];
+          data.longitude = coordMatch[2];
+        }
       }
 
       // Ownership type from Owner tab
