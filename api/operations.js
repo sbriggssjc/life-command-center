@@ -70,6 +70,7 @@ import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ACTION_SCHEMAS, generateOpenApiSpec, generatePluginManifest } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
+import { ingestPdfWorker } from './intake.js';
 import {
   canTransitionInbox, canTransitionAction,
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
@@ -681,6 +682,7 @@ const ACTION_REGISTRY = {
 
   // Tier 1-2: mutations (require confirmation)
   ingest_outlook_flagged_emails: { method: 'POST', path: 'sync?action=ingest_emails', tier: 1, confirm: 'lightweight' },
+  ingest_pdf_document:         { tier: 1, handler: 'ingest_pdf', confirm: 'lightweight' },
   triage_inbox_item:           { method: 'PATCH', path: 'inbox', tier: 2, confirm: 'lightweight' },
   promote_intake_to_action:    { method: 'POST', path: 'workflows?action=promote_to_shared', tier: 2, confirm: 'explicit', alias: 'operations?action=promote_to_shared' },
   create_listing_pursuit_followup_task: { method: 'POST', path: 'actions', tier: 2, confirm: 'explicit' },
@@ -737,6 +739,7 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'pipeline_intelligence':  return handlePipelineIntelligence(params, user, workspaceId);
       case 'guided_entity_merge':    return handleGuidedEntityMerge(params, user, workspaceId);
       case 'document_assembly':     return handleDocumentAssembly(params, user, workspaceId);
+      case 'ingest_pdf':            return ingestPdfWorker(params, user, workspaceId);
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
   }

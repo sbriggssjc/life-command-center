@@ -72,6 +72,7 @@ When the user's intent maps to a specific action, suggest it clearly:
 - guided_entity_merge — find and review duplicate entities/contacts
 - create_todo_task — create a task in Microsoft To Do (needs confirmation)
 - ingest_outlook_flagged_emails — pull flagged emails into intake (needs confirmation)
+- ingest_pdf_document — ingest an uploaded PDF (deed, OM, lease, etc.) into the intake queue (needs lightweight confirmation)
 - research_followup — close research and create follow-up action (needs confirmation)
 - reassign_work_item — reassign an action/inbox/research item (needs confirmation)
 - escalate_action — escalate to manager with reason (needs confirmation)

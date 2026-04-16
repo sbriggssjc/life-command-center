@@ -7,6 +7,7 @@
 // POST /api/intake?_route=extract           — manual document extraction trigger
 // POST /api/intake?_route=copilot-action    — Copilot action gateway (dispatches by action_id)
 // POST /api/intake?_route=parse-om          — OM lease abstract parser + provenance push
+// POST /api/intake?_route=ingest_pdf        — PDF upload ingestion (Copilot chat / REST)
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -103,9 +104,11 @@ export default withErrorHandler(async function handler(req, res) {
       return handleCopilotAction(req, res);
     case 'parse-om':
       return handleParseOm(req, res);
+    case 'ingest_pdf':
+      return handleIngestPdf(req, res);
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action, parse-om'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action, parse-om, ingest_pdf'
       });
   }
 });
@@ -1430,4 +1433,200 @@ async function handleParseOm(req, res) {
     lease_id,
     domain,
   });
+}
+
+// ============================================================================
+// PDF INGESTION (Copilot chat / REST)
+// ============================================================================
+// Accepts a PDF via base64 body or remote URL, extracts text with pdf-parse,
+// and creates one inbox_items row flagged for triage. Called from two paths:
+//   1. Copilot dispatch: operations.js imports ingestPdfWorker() and invokes
+//      it with (params, user, workspaceId) after action validation.
+//   2. REST: POST /api/intake?_route=ingest_pdf (or /api/intake-pdf rewrite).
+
+const INGEST_PDF_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+async function loadPdfBuffer({ file_content_base64, file_url }) {
+  if (file_content_base64) {
+    const buf = Buffer.from(file_content_base64, 'base64');
+    if (buf.length > INGEST_PDF_MAX_BYTES) {
+      throw new Error(`PDF exceeds ${INGEST_PDF_MAX_BYTES} bytes`);
+    }
+    return { buffer: buf, source: 'base64' };
+  }
+  if (file_url) {
+    const fetched = await fetchUrlArtifact(file_url);
+    if (!fetched) {
+      throw new Error('file_url could not be fetched (untrusted host, non-PDF, or network failure)');
+    }
+    const buf = Buffer.from(fetched.base64, 'base64');
+    if (buf.length > INGEST_PDF_MAX_BYTES) {
+      throw new Error(`PDF exceeds ${INGEST_PDF_MAX_BYTES} bytes`);
+    }
+    return { buffer: buf, source: 'url', remoteFileName: fetched.fileName };
+  }
+  throw new Error('Must provide file_content_base64 or file_url');
+}
+
+async function extractPdfText(buffer) {
+  try {
+    const mod = await import('pdf-parse');
+    const pdfParse = mod.default || mod;
+    const out = await pdfParse(buffer);
+    return {
+      ok: true,
+      text: out.text || '',
+      pageCount: out.numpages || 0,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message || String(err),
+      text: '',
+      pageCount: 0,
+    };
+  }
+}
+
+/**
+ * Core worker. Shared by Copilot dispatch (operations.js) and REST route.
+ * @param {object} params - { file_name, file_content_base64?, file_url?, entity_id?, note? }
+ * @param {object} user   - authenticated user from auth.js
+ * @param {string} workspaceId
+ * @returns {Promise<{ok:boolean, data?:object, error?:string}>}
+ */
+export async function ingestPdfWorker(params, user, workspaceId) {
+  const { file_name, file_content_base64, file_url, entity_id, note } = params || {};
+
+  if (!file_name || typeof file_name !== 'string') {
+    return { ok: false, error: 'file_name (string) is required' };
+  }
+  if (!file_content_base64 && !file_url) {
+    return { ok: false, error: 'Either file_content_base64 or file_url is required' };
+  }
+
+  // Validate entity_id (if provided) belongs to this workspace — cheap safety check
+  let validatedEntityId = null;
+  if (entity_id) {
+    if (typeof entity_id !== 'string' || !/^[0-9a-fA-F-]{36}$/.test(entity_id)) {
+      return { ok: false, error: 'entity_id must be a UUID' };
+    }
+    const entRes = await opsQuery(
+      'GET',
+      `entities?id=eq.${pgFilterVal(entity_id)}&workspace_id=eq.${pgFilterVal(workspaceId)}&select=id&limit=1`
+    );
+    if (!entRes.ok || !entRes.data?.length) {
+      return { ok: false, error: `entity_id ${entity_id} not found in this workspace` };
+    }
+    validatedEntityId = entity_id;
+  }
+
+  // Load PDF bytes
+  let loaded;
+  try {
+    loaded = await loadPdfBuffer({ file_content_base64, file_url });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+
+  const sizeBytes = loaded.buffer.length;
+
+  // Extract text (soft-fail: we still create the intake item)
+  const extraction = await extractPdfText(loaded.buffer);
+  const fullText = extraction.text || '';
+  const pageCount = extraction.pageCount || 0;
+  const textPreview = fullText.slice(0, 500);
+
+  const nowIso = new Date().toISOString();
+  const title = (note && note.trim()) || file_name;
+
+  const body = extraction.ok
+    ? (textPreview || null)
+    : '[PDF text extraction failed — manual review required]';
+
+  const metadata = {
+    file_name,
+    file_size_bytes: sizeBytes,
+    page_count: pageCount,
+    extracted_text: extraction.ok ? fullText : null,
+    extraction_error: extraction.ok ? null : extraction.error,
+    note: note || null,
+    source_variant: loaded.source,                // 'base64' | 'url'
+    remote_file_name: loaded.remoteFileName || null,
+    event_source: 'copilot_chat',
+    ingested_at: nowIso,
+  };
+
+  const insert = await opsQuery('POST', 'inbox_items', {
+    workspace_id: workspaceId,
+    source_user_id: user.id,
+    assigned_to: user.id,
+    title,
+    body,
+    source_type: 'copilot_pdf',
+    source_connector_id: null,
+    external_id: null,
+    external_url: null,
+    status: 'new',
+    priority: 'normal',
+    visibility: 'private',
+    entity_id: validatedEntityId,
+    metadata,
+    received_at: nowIso,
+  }, { Prefer: 'return=representation' });
+
+  if (!insert.ok) {
+    return {
+      ok: false,
+      error: 'Failed to create intake item',
+      detail: insert.data,
+      status: insert.status || 500,
+    };
+  }
+
+  const item = Array.isArray(insert.data) ? insert.data[0] : insert.data;
+  const inboxItemId = item?.id || null;
+
+  const sizeKb = Math.max(1, Math.round(sizeBytes / 1024));
+  const pageLabel = pageCount === 1 ? '1 page' : `${pageCount} pages`;
+  const baseMsg = extraction.ok
+    ? `Created intake item for "${file_name}" (${pageLabel}, ${sizeKb}KB). Triage it in the intake queue.`
+    : `Captured "${file_name}" (${sizeKb}KB) but text extraction failed (${extraction.error}). File flagged for manual review.`;
+
+  return {
+    ok: true,
+    action: 'ingest_pdf_document',
+    data: {
+      inbox_item_id: inboxItemId,
+      file_name,
+      page_count: pageCount,
+      size_bytes: sizeBytes,
+      text_preview: textPreview,
+      extraction_ok: extraction.ok,
+      entity_id: validatedEntityId,
+      message: baseMsg,
+    },
+  };
+}
+
+async function handleIngestPdf(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  if (!requireRole(user, 'operator', workspaceId)) {
+    return res.status(403).json({ error: 'Operator role required' });
+  }
+
+  const result = await ingestPdfWorker(req.body || {}, user, workspaceId);
+  const status = result.ok ? 200 : (result.status || 400);
+  return res.status(status).json(result);
 }
