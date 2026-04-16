@@ -15,6 +15,10 @@
   // Accumulated data: merges across CoStar tab switches and popups
   let accumulated = { contacts: [], sales_history: [], tenants: [] };
 
+  // Auto-pagination state for Public Record sale/loan history
+  let paginationInProgress = false;
+  let lastPaginatedPage = 0;
+
   const observer = new MutationObserver(() => {
     clearTimeout(extractionTimer);
     extractionTimer = setTimeout(extract, 500);
@@ -75,6 +79,8 @@
     // If address changed (navigated to different property), reset accumulation
     if (accumulated._address && accumulated._address !== identifier) {
       accumulated = { contacts: [], sales_history: [], tenants: [] };
+      lastPaginatedPage = 0;
+      paginationInProgress = false;
     }
     accumulated._address = identifier;
 
@@ -107,7 +113,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 15,
+        _version: 16,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -121,10 +127,121 @@
     });
 
     if (headingEl) injectLccButton(headingEl);
+
+    // Auto-paginate through Public Record sale/loan history records
+    autoPageSaleLoanHistory();
     } catch (err) {
       // Log error but don't crash — still send whatever we have
       console.error('[LCC CoStar] extraction error:', err);
     }
+  }
+
+  // ── Auto-pagination for Public Record sale/loan history ───────────────
+  // CoStar shows "1 of 5 Historic Sale Loan Records" with next/prev arrows.
+  // This clicks through all pages so the MutationObserver re-extracts each.
+
+  function autoPageSaleLoanHistory() {
+    if (paginationInProgress) return;
+
+    // Find the pagination indicator text: "X of Y Historic Sale Loan Records"
+    // or "X of Y Records" inside the Public Record panel
+    const allText = document.body.innerText;
+    const paginationMatch = allText.match(/(\d+)\s+of\s+(\d+)\s+(?:historic\s+)?sale\s*\/?loan\s+records/i)
+      || allText.match(/(\d+)\s+of\s+(\d+)\s+records/i);
+
+    if (!paginationMatch) return;
+
+    const currentPage = parseInt(paginationMatch[1], 10);
+    const totalPages = parseInt(paginationMatch[2], 10);
+
+    if (isNaN(currentPage) || isNaN(totalPages) || totalPages <= 1) return;
+    if (currentPage >= totalPages) {
+      // All pages viewed — reset for next property
+      lastPaginatedPage = 0;
+      return;
+    }
+
+    // Avoid re-clicking the same page (MutationObserver fires multiple times)
+    if (currentPage === lastPaginatedPage) return;
+    lastPaginatedPage = currentPage;
+
+    console.log(`[LCC CoStar] Auto-paging sale/loan history: ${currentPage} of ${totalPages}`);
+    paginationInProgress = true;
+
+    // Find the "next" arrow button — CoStar uses various patterns:
+    //  - An aria-label with "next" or "forward"
+    //  - A button/icon near the "X of Y" text with a right-arrow class
+    //  - A sibling element after the pagination text
+    const nextBtn = findNextPageButton();
+    if (!nextBtn) {
+      console.log('[LCC CoStar] Could not find next-page button');
+      paginationInProgress = false;
+      return;
+    }
+
+    // Small delay to avoid rapid-fire clicks, then click next
+    setTimeout(() => {
+      try {
+        nextBtn.click();
+        console.log(`[LCC CoStar] Clicked next → page ${currentPage + 1} of ${totalPages}`);
+      } catch (err) {
+        console.error('[LCC CoStar] pagination click error:', err);
+      }
+      // Reset flag after a delay to allow MutationObserver to pick up the change
+      setTimeout(() => { paginationInProgress = false; }, 1200);
+    }, 600);
+  }
+
+  function findNextPageButton() {
+    // Strategy 1: aria-label containing "next" near pagination context
+    const ariaNext = document.querySelector(
+      '[aria-label*="next" i], [aria-label*="forward" i], [aria-label*="Next" i]'
+    );
+    if (ariaNext && isVisibleElement(ariaNext)) return ariaNext;
+
+    // Strategy 2: Look for right-arrow / chevron-right icons/buttons near
+    // the "of X Records" text node
+    const allButtons = document.querySelectorAll('button, [role="button"], .pagination-next, .next-btn');
+    for (const btn of allButtons) {
+      if (!isVisibleElement(btn)) continue;
+      // Check for right-arrow icon classes or SVG
+      const hasArrow = btn.querySelector(
+        '[class*="right"], [class*="next"], [class*="forward"], [class*="chevron-right"]'
+      ) || /[▶►→❯]/.test(btn.textContent);
+      if (hasArrow) return btn;
+    }
+
+    // Strategy 3: Find the pagination text node and look for the next
+    // clickable sibling after it
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        /\d+\s+of\s+\d+\s+.*records/i.test(node.textContent)
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    });
+    const textNode = walker.nextNode();
+    if (textNode) {
+      const container = textNode.parentElement?.closest('[class*="pagination"], [class*="pager"], [class*="nav"]')
+        || textNode.parentElement?.parentElement;
+      if (container) {
+        // Find clickable elements after the text
+        const clickables = container.querySelectorAll('button, [role="button"], a, [tabindex="0"]');
+        for (const el of clickables) {
+          if (!isVisibleElement(el)) continue;
+          const rect = el.getBoundingClientRect();
+          const textRect = textNode.parentElement?.getBoundingClientRect();
+          // Pick the clickable element to the right of the pagination text
+          if (textRect && rect.left > textRect.right - 10) return el;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function isVisibleElement(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
   }
 
   function mergeContacts(existing, newContacts) {
