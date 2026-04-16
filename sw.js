@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lcc-v237';
+const CACHE_NAME = 'lcc-v238';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -62,6 +62,9 @@ self.addEventListener('fetch', event => {
 
   // Skip non-GET requests (POST to APIs, etc.)
   if (event.request.method !== 'GET') return;
+
+  // Never intercept API calls — let the browser handle them directly
+  if (url.pathname.startsWith('/api/')) return;
 
   // Network-first with 4s timeout for same-origin resources
   // Uses cache: 'no-cache' for JS/CSS/HTML to always revalidate with server
