@@ -5,6 +5,7 @@
 // POST /api/intake?_route=outlook-message   — deterministic single-message intake
 // GET  /api/intake?_route=summary           — Teams/Automation formatted summary
 // POST /api/intake?_route=extract           — manual document extraction trigger
+// POST /api/intake?_route=copilot-action    — Copilot action gateway (dispatches by action_id)
 //
 // CONSOLIDATION NOTE (2026-04-03):
 // Merged to stay within Vercel Hobby plan 12-function limit.
@@ -96,9 +97,11 @@ export default withErrorHandler(async function handler(req, res) {
       return handleIntakePromote(req, res);
     case 'discard':
       return handleIntakeDiscard(req, res);
+    case 'copilot-action':
+      return handleCopilotAction(req, res);
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action'
       });
   }
 });
@@ -1234,6 +1237,114 @@ async function handleIntakePromote(req, res) {
     domain_property_id: pipelineResult.domain_property_id || null,
     propagated: pipelineResult.domain_propagated || false,
     pipeline_summary: pipelineResult,
+  });
+}
+
+// ============================================================================
+// DISCARD — Mark intake item as discarded
+// POST /api/intake?_route=discard  { intake_id }
+// ============================================================================
+
+// ============================================================================
+// COPILOT ACTION GATEWAY
+// POST /api/intake?_route=copilot-action  { action_id, inputs }
+// Dispatches typed Copilot actions to their handlers.
+// ============================================================================
+
+async function handleCopilotAction(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const { action_id, inputs } = req.body || {};
+  if (!action_id) return res.status(400).json({ error: 'action_id required' });
+  if (!inputs) return res.status(400).json({ error: 'inputs required' });
+
+  switch (action_id) {
+    case 'intake.stage.om.v1':
+      return handleCopilotStageOm(req, res, user, inputs);
+    default:
+      return res.status(400).json({ error: `Unknown action_id: ${action_id}` });
+  }
+}
+
+// ============================================================================
+// COPILOT STAGE OM — Stage an Offering Memorandum PDF for intake
+// Inserts into staged_intake_items + staged_intake_artifacts, returns immediately.
+// No extraction, no matching, no AI — async pipeline handles downstream.
+// ============================================================================
+
+async function handleCopilotStageOm(req, res, user, inputs) {
+  const { intake_source, intake_channel, intent, artifacts, seed_data, copilot_metadata } = inputs;
+
+  // Validate required fields
+  if (intake_source !== 'copilot') {
+    return res.status(400).json({ error: 'intake_source must be "copilot"' });
+  }
+  if (!artifacts?.primary_document) {
+    return res.status(400).json({ error: 'artifacts.primary_document is required' });
+  }
+  const doc = artifacts.primary_document;
+  if (!doc.file_id || !doc.file_name || !doc.storage_path) {
+    return res.status(400).json({ error: 'primary_document requires file_id, file_name, and storage_path' });
+  }
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user.memberships?.[0]?.workspace_id
+    || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  const intakeId = randomUUID();
+
+  // 1. Insert staged_intake_item
+  const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
+    intake_id:   intakeId,
+    source_type: 'document',
+    status:      'received',
+    workspace_id: workspaceId,
+    raw_payload: {
+      intake_source,
+      intake_channel: intake_channel || 'copilot_chat',
+      intent:         intent || null,
+      seed_data:      seed_data || null,
+      copilot_metadata: copilot_metadata || null,
+    },
+  });
+
+  if (!stageResult.ok) {
+    console.error('[copilot-stage-om] Failed to insert staged_intake_item:', stageResult.data);
+    return res.status(500).json({ error: 'Failed to stage intake item', detail: stageResult.data });
+  }
+
+  // 2. Insert staged_intake_artifact
+  const artifactResult = await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
+    intake_id:    intakeId,
+    file_name:    doc.file_name,
+    file_type:    'application/pdf',
+    storage_path: doc.storage_path,
+    inline_data:  null,
+  });
+
+  if (!artifactResult.ok) {
+    console.error('[copilot-stage-om] Failed to insert staged_intake_artifact:', artifactResult.data);
+    // Item was created but artifact failed — still return the ID so it can be retried
+    return res.status(207).json({
+      ok: false,
+      status: 'partial',
+      staged_intake_item_id: intakeId,
+      error: 'Intake item created but artifact insert failed',
+    });
+  }
+
+  console.log(`[copilot-stage-om] Staged: ${intakeId}, file=${doc.file_name}, channel=${intake_channel}`);
+
+  return res.status(200).json({
+    ok: true,
+    status: 'received',
+    staged_intake_item_id: intakeId,
   });
 }
 

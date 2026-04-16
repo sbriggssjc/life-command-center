@@ -48,6 +48,7 @@
     { "source": "/api/recalculate-cap-rates", "destination": "/api/entity-hub?_domain=cap-rate-recalc" },
     { "source": "/api/bridge", "destination": "/api/operations" },
     { "source": "/api/workflows", "destination": "/api/operations" },
+    { "source": "/api/copilot/action", "destination": "/api/intake?_route=copilot-action" },
     { "source": "/api/intake-outlook-message", "destination": "/api/intake?_route=outlook-message" },
     { "source": "/api/intake-summary", "destination": "/api/intake?_route=summary" },
     { "source": "/api/intake-extract", "destination": "/api/intake?_route=extract" },
