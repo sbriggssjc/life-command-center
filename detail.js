@@ -4114,14 +4114,20 @@ async function _udRenderSalesAsync(bodyEl) {
         order: 'sale_date.desc.nullslast',
         limit: 100
       }).catch(() => null);
+      // diaQuery/govQuery swallow errors and return [], so .catch() above
+      // never fires and a nominally-present-but-empty response would suppress
+      // the sales_transactions fallback entirely. Gate the fallback on actual
+      // row presence, not just non-null.
+      const saleRows = Array.isArray(saleRes) ? saleRes : (saleRes?.data || null);
+      const hasSaleRows = Array.isArray(saleRows) && saleRows.length > 0;
       const [listRes, txnRes] = await Promise.all([
         qFn('available_listings', '*', {
           filter: `property_id=eq.${propId}`,
           order: 'listing_date.desc.nullslast',
           limit: 50
         }).catch(() => []),
-        saleRes != null
-          ? Promise.resolve(saleRes)
+        hasSaleRows
+          ? Promise.resolve(saleRows)
           : qFn('sales_transactions', '*', {
               filter: `property_id=eq.${propId}`,
               order: 'sale_date.desc',

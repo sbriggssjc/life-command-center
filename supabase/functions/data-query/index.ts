@@ -55,7 +55,7 @@ const DIA_READ_TABLES = new Set([
   "clinic_financial_estimates", "ownership_history", "bd_email_templates",
   "outbound_activities", "properties", "recorded_owners", "true_owners",
   "contacts", "sales_transactions", "property_sale_events", "v_property_latest_sale",
-  "sale_brokers", "brokers", "loans",
+  "sale_brokers", "brokers", "loans", "property_intel",
   "v_property_detail", "v_lease_detail", "v_ownership_current",
   "v_ownership_chain", "v_property_rankings",
   "facility_patient_counts", "clinic_trends", "clinic_quality_metrics",
@@ -69,7 +69,7 @@ const DIA_READ_TABLES = new Set([
 const DIA_WRITE_TABLES = new Set([
   "research_queue_outcomes", "outbound_activities", "marketing_leads",
   "properties", "recorded_owners", "true_owners", "contacts",
-  "sales_transactions", "property_sale_events",
+  "sales_transactions", "property_sale_events", "property_intel",
   "loans", "v_clinic_property_link_review_queue",
   "salesforce_activities",
   "property_cms_link", "property_cms_link_history",

@@ -111,6 +111,7 @@ export const DIA_READ_TABLES = new Set([
   'sale_brokers',
   'brokers',
   'loans',
+  'property_intel',
   // Detail panel views (shared with GOV)
   'v_property_detail',
   'v_lease_detail',
@@ -143,6 +144,7 @@ export const DIA_WRITE_TABLES = new Set([
   'contacts',
   'sales_transactions',
   'property_sale_events',
+  'property_intel',
   'loans',
   'leases',
   'v_clinic_property_link_review_queue',
