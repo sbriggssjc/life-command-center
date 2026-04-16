@@ -1,0 +1,41 @@
+-- =====================================================================
+-- Address dedup migration — INDEX
+-- =====================================================================
+-- The migration is split into five small per-Part files so each one
+-- is a trivially small paste into the Supabase SQL editor even on
+-- shaky connections:
+--
+--   sql/20260410_normalize_properties_address_01_setup.sql
+--   sql/20260410_normalize_properties_address_02_merge.sql
+--   sql/20260410_normalize_properties_address_03_repoint.sql
+--   sql/20260410_normalize_properties_address_04_finalize.sql
+--   sql/20260410_normalize_properties_address_05_cleanup.sql
+--
+-- Each file is a single BEGIN..COMMIT transaction. State flows
+-- between them through a regular table `lcc_dedup_pairs` that
+-- Part 1 creates and Part 5 drops.
+--
+-- HOW TO RUN — pick whichever is easiest:
+--
+--   (a) SQL EDITOR, per-part: open each file and paste its body
+--       into the Supabase SQL editor in order (01 → 02 → 03 → 04
+--       → 05). Each paste is small enough to avoid payload-size
+--       issues with api.supabase.com. Every Part is idempotent and
+--       safe to re-run if something hiccups mid-flight.
+--
+--   (b) psql, all at once (no HTTP timeout, no management API):
+--
+--         psql "<pooler connection string>" \
+--           -f sql/20260410_normalize_properties_address_01_setup.sql \
+--           -f sql/20260410_normalize_properties_address_02_merge.sql \
+--           -f sql/20260410_normalize_properties_address_03_repoint.sql \
+--           -f sql/20260410_normalize_properties_address_04_finalize.sql \
+--           -f sql/20260410_normalize_properties_address_05_cleanup.sql
+--
+-- Run this file against BOTH domain Supabase projects:
+--   * dialysis  (properties has medicare_id / lease fields)
+--   * government (properties has lease fields, no medicare_id)
+--
+-- All Parts use information_schema guards so the same set of files
+-- runs on either database without modification.
+-- =====================================================================

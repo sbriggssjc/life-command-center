@@ -1,0 +1,778 @@
+{
+  "schema_version": "1.0.0",
+  "last_updated": "2026-04-06",
+  "owner": "life-command-center",
+  "description": "Machine-readable Copilot action registry for LCC and connected domain systems. Waves 1-3.",
+  "risk_tiers": {
+    "0": "read-only — safe for autonomous execution",
+    "1": "low-risk workflow — allowed with lightweight confirmation",
+    "2": "review/assignment/status change — requires explicit confirmation",
+    "3": "domain write or approval-required — always requires human approval",
+    "4": "high-impact admin or financial/ownership mutation — admin-only approval"
+  },
+  "confirmation_levels": {
+    "none": "No confirmation required, autonomous execution allowed",
+    "lightweight": "Quick inline confirmation (e.g. 'Ingest now?')",
+    "explicit": "Full confirmation dialog with action summary before execution"
+  },
+  "actions": [
+    {
+      "action_name": "ingest_outlook_flagged_emails",
+      "user_goal": "Pull newly flagged Outlook emails into canonical intake",
+      "category": "ingest/submit",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/sync?action=ingest_emails",
+      "method": "POST",
+      "microsoft_surfaces": ["Outlook", "Power Automate", "Teams", "LCC"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "x-lcc-workspace", "location": "header", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["sync_job_id", "correlation_id", "status", "processed", "failed", "errors"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": true,
+      "idempotency_notes": "Upsert uses external identifiers; repeat runs are safe for incremental ingest.",
+      "wave": 1,
+      "listing_driven_production_support": "Captures inbound owner/client/prospect signals quickly so opportunities are not missed."
+    },
+    {
+      "action_name": "list_staged_intake_inbox",
+      "user_goal": "View current staged intake items awaiting triage or promotion",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/inbox",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "LCC", "Copilot Chat"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "status", "location": "query", "type": "string", "enum": ["new", "triaged", "promoted", "dismissed", "archived"] },
+          { "name": "source_type", "location": "query", "type": "string" },
+          { "name": "assigned_to", "location": "query", "type": "string" },
+          { "name": "priority", "location": "query", "type": "string" },
+          { "name": "domain", "location": "query", "type": "string" },
+          { "name": "limit", "location": "query", "type": "integer" },
+          { "name": "offset", "location": "query", "type": "integer" }
+        ]
+      },
+      "outputs": {
+        "fields": ["items", "count"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query.",
+      "wave": 1,
+      "listing_driven_production_support": "Keeps intake transparent so high-value leads are triaged early."
+    },
+    {
+      "action_name": "triage_inbox_item",
+      "user_goal": "Move staged intake item into triaged state with optional assignment/priority",
+      "category": "review/resolve",
+      "owning_repo": "LCC",
+      "endpoint": "PATCH /api/inbox?id={inbox_id}",
+      "method": "PATCH",
+      "microsoft_surfaces": ["Teams", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "id", "location": "query", "type": "string" }
+        ],
+        "optional": [
+          { "name": "status", "location": "body", "type": "string" },
+          { "name": "priority", "location": "body", "type": "string" },
+          { "name": "assigned_to", "location": "body", "type": "string" },
+          { "name": "entity_id", "location": "body", "type": "string" },
+          { "name": "metadata", "location": "body", "type": "object" }
+        ]
+      },
+      "outputs": {
+        "fields": ["item"]
+      },
+      "risk_tier": 2,
+      "confirmation_required": "lightweight",
+      "idempotent": true,
+      "idempotency_notes": "Reapplying same status/fields is effectively idempotent; lifecycle rules enforced server-side.",
+      "wave": 1,
+      "listing_driven_production_support": "Converts raw inbound noise into actionable listing workflow signals."
+    },
+    {
+      "action_name": "promote_intake_to_action",
+      "user_goal": "Convert vetted intake item into shared team action",
+      "category": "orchestrate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/workflows?action=promote_to_shared",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Planner/To Do", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "inbox_item_id", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "assigned_to", "location": "body", "type": "string" },
+          { "name": "priority", "location": "body", "type": "string" },
+          { "name": "due_date", "location": "body", "type": "string", "format": "date" },
+          { "name": "entity_id", "location": "body", "type": "string" },
+          { "name": "title", "location": "body", "type": "string" },
+          { "name": "description", "location": "body", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["action", "inbox_status", "workflow"]
+      },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "idempotency_notes": "Not idempotent; API blocks already-promoted inbox items.",
+      "wave": 1,
+      "listing_driven_production_support": "Ensures opportunities and follow-ups enter execution queues quickly."
+    },
+    {
+      "action_name": "list_government_review_observations",
+      "user_goal": "Surface government evidence/research observations awaiting review",
+      "category": "read/query",
+      "owning_repo": "GovernmentProject",
+      "endpoint": "GET /api/gov-evidence?endpoint=research-observations",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "LCC"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "status", "location": "query", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["observations"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query through LCC router.",
+      "wave": 1,
+      "listing_driven_production_support": "Speeds governance review so government leads/records move faster."
+    },
+    {
+      "action_name": "list_dialysis_review_queue",
+      "user_goal": "Surface dialysis property link review items",
+      "category": "read/query",
+      "owning_repo": "DialysisProject",
+      "endpoint": "GET /api/dia-query?table=v_clinic_property_link_review_queue&select=*",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "LCC"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "filter", "location": "query", "type": "string" },
+          { "name": "order", "location": "query", "type": "string" },
+          { "name": "limit", "location": "query", "type": "integer" },
+          { "name": "offset", "location": "query", "type": "integer" }
+        ]
+      },
+      "outputs": {
+        "fields": ["data", "count"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query through LCC proxy.",
+      "wave": 1,
+      "listing_driven_production_support": "Improves clinic-property matching throughput for dialysis pursuit quality."
+    },
+    {
+      "action_name": "get_hot_business_contacts",
+      "user_goal": "Identify highest-engagement contacts for outbound today",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/contacts?action=hot_leads&limit={n}",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "Outlook", "Copilot Chat", "LCC"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "limit", "location": "query", "type": "integer" }
+        ]
+      },
+      "outputs": {
+        "fields": ["contacts"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query.",
+      "wave": 1,
+      "listing_driven_production_support": "Focuses outbound activity on warm relationships likely to convert into listing conversations."
+    },
+    {
+      "action_name": "generate_prospecting_brief",
+      "user_goal": "Get a concise call-sheet style briefing for outreach",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "message", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "context", "location": "body", "type": "object" },
+          { "name": "history", "location": "body", "type": "array" },
+          { "name": "attachments", "location": "body", "type": "array" }
+        ]
+      },
+      "outputs": {
+        "fields": ["response", "usage", "provider"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": false,
+      "idempotency_notes": "LLM output variance; no system write side effects.",
+      "wave": 1,
+      "listing_driven_production_support": "Reduces prep time and improves prospecting consistency per broker."
+    },
+    {
+      "action_name": "draft_outreach_email",
+      "user_goal": "Produce personalized outreach drafts using available context",
+      "category": "notify/communicate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat",
+      "method": "POST",
+      "microsoft_surfaces": ["Outlook", "Teams", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "message", "location": "body", "type": "string", "description": "Prompt including recipient context, intent, tone, objective" }
+        ],
+        "optional": [
+          { "name": "context", "location": "body", "type": "object" },
+          { "name": "history", "location": "body", "type": "array" }
+        ]
+      },
+      "outputs": {
+        "fields": ["response"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "idempotency_notes": "Draft generation has no backend mutation; sending remains user-controlled in Outlook.",
+      "wave": 1,
+      "listing_driven_production_support": "Improves touchpoint cadence and quality, driving new listing opportunities."
+    },
+    {
+      "action_name": "search_entity_targets",
+      "user_goal": "Find canonical entities for listing pursuit prep and linkage",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/entities?action=search&q={query}",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "LCC", "Copilot Chat"],
+      "inputs": {
+        "required": [
+          { "name": "q", "location": "query", "type": "string" }
+        ],
+        "optional": [
+          { "name": "entity_type", "location": "query", "type": "string" },
+          { "name": "domain", "location": "query", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["entities", "count"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query.",
+      "wave": 1,
+      "listing_driven_production_support": "Helps quickly assemble account/property context for pursuit strategy."
+    },
+    {
+      "action_name": "create_listing_pursuit_followup_task",
+      "user_goal": "Create actionable next steps from pursuit analysis",
+      "category": "schedule/task",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/actions",
+      "method": "POST",
+      "microsoft_surfaces": ["Planner/To Do", "Teams", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "title", "location": "body", "type": "string" },
+          { "name": "action_type", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "description", "location": "body", "type": "string" },
+          { "name": "priority", "location": "body", "type": "string" },
+          { "name": "assigned_to", "location": "body", "type": "string" },
+          { "name": "due_date", "location": "body", "type": "string", "format": "date" },
+          { "name": "entity_id", "location": "body", "type": "string" },
+          { "name": "domain", "location": "body", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["action"]
+      },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "idempotency_notes": "Not strictly idempotent; repeated requests can create duplicate tasks.",
+      "wave": 1,
+      "listing_driven_production_support": "Translates pursuit insight into concrete broker actions that move assignments forward."
+    },
+    {
+      "action_name": "draft_seller_update_email",
+      "user_goal": "Generate weekly seller update drafts from queue/activity context",
+      "category": "notify/communicate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat",
+      "method": "POST",
+      "microsoft_surfaces": ["Outlook", "Teams", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "message", "location": "body", "type": "string", "description": "Prompt with listing context, activity highlights, open items, milestones" }
+        ],
+        "optional": [
+          { "name": "context", "location": "body", "type": "object" },
+          { "name": "history", "location": "body", "type": "array" }
+        ]
+      },
+      "outputs": {
+        "fields": ["response"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "idempotency_notes": "No backend mutation; user approval required before sending externally.",
+      "wave": 1,
+      "listing_driven_production_support": "Improves seller communication quality and responsiveness, supporting client retention and referrals."
+    },
+    {
+      "action_name": "fetch_listing_activity_context",
+      "user_goal": "Pull timeline/activity context used to draft seller communications",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/queue-v2?view=entity_timeline&entity_id={id}",
+      "method": "GET",
+      "microsoft_surfaces": ["LCC", "Teams", "Copilot Chat"],
+      "inputs": {
+        "required": [
+          { "name": "entity_id", "location": "query", "type": "string" }
+        ],
+        "optional": [
+          { "name": "per_page", "location": "query", "type": "integer" },
+          { "name": "cursor", "location": "query", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["view", "events", "has_more", "next_cursor"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query.",
+      "wave": 1,
+      "listing_driven_production_support": "Supplies concrete activity evidence for stronger seller updates and market communication."
+    },
+    {
+      "action_name": "get_my_execution_queue",
+      "user_goal": "See assigned work due soon/overdue for execution discipline",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/queue-v2?view=my_work",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "Planner/To Do", "LCC"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "status", "location": "query", "type": "string" },
+          { "name": "domain", "location": "query", "type": "string" },
+          { "name": "priority", "location": "query", "type": "string" },
+          { "name": "sort", "location": "query", "type": "string", "default": "due_date" },
+          { "name": "page", "location": "query", "type": "integer" },
+          { "name": "per_page", "location": "query", "type": "integer" }
+        ]
+      },
+      "outputs": {
+        "fields": ["view", "items", "pagination"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query.",
+      "wave": 1,
+      "listing_driven_production_support": "Prevents dropped execution tasks that delay transactions and client communication."
+    },
+    {
+      "action_name": "update_execution_task_status",
+      "user_goal": "Progress or complete execution tasks from Copilot surface",
+      "category": "review/resolve",
+      "owning_repo": "LCC",
+      "endpoint": "PATCH /api/actions?id={action_id}",
+      "method": "PATCH",
+      "microsoft_surfaces": ["Teams", "Planner/To Do", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "id", "location": "query", "type": "string" }
+        ],
+        "optional": [
+          { "name": "status", "location": "body", "type": "string" },
+          { "name": "assigned_to", "location": "body", "type": "string" },
+          { "name": "priority", "location": "body", "type": "string" },
+          { "name": "metadata", "location": "body", "type": "object" }
+        ]
+      },
+      "outputs": {
+        "fields": ["action"]
+      },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": true,
+      "idempotency_notes": "Reapplying same state is effectively idempotent; lifecycle rules enforce legal transitions.",
+      "wave": 1,
+      "listing_driven_production_support": "Keeps transaction and follow-up workflows moving to close with fewer misses."
+    },
+    {
+      "action_name": "get_daily_briefing_snapshot",
+      "user_goal": "Provide a single daily 'what matters now' snapshot",
+      "category": "orchestrate",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/daily-briefing?action=snapshot",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "Outlook", "LCC"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "role_view", "location": "query", "type": "string", "enum": ["broker", "analyst_ops", "manager"] },
+          { "name": "user_id", "location": "query", "type": "string" },
+          { "name": "domain", "location": "query", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["briefing_id", "as_of", "status", "global_market_intelligence", "user_specific_priorities", "team_level_production_signals", "domain_specific_alerts_highlights", "actions"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only aggregator; no write side effects.",
+      "wave": 1,
+      "implementation_status": "to_be_implemented",
+      "listing_driven_production_support": "Concentrates team attention on highest-leverage actions each day."
+    },
+    {
+      "action_name": "get_sync_run_health",
+      "user_goal": "Check connector health, run outcomes, and failure posture",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "GET /api/sync?action=health",
+      "method": "GET",
+      "microsoft_surfaces": ["Teams", "LCC", "Copilot Chat"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "workspace", "location": "query", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["health_summary", "drift_metrics", "error_posture", "recent_jobs", "connector_status"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only queries.",
+      "wave": 1,
+      "listing_driven_production_support": "Detects ingestion/reporting blind spots before they impact pursuit and execution."
+    },
+    {
+      "action_name": "retry_sync_error_record",
+      "user_goal": "Re-run retryable sync failures without leaving collaboration surface",
+      "category": "review/resolve",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/sync?action=retry&error_id={sync_error_id}",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "error_id", "location": "query", "type": "string" }
+        ],
+        "optional": []
+      },
+      "outputs": {
+        "fields": ["retry_result", "updated_status", "counts"]
+      },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": true,
+      "idempotency_notes": "Safe to retry when item remains retryable; repeated retries may be no-op after resolution.",
+      "wave": 1,
+      "listing_driven_production_support": "Restores missing activity/task data quickly so downstream listing workflows remain complete."
+    },
+    {
+      "action_name": "generate_prospecting_brief",
+      "user_goal": "Get a daily call sheet with prep notes for top contacts",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "LCC"],
+      "inputs": { "required": [], "optional": [{ "name": "limit", "location": "body", "type": "integer" }] },
+      "outputs": { "fields": ["response", "contacts", "provider"] },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": false,
+      "wave": 1,
+      "handler": "prospecting_brief",
+      "listing_driven_production_support": "Focuses outbound activity on warm relationships with AI-generated call prep."
+    },
+    {
+      "action_name": "draft_outreach_email",
+      "user_goal": "Generate personalized outreach email draft",
+      "category": "notify/communicate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Outlook", "Teams", "LCC"],
+      "inputs": { "required": [], "optional": [
+        { "name": "contact_id", "location": "body", "type": "string" },
+        { "name": "contact_name", "location": "body", "type": "string" },
+        { "name": "intent", "location": "body", "type": "string" },
+        { "name": "tone", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["response", "requires_review", "provider"] },
+      "risk_tier": 1,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "wave": 1,
+      "handler": "draft_outreach",
+      "listing_driven_production_support": "Accelerates touchpoint cadence with personalized, context-rich outreach."
+    },
+    {
+      "action_name": "draft_seller_update_email",
+      "user_goal": "Generate weekly seller report email draft",
+      "category": "notify/communicate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Outlook", "Teams", "LCC"],
+      "inputs": { "required": [], "optional": [
+        { "name": "entity_id", "location": "body", "type": "string" },
+        { "name": "entity_name", "location": "body", "type": "string" },
+        { "name": "listing_context", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["response", "requires_review", "provider"] },
+      "risk_tier": 1,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "wave": 1,
+      "handler": "draft_seller_update",
+      "listing_driven_production_support": "Improves seller communication speed and consistency."
+    },
+    {
+      "action_name": "create_todo_task",
+      "user_goal": "Create a task in Microsoft To Do",
+      "category": "schedule/task",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Planner/To Do", "Teams", "LCC"],
+      "inputs": { "required": [{ "name": "title", "location": "body", "type": "string" }], "optional": [
+        { "name": "body", "location": "body", "type": "string" },
+        { "name": "due_date", "location": "body", "type": "string", "format": "date" },
+        { "name": "importance", "location": "body", "type": "string", "enum": ["urgent", "normal", "low"] },
+        { "name": "list_name", "location": "body", "type": "string" },
+        { "name": "lcc_action_id", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["task"] },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "wave": 2,
+      "handler": "create_todo_task",
+      "listing_driven_production_support": "Bridges LCC actions to Microsoft task surfaces for cross-platform follow-through."
+    },
+    {
+      "action_name": "generate_listing_pursuit_dossier",
+      "user_goal": "Assemble a pursuit package for a property or entity",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "LCC", "Word"],
+      "inputs": { "required": [], "optional": [
+        { "name": "entity_id", "location": "body", "type": "string" },
+        { "name": "entity_name", "location": "body", "type": "string" },
+        { "name": "q", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["response", "entity", "provider"] },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": false,
+      "wave": 2,
+      "handler": "listing_pursuit_dossier",
+      "listing_driven_production_support": "Accelerates pursuit preparation and proposal readiness."
+    },
+    {
+      "action_name": "get_relationship_context",
+      "user_goal": "Get relationship briefing before a call or meeting",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "LCC"],
+      "inputs": { "required": [], "optional": [
+        { "name": "contact_id", "location": "body", "type": "string" },
+        { "name": "contact_name", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["response", "contact", "provider"] },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": false,
+      "wave": 3,
+      "handler": "relationship_context",
+      "listing_driven_production_support": "Ensures no touchpoint starts cold — compounds relationship intelligence."
+    },
+    {
+      "action_name": "get_pipeline_intelligence",
+      "user_goal": "Pipeline health diagnostics with bottleneck detection",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "LCC", "Power BI"],
+      "inputs": { "required": [], "optional": [
+        { "name": "domain", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["response", "pipeline", "provider"] },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "wave": 3,
+      "handler": "pipeline_intelligence",
+      "listing_driven_production_support": "Surfaces bottlenecks and velocity trends to keep production on track."
+    },
+    {
+      "action_name": "guided_entity_merge",
+      "user_goal": "Find and review duplicate entities and contacts",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["LCC", "Copilot Chat"],
+      "inputs": { "required": [], "optional": [
+        { "name": "entity_id", "location": "body", "type": "string" },
+        { "name": "source", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["entity_duplicates", "contact_merge_queue", "message"] },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "wave": 2,
+      "handler": "guided_entity_merge",
+      "listing_driven_production_support": "Maintains clean entity data for accurate pipeline and relationship tracking."
+    },
+    {
+      "action_name": "generate_document",
+      "user_goal": "Create BOV, proposal, seller report, comp analysis, or pursuit summary",
+      "category": "export/report",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Word", "OneDrive", "SharePoint", "LCC"],
+      "inputs": { "required": [{ "name": "doc_type", "location": "body", "type": "string", "enum": ["bov", "proposal", "seller_report", "comp_analysis", "pursuit_summary"] }], "optional": [
+        { "name": "entity_id", "location": "body", "type": "string" },
+        { "name": "entity_name", "location": "body", "type": "string" },
+        { "name": "title", "location": "body", "type": "string" },
+        { "name": "additional_context", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["response", "doc_type", "title", "saved_file", "html_available", "provider"] },
+      "risk_tier": 1,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "wave": 3,
+      "handler": "document_assembly",
+      "listing_driven_production_support": "Accelerates proposal turnaround and improves marketing collateral quality."
+    },
+    {
+      "action_name": "generate_teams_card",
+      "user_goal": "Generate Teams adaptive card JSON for notifications",
+      "category": "notify/communicate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams"],
+      "inputs": { "required": [{ "name": "card_type", "location": "body", "type": "string", "enum": ["inbox_triage", "action_review", "escalation"] }], "optional": [
+        { "name": "data", "location": "body", "type": "object" },
+        { "name": "lcc_host", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["card", "card_type"] },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "wave": 2,
+      "handler": "teams_card",
+      "listing_driven_production_support": "Enables Teams-native triage and approval flows without app-switching."
+    },
+    {
+      "action_name": "research_followup",
+      "user_goal": "Close research task and create follow-up action",
+      "category": "orchestrate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/operations?action=research_followup",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Planner/To Do", "LCC"],
+      "inputs": { "required": [{ "name": "research_task_id", "location": "body", "type": "string" }], "optional": [
+        { "name": "outcome", "location": "body", "type": "object" },
+        { "name": "followup_title", "location": "body", "type": "string" },
+        { "name": "followup_type", "location": "body", "type": "string" },
+        { "name": "assigned_to", "location": "body", "type": "string" },
+        { "name": "due_date", "location": "body", "type": "string" }
+      ]},
+      "outputs": { "fields": ["research_status", "action", "research_task"] },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "wave": 2,
+      "listing_driven_production_support": "Ensures research findings translate into concrete follow-up actions."
+    },
+    {
+      "action_name": "reassign_work_item",
+      "user_goal": "Reassign an action, inbox item, or research task",
+      "category": "schedule/task",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/operations?action=reassign",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "LCC"],
+      "inputs": { "required": [
+        { "name": "item_type", "location": "body", "type": "string", "enum": ["action", "inbox", "research"] },
+        { "name": "item_id", "location": "body", "type": "string" },
+        { "name": "assigned_to", "location": "body", "type": "string" }
+      ], "optional": [{ "name": "reason", "location": "body", "type": "string" }] },
+      "outputs": { "fields": ["item_id", "assigned_to", "previous"] },
+      "risk_tier": 2,
+      "confirmation_required": "explicit",
+      "idempotent": true,
+      "wave": 2,
+      "listing_driven_production_support": "Balances team workload and ensures right person handles each opportunity."
+    },
+    {
+      "action_name": "escalate_action",
+      "user_goal": "Escalate an action item to manager",
+      "category": "review/resolve",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/operations?action=escalate",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "LCC"],
+      "inputs": { "required": [
+        { "name": "action_item_id", "location": "body", "type": "string" },
+        { "name": "escalate_to", "location": "body", "type": "string" },
+        { "name": "reason", "location": "body", "type": "string" }
+      ], "optional": [] },
+      "outputs": { "fields": ["escalation", "reassignment"] },
+      "risk_tier": 3,
+      "confirmation_required": "explicit",
+      "idempotent": false,
+      "wave": 2,
+      "listing_driven_production_support": "Surfaces blockers to leadership so deals don't stall."
+    }
+  ]
+}

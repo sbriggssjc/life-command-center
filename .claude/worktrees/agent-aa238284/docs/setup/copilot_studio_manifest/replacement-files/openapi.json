@@ -1,0 +1,303 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Life Command Center API",
+    "version": "1.0.0",
+    "description": "CRE deal intelligence API for Team Briggs at Northmarq."
+  },
+  "servers": [
+    {
+      "url": "https://life-command-center-nine.vercel.app",
+      "description": "Production"
+    }
+  ],
+  "paths": {
+    "/api/copilot/portfolio/get-daily-briefing-snapshot": {
+      "post": {
+        "operationId": "get_daily_briefing_snapshot",
+        "summary": "Get today's prioritized daily briefing with strategic, important, and urgent items requiring attention.",
+        "description": "**Tier 0** (read-only). Category: portfolio.",
+        "tags": [
+          "portfolio"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "timeframe": {
+                    "type": "string",
+                    "enum": [
+                      "today",
+                      "since_yesterday",
+                      "this_week"
+                    ],
+                    "description": "Time range for the briefing"
+                  },
+                  "domain": {
+                    "type": "string",
+                    "enum": [
+                      "government",
+                      "dialysis",
+                      "both"
+                    ],
+                    "description": "Filter by business domain"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "briefing": {
+                      "type": "object",
+                      "description": "Structured briefing with priority sections"
+                    },
+                    "generated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/portfolio/get-hot-business-contacts": {
+      "post": {
+        "operationId": "get_hot_business_contacts",
+        "summary": "List high-priority business development contacts with recent activity or upcoming touchpoints.",
+        "description": "**Tier 0** (read-only). Category: portfolio.",
+        "tags": [
+          "portfolio"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "domain": {
+                    "type": "string",
+                    "enum": [
+                      "government",
+                      "dialysis"
+                    ]
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "contacts": {
+                      "type": "array",
+                      "description": "Hot lead contacts with activity context"
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/portfolio/search-entity-targets": {
+      "post": {
+        "operationId": "search_entity_targets",
+        "summary": "Search canonical entities (contacts, organizations, assets) by name across all types.",
+        "description": "**Tier 0** (read-only). Category: portfolio.",
+        "tags": [
+          "portfolio"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "q": {
+                    "type": "string",
+                    "description": "Search query (name match)"
+                  },
+                  "entity_type": {
+                    "type": "string",
+                    "enum": [
+                      "contact",
+                      "organization",
+                      "asset"
+                    ],
+                    "description": "Filter by entity type"
+                  },
+                  "domain": {
+                    "type": "string",
+                    "enum": [
+                      "government",
+                      "dialysis"
+                    ]
+                  }
+                },
+                "required": [
+                  "q"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entities": {
+                      "type": "array",
+                      "description": "Matching entities"
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/portfolio/get-pipeline-intelligence": {
+      "post": {
+        "operationId": "get_pipeline_intelligence",
+        "summary": "Get pipeline intelligence \u2014 deal velocity, conversion rates, bottleneck analysis across domains.",
+        "description": "**Tier 0** (read-only). Category: portfolio.",
+        "tags": [
+          "portfolio"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "domain": {
+                    "type": "string",
+                    "enum": [
+                      "government",
+                      "dialysis",
+                      "both"
+                    ]
+                  },
+                  "timeframe": {
+                    "type": "string",
+                    "enum": [
+                      "30d",
+                      "90d",
+                      "6m",
+                      "1y"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "intelligence": {
+                      "type": "object",
+                      "description": "Pipeline metrics and analysis"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/ops/get-work-counts": {
+      "post": {
+        "operationId": "get_work_counts",
+        "summary": "Get aggregate work counts \u2014 open actions, inbox items, overdue tasks, by domain and priority.",
+        "description": "**Tier 0** (read-only). Category: ops.",
+        "tags": [
+          "ops"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "domain": {
+                    "type": "string",
+                    "enum": [
+                      "government",
+                      "dialysis"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "counts": {
+                      "type": "object",
+                      "description": "Categorized work counts"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
