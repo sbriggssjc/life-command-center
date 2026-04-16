@@ -1028,8 +1028,10 @@ async function upsertDomainProperty(domain, entity, metadata) {
   // variants ("Street" vs "St", "Road" vs "Rd") resolve to the same record
   // instead of creating a duplicate every time CoStar spells it differently.
   const normAddr = normalizeAddress(address);
+  // Select building size columns so we can guard against overwriting with lower-confidence data
+  const sizeCol = domain === 'government' ? 'rba' : 'building_size';
   let lookupPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
-    `&select=property_id&limit=1`;
+    `&select=property_id,${sizeCol}&limit=1`;
   if (entity.state) lookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
   if (entity.city)  lookupPath += `&city=ilike.${encodeURIComponent(entity.city)}`;
 
@@ -1039,7 +1041,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
   // city-name variant mismatch ("MEMPHIS" vs "Memphis" vs "memphis" in DB).
   if (!lookup.data?.length && entity.city && entity.state) {
     const fallbackPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
-      `&state=eq.${encodeURIComponent(entity.state)}&select=property_id&limit=1`;
+      `&state=eq.${encodeURIComponent(entity.state)}&select=property_id,${sizeCol}&limit=1`;
     const fallback = await domainQuery(domain, 'GET', fallbackPath);
     if (fallback.ok && fallback.data?.length) lookup = fallback;
   }
@@ -1108,7 +1110,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
       lease_expiration:   parseDate(metadata.lease_expiration)?.split('T')[0] || null,
       renewal_options:    metadata.renewal_options || null,
       rent_escalations:   metadata.rent_escalations || null,
-      sf_leased:         parseSF(metadata.sf_leased || metadata.square_footage),
+      sf_leased:         parseSF(metadata.sf_leased),
       agency:            primaryTenant || null,
       agency_full_name:  primaryTenant || null,
       data_source:       'costar_sidebar',
@@ -1137,6 +1139,26 @@ async function upsertDomainProperty(domain, entity, metadata) {
     // are picked up by the end-of-propagateToDomainDbDirect recalc step
     // (Step 5g), which fires on every dialysis save and is idempotent.
     const propertyId = lookup.data[0].property_id;
+
+    // ── Guard: protect building_size / rba from lease-area contamination ──
+    // Hierarchy: (1) CoStar RBA from property tab, (2) existing DB value.
+    // Never allow lease area (sf_leased) to overwrite building size.
+    const existingSize = lookup.data[0][sizeCol];
+    if (existingSize && existingSize > 0) {
+      // DB already has a building size. Only overwrite if the incoming CoStar
+      // value is clearly RBA (square_footage set AND different from sf_leased).
+      // If sf_leased == square_footage, the extension may have picked up a
+      // lease-area value that bled into the RBA field — keep existing.
+      const incomingSF = parsedSF;
+      const leasedSF = parseSF(metadata.sf_leased);
+      if (!incomingSF || (leasedSF && incomingSF === leasedSF && incomingSF !== existingSize)) {
+        console.log(`[upsertDomainProperty] Protecting ${sizeCol}: DB has ${existingSize}, ` +
+          `incoming ${incomingSF || 'null'} matches sf_leased ${leasedSF || 'null'} — skipping overwrite`);
+        delete propertyData.building_size;
+        delete propertyData.rba;
+      }
+    }
+
     await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
     if (domain === 'government' && metadata.lease_number) {
       await linkGsaLease(propertyId, metadata.lease_number);
@@ -3221,7 +3243,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     leaseRecords.push({
       property_id: propertyId,
       tenant: tenantName,
-      leased_area: parseSF(metadata.sf_leased || metadata.square_footage),
+      leased_area: parseSF(metadata.sf_leased),
       lease_start: parseDate(metadata.lease_commencement),
       lease_expiration: parseDate(metadata.lease_expiration),
       expense_structure: metadata.expense_structure || metadata.lease_type,
