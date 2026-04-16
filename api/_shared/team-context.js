@@ -191,7 +191,7 @@ export function formatSalesTable(sales, domain) {
       const city = s.city || '';
       const state = s.state || '';
       const tenant = s.agency || s.tenant || '';
-      const rba = s.sf_leased || s.rba || s.building_size || '';
+      const rba = s.rba || s.building_size || s.sf_leased || '';
       const noi = s.noi ? `$${Number(s.noi).toLocaleString()}` : '';
       const term = s.firm_term_years || s.total_term_years || '';
       const cap = s.sold_cap_rate ? `${s.sold_cap_rate}%` : '';
@@ -206,7 +206,7 @@ export function formatSalesTable(sales, domain) {
       const s = sales[i];
       const location = [s.city, s.state].filter(Boolean).join(', ');
       const operator = s.tenant || s.operator || '';
-      const rba = s.sf_leased || s.rba || s.building_size || '';
+      const rba = s.rba || s.building_size || s.sf_leased || '';
       const rent = s.noi ? `$${Number(s.noi).toLocaleString()}` : '';
       const term = s.firm_term_years || '';
       const cap = s.sold_cap_rate ? `${s.sold_cap_rate}%` : '';
