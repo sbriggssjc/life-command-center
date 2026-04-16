@@ -4003,7 +4003,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
  * @param {string} userId - Acting user UUID
  * @returns {object} Summary of what was processed
  */
-export async function processSidebarExtraction(entityId, workspaceId, userId) {
+export async function processSidebarExtraction(entityId, workspaceId, userId, opts = {}) {
   // Fetch the full entity
   const entityResult = await opsQuery('GET',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}&select=*`
@@ -4015,8 +4015,10 @@ export async function processSidebarExtraction(entityId, workspaceId, userId) {
   const entity = entityResult.data[0];
   const metadata = entity.metadata || {};
 
-  // Only process if there's sidebar extraction data worth unpacking
-  if (!hasSidebarData(metadata)) {
+  // Only skip if not forced AND there's no actionable sidebar data to unpack.
+  // Manual "Re-run Pipeline" always passes force:true so the user's explicit
+  // action bypasses the hasSidebarData() gate.
+  if (!opts.force && !hasSidebarData(metadata)) {
     return { ok: true, skipped: true, reason: 'No actionable sidebar data in metadata' };
   }
 
