@@ -1086,13 +1086,12 @@ function renderOnMarketInner() {
 
   // Check multiple possible field names for price, cap rate, and days on market
   const getPrice = r => parseFloat(r.ask_price || r.asking_price || r.listing_price || r.price || 0);
-  // Normalize cap rate — DB stores mix of decimals (0.065 = 6.5%) and whole (6.5 = 6.5%)
+  // Cap rates are standardized as decimals in DB (0.065 = 6.5%) — convert to display pct
   const getCapNorm = r => {
     const raw = parseFloat(r.ask_cap || r.asking_cap_rate || r.cap_rate || 0);
     if (!raw || raw <= 0) return 0;
-    // If raw < 0.25, it's a decimal (e.g. 0.065 = 6.5%); convert to whole pct
-    // If raw >= 0.25, it's already a whole percentage (e.g. 6.5 = 6.5%)
-    return raw < 0.25 ? raw * 100 : raw;
+    // DB normalized to decimal (2026-04-17). Convert to display percentage.
+    return raw < 1 ? raw * 100 : raw;  // safety: if somehow still whole pct, pass through
   };
   const getDom = r => parseInt(r.dom || r.days_on_market || 0, 10);
   const withPrice = recentListings.filter(r => getPrice(r) > 0);

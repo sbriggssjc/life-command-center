@@ -2978,7 +2978,7 @@ function _udTabOperations() {
   html += '<span>&#x25B6;</span> Methodology & Data Sources</div>';
   html += '<div style="display:none;margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6">';
 
-  html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer model: Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). State-level payer mix baselines with demographic adjustments.</p>';
+  html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer blended rate (~$357/tx): Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). Chair-based model (chairs × 3 shifts × 5.5 days × 52 wks × 65% utilization) is primary where station data is available (validated median 1.00x vs TTM, n=7,115). Concurrent-ratio model (annual patients × 0.245 × 156 tx/yr) used as fallback. TTM-reported and 10-K filing data preferred over modeled estimates.</p>';
 
   html += '<p style="margin:0 0 8px"><strong style="color:var(--text2)">Risk Score Components:</strong></p>';
   html += '<p style="margin:0 0 4px;padding-left:8px"><strong style="color:var(--text2)">Patient Trend (30%):</strong> Measures YoY patient growth/decline and regression trend direction. Declining census signals potential revenue erosion and operator dissatisfaction.</p>';
