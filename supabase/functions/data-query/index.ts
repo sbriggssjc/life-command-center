@@ -64,6 +64,7 @@ const DIA_READ_TABLES = new Set([
   "v_clinic_payer_mix",
   "v_payer_mix_geo_averages",
   "property_cms_link", "property_cms_link_history",
+  "ingestion_log",
 ]);
 
 const DIA_WRITE_TABLES = new Set([
