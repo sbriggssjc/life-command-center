@@ -2662,24 +2662,81 @@ function _udTabOperations() {
 
   html += '<div class="detail-grid">';
   html += _rowMoney('Est. Annual Revenue', finDetail.estimated_annual_revenue || r.estimated_annual_revenue);
-  html += _rowMoney('Total Operating Costs', r.ttm_operating_costs);
+
+  // ── Reconcile Operating Costs ──
+  // Priority: 1) HCRIS cost report (facility-level actual)
+  //           2) Derive from finDetail (revenue − profit)
+  //           3) ttm_operating_costs from medicare_clinics (CAUTION: often org-level, not clinic-level)
+  let bestCosts = null;
+  let costSource = '';
+  if (costRpt && costRpt.total_costs && Number(costRpt.total_costs) > 0) {
+    bestCosts = Number(costRpt.total_costs);
+    costSource = 'HCRIS';
+  } else if (finDetail.estimated_annual_revenue && finDetail.estimated_operating_profit) {
+    bestCosts = Number(finDetail.estimated_annual_revenue) - Number(finDetail.estimated_operating_profit);
+    costSource = 'derived';
+  } else if (estRevenue && bestProfit) {
+    bestCosts = Number(estRevenue) - Number(bestProfit);
+    costSource = 'derived';
+  }
+  // Fallback to ttm_operating_costs only if it's within a plausible range of revenue
+  // (ttm_operating_costs is often org-level data that dwarfs clinic revenue)
+  if (!bestCosts && r.ttm_operating_costs) {
+    const ttmCost = Number(r.ttm_operating_costs);
+    const rev = Number(estRevenue || 0);
+    if (rev > 0 && ttmCost / rev < 3) {
+      bestCosts = ttmCost;
+      costSource = 'ttm';
+    }
+    // If ratio > 3x, the ttm figure is likely org-level — omit rather than show bad data
+  }
+  if (bestCosts != null && bestCosts > 0) {
+    html += _rowHtml('Total Operating Costs', '$' + _fmtCompact(bestCosts)
+      + (costSource === 'HCRIS' ? ' <span style="font-size:10px;color:var(--text3)">(HCRIS)</span>'
+        : costSource === 'derived' ? ' <span style="font-size:10px;color:var(--text3)">(derived)</span>'
+        : ''));
+  } else {
+    html += _row('Total Operating Costs', null);
+  }
+
   html += _rowMoney('Operating Profit', finDetail.estimated_operating_profit || r.ttm_operating_profit);
   html += _rowHtml('Operating Margin', margin != null ? _marginBadge(margin) : null);
 
-  // Revenue & cost per treatment — use model treatments (patients×156) when HCRIS data looks partial
-  const rawTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  // ── Reconcile Treatments / Year ──
+  // Priority: 1) HCRIS cost report (actual treatment count)
+  //           2) finDetail estimated_treatments_per_year
+  //           3) Model from patient count (patients × 156)
+  //           4) ttm_total_treatments (only if plausible for clinic size)
+  const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
+  const finTx = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
   const modelTx = bestPatientCount ? bestPatientCount * 156 : null; // 3 tx/week × 52 weeks
-  const txLooksPartial = rawTx && modelTx && (rawTx / modelTx < 0.5);
-  const annualTx = txLooksPartial ? modelTx : (rawTx || modelTx);
+  const rawTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  let annualTx = null;
+  let txLabel = '';
+  if (hcrisTx && hcrisTx > 0) {
+    annualTx = hcrisTx;
+    txLabel = ' <span style="font-size:10px;color:var(--text3)">(HCRIS)</span>';
+  } else if (finTx && finTx > 0) {
+    annualTx = finTx;
+    txLabel = ' <span style="font-size:10px;color:var(--text3)">(estimated)</span>';
+  } else if (modelTx && modelTx > 0) {
+    annualTx = modelTx;
+    txLabel = ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>';
+  } else if (rawTx && modelTx && Number(rawTx) / modelTx < 3) {
+    // Only use ttm if it's within plausible range
+    annualTx = Number(rawTx);
+  } else if (rawTx && !modelTx) {
+    annualTx = Number(rawTx);
+  }
   if (annualTx && estRevenue) {
-    const revPerTx = Number(estRevenue) / Number(annualTx);
+    const revPerTx = Number(estRevenue) / annualTx;
     html += _rowHtml('Revenue / Treatment', '$' + fmtN(Math.round(revPerTx)));
   }
-  if (annualTx && r.ttm_operating_costs) {
-    const costPerTx = Number(r.ttm_operating_costs) / Number(annualTx);
+  if (annualTx && bestCosts) {
+    const costPerTx = bestCosts / annualTx;
     html += _rowHtml('Cost / Treatment', '$' + fmtN(Math.round(costPerTx)));
   }
-  html += _rowHtml('Treatments / Year', annualTx ? fmtN(annualTx) + (txLooksPartial ? ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>' : '') : null);
+  html += _rowHtml('Treatments / Year', annualTx ? fmtN(annualTx) + txLabel : null);
   html += '</div>';
 
   // Payer Mix — 4-level comparison: Clinic → County Avg → State Avg → National (smallest to largest)
