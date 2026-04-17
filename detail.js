@@ -910,6 +910,11 @@ async function _udCmsClearLink() {
   }
 }
 
+// Export CMS link/search functions for onclick handlers in dynamic HTML
+window._udCmsLinkCandidate = _udCmsLinkCandidate;
+window._udCmsClearLink = _udCmsClearLink;
+window._udCmsTypeahead = _udCmsTypeahead;
+
 /** Lazy-load additional clinic data for the Operations tab, then render */
 let _opsExtraCache = null; // { medicare_id, patientHistory, trends, quality, financialDetail, costReports, payerMix, lease }
 async function _udRenderOperationsAsync(bodyEl) {
@@ -2669,8 +2674,13 @@ function _udTabOperations() {
   //           3) ttm_operating_costs from medicare_clinics (CAUTION: often org-level, not clinic-level)
   let bestCosts = null;
   let costSource = '';
-  if (costRpt && costRpt.total_costs && Number(costRpt.total_costs) > 0) {
-    bestCosts = Number(costRpt.total_costs);
+  // HCRIS Form 265-11 often reports total_costs == total_patient_revenue (Medicare-allocated).
+  // When that happens, prefer deriving costs from revenue − profit for actual profitability.
+  const hcrisCost = costRpt && costRpt.total_costs ? Number(costRpt.total_costs) : 0;
+  const hcrisRev = costRpt && costRpt.total_patient_revenue ? Number(costRpt.total_patient_revenue) : 0;
+  const hcrisCostEqualsRev = hcrisCost > 0 && hcrisRev > 0 && Math.abs(hcrisCost - hcrisRev) < 1;
+  if (hcrisCost > 0 && !hcrisCostEqualsRev) {
+    bestCosts = hcrisCost;
     costSource = 'HCRIS';
   } else if (finDetail.estimated_annual_revenue && finDetail.estimated_operating_profit) {
     bestCosts = Number(finDetail.estimated_annual_revenue) - Number(finDetail.estimated_operating_profit);
