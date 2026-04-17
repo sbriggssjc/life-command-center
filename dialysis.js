@@ -188,6 +188,8 @@ async function loadDiaSalesCompsFromTxns() {
   // orphan sales without a property drop out — v_sales_comps filtered those
   // too. Leases are a left-side embed so sales on vacant/land parcels still
   // show up.
+  // NOTE: sale_brokers loaded separately to avoid 3-level PostgREST embed
+  // failures that silently return [] through the edge proxy.
   const select = [
     '*,',
     'properties!inner(property_id,address,city,state,zip_code,county,building_size,',
@@ -195,10 +197,7 @@ async function loadDiaSalesCompsFromTxns() {
     'latitude,longitude,lease_bump_pct,lease_bump_interval_mo,',
     'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
     'expense_structure,rent_per_sf,annual_rent,renewal_options,is_active,',
-    'status,data_source,source_confidence)),',
-    'sale_brokers(role,broker_id,broker_company_id,',
-    'brokers(broker_name,company),',
-    'broker_companies(name))',
+    'status,data_source,source_confidence))',
   ].join('');
   let all = [];
   for (let pg = 0; pg <= 20; pg++) {
@@ -210,7 +209,29 @@ async function loadDiaSalesCompsFromTxns() {
     all = all.concat(batch || []);
     if (!batch || batch.length < 1000) break;
   }
-  return all.map(normalizeSalesTxnRow);
+
+  // Load sale_brokers separately and merge by sale_id
+  let brokerMap = {};
+  try {
+    const sbSelect = 'sale_id,role,broker_id,brokers(broker_name,company)';
+    let sbAll = [];
+    for (let pg = 0; pg <= 5; pg++) {
+      const batch = await diaQuery('sale_brokers', sbSelect, {
+        limit: 1000, offset: pg * 1000,
+      });
+      sbAll = sbAll.concat(batch || []);
+      if (!batch || batch.length < 1000) break;
+    }
+    sbAll.forEach(sb => {
+      if (!brokerMap[sb.sale_id]) brokerMap[sb.sale_id] = [];
+      brokerMap[sb.sale_id].push(sb);
+    });
+  } catch(e) { console.warn('sale_brokers load failed:', e.message); }
+
+  return all.map(r => {
+    r.sale_brokers = brokerMap[r.sale_id] || [];
+    return normalizeSalesTxnRow(r);
+  });
 }
 
 function pickCurrentLease(leases) {
@@ -673,7 +694,11 @@ function renderDiaOverview() {
           pg++;
         }
         diaFinancialEstimates = all;
-      } catch(e) { diaFinancialEstimates = []; }
+        // Debug source breakdown
+        const srcDebug = {};
+        all.forEach(e => { const s = e.estimate_source || '?'; srcDebug[s] = (srcDebug[s]||0)+1; });
+        console.debug('Financial estimates loaded:', all.length, 'rows. By source:', JSON.stringify(srcDebug));
+      } catch(e) { console.warn('Financial estimates load failed:', e.message); diaFinancialEstimates = []; }
       const finEl = document.getElementById('diaOverviewFinancials');
       if (finEl) finEl.innerHTML = renderFinancialMetricsInner();
     })();
@@ -692,7 +717,15 @@ function renderDiaOverview() {
           if (!batch || batch.length < 5000) break;
           pg++;
         }
-        diaPatientCounts = all.filter(r => r.total_patients > 0);
+        // Deduplicate by normalized clinic_id (some appear with/without leading zeros)
+        const seen = {};
+        diaPatientCounts = all.filter(r => {
+          if (!r.total_patients || r.total_patients <= 0) return false;
+          const normId = r.clinic_id ? r.clinic_id.replace(/^0+/, '') : r.clinic_id;
+          if (seen[normId]) return false;
+          seen[normId] = true;
+          return true;
+        });
       } catch(e) { diaPatientCounts = []; }
       // Re-render the patient metrics section
       const ptEl = document.getElementById('diaOverviewPatientMetrics');
@@ -1042,28 +1075,46 @@ function renderOnMarketInner() {
     return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading listings...</div></div></div>';
   }
   const listings = diaAvailListings;
+
+  // Filter stale listings — anything listed before 2023 is almost certainly no longer on market
+  const cutoff = new Date('2023-01-01');
+  const recentListings = listings.filter(r => {
+    if (!r.listing_date) return true; // keep listings without a date (benefit of the doubt)
+    return new Date(r.listing_date) >= cutoff;
+  });
+  const staleCount = listings.length - recentListings.length;
+
   // Check multiple possible field names for price, cap rate, and days on market
   const getPrice = r => parseFloat(r.ask_price || r.asking_price || r.listing_price || r.price || 0);
-  const getCap = r => parseFloat(r.ask_cap || r.asking_cap_rate || r.cap_rate || 0);
+  // Normalize cap rate — DB stores mix of decimals (0.065 = 6.5%) and whole (6.5 = 6.5%)
+  const getCapNorm = r => {
+    const raw = parseFloat(r.ask_cap || r.asking_cap_rate || r.cap_rate || 0);
+    if (!raw || raw <= 0) return 0;
+    // If raw < 0.25, it's a decimal (e.g. 0.065 = 6.5%); convert to whole pct
+    // If raw >= 0.25, it's already a whole percentage (e.g. 6.5 = 6.5%)
+    return raw < 0.25 ? raw * 100 : raw;
+  };
   const getDom = r => parseInt(r.dom || r.days_on_market || 0, 10);
-  const withPrice = listings.filter(r => getPrice(r) > 0);
-  const validCaps = listings.filter(r => { const v = getCap(r); return v > 0.01 && v < 0.25; }).map(r => getCap(r)).sort((a,b) => a-b);
-  const avgAskCap = validCaps.length > 0 ? (validCaps.reduce((s,v)=>s+v,0)/validCaps.length*100).toFixed(2) + '%' : '—';
+  const withPrice = recentListings.filter(r => getPrice(r) > 0);
+  // Filter to reasonable cap rates: 3%-15% for dialysis properties
+  const validCaps = recentListings.map(r => getCapNorm(r)).filter(v => v >= 3 && v <= 15).sort((a,b) => a-b);
+  const avgAskCap = validCaps.length > 0 ? (validCaps.reduce((s,v)=>s+v,0)/validCaps.length).toFixed(2) + '%' : '—';
   const q1Idx = Math.floor(validCaps.length * 0.25);
   const q3Idx = Math.floor(validCaps.length * 0.75);
-  const lowerQ = validCaps.length > 4 ? (validCaps[q1Idx]*100).toFixed(2)+'%' : '—';
-  const upperQ = validCaps.length > 4 ? (validCaps[q3Idx]*100).toFixed(2)+'%' : '—';
-  const avgDom = listings.filter(r => getDom(r) > 0);
+  const lowerQ = validCaps.length > 4 ? validCaps[q1Idx].toFixed(2)+'%' : '—';
+  const upperQ = validCaps.length > 4 ? validCaps[q3Idx].toFixed(2)+'%' : '—';
+  const avgDom = recentListings.filter(r => getDom(r) > 0);
   const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,r)=>s+getDom(r),0)/avgDom.length) : '—';
   const isNMListing = r => {
     var b = ((r.listing_broker||'')+(r.broker_name||'')+(r.broker_companies||'')).toLowerCase();
     if (b.includes('northmarq') || b.includes('north marq') || b.includes('nm capital')) return true;
     return NM_TEAM.some(name => { var parts = name.split(' '); return parts.some(p => p.length > 3 && b.includes(p)); });
   };
-  const nmListings = listings.filter(isNMListing);
+  const nmListings = recentListings.filter(isNMListing);
 
   let h = '<div class="dia-grid dia-grid-5">';
-  h += infoCard({ title: 'Active Listings', value: fmtN(listings.length), sub: 'clinics on market', color: 'blue', tab: 'sales' });
+  const staleSub = staleCount > 0 ? recentListings.length + ' recent · ' + staleCount + ' stale excluded' : 'clinics on market';
+  h += infoCard({ title: 'Active Listings', value: fmtN(recentListings.length), sub: staleSub, color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Ask Cap', value: avgAskCap, sub: fmtN(validCaps.length) + ' with cap data', color: 'cyan', tab: 'sales' });
   h += infoCard({ title: 'Lower Quartile', value: lowerQ, sub: '25th pctl ask cap', color: 'purple', tab: 'sales' });
   h += infoCard({ title: 'Upper Quartile', value: upperQ, sub: '75th pctl ask cap', color: 'yellow', tab: 'sales' });
@@ -1075,7 +1126,7 @@ function renderOnMarketInner() {
   const avgAskPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s,r)=>s+getPrice(r),0)/withPrice.length)) : '—';
   h += infoCard({ title: 'Avg Ask Price', value: avgAskPrice, sub: fmtN(withPrice.length) + ' priced', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Days on Market', value: avgDomVal, sub: fmtN(avgDom.length) + ' with dates', color: 'yellow', tab: 'sales' });
-  h += infoCard({ title: 'NM Market Share', value: listings.length > 0 ? (nmListings.length/listings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
+  h += infoCard({ title: 'NM Market Share', value: recentListings.length > 0 ? (nmListings.length/recentListings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
   h += '</div>';
   return h;
 }
@@ -1094,15 +1145,19 @@ function renderPatientMetricsInner() {
   }
   const total = ptSrc.reduce((s,c) => s + (c.total_patients || 0), 0);
   const avg = ptSrc.length > 0 ? Math.round(total / ptSrc.length) : 0;
+  // Estimate concurrent census — CMS total_patients is annual treated (includes turnover).
+  // Published ESRD prevalence ~577K. Scale by ratio of our clinic count to CMS universe (~7,800).
+  const estConcurrent = Math.round(577000 * (ptSrc.length / 7800));
+  const estConcurrentAvg = ptSrc.length > 0 ? Math.round(estConcurrent / ptSrc.length) : 0;
   // State breakdown for top 5
   const byState = {};
   ptSrc.forEach(c => { const st = c.state || '??'; byState[st] = (byState[st] || 0) + (c.total_patients || 0); });
   const topStates = Object.entries(byState).sort((a,b) => b[1] - a[1]).slice(0, 5);
   const statesSub = topStates.map(([st, cnt]) => st + ': ' + fmtN(cnt)).join(' · ');
   return '<div class="dia-grid dia-grid-4">' +
-    infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avg), sub: fmtN(total) + ' total across ' + fmtN(ptSrc.length) + ' clinics', color: 'blue', tab: 'changes' }) +
-    infoCard({ title: 'Clinics w/ Patients', value: fmtN(ptSrc.length), sub: 'from CMS patient counts', color: 'green', tab: 'changes' }) +
-    infoCard({ title: 'Total Patients', value: fmtN(total), sub: 'nationwide', color: 'purple', tab: 'changes' }) +
+    infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avg), sub: fmtN(total) + ' annual treated · ~' + fmtN(estConcurrentAvg) + ' concurrent est.', color: 'blue', tab: 'changes' }) +
+    infoCard({ title: 'Clinics Reporting', value: fmtN(ptSrc.length), sub: 'from CMS patient counts (deduped)', color: 'green', tab: 'changes' }) +
+    infoCard({ title: 'Annual Treated', value: fmtN(total), sub: '~' + fmtN(estConcurrent) + ' est. concurrent (ESRD prev.)', color: 'purple', tab: 'changes' }) +
     infoCard({ title: 'Top States', value: topStates[0] ? topStates[0][0] : '—', sub: statesSub, color: 'cyan', tab: 'changes' }) +
     '</div>';
 }
