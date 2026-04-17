@@ -35,6 +35,7 @@ let diaSalesView = 'comps'; // 'comps' | 'available'
 let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
+let diaPatientCounts = null; // lazy-loaded from v_facility_patient_counts_latest
 let diaSalesLoading = false;
 let diaSalesSearch = '';
 const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
@@ -194,7 +195,10 @@ async function loadDiaSalesCompsFromTxns() {
     'latitude,longitude,lease_bump_pct,lease_bump_interval_mo,',
     'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
     'expense_structure,rent_per_sf,annual_rent,renewal_options,is_active,',
-    'status,data_source,source_confidence))',
+    'status,data_source,source_confidence)),',
+    'sale_brokers(role,broker_id,broker_company_id,',
+    'brokers(broker_name,company),',
+    'broker_companies(name))',
   ].join('');
   let all = [];
   for (let pg = 0; pg <= 20; pg++) {
@@ -220,6 +224,17 @@ function pickCurrentLease(leases) {
     return bStart.localeCompare(aStart);
   });
   return scored[0] || null;
+}
+
+function extractBrokerCompanies(r) {
+  // Extract broker company names from the sale_brokers embed
+  const sbs = r.sale_brokers || [];
+  const companies = [];
+  sbs.forEach(sb => {
+    if (sb.broker_companies && sb.broker_companies.name) companies.push(sb.broker_companies.name);
+    else if (sb.brokers && sb.brokers.company) companies.push(sb.brokers.company);
+  });
+  return companies.join(', ');
 }
 
 function normalizeSalesTxnRow(r) {
@@ -280,6 +295,7 @@ function normalizeSalesTxnRow(r) {
     buyer:             r.buyer_name  || null,
     listing_broker:    r.listing_broker   || null,
     procuring_broker:  r.procuring_broker || null,
+    broker_companies:  extractBrokerCompanies(r),
     bid_ask_spread:    null,
     dom:               null,
     transaction_type:  r.transaction_type || null,
@@ -615,9 +631,10 @@ function renderDiaOverview() {
     (async () => {
       try {
         // Filter to on-market statuses only: active, Active, Available, For Sale
+        // Use v_available_listings view which JOINs property data (address, city, state)
         let all = [], pg = 0;
         while (true) {
-          const batch = await diaQuery('available_listings', '*', {
+          const batch = await diaQuery('v_available_listings', '*', {
             order: 'listing_date.desc.nullslast',
             limit: 1000, offset: pg * 1000,
             filter: 'status=in.(active,Active,Available,"For Sale")',
@@ -626,11 +643,11 @@ function renderDiaOverview() {
           if (!batch || batch.length < 1000) break;
           pg++;
         }
-        // Filter out blank records — require at least an address or property name
+        // Filter out blank records — require at least an address or operator
         diaAvailListings = all.filter(r =>
           (r.address && r.address.trim()) ||
-          (r.property_name && r.property_name.trim()) ||
-          (r.facility_name && r.facility_name.trim())
+          (r.tenant_operator && r.tenant_operator.trim()) ||
+          (r.operator && r.operator.trim())
         );
         console.debug('Available listings loaded:', diaAvailListings.length, 'of', all.length, 'raw');
       } catch(e) { console.warn('Available listings load failed:', e.message); diaAvailListings = []; }
@@ -639,19 +656,47 @@ function renderDiaOverview() {
     })();
   }
 
-  // Lazy-load clinic financial estimates
+  // Lazy-load clinic financial estimates (paginated — ~20K rows with is_latest)
   if (!diaFinancialEstimates) {
     (async () => {
       try {
         // Load latest primary estimates (highest-confidence per clinic)
-        const batch = await diaQuery('clinic_financial_estimates', 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score', {
-          filter: 'is_latest=eq.true',
-          limit: 10000,
-        });
-        diaFinancialEstimates = batch || [];
+        const selectCols = 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score';
+        let all = [], pg = 0;
+        while (true) {
+          const batch = await diaQuery('clinic_financial_estimates', selectCols, {
+            filter: 'is_latest=eq.true',
+            limit: 5000, offset: pg * 5000,
+          });
+          all = all.concat(batch || []);
+          if (!batch || batch.length < 5000) break;
+          pg++;
+        }
+        diaFinancialEstimates = all;
       } catch(e) { diaFinancialEstimates = []; }
       const finEl = document.getElementById('diaOverviewFinancials');
       if (finEl) finEl.innerHTML = renderFinancialMetricsInner();
+    })();
+  }
+
+  // Lazy-load patient counts from v_facility_patient_counts_latest (8K+ clinics)
+  if (!diaPatientCounts) {
+    (async () => {
+      try {
+        let all = [], pg = 0;
+        while (true) {
+          const batch = await diaQuery('v_facility_patient_counts_latest', 'clinic_id,total_patients,state', {
+            limit: 5000, offset: pg * 5000,
+          });
+          all = all.concat(batch || []);
+          if (!batch || batch.length < 5000) break;
+          pg++;
+        }
+        diaPatientCounts = all.filter(r => r.total_patients > 0);
+      } catch(e) { diaPatientCounts = []; }
+      // Re-render the patient metrics section
+      const ptEl = document.getElementById('diaOverviewPatientMetrics');
+      if (ptEl) ptEl.innerHTML = renderPatientMetricsInner();
     })();
   }
 
@@ -687,10 +732,11 @@ function renderDiaOverview() {
   const leaseBackfillLen = diaData.leaseBackfillRows?.length || 0;
   const researchDone = diaData.researchOutcomes?.length || 0;
 
-  // Compute patient stats from inventory changes
-  const clinicsWithPatients = diaData.inventoryChanges.filter(c => c.latest_total_patients > 0);
-  const totalPatients = clinicsWithPatients.reduce((s,c) => s + (c.latest_total_patients || 0), 0);
-  const avgPatients = clinicsWithPatients.length > 0 ? Math.round(totalPatients / clinicsWithPatients.length) : 0;
+  // Compute patient stats from v_facility_patient_counts_latest (loaded async) or inventory diff as fallback
+  const ptSrc = diaPatientCounts && diaPatientCounts.length > 0 ? diaPatientCounts : diaData.inventoryChanges.filter(c => c.latest_total_patients > 0);
+  const clinicsWithPatients = diaPatientCounts && diaPatientCounts.length > 0 ? ptSrc : ptSrc;
+  const totalPatients = ptSrc.reduce((s,c) => s + (c.total_patients || c.latest_total_patients || 0), 0);
+  const avgPatients = ptSrc.length > 0 ? Math.round(totalPatients / ptSrc.length) : 0;
 
   // Touchpoint metrics from DIA Supabase salesforce_activities — full Northmarq IS team
   const diaActivities = diaData.sfActivities || [];
@@ -800,8 +846,8 @@ function renderDiaOverview() {
   // SECTION 2: CLINICAL METRICS
   // ═══════════════════════════════════════════════
   html += sectionHeader('Clinical Metrics', '📊', 'changes');
-  html += '<div class="dia-grid dia-grid-4">';
-  html += infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avgPatients), sub: fmtN(totalPatients) + ' total across ' + fmtN(clinicsWithPatients.length) + ' clinics', color: 'blue', tab: 'changes' });
+  html += '<div id="diaOverviewPatientMetrics">' + renderPatientMetricsInner() + '</div>';
+  html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   html += infoCard({ title: 'Inventory Changes', value: fmtN(addedCount + removedCount), sub: '+' + fmtN(addedCount) + ' added · -' + fmtN(removedCount) + ' removed', color: addedCount > removedCount ? 'green' : 'red', tab: 'changes' });
   html += infoCard({ title: 'NPI Signals', value: fmtN(npiSignalCount), sub: 'provider changes detected', color: 'orange', tab: 'npi' });
   html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name && diaData.moversUp[0].facility_name !== 'null' ? diaData.moversUp[0].facility_name : diaData.moversUp[0].clinic_name || diaData.moversUp[0].address || 'Unknown Clinic').substring(0,30) : 'no data', color: 'green', tab: 'changes' });
@@ -960,7 +1006,7 @@ function renderNorthmarqInner() {
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmComps = comps.filter(r => r.sold_date && new Date(r.sold_date) >= ttmStart);
   const isNM = r => {
-    var brokers = ((r.listing_broker||'')+(r.procuring_broker||'')+(r.broker_name||'')+(r.seller_broker||'')+(r.buyer_broker||'')).toLowerCase();
+    var brokers = ((r.listing_broker||'')+(r.procuring_broker||'')+(r.broker_name||'')+(r.seller_broker||'')+(r.buyer_broker||'')+(r.broker_companies||'')).toLowerCase();
     if (brokers.includes('northmarq') || brokers.includes('north marq') || brokers.includes('nm capital')) return true;
     return NM_TEAM.some(name => { var parts = name.split(' '); return parts.some(p => p.length > 3 && brokers.includes(p)); });
   };
@@ -1010,7 +1056,7 @@ function renderOnMarketInner() {
   const avgDom = listings.filter(r => getDom(r) > 0);
   const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,r)=>s+getDom(r),0)/avgDom.length) : '—';
   const isNMListing = r => {
-    var b = ((r.listing_broker||'')+(r.broker_name||'')).toLowerCase();
+    var b = ((r.listing_broker||'')+(r.broker_name||'')+(r.broker_companies||'')).toLowerCase();
     if (b.includes('northmarq') || b.includes('north marq') || b.includes('nm capital')) return true;
     return NM_TEAM.some(name => { var parts = name.split(' '); return parts.some(p => p.length > 3 && b.includes(p)); });
   };
@@ -1032,6 +1078,33 @@ function renderOnMarketInner() {
   h += infoCard({ title: 'NM Market Share', value: listings.length > 0 ? (nmListings.length/listings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
   h += '</div>';
   return h;
+}
+
+function renderPatientMetricsInner() {
+  const ptSrc = diaPatientCounts && diaPatientCounts.length > 0 ? diaPatientCounts : null;
+  if (!ptSrc) {
+    // Fallback to inventory diff while loading
+    const inv = (typeof diaData !== 'undefined' && diaData.inventoryChanges) ? diaData.inventoryChanges.filter(c => c.latest_total_patients > 0) : [];
+    const total = inv.reduce((s,c) => s + (c.latest_total_patients || 0), 0);
+    const avg = inv.length > 0 ? Math.round(total / inv.length) : 0;
+    const loading = !diaPatientCounts; // null means still loading
+    return '<div class="dia-grid dia-grid-4">' +
+      infoCard({ title: 'Avg Patients / Clinic', value: loading ? '...' : fmtN(avg), sub: loading ? 'loading full patient data...' : fmtN(total) + ' total across ' + fmtN(inv.length) + ' clinics', color: 'blue', tab: 'changes' }) +
+      '</div>';
+  }
+  const total = ptSrc.reduce((s,c) => s + (c.total_patients || 0), 0);
+  const avg = ptSrc.length > 0 ? Math.round(total / ptSrc.length) : 0;
+  // State breakdown for top 5
+  const byState = {};
+  ptSrc.forEach(c => { const st = c.state || '??'; byState[st] = (byState[st] || 0) + (c.total_patients || 0); });
+  const topStates = Object.entries(byState).sort((a,b) => b[1] - a[1]).slice(0, 5);
+  const statesSub = topStates.map(([st, cnt]) => st + ': ' + fmtN(cnt)).join(' · ');
+  return '<div class="dia-grid dia-grid-4">' +
+    infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avg), sub: fmtN(total) + ' total across ' + fmtN(ptSrc.length) + ' clinics', color: 'blue', tab: 'changes' }) +
+    infoCard({ title: 'Clinics w/ Patients', value: fmtN(ptSrc.length), sub: 'from CMS patient counts', color: 'green', tab: 'changes' }) +
+    infoCard({ title: 'Total Patients', value: fmtN(total), sub: 'nationwide', color: 'purple', tab: 'changes' }) +
+    infoCard({ title: 'Top States', value: topStates[0] ? topStates[0][0] : '—', sub: statesSub, color: 'cyan', tab: 'changes' }) +
+    '</div>';
 }
 
 function renderFinancialMetricsInner() {
