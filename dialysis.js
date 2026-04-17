@@ -678,19 +678,21 @@ function renderDiaOverview() {
   }
 
   // Lazy-load clinic financial estimates (paginated — ~20K rows with is_latest)
+  // PostgREST max-rows caps at 1000 per request, so paginate at 1000
   if (!diaFinancialEstimates) {
     (async () => {
       try {
         // Load latest primary estimates (highest-confidence per clinic)
         const selectCols = 'medicare_id,estimate_source,estimated_annual_revenue,estimated_annual_profit,estimated_ebitda,estimated_operating_profit,patient_count,chairs_used,confidence_score';
+        const PAGE = 1000;
         let all = [], pg = 0;
         while (true) {
           const batch = await diaQuery('clinic_financial_estimates', selectCols, {
             filter: 'is_latest=eq.true',
-            limit: 5000, offset: pg * 5000,
+            limit: PAGE, offset: pg * PAGE,
           });
           all = all.concat(batch || []);
-          if (!batch || batch.length < 5000) break;
+          if (!batch || batch.length < PAGE) break;
           pg++;
         }
         diaFinancialEstimates = all;
@@ -705,16 +707,18 @@ function renderDiaOverview() {
   }
 
   // Lazy-load patient counts from v_facility_patient_counts_latest (8K+ clinics)
+  // PostgREST max-rows caps at 1000, paginate accordingly
   if (!diaPatientCounts) {
     (async () => {
       try {
+        const PAGE = 1000;
         let all = [], pg = 0;
         while (true) {
           const batch = await diaQuery('v_facility_patient_counts_latest', 'clinic_id,total_patients,state', {
-            limit: 5000, offset: pg * 5000,
+            limit: PAGE, offset: pg * PAGE,
           });
           all = all.concat(batch || []);
-          if (!batch || batch.length < 5000) break;
+          if (!batch || batch.length < PAGE) break;
           pg++;
         }
         // Deduplicate by normalized clinic_id (some appear with/without leading zeros)
