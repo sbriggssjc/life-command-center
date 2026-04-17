@@ -37,6 +37,7 @@ let diaAvailListings = null; // lazy-loaded from available_listings (on-market o
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
 let diaSalesLoading = false;
 let diaSalesSearch = '';
+const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
 let diaSalesPage = 0;
 let diaSalesSort = { col: null, dir: 'desc' }; // column sort state
 let diaSalesStateFilter = ''; // state filter
@@ -363,7 +364,7 @@ async function loadDiaData() {
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
-      diaQuery('v_clinic_inventory_latest_diff', '*', { limit: 10000 }).catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
+      diaQueryAll('v_clinic_inventory_latest_diff', '*').catch(function(e) { console.warn('Inv changes timeout', e); return []; }),
       diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=gt.0', order: 'delta_patients.desc', limit: 10 }).catch(function() { return []; }),
       diaQuery('v_facility_patient_counts_mom', '*', { filter: 'delta_patients=lt.0', order: 'delta_patients.asc', limit: 10 }).catch(function() { return []; }),
       diaQuery('v_npi_inventory_signal_summary', '*').catch(function() { return []; }),
@@ -619,7 +620,7 @@ function renderDiaOverview() {
           const batch = await diaQuery('available_listings', '*', {
             order: 'listing_date.desc.nullslast',
             limit: 1000, offset: pg * 1000,
-            filter: 'status=in.(active,Active,Available,For Sale)',
+            filter: 'status=in.(active,Active,Available,"For Sale")',
           });
           all = all.concat(batch || []);
           if (!batch || batch.length < 1000) break;
@@ -631,7 +632,8 @@ function renderDiaOverview() {
           (r.property_name && r.property_name.trim()) ||
           (r.facility_name && r.facility_name.trim())
         );
-      } catch(e) { diaAvailListings = []; }
+        console.debug('Available listings loaded:', diaAvailListings.length, 'of', all.length, 'raw');
+      } catch(e) { console.warn('Available listings load failed:', e.message); diaAvailListings = []; }
       const mktEl = document.getElementById('diaOverviewMarket');
       if (mktEl) mktEl.innerHTML = renderOnMarketInner();
     })();
@@ -691,7 +693,6 @@ function renderDiaOverview() {
   const avgPatients = clinicsWithPatients.length > 0 ? Math.round(totalPatients / clinicsWithPatients.length) : 0;
 
   // Touchpoint metrics from DIA Supabase salesforce_activities — full Northmarq IS team
-  const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
   const diaActivities = diaData.sfActivities || [];
   const now = new Date();
   const sixMonthsAgo = new Date(now); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
@@ -960,7 +961,8 @@ function renderNorthmarqInner() {
   const ttmComps = comps.filter(r => r.sold_date && new Date(r.sold_date) >= ttmStart);
   const isNM = r => {
     var brokers = ((r.listing_broker||'')+(r.procuring_broker||'')+(r.broker_name||'')+(r.seller_broker||'')+(r.buyer_broker||'')).toLowerCase();
-    return brokers.includes('northmarq') || brokers.includes('north marq') || brokers.includes('nm capital');
+    if (brokers.includes('northmarq') || brokers.includes('north marq') || brokers.includes('nm capital')) return true;
+    return NM_TEAM.some(name => { var parts = name.split(' '); return parts.some(p => p.length > 3 && brokers.includes(p)); });
   };
   const nmComps = ttmComps.filter(isNM);
   const nmWithPrice = nmComps.filter(r => r.price > 0);
@@ -1009,7 +1011,8 @@ function renderOnMarketInner() {
   const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s,r)=>s+getDom(r),0)/avgDom.length) : '—';
   const isNMListing = r => {
     var b = ((r.listing_broker||'')+(r.broker_name||'')).toLowerCase();
-    return b.includes('northmarq') || b.includes('north marq') || b.includes('nm capital');
+    if (b.includes('northmarq') || b.includes('north marq') || b.includes('nm capital')) return true;
+    return NM_TEAM.some(name => { var parts = name.split(' '); return parts.some(p => p.length > 3 && b.includes(p)); });
   };
   const nmListings = listings.filter(isNMListing);
 
@@ -6077,7 +6080,7 @@ async function renderDiaSales() {
     } catch (e) { console.error('Sales comps load error:', e); showToast('Sales comps load failed', 'error'); diaSalesComps = []; }
     diaSalesLoading = false;
   }
-  if (diaSalesView === 'available' && diaAvailListings === null && !diaSalesLoading) {
+  if (diaSalesView === 'available' && (!diaAvailListings || diaAvailListings.length === 0) && !diaSalesLoading) {
     diaSalesLoading = true;
     const inner = q('#bizPageInner');
     if (inner) inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading available listings...</p></div>';

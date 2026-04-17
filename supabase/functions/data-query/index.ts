@@ -84,7 +84,7 @@ const GOV_WRITE_SERVICE_TABLES = new Set([
   "rpc/upsert_lead", "rpc/save_research_outcome",
 ]);
 
-const MAX_LIMIT = 5000;
+const MAX_LIMIT = 10000;
 const DEFAULT_LIMIT = 1000;
 
 function isAllowedTable(table: string, allowlist: Set<string>): boolean {
@@ -101,7 +101,7 @@ function safeLimit(limit: string | null): number {
 
 function safeSelect(select: string | null): string {
   if (!select || typeof select !== "string") return "*";
-  if (!/^[a-zA-Z0-9_,.*:()\s]+$/.test(select)) return "*";
+  if (!/^[a-zA-Z0-9_,.*:()\s!]+$/.test(select)) return "*";
   return select;
 }
 
