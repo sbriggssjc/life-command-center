@@ -174,6 +174,338 @@ async function getPageContext() {
   });
 }
 
+// ── PDF text extraction (pdf.js) ───────────────────────────────────────────
+
+/**
+ * Extract all text from a PDF at the given URL using pdf.js.
+ * Returns { text, pageCount } or throws on failure.
+ */
+async function extractPdfText(url) {
+  if (typeof pdfjsLib === 'undefined') {
+    throw new Error('pdf.js not loaded');
+  }
+  // Set worker path relative to extension root
+  pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+
+  // Fetch PDF via background.js to handle CORS
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching PDF`);
+  const arrayBuffer = await resp.arrayBuffer();
+
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item => item.str).join(' ');
+    pages.push(pageText);
+  }
+  return { text: pages.join('\n\n'), pageCount: pdf.numPages };
+}
+
+/**
+ * Parse deal metrics from raw PDF text (OM, deed, brochure).
+ * Returns an object with extracted fields.
+ */
+/**
+ * Pre-process PDF text to extract label-value pairs from OM investment overview.
+ * PDFs often render label-value tables as bullet-separated lists where values
+ * appear BEFORE their labels. This function finds known CRE labels and extracts
+ * the value that appears in the bullet entry immediately before each label.
+ */
+function extractBulletTablePairs(text) {
+  const pairs = {};
+  // Split on bullet separators
+  const parts = text.split(/\n\s*•\s*\n/).map(s => s.trim()).filter(Boolean);
+  if (parts.length < 4) return pairs;
+
+  // Known OM investment overview labels → output keys
+  const KNOWN_LABELS = {
+    'BUILDING SIZE': 'building_size',
+    'YEAR BUILT': 'year_built',
+    'YEAR BUILT / EFFECTIVE AGE': 'year_built_effective_age',
+    'TYPE OF OWNERSHIP': 'type_of_ownership',
+    'TENANT NAME': 'tenant_name',
+    'LEASE TYPE': 'lease_type',
+    'LANDLORD RESPONSIBILITIES': 'landlord_responsibilities',
+    'OCCUPANCY': 'occupancy',
+    'OCCUPANY': 'occupancy',  // common typo
+    'LEASE COMMENCEMENT': 'lease_commencement',
+    'LEASE EXPIRATION': 'lease_expiration',
+    'OPTIONS': 'options',
+    'RENEWAL OPTIONS': 'options',
+    'RENT INCREASES': 'rent_increases',
+    'ESCALATIONS': 'escalations',
+    'GUARANTOR': 'guarantor',
+    'EXPENSE STRUCTURE': 'expense_structure',
+    'LOT SIZE': 'lot_size',
+    'PARKING': 'parking',
+    'ZONING': 'zoning',
+  };
+
+  // For each part, check if it matches a known label
+  for (let i = 1; i < parts.length; i++) {
+    const normalized = parts[i].trim().toUpperCase();
+    // Check for exact label match (the part may contain only the label text)
+    for (const [label, key] of Object.entries(KNOWN_LABELS)) {
+      if (normalized === label || normalized.startsWith(label + '\n')) {
+        // The value is the part immediately before this label.
+        // If that part has multiple lines (e.g. first chunk includes headers),
+        // take only the last non-empty line as the value.
+        const rawVal = parts[i - 1].trim();
+        const lines = rawVal.split('\n').map(l => l.trim()).filter(Boolean);
+        const val = lines.length > 0 ? lines[lines.length - 1] : '';
+        if (val.length > 0 && val.length < 100) {
+          pairs[key] = val;
+        }
+        break;
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Pre-process PDF text to extract rent roll table data.
+ * Looks for column headers (LEASE START, LEASE END, MONTHLY RENT, etc.)
+ * followed by data rows.
+ */
+function extractRentRollData(text) {
+  const data = {};
+  // Match rent roll row: date date $amount $amount $amount pct%
+  const rowMatch = text.match(
+    /(?:current|initial|base)\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+\$?([\d,]+(?:\.\d+)?)\s+\$?([\d,]+(?:\.\d+)?)\s+\$?([\d.]+)\s+([\d.]+)%/i
+  );
+  if (rowMatch) {
+    data.lease_start = rowMatch[1];
+    data.lease_end = rowMatch[2];
+    data.monthly_rent = '$' + rowMatch[3];
+    data.annual_rent = '$' + rowMatch[4];
+    data.rent_psf = '$' + rowMatch[5];
+    data.cap_rate = rowMatch[6] + '%';
+  }
+
+  // Extract renewal option rows: Option N date date FMR FMR
+  const optionMatches = [...text.matchAll(
+    /option\s*(\d+)\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(FMR|[\d$,]+)/gi
+  )];
+  if (optionMatches.length > 0) {
+    data.renewal_options_detail = optionMatches.map(m => ({
+      option: parseInt(m[1], 10),
+      start: m[2], end: m[3], rent: m[4],
+    }));
+  }
+
+  // Extract rent roll footnotes
+  const notes = [];
+  const noteMatches = text.matchAll(/\*\s*tenant\s+(reimburses|occupies|is\s+responsible)(?:[^.]|\.\d)+\./gi);
+  for (const m of noteMatches) notes.push(m[0].replace(/^\*\s*/, '').trim());
+  if (notes.length > 0) data.rent_roll_notes = notes;
+
+  return data;
+}
+
+function parsePdfDealMetrics(text) {
+  const metrics = {};
+  if (!text) return metrics;
+
+  // Pre-process: extract structured data from bullet tables and rent roll
+  const bulletPairs = extractBulletTablePairs(text);
+  const rentRoll = extractRentRollData(text);
+
+  // Use bullet-table pairs for fields that are hard to regex from raw text
+  if (bulletPairs.lease_commencement) metrics.lease_commencement = bulletPairs.lease_commencement;
+  if (bulletPairs.guarantor) metrics.guarantor = bulletPairs.guarantor;
+  if (bulletPairs.type_of_ownership) metrics.ownership_type = bulletPairs.type_of_ownership;
+  if (bulletPairs.lease_type) metrics.lease_type = bulletPairs.lease_type;
+  if (bulletPairs.rent_increases) metrics.rent_increase_mechanism = bulletPairs.rent_increases;
+  if (bulletPairs.landlord_responsibilities) metrics.landlord_responsibilities = bulletPairs.landlord_responsibilities;
+  if (bulletPairs.options) metrics.renewal_options = bulletPairs.options;
+  if (bulletPairs.occupany || bulletPairs.occupancy) metrics.occupancy = (bulletPairs.occupany || bulletPairs.occupancy);
+  if (bulletPairs.tenant_name) metrics.tenant_name = bulletPairs.tenant_name;
+  if (bulletPairs.building_size) {
+    const num = parseInt(bulletPairs.building_size.replace(/[^0-9]/g, ''), 10);
+    if (num >= 500 && num <= 500000) metrics.building_sf = bulletPairs.building_size;
+  }
+  // Year built / effective age — handle various key formats from bullet table
+  const yrKey = Object.keys(bulletPairs).find(k => k.includes('year_built'));
+  if (yrKey && bulletPairs[yrKey]) {
+    const yrParts = bulletPairs[yrKey].split(/\s*[\/\-]\s*/);
+    if (yrParts[0] && /^\d{4}$/.test(yrParts[0].trim())) metrics.year_built = yrParts[0].trim();
+    if (yrParts[1] && /^\d{4}$/.test(yrParts[1].trim())) metrics.year_renovated = yrParts[1].trim();
+  }
+
+  // Use rent roll data
+  if (rentRoll.monthly_rent) metrics.monthly_rent = rentRoll.monthly_rent;
+  if (rentRoll.annual_rent && !metrics.annual_rent) metrics.annual_rent = rentRoll.annual_rent;
+  if (rentRoll.rent_psf) metrics.rent_per_sf = rentRoll.rent_psf + '/SF';
+  if (rentRoll.cap_rate) metrics.cap_rate = rentRoll.cap_rate;
+  if (rentRoll.lease_start) metrics.current_term_start = rentRoll.lease_start;
+  if (rentRoll.lease_end && !metrics.lease_expiration) metrics.lease_expiration = rentRoll.lease_end;
+  if (rentRoll.rent_roll_notes) metrics.expense_notes = rentRoll.rent_roll_notes.join(' | ');
+  if (rentRoll.renewal_options_detail) {
+    metrics.option_periods = rentRoll.renewal_options_detail
+      .map(o => `Option ${o.option}: ${o.start}–${o.end} (${o.rent})`).join('; ');
+  }
+
+  // NOI
+  const noiMatch = text.match(/\bNOI\b[:\s]*\$?([\d,]+(?:\.\d+)?)/i)
+    || text.match(/net\s+operating\s+income[:\s]*\$?([\d,]+(?:\.\d+)?)/i);
+  if (noiMatch) metrics.noi = '$' + noiMatch[1].trim();
+
+  // Cap rate
+  const capMatch = text.match(/cap\s*(?:italization)?\s*rate[:\s]*([\d.]+)\s*%/i)
+    || text.match(/\b([\d.]+)\s*%\s*cap/i);
+  if (capMatch) metrics.cap_rate = capMatch[1] + '%';
+
+  // Annual rent
+  const rentMatch = text.match(/(?:annual|base|current)\s+rent[:\s]*\$?([\d,]+(?:\.\d+)?)/i);
+  if (rentMatch) metrics.annual_rent = '$' + rentMatch[1].trim();
+
+  // Rent per SF
+  const rentSfMatch = text.match(/\$\s*([\d.]+)\s*(?:\/|\s+per\s+)(?:sf|square\s+foot)/i)
+    || text.match(/rent[:\s]*\$?([\d.]+)\s*(?:\/sf|psf)/i);
+  if (rentSfMatch) metrics.rent_per_sf = '$' + rentSfMatch[1] + '/SF';
+
+  // Lease expiration
+  const expMatch = text.match(/(?:lease\s+)?expir(?:es|ation|y)[:\s]*((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4})/i);
+  if (expMatch) metrics.lease_expiration = expMatch[1].trim();
+
+  // Lease term
+  const termMatch = text.match(/(?:lease\s+)?term[:\s]*(\d+)\s*(?:year|yr)s?/i);
+  if (termMatch) metrics.lease_term = termMatch[1] + ' years';
+
+  // Rent escalations / bumps
+  const escMatch = text.match(/(?:annual\s+)?(?:escalation|increase|bump)s?[:\s]*([\d.]+)\s*%/i)
+    || text.match(/([\d.]+)\s*%\s*(?:annual\s+)?(?:escalation|increase|bump)/i);
+  if (escMatch) metrics.escalation = escMatch[1] + '%';
+
+  // Renewal options (don't overwrite bullet-table value)
+  if (!metrics.renewal_options) {
+    const renewMatch = text.match(/(?:renewal|extension)\s+option[s]?[:\s]*([\w\s,()]+?)(?:\.|;|$)/i);
+    if (renewMatch && renewMatch[1].length < 80) metrics.renewal_options = renewMatch[1].trim();
+  }
+
+  // Expense structure (NNN, NN, Gross, Modified Gross)
+  const expenseMatch = text.match(/\b(triple\s+net|NNN|double\s+net|NN|modified\s+gross|full\s+service\s+gross)\b/i);
+  if (expenseMatch) metrics.expense_structure = expenseMatch[0].trim();
+
+  // Building SF (don't overwrite bullet-table value)
+  if (!metrics.building_sf) {
+    const sfMatch = text.match(/([\d,]+)\s*(?:rentable\s+)?(?:square\s+feet|sf|RSF)\b/i);
+    if (sfMatch) {
+      const num = parseInt(sfMatch[1].replace(/,/g, ''), 10);
+      if (num >= 500 && num <= 500000) metrics.building_sf = sfMatch[1] + ' SF';
+    }
+  }
+
+  // Year built / renovated (don't overwrite bullet-table value)
+  if (!metrics.year_built) {
+    const yrMatch = text.match(/(?:built|constructed|year\s+built)[:\s]*(\d{4})/i);
+    if (yrMatch) metrics.year_built = yrMatch[1];
+  }
+
+  // Occupancy (don't overwrite bullet-table value)
+  if (!metrics.occupancy) {
+    const occMatch = text.match(/([\d.]+)\s*%\s*(?:occupied|occupancy|leased)/i);
+    if (occMatch) metrics.occupancy = occMatch[1] + '%';
+  }
+
+  // Tenant name (don't overwrite bullet-table value)
+  if (!metrics.tenant_name) {
+    const tenantMatch = text.match(/(?:tenant|leased\s+to|occupied\s+by)[:\s]*([A-Z][A-Za-z\s&,.'-]+?)(?:\s*[-–—(,]|\s+at\s+|\s+since\s+|\s+through\s+|\.)/);
+    if (tenantMatch && tenantMatch[1].length < 60) metrics.tenant_name = tenantMatch[1].trim();
+  }
+
+  // Sale price
+  const priceMatch = text.match(/(?:sale|purchase|acquisition)\s+price[:\s]*\$?([\d,]+(?:\.\d+)?(?:\s*(?:M|million))?)/i);
+  if (priceMatch) metrics.sale_price = '$' + priceMatch[1].trim();
+
+  // Asking price / list price
+  const askMatch = text.match(/(?:asking|list)\s+price[:\s]*\$?([\d,]+(?:\.\d+)?(?:\s*(?:M|million))?)/i);
+  if (askMatch) metrics.asking_price = '$' + askMatch[1].trim();
+
+  // ── Tier 1 fields ─────────────────────────────────────────────────────────
+
+  // Lease commencement date
+  const commMatch = text.match(/(?:lease\s+)?commencement[:\s]*((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+  if (commMatch) metrics.lease_commencement = commMatch[1].trim();
+
+  // Guarantor (Corporate, Personal, etc.)
+  const guarMatch = text.match(/guarantor[:\s]*(corporate|personal|individual|parent|none)\b/i);
+  if (guarMatch) metrics.guarantor = guarMatch[1].trim();
+
+  // Year renovated — "1991 / 2012" or "renovated 2012" or "effective age 2012"
+  const renovMatch = text.match(/(?:renovated|renovation|effective\s+age)[:\s]*(\d{4})/i)
+    || text.match(/(?:built|year\s+built)[:\s\/]*\d{4}\s*[\/\-]\s*(\d{4})/i);
+  if (renovMatch) metrics.year_renovated = renovMatch[1];
+
+  // Monthly rent
+  const moRentMatch = text.match(/monthly\s+rent[:\s]*\$?([\d,]+(?:\.\d+)?)/i);
+  if (moRentMatch) metrics.monthly_rent = '$' + moRentMatch[1].trim();
+
+  // Listing broker — name, firm, phone, email
+  // "In State Broker: Brian Brockman" or "CONTACT\nBrian Brockman" on final page
+  // Require Firstname Lastname pattern (capitalized, 2+ chars each)
+  const brokerNameMatch = text.match(/(?:in\s+state\s+broker|contact)\s*[:\s]\s*([A-Z][a-z]{1,15}\s+[A-Z][a-z]{1,20})\b/i)
+    || text.match(/(?:listing\s+agent|presented\s+by|exclusive(?:ly)?\s+(?:listed|marketed)\s+by)\s*[:\s]\s*([A-Z][a-z]{1,15}\s+[A-Z][a-z]{1,20})\b/i);
+  if (brokerNameMatch) metrics.listing_broker = brokerNameMatch[1].trim();
+
+  const brokerFirmMatch = text.match(/(?:in\s+state\s+broker|brokerage|(?:listed|marketed|offered)\s+by)[:\s]*(?:[A-Za-z ]+?•\s*)?([A-Za-z][A-Za-z &.,'-]+?(?:Realty|Real\s+Estate|Capital|Group|Advisors|Partners|Properties|Brokerage|Inc\.?|LLC|Co\.?))/i);
+  if (brokerFirmMatch) metrics.listing_firm = brokerFirmMatch[1].trim();
+
+  const brokerPhoneMatch = text.match(/(\d{3}[\s.\-]\d{3}[\s.\-]\d{4})/);
+  if (brokerPhoneMatch) metrics.listing_phone = brokerPhoneMatch[1].trim();
+
+  const brokerEmailMatch = text.match(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i);
+  if (brokerEmailMatch) metrics.listing_email = brokerEmailMatch[1].trim();
+
+  // ── Tier 2 fields ─────────────────────────────────────────────────────────
+
+  // Ownership type (don't overwrite bullet-table value)
+  if (!metrics.ownership_type) {
+    const ownTypeMatch = text.match(/(?:type\s+of\s+ownership|ownership\s+(?:type|interest)|estate\s+type)[:\s]*(fee\s+simple|ground\s+lease|leasehold|fee\s+absolute)/i)
+      || text.match(/\b(fee\s+simple|ground\s+lease)\b/i);
+    if (ownTypeMatch) metrics.ownership_type = ownTypeMatch[1].trim();
+  }
+
+  // Rent increase mechanism (don't overwrite bullet-table value)
+  if (!metrics.rent_increase_mechanism) {
+    const rentIncMatch = text.match(/(?:rent\s+increase|escalation|bump)s?[:\s]*((?:FMR|fair\s+market\s+(?:rent|value|reset)|CPI|consumer\s+price|fixed)[^.;]*?)(?:\.|;|$)/i);
+    if (rentIncMatch && rentIncMatch[1].length < 80) metrics.rent_increase_mechanism = rentIncMatch[1].trim();
+  }
+
+  // Landlord responsibilities / expense notes (don't overwrite bullet-table value)
+  if (!metrics.landlord_responsibilities) {
+    const llRespMatch = text.match(/(?:landlord\s+responsibilit(?:y|ies)|LL\s+responsible)[:\s]*([^.]+\.)/i);
+    if (llRespMatch && llRespMatch[1].length < 200) metrics.landlord_responsibilities = llRespMatch[1].trim();
+  }
+
+  // Tenant credit profile — extract from tenant overview section
+  const tickerMatch = text.match(/(?:NYSE|NASDAQ|stock\s+(?:ticker|symbol))[:\s]*([A-Z]{1,5})\b/i);
+  if (tickerMatch) metrics.tenant_ticker = tickerMatch[1].toUpperCase();
+
+  const tenantRevMatch = text.match(/(?:total\s+)?revenue[:\s]*\$?([\d,.]+)\s*(billion|million|B|M)\b/i);
+  if (tenantRevMatch) {
+    const unit = /^[bB]/.test(tenantRevMatch[2]) ? 'B' : 'M';
+    metrics.tenant_revenue = '$' + tenantRevMatch[1] + unit;
+  }
+
+  const tenantIncomeMatch = text.match(/net\s+income[:\s]*\$?([\d,.]+)\s*(billion|million|B|M)\b/i);
+  if (tenantIncomeMatch) {
+    const unit = /^[bB]/.test(tenantIncomeMatch[2]) ? 'B' : 'M';
+    metrics.tenant_net_income = '$' + tenantIncomeMatch[1] + unit;
+  }
+
+  const locationsMatch = text.match(/(?:locations?|(?:number\s+of\s+)?(?:clinics?|facilit(?:y|ies)|stores?|centers?))[:\s]*([\d,]+)\b/i);
+  if (locationsMatch) {
+    const num = parseInt(locationsMatch[1].replace(/,/g, ''), 10);
+    if (num >= 10 && num <= 100000) metrics.tenant_locations = locationsMatch[1];
+  }
+
+  return metrics;
+}
+
 // ── State ───────────────────────────────────────────────────────────────────
 
 let currentTab = 'property';
@@ -448,6 +780,11 @@ async function loadPropertyTab() {
     html += renderSalesHistory(salesHistory, ctx);
   }
 
+  // ── SECTION 4b: Sale notes from source ─────────────────────────
+  if (ctx?.sale_notes_raw) {
+    html += renderSaleNotes(ctx.sale_notes_raw);
+  }
+
   // ── SECTION 5: Documents from source ──────────────────────────
   const documentLinks = ctx?.document_links || [];
   if (documentLinks.length) {
@@ -469,14 +806,93 @@ async function loadPropertyTab() {
     });
   });
   body.querySelectorAll('.doc-ingest-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const url = btn.dataset.url;
-      if (url) chrome.tabs.create({ url });
-      const toast = document.createElement('div');
-      toast.className = 'update-toast';
-      toast.textContent = 'Document opened — PDF extraction coming soon';
-      btn.closest('.doc-card').appendChild(toast);
-      setTimeout(() => toast.remove(), 4000);
+      const card = btn.closest('.doc-card');
+      if (!url || !card) return;
+
+      // Show extraction spinner
+      btn.disabled = true;
+      btn.textContent = 'Extracting…';
+      const spinner = document.createElement('div');
+      spinner.className = 'update-toast';
+      spinner.textContent = 'Fetching and parsing PDF…';
+      card.appendChild(spinner);
+
+      try {
+        const { text, pageCount } = await extractPdfText(url);
+        if (!text || text.trim().length < 20) {
+          spinner.textContent = 'PDF extracted but no readable text found (may be scanned image)';
+          setTimeout(() => spinner.remove(), 5000);
+          btn.textContent = 'No Text';
+          return;
+        }
+
+        // Parse deal metrics from extracted text
+        const metrics = parsePdfDealMetrics(text);
+        const metricKeys = Object.keys(metrics);
+
+        // Update spinner with success
+        spinner.textContent = `Extracted ${pageCount} page${pageCount > 1 ? 's' : ''}, ${text.length.toLocaleString()} chars`;
+        setTimeout(() => spinner.remove(), 4000);
+        btn.textContent = 'Extracted ✓';
+        btn.style.background = 'var(--green)';
+        btn.style.color = '#fff';
+
+        // Render extracted metrics as tags below the card
+        if (metricKeys.length > 0) {
+          const metricsDiv = document.createElement('div');
+          metricsDiv.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;padding:4px 0;';
+          for (const [key, val] of Object.entries(metrics)) {
+            const tag = document.createElement('span');
+            tag.style.cssText = 'background:#EFF6FF;color:#1E40AF;font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;';
+            const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            tag.textContent = `${label}: ${val}`;
+            metricsDiv.appendChild(tag);
+          }
+          card.appendChild(metricsDiv);
+        }
+
+        // Show extracted text preview (collapsible)
+        const previewDiv = document.createElement('div');
+        previewDiv.style.cssText = 'margin-top:6px;';
+        const previewText = text.length > 500 ? text.substring(0, 500) + '…' : text;
+        previewDiv.innerHTML = `<details style="font-size:10px;"><summary style="cursor:pointer;color:var(--accent);font-weight:600;">View extracted text (${text.length.toLocaleString()} chars)</summary><pre style="white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto;background:var(--bg);padding:6px;border-radius:4px;margin-top:4px;font-size:10px;line-height:1.4;">${escapeHtml(previewText)}</pre></details>`;
+        card.appendChild(previewDiv);
+
+        // Merge extracted metrics into current page context
+        chrome.storage.session.get(['pageContext'], (result) => {
+          const ctx = result.pageContext || {};
+          // Store full extracted text as pdf_text for pipeline processing
+          ctx.pdf_extracted_text = text;
+          ctx.pdf_extracted_metrics = metrics;
+          // Merge individual metrics into context (don't overwrite existing values)
+          // Merge all extracted metrics — don't overwrite existing CoStar values
+          const mergeFields = [
+            'noi', 'cap_rate', 'annual_rent', 'lease_expiration', 'lease_term',
+            'escalation', 'renewal_options', 'expense_structure', 'asking_price',
+            'sale_price', 'building_sf', 'year_built', 'occupancy', 'tenant_name',
+            'rent_per_sf', 'lease_commencement', 'guarantor', 'year_renovated',
+            'monthly_rent', 'listing_broker', 'listing_firm', 'listing_phone',
+            'listing_email', 'ownership_type', 'rent_increase_mechanism',
+            'landlord_responsibilities', 'tenant_ticker', 'tenant_revenue',
+            'tenant_net_income', 'tenant_locations', 'lease_type',
+            'current_term_start', 'option_periods', 'expense_notes',
+          ];
+          for (const field of mergeFields) {
+            if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
+          }
+          chrome.storage.session.set({ pageContext: ctx });
+        });
+
+      } catch (err) {
+        spinner.textContent = `PDF extraction failed: ${err.message}`;
+        spinner.style.background = '#FEE2E2';
+        spinner.style.color = '#991B1B';
+        setTimeout(() => spinner.remove(), 6000);
+        btn.textContent = 'Retry';
+        btn.disabled = false;
+      }
     });
   });
 
@@ -925,7 +1341,7 @@ function buildMetadata(ctx, domain) {
   // Capture ALL extracted data for the cleaning/propagation pipeline.
   // Keys match database column names where possible.
   // Belt-and-suspenders filter: strip CoStar section headings that slip past extractFields()
-  const INVALID_TENANT = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research)$/i;
+  const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
   const m = {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
@@ -1283,6 +1699,42 @@ function renderSalesHistory(sales, ctx) {
     if (s.title_company) html += `<div class="sale-detail" style="color:var(--text-secondary);">Title: ${escapeHtml(s.title_company)}</div>`;
     if (s.document_number) html += `<div class="sale-detail" style="color:var(--text-secondary);">Doc #${escapeHtml(s.document_number)}</div>`;
 
+    html += '</div>';
+  }
+  return html;
+}
+
+// ── Sale notes display ─────────────────────────────────────────────────────
+
+function renderSaleNotes(raw) {
+  if (!raw || !raw.trim()) return '';
+  let html = '<div class="section-label">Sale Notes</div>';
+  html += '<div style="background:var(--bg-secondary,#f8f8f8);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;line-height:1.5;color:var(--text-primary,#333);white-space:pre-wrap;word-break:break-word;">';
+  html += escapeHtml(raw);
+  html += '</div>';
+
+  // Extract key financial metrics from the notes
+  const extracts = [];
+  const noiMatch = raw.match(/NOI\s*(?:of\s*)?\$?([\d,]+(?:\.\d+)?(?:\s*(?:M|K|million|thousand))?)/i);
+  if (noiMatch) extracts.push({ label: 'NOI', value: noiMatch[1].trim() });
+
+  const capMatch = raw.match(/cap\s*(?:rate)?\s*(?:of\s*)?([\d.]+)\s*%/i);
+  if (capMatch) extracts.push({ label: 'Cap Rate', value: capMatch[1] + '%' });
+
+  const rentMatch = raw.match(/(?:annual|yearly|base)\s*rent\s*(?:of\s*)?\$?([\d,]+(?:\.\d+)?(?:\s*(?:M|K|million|thousand))?)/i);
+  if (rentMatch) extracts.push({ label: 'Rent', value: '$' + rentMatch[1].trim() });
+
+  const leaseMatch = raw.match(/(?:lease\s*(?:term|expir(?:es|ation|y)))\s*(?:of\s*|:?\s*|in\s*)?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}|\d+\s*(?:year|yr)s?)/i);
+  if (leaseMatch) extracts.push({ label: 'Lease', value: leaseMatch[1].trim() });
+
+  const occupancyMatch = raw.match(/([\d.]+)\s*%\s*(?:occupied|occupancy|leased)/i);
+  if (occupancyMatch) extracts.push({ label: 'Occupancy', value: occupancyMatch[1] + '%' });
+
+  if (extracts.length) {
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">';
+    for (const e of extracts) {
+      html += `<span style="background:#EFF6FF;color:#1E40AF;font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;">${escapeHtml(e.label)}: ${escapeHtml(e.value)}</span>`;
+    }
     html += '</div>';
   }
   return html;
