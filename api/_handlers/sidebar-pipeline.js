@@ -38,20 +38,31 @@ const ROLE_TO_RELATIONSHIP = {
 };
 
 // ── Domain classification keywords ──────────────────────────────────────────
+// Word-boundary regexes prevent false positives (e.g. 'ice' matching 'office').
+// Short acronyms use \b boundaries; multi-word phrases use plain includes via
+// the longer string naturally preventing substring collisions.
 
-const GOV_TENANT_KEYWORDS = [
-  'gsa', 'general services administration', 'veterans affairs', 'va ',
-  'social security', 'ssa', 'irs', 'internal revenue', 'fbi', 'dea',
-  'ice', 'uscis', 'fema', 'usda', 'hud', 'department of', 'bureau of',
-  'federal', 'state of', 'county of', 'city of', 'usps', 'postal service',
-  'army corps', 'coast guard', 'customs', 'cbp', 'tsa',
+const GOV_TENANT_PATTERNS = [
+  /\bgsa\b/,  /\bgeneral services administration\b/,  /\bveterans affairs\b/,
+  /\bva\b/,   /\bsocial security\b/,  /\bssa\b/,  /\birs\b/,
+  /\binternal revenue\b/,  /\bfbi\b/,  /\bdea\b/,
+  /\bice\b/,  /\buscis\b/,  /\bfema\b/,  /\busda\b/,  /\bhud\b/,
+  /\bdepartment of\b/,  /\bbureau of\b/,
+  /\bfederal\b/,  /\bstate of\b/,  /\bcounty of\b/,  /\bcity of\b/,
+  /\busps\b/,  /\bpostal service\b/,
+  /\barmy corps\b/,  /\bcoast guard\b/,  /\bcustoms\b/,  /\bcbp\b/,  /\btsa\b/,
+  /\bprobation\b/,
 ];
 
-const DIALYSIS_TENANT_KEYWORDS = [
-  'fresenius', 'fmc', 'davita', 'dialysis', 'dci ', 'dialysis clinic',
-  'us renal care', 'american renal', 'greenfield renal', 'innovative renal',
-  'satellite healthcare', 'satellite dialysis',
-  'northwest kidney', 'kidney center', 'renal', 'nephrology',
+const DIALYSIS_TENANT_PATTERNS = [
+  /\bfresenius\b/,  /\bfresnius\b/,  // common misspelling from CoStar OCR
+  /\bfmc\b/,  /\bdavita\b/,  /\bdialysis\b/,
+  /\bdci\b/,  /\bdialysis clinic\b/,
+  /\bus renal care\b/,  /\bamerican renal\b/,
+  /\bgreenfield renal\b/,  /\binnovative renal\b/,
+  /\bsatellite healthcare\b/,  /\bsatellite dialysis\b/,
+  /\bnorthwest kidney\b/,  /\bkidney center\b/,
+  /\brenal\b/,  /\bnephrology\b/,
 ];
 
 // ── Mortgage / refinance deed types ─────────────────────────────────────────
@@ -407,14 +418,14 @@ function classifyDomain(metadata, entityFields) {
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
 
   // Check DIALYSIS FIRST — more specific domain, prevents misclassification
-  for (const kw of DIALYSIS_TENANT_KEYWORDS) {
-    if (searchText.includes(kw)) return 'dialysis';
+  for (const rx of DIALYSIS_TENANT_PATTERNS) {
+    if (rx.test(searchText)) return 'dialysis';
   }
 
   // Then check government
   if (entityFields.asset_type === 'government_leased') return 'government';
-  for (const kw of GOV_TENANT_KEYWORDS) {
-    if (searchText.includes(kw)) return 'government';
+  for (const rx of GOV_TENANT_PATTERNS) {
+    if (rx.test(searchText)) return 'government';
   }
 
   return null;
