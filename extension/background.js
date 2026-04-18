@@ -269,8 +269,15 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           });
           if (matchIdx === -1) {
             mergedSales.push(s);
-          } else if (fieldCount(s) > fieldCount(mergedSales[matchIdx])) {
-            mergedSales[matchIdx] = s;
+          } else {
+            // Always merge: add new fields from incoming without overwriting
+            // existing enriched fields (om_extracted, om_url, annual_rent, etc.)
+            const existing_sale = mergedSales[matchIdx];
+            for (const [k, v] of Object.entries(s)) {
+              if (v != null && v !== '' && (existing_sale[k] == null || existing_sale[k] === '')) {
+                existing_sale[k] = v;
+              }
+            }
           }
         }
 

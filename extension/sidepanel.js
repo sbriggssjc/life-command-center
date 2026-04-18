@@ -1266,9 +1266,13 @@ function wirePropertyActions(ctx, lccEntity) {
       updateBtn.disabled = true;
       updateBtn.textContent = 'Updating...';
 
+      // Re-read live pageContext so OM-enriched data is included
+      // (the closure ctx may be stale if OM ingestion happened after render)
+      const liveCtx = (await getPageContext()) || ctx;
+
       // PATCH the existing entity — merge new CRE data into metadata
-      const fields = extractSourceFields(ctx);
-      const metadata = { ...(lccEntity.metadata || {}), ...buildMetadata(ctx, domain) };
+      const fields = extractSourceFields(liveCtx);
+      const metadata = { ...(lccEntity.metadata || {}), ...buildMetadata(liveCtx, domain) };
       // Clear pipeline gate so re-ingestion triggers a fresh pipeline run
       delete metadata._pipeline_processed_at;
       delete metadata._pipeline_status;
@@ -1311,19 +1315,22 @@ function wirePropertyActions(ctx, lccEntity) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
-      const fields = extractSourceFields(ctx);
-      const metadata = buildMetadata(ctx, domain);
+      // Re-read live pageContext so OM-enriched data is included
+      const liveCtx = (await getPageContext()) || ctx;
+
+      const fields = extractSourceFields(liveCtx);
+      const metadata = buildMetadata(liveCtx, domain);
 
       const result = await apiCall('/api/entities', {
         entity_type: 'asset',
-        name: ctx.address,
-        address: ctx.address,
-        city: ctx.city,
-        state: ctx.state,
-        zip: ctx.zip || null,
-        county: ctx.county || null,
+        name: liveCtx.address,
+        address: liveCtx.address,
+        city: liveCtx.city,
+        state: liveCtx.state,
+        zip: liveCtx.zip || null,
+        county: liveCtx.county || null,
         asset_type: (() => {
-          const rawType = fields.property_type || ctx.property_subtype || null;
+          const rawType = fields.property_type || liveCtx.property_subtype || null;
           const INVALID_TYPES = ['size', 'type', 'class', 'sf', 'rba', 'stories'];
           return (rawType && !INVALID_TYPES.includes(rawType.toLowerCase())) ? rawType : 'property';
         })(),
@@ -1334,13 +1341,13 @@ function wirePropertyActions(ctx, lccEntity) {
       // If created, link the external identity (CoStar parcel/URL)
       const newEntityId = result.data?.entity?.id;
       if (result.ok && newEntityId) {
-        const extId = ctx.parcel_number || ctx.page_url || ctx.address;
+        const extId = liveCtx.parcel_number || liveCtx.page_url || liveCtx.address;
         await apiCall('/api/entities?action=link', {
           entity_id: newEntityId,
           source_system: domain || 'extension',
           source_type: 'property',
           external_id: extId,
-          external_url: ctx.page_url || null,
+          external_url: liveCtx.page_url || null,
         }).catch(() => {}); // linking is best-effort
       }
 
@@ -1462,6 +1469,10 @@ function buildMetadata(ctx, domain) {
     // Sale notes & document links from CoStar comp detail pages
     sale_notes_raw: ctx.sale_notes_raw || null,
     document_links: ctx.document_links || [],
+    documents: ctx.documents || [],
+    // PDF / OM ingestion tracking
+    pdf_count: (ctx.pdf_extracted_texts || []).length || 0,
+    pdf_extracted_texts: ctx.pdf_extracted_texts || [],
   };
   // Strip null values to keep metadata clean
   for (const key of Object.keys(m)) {

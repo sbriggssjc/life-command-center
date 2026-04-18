@@ -430,9 +430,13 @@
         // No match — add it
         existing.push(s);
       } else {
-        // Match found — keep the version with more detail
-        if (saleFieldCount(s) > saleFieldCount(existing[matchIdx])) {
-          existing[matchIdx] = s;
+        // Match found — merge: add new fields without overwriting existing
+        // (preserves OM-enriched fields like om_extracted, om_url, annual_rent)
+        const target = existing[matchIdx];
+        for (const [k, v] of Object.entries(s)) {
+          if (v != null && v !== '' && (target[k] == null || target[k] === '')) {
+            target[k] = v;
+          }
         }
       }
     }
