@@ -87,12 +87,13 @@ let diaIntakeIdx = 0;
  */
 async function diaQuery(table, select, params = {}) {
   // Query via serverless proxy — keeps secret key server-side
-  const { filter, order, limit = 1000, offset = 0 } = params;
+  const { filter, filter2, order, limit = 1000, offset = 0 } = params;
 
   const url = new URL('/api/dia-query', window.location.origin);
   url.searchParams.set('table', table);
   url.searchParams.set('select', select);
   if (filter) url.searchParams.set('filter', filter);
+  if (filter2) url.searchParams.set('filter2', filter2);
   if (order) url.searchParams.set('order', order);
   if (limit !== undefined) url.searchParams.set('limit', limit);
   if (offset !== undefined) url.searchParams.set('offset', offset);

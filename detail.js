@@ -957,8 +957,8 @@ async function _udRenderOperationsAsync(bodyEl) {
       promises.push(diaQuery('facility_patient_counts', '*', { filter: mFilter, order: 'snapshot_date.asc', limit: 100 }).catch(() => []));
       promises.push(diaQuery('clinic_trends', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('clinic_quality_metrics', '*', { filter: mFilter, order: 'snapshot_date.desc', limit: 1 }).catch(() => []));
-      promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter + '&is_primary=eq.true', limit: 1 }).catch(() => []));
-      promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year.desc', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter, filter2: 'is_primary=eq.true', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year_end.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_clinic_payer_mix', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_payer_mix_geo_averages', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       // Lease via property_id
@@ -2723,13 +2723,13 @@ function _udTabOperations() {
 
   // ── Reconcile Treatments / Year ──
   // Priority: 1) HCRIS cost report (actual treatment count)
-  //           2) finDetail estimated_treatments_per_year
-  //           3) Model from patient count (patients × 156)
-  //           4) ttm_total_treatments (only if plausible for clinic size)
+  //           2) finDetail estimated_treatments_per_year (from primary estimate model)
+  //           3) Rankings ttm_total_treatments (actual CMS-reported)
+  //           4) Model from patient count (patients × 156) — last resort, often inflated
   const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
   const finTx = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
-  const modelTx = bestPatientCount ? bestPatientCount * 156 : null; // 3 tx/week × 52 weeks
   const rawTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  const modelTx = bestPatientCount ? bestPatientCount * 156 : null; // 3 tx/week × 52 weeks
   let annualTx = null;
   let txLabel = '';
   if (hcrisTx && hcrisTx > 0) {
@@ -2738,14 +2738,12 @@ function _udTabOperations() {
   } else if (finTx && finTx > 0) {
     annualTx = finTx;
     txLabel = ' <span style="font-size:10px;color:var(--text3)">(estimated)</span>';
+  } else if (rawTx && Number(rawTx) > 0) {
+    annualTx = Number(rawTx);
+    txLabel = ' <span style="font-size:10px;color:var(--text3)">(reported)</span>';
   } else if (modelTx && modelTx > 0) {
     annualTx = modelTx;
     txLabel = ' <span style="font-size:10px;color:var(--text3)">(modeled)</span>';
-  } else if (rawTx && modelTx && Number(rawTx) / modelTx < 3) {
-    // Only use ttm if it's within plausible range
-    annualTx = Number(rawTx);
-  } else if (rawTx && !modelTx) {
-    annualTx = Number(rawTx);
   }
   if (annualTx && estRevenue) {
     const revPerTx = Number(estRevenue) / annualTx;
@@ -2915,15 +2913,20 @@ function _udTabOperations() {
   const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
   if (projPt1 != null) html += _row('Projected Patients (1yr)', fmtN(projPt1));
   if (projPt3 != null) html += _row('Projected Patients (3yr)', fmtN(projPt3));
-  // Revenue projections: derive from patient projections × current per-patient revenue (+ 3% annual inflation)
+  // Revenue projections: derive from patient growth rate applied to current revenue (+ 3% annual inflation)
+  // CAUTION: bestPatientCount is total CMS census (all modalities), not just in-center.
+  // Using revenue / patients directly inflates per-patient cost if many patients are home/PD.
+  // Instead, apply the patient growth RATE to current revenue for more stable projections.
   if (estRevenue && bestPatientCount && bestPatientCount > 0) {
-    const revenuePerPatient = Number(estRevenue) / bestPatientCount;
-    if (projPt1 != null) {
-      const projRev1 = projPt1 * revenuePerPatient * 1.03;
+    const rev = Number(estRevenue);
+    if (projPt1 != null && projPt1 > 0) {
+      const growthRate1 = projPt1 / bestPatientCount;
+      const projRev1 = rev * growthRate1 * 1.03;
       html += _rowMoney('Projected Revenue (1yr)', projRev1);
     }
-    if (projPt3 != null) {
-      const projRev3 = projPt3 * revenuePerPatient * Math.pow(1.03, 3);
+    if (projPt3 != null && projPt3 > 0) {
+      const growthRate3 = projPt3 / bestPatientCount;
+      const projRev3 = rev * growthRate3 * Math.pow(1.03, 3);
       html += _rowMoney('Projected Revenue (3yr)', projRev3);
     }
   }
@@ -3187,7 +3190,9 @@ function _udExportOperations() {
   if (hcrisCost > 0 && !hcrisCostEqRev) bestCosts = hcrisCost;
   else if (estRevenue && bestProfit) bestCosts = Number(estRevenue) - Number(bestProfit);
   const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
-  const annualTx = hcrisTx || (finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null) || (bestPatientCount ? bestPatientCount * 156 : null);
+  const finTxExp = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
+  const rawTxExp = r.estimated_annual_treatments || r.ttm_total_treatments;
+  const annualTx = hcrisTx || finTxExp || (rawTxExp ? Number(rawTxExp) : null) || (bestPatientCount ? bestPatientCount * 156 : null);
   const revPerTx = (estRevenue && annualTx) ? (Number(estRevenue) / annualTx) : null;
 
   // Hours

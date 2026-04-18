@@ -350,13 +350,16 @@ function applyFilter(url: URL, filterStr: string | null): string | null {
     return null;
   }
 
-  // Simple col=op.val filter
-  const eqIdx = filterStr.indexOf("=");
-  if (eqIdx > 0) {
-    const col = safeColumn(filterStr.substring(0, eqIdx));
-    if (!col) return "Invalid column name in filter";
-    const val = filterStr.substring(eqIdx + 1);
-    url.searchParams.set(col, val);
+  // Handle multiple &-separated filter conditions (e.g. "medicare_id=eq.312669&is_primary=eq.true")
+  const parts = filterStr.split("&");
+  for (const part of parts) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx > 0) {
+      const col = safeColumn(part.substring(0, eqIdx));
+      if (!col) return "Invalid column name in filter: " + part.substring(0, eqIdx);
+      const val = part.substring(eqIdx + 1);
+      url.searchParams.set(col, val);
+    }
   }
   return null;
 }
