@@ -152,13 +152,12 @@
       // Find matching sale record (by date from Transaction Details)
       // The Transaction Details block captures the primary sale for this comp.
       const txnSale = salesHistory.find(s => s.sale_date || s.sale_price);
+      const normDate = (s) => {
+        if (!s) return '';
+        const d = new Date(s);
+        return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : s.toLowerCase().trim();
+      };
       if (txnSale) {
-        // Enrich the matching entry in accumulated.sales_history
-        const normDate = (s) => {
-          if (!s) return '';
-          const d = new Date(s);
-          return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : s.toLowerCase().trim();
-        };
         const txnDateNorm = normDate(txnSale.sale_date);
         const match = accumulated.sales_history.find(s =>
           normDate(s.sale_date) === txnDateNorm
@@ -178,6 +177,11 @@
         }
       }
 
+      // Publish the current comp's context so the sidebar can associate
+      // OM ingestion with the correct sale record
+      accumulated.viewing_comp_id = data._comp_id;
+      accumulated.viewing_comp_sale_date = txnSale?.sale_date || data.sale_date || null;
+
       // Merge property-level fields into top-level (skip sale-specific)
       for (const [key, val] of Object.entries(data)) {
         if (SALE_SPECIFIC_FIELDS.includes(key)) continue;
@@ -192,6 +196,9 @@
         if (val) accumulated[key] = val;
       }
       mergeSales(accumulated.sales_history, salesHistory);
+      // Clear comp viewing context when not on a comp page
+      accumulated.viewing_comp_id = null;
+      accumulated.viewing_comp_sale_date = null;
     }
 
     mergeContacts(accumulated.contacts, contacts);
@@ -237,7 +244,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 20,
+        _version: 21,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -492,10 +499,20 @@
     const isSaleCompPage = !!compMatch;
     if (isSaleCompPage) data._comp_id = compMatch[1];
 
+    // Track when we enter a Sales History / Prior Sales section on Summary pages.
+    // "Asking Price" labels after this point are historical per-sale values,
+    // not the current listing price.
+    let inSalesHistorySection = false;
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const prev = i > 0 ? lines[i - 1] : '';
       const next = i < lines.length - 1 ? lines[i + 1] : '';
+
+      // Detect sales history sections (on Summary and Sale tabs)
+      if (/^(sales?\s+history|prior\s+sales?|transaction\s+history|transaction\s+details)$/i.test(line)) {
+        inSalesHistorySection = true;
+      }
 
       if (!data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
         if (/[\d.]+%/.test(prev)) data.cap_rate = prev;
@@ -522,7 +539,10 @@
         }
       }
 
-      if (!data.asking_price && /^asking\s+price$/i.test(line)) {
+      // Asking price: only capture from the stat card area (before sales history
+      // section). Historical "Asking Price" fields inside prior sales records
+      // belong to those individual sales, not the current listing.
+      if (!inSalesHistorySection && !data.asking_price && /^asking\s+price$/i.test(line)) {
         if (/^\$[\d,]+/.test(next)) data.asking_price = next;
         else if (/^\$[\d,]+/.test(prev)) data.asking_price = prev;
       }

@@ -873,20 +873,16 @@ async function loadPropertyTab() {
           ctx.pdf_extracted_metrics = metrics;
 
           // ── Route OM metrics to the correct destination ──
-          // If the user is viewing a sale comp page, the OM belongs to THAT
-          // historical sale — attach metrics to the matching sales_history entry.
+          // If the user is viewing a sale comp page (viewing_comp_id set by
+          // costar.js), the OM belongs to THAT historical sale — attach metrics
+          // to the matching sales_history entry.
           // If on a Summary/property page, the OM is the current listing OM —
           // merge into top-level context fields.
-          const compId = ctx._comp_id || ctx.costar_comp_id;
-          const pageIsComp = /\/Comp\/\d+\//i.test(ctx.page_url || '');
+          const viewingCompDate = ctx.viewing_comp_sale_date;
 
-          // Sale-specific fields that belong on the sale record, not top-level
-          const SALE_SPECIFIC = [
+          // All OM fields — both sale-specific and property/lease
+          const allOmFields = [
             'asking_price', 'sale_price', 'cap_rate', 'noi', 'price_per_sf',
-          ];
-
-          // Property/lease fields always merge to top-level (don't overwrite existing)
-          const mergeFields = [
             'annual_rent', 'lease_expiration', 'lease_term',
             'escalation', 'renewal_options', 'expense_structure',
             'building_sf', 'year_built', 'occupancy', 'tenant_name',
@@ -898,33 +894,30 @@ async function loadPropertyTab() {
             'current_term_start', 'option_periods', 'expense_notes',
           ];
 
-          if (pageIsComp && ctx.sales_history?.length) {
-            // Attach OM metrics to the matching sale record in sales_history.
-            // Match by sale_date from the current Transaction Details context.
+          if (viewingCompDate && ctx.sales_history?.length) {
+            // On a comp page — attach OM to the matching sale record
             const normDate = (s) => {
               if (!s) return '';
               const d = new Date(s);
               return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : (s || '').trim();
             };
-            const ctxSaleDate = normDate(ctx.sale_date);
-            const match = ctx.sales_history.find(s => normDate(s.sale_date) === ctxSaleDate);
+            const targetDate = normDate(viewingCompDate);
+            const match = ctx.sales_history.find(s => normDate(s.sale_date) === targetDate);
             if (match) {
-              // Enrich sale record with OM-extracted data
-              for (const key of [...SALE_SPECIFIC, ...mergeFields]) {
+              // Enrich sale record with ALL OM-extracted data
+              for (const key of allOmFields) {
                 if (metrics[key] && !match[key]) match[key] = metrics[key];
               }
               match.om_extracted = true;
               match.om_url = url;
             }
-            // Property-level fields still merge to top-level
-            for (const field of mergeFields) {
-              if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
-            }
-          } else {
-            // Summary/property page — all fields merge to top-level
-            for (const field of [...SALE_SPECIFIC, ...mergeFields]) {
-              if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
-            }
+          }
+
+          // Always merge ALL OM fields into top-level too (don't overwrite existing).
+          // The first OM ingested (current listing) populates top-level.
+          // Subsequent OMs enrich sale records but won't overwrite top-level.
+          for (const field of allOmFields) {
+            if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
           }
 
           chrome.storage.session.set({ pageContext: ctx });
