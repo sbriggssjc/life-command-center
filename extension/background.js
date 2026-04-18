@@ -204,17 +204,35 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         existing.address.toLowerCase().trim() ===
         incoming.address.toLowerCase().trim();
 
-      const INVALID_TENANT = /^(public\s+record|building|land|market|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research)$/i;
+      const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross)$/i;
 
       let merged = incoming;
       if (sameProperty) {
-        // Merge tenants — preserve from either source, dedupe by name
-        const mergedTenants = [...(existing.tenants || [])];
-        for (const t of (incoming.tenants || [])) {
-          if (!mergedTenants.some(e => e.name === t.name)) {
-            mergedTenants.push(t);
+        // Deep-merge arrays: preserve data from ALL tabs, not just the latest
+        // Helper: merge two arrays by deduping on a key field (or by value)
+        const mergeArrays = (a, b, keyFn) => {
+          const result = [...(a || [])];
+          for (const item of (b || [])) {
+            const key = keyFn ? keyFn(item) : JSON.stringify(item);
+            if (!result.some(r => (keyFn ? keyFn(r) : JSON.stringify(r)) === key)) {
+              result.push(item);
+            }
           }
-        }
+          return result;
+        };
+
+        // Merge tenants by name
+        const mergedTenants = mergeArrays(existing.tenants, incoming.tenants, t => t.name);
+
+        // Merge contacts by name (listing brokers from Summary, buyer brokers from Sale tab)
+        const mergedContacts = mergeArrays(existing.contacts, incoming.contacts, c => (c.name || '') + '|' + (c.role || ''));
+
+        // Merge sales_history by date+price (combine deed records from different tabs)
+        const mergedSales = mergeArrays(existing.sales_history, incoming.sales_history,
+          s => (s.date || s.sold_date || '') + '|' + (s.price || ''));
+
+        // Merge documents (deeds, OMs, brochures from different tabs)
+        const mergedDocs = mergeArrays(existing.documents, incoming.documents, d => d.url || d.title);
 
         const cleanIncomingTenant = incoming.tenant_name &&
           !INVALID_TENANT.test(incoming.tenant_name)
@@ -230,17 +248,32 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           !INVALID_TENANT.test(existing.primary_tenant)
           ? existing.primary_tenant : null;
 
+        // Merge: existing first, incoming overwrites scalars, but arrays are deep-merged
+        // For scalar fields, prefer incoming non-null over existing non-null
+        const mergedScalars = {};
+        for (const key of Object.keys({ ...existing, ...incoming })) {
+          if (['tenants', 'contacts', 'sales_history', 'documents',
+               'tenant_name', 'primary_tenant'].includes(key)) continue;
+          const eVal = existing[key];
+          const iVal = incoming[key];
+          // Keep existing value if incoming is null/undefined/empty-array
+          if (iVal == null || (Array.isArray(iVal) && iVal.length === 0)) {
+            mergedScalars[key] = eVal;
+          } else {
+            mergedScalars[key] = iVal;
+          }
+        }
+
         merged = {
-          ...existing,
-          ...incoming,
+          ...mergedScalars,
           tenants: mergedTenants,
+          contacts: mergedContacts,
+          sales_history: mergedSales,
+          documents: mergedDocs,
           tenant_name:    cleanIncomingTenant || cleanExistingTenant || null,
           primary_tenant: cleanIncomingPrimary || cleanExistingPrimary || null,
-          // Also preserve sales history — take the longer array
-          sales_history: (incoming.sales_history || []).length >=
-                         (existing.sales_history || []).length
-            ? incoming.sales_history
-            : existing.sales_history,
+          // Preserve sale_notes_raw from whichever tab captured it
+          sale_notes_raw: incoming.sale_notes_raw || existing.sale_notes_raw || null,
         };
       }
 
