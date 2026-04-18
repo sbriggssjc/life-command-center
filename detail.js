@@ -3114,7 +3114,6 @@ function _udTabOperations() {
     html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Patients</th>';
     html += '</tr></thead><tbody>';
     competitors.forEach(c => {
-      const isSubject = false; // subject facility already filtered out
       html += '<tr style="border-bottom:1px solid var(--s3)">';
       html += '<td style="padding:4px 8px;white-space:nowrap">' + (c.facility_name || '') + '</td>';
       html += '<td style="padding:4px 8px">' + (c.city || '') + '</td>';
@@ -3227,8 +3226,9 @@ function _udExportOperations() {
   const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
   const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || '';
-  const facilityName = r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility';
-  const address = [r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '';
+  const _esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const facilityName = _esc(r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility');
+  const address = _esc([r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '');
   const stationsVal = r.number_of_chairs || r.stations || null;
   const trendDir = trends.trend_direction || (r.patient_yoy_pct > 2 ? 'Growth' : r.patient_yoy_pct < -2 ? 'Decline' : 'Stable');
   let leaseExp = 'N/A';
@@ -3605,6 +3605,7 @@ function _trendBadge(pct, label) {
 
 /** Compare TTM to estimated with trend arrow */
 function _trendCompare(actual, estimate, label) {
+  if (!estimate || Number(estimate) === 0) return '';
   const diff = ((Number(actual) - Number(estimate)) / Number(estimate) * 100).toFixed(1);
   return _trendArrow(diff, label);
 }

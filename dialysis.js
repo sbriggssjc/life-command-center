@@ -1070,7 +1070,7 @@ function renderNorthmarqInner() {
   h += infoCard({ title: 'NM TTM Sales', value: fmtN(nmComps.length), sub: '$' + fmtN(Math.round(nmVolume / 1000000)) + 'M volume', color: 'green', tab: 'sales' });
   h += infoCard({ title: 'Market Share (Txns)', value: marketShareTxn, sub: fmtN(nmComps.length) + ' of ' + fmtN(ttmComps.length) + ' TTM deals', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'NM Avg Cap Rate', value: nmAvgCap, sub: 'vs ' + mktAvgCap + ' market avg', color: 'cyan', tab: 'sales' });
-  h += infoCard({ title: 'Seller Value Add', value: capAdvStr, sub: capAdv && parseInt(capAdv, 10) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: parseInt(capAdv, 10) > 0 ? 'green' : 'yellow', tab: 'sales' });
+  h += infoCard({ title: 'Seller Value Add', value: capAdvStr, sub: capAdv != null && Number(capAdv) > 0 ? 'tighter caps = higher proceeds' : 'vs market average', color: capAdv != null && Number(capAdv) > 0 ? 'green' : 'yellow', tab: 'sales' });
   h += '</div>';
   return h;
 }
