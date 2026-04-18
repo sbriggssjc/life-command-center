@@ -511,6 +511,7 @@ function parsePdfDealMetrics(text) {
 let currentTab = 'property';
 let chatHistory = [];
 let selectedEntity = null;
+let _suppressStorageRerender = false; // true while OM ingest writes to storage
 
 // ── Tab switching ───────────────────────────────────────────────────────────
 
@@ -861,6 +862,9 @@ async function loadPropertyTab() {
         card.appendChild(previewDiv);
 
         // Merge extracted metrics into current page context
+        // Suppress the onChanged → loadPropertyTab re-render while we write,
+        // otherwise the storage listener nukes the extraction UI we just built.
+        _suppressStorageRerender = true;
         chrome.storage.session.get(['pageContext'], (result) => {
           const ctx = result.pageContext || {};
 
@@ -920,10 +924,14 @@ async function loadPropertyTab() {
             if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
           }
 
-          chrome.storage.session.set({ pageContext: ctx });
+          chrome.storage.session.set({ pageContext: ctx }, () => {
+            // Release the re-render suppression after the write completes
+            _suppressStorageRerender = false;
+          });
         });
 
       } catch (err) {
+        _suppressStorageRerender = false; // ensure flag is cleared on error
         spinner.textContent = `PDF extraction failed: ${err.message}`;
         spinner.style.background = '#FEE2E2';
         spinner.style.color = '#991B1B';
@@ -2092,6 +2100,10 @@ async function restoreChatHistory() {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.pageContext) {
     updatePageContextBadge();
+    // Skip re-render while OM ingest is writing to storage — the ingest
+    // handler manages its own DOM state and a full re-render would wipe
+    // out the extraction UI (spinner, metrics tags, extracted text preview).
+    if (_suppressStorageRerender) return;
     if (currentTab === 'property') {
       loadPropertyTab();
     }

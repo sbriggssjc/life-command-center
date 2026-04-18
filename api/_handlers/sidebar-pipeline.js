@@ -112,6 +112,17 @@ function parsePercent(val) {
   return isNaN(num) ? null : num;
 }
 
+/**
+ * Parse cap rate to decimal: "6.7%" → 0.067, "0.067" → 0.067.
+ * CoStar sends cap rates as "6.7%" (percentage) but the DB stores decimal.
+ * Values > 1 are treated as percentages and divided by 100.
+ */
+function parseCapRateDecimal(val) {
+  const num = parsePercent(val);
+  if (num == null) return null;
+  return num > 1 ? num / 100 : num;
+}
+
 /** Parse acres string: "0.54 AC" → 0.54 */
 function parseAcres(val) {
   if (val == null) return null;
@@ -2056,7 +2067,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     const buyerBroker = (metadata.contacts || []).find(c => c.role === 'buyer_broker');
 
     // Domain-aware field names for sales transactions
-    const capRateVal = parsePercent(sale.cap_rate || metadata.cap_rate);
+    const capRateVal = parseCapRateDecimal(sale.cap_rate || metadata.cap_rate);
     // For current sales with no deed-level buyer/seller, supplement
     // from contacts (buyer/seller contacts are the same entities)
     const contactBuyer = (metadata.contacts || [])
@@ -2363,7 +2374,7 @@ async function stageGovCompForSalesforce(propertyId, entity, metadata) {
     state:          entity.state   || null,
     sale_date:      saleDate,
     sale_price:     parseCurrency(mostRecentSale.sale_price),
-    cap_rate:       parsePercent(mostRecentSale.cap_rate),
+    cap_rate:       parseCapRateDecimal(mostRecentSale.cap_rate),
     buyer_name:     buyerContact?.name || mostRecentSale.buyer || null,
     seller_name:    sellerContact?.name || mostRecentSale.seller || null,
     square_feet:    parseSF(metadata.square_footage),
@@ -3819,7 +3830,7 @@ async function upsertDialysisListings(propertyId, metadata) {
   // a historical sale's calculated_cap_rate or sold_cap_rate. Named
   // distinctly from the sales-context capRate/cap_rate to keep the source
   // unambiguous in code review.
-  const listingCapRate = parsePercent(metadata.cap_rate);
+  const listingCapRate = parseCapRateDecimal(metadata.cap_rate);
 
   const record = stripNulls({
     property_id: propertyIdInt,
@@ -4043,7 +4054,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
   // a historical sale's sold_cap_rate or calculated_cap_rate. Named
   // distinctly from the sales-context capRate to keep the source
   // unambiguous in code review.
-  const listingCapRate = parsePercent(metadata.cap_rate);
+  const listingCapRate = parseCapRateDecimal(metadata.cap_rate);
 
   const record = stripNulls({
     property_id: propertyId,
