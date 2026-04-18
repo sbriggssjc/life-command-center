@@ -448,11 +448,6 @@ async function loadPropertyTab() {
     html += renderSalesHistory(salesHistory, ctx);
   }
 
-  // ── SECTION 4b: Sale notes from source ─────────────────────────
-  if (ctx?.sale_notes_raw) {
-    html += renderSaleNotes(ctx.sale_notes_raw);
-  }
-
   // ── SECTION 5: Documents from source ──────────────────────────
   const documentLinks = ctx?.document_links || [];
   if (documentLinks.length) {
@@ -1288,42 +1283,6 @@ function renderSalesHistory(sales, ctx) {
     if (s.title_company) html += `<div class="sale-detail" style="color:var(--text-secondary);">Title: ${escapeHtml(s.title_company)}</div>`;
     if (s.document_number) html += `<div class="sale-detail" style="color:var(--text-secondary);">Doc #${escapeHtml(s.document_number)}</div>`;
 
-    html += '</div>';
-  }
-  return html;
-}
-
-// ── Sale notes display ─────────────────────────────────────────────────────
-
-function renderSaleNotes(raw) {
-  if (!raw || !raw.trim()) return '';
-  let html = '<div class="section-label">Sale Notes</div>';
-  html += '<div style="background:var(--bg-secondary,#f8f8f8);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;line-height:1.5;color:var(--text-primary,#333);white-space:pre-wrap;word-break:break-word;">';
-  html += escapeHtml(raw);
-  html += '</div>';
-
-  // Extract key financial metrics from the notes
-  const extracts = [];
-  const noiMatch = raw.match(/NOI\s*(?:of\s*)?\$?([\d,]+(?:\.\d+)?(?:\s*(?:M|K|million|thousand))?)/i);
-  if (noiMatch) extracts.push({ label: 'NOI', value: noiMatch[1].trim() });
-
-  const capMatch = raw.match(/cap\s*(?:rate)?\s*(?:of\s*)?([\d.]+)\s*%/i);
-  if (capMatch) extracts.push({ label: 'Cap Rate', value: capMatch[1] + '%' });
-
-  const rentMatch = raw.match(/(?:annual|yearly|base)\s*rent\s*(?:of\s*)?\$?([\d,]+(?:\.\d+)?(?:\s*(?:M|K|million|thousand))?)/i);
-  if (rentMatch) extracts.push({ label: 'Rent', value: '$' + rentMatch[1].trim() });
-
-  const leaseMatch = raw.match(/(?:lease\s*(?:term|expir(?:es|ation|y)))\s*(?:of\s*|:?\s*|in\s*)?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}|\d+\s*(?:year|yr)s?)/i);
-  if (leaseMatch) extracts.push({ label: 'Lease', value: leaseMatch[1].trim() });
-
-  const occupancyMatch = raw.match(/([\d.]+)\s*%\s*(?:occupied|occupancy|leased)/i);
-  if (occupancyMatch) extracts.push({ label: 'Occupancy', value: occupancyMatch[1] + '%' });
-
-  if (extracts.length) {
-    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">';
-    for (const e of extracts) {
-      html += `<span style="background:#EFF6FF;color:#1E40AF;font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;">${escapeHtml(e.label)}: ${escapeHtml(e.value)}</span>`;
-    }
     html += '</div>';
   }
   return html;

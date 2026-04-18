@@ -970,18 +970,10 @@ async function _udRenderOperationsAsync(bodyEl) {
       }
       // Hours of operation from medicare_clinics
       promises.push(diaQuery('medicare_clinics', 'medicare_id,weekly_operating_hours,late_shift,hours_json,hours_summary_text,hours_source,hours_confidence,hours_last_checked_at', { filter: mFilter, limit: 1 }).catch(() => []));
-      // Competitors: same-county clinics (need county from rankings)
-      const county = (_udCache.rankings && _udCache.rankings.county) || null;
-      const countyState = (_udCache.rankings && _udCache.rankings.state) || null;
-      if (county && countyState) {
-        promises.push(diaQuery('medicare_clinics', 'medicare_id,facility_name,city,state,chain_organization,number_of_chairs,latest_estimated_patients,county', { filter: `county=eq.${encodeURIComponent(county)}`, filter2: `state=eq.${encodeURIComponent(countyState)}`, order: 'latest_estimated_patients.desc.nullslast', limit: 25 }).catch(() => []));
-      } else {
-        promises.push(Promise.resolve([]));
-      }
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], []];
 
     _opsExtraCache = {
       medicare_id: clinicId,
@@ -994,11 +986,10 @@ async function _udRenderOperationsAsync(bodyEl) {
       geoPayerMix: (geoPayerData || [])[0] || null,
       lease: (leaseData || [])[0] || null,
       hours: (hoursData || [])[0] || null,
-      competitors: (competitorData || []).filter(c => c.medicare_id !== clinicId),
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [] };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -3085,47 +3076,6 @@ function _udTabOperations() {
   html += '</div>';
   html += '</div>'; // end side-by-side grid
 
-  // ── COMPETITIVE LANDSCAPE ──
-  const competitors = ext.competitors || [];
-  if (competitors.length > 0) {
-    html += '<div class="detail-section">';
-    html += '<div class="detail-section-title">Competitive Landscape \u2014 ' + (r.county || '') + ' County</div>';
-    // Operator summary
-    const opCounts = {};
-    let totalChairs = 0, totalPts = 0;
-    competitors.forEach(c => {
-      const op = c.chain_organization || 'Independent';
-      opCounts[op] = (opCounts[op] || 0) + 1;
-      if (c.number_of_chairs) totalChairs += Number(c.number_of_chairs);
-      if (c.latest_estimated_patients) totalPts += Number(c.latest_estimated_patients);
-    });
-    const opSummary = Object.entries(opCounts).sort((a, b) => b[1] - a[1]).map(([op, ct]) => op + ' (' + ct + ')').join(', ');
-    html += '<div style="font-size:12px;color:var(--text3);margin-bottom:10px">' + competitors.length + ' competing facilities &nbsp;\u00B7&nbsp; ' + totalChairs + ' total chairs &nbsp;\u00B7&nbsp; ' + fmtN(totalPts) + ' patients</div>';
-    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px"><strong style="color:var(--text2)">Operators:</strong> ' + opSummary + '</div>';
-    // Table
-    html += '<div style="overflow-x:auto;max-height:300px;overflow-y:auto">';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
-    html += '<thead style="position:sticky;top:0;background:var(--bg)">';
-    html += '<tr style="border-bottom:2px solid var(--s3)">';
-    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Facility</th>';
-    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">City</th>';
-    html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Operator</th>';
-    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Chairs</th>';
-    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Patients</th>';
-    html += '</tr></thead><tbody>';
-    competitors.forEach(c => {
-      html += '<tr style="border-bottom:1px solid var(--s3)">';
-      html += '<td style="padding:4px 8px;white-space:nowrap">' + (c.facility_name || '') + '</td>';
-      html += '<td style="padding:4px 8px">' + (c.city || '') + '</td>';
-      html += '<td style="padding:4px 8px">' + (c.chain_organization || 'Independent') + '</td>';
-      html += '<td style="padding:4px 8px;text-align:right">' + (c.number_of_chairs || '\u2014') + '</td>';
-      html += '<td style="padding:4px 8px;text-align:right">' + (c.latest_estimated_patients ? Number(c.latest_estimated_patients).toLocaleString() : '\u2014') + '</td>';
-      html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-    html += '</div>';
-  }
-
   // ── COMPARATIVE RANKINGS ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Comparative Rankings</div>';
@@ -3212,7 +3162,6 @@ function _udExportOperations() {
   const hoursInfo = ext.hours || null;
   const patientHistory = ext.patientHistory || [];
   const payerMix = ext.payerMix || {};
-  const competitors = ext.competitors || [];
   const operator = (cmsLink && cmsLink.operator) || _udDetectOperator(r);
   const B = NMQ_BRAND;
 
@@ -3226,9 +3175,8 @@ function _udExportOperations() {
   const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
   const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || '';
-  const _esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const facilityName = _esc(r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility');
-  const address = _esc([r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '');
+  const facilityName = r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility';
+  const address = [r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '';
   const stationsVal = r.number_of_chairs || r.stations || null;
   const trendDir = trends.trend_direction || (r.patient_yoy_pct > 2 ? 'Growth' : r.patient_yoy_pct < -2 ? 'Decline' : 'Stable');
   let leaseExp = 'N/A';
@@ -3392,53 +3340,9 @@ ${hoursBlock}
   <tr><td>Commercial / Private</td><td>${payerMix.private_pct != null ? Number(payerMix.private_pct).toFixed(1) + '%' : (r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct).toFixed(1) + '%' : 'N/A')}</td></tr>
 </table>
 
-${competitors.length > 0 ? (() => {
-  const opCts = {};
-  let totChairs = 0, totPts = 0;
-  competitors.forEach(c => {
-    const op = c.chain_organization || 'Independent';
-    opCts[op] = (opCts[op] || 0) + 1;
-    if (c.number_of_chairs) totChairs += Number(c.number_of_chairs);
-    if (c.latest_estimated_patients) totPts += Number(c.latest_estimated_patients);
-  });
-  const opList = Object.entries(opCts).sort((a, b) => b[1] - a[1]).map(([op, ct]) => op + ' (' + ct + ')').join(', ');
-  const rows = competitors.map(c =>
-    '<tr><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + '">' + (c.facility_name || '') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + '">' + (c.city || '') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + '">' + (c.chain_organization || 'Independent') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + ';text-align:right">' + (c.number_of_chairs || '\u2014') +
-    '</td><td style="padding:6px 10px;border-bottom:1px solid ' + B.border + ';text-align:right">' + (c.latest_estimated_patients ? Number(c.latest_estimated_patients).toLocaleString() : '\u2014') +
-    '</td></tr>'
-  ).join('');
-  return '<div class="page-break"></div>' +
-    '<h2>Competitive Landscape \u2014 ' + (r.county || '') + ' County</h2>' +
-    '<p style="font-size:12px;color:' + B.muted + ';margin-bottom:12px">' + competitors.length + ' competing facilities &nbsp;\u00B7&nbsp; ' + totChairs.toLocaleString() + ' total chairs &nbsp;\u00B7&nbsp; ' + totPts.toLocaleString() + ' patients<br><strong style="color:' + B.bodyText + '">Operators:</strong> ' + opList + '</p>' +
-    '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-    '<thead><tr style="background:' + B.blueTint + '">' +
-    '<th style="text-align:left;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Facility</th>' +
-    '<th style="text-align:left;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">City</th>' +
-    '<th style="text-align:left;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Operator</th>' +
-    '<th style="text-align:right;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Chairs</th>' +
-    '<th style="text-align:right;padding:8px 10px;font-weight:700;color:' + B.navy + ';border-bottom:2px solid ' + B.blue + '">Patients</th>' +
-    '</tr></thead><tbody>' + rows + '</tbody></table>';
-})() : ''}
-
 <div class="methodology">
-  <strong>Methodology & Data Sources</strong><br><br>
-  <strong style="color:${B.navy}">Revenue Estimation</strong><br>
-  Revenue estimates are derived from a 4-payer blended reimbursement model applied to estimated annual treatment volume. Payer-specific rates reflect current CMS reimbursement schedules: Medicare ~$279/treatment, Medicaid ~$225/treatment, Commercial/Private ~$1,100/treatment, and Other ~$250/treatment. The blended average is approximately $357/treatment. Treatment volume assumes 156 treatments per patient per year (3x weekly, 52 weeks).<br><br>
-  <strong style="color:${B.navy}">Treatment Volume</strong><br>
-  Annual treatment counts follow a data-priority hierarchy: (1) HCRIS cost report actuals, (2) XGBoost primary financial model estimates, (3) CMS-reported trailing twelve month totals, (4) modeled from patient census (patients \u00D7 156). The chair-based capacity model (stations \u00D7 3 shifts \u00D7 5.5 days \u00D7 52 weeks \u00D7 65% utilization) has been validated against reported figures with a median accuracy of 1.00x across 7,115 facilities.<br><br>
-  <strong style="color:${B.navy}">Operating Costs & Margins</strong><br>
-  Operating costs are sourced from: (1) CMS HCRIS facility cost reports (actual facility-level data), or (2) derived from revenue minus operating profit where HCRIS data is unavailable or reflects known Medicare-only allocation quirks. Margins are calculated as operating profit divided by revenue.<br><br>
-  <strong style="color:${B.navy}">Revenue Projections</strong><br>
-  Projected revenue uses a growth-rate approach: current revenue is scaled by the ratio of projected-to-current patient census, plus 3% annual inflation compounding. This avoids per-patient revenue inflation caused by multi-modality census counts (in-center HD, home HD, peritoneal dialysis) that differ in reimbursement rates. Patient projections are derived from regression analysis of historical CMS enrollment snapshots.<br><br>
-  <strong style="color:${B.navy}">Quality & Risk Metrics</strong><br>
-  Quality data sourced from CMS Dialysis Facility Compare. Mortality, hospitalization, and readmission rates are per 100 patient-years, benchmarked against national averages (mortality ~15, hospitalization ~150, readmission ~25). The composite lease renewal risk score (0\u2013100) weights five factors: Patient Trend (30%), Financial Health (25%), Quality Metrics (20%), Lease Expiration (15%), and Market Conditions (10%).<br><br>
-  <strong style="color:${B.navy}">Competitive Landscape</strong><br>
-  Competitor data includes all CMS-certified dialysis facilities in the same county, sourced from the CMS Provider of Services file. Patient counts reflect the most recent CMS enrollment snapshot. Geocoded distance-based analysis will be available in a future release.<br><br>
-  <strong style="color:${B.navy}">Data Sources</strong><br>
-  CMS Dialysis Facility Compare, CMS HCRIS Cost Reports, CMS Provider of Services, USRDS Annual Data Report, MedPAC Payment Reports, DaVita/Fresenius 10-K SEC Filings, U.S. Census ACS Demographics, CDC PLACES Health Data, Google Places API (hours of operation).
+  <strong>Methodology</strong><br>
+  Revenue estimates are derived from a 4-payer blended rate model (~$357/treatment) applied to estimated annual treatment volume. Payer-specific rates reflect current CMS reimbursement (Medicare ~$279/tx, Medicaid ~$225/tx, Commercial ~$1,100/tx). Treatment volume is estimated using a chair-based capacity model (stations \u00D7 3 shifts \u00D7 5.5 days \u00D7 52 weeks \u00D7 65% utilization), validated against reported figures (median accuracy 1.00x, n=7,115). Operating margins are derived from clinic-level financial estimates cross-referenced with CMS HCRIS cost reports where available. Quality metrics sourced from CMS Dialysis Facility Compare. Patient census from CMS enrollment snapshots.
 </div>
 
 </div><!-- end content -->
@@ -3605,7 +3509,6 @@ function _trendBadge(pct, label) {
 
 /** Compare TTM to estimated with trend arrow */
 function _trendCompare(actual, estimate, label) {
-  if (!estimate || Number(estimate) === 0) return '';
   const diff = ((Number(actual) - Number(estimate)) / Number(estimate) * 100).toFixed(1);
   return _trendArrow(diff, label);
 }

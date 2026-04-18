@@ -122,6 +122,16 @@
       if (val) accumulated[key] = val;
     }
     mergeContacts(accumulated.contacts, contacts);
+    // Sanitize: remove contacts with garbage names (addresses, dates, titles, etc.)
+    accumulated.contacts = (accumulated.contacts || []).filter(c => {
+      if (!c.name) return false;
+      if (isContactNameGarbage(c.name)) return false;
+      // Reject concatenated address strings (contain ZIP + city run-on)
+      if (/\d{5}[A-Z]/.test(c.name)) return false;
+      // Reject very short non-names
+      if (c.name.length <= 2) return false;
+      return true;
+    });
     mergeSales(accumulated.sales_history, salesHistory);
     mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
@@ -273,13 +283,57 @@
     }
   }
 
+  // Normalize a price string to a number for comparison: "$2.7M" → 2700000
+  function normalizePrice(s) {
+    if (!s) return 0;
+    const cleaned = s.replace(/[^0-9.kmb]/gi, '');
+    let num = parseFloat(cleaned) || 0;
+    if (/[Mm]/.test(s)) num *= 1000000;
+    else if (/[Kk]/.test(s)) num *= 1000;
+    else if (/[Bb]/.test(s)) num *= 1000000000;
+    return num;
+  }
+
+  // Normalize a date string for comparison: various formats → "YYYY-MM-DD"-ish
+  function normalizeSaleDate(s) {
+    if (!s) return '';
+    // "Sep 30, 2022" → Date → toISOString prefix
+    // "9/30/2022" → Date → toISOString prefix
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return s.toLowerCase().trim();
+  }
+
+  // Count non-null, non-empty fields on a sale object
+  function saleFieldCount(s) {
+    return Object.keys(s).filter(k => s[k] != null && s[k] !== '').length;
+  }
+
   function mergeSales(existing, newSales) {
     for (const s of newSales) {
-      const dup = existing.some((e) =>
-        e.sale_date === s.sale_date && e.sale_price === s.sale_price &&
-        e.buyer === s.buyer && e.seller === s.seller
-      );
-      if (!dup) existing.push(s);
+      const sDate = normalizeSaleDate(s.sale_date);
+      const sPrice = normalizePrice(s.sale_price);
+
+      // Look for an existing entry with the same date and similar price
+      const matchIdx = existing.findIndex((e) => {
+        const eDate = normalizeSaleDate(e.sale_date);
+        if (eDate !== sDate) return false;
+        const ePrice = normalizePrice(e.sale_price);
+        // Prices match if both are 0, or within 5% of each other
+        if (ePrice === 0 && sPrice === 0) return true;
+        if (ePrice === 0 || sPrice === 0) return false;
+        return Math.abs(ePrice - sPrice) / Math.max(ePrice, sPrice) < 0.05;
+      });
+
+      if (matchIdx === -1) {
+        // No match — add it
+        existing.push(s);
+      } else {
+        // Match found — keep the version with more detail
+        if (saleFieldCount(s) > saleFieldCount(existing[matchIdx])) {
+          existing[matchIdx] = s;
+        }
+      }
     }
   }
 
@@ -349,9 +403,23 @@
         else if (i < lines.length - 2 && /[\d.]+%/.test(lines[i + 2])) data.cap_rate = lines[i + 2];
       }
 
-      if (!data.sale_date && /^sale\s+date$/i.test(line)) {
-        if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(prev)) data.sale_date = prev;
-        else if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(next)) data.sale_date = next;
+      // Sale date: capture the MOST RECENT date seen (not first — oldest may appear first)
+      if (/^sale\s+date$/i.test(line)) {
+        let candidate = null;
+        if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(prev)) candidate = prev;
+        else if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(next)) candidate = next;
+        if (candidate) {
+          if (!data.sale_date) {
+            data.sale_date = candidate;
+          } else {
+            // Keep whichever is more recent
+            const existing = new Date(data.sale_date);
+            const incoming = new Date(candidate);
+            if (!isNaN(incoming.getTime()) && incoming > existing) {
+              data.sale_date = candidate;
+            }
+          }
+        }
       }
 
       if (!data.asking_price && /^asking\s+price$/i.test(line)) {
@@ -360,11 +428,14 @@
       }
 
       // Sale price: prefer stat card value (appears first, is most recent sale)
-      // but skip "Not Disclosed" — grab actual dollar amounts
+      // but skip "Not Disclosed" — grab actual dollar amounts.
+      // Guard: a real sale price is at least $1,000 (reject price/SF values like $198.63)
       if (/^sale\s+price$/i.test(line)) {
         if (next && /^\$[\d,]+/.test(next)) {
-          // Only take the first actual dollar amount (stat card = most recent)
-          if (!data.sale_price || !/^\$/.test(data.sale_price)) data.sale_price = next;
+          const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
+          if (numericVal >= 1000) {
+            if (!data.sale_price || !/^\$/.test(data.sale_price)) data.sale_price = next;
+          }
         } else if (!data.sale_price && next && next.length < 60) {
           data.sale_price = next; // "Not Disclosed" as fallback
         }
@@ -417,8 +488,9 @@
       }
 
       if (!data.price_per_sf && (/^price\/?sf$/i.test(line) || /^price\s+per\s+sf$/i.test(line))) {
-        if (/^\$?[\d,.]+/.test(next)) data.price_per_sf = next;
-        else if (/^\$?[\d,.]+/.test(prev)) data.price_per_sf = prev;
+        // Must look like a dollar amount (not a percentage — that's cap rate)
+        if (/^\$[\d,.]+/.test(next) && !/%/.test(next)) data.price_per_sf = next;
+        else if (/^\$[\d,.]+/.test(prev) && !/%/.test(prev)) data.price_per_sf = prev;
       }
 
       // ── Public Record tab: Assessment table (multi-year rows) ────────
@@ -857,6 +929,26 @@
   //   Buyer Broker:        "Buyer Broker" → people or "No Buyer Broker on Deal"
   //   After brokers:       "My Notes" / "Sources & Research" (STOP here)
 
+  // Shared reject pattern for strings that should never be treated as a contact name.
+  // Covers: city/state/zip lines, date strings ("Since ..."), role labels,
+  // job titles when standalone, CoStar UI chrome, and address fragments.
+  const CONTACT_NAME_REJECT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|no\s+buyer|no\s+seller|confirmed|verified|research\s+complete|comp\s+status|united\s+states|[a-z].*,\s*[a-z]{2}\s+\d{5}|logo|source|add\s+notes|name$)/i;
+
+  // Reject city/state/zip patterns like "Saint Louis, MO 63125"
+  function isContactNameGarbage(s) {
+    if (!s || s.length < 2) return true;
+    if (CONTACT_NAME_REJECT.test(s.trim())) return true;
+    // City, ST ZIP pattern (e.g. "Los Angeles, CA 90048")
+    if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(s)) return true;
+    // Concatenated multi-line address (contains ZIP mid-string with no break)
+    if (/\b\d{5}\b.*\b(united\s+states|us)\b/i.test(s)) return true;
+    // "One Financial CenterBoston" — address concatenation artifact
+    if (/\d{5}[A-Z]/.test(s)) return true;
+    // Standalone date patterns
+    if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d/i.test(s)) return true;
+    return false;
+  }
+
   function extractContacts(lines) {
     const contacts = [];
     let currentGroupBuyer  = null;
@@ -1078,7 +1170,9 @@
 
       // A name-like line after entity is established = individual contact
       if (/^[A-Z][a-z]/.test(line) && line.length < 60
-          && !isPhone(line) && !isEmail(line) && !isURL(line)) {
+          && !isPhone(line) && !isEmail(line) && !isURL(line)
+          && !isCityState(line) && !isAddress(line)
+          && !isContactNameGarbage(line)) {
         if (current) individuals.push(current);
         current = { name: line, type: 'person' };
         continue;
@@ -1116,6 +1210,9 @@
       if (/^[a-z]/.test(s)) return false; // must start with capital
       // Reject page footer / CoStar chrome
       if (/^(©|by\s+using|costar\s+(comp|group|est)|last\s+updated|report\s+an|publication|verification|all\s+rights|terms\s+of)/i.test(s)) return false;
+      // Reject garbage contact names (addresses, dates, role labels, titles)
+      if (isContactNameGarbage(s)) return false;
+      if (isAddress(s)) return false;
       return true;
     }
 
@@ -1371,7 +1468,8 @@
       const candidate = nameEl.textContent.replace(/\s+/g, ' ').trim();
       if (candidate.length >= 3 && candidate.length <= 60 &&
           /^[A-Z]/.test(candidate) && !/@/.test(candidate) &&
-          !/^\d/.test(candidate) && !/^(logo|http)/i.test(candidate)) {
+          !/^\d/.test(candidate) && !/^(logo|http)/i.test(candidate) &&
+          !isContactNameGarbage(candidate)) {
         person.name = candidate;
       }
     }
@@ -1384,7 +1482,8 @@
       for (const line of lines) {
         if (/^[A-Z][a-z]/.test(line) && !/@/.test(line) &&
             !/^\d/.test(line) && !/^(logo|http|www\.)/i.test(line) &&
-            !/^(no\s+|source:|united states)/i.test(line)) {
+            !/^(no\s+|source:|united states)/i.test(line) &&
+            !isContactNameGarbage(line)) {
           person.name = line;
           break;
         }

@@ -206,6 +206,17 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 
       const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross)$/i;
 
+      // Reject garbage contact names — defense-in-depth (also filtered in costar.js)
+      const INVALID_CONTACT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|confirmed|verified|research\s+complete|comp\s+status|united\s+states|logo|source|add\s+notes|name$)$/i;
+      const isGarbageContact = (name) => {
+        if (!name || name.length <= 2) return true;
+        if (INVALID_CONTACT.test(name.trim())) return true;
+        if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(name)) return true;
+        if (/\d{5}[A-Z]/.test(name)) return true;
+        if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d/i.test(name)) return true;
+        return false;
+      };
+
       let merged = incoming;
       if (sameProperty) {
         // Deep-merge arrays: preserve data from ALL tabs, not just the latest
@@ -225,11 +236,43 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const mergedTenants = mergeArrays(existing.tenants, incoming.tenants, t => t.name);
 
         // Merge contacts by name (listing brokers from Summary, buyer brokers from Sale tab)
-        const mergedContacts = mergeArrays(existing.contacts, incoming.contacts, c => (c.name || '') + '|' + (c.role || ''));
+        const mergedContacts = mergeArrays(existing.contacts, incoming.contacts, c => (c.name || '') + '|' + (c.role || ''))
+          .filter(c => !isGarbageContact(c.name));
 
-        // Merge sales_history by date+price (combine deed records from different tabs)
-        const mergedSales = mergeArrays(existing.sales_history, incoming.sales_history,
-          s => (s.date || s.sold_date || '') + '|' + (s.price || ''));
+        // Merge sales_history by normalized date (combine deed records from different tabs).
+        // When two sales share the same date and similar price, keep the one with more fields.
+        const normPrice = (s) => {
+          if (!s) return 0;
+          const c = s.replace(/[^0-9.kmb]/gi, '');
+          let n = parseFloat(c) || 0;
+          if (/[Mm]/.test(s)) n *= 1e6;
+          else if (/[Kk]/.test(s)) n *= 1e3;
+          return n;
+        };
+        const normDate = (s) => {
+          if (!s) return '';
+          const d = new Date(s);
+          return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : (s || '').toLowerCase().trim();
+        };
+        const fieldCount = (o) => Object.keys(o).filter(k => o[k] != null && o[k] !== '').length;
+        const mergedSales = [...(existing.sales_history || [])];
+        for (const s of (incoming.sales_history || [])) {
+          const sd = normDate(s.sale_date || s.date || s.sold_date);
+          const sp = normPrice(s.sale_price || s.price);
+          const matchIdx = mergedSales.findIndex(e => {
+            const ed = normDate(e.sale_date || e.date || e.sold_date);
+            if (ed !== sd) return false;
+            const ep = normPrice(e.sale_price || e.price);
+            if (ep === 0 && sp === 0) return true;
+            if (ep === 0 || sp === 0) return false;
+            return Math.abs(ep - sp) / Math.max(ep, sp) < 0.05;
+          });
+          if (matchIdx === -1) {
+            mergedSales.push(s);
+          } else if (fieldCount(s) > fieldCount(mergedSales[matchIdx])) {
+            mergedSales[matchIdx] = s;
+          }
+        }
 
         // Merge documents (deeds, OMs, brochures from different tabs)
         const mergedDocs = mergeArrays(existing.documents, incoming.documents, d => d.url || d.title);
@@ -275,6 +318,11 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           // Preserve sale_notes_raw from whichever tab captured it
           sale_notes_raw: incoming.sale_notes_raw || existing.sale_notes_raw || null,
         };
+      }
+
+      // Final sanitization: filter garbage contacts on all paths
+      if (merged.contacts && Array.isArray(merged.contacts)) {
+        merged.contacts = merged.contacts.filter(c => !isGarbageContact(c.name));
       }
 
       chrome.storage.session.set({ pageContext: merged });
