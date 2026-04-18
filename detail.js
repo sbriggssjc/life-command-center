@@ -968,10 +968,12 @@ async function _udRenderOperationsAsync(bodyEl) {
       } else {
         promises.push(Promise.resolve([]));
       }
+      // Hours of operation from medicare_clinics
+      promises.push(diaQuery('medicare_clinics', 'medicare_id,weekly_operating_hours,late_shift,hours_json,hours_summary_text,hours_source,hours_confidence,hours_last_checked_at', { filter: mFilter, limit: 1 }).catch(() => []));
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], []];
 
     _opsExtraCache = {
       medicare_id: clinicId,
@@ -983,10 +985,11 @@ async function _udRenderOperationsAsync(bodyEl) {
       payerMix: (payerMixData || [])[0] || null,
       geoPayerMix: (geoPayerData || [])[0] || null,
       lease: (leaseData || [])[0] || null,
+      hours: (hoursData || [])[0] || null,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -2461,6 +2464,7 @@ function _udTabOperations() {
   const payerMixHcris = ext.payerMix || (cmsLink && cmsLink.payer) || null;
   const geoPayerMix = ext.geoPayerMix || null;
   const lease = ext.lease || {};
+  const hoursInfo = ext.hours || null;
   const patientHistory = ext.patientHistory || [];
   const operator = (cmsLink && cmsLink.operator) || _udDetectOperator(r);
   let html = '';
@@ -2503,6 +2507,11 @@ function _udTabOperations() {
     margin = Number(r.ttm_operating_margin);
     if (Math.abs(margin) > 0 && Math.abs(margin) < 1) margin = margin * 100;
   }
+
+  // ── Export Toolbar ──
+  html += '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">';
+  html += '<button onclick="_udExportOperations()" style="display:flex;align-items:center;gap:5px;padding:6px 14px;border-radius:8px;border:1px solid #003DA5;background:#003DA5;color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;box-shadow:0 1px 4px rgba(0,61,165,0.2)"><span style="font-size:14px">&#x1F4CB;</span> Export Client Report</button>';
+  html += '</div>';
 
   // ════════════════════════════════════════════════════════════════════════════
   // 1. KEY METRICS BANNER — always visible at top
@@ -2951,6 +2960,56 @@ function _udTabOperations() {
   html += '</div></div>';
 
   // ════════════════════════════════════════════════════════════════════════════
+  // 4b. HOURS OF OPERATION
+  // ════════════════════════════════════════════════════════════════════════════
+
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">Hours of Operation</div>';
+  if (hoursInfo && hoursInfo.hours_json) {
+    const hj = hoursInfo.hours_json;
+    const dayOrder = ['mon','tue','wed','thu','fri','sat','sun'];
+    const dayNames = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
+    html += '<div style="display:grid;grid-template-columns:90px 1fr;gap:4px 12px;font-size:13px">';
+    dayOrder.forEach(d => {
+      const slots = hj[d];
+      const label = dayNames[d];
+      const isToday = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase() === label.toLowerCase();
+      const fontWeight = isToday ? '700' : '400';
+      const todayDot = isToday ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:4px;vertical-align:middle"></span>' : '';
+      if (!slots || slots.length === 0) {
+        html += '<div style="color:var(--text3);font-weight:' + fontWeight + '">' + label + todayDot + '</div>';
+        html += '<div style="color:var(--text3);font-style:italic">Closed</div>';
+      } else {
+        const formatted = slots.map(s => {
+          const [open, close] = s.split('-');
+          return _fmt12h(open) + ' – ' + _fmt12h(close);
+        }).join(', ');
+        html += '<div style="color:var(--text2);font-weight:' + fontWeight + '">' + label + todayDot + '</div>';
+        html += '<div style="color:var(--text)">' + formatted + '</div>';
+      }
+    });
+    html += '</div>';
+    // Summary stats row
+    html += '<div style="display:flex;gap:16px;margin-top:10px;padding-top:8px;border-top:1px solid var(--s3);font-size:12px;color:var(--text2)">';
+    if (hoursInfo.weekly_operating_hours) {
+      html += '<span><strong>' + Number(hoursInfo.weekly_operating_hours).toFixed(0) + '</strong> hrs/week</span>';
+    }
+    if (hoursInfo.late_shift != null) {
+      html += '<span>' + (hoursInfo.late_shift ? '&#x1F319; Late shift offered' : 'No late shift') + '</span>';
+    }
+    if (hoursInfo.hours_source) {
+      html += '<span style="color:var(--text3)">Source: ' + esc(hoursInfo.hours_source) + '</span>';
+    }
+    if (hoursInfo.hours_last_checked_at) {
+      html += '<span style="color:var(--text3)">Updated: ' + _fmtDate(hoursInfo.hours_last_checked_at) + '</span>';
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="color:var(--text3);font-size:13px;padding:8px 0">Hours not available for this facility. Data is sourced from Google Places and covers ~36% of tracked clinics.</div>';
+  }
+  html += '</div>';
+
+  // ════════════════════════════════════════════════════════════════════════════
   // 5. QUALITY & RISK — two panels side by side
   // ════════════════════════════════════════════════════════════════════════════
 
@@ -3069,6 +3128,234 @@ function _udTabOperations() {
 
   return html;
 }
+
+/** Northmarq brand constants — extracted from northmarq.com live site */
+const NMQ_BRAND = {
+  blue:       '#003DA5',  // primary — links, CTA bg, header accents
+  navy:       '#001159',  // deep navy — dark headers, hover states
+  lightBlue:  '#62B5E5',  // secondary accent
+  blueTint:   '#E0E8F4',  // light blue background tint
+  warmWhite:  '#FAF9F5',  // warm off-white background
+  bodyText:   '#3D4A54',  // body copy
+  darkText:   '#191919',  // headings
+  muted:      '#6A748C',  // secondary text
+  border:     '#D8DFDF',  // borders, dividers
+  headingFont: "'futura-pt', 'Trebuchet MS', 'Arial', sans-serif",
+  bodyFont:    "'Open Sans', 'Segoe UI', system-ui, sans-serif",
+  logoUrl:     'https://www.northmarq.com/themes/custom/northmarq/logo.svg',
+};
+
+/** Export Operations tab as a Northmarq-branded client-deliverable HTML report */
+function _udExportOperations() {
+  const rankings = _udCache.rankings;
+  const cmsLink = _udCache.cms || null;
+  const ext = _opsExtraCache || {};
+  const r = rankings || {};
+  const finDetail = ext.financialDetail || {};
+  const costRpt = ext.costReports || {};
+  const quality = ext.quality || {};
+  const trends = ext.trends || {};
+  const lease = ext.lease || {};
+  const hoursInfo = ext.hours || null;
+  const patientHistory = ext.patientHistory || [];
+  const payerMix = ext.payerMix || {};
+  const operator = (cmsLink && cmsLink.operator) || _udDetectOperator(r);
+  const B = NMQ_BRAND;
+
+  // Derive key values (same logic as _udTabOperations)
+  const estRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
+  const bestProfit = finDetail.estimated_operating_profit || r.ttm_operating_profit;
+  let margin = null;
+  if (bestProfit && estRevenue && Number(estRevenue) > 0) margin = (Number(bestProfit) / Number(estRevenue)) * 100;
+  else if (r.ttm_operating_margin != null) { margin = Number(r.ttm_operating_margin); if (Math.abs(margin) > 0 && Math.abs(margin) < 1) margin *= 100; }
+  const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
+  const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
+  const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
+  const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || '';
+  const facilityName = r.facility_name || r.property_name || (cmsLink && cmsLink.facility_name) || 'Dialysis Facility';
+  const address = [r.address, r.city, r.state, r.zip].filter(Boolean).join(', ') || '';
+  const stationsVal = r.number_of_chairs || r.stations || null;
+  const trendDir = trends.trend_direction || (r.patient_yoy_pct > 2 ? 'Growth' : r.patient_yoy_pct < -2 ? 'Decline' : 'Stable');
+  let leaseExp = 'N/A';
+  if (lease.expiration_date) { const d = new Date(lease.expiration_date); leaseExp = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
+
+  // Reconcile costs & treatments (same hierarchy as tab)
+  const hcrisCost = costRpt && costRpt.total_costs ? Number(costRpt.total_costs) : 0;
+  const hcrisRev = costRpt && costRpt.total_patient_revenue ? Number(costRpt.total_patient_revenue) : 0;
+  const hcrisCostEqRev = hcrisCost > 0 && hcrisRev > 0 && Math.abs(hcrisCost - hcrisRev) < 1;
+  let bestCosts = null;
+  if (hcrisCost > 0 && !hcrisCostEqRev) bestCosts = hcrisCost;
+  else if (estRevenue && bestProfit) bestCosts = Number(estRevenue) - Number(bestProfit);
+  const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
+  const annualTx = hcrisTx || (finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null) || (bestPatientCount ? bestPatientCount * 156 : null);
+  const revPerTx = (estRevenue && annualTx) ? (Number(estRevenue) / annualTx) : null;
+
+  // Hours
+  let hoursBlock = '<p style="color:' + B.muted + ';font-style:italic">Hours data not available for this facility.</p>';
+  if (hoursInfo && hoursInfo.hours_json) {
+    const hj = hoursInfo.hours_json;
+    const dayOrder = ['mon','tue','wed','thu','fri','sat','sun'];
+    const dayNames = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
+    hoursBlock = '<table style="border-collapse:collapse;font-size:13px">';
+    dayOrder.forEach(d => {
+      const slots = hj[d];
+      const timeStr = (!slots || slots.length === 0) ? '<em style="color:' + B.muted + '">Closed</em>' : slots.map(s => { const [o,c] = s.split('-'); return _fmt12h(o) + ' \u2013 ' + _fmt12h(c); }).join(', ');
+      hoursBlock += '<tr><td style="padding:3px 16px 3px 0;font-weight:600;color:' + B.bodyText + '">' + dayNames[d] + '</td><td style="padding:3px 0;color:' + B.darkText + '">' + timeStr + '</td></tr>';
+    });
+    hoursBlock += '</table>';
+    if (hoursInfo.weekly_operating_hours) hoursBlock += '<p style="margin:6px 0 0;font-size:12px;color:' + B.muted + '"><strong style="color:' + B.bodyText + '">' + Number(hoursInfo.weekly_operating_hours).toFixed(0) + ' hours/week</strong>' + (hoursInfo.late_shift ? ' \u00B7 Late shift offered' : '') + '</p>';
+  }
+
+  const fmtDollar = v => v ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
+  const fmtPct = v => v != null ? Number(v).toFixed(1) + '%' : 'N/A';
+  const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+  const doc = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${facilityName} \u2014 Clinic Operations Report | Northmarq</title>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .no-print { display:none !important; }
+    .page-break { page-break-before: always; }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: ${B.bodyFont}; color: ${B.bodyText}; max-width: 860px; margin: 0 auto; padding: 0; line-height: 1.55; background: #fff; }
+
+  /* ── Header bar ── */
+  .nmq-header { background: ${B.navy}; color: #fff; padding: 24px 40px; display: flex; align-items: center; justify-content: space-between; }
+  .nmq-header img { height: 28px; filter: brightness(0) invert(1); }
+  .nmq-header .report-type { font-family: ${B.headingFont}; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.8; }
+
+  /* ── Title section ── */
+  .title-section { padding: 28px 40px 20px; border-bottom: 3px solid ${B.blue}; }
+  .title-section h1 { font-family: ${B.headingFont}; font-size: 26px; font-weight: 700; color: ${B.navy}; margin: 0 0 4px; letter-spacing: -0.3px; }
+  .title-section .subtitle { font-size: 14px; color: ${B.muted}; }
+
+  /* ── Content area ── */
+  .content { padding: 0 40px 32px; }
+
+  /* ── KPI banner ── */
+  .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0; }
+  .kpi { background: ${B.warmWhite}; border-radius: 6px; padding: 16px; text-align: center; border: 1px solid ${B.border}; }
+  .kpi-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: ${B.muted}; margin-bottom: 6px; font-weight: 600; }
+  .kpi-value { font-family: ${B.headingFont}; font-size: 22px; font-weight: 700; color: ${B.navy}; }
+
+  /* ── Section headers ── */
+  h2 { font-family: ${B.headingFont}; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: ${B.blue}; border-bottom: 2px solid ${B.blueTint}; padding-bottom: 6px; margin: 28px 0 14px; font-weight: 700; }
+
+  /* ── Data tables ── */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
+  .data-table tr:nth-child(even) { background: ${B.warmWhite}; }
+  .data-table td { padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
+  .data-table td:first-child { color: ${B.muted}; font-weight: 600; width: 210px; }
+  .data-table td:last-child { color: ${B.darkText}; font-weight: 500; }
+
+  /* ── Methodology box ── */
+  .methodology { background: ${B.blueTint}; border-left: 4px solid ${B.blue}; border-radius: 0 6px 6px 0; padding: 18px 20px; font-size: 12px; color: ${B.bodyText}; line-height: 1.7; margin-top: 24px; }
+  .methodology strong { color: ${B.navy}; }
+
+  /* ── Footer ── */
+  .nmq-footer { margin-top: 32px; padding: 20px 40px; background: ${B.navy}; color: rgba(255,255,255,0.7); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+  .nmq-footer strong { color: #fff; }
+  .nmq-footer .sources { font-size: 10px; max-width: 50%; text-align: right; }
+
+  /* ── Print button ── */
+  .print-btn { position:fixed; top:16px; right:16px; padding:10px 24px; background:${B.blue}; color:white; border:none; border-radius:6px; font-size:14px; font-weight:600; cursor:pointer; font-family:${B.bodyFont}; box-shadow:0 2px 8px rgba(0,61,165,0.3); }
+  .print-btn:hover { background:${B.navy}; }
+
+  .star { color: #E97132; }
+  .star-empty { color: ${B.border}; }
+  .highlight { color: ${B.blue}; font-weight: 700; }
+</style></head><body>
+
+<button class="print-btn no-print" onclick="window.print()">\u{1F5A8} Print / Save PDF</button>
+
+<!-- Northmarq branded header -->
+<div class="nmq-header">
+  <img src="${B.logoUrl}" alt="Northmarq" onerror="this.parentElement.innerHTML='<span style=\\'font-family:${B.headingFont};font-size:20px;font-weight:700;letter-spacing:1px\\'>NORTHMARQ</span><span class=\\'report-type\\'>Clinic Operations Report</span>'">
+  <div class="report-type">Clinic Operations Report</div>
+</div>
+
+<!-- Title -->
+<div class="title-section">
+  <h1>${facilityName}</h1>
+  <div class="subtitle">${address}${ccn ? ' &nbsp;\u00B7&nbsp; CCN ' + ccn : ''} &nbsp;\u00B7&nbsp; ${today}</div>
+</div>
+
+<div class="content">
+
+<!-- KPIs -->
+<div class="kpi-grid">
+  <div class="kpi"><div class="kpi-label">Est. Annual Revenue</div><div class="kpi-value">${fmtDollar(estRevenue)}</div></div>
+  <div class="kpi"><div class="kpi-label">Operating Margin</div><div class="kpi-value">${fmtPct(margin)}</div></div>
+  <div class="kpi"><div class="kpi-label">Patient Census</div><div class="kpi-value">${bestPatientCount ? bestPatientCount.toLocaleString() : 'N/A'}</div></div>
+  <div class="kpi"><div class="kpi-label">CMS Star Rating</div><div class="kpi-value">${starVal != null ? '<span class="star">' + '\u2605'.repeat(Math.floor(starVal)) + '</span><span class="star-empty">' + '\u2606'.repeat(5 - Math.floor(starVal)) + '</span>' : 'N/A'}</div></div>
+  <div class="kpi"><div class="kpi-label">Census Trend</div><div class="kpi-value">${trendDir}</div></div>
+  <div class="kpi"><div class="kpi-label">Lease Expiration</div><div class="kpi-value">${leaseExp}</div></div>
+</div>
+
+<h2>Financial Performance</h2>
+<table class="data-table">
+  <tr><td>Estimated Annual Revenue</td><td>${fmtDollar(estRevenue)}</td></tr>
+  <tr><td>Estimated Operating Costs</td><td>${fmtDollar(bestCosts)}</td></tr>
+  <tr><td>Estimated Operating Profit</td><td>${fmtDollar(bestProfit)}</td></tr>
+  <tr><td>Operating Margin</td><td>${fmtPct(margin)}</td></tr>
+  <tr><td>Treatments / Year</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}</td></tr>
+  <tr><td>Revenue / Treatment</td><td>${revPerTx ? '$' + revPerTx.toFixed(0) : 'N/A'}</td></tr>
+</table>
+
+<h2>Capacity & Operations</h2>
+<table class="data-table">
+  <tr><td>Dialysis Stations</td><td>${stationsVal ? stationsVal : 'N/A'}</td></tr>
+  <tr><td>Patient Census</td><td>${bestPatientCount ? bestPatientCount.toLocaleString() : 'N/A'}</td></tr>
+  <tr><td>Patients / Chair</td><td>${bestPatientCount && stationsVal ? (bestPatientCount / Number(stationsVal)).toFixed(1) : 'N/A'}</td></tr>
+  <tr><td>Capacity Utilization</td><td>${r.capacity_utilization_pct != null ? Number(r.capacity_utilization_pct).toFixed(1) + '%' : 'N/A'}</td></tr>
+  <tr><td>Operator</td><td>${r.operator_name || r.chain_organization || 'N/A'}</td></tr>
+  <tr><td>Census Trend</td><td>${trendDir}${r.patient_yoy_pct != null ? ' (' + (Number(r.patient_yoy_pct) >= 0 ? '+' : '') + Number(r.patient_yoy_pct).toFixed(1) + '% YoY)' : ''}</td></tr>
+</table>
+
+<h2>Hours of Operation</h2>
+${hoursBlock}
+
+<h2>Quality Metrics</h2>
+<table class="data-table">
+  <tr><td>CMS Star Rating</td><td>${starVal != null ? starVal + ' / 5' : 'N/A'}</td></tr>
+  <tr><td>Mortality Rate</td><td>${quality.mortality_rate != null ? Number(quality.mortality_rate).toFixed(1) + ' (national avg: 15.0)' : 'N/A'}</td></tr>
+  <tr><td>Hospitalization Rate</td><td>${quality.hospitalization_rate != null ? Number(quality.hospitalization_rate).toFixed(1) + ' (national avg: 150.0)' : 'N/A'}</td></tr>
+  <tr><td>Readmission Rate</td><td>${quality.readmission_rate != null ? Number(quality.readmission_rate).toFixed(1) + ' (national avg: 25.0)' : 'N/A'}</td></tr>
+  <tr><td>Infection Ratio</td><td>${quality.infection_ratio != null ? Number(quality.infection_ratio).toFixed(2) : 'N/A'}</td></tr>
+  <tr><td>Deficiency Count</td><td>${r.deficiency_count != null ? r.deficiency_count : 'N/A'}</td></tr>
+</table>
+
+<h2>Payer Mix</h2>
+<table class="data-table">
+  <tr><td>Medicare</td><td>${payerMix.medicare_pct != null ? Number(payerMix.medicare_pct).toFixed(1) + '%' : (r.payer_mix_medicare_pct != null ? Number(r.payer_mix_medicare_pct).toFixed(1) + '%' : 'N/A')}</td></tr>
+  <tr><td>Medicaid</td><td>${payerMix.medicaid_pct != null ? Number(payerMix.medicaid_pct).toFixed(1) + '%' : (r.payer_mix_medicaid_pct != null ? Number(r.payer_mix_medicaid_pct).toFixed(1) + '%' : 'N/A')}</td></tr>
+  <tr><td>Commercial / Private</td><td>${payerMix.private_pct != null ? Number(payerMix.private_pct).toFixed(1) + '%' : (r.payer_mix_private_pct != null ? Number(r.payer_mix_private_pct).toFixed(1) + '%' : 'N/A')}</td></tr>
+</table>
+
+<div class="methodology">
+  <strong>Methodology</strong><br>
+  Revenue estimates are derived from a 4-payer blended rate model (~$357/treatment) applied to estimated annual treatment volume. Payer-specific rates reflect current CMS reimbursement (Medicare ~$279/tx, Medicaid ~$225/tx, Commercial ~$1,100/tx). Treatment volume is estimated using a chair-based capacity model (stations \u00D7 3 shifts \u00D7 5.5 days \u00D7 52 weeks \u00D7 65% utilization), validated against reported figures (median accuracy 1.00x, n=7,115). Operating margins are derived from clinic-level financial estimates cross-referenced with CMS HCRIS cost reports where available. Quality metrics sourced from CMS Dialysis Facility Compare. Patient census from CMS enrollment snapshots.
+</div>
+
+</div><!-- end content -->
+
+<!-- Northmarq branded footer -->
+<div class="nmq-footer">
+  <div><strong>Northmarq</strong> &nbsp;\u00B7&nbsp; Confidential &nbsp;\u00B7&nbsp; ${today}</div>
+  <div class="sources">Sources: CMS Dialysis Facility Compare, USRDS, CMS HCRIS, MedPAC Reports, Google Places</div>
+</div>
+
+</body></html>`;
+
+  const blob = new Blob([doc], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+window._udExportOperations = _udExportOperations;
 
 /** Compact star display for KPI card */
 function _starsCompact(n) {
@@ -6466,6 +6753,18 @@ window.entityLink = function(text, type, id, db) {
 };
 
 
+
+/** Convert 24h time string "HH:MM" to 12h format "H:MM AM/PM" */
+function _fmt12h(t) {
+  if (!t || typeof t !== 'string') return t;
+  const parts = t.split(':');
+  let h = parseInt(parts[0], 10);
+  const m = parts[1] || '00';
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  if (h === 0) h = 12;
+  else if (h > 12) h -= 12;
+  return h + ':' + m + ' ' + ampm;
+}
 
 function _fmtDate(d) {
   if (!d) return '—';
