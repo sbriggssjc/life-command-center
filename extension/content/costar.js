@@ -138,6 +138,26 @@
     if (location.state) accumulated.state = location.state;
     if (location.zip) accumulated.zip = location.zip;
 
+    // ── Derive top-level sale_date / sale_price from most recent in history ──
+    // The page-level extraction may capture data from whichever comp page the
+    // user is viewing. Override with the most recent transaction from history.
+    if (accumulated.sales_history && accumulated.sales_history.length > 0) {
+      let mostRecent = null;
+      let mostRecentDate = null;
+      for (const s of accumulated.sales_history) {
+        const d = new Date(s.sale_date);
+        if (!isNaN(d.getTime()) && (!mostRecentDate || d > mostRecentDate)) {
+          mostRecentDate = d;
+          mostRecent = s;
+        }
+      }
+      if (mostRecent) {
+        accumulated.sale_date = mostRecent.sale_date;
+        if (mostRecent.sale_price) accumulated.sale_price = mostRecent.sale_price;
+        if (mostRecent.cap_rate && !accumulated.cap_rate) accumulated.cap_rate = mostRecent.cap_rate;
+      }
+    }
+
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
       data: {
@@ -616,7 +636,7 @@
       // Tenant name — appears as a label/value pair on property detail pages
       // e.g. "Tenant" label followed by "VA Madison East Clinic" or "DaVita..."
       // Reject CoStar section header labels that follow a "Tenant" label in page text.
-      const TENANT_REJECT = /^(public\s+record|building|building\s+info|land|market|market\s+data|submarket|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type|lease\s+term|lease\s+start|lease\s+expir.*|rent\/?sf|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score|industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross)$/i;
+      const TENANT_REJECT = /^(public\s+record|building|building\s+info|land|market|market\s+data|submarket|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type|lease\s+term|lease\s+start|lease\s+expir.*|rent\/?sf|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score|industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
 
       if (!data.tenant_name && /^tenant\s*name?$/i.test(line) && next
           && next.length > 2 && next.length < 80
