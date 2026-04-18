@@ -118,7 +118,12 @@
     const location = findLocationInLines(lines);
 
     // Merge new data into accumulated (preserves data from prior tab views)
+    // asking_price is "sticky" — once captured from the Summary tab stat card,
+    // subsequent tabs (Sale comps) may extract historical asking prices that
+    // would incorrectly overwrite the current listing's asking price.
+    const STICKY_FIELDS = ['asking_price'];
     for (const [key, val] of Object.entries(data)) {
+      if (STICKY_FIELDS.includes(key) && accumulated[key]) continue;
       if (val) accumulated[key] = val;
     }
     mergeContacts(accumulated.contacts, contacts);
@@ -163,7 +168,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 17,
+        _version: 18,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -1649,12 +1654,16 @@
   function extractSalesHistory(lines) {
     const sales = [];
 
-    // Parse Transaction Details block (current sale)
+    // Parse Transaction Details block (most recent sale or active listing)
+    // Only mark is_current for active listings — closed sales with confirmed
+    // pricing or "Research Complete" comp status are historical, not current.
     for (let i = 0; i < lines.length; i++) {
       if (/^transaction\s+details$/i.test(lines[i])) {
         const sale = parseTransactionBlock(lines, i + 1);
         if (sale && (sale.sale_date || sale.sale_price)) {
-          sale.is_current = true;
+          const isClosed = /^(research\s+complete|confirmed)/i.test(sale.comp_status || '')
+            || /^(full\s+value|confirmed|partial)/i.test(sale.price_status || '');
+          if (!isClosed) sale.is_current = true;
           sales.push(sale);
         }
         break;
