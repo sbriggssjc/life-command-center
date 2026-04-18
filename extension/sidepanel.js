@@ -898,23 +898,39 @@ async function loadPropertyTab() {
             'current_term_start', 'option_periods', 'expense_notes',
           ];
 
+          // ── Match OM to the correct sale record ──
+          // Priority: 1) viewing_comp_sale_date (on a comp page)
+          //           2) document URL matches a sale record's document_links
+          //           3) fall through to top-level only
+          const normDate = (s) => {
+            if (!s) return '';
+            const d = new Date(s);
+            return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : (s || '').trim();
+          };
+
+          let saleMatch = null;
           if (viewingCompDate && ctx.sales_history?.length) {
-            // On a comp page — attach OM to the matching sale record
-            const normDate = (s) => {
-              if (!s) return '';
-              const d = new Date(s);
-              return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : (s || '').trim();
-            };
+            // On a comp page — match by date
             const targetDate = normDate(viewingCompDate);
-            const match = ctx.sales_history.find(s => normDate(s.sale_date) === targetDate);
-            if (match) {
-              // Enrich sale record with ALL OM-extracted data
-              for (const key of allOmFields) {
-                if (metrics[key] && !match[key]) match[key] = metrics[key];
-              }
-              match.om_extracted = true;
-              match.om_url = url;
+            saleMatch = ctx.sales_history.find(s => normDate(s.sale_date) === targetDate);
+          }
+          if (!saleMatch && ctx.sales_history?.length) {
+            // Fallback: match by document URL — check if this OM's URL
+            // appears in any sale record's document_links (set by costar.js
+            // when visiting comp pages)
+            saleMatch = ctx.sales_history.find(s =>
+              Array.isArray(s.document_links) &&
+              s.document_links.some(d => d.url === url)
+            );
+          }
+
+          if (saleMatch) {
+            // Enrich sale record with ALL OM-extracted data
+            for (const key of allOmFields) {
+              if (metrics[key] && !saleMatch[key]) saleMatch[key] = metrics[key];
             }
+            saleMatch.om_extracted = true;
+            saleMatch.om_url = url;
           }
 
           // Always merge ALL OM fields into top-level too (don't overwrite existing).

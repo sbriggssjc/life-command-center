@@ -172,7 +172,13 @@
             match.sale_notes_raw = data.sale_notes_raw;
           }
           if (data.document_links?.length) {
-            match.document_links = data.document_links;
+            // Tag each document with the sale date so OM ingestion can
+            // match by URL even when on the summary page
+            const saleDateTag = txnSale?.sale_date || data.sale_date || null;
+            match.document_links = data.document_links.map(d => ({
+              ...d,
+              sale_date: saleDateTag,
+            }));
           }
         }
       }
