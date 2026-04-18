@@ -863,8 +863,13 @@ async function loadPropertyTab() {
         // Merge extracted metrics into current page context
         chrome.storage.session.get(['pageContext'], (result) => {
           const ctx = result.pageContext || {};
-          // Store full extracted text as pdf_text for pipeline processing
-          ctx.pdf_extracted_text = text;
+          // Store full extracted text for pipeline processing.
+          // Append to array so multiple OMs are preserved (current + historical).
+          // The first OM ingested should be the current listing OM.
+          if (!ctx.pdf_extracted_texts) ctx.pdf_extracted_texts = [];
+          ctx.pdf_extracted_texts.push(text);
+          // Keep latest metrics for display but preserve first OM's text as primary
+          if (!ctx.pdf_extracted_text) ctx.pdf_extracted_text = text;
           ctx.pdf_extracted_metrics = metrics;
           // Merge individual metrics into context (don't overwrite existing values)
           // Merge all extracted metrics — don't overwrite existing CoStar values

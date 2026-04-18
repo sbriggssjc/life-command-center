@@ -85,7 +85,7 @@
     accumulated._address = identifier;
 
     if (!lines) lines = getPageLines();
-    const data = extractFields(lines);
+    const data = extractFields(lines, url);
     // Try DOM-based contact extraction first (captures mailto:/tel: icon links);
     // fall back to text-based parsing for older layouts or when DOM yields nothing
     let contacts = extractContactsFromDOM();
@@ -168,7 +168,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 18,
+        _version: 19,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -414,22 +414,31 @@
 
   // ── Property field extraction ─────────────────────────────────────────
 
-  function extractFields(lines) {
+  function extractFields(lines, pageUrl) {
     const data = {};
+    // Sale comp detail pages (/Comp/NNN/) show historical asking prices in
+    // their stat cards. These must NOT be captured as top-level asking_price
+    // (which represents the CURRENT listing price from the Summary tab).
+    const isSaleCompPage = /\/Comp\/\d+\//i.test(pageUrl || '');
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const prev = i > 0 ? lines[i - 1] : '';
       const next = i < lines.length - 1 ? lines[i + 1] : '';
 
-      if (!data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
+      // Cap rate from Summary = listing cap rate (current asking price / NOI).
+      // Cap rate from sale comp = historical sale cap rate. Skip on comp pages
+      // to avoid overwriting the listing cap rate.
+      if (!isSaleCompPage && !data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
         if (/[\d.]+%/.test(prev)) data.cap_rate = prev;
         else if (/[\d.]+%/.test(next)) data.cap_rate = next;
         else if (i < lines.length - 2 && /[\d.]+%/.test(lines[i + 2])) data.cap_rate = lines[i + 2];
       }
 
       // Sale date: capture the MOST RECENT date seen (not first — oldest may appear first)
-      if (/^sale\s+date$/i.test(line)) {
+      // Skip on sale comp pages — historical dates should come from sales_history,
+      // not overwrite the top-level sale_date.
+      if (!isSaleCompPage && /^sale\s+date$/i.test(line)) {
         let candidate = null;
         if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(prev)) candidate = prev;
         else if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(next)) candidate = next;
@@ -447,7 +456,9 @@
         }
       }
 
-      if (!data.asking_price && /^asking\s+price$/i.test(line)) {
+      // Only capture top-level asking_price from Summary/property pages —
+      // sale comp pages show HISTORICAL asking prices, not the current listing.
+      if (!isSaleCompPage && !data.asking_price && /^asking\s+price$/i.test(line)) {
         if (/^\$[\d,]+/.test(next)) data.asking_price = next;
         else if (/^\$[\d,]+/.test(prev)) data.asking_price = prev;
       }
@@ -455,7 +466,8 @@
       // Sale price: prefer stat card value (appears first, is most recent sale)
       // but skip "Not Disclosed" — grab actual dollar amounts.
       // Guard: a real sale price is at least $1,000 (reject price/SF values like $198.63)
-      if (/^sale\s+price$/i.test(line)) {
+      // Skip on sale comp pages — historical sale prices come from sales_history.
+      if (!isSaleCompPage && /^sale\s+price$/i.test(line)) {
         if (next && /^\$[\d,]+/.test(next)) {
           const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
           if (numericVal >= 1000) {
