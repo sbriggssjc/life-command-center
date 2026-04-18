@@ -117,15 +117,83 @@
 
     const location = findLocationInLines(lines);
 
-    // Merge new data into accumulated (preserves data from prior tab views)
-    // asking_price is "sticky" — once captured from the Summary tab stat card,
-    // subsequent tabs (Sale comps) may extract historical asking prices that
-    // would incorrectly overwrite the current listing's asking price.
-    const STICKY_FIELDS = ['asking_price'];
-    for (const [key, val] of Object.entries(data)) {
-      if (STICKY_FIELDS.includes(key) && accumulated[key]) continue;
-      if (val) accumulated[key] = val;
+    // ── Merge data into accumulated (route to correct destination) ────────
+    //
+    // Sale comp pages (/Comp/NNN/) show per-sale values (asking_price, cap_rate,
+    // sale_price, noi, etc.) that belong to THAT sale record, not the top-level
+    // fields (which represent the current listing / property state).
+    //
+    // Strategy:
+    //   - Sale-specific fields from comp pages → enriched into matching
+    //     sales_history entry (keyed by sale_date or comp_id)
+    //   - Property-level fields (square_footage, year_built, stories, etc.) →
+    //     always merge into top-level accumulated
+    //   - Summary/property pages → everything goes top-level as before
+
+    // Fields that are sale-specific and should NOT overwrite top-level when
+    // extracted from a historical comp page:
+    const SALE_SPECIFIC_FIELDS = [
+      'asking_price', 'sale_price', 'sale_date', 'cap_rate', 'noi',
+      'price_per_sf', 'occupancy', 'sale_notes_raw',
+    ];
+
+    if (data._comp_id) {
+      // ── Sale comp page: route sale-specific fields into the sale record ──
+      // First merge sales history so we have the Transaction Details entry
+      mergeSales(accumulated.sales_history, salesHistory);
+
+      // Build enrichment object from stat card values
+      const saleEnrich = {};
+      for (const key of SALE_SPECIFIC_FIELDS) {
+        if (data[key]) saleEnrich[key] = data[key];
+      }
+      saleEnrich._comp_id = data._comp_id;
+
+      // Find matching sale record (by date from Transaction Details)
+      // The Transaction Details block captures the primary sale for this comp.
+      const txnSale = salesHistory.find(s => s.sale_date || s.sale_price);
+      if (txnSale) {
+        // Enrich the matching entry in accumulated.sales_history
+        const normDate = (s) => {
+          if (!s) return '';
+          const d = new Date(s);
+          return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : s.toLowerCase().trim();
+        };
+        const txnDateNorm = normDate(txnSale.sale_date);
+        const match = accumulated.sales_history.find(s =>
+          normDate(s.sale_date) === txnDateNorm
+        );
+        if (match) {
+          // Enrich sale record with stat card + extracted data
+          for (const [k, v] of Object.entries(saleEnrich)) {
+            if (v && !match[k]) match[k] = v;
+          }
+          // Also attach sale_notes and document_links to the sale
+          if (data.sale_notes_raw && !match.sale_notes_raw) {
+            match.sale_notes_raw = data.sale_notes_raw;
+          }
+          if (data.document_links?.length) {
+            match.document_links = data.document_links;
+          }
+        }
+      }
+
+      // Merge property-level fields into top-level (skip sale-specific)
+      for (const [key, val] of Object.entries(data)) {
+        if (SALE_SPECIFIC_FIELDS.includes(key)) continue;
+        if (key.startsWith('_')) continue; // internal flags
+        if (val) accumulated[key] = val;
+      }
+    } else {
+      // ── Summary / property page: everything goes top-level ──
+      // asking_price from Summary is authoritative for the current listing
+      for (const [key, val] of Object.entries(data)) {
+        if (key.startsWith('_')) continue;
+        if (val) accumulated[key] = val;
+      }
+      mergeSales(accumulated.sales_history, salesHistory);
     }
+
     mergeContacts(accumulated.contacts, contacts);
     // Sanitize: remove contacts with garbage names (addresses, dates, titles, etc.)
     accumulated.contacts = (accumulated.contacts || []).filter(c => {
@@ -137,15 +205,16 @@
       if (c.name.length <= 2) return false;
       return true;
     });
-    mergeSales(accumulated.sales_history, salesHistory);
     mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
     if (location.state) accumulated.state = location.state;
     if (location.zip) accumulated.zip = location.zip;
 
     // ── Derive top-level sale_date / sale_price from most recent in history ──
-    // The page-level extraction may capture data from whichever comp page the
-    // user is viewing. Override with the most recent transaction from history.
+    // Only set these if not already captured from the Summary tab stat card.
+    // The Summary tab's values represent the current listing state and are
+    // authoritative; the derivation is a fallback for properties without a
+    // Summary-captured sale_price.
     if (accumulated.sales_history && accumulated.sales_history.length > 0) {
       let mostRecent = null;
       let mostRecentDate = null;
@@ -157,9 +226,9 @@
         }
       }
       if (mostRecent) {
-        accumulated.sale_date = mostRecent.sale_date;
-        if (mostRecent.sale_price) accumulated.sale_price = mostRecent.sale_price;
-        if (mostRecent.cap_rate && !accumulated.cap_rate) accumulated.cap_rate = mostRecent.cap_rate;
+        if (!accumulated.sale_date) accumulated.sale_date = mostRecent.sale_date;
+        if (!accumulated.sale_price && mostRecent.sale_price) accumulated.sale_price = mostRecent.sale_price;
+        if (!accumulated.cap_rate && mostRecent.cap_rate) accumulated.cap_rate = mostRecent.cap_rate;
       }
     }
 
@@ -168,7 +237,7 @@
       data: {
         domain: 'costar',
         entity_type: 'property',
-        _version: 19,
+        _version: 20,
         address: address || document.title,
         page_url: url,
         city: accumulated.city,
@@ -416,29 +485,26 @@
 
   function extractFields(lines, pageUrl) {
     const data = {};
-    // Sale comp detail pages (/Comp/NNN/) show historical asking prices in
-    // their stat cards. These must NOT be captured as top-level asking_price
-    // (which represents the CURRENT listing price from the Summary tab).
-    const isSaleCompPage = /\/Comp\/\d+\//i.test(pageUrl || '');
+    // Sale comp detail pages (/Comp/NNN/) show historical per-sale values in
+    // their stat cards. These are captured but flagged so the caller can route
+    // them into the matching sales_history entry instead of top-level fields.
+    const compMatch = (pageUrl || '').match(/\/Comp\/(\d+)\//i);
+    const isSaleCompPage = !!compMatch;
+    if (isSaleCompPage) data._comp_id = compMatch[1];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const prev = i > 0 ? lines[i - 1] : '';
       const next = i < lines.length - 1 ? lines[i + 1] : '';
 
-      // Cap rate from Summary = listing cap rate (current asking price / NOI).
-      // Cap rate from sale comp = historical sale cap rate. Skip on comp pages
-      // to avoid overwriting the listing cap rate.
-      if (!isSaleCompPage && !data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
+      if (!data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
         if (/[\d.]+%/.test(prev)) data.cap_rate = prev;
         else if (/[\d.]+%/.test(next)) data.cap_rate = next;
         else if (i < lines.length - 2 && /[\d.]+%/.test(lines[i + 2])) data.cap_rate = lines[i + 2];
       }
 
       // Sale date: capture the MOST RECENT date seen (not first — oldest may appear first)
-      // Skip on sale comp pages — historical dates should come from sales_history,
-      // not overwrite the top-level sale_date.
-      if (!isSaleCompPage && /^sale\s+date$/i.test(line)) {
+      if (/^sale\s+date$/i.test(line)) {
         let candidate = null;
         if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(prev)) candidate = prev;
         else if (/[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}/.test(next)) candidate = next;
@@ -456,9 +522,7 @@
         }
       }
 
-      // Only capture top-level asking_price from Summary/property pages —
-      // sale comp pages show HISTORICAL asking prices, not the current listing.
-      if (!isSaleCompPage && !data.asking_price && /^asking\s+price$/i.test(line)) {
+      if (!data.asking_price && /^asking\s+price$/i.test(line)) {
         if (/^\$[\d,]+/.test(next)) data.asking_price = next;
         else if (/^\$[\d,]+/.test(prev)) data.asking_price = prev;
       }
@@ -466,8 +530,7 @@
       // Sale price: prefer stat card value (appears first, is most recent sale)
       // but skip "Not Disclosed" — grab actual dollar amounts.
       // Guard: a real sale price is at least $1,000 (reject price/SF values like $198.63)
-      // Skip on sale comp pages — historical sale prices come from sales_history.
-      if (!isSaleCompPage && /^sale\s+price$/i.test(line)) {
+      if (/^sale\s+price$/i.test(line)) {
         if (next && /^\$[\d,]+/.test(next)) {
           const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
           if (numericVal >= 1000) {

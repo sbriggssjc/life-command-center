@@ -863,20 +863,33 @@ async function loadPropertyTab() {
         // Merge extracted metrics into current page context
         chrome.storage.session.get(['pageContext'], (result) => {
           const ctx = result.pageContext || {};
-          // Store full extracted text for pipeline processing.
-          // Append to array so multiple OMs are preserved (current + historical).
-          // The first OM ingested should be the current listing OM.
+
+          // ── Store extracted text(s) for pipeline processing ──
+          // Accumulate all OM texts so the pipeline has access to every OM.
           if (!ctx.pdf_extracted_texts) ctx.pdf_extracted_texts = [];
-          ctx.pdf_extracted_texts.push(text);
-          // Keep latest metrics for display but preserve first OM's text as primary
+          ctx.pdf_extracted_texts.push({ text, metrics, url: url });
+          // Primary text = first OM ingested (should be the current listing OM)
           if (!ctx.pdf_extracted_text) ctx.pdf_extracted_text = text;
           ctx.pdf_extracted_metrics = metrics;
-          // Merge individual metrics into context (don't overwrite existing values)
-          // Merge all extracted metrics — don't overwrite existing CoStar values
+
+          // ── Route OM metrics to the correct destination ──
+          // If the user is viewing a sale comp page, the OM belongs to THAT
+          // historical sale — attach metrics to the matching sales_history entry.
+          // If on a Summary/property page, the OM is the current listing OM —
+          // merge into top-level context fields.
+          const compId = ctx._comp_id || ctx.costar_comp_id;
+          const pageIsComp = /\/Comp\/\d+\//i.test(ctx.page_url || '');
+
+          // Sale-specific fields that belong on the sale record, not top-level
+          const SALE_SPECIFIC = [
+            'asking_price', 'sale_price', 'cap_rate', 'noi', 'price_per_sf',
+          ];
+
+          // Property/lease fields always merge to top-level (don't overwrite existing)
           const mergeFields = [
-            'noi', 'cap_rate', 'annual_rent', 'lease_expiration', 'lease_term',
-            'escalation', 'renewal_options', 'expense_structure', 'asking_price',
-            'sale_price', 'building_sf', 'year_built', 'occupancy', 'tenant_name',
+            'annual_rent', 'lease_expiration', 'lease_term',
+            'escalation', 'renewal_options', 'expense_structure',
+            'building_sf', 'year_built', 'occupancy', 'tenant_name',
             'rent_per_sf', 'lease_commencement', 'guarantor', 'year_renovated',
             'monthly_rent', 'listing_broker', 'listing_firm', 'listing_phone',
             'listing_email', 'ownership_type', 'rent_increase_mechanism',
@@ -884,9 +897,36 @@ async function loadPropertyTab() {
             'tenant_net_income', 'tenant_locations', 'lease_type',
             'current_term_start', 'option_periods', 'expense_notes',
           ];
-          for (const field of mergeFields) {
-            if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
+
+          if (pageIsComp && ctx.sales_history?.length) {
+            // Attach OM metrics to the matching sale record in sales_history.
+            // Match by sale_date from the current Transaction Details context.
+            const normDate = (s) => {
+              if (!s) return '';
+              const d = new Date(s);
+              return !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : (s || '').trim();
+            };
+            const ctxSaleDate = normDate(ctx.sale_date);
+            const match = ctx.sales_history.find(s => normDate(s.sale_date) === ctxSaleDate);
+            if (match) {
+              // Enrich sale record with OM-extracted data
+              for (const key of [...SALE_SPECIFIC, ...mergeFields]) {
+                if (metrics[key] && !match[key]) match[key] = metrics[key];
+              }
+              match.om_extracted = true;
+              match.om_url = url;
+            }
+            // Property-level fields still merge to top-level
+            for (const field of mergeFields) {
+              if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
+            }
+          } else {
+            // Summary/property page — all fields merge to top-level
+            for (const field of [...SALE_SPECIFIC, ...mergeFields]) {
+              if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
+            }
           }
+
           chrome.storage.session.set({ pageContext: ctx });
         });
 
