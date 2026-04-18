@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LCC Assistant</title>
+  <style>
+    :root {
+      --navy: #1F3864;
+      --navy-light: #2B4A8C;
+      --accent: #4A90D9;
+      --bg: #F5F6FA;
+      --card-bg: #FFFFFF;
+      --text: #1A1A2E;
+      --text-secondary: #6B7280;
+      --border: #E5E7EB;
+      --green: #059669;
+      --yellow: #D97706;
+      --red: #DC2626;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: var(--navy);
+      color: white;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .logo { font-weight: 700; font-size: 16px; letter-spacing: 1px; }
+    .page-context {
+      font-size: 11px;
+      background: rgba(255,255,255,0.15);
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    .settings-btn {
+      background: none;
+      border: none;
+      color: white;
+      cursor: pointer;
+      font-size: 16px;
+      opacity: 0.8;
+      padding: 4px;
+    }
+    .settings-btn:hover { opacity: 1; }
+
+    /* Tab bar */
+    .tab-bar {
+      display: flex;
+      background: white;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 8px 4px;
+      border: none;
+      background: none;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .tab-btn.active {
+      color: var(--navy);
+      border-bottom-color: var(--navy);
+    }
+    .tab-btn:hover { color: var(--navy); }
+
+    /* Tab content */
+    .tab-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+    .tab-pane { display: none; height: 100%; }
+    .tab-pane.active { display: flex; flex-direction: column; }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .card-title {
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .card-subtitle {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    /* Domain badge */
+    .domain-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      margin-left: 6px;
+    }
+    .domain-badge.gov { background: #DBEAFE; color: #1E40AF; }
+    .domain-badge.dia { background: #FCE7F3; color: #9D174D; }
+
+    /* Search */
+    .search-box {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      flex-shrink: 0;
+    }
+    .search-box input {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      outline: none;
+    }
+    .search-box input:focus { border-color: var(--accent); }
+    .search-results { flex: 1; overflow-y: auto; }
+
+    /* Result cards */
+    .result-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .result-card:hover { border-color: var(--accent); }
+    .result-name { font-weight: 600; font-size: 12px; }
+    .result-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+    /* Context fields (reused in property tab) */
+    .context-field {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .context-label { color: var(--text-secondary); font-weight: 500; }
+    .context-value { font-weight: 600; text-align: right; }
+
+    /* Property tab */
+    .property-header-section {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+    .property-title { font-weight: 700; font-size: 14px; color: var(--navy); }
+    .property-subtitle { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+    .property-source { font-size: 10px; color: var(--accent); margin-top: 4px; }
+    .property-body { flex: 1; overflow-y: auto; }
+    .property-actions { flex-shrink: 0; padding-top: 8px; }
+
+    .match-status {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; border-radius: 6px;
+      font-size: 11px; font-weight: 600; margin-bottom: 8px;
+    }
+    .match-status.found { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; }
+    .match-status.not-found { background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; }
+    .match-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .match-dot.found { background: var(--green); }
+    .match-dot.not-found { background: var(--yellow); }
+
+    .compare-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .compare-table th {
+      text-align: left; padding: 4px 6px; font-size: 10px;
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+      color: var(--text-secondary); border-bottom: 2px solid var(--border);
+    }
+    .compare-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+    .compare-table .field-label { font-weight: 500; color: var(--text-secondary); }
+    .compare-new { color: var(--accent); font-weight: 600; }
+    .compare-diff { color: var(--yellow); font-weight: 600; }
+
+    .related-section { margin-top: 12px; }
+    .related-entity {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; background: var(--card-bg);
+      border: 1px solid var(--border); border-radius: 6px;
+      margin-bottom: 4px; cursor: pointer; font-size: 12px;
+      transition: border-color 0.15s;
+    }
+    .related-entity:hover { border-color: var(--accent); }
+    .related-type { font-size: 10px; color: var(--text-secondary); }
+
+    .update-toast {
+      padding: 8px 12px; border-radius: 6px; font-size: 11px;
+      background: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE;
+    }
+    .update-toast.updated {
+      background: #ECFDF5; color: #065F46; border-color: #A7F3D0;
+    }
+
+    /* Contact cards */
+    .contact-card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .contact-name { font-weight: 600; font-size: 12px; }
+    .contact-role {
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.3px; color: var(--accent); margin-bottom: 2px;
+    }
+    .contact-detail { color: var(--text-secondary); margin-top: 1px; }
+    .contact-detail a { color: var(--accent); text-decoration: none; }
+
+    /* Document cards */
+    .doc-card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .doc-card-header {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .doc-type-icon {
+      display: inline-block; width: 22px; height: 18px; line-height: 18px;
+      text-align: center; font-size: 9px; font-weight: 700;
+      background: var(--navy); color: white; border-radius: 3px;
+      margin-right: 6px; flex-shrink: 0;
+    }
+    .doc-name { font-weight: 600; font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-status {
+      font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 3px;
+      white-space: nowrap; margin-left: 6px;
+    }
+    .doc-status.captured { background: #FEF3C7; color: #92400E; }
+    .doc-status.ingested { background: #DBEAFE; color: #1E40AF; }
+    .doc-status.extracted { background: #D1FAE5; color: #065F46; }
+    .doc-actions { display: flex; gap: 4px; margin-top: 4px; }
+    .doc-actions .btn { font-size: 10px; padding: 2px 8px; cursor: pointer; }
+
+    /* Sale history rows */
+    .sale-row {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .sale-row-header {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .sale-date { font-weight: 600; font-size: 12px; }
+    .sale-price { font-weight: 700; color: var(--navy); }
+    .sale-detail { color: var(--text-secondary); margin-top: 2px; }
+
+    /* LCC existing data section */
+    .lcc-section {
+      background: #F0F7FF; border: 1px solid #BFDBFE;
+      border-radius: 6px; padding: 8px 10px; margin-bottom: 8px;
+    }
+    .lcc-section-header {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.3px; color: #1E40AF; margin-bottom: 4px;
+    }
+
+    /* Chat */
+    .chat-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    .chat-msg {
+      margin-bottom: 8px;
+      max-width: 90%;
+    }
+    .chat-msg.user {
+      margin-left: auto;
+      text-align: right;
+    }
+    .chat-bubble {
+      display: inline-block;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      line-height: 1.4;
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .chat-msg.user .chat-bubble {
+      background: var(--navy);
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+    .chat-msg.assistant .chat-bubble {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 6px;
+      padding-top: 8px;
+      flex-shrink: 0;
+    }
+    .chat-input-row input {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      outline: none;
+    }
+    .chat-input-row input:focus { border-color: var(--accent); }
+    .chat-clear-btn {
+      font-size: 10px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      text-align: right;
+      padding-top: 4px;
+    }
+    .chat-clear-btn:hover { color: var(--red); }
+
+    /* Buttons */
+    .btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn-primary { background: var(--navy); color: white; }
+    .btn-secondary { background: var(--border); color: var(--text); }
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
+    .btn-confirm { background: #D97706; color: white; }
+    .btn-success { background: var(--green); color: white; }
+    .btn-danger { background: var(--red); color: white; }
+
+    /* Status bar */
+    .status-bar {
+      background: white;
+      border-top: 1px solid var(--border);
+      padding: 6px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+    .status-dot.online { background: var(--green); }
+    .status-dot.offline { background: var(--red); }
+
+    /* Loading / empty states */
+    .loading {
+      text-align: center;
+      padding: 30px 0;
+      color: var(--text-secondary);
+    }
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--navy);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty-state {
+      text-align: center;
+      padding: 30px 10px;
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+    .error-state {
+      text-align: center;
+      padding: 20px 10px;
+      color: var(--red);
+      font-size: 12px;
+    }
+
+    .section-label {
+      font-weight: 600; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.3px; color: var(--text-secondary); margin: 8px 0 4px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <span class="logo">LCC</span>
+      <span id="pageContextBadge" class="page-context" style="display:none;"></span>
+    </div>
+    <button class="settings-btn" id="openSettings" title="Settings">&#9881;</button>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="property">Property</button>
+    <button class="tab-btn" data-tab="search">Search</button>
+    <button class="tab-btn" data-tab="chat">Chat</button>
+  </div>
+
+  <!-- Tab content -->
+  <div class="tab-content">
+    <!-- PROPERTY TAB -->
+    <div class="tab-pane active" id="tab-property">
+      <div id="propertyHeader" class="property-header-section"></div>
+      <div id="propertyBody" class="property-body"></div>
+      <div id="propertyActions" class="property-actions"></div>
+    </div>
+
+    <!-- SEARCH TAB -->
+    <div class="tab-pane" id="tab-search">
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Search properties, contacts, organizations...">
+        <button class="btn btn-sm btn-primary" id="searchBtn">Search</button>
+      </div>
+      <div class="search-results" id="searchResults">
+        <div class="empty-state">Enter a search query to find entities in LCC</div>
+      </div>
+    </div>
+
+    <!-- CHAT TAB -->
+    <div class="tab-pane" id="tab-chat">
+      <div class="chat-container">
+        <div class="chat-messages" id="chatMessages">
+          <div class="empty-state">Ask about this property or anything in your pipeline.</div>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chatInput" placeholder="Ask about this property...">
+          <button class="btn btn-sm btn-primary" id="chatSend">Send</button>
+        </div>
+        <div class="chat-clear-btn" id="chatClear">Clear chat</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <span><span class="status-dot" id="statusDot"></span><span id="statusText">Checking...</span></span>
+    <span id="lastUpdated"></span>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

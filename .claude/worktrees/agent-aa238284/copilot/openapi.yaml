@@ -1,0 +1,178 @@
+openapi: 3.0.3
+info:
+  title: LCC Copilot Actions API
+  description: >
+    Typed action endpoints for Microsoft Copilot Studio integration with
+    Life Command Center. All actions are dispatched through the unified
+    copilot action gateway.
+  version: 1.0.0
+
+servers:
+  - url: https://life-command-center.vercel.app
+    description: Production
+
+paths:
+  /api/copilot/action:
+    post:
+      operationId: copilotAction
+      summary: Dispatch a typed Copilot action
+      description: >
+        Unified gateway for all Copilot actions. Routes to the appropriate
+        handler based on the action_id field.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/IntakeStageOmRequest"
+      responses:
+        "200":
+          description: Action completed successfully
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/IntakeStageOmResponse"
+        "400":
+          description: Invalid request (missing fields or unknown action_id)
+        "401":
+          description: Authentication required
+        "500":
+          description: Server error
+
+  /intake/stage-om:
+    post:
+      operationId: intakeStageOm
+      summary: Stage an Offering Memorandum for intake
+      description: >
+        Convenience alias. Equivalent to POST /api/copilot/action with
+        action_id = intake.stage.om.v1. Stages a property OM PDF into
+        staged_intake_items and staged_intake_artifacts for downstream
+        extraction and matching.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntakeStageOmInputs"
+      responses:
+        "200":
+          description: Intake staged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntakeStageOmResponse"
+
+components:
+  schemas:
+    IntakeStageOmRequest:
+      type: object
+      required:
+        - action_id
+        - inputs
+      properties:
+        action_id:
+          type: string
+          enum: [intake.stage.om.v1]
+        inputs:
+          $ref: "#/components/schemas/IntakeStageOmInputs"
+
+    IntakeStageOmInputs:
+      type: object
+      required:
+        - intake_source
+        - intake_channel
+        - artifacts
+      properties:
+        intake_source:
+          type: string
+          enum: [copilot]
+        intake_channel:
+          type: string
+          enum: [outlook, copilot_chat, teams]
+        intent:
+          type: string
+          description: Free-text intent description from the Copilot conversation
+        artifacts:
+          type: object
+          required:
+            - primary_document
+          properties:
+            primary_document:
+              type: object
+              required:
+                - file_id
+                - file_name
+                - storage_path
+              properties:
+                file_id:
+                  type: string
+                  description: Unique file identifier
+                file_name:
+                  type: string
+                  description: Original filename (e.g. "123-Main-St-OM.pdf")
+                storage_path:
+                  type: string
+                  description: Supabase storage path or URL to the PDF
+                sha256:
+                  type: string
+                  description: Optional SHA-256 hash for integrity verification
+        seed_data:
+          type: object
+          description: Optional pre-extracted property data from Copilot context
+          properties:
+            property:
+              type: object
+              properties:
+                name:
+                  type: string
+                address:
+                  type: object
+                  properties:
+                    line1:
+                      type: string
+                    city:
+                      type: string
+                    state:
+                      type: string
+                    postal_code:
+                      type: string
+            tags:
+              type: array
+              items:
+                type: string
+        copilot_metadata:
+          type: object
+          description: Copilot session context for traceability
+          properties:
+            conversation_id:
+              type: string
+            message_id:
+              type: string
+            model:
+              type: string
+            run_id:
+              type: string
+
+    IntakeStageOmResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        status:
+          type: string
+          enum: [received, partial]
+        staged_intake_item_id:
+          type: string
+          format: uuid
+          description: UUID of the created staged_intake_items row
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-LCC-Key
+
+security:
+  - ApiKeyAuth: []

@@ -1,0 +1,19 @@
+{
+    "$schema": "https://aka.ms/json-schemas/copilot-extensions/v2.1/plugin.schema.json",
+    "schema_version": "v2.4",
+    "name_for_human": "Life Command Center",
+    "namespace": "LifeCommandCenter",
+    "description_for_human": "Access LCC deal intelligence, daily priorities, property context, and queue management.",
+    "description_for_model": "Call LCC to get daily briefings, search properties and contacts, retrieve full context packets for properties and contacts, check research queue status, and monitor pipeline health.",
+    "runtimes": [
+        {
+            "type": "OpenApi",
+            "auth": {
+                "type": "None"
+            },
+            "spec": {
+                "url": "https://life-command-center-nine.vercel.app/api/copilot-spec"
+            }
+        }
+    ]
+}

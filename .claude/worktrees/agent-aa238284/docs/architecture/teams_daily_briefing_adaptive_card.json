@@ -1,0 +1,161 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "Daily Briefing",
+      "weight": "Bolder",
+      "size": "Large"
+    },
+    {
+      "type": "TextBlock",
+      "text": "${summary_headline}",
+      "wrap": true,
+      "spacing": "Small"
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        {
+          "title": "Role View",
+          "value": "${role_view}"
+        },
+        {
+          "title": "As Of",
+          "value": "${as_of_display}"
+        },
+        {
+          "title": "Status",
+          "value": "${completeness_status}"
+        }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "Top Priorities",
+      "weight": "Bolder",
+      "spacing": "Medium"
+    },
+    {
+      "type": "TextBlock",
+      "text": "${top_priorities_text}",
+      "wrap": true,
+      "spacing": "Small"
+    },
+    {
+      "type": "TextBlock",
+      "text": "Production Signals",
+      "weight": "Bolder",
+      "spacing": "Medium"
+    },
+    {
+      "type": "ColumnSet",
+      "columns": [
+        {
+          "type": "Column",
+          "width": "stretch",
+          "items": [
+            {
+              "type": "TextBlock",
+              "text": "Open",
+              "size": "Small",
+              "color": "Accent"
+            },
+            {
+              "type": "TextBlock",
+              "text": "${work_open_actions}",
+              "weight": "Bolder",
+              "size": "Medium"
+            }
+          ]
+        },
+        {
+          "type": "Column",
+          "width": "stretch",
+          "items": [
+            {
+              "type": "TextBlock",
+              "text": "Inbox New",
+              "size": "Small",
+              "color": "Accent"
+            },
+            {
+              "type": "TextBlock",
+              "text": "${work_inbox_new}",
+              "weight": "Bolder",
+              "size": "Medium"
+            }
+          ]
+        },
+        {
+          "type": "Column",
+          "width": "stretch",
+          "items": [
+            {
+              "type": "TextBlock",
+              "text": "Sync Errors",
+              "size": "Small",
+              "color": "Attention"
+            },
+            {
+              "type": "TextBlock",
+              "text": "${work_sync_errors}",
+              "weight": "Bolder",
+              "size": "Medium"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "Domain Highlights",
+      "weight": "Bolder",
+      "spacing": "Medium"
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        {
+          "title": "Government",
+          "value": "${government_highlights_text}"
+        },
+        {
+          "title": "Dialysis",
+          "value": "${dialysis_highlights_text}"
+        }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "${degraded_note}",
+      "wrap": true,
+      "isVisible": "${is_degraded}"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open LCC Home",
+      "url": "${lcc_base_url}/?page=pageHome"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open My Queue",
+      "url": "${lcc_base_url}/?page=pageMyWork"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open Inbox",
+      "url": "${lcc_base_url}/?page=pageInbox"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open Sync Health",
+      "url": "${lcc_base_url}/?page=pageSyncHealth"
+    }
+  ]
+}
+

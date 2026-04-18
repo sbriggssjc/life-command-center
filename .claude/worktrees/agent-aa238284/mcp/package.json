@@ -1,0 +1,16 @@
+{
+  "name": "lcc-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP (Model Context Protocol) server for Life Command Center — lets Claude.ai call LCC tools natively",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "node-fetch": "^3.3.2"
+  }
+}
