@@ -5116,7 +5116,7 @@ function _salesRenderListing(l) {
       html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Original Ask</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(initial)}</div></div>`;
     }
     if (last != null && Number(last) !== Number(initial)) {
-      html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Final Ask</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
+      html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Last Price</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
     }
     html += '</div>';
   }
@@ -5132,14 +5132,14 @@ function _salesRenderSale(s) {
   let html = '';
 
   const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
-  const isLand = s.exclude_from_market_metrics === true;
+  const isExcluded = s.exclude_from_market_metrics === true;
   const price = s.price != null ? s.price : (s.sold_price != null ? s.sold_price : s.sale_price);
 
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
   html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
   html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--green);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--green)">${esc(txnType)}</span>`;
-  if (isLand) {
-    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--yellow);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--yellow)">Land Sale</span>`;
+  if (isExcluded) {
+    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--text3)">Excluded</span>`;
   }
   html += `</div>`;
   if (s.sale_date) {
@@ -5182,19 +5182,19 @@ function _salesRenderCombined(l, s) {
   const last = l.last_price != null ? l.last_price : null;
   const soldPrice = s.price != null ? s.price : (s.sold_price != null ? s.sold_price : s.sale_price);
   const txnType = s.transaction_type ? String(s.transaction_type) : 'Sale';
-  const isLand = s.exclude_from_market_metrics === true;
+  const isExcluded = s.exclude_from_market_metrics === true;
 
   let html = '';
 
-  // Header: Sold badge + transaction type + land tag + sale date
+  // Header: Sold badge + transaction type + excluded tag + sale date
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">';
   html += `<div style="display:flex;gap:6px;flex-wrap:wrap">`;
   html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--green);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--green)">Sold</span>`;
   if (txnType && txnType.toLowerCase() !== 'sale') {
     html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--border)">${esc(txnType)}</span>`;
   }
-  if (isLand) {
-    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--yellow);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--yellow)">Land Sale</span>`;
+  if (isExcluded) {
+    html += `<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--text3)">Excluded</span>`;
   }
   html += '</div>';
   if (s.sale_date) {
@@ -5212,7 +5212,7 @@ function _salesRenderCombined(l, s) {
   if (initial != null) {
     parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(initial)}</span>`);
   }
-  if (last != null && Number(last) !== Number(initial)) {
+  if (last != null && Number(last) !== Number(initial) && (soldPrice == null || Math.abs(Number(last) - Number(soldPrice)) > 1)) {
     parts.push(`<span style="color:var(--accent);font-weight:600">${fmt(last)}</span>`);
   }
   const soldBits = ['Sold'];
@@ -5225,12 +5225,13 @@ function _salesRenderCombined(l, s) {
 
   html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
 
-  // Price grid
+  // Price grid — suppress "Final Ask" if it equals sold price (CoStar last_price = sold price, not last asking)
+  const showFinalAsk = last != null && Number(last) !== Number(initial) && (soldPrice == null || Math.abs(Number(last) - Number(soldPrice)) > 1);
   html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
   if (initial != null) {
     html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Original Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(initial)}</div></div>`;
   }
-  if (last != null && Number(last) !== Number(initial)) {
+  if (showFinalAsk) {
     html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Final Ask</div><div style="font-size:14px;font-weight:600;color:var(--text)">${fmt(last)}</div></div>`;
   }
   if (soldPrice != null) {
