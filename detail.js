@@ -5152,7 +5152,8 @@ function _salesRenderSale(s) {
   }
 
   const metrics = [];
-  if (s.cap_rate != null) metrics.push(`${_fmtCapRate(s.cap_rate) || '—'} Cap`);
+  const _bestCap = s.stated_cap_rate || s.calculated_cap_rate || s.cap_rate || null;
+  if (_bestCap != null) metrics.push(`${_fmtCapRate(_bestCap) || '—'} Cap`);
   if (s.price_psf != null) metrics.push(`$${Number(s.price_psf).toFixed(0)}/SF`);
   if (metrics.length) {
     html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
@@ -5217,8 +5218,9 @@ function _salesRenderCombined(l, s) {
   const soldBits = ['Sold'];
   if (s.sale_date) soldBits.push(esc(_fmtDate(s.sale_date)));
   let soldTail = soldBits.join(' ');
+  const _bestCap2 = s.stated_cap_rate || s.calculated_cap_rate || s.cap_rate || null;
   if (soldPrice != null) soldTail += ` at ${fmt(soldPrice)}`;
-  if (s.cap_rate != null) soldTail += ` / ${_fmtCapRate(s.cap_rate)} Cap`;
+  if (_bestCap2 != null) soldTail += ` / ${_fmtCapRate(_bestCap2)} Cap`;
   parts.push(`<span style="color:var(--green);font-weight:600">${soldTail}</span>`);
 
   html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
@@ -5234,8 +5236,9 @@ function _salesRenderCombined(l, s) {
   if (soldPrice != null) {
     html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Sold Price</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fmt(soldPrice)}</div></div>`;
   }
-  if (s.cap_rate != null) {
-    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(s.cap_rate)}</div></div>`;
+  if (_bestCap2 != null) {
+    const _capSrc2 = s.stated_cap_rate ? ' (stated)' : (s.calculated_cap_rate ? ' (calc)' : '');
+    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(_bestCap2)}${_capSrc2 ? '<span style="font-size:9px;color:var(--text3)">' + _capSrc2 + '</span>' : ''}</div></div>`;
   }
   html += '</div>';
 
