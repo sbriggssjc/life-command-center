@@ -3370,9 +3370,8 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
       }
     }
     patch.recorded_owner_id = latestOwnerId;
-    patch.true_owner_id    = latestOwnerId;
 
-    // 2b. Back-fill recorded_owner_name (and true_owner_name if available)
+    // 2b. Back-fill recorded_owner_name, true_owner_id, and true_owner_name
     //     from the recorded_owners / true_owners tables so the denormalized
     //     cache on the properties row stays in sync with the new owner ID.
     const roRes = await domainQuery(domain, 'GET',
@@ -3384,6 +3383,7 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
       const ro = roRes.data[0];
       if (ro.name) patch.recorded_owner_name = ro.name;
       if (ro.true_owner_id) {
+        patch.true_owner_id = ro.true_owner_id;
         const truRes = await domainQuery(domain, 'GET',
           `true_owners?true_owner_id=eq.${ro.true_owner_id}` +
           `&select=name` +
