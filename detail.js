@@ -5041,8 +5041,15 @@ function _salesBuildTimeline(listings, txns) {
   const listingArr = Array.isArray(listings) ? listings.slice() : [];
   const saleArr = Array.isArray(txns) ? txns.slice() : [];
   const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  const NINETY_DAYS = 90 * 24 * 60 * 60 * 1000;
   const usedSaleIdx = new Set();
+  const excludedSaleIdx = new Set();
   const events = [];
+
+  // Mark excluded/duplicate sales so they are skipped during pairing
+  saleArr.forEach((sale, i) => {
+    if (sale.exclude_from_market_metrics === true) excludedSaleIdx.add(i);
+  });
 
   listingArr.forEach(listing => {
     const offMs = _salesParseDate(listing.off_market_date);
@@ -5050,8 +5057,9 @@ function _salesBuildTimeline(listings, txns) {
     let matchDiff = Infinity;
 
     if (offMs != null) {
+      // First pass: try 30-day window against non-excluded sales
       saleArr.forEach((sale, i) => {
-        if (usedSaleIdx.has(i)) return;
+        if (usedSaleIdx.has(i) || excludedSaleIdx.has(i)) return;
         const saleMs = _salesParseDate(sale.sale_date);
         if (saleMs == null) return;
         const diff = Math.abs(saleMs - offMs);
@@ -5060,6 +5068,20 @@ function _salesBuildTimeline(listings, txns) {
           matchDiff = diff;
         }
       });
+      // Second pass: wider 90-day window if no 30-day match found
+      // (handles CoStar contract-vs-recorded date splits)
+      if (matchIdx < 0) {
+        saleArr.forEach((sale, i) => {
+          if (usedSaleIdx.has(i) || excludedSaleIdx.has(i)) return;
+          const saleMs = _salesParseDate(sale.sale_date);
+          if (saleMs == null) return;
+          const diff = Math.abs(saleMs - offMs);
+          if (diff <= NINETY_DAYS && diff < matchDiff) {
+            matchIdx = i;
+            matchDiff = diff;
+          }
+        });
+      }
     }
 
     if (matchIdx >= 0) {
@@ -5079,8 +5101,9 @@ function _salesBuildTimeline(listings, txns) {
     }
   });
 
+  // Add remaining unmatched, non-excluded sales as standalone entries
   saleArr.forEach((sale, i) => {
-    if (usedSaleIdx.has(i)) return;
+    if (usedSaleIdx.has(i) || excludedSaleIdx.has(i)) return;
     events.push({
       listing: null,
       sale,
