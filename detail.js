@@ -1125,22 +1125,22 @@ function _udInferPipelineStage() {
     ? _salesCache
     : null;
 
-  // Sold — any completed sale event
-  const hasSale = sales && (sales.transactions || []).some(t => t.sale_date);
-  if (hasSale) return 'sold';
   // Under contract — sale event with status pending or listing marked under_contract
   const underContract = sales && (
     (sales.transactions || []).some(t => ['pending','under_contract'].includes(String(t.status || '').toLowerCase())) ||
     (sales.listings || []).some(l => String(l.status || '').toLowerCase() === 'under_contract')
   );
   if (underContract) return 'under_contract';
-  // Listed — any active listing
+  // Listed — any active listing (takes priority over historical sales)
   const listed = sales && (sales.listings || []).some(l => {
     if (l.is_active === true) return true;
     if (l.is_active === false) return false;
     return !l.off_market_date;
   });
   if (listed) return 'listed';
+  // Sold — completed sale event (only if NOT currently listed)
+  const hasSale = sales && (sales.transactions || []).some(t => t.sale_date);
+  if (hasSale) return 'sold';
   // SF-linked owner → Engaged / Pitched heuristic
   const own = _udCache.ownership || {};
   if (own.sf_opportunity_id) return 'engaged';
@@ -5493,11 +5493,15 @@ function _udTabDealHistory() {
   }
   html += '</div>';
 
+  // Count events per filter category
+  const countListings = events.filter(e => e.kind === 'sale' && !!e.listing).length;
+  const countSales = events.filter(e => e.kind === 'sale' && !!e.sale).length;
+  const countOwnership = events.filter(e => e.kind === 'ownership' || (e.kind === 'sale' && !!e.chain)).length;
   const chips = [
-    { key: 'all',       label: 'All' },
-    { key: 'listings',  label: 'Listings' },
-    { key: 'sales',     label: 'Sales' },
-    { key: 'ownership', label: 'Ownership' },
+    { key: 'all',       label: 'All',       count: events.length },
+    { key: 'listings',  label: 'Listings',  count: countListings },
+    { key: 'sales',     label: 'Sales',     count: countSales },
+    { key: 'ownership', label: 'Ownership', count: countOwnership },
   ];
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px 0">';
   chips.forEach((c) => {
@@ -5505,7 +5509,7 @@ function _udTabDealHistory() {
     const bg = isActive ? 'var(--accent)' : 'var(--s2)';
     const fg = isActive ? '#fff' : 'var(--text2)';
     const border = isActive ? 'var(--accent)' : 'var(--border)';
-    html += `<button onclick="_dealHistorySetFilter('${c.key}')" style="padding:4px 12px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${border};background:${bg};color:${fg};text-transform:uppercase;letter-spacing:0.4px">${esc(c.label)}</button>`;
+    html += `<button onclick="_dealHistorySetFilter('${c.key}')" style="padding:4px 12px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${border};background:${bg};color:${fg};text-transform:uppercase;letter-spacing:0.4px">${esc(c.label)} <span style="opacity:0.7">${c.count}</span></button>`;
   });
   html += '</div>';
 
@@ -5543,9 +5547,12 @@ function _udTabDealHistory() {
 }
 
 function _dealHistorySetFilter(f) {
-  _salesFilter = (['listings', 'sales', 'ownership'].includes(f)) ? f : 'all';
+  _salesFilter = (['all', 'listings', 'sales', 'ownership'].includes(f)) ? f : 'all';
   const bodyEl = document.getElementById('detailBody');
-  if (bodyEl) bodyEl.innerHTML = _udTabDealHistory();
+  if (bodyEl) {
+    bodyEl.innerHTML = _udTabDealHistory();
+    _intelRenderPriorSaleSummaryAsync(); // re-populate Prior Sale section
+  }
 }
 window._dealHistorySetFilter = _dealHistorySetFilter;
 
