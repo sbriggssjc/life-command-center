@@ -14,6 +14,16 @@ let _udFormDirty = false; // track unsaved form edits for beforeunload guard
 // Helper for safe parseFloat: converts empty strings to null instead of NaN
 function _dpf(v) { return v && v.trim() ? parseFloat(v) : null; }
 
+// Cap rate display: DB stores decimals (0.07 = 7%). Convert to percentage for display.
+// Values > 1 are assumed to already be in percentage form.
+function _fmtCapRate(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  if (isNaN(n) || n === 0) return null;
+  const pct = n < 1 ? n * 100 : n;
+  return pct.toFixed(2) + '%';
+}
+
 /**
  * Generic async button guard — disables button during operation, shows "Saving…",
  * re-enables on completion or error. Prevents double-clicks on any async save.
@@ -1447,7 +1457,7 @@ function _udTabRentRoll() {
     const picked = _udPickCurrentRent(property, activeTerm, em);
     const baseRent = activeTerm.annual_rent != null ? Number(activeTerm.annual_rent)
                    : (em.annual_rent != null ? Number(em.annual_rent) : null);
-    const showBaseHint = picked && baseRent != null && picked.bumps_applied !== 0 &&
+    const showBaseHint = picked && baseRent != null && !isNaN(baseRent) && picked.bumps_applied !== 0 &&
       Math.round(baseRent) !== Math.round(picked.rent);
     const rentLabel = picked && picked.bumps_applied !== 0
       ? `Current Rent (${new Date().getUTCFullYear()})`
@@ -4055,7 +4065,7 @@ function _udTabOwnership() {
             html += _rowHtml('Buyer / Grantee', (fb.buyer_name || fb.grantee) && fb.buyer_id ? entityLink(fb.buyer_name || fb.grantee, 'contact', fb.buyer_id, db) : esc(fb.buyer_name || fb.grantee || ''));
       html += _row('Transfer Date', _fmtDate(fb.sale_date || fb.transfer_date));
       html += _rowMoney('Sale Price', fb.sale_price || fb.price);
-      html += _row('Cap Rate', fb.cap_rate ? Number(fb.cap_rate).toFixed(2) + '%' : null);
+      html += _row('Cap Rate', _fmtCapRate(fb.cap_rate));
       html += '</div></div>';
       return html;
     }
@@ -4252,7 +4262,7 @@ function _udTabOwnership() {
         html += '<div class="detail-card-body">';
         if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
         if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
-        if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
+        if (h.cap_rate) html += `Cap Rate: ${_fmtCapRate(h.cap_rate)}<br>`;
         if (h.annual_rent) html += `Rent: ${fmt(h.annual_rent)}<br>`;
         if (h.square_feet) html += `SF: ${fmtN(h.square_feet)}<br>`;
         if (h.recorded_owner_name && h.recorded_owner_name !== govOwnerName) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${_ownerLink(h.recorded_owner_name, _ownerCtxFromChain(h, db))}<br>`;
@@ -4274,7 +4284,7 @@ function _udTabOwnership() {
           : 'Not Disclosed';
         // Cap rate: prefer stated, fall back to calculated
         const capVal = h.stated_cap_rate || h.cap_rate || h.calculated_cap_rate || null;
-        const capStr = capVal ? Number(capVal).toFixed(2) + '%' : '\u2014';
+        const capStr = capVal ? _fmtCapRate(capVal) : '\u2014';
         const capSource = h.stated_cap_rate ? 'stated' : (h.calculated_cap_rate ? 'calc' : '');
 
         // Prospecting status badge
@@ -5096,7 +5106,7 @@ function _salesRenderSale(s) {
   }
 
   const metrics = [];
-  if (s.cap_rate != null) metrics.push(`${Number(s.cap_rate).toFixed(2)}% Cap`);
+  if (s.cap_rate != null) metrics.push(`${_fmtCapRate(s.cap_rate) || '—'} Cap`);
   if (s.price_psf != null) metrics.push(`$${Number(s.price_psf).toFixed(0)}/SF`);
   if (metrics.length) {
     html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
@@ -5162,7 +5172,7 @@ function _salesRenderCombined(l, s) {
   if (s.sale_date) soldBits.push(esc(_fmtDate(s.sale_date)));
   let soldTail = soldBits.join(' ');
   if (soldPrice != null) soldTail += ` at ${fmt(soldPrice)}`;
-  if (s.cap_rate != null) soldTail += ` / ${Number(s.cap_rate).toFixed(2)}% Cap`;
+  if (s.cap_rate != null) soldTail += ` / ${_fmtCapRate(s.cap_rate)} Cap`;
   parts.push(`<span style="color:var(--green);font-weight:600">${soldTail}</span>`);
 
   html += `<div style="font-size:13px;margin-bottom:10px;line-height:1.7">${parts.join(' <span style="color:var(--text3)">→</span> ')}</div>`;
@@ -5179,7 +5189,7 @@ function _salesRenderCombined(l, s) {
     html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Sold Price</div><div style="font-size:16px;font-weight:700;color:var(--green)">${fmt(soldPrice)}</div></div>`;
   }
   if (s.cap_rate != null) {
-    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${Number(s.cap_rate).toFixed(2)}%</div></div>`;
+    html += `<div><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(s.cap_rate)}</div></div>`;
   }
   html += '</div>';
 
@@ -5562,7 +5572,7 @@ function _udDealRenderOwnership(h, db) {
   if (h.buyer_name && h.buyer_name !== (h.recorded_owner_name || h.true_owner_name)) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(h.buyer_name)}</span></div>`;
   if (h.sale_price) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Sale:</span> <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span></div>`;
   const _capVal = h.stated_cap_rate || h.cap_rate || h.calculated_cap_rate || null;
-  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${Number(_capVal).toFixed(2)}%</span>${h.stated_cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(stated)</span>' : (h.calculated_cap_rate && !h.cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(calc)</span>' : '')}</div>`;
+  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${_fmtCapRate(_capVal)}</span>${h.stated_cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(stated)</span>' : (h.calculated_cap_rate && !h.cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(calc)</span>' : '')}</div>`;
   if (h.listing_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(h.listing_broker)}</span></div>`;
   if (h.procuring_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(h.procuring_broker)}</span></div>`;
   if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:4px">Type: ${esc(h.ownership_type)}</div>`;
@@ -5808,7 +5818,7 @@ function _udTabHistory() {
       html += '<div class="detail-card-body">';
       if (h.from_owner) html += `<span style="font-size:12px;color:var(--text3)">From:</span> ${esc(h.from_owner)}<br>`;
       if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
-      if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
+      if (h.cap_rate) html += `Cap Rate: ${_fmtCapRate(h.cap_rate)}<br>`;
       if (h.annual_rent) html += `Rent: ${fmt(h.annual_rent)}<br>`;
       if (h.square_feet) html += `SF: ${fmtN(h.square_feet)}<br>`;
       if (h.recorded_owner_name) html += `<span style="font-size:12px;color:var(--text3)">Recorded:</span> ${esc(h.recorded_owner_name)}<br>`;
@@ -5825,7 +5835,7 @@ function _udTabHistory() {
         html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${esc(h.true_owner_name)}<br>`;
       }
       if (h.sale_price) html += `Sale: <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span><br>`;
-      if (h.cap_rate) html += `Cap Rate: ${Number(h.cap_rate).toFixed(2)}%<br>`;
+      if (h.cap_rate) html += `Cap Rate: ${_fmtCapRate(h.cap_rate)}<br>`;
       if (h.rent) html += `Rent: ${fmt(h.rent)}<br>`;
       if (h.ownership_type) html += `<span style="font-size:12px;color:var(--text3)">Type:</span> ${esc(h.ownership_type)}<br>`;
       if (h.ownership_source) html += `<span style="font-size:12px;color:var(--text3)">Source:</span> ${esc(h.ownership_source)}<br>`;
@@ -7344,7 +7354,7 @@ function _udMergeFields(tmpl) {
   const cityState = esc((prop.city || '') + (prop.state ? ', ' + prop.state : ''));
   const annualRent = prop.annual_rent ? esc(fmt(prop.annual_rent)) : '';
   const askingPrice = prop.asking_price ? esc(fmt(prop.asking_price)) : '';
-  const capRate = prop.cap_rate ? esc(Number(prop.cap_rate).toFixed(2) + '%') : '';
+  const capRate = prop.cap_rate ? esc(_fmtCapRate(prop.cap_rate) || '') : '';
   const agency = esc(prop.agency_full || prop.agency_short || '');
   const leaseTerm = '';
 
@@ -8325,7 +8335,7 @@ async function _intelRenderPriorSaleSummaryAsync() {
   const bits = [];
   if (latest.sale_date) bits.push(`<span style="color:var(--text3)">Date:</span> <span style="color:var(--text)">${esc(_fmtDate(latest.sale_date))}</span>`);
   if (price != null)    bits.push(`<span style="color:var(--text3)">Price:</span> <span class="mono" style="color:var(--green);font-weight:600">${fmt(price)}</span>`);
-  if (latest.cap_rate != null) bits.push(`<span style="color:var(--text3)">Cap:</span> <span style="color:var(--text);font-weight:600">${Number(latest.cap_rate).toFixed(2)}%</span>`);
+  if (latest.cap_rate != null) bits.push(`<span style="color:var(--text3)">Cap:</span> <span style="color:var(--text);font-weight:600">${_fmtCapRate(latest.cap_rate)}</span>`);
   if (latest.buyer_name)  bits.push(`<span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(latest.buyer_name)}</span>`);
   if (latest.seller_name) bits.push(`<span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(latest.seller_name)}</span>`);
   if (latest.broker_name) bits.push(`<span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(latest.broker_name)}</span>`);
@@ -10434,7 +10444,7 @@ function _brokerDrawerDeals(c) {
     html += '</div><div class="detail-card-body">';
     if (d.buyer_name) html += '<div>Buyer: ' + esc(d.buyer_name) + '</div>';
     if (d.seller_name) html += '<div>Seller: ' + esc(d.seller_name) + '</div>';
-    if (d.cap_rate) html += '<div>Cap: ' + Number(d.cap_rate).toFixed(2) + '%</div>';
+    if (d.cap_rate) html += '<div>Cap: ' + (_fmtCapRate(d.cap_rate) || '') + '</div>';
     html += '</div></div>';
   });
   html += '</div>';
