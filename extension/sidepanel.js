@@ -787,7 +787,18 @@ async function loadPropertyTab() {
   }
 
   // ── SECTION 5: Documents from source ──────────────────────────
-  const documentLinks = ctx?.document_links || [];
+  // Collect documents from top-level AND from each sale record's document_links
+  // so all OMs from all comp pages are visible on the summary page
+  const topDocLinks = ctx?.document_links || [];
+  const saleDocLinks = (ctx?.sales_history || []).flatMap(s =>
+    Array.isArray(s.document_links) ? s.document_links : []
+  );
+  const seenUrls = new Set();
+  const documentLinks = [...topDocLinks, ...saleDocLinks].filter(d => {
+    if (!d.url || seenUrls.has(d.url)) return false;
+    seenUrls.add(d.url);
+    return true;
+  });
   if (documentLinks.length) {
     html += renderDocuments(documentLinks);
   }

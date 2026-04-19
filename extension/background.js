@@ -284,6 +284,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         // Merge documents (deeds, OMs, brochures from different tabs)
         const mergedDocs = mergeArrays(existing.documents, incoming.documents, d => d.url || d.title);
 
+        // Merge document_links (accumulated from comp pages + summary)
+        const mergedDocLinks = mergeArrays(existing.document_links, incoming.document_links, d => d.url);
+
         const cleanIncomingTenant = incoming.tenant_name &&
           !INVALID_TENANT.test(incoming.tenant_name)
           ? incoming.tenant_name : null;
@@ -303,7 +306,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const mergedScalars = {};
         for (const key of Object.keys({ ...existing, ...incoming })) {
           if (['tenants', 'contacts', 'sales_history', 'documents',
-               'tenant_name', 'primary_tenant'].includes(key)) continue;
+               'document_links', 'tenant_name', 'primary_tenant'].includes(key)) continue;
           const eVal = existing[key];
           const iVal = incoming[key];
           // Keep existing value if incoming is null/undefined/empty-array
@@ -320,6 +323,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           contacts: mergedContacts,
           sales_history: mergedSales,
           documents: mergedDocs,
+          document_links: mergedDocLinks,
           tenant_name:    cleanIncomingTenant || cleanExistingTenant || null,
           primary_tenant: cleanIncomingPrimary || cleanExistingPrimary || null,
           // Preserve sale_notes_raw from whichever tab captured it
