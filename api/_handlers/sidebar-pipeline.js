@@ -71,6 +71,12 @@ const DIALYSIS_TENANT_PATTERNS = [
 // They must be skipped when building sales_transactions and ownership_history.
 const MORTGAGE_DEED_TYPES = /^(mortgage|deed\s+of\s+trust|assignment\s+of|subordination|satisfaction|release|reconveyance|lien|easement)/i;
 
+// Lender/bank name pattern — entities with these names are financial institutions,
+// NOT property owners. When a deed shows a bank as "buyer" it's typically a
+// foreclosure, refinance, or securitization event rather than a real sale.
+// Must be filtered from ownership_history to prevent false owner records.
+const LENDER_PATTERN = /\b(bank|bancorp|bankcentre|bancshares|credit\s*union|mortgage\s*co|lending|savings\s*(and|&)?\s*loan|financial\s*services|capital\s*one|wells\s*fargo|chase\s*manhattan|citibank|us\s*bank|jpmorgan|bmo\s*harris|pnc\s*bank|td\s*bank|fifth\s*third|truist|regions\s*bank|citizens\s*bank|key\s*bank|comerica|zions|m\s*&?\s*t\s*bank|first\s*national\s*bank|umpqua|glacier|webster\s*bank|midwest\s*bankcentre|fannie\s*mae|freddie\s*mac|fhlmc|fnma|ginnie\s*mae)\b/i;
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -1075,6 +1081,10 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   const trueOwnerResult = await upsertTrueOwners(domain, propertyId, metadata);
   results.records.true_owners = (trueOwnerResult.true_buyer_id ? 1 : 0)
                                + (trueOwnerResult.true_seller_id ? 1 : 0);
+
+  // Step 5d3: Cross-reference all owners against Salesforce (dialysis only)
+  const sfResult = await crossReferenceSalesforce(domain, propertyId);
+  results.records.sf_matches = sfResult.matched;
 
   // Step 5e: Upsert leases (dialysis only — gov skipped for now)
   results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
@@ -3060,6 +3070,31 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     .filter(s => s.sale_date && s.buyer)  // must have a buyer to count as a transfer
     .sort((a, b) => new Date(a.sale_date) - new Date(b.sale_date));
 
+  // Pre-fetch sales_transactions for this property so we can link ownership_history → sale_id
+  const existingSales = await domainQuery(domain, 'GET',
+    `sales_transactions?property_id=eq.${propertyId}&select=sale_id,sale_date,sold_price&limit=50`
+  );
+  const salesTxns = existingSales.ok ? (existingSales.data || []) : [];
+
+  // Helper: find matching sale_id by date (within 7 days) + price (within 5%)
+  function findMatchingSaleId(dateStr, priceVal) {
+    if (!dateStr) return null;
+    const targetDate = new Date(dateStr);
+    for (const st of salesTxns) {
+      if (!st.sale_date) continue;
+      const stDate = new Date(st.sale_date);
+      const daysDiff = Math.abs((targetDate - stDate) / 86400000);
+      if (daysDiff > 7) continue;
+      // If prices available, verify within 5%; if one is missing, date match is enough
+      if (priceVal && st.sold_price) {
+        const priceDiff = Math.abs(Number(st.sold_price) - priceVal) / Math.max(Number(st.sold_price), priceVal);
+        if (priceDiff > 0.05) continue;
+      }
+      return st.sale_id;
+    }
+    return null;
+  }
+
   for (let i = 0; i < validTransitions.length; i++) {
     const sale = validTransitions[i];
     const saleDate = parseDate(sale.sale_date);
@@ -3070,6 +3105,14 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
     // create duplicate ownership_history rows.
     if (sale.deed_type && MORTGAGE_DEED_TYPES.test(sale.deed_type)) continue;
 
+    // Skip lender names as buyers — banks appearing as buyers are typically
+    // foreclosures, securitization, or refinancing events, not real transfers.
+    if (LENDER_PATTERN.test(sale.buyer)) {
+      console.log(`[upsertDomainOwners] skipping lender buyer: "${sale.buyer}" ` +
+        `for property=${propertyId} date=${sale.sale_date}`);
+      continue;
+    }
+
     const saleDateStr = saleDate.split('T')[0];
 
     // Ensure buyer owner record
@@ -3077,6 +3120,19 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 
     // Ensure seller owner record
     const sellerId = sale.seller ? await ensureRecordedOwner(sale.seller, sale.seller_address) : null;
+
+    // Link sale_transaction to the buyer's recorded_owner_id
+    const matchedSaleId = findMatchingSaleId(saleDateStr, parseCurrency(sale.sale_price));
+    if (matchedSaleId && buyerId) {
+      await domainPatch(domain,
+        `sales_transactions?sale_id=eq.${matchedSaleId}`,
+        stripNulls({
+          recorded_owner_id: buyerId,
+          recorded_owner_name: sale.buyer,
+        }),
+        'upsertDomainOwners:linkSaleToOwner'
+      );
+    }
 
     // Build ownership_history entry for the buyer (they own from this sale forward)
     if (buyerId) {
@@ -3116,11 +3172,75 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
             ownership_start:   saleDateStr,
             ownership_end:     nextSaleDate ? nextSaleDate.split('T')[0] : null,
             sold_price:        parseCurrency(sale.sale_price),
+            sale_id:           matchedSaleId || null,
           });
 
       if (!ohLookup.ok || !ohLookup.data?.length) {
         const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
         if (result.ok) results.history++;
+      } else if (matchedSaleId) {
+        // Existing row — ensure sale_id is linked
+        const existingOhId = ohLookup.data[0].ownership_id;
+        await domainPatch(domain,
+          `ownership_history?ownership_id=eq.${existingOhId}`,
+          { sale_id: matchedSaleId },
+          'upsertDomainOwners:linkOwnershipToSale'
+        );
+      }
+    }
+  }
+
+  // ── Auto-resolve recorded_owner → true_owner ──
+  // For each recorded_owner we created/found, check if they need a true_owner link.
+  // If no true_owner exists, create one. This ensures the ownership chain is
+  // fully resolved for Salesforce cross-referencing downstream.
+  if (domain === 'dialysis') {
+    for (const [normalizedName, recordedOwnerId] of ownerIds) {
+      try {
+        const roLookup = await domainQuery(domain, 'GET',
+          `recorded_owners?recorded_owner_id=eq.${recordedOwnerId}` +
+          `&select=recorded_owner_id,name,true_owner_id,address,city,state&limit=1`
+        );
+        const ro = roLookup.ok && roLookup.data?.length ? roLookup.data[0] : null;
+        if (!ro || ro.true_owner_id) continue; // already linked
+
+        // Skip lenders — they don't get true_owner records
+        if (LENDER_PATTERN.test(ro.name || '')) continue;
+
+        // Check if a true_owner already exists by normalized name
+        const toMatch = await domainQuery(domain, 'GET',
+          `true_owners?normalized_name=eq.${encodeURIComponent(normalizedName)}` +
+          `&select=true_owner_id&limit=1`
+        );
+        let trueOwnerId = null;
+        if (toMatch.ok && toMatch.data?.length) {
+          trueOwnerId = toMatch.data[0].true_owner_id;
+        } else {
+          // Create new true_owner from recorded_owner data
+          const toData = stripNulls({
+            name: ro.name,
+            normalized_name: normalizedName,
+            city: ro.city || null,
+            state: ro.state || null,
+            owner_type: 'investor',
+          });
+          const toResult = await domainQuery(domain, 'POST', 'true_owners', toData);
+          if (toResult.ok && toResult.data) {
+            const created = Array.isArray(toResult.data) ? toResult.data[0] : toResult.data;
+            trueOwnerId = created?.true_owner_id || null;
+          }
+        }
+
+        if (trueOwnerId) {
+          await domainPatch(domain,
+            `recorded_owners?recorded_owner_id=eq.${recordedOwnerId}`,
+            { true_owner_id: trueOwnerId },
+            'upsertDomainOwners:linkToTrueOwner'
+          );
+          console.log(`[upsertDomainOwners] linked recorded_owner "${ro.name}" → true_owner ${trueOwnerId}`);
+        }
+      } catch (err) {
+        console.error(`[upsertDomainOwners] true_owner resolution error for ${normalizedName}:`, err?.message);
       }
     }
   }
@@ -3289,6 +3409,115 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
     'reconcilePropertyOwnership'
   );
   return { updated: true, patch };
+}
+
+// ── Step 5d1b: Cross-reference owners against Salesforce ──────────────────
+// After true_owner records are resolved, check LCC unified_contacts for
+// matching Salesforce IDs. Uses normalized name + related entity expansion.
+// Only runs for dialysis domain (gov has separate SF integration path).
+
+async function crossReferenceSalesforce(domain, propertyId) {
+  if (domain !== 'dialysis') return { matched: 0 };
+
+  let matched = 0;
+
+  try {
+    // Get all true_owners linked to this property via recorded_owners in ownership_history
+    const ohRes = await domainQuery(domain, 'GET',
+      `ownership_history?property_id=eq.${propertyId}` +
+      `&recorded_owner_id=not.is.null` +
+      `&select=recorded_owner_id` +
+      `&limit=20`
+    );
+    if (!ohRes.ok || !ohRes.data?.length) return { matched: 0 };
+
+    // Collect unique recorded_owner_ids → true_owner_ids
+    const roIds = [...new Set(ohRes.data.map(r => r.recorded_owner_id))];
+
+    for (const roId of roIds) {
+      const roRes = await domainQuery(domain, 'GET',
+        `recorded_owners?recorded_owner_id=eq.${roId}` +
+        `&select=recorded_owner_id,name,normalized_name,true_owner_id` +
+        `&limit=1`
+      );
+      if (!roRes.ok || !roRes.data?.length) continue;
+      const ro = roRes.data[0];
+      if (!ro.true_owner_id) continue;
+
+      // Check if true_owner already has SF link
+      const toRes = await domainQuery(domain, 'GET',
+        `true_owners?true_owner_id=eq.${ro.true_owner_id}` +
+        `&select=true_owner_id,name,normalized_name,salesforce_id,sf_company_id` +
+        `&limit=1`
+      );
+      if (!toRes.ok || !toRes.data?.length) continue;
+      const trueOwner = toRes.data[0];
+      if (trueOwner.salesforce_id || trueOwner.sf_company_id) continue; // already linked
+
+      // Search LCC unified_contacts by normalized company name
+      const normalizedName = trueOwner.normalized_name || ro.normalized_name;
+      if (!normalizedName) continue;
+
+      // Use opsQuery (LCC Supabase) to search unified_contacts
+      const sfMatch = await opsQuery('GET',
+        `unified_contacts?company_name=ilike.*${encodeURIComponent(normalizedName)}*` +
+        `&or=(sf_contact_id.not.is.null,sf_account_id.not.is.null)` +
+        `&select=sf_contact_id,sf_account_id,company_name,full_name` +
+        `&limit=3`
+      );
+
+      if (sfMatch.ok && sfMatch.data?.length) {
+        const best = sfMatch.data[0];
+        const sfPatch = {};
+        if (best.sf_contact_id) sfPatch.salesforce_id = best.sf_contact_id;
+        if (best.sf_account_id) sfPatch.sf_company_id = best.sf_account_id;
+
+        if (Object.keys(sfPatch).length) {
+          await domainPatch(domain,
+            `true_owners?true_owner_id=eq.${trueOwner.true_owner_id}`,
+            sfPatch,
+            'crossReferenceSalesforce'
+          );
+          matched++;
+          console.log(`[crossReferenceSalesforce] linked true_owner "${trueOwner.name}" ` +
+            `→ SF ${sfPatch.salesforce_id || sfPatch.sf_company_id} ` +
+            `(matched via "${best.company_name || best.full_name}")`);
+        }
+      } else {
+        // Fallback: search by recorded_owner name (LLC names) in case the SF
+        // record uses the LLC name rather than the true owner name
+        const roName = ro.normalized_name;
+        if (roName && roName !== normalizedName) {
+          const roSfMatch = await opsQuery('GET',
+            `unified_contacts?company_name=ilike.*${encodeURIComponent(roName)}*` +
+            `&or=(sf_contact_id.not.is.null,sf_account_id.not.is.null)` +
+            `&select=sf_contact_id,sf_account_id,company_name` +
+            `&limit=1`
+          );
+          if (roSfMatch.ok && roSfMatch.data?.length) {
+            const best = roSfMatch.data[0];
+            const sfPatch = {};
+            if (best.sf_contact_id) sfPatch.salesforce_id = best.sf_contact_id;
+            if (best.sf_account_id) sfPatch.sf_company_id = best.sf_account_id;
+            if (Object.keys(sfPatch).length) {
+              await domainPatch(domain,
+                `true_owners?true_owner_id=eq.${trueOwner.true_owner_id}`,
+                sfPatch,
+                'crossReferenceSalesforce:roFallback'
+              );
+              matched++;
+              console.log(`[crossReferenceSalesforce] linked true_owner "${trueOwner.name}" ` +
+                `→ SF via recorded_owner "${ro.name}" match`);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[crossReferenceSalesforce] error:', err?.message || err);
+  }
+
+  return { matched };
 }
 
 // ── Step 5d2: Upsert true owners (true buyer / true seller) ────────────────
@@ -3513,9 +3742,17 @@ async function promotePropertyAnchorRent(domain, propertyId, candidate) {
 
 /**
  * Upsert lease records in the domain database.
+ * Uses a parent-child consolidation model: extensions/renewals reference
+ * the original lease via parent_lease_id rather than creating independent rows.
+ *
  * Builds one lease record per tenant from metadata.tenants[].
  * Falls back to a single record from top-level fields if tenants[] is empty.
- * Deduplicates by property_id + tenant (case-insensitive).
+ * Deduplicates by property_id + tenant (case-insensitive, fuzzy for dialysis).
+ *
+ * When incoming dates differ from the active lease for the same tenant,
+ * the existing active lease is superseded and a new term is created.
+ * When dates match, the existing row is PATCHed with updated data.
+ *
  * Skips government domain (not yet supported).
  */
 async function upsertDomainLeases(domain, propertyId, metadata) {
@@ -3580,14 +3817,41 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     });
   }
 
-  // Fetch all existing leases for this property once
+  // Fetch all existing leases for this property (including superseded) with
+  // full date/term data so we can detect new terms vs. updates to existing terms.
   const existing = await domainQuery(
     domain, 'GET',
-    `leases?property_id=eq.${propertyId}&select=lease_id,tenant&limit=50`
+    `leases?property_id=eq.${propertyId}` +
+    `&select=lease_id,tenant,lease_start,lease_expiration,term_number,parent_lease_id,superseded_at,is_active` +
+    `&limit=50`
   );
+  const existingLeases = existing.data || [];
   const existingTenants = new Set(
-    (existing.data || []).map(l => l.tenant?.toLowerCase().trim())
+    existingLeases.map(l => l.tenant?.toLowerCase().trim())
   );
+
+  // Helper: find the original (root) lease for a tenant chain
+  function findOriginalLease(tenantKey) {
+    return existingLeases.find(l =>
+      l.tenant?.toLowerCase().trim() === tenantKey &&
+      !l.parent_lease_id &&
+      (l.term_number === 1 || l.term_number == null)
+    );
+  }
+
+  // Helper: find the current active lease for a tenant
+  function findActiveLease(tenantKey) {
+    return existingLeases.find(l =>
+      l.tenant?.toLowerCase().trim() === tenantKey &&
+      l.is_active && !l.superseded_at
+    );
+  }
+
+  // Helper: normalize date to YYYY-MM-DD for comparison
+  function normDateStr(d) {
+    if (!d) return null;
+    return String(d).slice(0, 10);
+  }
 
   let count = 0;
   for (const record of leaseRecords) {
@@ -3600,30 +3864,101 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     const tenantKey = record.tenant.toLowerCase().trim();
     let leaseId = null;
 
-    // Exact match first; then fuzzy match for dialysis (single-tenant properties
-    // where the same operator appears under slightly different names like
-    // "DaVita Kidney Care" vs "Davita Green Bay Dialysis" vs "DaVita Dialysis")
-    let existingLease = null;
+    // ── Tenant matching: exact first, then fuzzy for dialysis ──
+    let matchedLease = null;
+    let matchedTenantKey = tenantKey;
+
+    // Exact match — prefer active lease
     if (existingTenants.has(tenantKey)) {
-      existingLease = existing.data.find(
-        l => l.tenant?.toLowerCase().trim() === tenantKey
-      );
+      matchedLease = findActiveLease(tenantKey) ||
+        existingLeases.find(l => l.tenant?.toLowerCase().trim() === tenantKey);
     }
-    if (!existingLease && domain === 'dialysis') {
-      // Fuzzy: match if tenant names share a significant keyword (e.g. "davita")
+    // Fuzzy match for dialysis — single-tenant operators with name variants
+    if (!matchedLease && domain === 'dialysis') {
       const incomingWords = tenantKey.split(/\s+/).filter(w => w.length > 3);
-      existingLease = existing.data.find(l => {
+      for (const l of existingLeases) {
         const eName = l.tenant?.toLowerCase().trim() || '';
-        return incomingWords.some(w => eName.includes(w));
-      });
+        if (incomingWords.some(w => eName.includes(w))) {
+          matchedLease = l;
+          matchedTenantKey = eName;
+          break;
+        }
+      }
     }
-    if (existingLease) {
-      const { property_id: _pid, ...patchData } = cleaned;
-      await domainPatch(domain,
-        `leases?lease_id=eq.${existingLease.lease_id}`, patchData, 'upsertDomainLeases');
-      leaseId = existingLease.lease_id;
+
+    if (matchedLease) {
+      // ── Lease consolidation: decide PATCH vs. new term ──
+      const incomingStart = normDateStr(cleaned.lease_start);
+      const incomingExp = normDateStr(cleaned.lease_expiration);
+      const existingStart = normDateStr(matchedLease.lease_start);
+      const existingExp = normDateStr(matchedLease.lease_expiration);
+
+      const datesAreDifferent = (incomingStart && existingStart && incomingStart !== existingStart) ||
+        (incomingExp && existingExp && incomingExp !== existingExp);
+
+      // Only create a new term if BOTH incoming dates are present and differ
+      // from the existing active lease. If incoming has no dates or only one
+      // date differs, it's an update to the current term, not a new extension.
+      const isNewTerm = datesAreDifferent && incomingStart && incomingExp &&
+        matchedLease.is_active && !matchedLease.superseded_at;
+
+      if (isNewTerm) {
+        // ── New term detected → supersede the existing active lease, insert new term ──
+        const originalLeaseId = matchedLease.parent_lease_id || matchedLease.lease_id;
+        const maxTermNumber = Math.max(
+          ...existingLeases
+            .filter(l => (l.parent_lease_id || l.lease_id) === originalLeaseId)
+            .map(l => l.term_number || 1),
+          0
+        );
+
+        // Determine term_type: if there's a gap > 30 days, it's a renewal; otherwise extension
+        const gapDays = existingExp && incomingStart
+          ? (new Date(incomingStart) - new Date(existingExp)) / 86400000
+          : 0;
+        const termType = gapDays > 30 ? 'renewal' : 'extension';
+
+        // Supersede the existing active lease
+        await domainPatch(domain,
+          `leases?lease_id=eq.${matchedLease.lease_id}`,
+          { superseded_at: new Date().toISOString(), is_active: false },
+          'upsertDomainLeases:supersede'
+        );
+        console.log(`[upsertDomainLeases] superseded lease_id=${matchedLease.lease_id} ` +
+          `(term ${matchedLease.term_number || 1}) for new ${termType}`);
+
+        // Insert the new term
+        cleaned.parent_lease_id = originalLeaseId;
+        cleaned.term_number = maxTermNumber + 1;
+        cleaned.term_type = termType;
+
+        const result = await domainQuery(domain, 'POST', 'leases', cleaned);
+        if (!result.ok) {
+          console.error('[upsertDomainLeases] new term INSERT failed:', {
+            domain, propertyId, tenant: record.tenant,
+            status: result.status, error: result.data,
+          });
+          continue;
+        }
+        count++;
+        leaseId = Array.isArray(result.data) ? result.data[0]?.lease_id : result.data?.lease_id;
+        console.log(`[upsertDomainLeases] created new ${termType} lease_id=${leaseId} ` +
+          `term ${maxTermNumber + 1} for property=${propertyId}`);
+      } else {
+        // ── Same term or partial update → PATCH existing lease ──
+        const { property_id: _pid, ...patchData } = cleaned;
+        // Don't overwrite term metadata on a simple PATCH
+        delete patchData.term_number;
+        delete patchData.term_type;
+        delete patchData.parent_lease_id;
+        await domainPatch(domain,
+          `leases?lease_id=eq.${matchedLease.lease_id}`, patchData, 'upsertDomainLeases');
+        leaseId = matchedLease.lease_id;
+      }
     } else {
-      // INSERT new lease
+      // ── No existing lease for this tenant → INSERT as original term ──
+      cleaned.term_number = 1;
+      cleaned.term_type = 'original';
       const result = await domainQuery(domain, 'POST', 'leases', cleaned);
       if (!result.ok) {
         console.error('[upsertDomainLeases] INSERT failed:', {
