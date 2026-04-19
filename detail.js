@@ -4939,6 +4939,8 @@ function _udTabSales() {
   // Filter chips replace the old "X listings · Y sales" counter.
   const filter = _salesFilter || 'all';
   const events = allEvents.filter((e) => {
+    // Hide excluded/duplicate sales entirely
+    if (e.sale && e.sale.exclude_from_market_metrics === true) return false;
     if (filter === 'listings') return !!e.listing;
     if (filter === 'sales') return !!e.sale;
     return true;
