@@ -1543,7 +1543,17 @@ function _udTabRentRoll() {
         if (tStart || tEnd) html += `<span>${esc(tStart || '?')} → ${esc(tEnd || '?')}</span>`;
         if (tRent) html += `<span style="margin-left:12px;color:var(--green)">${esc(tRent)}</span>`;
         if (tArea) html += `<span style="margin-left:12px;color:var(--text2)">${esc(tArea)}</span>`;
-        if (tExpense) html += `<span style="margin-left:12px;color:var(--text3)">${esc(tExpense)}</span>`;
+        if (tExpense) {
+          let expDetail = tExpense;
+          // Build LL responsibilities note from lease fields
+          const llResp = [];
+          if (t.roof_responsibility === 'landlord') llResp.push('Roof');
+          if (t.structure_responsibility === 'landlord') llResp.push('Structure');
+          if (t.hvac_responsibility === 'landlord') llResp.push('HVAC');
+          if (t.parking_responsibility === 'landlord') llResp.push('Parking');
+          if (llResp.length) expDetail += ' (LL: ' + llResp.join(', ') + ')';
+          html += `<span style="margin-left:12px;color:var(--text3)">${esc(expDetail)}</span>`;
+        }
         html += '</div>';
         html += '</div></div>';
       });
@@ -2565,7 +2575,17 @@ function _udTabLease() {
       { label: 'Term Remaining',    row: termRow },
       { label: 'Annual Rent',       row: pick(l.annual_rent, em.annual_rent, moneyFmt) },
       { label: 'Rent PSF',          row: pick(l.rent_psf, em.rent_per_sf, moneyFmt) },
-      { label: 'Expense Structure', row: pick(l.expense_structure, em.expense_structure) },
+      { label: 'Expense Structure', row: (function() {
+        const base = pick(l.expense_structure, em.expense_structure);
+        if (!base.html) return base;
+        const llR = [];
+        if (l.roof_responsibility === 'landlord') llR.push('Roof');
+        if (l.structure_responsibility === 'landlord') llR.push('Structure');
+        if (l.hvac_responsibility === 'landlord') llR.push('HVAC');
+        if (l.parking_responsibility === 'landlord') llR.push('Parking');
+        if (llR.length) base.html += ' <span style="color:var(--text3);font-size:11px">(LL: ' + esc(llR.join(', ')) + ')</span>';
+        return base;
+      })() },
       { label: 'Renewal Options',   row: pick(l.renewal_options, em.renewal_options) },
       { label: 'Guarantor',         row: pick(l.guarantor, em.guarantor) },
       { label: 'Escalations',       row: esc_row },
