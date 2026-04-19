@@ -5369,7 +5369,7 @@ async function _udRenderDealHistoryAsync(bodyEl) {
       }).catch(() => null) : null;
       const [listRes, txnRes] = propertyId ? await Promise.all([
         qFn('available_listings', '*', { filter: `property_id=eq.${propId}`, order: 'listing_date.desc.nullslast', limit: 50 }).catch(() => []),
-        saleRes != null ? Promise.resolve(saleRes) : qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
+        (Array.isArray(saleRes) && saleRes.length > 0) ? Promise.resolve(saleRes) : qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
       ]) : [[], []];
       const txnArr = Array.isArray(txnRes) ? txnRes : (txnRes && txnRes.data) || [];
       const listArr = Array.isArray(listRes) ? listRes : (listRes && listRes.data) || [];
@@ -8363,10 +8363,10 @@ async function _intelRenderPriorSaleSummaryAsync() {
       latest = {
         sale_date: chainSale.transfer_date,
         price: chainSale.sale_price,
-        cap_rate: chainSale.cap_rate || null,
+        cap_rate: chainSale.stated_cap_rate || chainSale.calculated_cap_rate || chainSale.cap_rate || null,
         buyer_name: chainSale.recorded_owner_name || chainSale.true_owner_name || chainSale.to_owner || chainSale.new_owner || null,
-        seller_name: chainSale.from_owner || null,
-        broker_name: null,
+        seller_name: chainSale.seller_name || chainSale.from_owner || null,
+        broker_name: chainSale.listing_broker || null,
         source: 'Ownership chain',
         notes: null
       };
