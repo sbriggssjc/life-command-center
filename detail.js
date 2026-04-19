@@ -5481,7 +5481,7 @@ function _udTabDealHistory() {
   const filtered = events.filter(e => {
     if (filter === 'listings') return e.kind === 'sale' && !!e.listing;
     if (filter === 'sales')    return e.kind === 'sale' && !!e.sale;
-    if (filter === 'ownership') return e.kind === 'ownership';
+    if (filter === 'ownership') return e.kind === 'ownership' || (e.kind === 'sale' && !!e.chain);
     return true;
   });
 
@@ -5689,6 +5689,7 @@ async function _udRenderActivityLogAsync(bodyEl) {
   // 1. Sales + listing events (always present)
   (_salesCache?.transactions || []).forEach(t => {
     if (!t.sale_date) return;
+    if (t.exclude_from_market_metrics === true) return; // skip excluded/duplicate sales
     events.push({
       kind: 'sale',
       date: t.sale_date,
