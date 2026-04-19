@@ -1497,6 +1497,11 @@ function buildMetadata(ctx, domain) {
     sale_notes_raw: ctx.sale_notes_raw || null,
     document_links: ctx.document_links || [],
     documents: ctx.documents || [],
+    // Listing broker (from OM extraction)
+    listing_broker: ctx.listing_broker || null,
+    listing_firm: ctx.listing_firm || null,
+    listing_email: ctx.listing_email || null,
+    listing_phone: ctx.listing_phone || null,
     // PDF / OM ingestion tracking
     pdf_count: (ctx.pdf_extracted_texts || []).length || 0,
     pdf_extracted_texts: ctx.pdf_extracted_texts || [],

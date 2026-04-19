@@ -3798,16 +3798,26 @@ async function upsertDialysisListings(propertyId, metadata) {
   const contacts = metadata.contacts || [];
   const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
 
-  // Prefer a person (has email or phone) over a firm name
-  const brokerContacts = contacts.filter(
-    c => c.role === 'listing_broker' || c.role === 'buyer_broker'
-  );
-  const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
-  const personBroker = brokerContacts.find(
-    c => !FIRM_PATTERN.test(c.name) && (c.email || c.phones?.length)
-  );
-  const firmBroker = brokerContacts.find(c => FIRM_PATTERN.test(c.name));
-  const primaryBroker = personBroker || firmBroker || brokerContacts[0] || null;
+  // Priority 1: OM-extracted listing broker fields (specific to current listing)
+  // Priority 2: contacts array (may contain historical brokers from all sales)
+  let primaryBroker = null;
+  if (metadata.listing_broker) {
+    primaryBroker = {
+      name: metadata.listing_broker,
+      email: metadata.listing_email || null,
+    };
+  } else {
+    // Fallback: search contacts for listing_broker / buyer_broker
+    const brokerContacts = contacts.filter(
+      c => c.role === 'listing_broker' || c.role === 'buyer_broker'
+    );
+    const FIRM_PATTERN = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS|REALTY|PROPERTIES|CAPITAL|INVESTMENTS|COMMERCIAL|RETAIL|&)\b/i;
+    const personBroker = brokerContacts.find(
+      c => !FIRM_PATTERN.test(c.name) && (c.email || c.phones?.length)
+    );
+    const firmBroker = brokerContacts.find(c => FIRM_PATTERN.test(c.name));
+    primaryBroker = personBroker || firmBroker || brokerContacts[0] || null;
+  }
 
   // Guard: reject price_per_sf under $50 (cap rate leak) or over $2000
   // (CoStar sometimes shows building SF in the Price/SF position)
@@ -3847,6 +3857,17 @@ async function upsertDialysisListings(propertyId, metadata) {
     price_per_sf: safePricePsf,
   });
 
+  console.log('[upsertDialysisListings] building record:', {
+    propertyId: propertyIdInt,
+    asking_price_raw: metadata.asking_price,
+    asking_price_parsed: parseCurrency(metadata.asking_price),
+    cap_rate_raw: metadata.cap_rate,
+    cap_rate_parsed: listingCapRate,
+    broker: primaryBroker?.name || '(none)',
+    seller: sellerContact?.name || '(none)',
+    record_keys: Object.keys(record),
+  });
+
   // Always keep property_id, status, and is_active even after stripNulls
   record.property_id = propertyIdInt;
   record.status = 'Active';
@@ -3870,6 +3891,14 @@ async function upsertDialysisListings(propertyId, metadata) {
   );
 
   let currentListingId = null;
+
+  console.log('[upsertDialysisListings] dedup lookup:', {
+    propertyId: propertyIdInt,
+    lookup_ok: lookup.ok,
+    lookup_status: lookup.status,
+    lookup_count: lookup.data?.length || 0,
+    ninetyDaysAgo: ninetyDaysAgoPart,
+  });
 
   if (lookup.ok && lookup.data?.length) {
     // Update price and cap rate on the in-window active listing. listingCapRate
@@ -3897,7 +3926,15 @@ async function upsertDialysisListings(propertyId, metadata) {
     return 1;
   }
 
+  console.log('[upsertDialysisListings] attempting INSERT for property', propertyIdInt);
   const result = await domainQuery('dialysis', 'POST', 'available_listings', record);
+  console.log('[upsertDialysisListings] INSERT result:', {
+    propertyId: propertyIdInt,
+    ok: result.ok,
+    status: result.status,
+    data_type: typeof result.data,
+    data_preview: JSON.stringify(result.data)?.slice(0, 200),
+  });
   if (!result.ok) {
     console.error('[upsertDialysisListings] INSERT failed:', {
       propertyId: propertyIdInt,
