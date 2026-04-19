@@ -4303,7 +4303,7 @@ function _udTabOwnership() {
           ? '$' + Number(h.sale_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
           : 'Not Disclosed';
         // Cap rate: prefer stated, fall back to calculated
-        const capVal = h.stated_cap_rate || h.cap_rate || h.calculated_cap_rate || null;
+        const capVal = h.stated_cap_rate || h.calculated_cap_rate || h.cap_rate || null;
         const capStr = capVal ? _fmtCapRate(capVal) : '\u2014';
         const capSource = h.stated_cap_rate ? 'stated' : (h.calculated_cap_rate ? 'calc' : '');
 
@@ -4346,6 +4346,32 @@ function _udTabOwnership() {
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
         if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
         if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
+        // CRM coverage bar — shows what intel we have on this owner
+        {
+          const checks = [];
+          checks.push({ label: 'Identified', ok: !!h.true_owner_id });
+          checks.push({ label: 'Salesforce', ok: !!h.salesforce_id });
+          checks.push({ label: 'Prospecting', ok: !!h.prospecting_status });
+          checks.push({ label: 'Contacted', ok: !!h.last_contact_date });
+          const covered = checks.filter(c => c.ok).length;
+          const pct = Math.round((covered / checks.length) * 100);
+          const barColor = pct >= 75 ? 'var(--green,#34d399)' : pct >= 50 ? 'var(--yellow,#fbbf24)' : pct >= 25 ? '#f59e0b' : 'var(--red,#ef4444)';
+          html += '<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border,#2a2a2a)">';
+          html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
+          html += '<span style="font-size:10px;color:var(--text3);font-weight:600">CRM Coverage</span>';
+          html += `<span style="font-size:9px;color:${barColor};font-weight:700">${pct}%</span>`;
+          html += '</div>';
+          html += '<div style="display:flex;gap:1px;height:4px;border-radius:2px;overflow:hidden;background:var(--s3,#1a1a1a)">';
+          checks.forEach(c => {
+            html += `<div style="flex:1;background:${c.ok ? barColor : 'transparent'}" title="${esc(c.label)}: ${c.ok ? 'Yes' : 'Missing'}"></div>`;
+          });
+          html += '</div>';
+          html += '<div style="display:flex;gap:8px;margin-top:3px;flex-wrap:wrap">';
+          checks.forEach(c => {
+            html += `<span style="font-size:9px;color:${c.ok ? 'var(--text2)' : 'var(--text3,#555)'}">${c.ok ? '\u2713' : '\u2717'} ${c.label}</span>`;
+          });
+          html += '</div></div>';
+        }
         html += '</div>';
         html += '</div>';
       }
@@ -5591,8 +5617,9 @@ function _udDealRenderOwnership(h, db) {
   if (h.from_owner || h.seller_name) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">From:</span> <span style="color:var(--text)">${esc(h.from_owner || h.seller_name)}</span></div>`;
   if (h.buyer_name && h.buyer_name !== (h.recorded_owner_name || h.true_owner_name)) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(h.buyer_name)}</span></div>`;
   if (h.sale_price) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Sale:</span> <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span></div>`;
-  const _capVal = h.stated_cap_rate || h.cap_rate || h.calculated_cap_rate || null;
-  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${_fmtCapRate(_capVal)}</span>${h.stated_cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(stated)</span>' : (h.calculated_cap_rate && !h.cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(calc)</span>' : '')}</div>`;
+  const _capVal = h.stated_cap_rate || h.calculated_cap_rate || h.cap_rate || null;
+  const _capSrc = h.stated_cap_rate ? 'stated' : (h.calculated_cap_rate ? 'calc' : null);
+  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${_fmtCapRate(_capVal)}</span>${_capSrc ? ' <span style="font-size:9px;color:var(--text3)">(' + _capSrc + ')</span>' : ''}</div>`;
   if (h.listing_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(h.listing_broker)}</span></div>`;
   if (h.procuring_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(h.procuring_broker)}</span></div>`;
   if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:4px">Type: ${esc(h.ownership_type)}</div>`;
