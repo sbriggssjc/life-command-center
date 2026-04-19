@@ -355,7 +355,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     if (db === 'dia' && Array.isArray(leases) && leases.length > 0) {
       _udFetchLeaseEnrichment(leases).then((enrichment) => {
         if (!_udCache) return;
-        _setUdCache({ ..._udCache, leaseExtensions: enrichment.extensions, leaseRentSchedule: enrichment.schedule });
+        _setUdCache({ ..._udCache, leaseExtensions: enrichment.extensions, leaseRentSchedule: enrichment.schedule, leaseOptions: enrichment.options || new Map() });
         // Re-render if the Rent Roll tab is currently active
         const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
         const activeLabel = activeTabEl ? activeTabEl.textContent.trim() : '';
@@ -1389,6 +1389,7 @@ function _udTabRentRoll() {
   const em = _udCache.entityMeta || {};
   const schedMap = _udCache.leaseRentSchedule instanceof Map ? _udCache.leaseRentSchedule : new Map();
   const extMap = _udCache.leaseExtensions instanceof Map ? _udCache.leaseExtensions : new Map();
+  const optMap = _udCache.leaseOptions instanceof Map ? _udCache.leaseOptions : new Map();
 
   const hasEntityMeta = !!(em && (em.tenant_name || em.lease_commencement ||
     em.lease_expiration || em.annual_rent || em.rent_per_sf ||
@@ -1401,21 +1402,50 @@ function _udTabRentRoll() {
 
   const leasesForRoll = leases.length > 0 ? leases : [{}];
   let html = '';
-
-  // Tenant summary header — each tenant is a link that opens the TenantDrawer.
-  // "Current Rent" follows the source-tier policy in _udPickCurrentRent:
-  // prefer the property's anchor_rent (tier 1/2/6) projected to today, fall
-  // back to the lease row (tier 3/4/5). last_known_rent is never displayed.
   const property = _udCache.property || {};
-  leasesForRoll.forEach((l) => {
-    const tenantName = l.tenant || em.tenant_name || '';
-    if (!tenantName) return;
-    const commencement = _fmtDate(l.lease_start || em.lease_commencement);
-    const expiration = _fmtDate(l.lease_expiration || em.lease_expiration);
-    const live = l.lease_id ? extMap.get(l.lease_id) : null;
 
-    const picked = _udPickCurrentRent(property, l, em);
-    const baseRent = l.annual_rent != null ? Number(l.annual_rent)
+  // ── Group leases by tenant (parent_lease_id chain) ─────────────────────
+  // A "chain" is the original lease + all extensions/renewals that share a
+  // parent_lease_id. Leases without parent_lease_id that share the same
+  // tenant name are also grouped together.
+  const tenantGroups = _udGroupLeasesByTenant(leasesForRoll);
+
+  tenantGroups.forEach((group) => {
+    const { tenantName, terms, isActive } = group;
+    if (!tenantName) return;
+
+    // The "primary" term is the active one (is_active=true), or the latest by expiration
+    const activeTerm = terms.find(t => t.is_active === true || t.is_active === 'true')
+      || terms.reduce((best, t) => {
+        const d = t.lease_expiration || t.expiration_date;
+        if (!d) return best;
+        if (!best) return t;
+        return new Date(d) > new Date(best.lease_expiration || best.expiration_date) ? t : best;
+      }, null)
+      || terms[0];
+
+    // Earliest commencement across all terms
+    const earliestStart = terms.reduce((earliest, t) => {
+      const d = t.lease_start || t.lease_commencement;
+      if (!d) return earliest;
+      if (!earliest) return d;
+      return new Date(d) < new Date(earliest) ? d : earliest;
+    }, null) || em.lease_commencement;
+
+    // Latest expiration across all terms
+    const latestEnd = terms.reduce((latest, t) => {
+      const d = t.lease_expiration || t.expiration_date;
+      if (!d) return latest;
+      if (!latest) return d;
+      return new Date(d) > new Date(latest) ? d : latest;
+    }, null) || em.lease_expiration;
+
+    const commencement = _fmtDate(earliestStart);
+    const expiration = _fmtDate(latestEnd);
+    const live = activeTerm.lease_id ? extMap.get(activeTerm.lease_id) : null;
+
+    const picked = _udPickCurrentRent(property, activeTerm, em);
+    const baseRent = activeTerm.annual_rent != null ? Number(activeTerm.annual_rent)
                    : (em.annual_rent != null ? Number(em.annual_rent) : null);
     const showBaseHint = picked && baseRent != null && picked.bumps_applied !== 0 &&
       Math.round(baseRent) !== Math.round(picked.rent);
@@ -1433,13 +1463,22 @@ function _udTabRentRoll() {
       ? `Tier ${picked.tier} — ${picked.source} · anchor $${fmtN(Math.round(picked.anchor_rent))} as of ${_fmtDate(picked.anchor_date)} · ${picked.bumps_applied} bump(s) applied`
       : '';
 
+    // ── Tenant Header ─────────────────────────────────────────────────────
     html += '<div class="detail-section"><div class="detail-section-title">Tenant</div>';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">';
-    html += `<div style="font-size:15px;font-weight:700">${_udTenantLink(tenantName, l, em)}</div>`;
-    if (l.guarantor || em.guarantor) {
-      html += `<div style="font-size:11px;color:var(--text3)">Guarantor: <span style="color:var(--text)">${esc(l.guarantor || em.guarantor)}</span></div>`;
+    html += `<div style="font-size:15px;font-weight:700">${_udTenantLink(tenantName, activeTerm, em)}`;
+    if (isActive) {
+      html += ' <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--green);color:#fff;font-weight:600;margin-left:6px">Active</span>';
+    } else {
+      html += ' <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--red);color:#fff;font-weight:600;margin-left:6px">Expired</span>';
     }
     html += '</div>';
+    if (activeTerm.guarantor || em.guarantor) {
+      html += `<div style="font-size:11px;color:var(--text3)">Guarantor: <span style="color:var(--text)">${esc(activeTerm.guarantor || em.guarantor)}</span></div>`;
+    }
+    html += '</div>';
+
+    // KPI row
     html += '<div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;font-size:12px">';
     if (commencement && commencement !== '—') html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Commencement</div><div>${esc(commencement)}</div></div>`;
     if (expiration && expiration !== '—') html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Expiration</div><div>${esc(expiration)}</div></div>`;
@@ -1454,12 +1493,152 @@ function _udTabRentRoll() {
     if (live) {
       html += `<div><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Extensions</div><div>${fmtN(Number(live.extension_count))}${live.last_extension_date ? ' · ' + esc(_fmtDate(live.last_extension_date)) : ''}</div></div>`;
     }
-    html += '</div></div>';
+    html += '</div>';
+
+    // ── Lease Terms Timeline ──────────────────────────────────────────────
+    if (terms.length > 1) {
+      html += '<div style="margin-top:14px">';
+      html += '<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Lease Term History</div>';
+      html += '<div style="position:relative;padding-left:20px">';
+      html += '<div style="position:absolute;left:6px;top:4px;bottom:4px;width:2px;background:var(--border);border-radius:1px"></div>';
+
+      // Sort terms chronologically
+      const sortedTerms = [...terms].sort((a, b) => {
+        const da = new Date(a.lease_start || a.lease_commencement || 0);
+        const db2 = new Date(b.lease_start || b.lease_commencement || 0);
+        return da - db2;
+      });
+
+      sortedTerms.forEach((t) => {
+        const tType = t.term_type || (t.parent_lease_id ? 'extension' : 'original');
+        const tNum = t.term_number || 1;
+        const isActiveTerm = t.is_active === true || t.is_active === 'true';
+        const dotColor = isActiveTerm ? 'var(--green)' : 'var(--text3)';
+        const typeLabel = tType === 'original' ? 'Original' : tType === 'extension' ? 'Extension' : tType === 'renewal' ? 'Renewal' : (tType.charAt(0).toUpperCase() + tType.slice(1));
+        const tStart = _fmtDate(t.lease_start || t.lease_commencement);
+        const tEnd = _fmtDate(t.lease_expiration || t.expiration_date);
+        const tRent = t.annual_rent ? fmt(t.annual_rent) : null;
+        const tArea = t.leased_area ? fmtN(t.leased_area) + ' SF' : null;
+        const tExpense = t.expense_structure || null;
+
+        html += '<div style="position:relative;margin-bottom:10px">';
+        html += `<div style="position:absolute;left:-17px;top:4px;width:8px;height:8px;border-radius:50%;background:${dotColor};border:2px solid var(--bg)"></div>`;
+        html += '<div style="background:var(--s2);border-radius:8px;padding:10px 12px;border:1px solid var(--border)">';
+        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">`;
+        html += `<span style="font-size:11px;font-weight:700;color:${isActiveTerm ? 'var(--green)' : 'var(--text2)'}">${esc(typeLabel)} (Term ${tNum})</span>`;
+        if (isActiveTerm) html += '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600">Active</span>';
+        if (t.superseded_at) html += `<span style="font-size:9px;color:var(--text3)">Superseded ${esc(_fmtDate(t.superseded_at))}</span>`;
+        html += '</div>';
+        html += '<div style="font-size:12px;color:var(--text)">';
+        if (tStart || tEnd) html += `<span>${esc(tStart || '?')} → ${esc(tEnd || '?')}</span>`;
+        if (tRent) html += `<span style="margin-left:12px;color:var(--green)">${esc(tRent)}</span>`;
+        if (tArea) html += `<span style="margin-left:12px;color:var(--text2)">${esc(tArea)}</span>`;
+        if (tExpense) html += `<span style="margin-left:12px;color:var(--text3)">${esc(tExpense)}</span>`;
+        html += '</div>';
+        html += '</div></div>';
+      });
+      html += '</div></div>';
+    }
+
+    // ── Renewal Options ───────────────────────────────────────────────────
+    // Collect options from all leases in this chain
+    const chainOptions = [];
+    terms.forEach(t => {
+      const opts = t.lease_id ? (optMap.get(t.lease_id) || []) : [];
+      chainOptions.push(...opts);
+    });
+    // Also check renewal_options text from the lease or entity metadata
+    const renewalText = activeTerm.renewal_options || activeTerm.renewal_options_short || em.renewal_options;
+
+    if (chainOptions.length > 0 || renewalText) {
+      html += '<div style="margin-top:10px">';
+      html += '<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Renewal / Extension Options</div>';
+      if (chainOptions.length > 0) {
+        chainOptions.forEach(opt => {
+          const optType = opt.option_type ? (opt.option_type.charAt(0).toUpperCase() + opt.option_type.slice(1)) : 'Option';
+          const optYears = opt.option_term_years ? opt.option_term_years + ' yr' : '';
+          const optTerms = opt.option_rent_terms || '';
+          const optExercised = opt.exercised_date ? ' — Exercised ' + _fmtDate(opt.exercised_date) : '';
+          html += `<div style="font-size:12px;padding:4px 0;color:var(--text)">`;
+          html += `<span style="color:var(--accent);font-weight:600">#${opt.option_number || '?'}</span> `;
+          html += `${esc(optType)}${optYears ? ' · ' + esc(optYears) : ''}`;
+          if (optTerms) html += ` <span style="color:var(--text3)">· ${esc(optTerms)}</span>`;
+          if (optExercised) html += `<span style="color:var(--green);font-size:11px">${esc(optExercised)}</span>`;
+          html += '</div>';
+        });
+      } else if (renewalText) {
+        html += `<div style="font-size:12px;color:var(--text)">${esc(renewalText)}</div>`;
+      }
+      html += '</div>';
+    }
+
+    html += '</div>'; // close detail-section
   });
 
   // Structured schedule with bumps (existing renderer).
   html += _udRenderRentRoll(leasesForRoll, schedMap, em);
   return html;
+}
+
+/**
+ * Group leases into tenant chains based on parent_lease_id or matching tenant name.
+ * Returns array of { tenantName, terms: [...leases], isActive }.
+ */
+function _udGroupLeasesByTenant(leases) {
+  if (!Array.isArray(leases) || leases.length === 0) return [];
+
+  // Build parent→child map
+  const byId = new Map();
+  leases.forEach(l => { if (l.lease_id) byId.set(l.lease_id, l); });
+
+  // Find root lease for each lease (walk up parent chain)
+  function findRoot(l) {
+    const visited = new Set();
+    let current = l;
+    while (current.parent_lease_id && byId.has(current.parent_lease_id) && !visited.has(current.parent_lease_id)) {
+      visited.add(current.lease_id);
+      current = byId.get(current.parent_lease_id);
+    }
+    return current;
+  }
+
+  // Group by root lease_id or by tenant name
+  const groups = new Map();
+  leases.forEach(l => {
+    let groupKey;
+    if (l.parent_lease_id || (l.lease_id && leases.some(o => o.parent_lease_id === l.lease_id))) {
+      // Part of a parent chain — group by root
+      const root = findRoot(l);
+      groupKey = 'chain:' + (root.lease_id || root.tenant || '');
+    } else {
+      // Standalone lease — group by tenant name
+      groupKey = 'tenant:' + (l.tenant || '').toLowerCase().trim();
+    }
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(l);
+  });
+
+  // Convert to output format
+  const result = [];
+  groups.forEach((terms) => {
+    // Determine tenant name from the most prominent lease
+    const tenantName = terms.reduce((best, t) => t.tenant || best, '') || '';
+    // Check if any term is active
+    const isActive = terms.some(t => t.is_active === true || t.is_active === 'true')
+      || terms.some(t => {
+        const exp = t.lease_expiration || t.expiration_date;
+        return exp && new Date(exp) > new Date();
+      });
+    result.push({ tenantName, terms, isActive });
+  });
+
+  // Sort: active tenants first, then alphabetically
+  result.sort((a, b) => {
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    return (a.tenantName || '').localeCompare(b.tenantName || '');
+  });
+
+  return result;
 }
 
 /** Build a clickable tenant link that opens the TenantDrawer. */
@@ -1751,9 +1930,16 @@ async function _udFetchLeaseEnrichment(leases) {
   const idList = leaseIds.join(',');
   const filter = `lease_id=in.(${idList})`;
 
-  const [extRes, schRes] = await Promise.allSettled([
+  // Also fetch lease_options for renewal/extension option display
+  const propertyIds = [...new Set(leases.map(l => l.property_id).filter(Boolean))];
+  const optFilter = propertyIds.length > 0
+    ? `property_id=in.(${propertyIds.join(',')})`
+    : filter;
+
+  const [extRes, schRes, optRes] = await Promise.allSettled([
     diaQuery('v_lease_extensions_summary', '*', { filter, limit: 100 }).catch(() => []),
     diaQuery('lease_rent_schedule', '*', { filter, order: 'lease_year.asc', limit: 500 }).catch(() => []),
+    diaQuery('lease_options', '*', { filter: optFilter, order: 'option_number.asc', limit: 100 }).catch(() => []),
   ]);
 
   const extract = (r) => {
@@ -1774,7 +1960,14 @@ async function _udFetchLeaseEnrichment(leases) {
     if (!schedule.has(row.lease_id)) schedule.set(row.lease_id, []);
     schedule.get(row.lease_id).push(row);
   }
-  return { extensions, schedule };
+  // Lease options keyed by lease_id
+  const options = new Map();
+  for (const row of extract(optRes)) {
+    const key = row.lease_id;
+    if (!options.has(key)) options.set(key, []);
+    options.get(key).push(row);
+  }
+  return { extensions, schedule, options };
 }
 
 // ── Rent source-tier policy ───────────────────────────────────────────────
@@ -2583,7 +2776,17 @@ function _udTabOperations() {
     const now = new Date();
     leaseMonths = Math.round((expDate - now) / (1000 * 60 * 60 * 24 * 30.44));
   } else if (_udCache.leases && _udCache.leases.length > 0) {
-    const primaryLease = _udCache.leases[0];
+    // Prefer the active lease (is_active=true); fall back to the lease with latest expiration
+    const activeLease = _udCache.leases.find(ll => ll.is_active === true || ll.is_active === 'true')
+      || _udCache.leases.reduce((best, ll) => {
+        const d = ll.expiration_date || ll.lease_expiration;
+        if (!d) return best;
+        if (!best) return ll;
+        const bestD = best.expiration_date || best.lease_expiration;
+        return new Date(d) > new Date(bestD) ? ll : best;
+      }, null)
+      || _udCache.leases[0];
+    const primaryLease = activeLease;
     if (primaryLease.expiration_date || primaryLease.lease_expiration) {
       const expDate = new Date(primaryLease.expiration_date || primaryLease.lease_expiration);
       const now = new Date();
@@ -4069,16 +4272,47 @@ function _udTabOwnership() {
         const priceStr = h.sale_price
           ? '$' + Number(h.sale_price).toLocaleString(undefined, { maximumFractionDigits: 0 })
           : 'Not Disclosed';
-        const capStr = h.cap_rate ? Number(h.cap_rate).toFixed(2) + '%' : '\u2014';
+        // Cap rate: prefer stated, fall back to calculated
+        const capVal = h.stated_cap_rate || h.cap_rate || h.calculated_cap_rate || null;
+        const capStr = capVal ? Number(capVal).toFixed(2) + '%' : '\u2014';
+        const capSource = h.stated_cap_rate ? 'stated' : (h.calculated_cap_rate ? 'calc' : '');
+
+        // Prospecting status badge
+        let prospectBadge = '';
+        if (isCurrent && h.prospecting_status) {
+          const ps = String(h.prospecting_status).toLowerCase();
+          const daysSinceContact = h.last_contact_date
+            ? Math.floor((Date.now() - new Date(h.last_contact_date).getTime()) / (1000 * 60 * 60 * 24))
+            : null;
+          let badgeColor, badgeLabel;
+          if (ps === 'active' && daysSinceContact != null && daysSinceContact > 180) {
+            badgeColor = 'var(--yellow)'; badgeLabel = 'Stale (' + daysSinceContact + 'd)';
+          } else if (ps === 'active') {
+            badgeColor = 'var(--green)'; badgeLabel = 'Active' + (daysSinceContact != null ? ' (' + daysSinceContact + 'd ago)' : '');
+          } else if (ps === 'passive') {
+            badgeColor = 'var(--yellow)'; badgeLabel = 'Passive';
+          } else if (ps === 'do_not_contact') {
+            badgeColor = 'var(--red)'; badgeLabel = 'Do Not Contact';
+          } else {
+            badgeColor = 'var(--text3)'; badgeLabel = 'Not Prospecting';
+          }
+          prospectBadge = ` <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:rgba(255,255,255,0.06);color:${badgeColor};border:1px solid ${badgeColor};font-weight:600;margin-left:6px;white-space:nowrap" title="Prospecting: ${esc(ps)}${daysSinceContact != null ? ' · Last contact ' + daysSinceContact + ' days ago' : ''}">${esc(badgeLabel)}</span>`;
+        } else if (isCurrent && !h.prospecting_status) {
+          prospectBadge = ' <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:rgba(251,191,36,0.08);color:var(--yellow);border:1px solid rgba(251,191,36,0.25);font-weight:600;margin-left:6px" title="No prospecting status set">No Status</span>';
+        }
 
         html += `<div class="detail-timeline-item ${statusClass}">`;
-        html += `<div class="detail-card-date">${esc(startStr)} \u2192 ${esc(endStr)}${isCurrent ? ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>' : ''}</div>`;
+        html += `<div class="detail-card-date">${esc(startStr)} \u2192 ${esc(endStr)}${isCurrent ? ' <span class="detail-badge" style="background:var(--green);color:#fff;margin-left:6px">Current</span>' : ''}${prospectBadge}</div>`;
         html += `<div class="detail-card-title">${_ownerLink(ownerLabel, _ownerCtxFromChain(h, db))}</div>`;
         html += '<div class="detail-card-body">';
         if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
           html += `<span style="font-size:12px;color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}<br>`;
         }
-        html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span style="color:var(--text3)">|</span> Cap rate: ${esc(capStr)}</div>`;
+        html += `<div style="font-size:12px">Sale price: <span class="mono" style="color:var(--green)">${esc(priceStr)}</span> <span style="color:var(--text3)">|</span> Cap rate: <span${capSource ? ' title="' + esc(capSource) + '"' : ''}>${esc(capStr)}</span></div>`;
+        if (h.listing_broker) html += `<div style="font-size:11px;color:var(--text2);margin-top:2px">Listing Broker: ${esc(h.listing_broker)}</div>`;
+        if (h.procuring_broker) html += `<div style="font-size:11px;color:var(--text2)">Procuring Broker: ${esc(h.procuring_broker)}</div>`;
+        if (h.buyer_name) html += `<div style="font-size:11px;color:var(--text2)">Buyer: ${esc(h.buyer_name)}</div>`;
+        if (h.seller_name) html += `<div style="font-size:11px;color:var(--text2)">Seller: ${esc(h.seller_name)}</div>`;
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
         if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
         if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
@@ -4871,9 +5105,11 @@ function _salesRenderSale(s) {
   const buyer = s.buyer_name || s.buyer;
   const seller = s.seller_name || s.seller;
   const broker = s.broker_name || s.listing_broker;
+  const procBroker = s.procuring_broker || null;
   if (buyer)  html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(buyer)}</span></div>`;
   if (seller) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Seller:</span> <span style="color:var(--text)">${esc(seller)}</span></div>`;
   if (broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
+  if (procBroker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(procBroker)}</span></div>`;
   if (s.source) {
     html += `<div style="font-size:11px;color:var(--text3);margin-top:6px;font-style:italic">${esc(s.source)}</div>`;
   }
@@ -4967,8 +5203,12 @@ function _salesRenderCombined(l, s) {
 
   // Broker: prefer sale record, fall back to listing
   const broker = s.broker_name || s.listing_broker || l.listing_broker;
+  const procBroker2 = s.procuring_broker || null;
   if (broker) {
     html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(broker)}</span></div>`;
+  }
+  if (procBroker2) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(procBroker2)}</span></div>`;
   }
 
   if (s.source) {
@@ -5241,6 +5481,7 @@ function _udDealRenderSale(s) {
   const buyer = s.buyer_name || s.buyer;
   const seller = s.seller_name || s.seller;
   const broker = s.broker_name || s.listing_broker;
+  const procBroker = s.procuring_broker;
   if (buyer) {
     html = html.replace(
       new RegExp('(<span style="color:var\\(--text3\\)">Buyer:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(buyer)) + '</span>'),
@@ -5257,6 +5498,12 @@ function _udDealRenderSale(s) {
     html = html.replace(
       new RegExp('(<span style="color:var\\(--text3\\)">Listing Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(broker)) + '</span>'),
       '$1' + _udBrokerLink(broker, s)
+    );
+  }
+  if (procBroker) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Procuring Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(procBroker)) + '</span>'),
+      '$1' + _udBrokerLink(procBroker, s)
     );
   }
   return html;
@@ -5267,6 +5514,7 @@ function _udDealRenderCombined(l, s) {
   const buyer = s.buyer_name || s.buyer;
   const seller = s.seller_name || s.seller;
   const broker = s.broker_name || s.listing_broker || l.listing_broker;
+  const procBroker = s.procuring_broker;
   if (buyer) {
     html = html.replace(
       new RegExp('(<span style="color:var\\(--text3\\)">Buyer:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(buyer)) + '</span>'),
@@ -5283,6 +5531,12 @@ function _udDealRenderCombined(l, s) {
     html = html.replace(
       new RegExp('(<span style="color:var\\(--text3\\)">Listing Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(broker)) + '</span>'),
       '$1' + _udBrokerLink(broker, s)
+    );
+  }
+  if (procBroker) {
+    html = html.replace(
+      new RegExp('(<span style="color:var\\(--text3\\)">Procuring Broker:</span> )<span style="color:var\\(--text\\)">' + _reEsc(esc(procBroker)) + '</span>'),
+      '$1' + _udBrokerLink(procBroker, s)
     );
   }
   return html;
@@ -5304,9 +5558,13 @@ function _udDealRenderOwnership(h, db) {
   if (h.true_owner_name && h.recorded_owner_name && h.true_owner_name !== h.recorded_owner_name) {
     html += `<div style="font-size:12px;color:var(--text2);margin-bottom:4px"><span style="color:var(--text3)">True Owner:</span> ${_ownerLink(h.true_owner_name, Object.assign(_ownerCtxFromChain(h, db), { name: h.true_owner_name }))}</div>`;
   }
-  if (h.from_owner) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">From:</span> <span style="color:var(--text)">${esc(h.from_owner)}</span></div>`;
+  if (h.from_owner || h.seller_name) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">From:</span> <span style="color:var(--text)">${esc(h.from_owner || h.seller_name)}</span></div>`;
+  if (h.buyer_name && h.buyer_name !== (h.recorded_owner_name || h.true_owner_name)) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Buyer:</span> <span style="color:var(--text)">${esc(h.buyer_name)}</span></div>`;
   if (h.sale_price) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Sale:</span> <span class="mono" style="color:var(--green)">${fmt(h.sale_price)}</span></div>`;
-  if (h.cap_rate) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${Number(h.cap_rate).toFixed(2)}%</span></div>`;
+  const _capVal = h.stated_cap_rate || h.cap_rate || h.calculated_cap_rate || null;
+  if (_capVal) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Cap Rate:</span> <span style="color:var(--text)">${Number(_capVal).toFixed(2)}%</span>${h.stated_cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(stated)</span>' : (h.calculated_cap_rate && !h.cap_rate ? ' <span style="font-size:9px;color:var(--text3)">(calc)</span>' : '')}</div>`;
+  if (h.listing_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Listing Broker:</span> <span style="color:var(--text)">${esc(h.listing_broker)}</span></div>`;
+  if (h.procuring_broker) html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Procuring Broker:</span> <span style="color:var(--text)">${esc(h.procuring_broker)}</span></div>`;
   if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:4px">Type: ${esc(h.ownership_type)}</div>`;
   if (h.ownership_source) html += `<div style="font-size:11px;color:var(--text3)">Source: ${esc(h.ownership_source)}</div>`;
 

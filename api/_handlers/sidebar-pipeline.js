@@ -2311,6 +2311,8 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
       await closeActiveListingsOnSale(
         domain, propertyId, datePart, saleData.sold_price, existing.sale_id
       );
+      // Link brokers from text fields to sale_brokers table
+      await linkSaleBrokers(domain, existing.sale_id, saleData);
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -2329,11 +2331,58 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
         await closeActiveListingsOnSale(
           domain, propertyId, datePart, saleData.sold_price, newSaleId
         );
+        // Link brokers from text fields to sale_brokers table
+        await linkSaleBrokers(domain, newSaleId, saleData);
       }
     }
   }
 
   return count;
+}
+
+// ── Link sale_brokers table from listing_broker / procuring_broker text ──────
+async function linkSaleBrokers(domain, saleId, saleData) {
+  if (!saleId || domain !== 'dialysis') return;
+  const brokerFields = [
+    { text: saleData.listing_broker, role: 'listing' },
+    { text: saleData.procuring_broker, role: 'procuring' },
+  ];
+  for (const { text, role } of brokerFields) {
+    if (!text || text.length < 2) continue;
+    try {
+      // Normalize for lookup
+      const normalized = text.trim().toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      // Find existing broker by normalized_name or broker_name
+      let brokerLookup = await domainQuery(domain, 'GET',
+        `brokers?normalized_name=eq.${encodeURIComponent(normalized)}&select=broker_id&limit=1`
+      );
+      let brokerId = brokerLookup.ok && brokerLookup.data?.length
+        ? brokerLookup.data[0].broker_id : null;
+      // Fallback: case-insensitive name match
+      if (!brokerId) {
+        brokerLookup = await domainQuery(domain, 'GET',
+          `brokers?broker_name=ilike.${encodeURIComponent(text.trim())}&select=broker_id&limit=1`
+        );
+        brokerId = brokerLookup.ok && brokerLookup.data?.length
+          ? brokerLookup.data[0].broker_id : null;
+      }
+      if (brokerId) {
+        // Check if already linked
+        const existing = await domainQuery(domain, 'GET',
+          `sale_brokers?sale_id=eq.${saleId}&broker_id=eq.${brokerId}&role=eq.${role}&select=sale_broker_id&limit=1`
+        );
+        if (!existing.data?.length) {
+          await domainQuery(domain, 'POST', 'sale_brokers', {
+            sale_id: saleId, broker_id: brokerId, role
+          });
+          console.log(`[linkSaleBrokers] linked broker_id=${brokerId} (${text}) as ${role} on sale_id=${saleId}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[linkSaleBrokers] error linking ${role} broker "${text}":`, err?.message);
+    }
+  }
 }
 
 // ── Alert BD team on new dialysis sale capture ──────────────────────────────
@@ -3822,7 +3871,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   const existing = await domainQuery(
     domain, 'GET',
     `leases?property_id=eq.${propertyId}` +
-    `&select=lease_id,tenant,lease_start,lease_expiration,term_number,parent_lease_id,superseded_at,is_active` +
+    `&select=lease_id,tenant,lease_start,lease_expiration,term_number,parent_lease_id,superseded_at,is_active,leased_area,renewal_options,expense_structure,operator` +
     `&limit=50`
   );
   const existingLeases = existing.data || [];
@@ -3927,6 +3976,17 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         console.log(`[upsertDomainLeases] superseded lease_id=${matchedLease.lease_id} ` +
           `(term ${matchedLease.term_number || 1}) for new ${termType}`);
 
+        // Carry forward leased_area, operator, expense_structure from parent if incoming is null
+        const parentLease = existingLeases.find(l => l.lease_id === originalLeaseId) || matchedLease;
+        if (!cleaned.leased_area && parentLease?.leased_area) {
+          cleaned.leased_area = parentLease.leased_area;
+          console.log(`[upsertDomainLeases] propagating leased_area=${parentLease.leased_area} from parent`);
+        }
+        if (!cleaned.operator && parentLease?.operator) cleaned.operator = parentLease.operator;
+        if (!cleaned.expense_structure && parentLease?.expense_structure) {
+          cleaned.expense_structure = parentLease.expense_structure;
+        }
+
         // Insert the new term
         cleaned.parent_lease_id = originalLeaseId;
         cleaned.term_number = maxTermNumber + 1;
@@ -3979,6 +4039,33 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     // Write escalation data from CoStar estimated rent range
     if (domain === 'dialysis' && leaseId) {
       await upsertLeaseEscalations(propertyId, leaseId, metadata);
+
+      // ── Parse and create lease_options from renewal_options text ──
+      // Common formats: "2, 5yr" → two 5-year renewal options
+      //                 "3x5" → three 5-year options
+      //                 "1, 10yr" → one 10-year option
+      const renewalText = record.renewal_options || metadata.renewal_options;
+      if (renewalText) {
+        try {
+          const optMatch = String(renewalText).match(/(\d+)\s*[,x×]\s*(\d+)\s*(?:yr|year)?/i);
+          if (optMatch) {
+            const optCount = parseInt(optMatch[1], 10);
+            const optYears = parseInt(optMatch[2], 10);
+            for (let i = 1; i <= optCount; i++) {
+              await domainQuery(domain, 'POST', 'lease_options', {
+                lease_id: leaseId,
+                property_id: propertyId,
+                option_number: i,
+                option_type: 'renewal',
+                option_term_years: optYears,
+              }, { onConflict: 'lease_id,option_number', merge: 'option_type,option_term_years' });
+            }
+            console.log(`[upsertDomainLeases] created ${optCount} renewal options (${optYears}yr each) for lease_id=${leaseId}`);
+          }
+        } catch (optErr) {
+          console.warn('[upsertDomainLeases] lease_options parse error:', optErr?.message);
+        }
+      }
 
       // ── Lease field provenance: track underwriting-critical fields ──
       // Uses upsert_lease_field() which checks source tier before overwriting,
