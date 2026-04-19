@@ -944,11 +944,16 @@ async function loadPropertyTab() {
             saleMatch.om_url = url;
           }
 
-          // Always merge ALL OM fields into top-level too (don't overwrite existing).
-          // The first OM ingested (current listing) populates top-level.
-          // Subsequent OMs enrich sale records but won't overwrite top-level.
-          for (const field of allOmFields) {
-            if (metrics[field] && !ctx[field]) ctx[field] = metrics[field];
+          // Route OM data correctly:
+          // - If the OM matched a sale record, it belongs to THAT sale — don't
+          //   merge into top-level (avoids historical lease terms overwriting
+          //   current listing context).
+          // - If no sale match (current listing OM), ALWAYS overwrite top-level
+          //   fields so the most recent OM wins for lease_commencement, etc.
+          if (!saleMatch) {
+            for (const field of allOmFields) {
+              if (metrics[field]) ctx[field] = metrics[field];
+            }
           }
 
           chrome.storage.session.set({ pageContext: ctx }, () => {

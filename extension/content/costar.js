@@ -224,10 +224,8 @@
     if (location.zip) accumulated.zip = location.zip;
 
     // ── Derive top-level sale_date / sale_price from most recent in history ──
-    // Only set these if not already captured from the Summary tab stat card.
-    // The Summary tab's values represent the current listing state and are
-    // authoritative; the derivation is a fallback for properties without a
-    // Summary-captured sale_price.
+    // sales_history is authoritative: always prefer the most recent sale's
+    // data over stat-card values, which can show a different (older) sale.
     if (accumulated.sales_history && accumulated.sales_history.length > 0) {
       let mostRecent = null;
       let mostRecentDate = null;
@@ -239,8 +237,11 @@
         }
       }
       if (mostRecent) {
-        if (!accumulated.sale_date) accumulated.sale_date = mostRecent.sale_date;
-        if (!accumulated.sale_price && mostRecent.sale_price) accumulated.sale_price = mostRecent.sale_price;
+        // Always overwrite stat-card sale_date/sale_price with the most
+        // recent sales_history entry — CoStar's "Sale Price" stat card
+        // sometimes shows a different (older) sale than the most recent.
+        if (mostRecent.sale_date) accumulated.sale_date = mostRecent.sale_date;
+        if (mostRecent.sale_price) accumulated.sale_price = mostRecent.sale_price;
         if (!accumulated.cap_rate && mostRecent.cap_rate) accumulated.cap_rate = mostRecent.cap_rate;
       }
     }
@@ -426,9 +427,10 @@
         const eDate = normalizeSaleDate(e.sale_date);
         if (eDate !== sDate) return false;
         const ePrice = normalizePrice(e.sale_price);
-        // Prices match if both are 0, or within 5% of each other
-        if (ePrice === 0 && sPrice === 0) return true;
-        if (ePrice === 0 || sPrice === 0) return false;
+        // Same date: match if both prices are 0, one is missing (0),
+        // or both are within 5% of each other. Missing price = same sale,
+        // just captured from a different CoStar tab (e.g. deed vs summary).
+        if (ePrice === 0 || sPrice === 0) return true;
         return Math.abs(ePrice - sPrice) / Math.max(ePrice, sPrice) < 0.05;
       });
 

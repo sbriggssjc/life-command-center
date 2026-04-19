@@ -263,8 +263,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             const ed = normDate(e.sale_date || e.date || e.sold_date);
             if (ed !== sd) return false;
             const ep = normPrice(e.sale_price || e.price);
-            if (ep === 0 && sp === 0) return true;
-            if (ep === 0 || sp === 0) return false;
+            // Same date: match if either price is missing (0) or within 5%.
+            // Missing price = same sale captured from a different CoStar tab.
+            if (ep === 0 || sp === 0) return true;
             return Math.abs(ep - sp) / Math.max(ep, sp) < 0.05;
           });
           if (matchIdx === -1) {

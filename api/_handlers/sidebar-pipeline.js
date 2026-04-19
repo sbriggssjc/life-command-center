@@ -3529,11 +3529,12 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   const leaseDataSource = metadata._intake_promoted
     ? 'email_intake'
     : 'costar_sidebar';
-  // Dialysis leases.source_confidence CHECK: 'documented' | 'estimated' | 'inferred'
-  // lease_abstract docs → 'documented'; OM / other intake → 'estimated'
+  // Dialysis leases.source_confidence CHECK: 'documented' | 'inferred' | 'placeholder'
+  // lease_abstract docs → 'documented'; OM / other intake → 'inferred'
+  // CoStar sidebar data → 'inferred' (not 'estimated' — that value is rejected by CHECK)
   const leaseConfidence = metadata._intake_promoted
-    ? (metadata.document_type === 'lease_abstract' ? 'documented' : 'estimated')
-    : 'estimated';
+    ? (metadata.document_type === 'lease_abstract' ? 'documented' : 'inferred')
+    : 'inferred';
 
   if (Array.isArray(tenants) && tenants.length > 0) {
     // Build one lease record per tenant entry
@@ -3598,11 +3599,25 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
 
     const tenantKey = record.tenant.toLowerCase().trim();
     let leaseId = null;
+
+    // Exact match first; then fuzzy match for dialysis (single-tenant properties
+    // where the same operator appears under slightly different names like
+    // "DaVita Kidney Care" vs "Davita Green Bay Dialysis" vs "DaVita Dialysis")
+    let existingLease = null;
     if (existingTenants.has(tenantKey)) {
-      // PATCH existing lease — find its lease_id and update
-      const existingLease = existing.data.find(
+      existingLease = existing.data.find(
         l => l.tenant?.toLowerCase().trim() === tenantKey
       );
+    }
+    if (!existingLease && domain === 'dialysis') {
+      // Fuzzy: match if tenant names share a significant keyword (e.g. "davita")
+      const incomingWords = tenantKey.split(/\s+/).filter(w => w.length > 3);
+      existingLease = existing.data.find(l => {
+        const eName = l.tenant?.toLowerCase().trim() || '';
+        return incomingWords.some(w => eName.includes(w));
+      });
+    }
+    if (existingLease) {
       const { property_id: _pid, ...patchData } = cleaned;
       await domainPatch(domain,
         `leases?lease_id=eq.${existingLease.lease_id}`, patchData, 'upsertDomainLeases');
@@ -3794,6 +3809,8 @@ async function upsertDialysisListings(propertyId, metadata) {
     });
     return 0;
   }
+
+  try {
 
   const contacts = metadata.contacts || [];
   const sellerContact = contacts.find(c => c.role === 'owner' || c.role === 'seller') || null;
@@ -4024,6 +4041,15 @@ async function upsertDialysisListings(propertyId, metadata) {
     return 0;
   }
   return 1;
+
+  } catch (err) {
+    console.error('[upsertDialysisListings] unexpected error:', {
+      propertyId,
+      error: err?.message || err,
+      stack: err?.stack?.slice(0, 300),
+    });
+    return 0;
+  }
 }
 
 /**
