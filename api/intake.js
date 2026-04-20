@@ -1272,10 +1272,11 @@ async function handleCopilotAction(req, res) {
 
     console.log('[copilot-action] COPILOT_DIAG_V2 about to call authenticate');
     const user = await authenticate(req, res);
-    console.log('[copilot-action] COPILOT_DIAG_V2 authenticate returned; user?', !!user);
+    console.log('[copilot-action] COPILOT_DIAG_V3 authenticate returned; user?', !!user, 'email=', user?.email, 'membershipsLen=', user?.memberships?.length);
     if (!user) return;
 
     const { action_id, inputs } = req.body || {};
+    console.log('[copilot-action] COPILOT_DIAG_V3 parsed body; action_id=', action_id, 'hasInputs=', !!inputs);
     if (!action_id) return res.status(400).json({ error: 'action_id required' });
     if (!inputs)    return res.status(400).json({ error: 'inputs required' });
 
@@ -1288,20 +1289,27 @@ async function handleCopilotAction(req, res) {
       oid:        req.headers['x-ms-caller-oid']    || null,
       tenant_id:  req.headers['x-ms-caller-tenant'] || null,
     };
+    console.log('[copilot-action] COPILOT_DIAG_V3 authContext built; email=', authContext.email);
 
     const workspaceId = req.headers['x-lcc-workspace']
       || user.memberships?.[0]?.workspace_id
       || process.env.LCC_DEFAULT_WORKSPACE_ID
       || null;
+    console.log('[copilot-action] COPILOT_DIAG_V3 workspaceId resolved=', workspaceId);
 
     let result;
     if (action_id === 'intake.stage.om.v1') {
+      console.log('[copilot-action] COPILOT_DIAG_V3 about to call handleIntakeStageOm');
       result = await handleIntakeStageOm({ inputs, authContext, workspaceId });
+      console.log('[copilot-action] COPILOT_DIAG_V3 handleIntakeStageOm returned; status=', result?.status);
     } else if (action_id === 'intake.finalize.om.v1') {
+      console.log('[copilot-action] COPILOT_DIAG_V3 about to call handleIntakeFinalizeOm');
       result = await handleIntakeFinalizeOm({ inputs });
+      console.log('[copilot-action] COPILOT_DIAG_V3 handleIntakeFinalizeOm returned; status=', result?.status);
     } else {
       return res.status(400).json({ error: `Unknown action_id: ${action_id}` });
     }
+    console.log('[copilot-action] COPILOT_DIAG_V3 about to send response');
     return res.status(result.status).json(result.body);
   } catch (err) {
     console.error('[copilot-action] throw caught:', {
