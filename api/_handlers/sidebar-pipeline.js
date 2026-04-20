@@ -416,6 +416,8 @@ function classifyDomain(metadata, entityFields) {
     metadata.property_type,
     metadata.property_subtype,
     metadata.occupancy_details,
+    // Sale notes narrative often names the tenant when structured fields don't
+    metadata.sale_notes_raw,
   ];
 
   // Include tenant names from tenants[] array
@@ -429,6 +431,17 @@ function classifyDomain(metadata, entityFields) {
   if (Array.isArray(metadata.contacts)) {
     for (const c of metadata.contacts) {
       if (c.name) textParts.push(c.name);
+    }
+  }
+
+  // Include extracted PDF text (OM brochures often identify the tenant)
+  if (Array.isArray(metadata.pdf_extracted_texts)) {
+    for (const pdf of metadata.pdf_extracted_texts) {
+      if (pdf.text) {
+        // Only take first 500 chars to avoid bloating the search string
+        // with map legends and legal boilerplate — tenant names appear early
+        textParts.push(pdf.text.substring(0, 500));
+      }
     }
   }
 
