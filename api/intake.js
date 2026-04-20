@@ -1261,33 +1261,33 @@ async function handleIntakePromote(req, res) {
 // ============================================================================
 
 async function handleCopilotAction(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: `Method ${req.method} not allowed` });
-  }
-
-  const user = await authenticate(req, res);
-  if (!user) return;
-
-  const { action_id, inputs } = req.body || {};
-  if (!action_id) return res.status(400).json({ error: 'action_id required' });
-  if (!inputs)    return res.status(400).json({ error: 'inputs required' });
-
-  // Build authContext — prefer X-MS-Caller-* headers (multi-user future),
-  // fall back to the authenticated LCC user so today's single-user path works
-  // even before the Copilot Studio connector wires the caller headers.
-  const authContext = {
-    email:     (req.headers['x-ms-caller-email']  || user.email        || '').toLowerCase() || null,
-    name:       req.headers['x-ms-caller-name']   || user.display_name || null,
-    oid:        req.headers['x-ms-caller-oid']    || null,
-    tenant_id:  req.headers['x-ms-caller-tenant'] || null,
-  };
-
-  const workspaceId = req.headers['x-lcc-workspace']
-    || user.memberships?.[0]?.workspace_id
-    || process.env.LCC_DEFAULT_WORKSPACE_ID
-    || null;
-
   try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: `Method ${req.method} not allowed` });
+    }
+
+    const user = await authenticate(req, res);
+    if (!user) return;
+
+    const { action_id, inputs } = req.body || {};
+    if (!action_id) return res.status(400).json({ error: 'action_id required' });
+    if (!inputs)    return res.status(400).json({ error: 'inputs required' });
+
+    // Build authContext — prefer X-MS-Caller-* headers (multi-user future),
+    // fall back to the authenticated LCC user so today's single-user path works
+    // even before the Copilot Studio connector wires the caller headers.
+    const authContext = {
+      email:     (req.headers['x-ms-caller-email']  || user.email        || '').toLowerCase() || null,
+      name:       req.headers['x-ms-caller-name']   || user.display_name || null,
+      oid:        req.headers['x-ms-caller-oid']    || null,
+      tenant_id:  req.headers['x-ms-caller-tenant'] || null,
+    };
+
+    const workspaceId = req.headers['x-lcc-workspace']
+      || user.memberships?.[0]?.workspace_id
+      || process.env.LCC_DEFAULT_WORKSPACE_ID
+      || null;
+
     let result;
     if (action_id === 'intake.stage.om.v1') {
       result = await handleIntakeStageOm({ inputs, authContext, workspaceId });
@@ -1298,10 +1298,20 @@ async function handleCopilotAction(req, res) {
     }
     return res.status(result.status).json(result.body);
   } catch (err) {
-    console.error('[copilot-action] handler threw:', {
-      action_id, error: err?.message, stack: err?.stack,
+    console.error('[copilot-action] throw caught:', {
+      action_id: req.body?.action_id,
+      error: err?.message,
+      name: err?.name,
+      code: err?.code,
+      stack: err?.stack,
     });
-    return res.status(500).json({ error: 'handler_exception', detail: err?.message });
+    if (res.headersSent) return;
+    return res.status(500).json({
+      error: 'copilot_action_exception',
+      detail: err?.message || String(err),
+      name: err?.name || null,
+      code: err?.code || null,
+    });
   }
 }
 
