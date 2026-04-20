@@ -67,9 +67,6 @@ async function proxyToIntakeReceiver(req, res, action) {
 // ============================================================================
 
 export default withErrorHandler(async function handler(req, res) {
-  if (req.query?._route === 'copilot-action') {
-    console.log('[intake.js] COPILOT_DIAG_V2 dispatching copilot-action');
-  }
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -105,19 +102,8 @@ export default withErrorHandler(async function handler(req, res) {
       return handleIntakePromote(req, res);
     case 'discard':
       return handleIntakeDiscard(req, res);
-    case 'copilot-action': {
-      try {
-        const ret = await handleCopilotAction(req, res);
-        console.log('[intake.js] COPILOT_DIAG_V4 handleCopilotAction resolved; headersSent=', res.headersSent);
-        return ret;
-      } catch (outerErr) {
-        console.error('[intake.js] COPILOT_DIAG_V4 OUTER catch, throw escaped inner:', outerErr?.message, outerErr?.name, outerErr?.stack);
-        if (!res.headersSent) {
-          return res.status(500).json({ error: 'outer_catch', detail: outerErr?.message, name: outerErr?.name });
-        }
-        return;
-      }
-    }
+    case 'copilot-action':
+      return handleCopilotAction(req, res);
     case 'parse-om':
       return handleParseOm(req, res);
     case 'ingest_pdf':
@@ -1276,63 +1262,50 @@ async function handleIntakePromote(req, res) {
 
 async function handleCopilotAction(req, res) {
   try {
-    console.log('[copilot-action] COPILOT_DIAG_V2 entered handler; method=', req.method);
     if (req.method !== 'POST') {
       return res.status(405).json({ error: `Method ${req.method} not allowed` });
     }
 
-    console.log('[copilot-action] COPILOT_DIAG_V2 about to call authenticate');
     const user = await authenticate(req, res);
-    console.log('[copilot-action] COPILOT_DIAG_V3 authenticate returned; user?', !!user, 'email=', user?.email, 'membershipsLen=', user?.memberships?.length);
-    if (!user) { console.log('[copilot-action] COPILOT_DIAG_V4 user is falsy, returning'); return; }
-    console.log('[copilot-action] COPILOT_DIAG_V4 past user-null-check');
-    console.log('[copilot-action] COPILOT_DIAG_V4 req.body typeof=', typeof req.body, 'isNull=', req.body === null, 'isArr=', Array.isArray(req.body), 'ctor=', req.body?.constructor?.name);
+    if (!user) return;
 
-    let action_id, inputs;
+    // Vercel lazy-parses req.body; accessing it on an unparseable payload throws.
+    let body;
     try {
-      ({ action_id, inputs } = req.body || {});
-      console.log('[copilot-action] COPILOT_DIAG_V4 destructure OK');
-    } catch (destructureErr) {
-      console.error('[copilot-action] COPILOT_DIAG_V4 destructure threw:', destructureErr?.message, destructureErr?.name);
-      throw destructureErr;
+      body = req.body || {};
+    } catch (bodyErr) {
+      return res.status(400).json({ error: 'invalid_json_body', detail: bodyErr?.message });
     }
-    console.log('[copilot-action] COPILOT_DIAG_V3 parsed body; action_id=', action_id, 'hasInputs=', !!inputs);
+    const { action_id, inputs } = body;
     if (!action_id) return res.status(400).json({ error: 'action_id required' });
     if (!inputs)    return res.status(400).json({ error: 'inputs required' });
 
-    // Build authContext — prefer X-MS-Caller-* headers (multi-user future),
-    // fall back to the authenticated LCC user so today's single-user path works
-    // even before the Copilot Studio connector wires the caller headers.
+    // Prefer X-MS-Caller-* headers (multi-user future); fall back to the
+    // authenticated LCC user so today's single-user path works even before
+    // the Copilot Studio connector wires the caller headers.
     const authContext = {
       email:     (req.headers['x-ms-caller-email']  || user.email        || '').toLowerCase() || null,
       name:       req.headers['x-ms-caller-name']   || user.display_name || null,
       oid:        req.headers['x-ms-caller-oid']    || null,
       tenant_id:  req.headers['x-ms-caller-tenant'] || null,
     };
-    console.log('[copilot-action] COPILOT_DIAG_V3 authContext built; email=', authContext.email);
 
     const workspaceId = req.headers['x-lcc-workspace']
       || user.memberships?.[0]?.workspace_id
       || process.env.LCC_DEFAULT_WORKSPACE_ID
       || null;
-    console.log('[copilot-action] COPILOT_DIAG_V3 workspaceId resolved=', workspaceId);
 
     let result;
     if (action_id === 'intake.stage.om.v1') {
-      console.log('[copilot-action] COPILOT_DIAG_V3 about to call handleIntakeStageOm');
       result = await handleIntakeStageOm({ inputs, authContext, workspaceId });
-      console.log('[copilot-action] COPILOT_DIAG_V3 handleIntakeStageOm returned; status=', result?.status);
     } else if (action_id === 'intake.finalize.om.v1') {
-      console.log('[copilot-action] COPILOT_DIAG_V3 about to call handleIntakeFinalizeOm');
       result = await handleIntakeFinalizeOm({ inputs });
-      console.log('[copilot-action] COPILOT_DIAG_V3 handleIntakeFinalizeOm returned; status=', result?.status);
     } else {
       return res.status(400).json({ error: `Unknown action_id: ${action_id}` });
     }
-    console.log('[copilot-action] COPILOT_DIAG_V3 about to send response');
     return res.status(result.status).json(result.body);
   } catch (err) {
-    console.error('[copilot-action] throw caught:', {
+    console.error('[copilot-action] handler threw:', {
       action_id: req.body?.action_id,
       error: err?.message,
       name: err?.name,
