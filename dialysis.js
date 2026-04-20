@@ -738,6 +738,70 @@ function renderDiaOverview() {
     })();
   }
 
+  // Lazy-load ownership coverage metrics (Section 4b)
+  (async () => {
+    try {
+      // 1. Developer-traced: properties where earliest sale has land/development transaction_type
+      const allSales = await diaQueryAll('sales_transactions', 'property_id,transaction_type,sale_date', { order: 'sale_date.asc.nullslast' });
+      const salesRows = allSales.data || allSales || [];
+      const earliestByProp = {};
+      salesRows.forEach(s => {
+        if (!s.property_id) return;
+        if (!earliestByProp[s.property_id] || (s.sale_date && (!earliestByProp[s.property_id].sale_date || s.sale_date < earliestByProp[s.property_id].sale_date))) {
+          earliestByProp[s.property_id] = s;
+        }
+      });
+      const propsWithSales = Object.keys(earliestByProp).length;
+      const devTraced = Object.values(earliestByProp).filter(s => {
+        const tt = (s.transaction_type || '').toLowerCase();
+        return tt.includes('land') || tt.includes('development') || tt.includes('ground lease') || tt.includes('build-to-suit') || tt.includes('build to suit');
+      }).length;
+
+      // 2. Prospecting: true_owners with SF activity in last 180 days
+      const owners = await diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id,prospecting_status');
+      const ownerRows = owners.data || owners || [];
+      const ownersWithSF = ownerRows.filter(o => o.salesforce_id);
+      const ownersProspecting = ownerRows.filter(o => o.prospecting_status === 'active');
+      const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
+      const cutoffStr = cutoff180.toISOString().substring(0, 10);
+      let recentActivityOwners = 0;
+      if (ownersWithSF.length > 0) {
+        const recentActs = await diaQueryAll('salesforce_activities', 'company_name,activity_date', { filter: 'activity_date=gte.' + cutoffStr });
+        const actRows = recentActs.data || recentActs || [];
+        const activeCompanies = new Set(actRows.map(a => (a.company_name || '').toLowerCase()).filter(Boolean));
+        recentActivityOwners = ownersWithSF.filter(o => activeCompanies.has((o.name || '').toLowerCase())).length;
+      }
+
+      // 3. Missing SF: owners without salesforce_id
+      const totalOwners = ownerRows.length;
+      const missingSF = ownerRows.filter(o => !o.salesforce_id).length;
+
+      // ── Update DOM ──
+      const _fmtPct = (n, d) => d > 0 ? Math.round(n / d * 100) + '%' : '—';
+      const devEl = document.getElementById('diaOwnDevVal');
+      const devSub = document.getElementById('diaOwnDevSub');
+      if (devEl) devEl.textContent = _fmtPct(devTraced, propsWithSales);
+      if (devSub) devSub.textContent = devTraced + ' of ' + propsWithSales + ' properties traced to developer';
+
+      const prospEl = document.getElementById('diaOwnProspVal');
+      const prospSub = document.getElementById('diaOwnProspSub');
+      if (prospEl) prospEl.textContent = recentActivityOwners + ' / ' + ownersProspecting.length;
+      if (prospSub) prospSub.textContent = recentActivityOwners + ' with activity in 180d of ' + ownersProspecting.length + ' prospecting';
+
+      const missEl = document.getElementById('diaOwnMissVal');
+      const missSub = document.getElementById('diaOwnMissSub');
+      if (missEl) {
+        missEl.textContent = missingSF + ' / ' + totalOwners;
+        missEl.style.color = missingSF > totalOwners * 0.5 ? '#f87171' : missingSF > totalOwners * 0.25 ? '#fbbf24' : '#34d399';
+      }
+      if (missSub) missSub.textContent = missingSF + ' groups missing Salesforce of ' + totalOwners + ' total';
+    } catch (err) {
+      console.warn('Ownership coverage load failed:', err.message);
+      const wrap = document.getElementById('diaOwnershipCoverage');
+      if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Ownership coverage data unavailable</div>';
+    }
+  })();
+
   let html = '<div style="padding:4px 0">';
 
   // ── STYLE ──
@@ -951,6 +1015,16 @@ function renderDiaOverview() {
     html += infoCard({ title: displayName, value: fmtN(ytd), sub: 'YTD touchpoints', color: memberColors[name] || 'blue', tab: 'activity' });
   });
   html += '</div>';
+
+  // ═══════════════════════════════════════════════
+  // SECTION 4b: OWNERSHIP COVERAGE REPORTING
+  // ═══════════════════════════════════════════════
+  html += sectionHeader('Ownership Coverage', '🏛️', 'sales');
+  html += '<div id="diaOwnershipCoverage"><div class="dia-grid dia-grid-3">';
+  html += infoCard({ title: 'Developer-Traced', value: '...', sub: 'loading ownership data', color: 'blue', id: 'diaOwnDevVal', subId: 'diaOwnDevSub' });
+  html += infoCard({ title: 'Actively Prospecting', value: '...', sub: 'loading activity data', color: 'green', id: 'diaOwnProspVal', subId: 'diaOwnProspSub' });
+  html += infoCard({ title: 'Missing SF Activity', value: '...', sub: 'loading salesforce data', color: 'red', id: 'diaOwnMissVal', subId: 'diaOwnMissSub' });
+  html += '</div></div>';
 
   // ═══════════════════════════════════════════════
   // SECTION 5: TTM SALES MARKET

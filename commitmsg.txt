@@ -1,14 +1,10 @@
-UI: Consolidated rent roll, ownership prospecting badges, deal history enrichment
+Fix cap rate display (decimal→percentage) and Base: $NaN in rent roll
 
-- Rent Roll: Group leases by parent_lease_id chain into unified tenant view
-  with term timeline, renewal options from lease_options table, active/expired badges
-- Ownership: Add prospecting status badges (Active/Stale/Passive/Not Prospecting)
-  with days-since-contact, show stated vs calculated cap rates, broker names
-- Deal History: Add procuring_broker display across all sale renderers,
-  enrich ownership events with buyer/seller/broker from v_ownership_chain
-- Operations: Fix Lease Expiration KPI to prefer active lease (is_active=true)
-  over expired terms when multiple leases exist
-- Pipeline: lease_options now fetched in lease enrichment loader
-- Cache bump to v254
+- Add _fmtCapRate() helper: DB stores decimals (0.07=7%), display multiplies
+  by 100 when value < 1. Applied to all 12 cap rate display locations across
+  ownership chain, deal history, sales timeline, export, and prior sale summary.
+- Fix "Base: $NaN" in rent roll tenant header — add isNaN guard on baseRent
+  before showing the base hint line
+- Cache bump to v255
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
