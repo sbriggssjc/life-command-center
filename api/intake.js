@@ -67,6 +67,9 @@ async function proxyToIntakeReceiver(req, res, action) {
 // ============================================================================
 
 export default withErrorHandler(async function handler(req, res) {
+  if (req.query?._route === 'copilot-action') {
+    console.log('[intake.js] COPILOT_DIAG_V2 dispatching copilot-action');
+  }
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
 
@@ -1262,11 +1265,14 @@ async function handleIntakePromote(req, res) {
 
 async function handleCopilotAction(req, res) {
   try {
+    console.log('[copilot-action] COPILOT_DIAG_V2 entered handler; method=', req.method);
     if (req.method !== 'POST') {
       return res.status(405).json({ error: `Method ${req.method} not allowed` });
     }
 
+    console.log('[copilot-action] COPILOT_DIAG_V2 about to call authenticate');
     const user = await authenticate(req, res);
+    console.log('[copilot-action] COPILOT_DIAG_V2 authenticate returned; user?', !!user);
     if (!user) return;
 
     const { action_id, inputs } = req.body || {};
