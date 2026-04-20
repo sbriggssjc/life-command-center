@@ -13,13 +13,11 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-// ── Import all 12 API handlers ──────────────────────────────────────────────
+// ── Import all 9 API handlers (Phase 4b consolidated) ──────────────────────
+// daily-briefing, data-proxy, diagnostics absorbed into admin.js
 import actionsHandler from './api/actions.js';
 import adminHandler from './api/admin.js';
 import applyChangeHandler from './api/apply-change.js';
-import dailyBriefingHandler from './api/daily-briefing.js';
-import dataProxyHandler from './api/data-proxy.js';
-import diagnosticsHandler from './api/diagnostics.js';
 import domainsHandler from './api/domains.js';
 import entityHubHandler from './api/entity-hub.js';
 import intakeHandler from './api/intake.js';
@@ -62,26 +60,30 @@ app.use('/api', (req, res, next) => {
 // Each rewrite sets the same query params that vercel.json would inject,
 // then delegates to the target handler.
 
-// diagnostics rewrites
-app.all('/api/config', (req, res) => { req.query._route = 'config'; diagnosticsHandler(req, res); });
-app.all('/api/diag', (req, res) => { req.query._route = 'diag'; diagnosticsHandler(req, res); });
-app.all('/api/treasury', (req, res) => { req.query._route = 'treasury'; diagnosticsHandler(req, res); });
+// admin rewrites (formerly diagnostics + data-proxy + daily-briefing)
+app.all('/api/config', (req, res) => { req.query._route = 'config'; adminHandler(req, res); });
+app.all('/api/diag', (req, res) => { req.query._route = 'diag'; adminHandler(req, res); });
+app.all('/api/treasury', (req, res) => { req.query._route = 'treasury'; adminHandler(req, res); });
+app.all('/api/daily-briefing', (req, res) => { req.query._route = 'edge-brief'; req.query.action = 'snapshot'; adminHandler(req, res); });
+app.all('/api/cms-match', (req, res) => { req.query._route = 'cms-match'; adminHandler(req, res); });
+app.all('/api/ownership-reconcile', (req, res) => { req.query._route = 'ownership-reconcile'; adminHandler(req, res); });
 
-// data-proxy rewrites
-app.all('/api/gov-query', (req, res) => { req.query._source = 'gov'; dataProxyHandler(req, res); });
-app.all('/api/gov-write', (req, res) => { req.query._route = 'gov-write'; dataProxyHandler(req, res); });
-app.all('/api/gov-evidence', (req, res) => { req.query._route = 'gov-evidence'; dataProxyHandler(req, res); });
-app.all('/api/dia-query', (req, res) => { req.query._source = 'dia'; dataProxyHandler(req, res); });
+// edge-data rewrites (formerly data-proxy)
+app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
+app.all('/api/gov-write', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-write'; adminHandler(req, res); });
+app.all('/api/gov-evidence', (req, res) => { req.query._route = 'edge-data'; req.query._edgeRoute = 'gov-evidence'; adminHandler(req, res); });
+app.all('/api/dia-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'dia'; adminHandler(req, res); });
 
 // actions rewrites
 app.all('/api/activities', (req, res) => { req.query._route = 'activities'; actionsHandler(req, res); });
 
-// admin rewrites
+// admin sub-route rewrites
 app.all('/api/workspaces', (req, res) => { req.query._route = 'workspaces'; adminHandler(req, res); });
 app.all('/api/members', (req, res) => { req.query._route = 'members'; adminHandler(req, res); });
 app.all('/api/flags', (req, res) => { req.query._route = 'flags'; adminHandler(req, res); });
 app.all('/api/auth-config', (req, res) => { req.query._route = 'auth-config'; adminHandler(req, res); });
 app.all('/api/me', (req, res) => { req.query._route = 'me'; adminHandler(req, res); });
+app.all('/api/connectors', (req, res) => { req.query._route = 'connectors'; adminHandler(req, res); });
 
 // queue rewrites
 app.all('/api/queue-v2', (req, res) => { req.query._version = 'v2'; queueHandler(req, res); });
@@ -95,15 +97,20 @@ app.all('/api/loopnet-ingest', (req, res) => { req.query._route = 'loopnet-inges
 app.all('/api/lead-health', (req, res) => { req.query._route = 'lead-health'; syncHandler(req, res); });
 app.all('/api/cross-domain-match', (req, res) => { req.query._route = 'cross-domain-match'; syncHandler(req, res); });
 app.all('/api/listing-webhook', (req, res) => { req.query._route = 'listing-webhook'; syncHandler(req, res); });
-app.all('/api/connectors', (req, res) => { req.query._route = 'connectors'; syncHandler(req, res); });
 
-// operations rewrites (copilot, chat, draft, bridge, workflows)
+// operations rewrites (copilot, chat, draft, bridge, workflows, context)
+app.all('/api/copilot/portfolio/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
+app.all('/api/copilot/ops/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
+app.all('/api/copilot/outreach/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
+app.all('/api/copilot/workflow/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
+app.all('/api/copilot/domain/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
 app.all('/api/copilot-spec', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'openapi'; operationsHandler(req, res); });
 app.all('/api/copilot-manifest', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'manifest'; operationsHandler(req, res); });
 app.all('/api/chat', (req, res) => { req.query._route = 'chat'; operationsHandler(req, res); });
 app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHandler(req, res); });
 app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.query.action = 'preassemble-nightly'; operationsHandler(req, res); });
 app.all('/api/context', (req, res) => { req.query._route = 'context'; operationsHandler(req, res); });
+app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
 app.all('/api/bridge', operationsHandler);
 app.all('/api/workflows', operationsHandler);
 
@@ -111,21 +118,26 @@ app.all('/api/workflows', operationsHandler);
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
 app.all('/api/contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
 app.all('/api/entities', (req, res) => { req.query._domain = 'entities'; entityHubHandler(req, res); });
+app.all('/api/property', (req, res) => { req.query._domain = 'property'; entityHubHandler(req, res); });
+app.all('/api/contact', (req, res) => { req.query._domain = 'contact'; entityHubHandler(req, res); });
+app.all('/api/search', (req, res) => { req.query._domain = 'search'; entityHubHandler(req, res); });
+app.all('/api/briefing-email', (req, res) => { req.query._domain = 'briefing-email'; entityHubHandler(req, res); });
+app.all('/api/recalculate-cap-rates', (req, res) => { req.query._domain = 'cap-rate-recalc'; entityHubHandler(req, res); });
 
 // intake rewrites
+app.all('/api/copilot/action', (req, res) => { req.query._route = 'copilot-action'; intakeHandler(req, res); });
 app.all('/api/intake-outlook-message', (req, res) => { req.query._route = 'outlook-message'; intakeHandler(req, res); });
 app.all('/api/intake-summary', (req, res) => { req.query._route = 'summary'; intakeHandler(req, res); });
+app.all('/api/intake-extract', (req, res) => { req.query._route = 'extract'; intakeHandler(req, res); });
 app.all('/api/intake-queue', (req, res) => { req.query._route = 'queue'; intakeHandler(req, res); });
 app.all('/api/intake-promote', (req, res) => { req.query._route = 'promote'; intakeHandler(req, res); });
 app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; intakeHandler(req, res); });
+app.all('/api/intake-pdf', (req, res) => { req.query._route = 'ingest_pdf'; intakeHandler(req, res); });
 
-// ── Primary handler routes (12 canonical endpoints) ─────────────────────────
+// ── Primary handler routes (9 canonical endpoints) ──────────────────────────
 app.all('/api/actions', actionsHandler);
 app.all('/api/admin', adminHandler);
 app.all('/api/apply-change', applyChangeHandler);
-app.all('/api/daily-briefing', dailyBriefingHandler);
-app.all('/api/data-proxy', dataProxyHandler);
-app.all('/api/diagnostics', diagnosticsHandler);
 app.all('/api/domains', domainsHandler);
 app.all('/api/entity-hub', entityHubHandler);
 app.all('/api/intake', intakeHandler);
