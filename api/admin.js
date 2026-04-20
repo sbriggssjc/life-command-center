@@ -1,6 +1,6 @@
 // ============================================================================
 // Admin API — Consolidated: workspaces, members, flags, connectors, diagnostics, edge proxies
-// Life Command Center
+// Life Command Center  (cache-bust: force rebuild of handler imports)
 //
 // Routed via vercel.json rewrites:
 //   /api/workspaces  → /api/admin?_route=workspaces

@@ -1,6 +1,6 @@
 // ============================================================================
 // Unified Intake API — Consolidated from intake-outlook-message.js + intake-summary.js
-// Life Command Center
+// Life Command Center  (cache-bust: force rebuild of handler imports)
 //
 // POST /api/intake?_route=outlook-message   — deterministic single-message intake
 // GET  /api/intake?_route=summary           — Teams/Automation formatted summary

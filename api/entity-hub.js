@@ -1,6 +1,6 @@
 // ============================================================================
 // Entity Hub API — Consolidated router for contacts.js + entities.js
-// Life Command Center
+// Life Command Center  (cache-bust: force rebuild of handler imports)
 //
 // Routes:
 //   /api/entity-hub?_domain=contacts&...  → Unified Contact Hub (contacts-handler.js)
