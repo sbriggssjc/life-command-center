@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix } from '../_shared/entity-link.js';
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
@@ -1241,13 +1241,35 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   let lookup = await domainQuery(domain, 'GET', lookupPath);
 
-  // Fallback: if city filter yielded no results, retry without city in case of
+  // Fallback 1: if city filter yielded no results, retry without city in case of
   // city-name variant mismatch ("MEMPHIS" vs "Memphis" vs "memphis" in DB).
   if (!lookup.data?.length && entity.city && entity.state) {
     const fallbackPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
       `&state=eq.${encodeURIComponent(entity.state)}&select=property_id,${sizeCol}&limit=1`;
     const fallback = await domainQuery(domain, 'GET', fallbackPath);
     if (fallback.ok && fallback.data?.length) lookup = fallback;
+  }
+
+  // Fallback 2: street-suffix mismatch ("Dozier St" vs "Dozier Blvd").
+  // Strip the suffix and search with a wildcard so the number + street name
+  // portion is enough to match regardless of which suffix the DB has.
+  if (!lookup.data?.length && entity.state) {
+    const stripped = stripStreetSuffix(normAddr);
+    if (stripped && stripped !== normAddr) {
+      const suffixFallback = `properties?address=ilike.${encodeURIComponent(stripped + '*')}` +
+        `&state=eq.${encodeURIComponent(entity.state)}&select=property_id,${sizeCol},address&limit=5`;
+      const fb2 = await domainQuery(domain, 'GET', suffixFallback);
+      if (fb2.ok && fb2.data?.length) {
+        // If we got exactly one match, use it. If multiple, log and skip
+        // to avoid linking to the wrong property.
+        if (fb2.data.length === 1) {
+          console.log(`[upsertDomainProperty] Suffix-stripped fallback matched: "${normAddr}" → "${fb2.data[0].address}" (${domain})`);
+          lookup = fb2;
+        } else {
+          console.warn(`[upsertDomainProperty] Suffix-stripped fallback returned ${fb2.data.length} matches for "${stripped}*" — skipping ambiguous match`);
+        }
+      }
+    }
   }
 
   const INVALID_TENANT_VALUES = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score)$/i;

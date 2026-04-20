@@ -35,6 +35,19 @@ export function normalizeAddress(addr) {
     .toLowerCase();
 }
 
+/**
+ * Strip the street-type suffix from a normalized address so that
+ * "181 dozier st" and "181 dozier blvd" both become "181 dozier".
+ * Used as a fallback when the full normalized address doesn't match
+ * because CoStar and the DB disagree on the suffix (St vs Blvd, etc.).
+ */
+export function stripStreetSuffix(normalizedAddr) {
+  if (!normalizedAddr) return '';
+  return normalizedAddr
+    .replace(/\b(st|ave|blvd|dr|rd|ln|ct|pl|hwy|pkwy|cir|trl|way|ter|loop|run)\b\.?\s*$/i, '')
+    .trim();
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
