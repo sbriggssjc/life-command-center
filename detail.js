@@ -3098,14 +3098,40 @@ function _udTabOperations() {
   if (costRpt && costRpt.total_patient_revenue && estRevenue) {
     const actual = Number(costRpt.total_patient_revenue);
     const modeled = Number(estRevenue);
+    const absVar = Math.abs(((modeled - actual) / actual * 100));
     const variance = ((modeled - actual) / actual * 100).toFixed(1);
-    html += '<div style="margin-top:14px;padding:10px 12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px">';
-    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">&#x1F4CA; Modeled vs. HCRIS Actual (FY' + (costRpt.fiscal_year || '?') + ')</div>';
+    const isLargeGap = absVar >= 25;
+    const borderColor = isLargeGap ? 'rgba(239,68,68,0.35)' : (absVar >= 10 ? 'rgba(251,191,36,0.3)' : 'rgba(59,130,246,0.2)');
+    const bgColor = isLargeGap ? 'rgba(239,68,68,0.06)' : (absVar >= 10 ? 'rgba(251,191,36,0.06)' : 'rgba(59,130,246,0.08)');
+    const varColor = absVar < 10 ? 'var(--green)' : (absVar < 25 ? 'var(--yellow)' : '#ef4444');
+    html += '<div style="margin-top:14px;padding:10px 12px;background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:8px">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (isLargeGap ? '&#x26A0;&#xFE0F;' : '&#x1F4CA;') + ' Modeled vs. HCRIS Actual (FY' + (costRpt.fiscal_year || '?') + ')</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
     html += '<div style="color:var(--text3)">Modeled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
     html += '<div style="color:var(--text3)">HCRIS Actual</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
-    html += '<div style="color:var(--text3)">Variance</div><div style="text-align:right;font-weight:600;color:' + (Math.abs(variance) < 10 ? 'var(--green)' : 'var(--yellow)') + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
-    html += '</div></div>';
+    html += '<div style="color:var(--text3)">Variance</div><div style="text-align:right;font-weight:600;color:' + varColor + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
+    html += '</div>';
+    if (isLargeGap) {
+      // Determine which source is more trustworthy
+      const hcrisConf = costRpt.confidence_score ? Number(costRpt.confidence_score) : null;
+      // Check quality flags on both the cost report AND the financial estimate model
+      const allFlags = [costRpt.data_quality_flags, finDetail.data_quality_flags].filter(Boolean).map(f => String(f)).join(',');
+      const hasChainFlag = allFlags.includes('chain');
+      const hasAnomaly = costRpt.is_anomaly === true || finDetail.is_anomaly === true || allFlags.includes('anomal');
+      let explanation = '';
+      if (hasChainFlag || hasAnomaly) {
+        explanation = 'HCRIS data is flagged as potentially unreliable' + (hasChainFlag ? ' \u2014 costs appear to be allocated from the parent chain rather than facility-specific' : '') + '. ';
+        explanation += 'For underwriting, prefer TTM reported actuals or the modeled estimate with a wider confidence band.';
+      } else if (modeled > actual * 1.25) {
+        explanation = 'The model may be overestimating revenue. Verify against recent OM data or operator financials before using the modeled figure for underwriting.';
+      } else {
+        explanation = 'The model estimate is significantly below HCRIS actuals. HCRIS may include non-recurring items or multi-facility allocations. Cross-reference with TTM actuals.';
+      }
+      html += '<div style="margin-top:8px;padding:8px 10px;background:rgba(239,68,68,0.05);border-radius:6px;font-size:11px;color:var(--text2);line-height:1.5">';
+      html += '<strong style="color:#ef4444">Data Quality Flag:</strong> ' + esc(explanation);
+      html += '</div>';
+    }
+    html += '</div>';
   }
 
   html += '</div>';
@@ -4061,6 +4087,49 @@ function _udResolveGap(action) {
 
 window._udResolveGap = _udResolveGap;
 
+/** Sync & Begin Prospecting: search SF for this owner, set prospecting_status, open owner drawer. */
+async function _udOwnerBeginProspecting(trueOwnerId, ownerName) {
+  if (!trueOwnerId) { showToast('No true owner linked — resolve ownership first', 'info'); return; }
+  const db = _udCache?.db || 'dia';
+  const qFn = db === 'gov' ? govQuery : diaQuery;
+  showToast('Searching Salesforce for "' + ownerName + '"...', 'info');
+  try {
+    // 1. Try to cross-reference with Salesforce via unified_contacts
+    const ctx = { true_owner_id: trueOwnerId, name: ownerName, db };
+    const resolved = await _resolveSfAccountId(ctx).catch(() => null);
+    if (resolved && resolved.sf_account_id) {
+      // Link the SF account to the true_owner record
+      await qFn('true_owners', null, {
+        method: 'PATCH',
+        filter: 'true_owner_id=eq.' + trueOwnerId,
+        body: { salesforce_id: resolved.sf_account_id, prospecting_status: 'active' }
+      }).catch(e => console.warn('PATCH true_owners failed', e));
+      showToast('Linked to SF Account: ' + (resolved.company_name || ownerName) + ' — prospecting started', 'success');
+    } else {
+      // No SF match — set prospecting status anyway and prompt user
+      await qFn('true_owners', null, {
+        method: 'PATCH',
+        filter: 'true_owner_id=eq.' + trueOwnerId,
+        body: { prospecting_status: 'active' }
+      }).catch(e => console.warn('PATCH true_owners failed', e));
+      showToast('No SF match found for "' + ownerName + '" — marked as actively prospecting. Create SF Account when ready.', 'info');
+    }
+    // 2. Refresh the Ownership tab to show updated status
+    const bodyEl = document.getElementById('detailBody');
+    // Re-fetch chain data to pick up the updated prospecting_status
+    const propId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+    if (propId) {
+      const chainRes = await qFn('v_ownership_chain', '*', { filter: 'property_id=eq.' + propId, order: 'transfer_date.desc', limit: 50 }).catch(() => []);
+      _udCache.chain = Array.isArray(chainRes) ? chainRes : (chainRes?.data || []);
+    }
+    if (bodyEl) bodyEl.innerHTML = _udTabOwnership();
+  } catch (e) {
+    console.warn('Begin Prospecting failed:', e);
+    showToast('Error: ' + (e.message || 'unknown'), 'error');
+  }
+}
+window._udOwnerBeginProspecting = _udOwnerBeginProspecting;
+
 /**
  * Dedup ownership_history rows for the chain timeline.
  * Merges entries that point at the same owner_entity (recorded_owner_id,
@@ -4370,7 +4439,14 @@ function _udTabOwnership() {
           checks.forEach(c => {
             html += `<span style="font-size:9px;color:${c.ok ? 'var(--text2)' : 'var(--text3,#555)'}">${c.ok ? '\u2713' : '\u2717'} ${c.label}</span>`;
           });
-          html += '</div></div>';
+          html += '</div>';
+          // "Sync & Begin Prospecting" button when owner lacks SF link
+          if (!h.salesforce_id && h.true_owner_id) {
+            const ownerName = h.true_owner_name || h.recorded_owner_name || h.to_owner || 'this owner';
+            const escapedName = esc(ownerName).replace(/'/g, "\\'");
+            html += `<button onclick="_udOwnerBeginProspecting('${esc(h.true_owner_id)}', '${escapedName}')" style="margin-top:6px;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid #a55eea;background:rgba(165,94,234,0.1);color:#a55eea;width:100%">\u2192 Sync &amp; Begin Prospecting</button>`;
+          }
+          html += '</div>';
         }
         html += '</div>';
         html += '</div>';
