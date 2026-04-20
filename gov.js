@@ -3505,55 +3505,33 @@ function renderGovOverview() {
   // Lazy-load ownership coverage metrics (Section 12)
   (async () => {
     try {
-      // 1. Developer-traced: properties where earliest sale has land/development type
-      const allSales = await govQueryAll('sales_transactions', 'property_id,transaction_type,sale_date');
-      const salesRows = allSales.data || allSales || [];
-      const earliestByProp = {};
-      salesRows.forEach(s => {
-        if (!s.property_id) return;
-        if (!earliestByProp[s.property_id] || (s.sale_date && (!earliestByProp[s.property_id].sale_date || s.sale_date < earliestByProp[s.property_id].sale_date))) {
-          earliestByProp[s.property_id] = s;
-        }
-      });
-      const propsWithSales = Object.keys(earliestByProp).length;
-      const devTraced = Object.values(earliestByProp).filter(s => {
-        const tt = (s.transaction_type || '').toLowerCase();
-        return tt.includes('land') || tt.includes('development') || tt.includes('ground lease') || tt.includes('build-to-suit') || tt.includes('build to suit');
-      }).length;
-
-      // 2. Ownership groups from ownership_history
-      const allOwnership = await govQueryAll('ownership_history', 'id,new_owner,prior_owner,research_status');
-      const ownRows = allOwnership.data || allOwnership || [];
-      const uniqueOwners = new Set();
+      // 1. Ownership depth: properties with 3+ ownership records = deep chain
+      const ownHistory = await govQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' });
+      const ownRows = ownHistory.data || ownHistory || [];
+      const depthByProp = {};
       ownRows.forEach(o => {
-        if (o.new_owner) uniqueOwners.add(o.new_owner.toLowerCase().trim());
-        if (o.prior_owner) uniqueOwners.add(o.prior_owner.toLowerCase().trim());
+        if (!o.property_id) return;
+        depthByProp[o.property_id] = (depthByProp[o.property_id] || 0) + 1;
       });
-      const totalOwners = uniqueOwners.size;
+      const propsWithOwnership = Object.keys(depthByProp).length;
+      const deepChains = Object.values(depthByProp).filter(d => d >= 3).length;
 
-      // Count actively prospecting (research_status in active/prospecting/completed)
-      const uniqueProspecting = new Set();
-      ownRows.forEach(o => {
-        const rs = (o.research_status || '').toLowerCase();
-        if (rs === 'active' || rs === 'prospecting' || rs === 'completed') {
-          if (o.new_owner) uniqueProspecting.add(o.new_owner.toLowerCase().trim());
-        }
-      });
+      // 2. Prospecting: true_owners with sf_account_id and recent activity
+      const ownerRes = await govQueryAll('true_owners', 'true_owner_id,name,sf_account_id');
+      const ownerRows = ownerRes.data || ownerRes || [];
+      const totalOwners = ownerRows.length;
+      const ownersWithSF = ownerRows.filter(o => o.sf_account_id);
+      const missingSF = ownerRows.filter(o => !o.sf_account_id).length;
 
-      // Check SF activity in last 180 days
+      // Check SF activity in last 180 days using global activities array
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
       const cutoffStr = cutoff180.toISOString().substring(0, 10);
       const allActs = typeof activities !== 'undefined' ? activities : [];
-      let recentActivityOwners = 0, missingSF = 0;
-      if (allActs.length > 0) {
+      let recentActivityOwners = 0;
+      if (ownersWithSF.length > 0 && allActs.length > 0) {
         const recentActs = allActs.filter(a => a.activity_date && a.activity_date >= cutoffStr);
         const activeCompanies = new Set(recentActs.map(a => (a.company_name || '').toLowerCase()).filter(Boolean));
-        uniqueOwners.forEach(name => {
-          if (activeCompanies.has(name)) recentActivityOwners++;
-          else missingSF++;
-        });
-      } else {
-        missingSF = totalOwners;
+        recentActivityOwners = ownersWithSF.filter(o => activeCompanies.has((o.name || '').toLowerCase())).length;
       }
 
       // ── Update DOM ──
@@ -3565,19 +3543,19 @@ function renderGovOverview() {
 
       wrap.innerHTML = `<div class="gov-grid gov-grid-3">
         <div class="gov-info-card">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Developer-Traced</div>
-          <div style="font-size:24px;font-weight:800;color:${_c.blue};margin-bottom:4px">${_fmtPct(devTraced, propsWithSales)}</div>
-          <div style="font-size:11px;color:var(--text2)">${devTraced} of ${propsWithSales} properties traced to developer</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Ownership Depth</div>
+          <div style="font-size:24px;font-weight:800;color:${_c.blue};margin-bottom:4px">${_fmtPct(deepChains, propsWithOwnership)}</div>
+          <div style="font-size:11px;color:var(--text2)">${deepChains} of ${propsWithOwnership} properties with 3+ ownership records</div>
         </div>
         <div class="gov-info-card">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Actively Prospecting</div>
-          <div style="font-size:24px;font-weight:800;color:${_c.green};margin-bottom:4px">${recentActivityOwners} / ${uniqueProspecting.size}</div>
-          <div style="font-size:11px;color:var(--text2)">${recentActivityOwners} with activity in 180d of ${uniqueProspecting.size} prospecting</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">SF Prospecting</div>
+          <div style="font-size:24px;font-weight:800;color:${_c.green};margin-bottom:4px">${_fmtPct(recentActivityOwners, ownersWithSF.length)}</div>
+          <div style="font-size:11px;color:var(--text2)">${recentActivityOwners} active in 180d of ${ownersWithSF.length} SF-linked groups</div>
         </div>
         <div class="gov-info-card">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Missing SF Activity</div>
-          <div style="font-size:24px;font-weight:800;color:${missColor};margin-bottom:4px">${missingSF} / ${totalOwners}</div>
-          <div style="font-size:11px;color:var(--text2)">${missingSF} groups missing Salesforce of ${totalOwners} total</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">Missing SF Link</div>
+          <div style="font-size:24px;font-weight:800;color:${missColor};margin-bottom:4px">${_fmtPct(missingSF, totalOwners)}</div>
+          <div style="font-size:11px;color:var(--text2)">${missingSF} of ${totalOwners} groups missing Salesforce</div>
         </div>
       </div>`;
     } catch (err) {
@@ -4078,9 +4056,9 @@ function renderGovOverview() {
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Ownership Coverage', '🏛️', 'ownership');
   html += '<div id="govOwnershipCoverage" class="gov-grid gov-grid-3">';
-  html += govCard({ title: 'Developer-Traced', value: '...', sub: 'loading ownership data', color: 'blue' });
-  html += govCard({ title: 'Actively Prospecting', value: '...', sub: 'loading activity data', color: 'green' });
-  html += govCard({ title: 'Missing SF Activity', value: '...', sub: 'loading salesforce data', color: 'red' });
+  html += govCard({ title: 'Ownership Depth', value: '...', sub: 'loading ownership data', color: 'blue' });
+  html += govCard({ title: 'SF Prospecting', value: '...', sub: 'loading activity data', color: 'green' });
+  html += govCard({ title: 'Missing SF Link', value: '...', sub: 'loading salesforce data', color: 'red' });
   html += '</div>';
 
   html += '</div>'; // end wrapper

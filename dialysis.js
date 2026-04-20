@@ -741,27 +741,22 @@ function renderDiaOverview() {
   // Lazy-load ownership coverage metrics (Section 4b)
   (async () => {
     try {
-      // 1. Developer-traced: properties where earliest sale has land/development transaction_type
-      const allSales = await diaQueryAll('sales_transactions', 'property_id,transaction_type,sale_date', { order: 'sale_date.asc.nullslast' });
-      const salesRows = allSales.data || allSales || [];
-      const earliestByProp = {};
-      salesRows.forEach(s => {
-        if (!s.property_id) return;
-        if (!earliestByProp[s.property_id] || (s.sale_date && (!earliestByProp[s.property_id].sale_date || s.sale_date < earliestByProp[s.property_id].sale_date))) {
-          earliestByProp[s.property_id] = s;
-        }
+      // 1. Ownership depth: properties with 3+ ownership records = deep chain (likely traced to developer)
+      //    Also count properties with ANY ownership vs total properties with sales
+      const ownHistory = await diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' });
+      const ownRows = ownHistory.data || ownHistory || [];
+      const depthByProp = {};
+      ownRows.forEach(o => {
+        if (!o.property_id) return;
+        depthByProp[o.property_id] = (depthByProp[o.property_id] || 0) + 1;
       });
-      const propsWithSales = Object.keys(earliestByProp).length;
-      const devTraced = Object.values(earliestByProp).filter(s => {
-        const tt = (s.transaction_type || '').toLowerCase();
-        return tt.includes('land') || tt.includes('development') || tt.includes('ground lease') || tt.includes('build-to-suit') || tt.includes('build to suit');
-      }).length;
+      const propsWithOwnership = Object.keys(depthByProp).length;
+      const deepChains = Object.values(depthByProp).filter(d => d >= 3).length;
 
-      // 2. Prospecting: true_owners with SF activity in last 180 days
-      const owners = await diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id,prospecting_status');
+      // 2. Prospecting: true_owners with SF activity in last 180 days vs total with SF IDs
+      const owners = await diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id');
       const ownerRows = owners.data || owners || [];
       const ownersWithSF = ownerRows.filter(o => o.salesforce_id);
-      const ownersProspecting = ownerRows.filter(o => o.prospecting_status === 'active');
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
       const cutoffStr = cutoff180.toISOString().substring(0, 10);
       let recentActivityOwners = 0;
@@ -780,21 +775,21 @@ function renderDiaOverview() {
       const _fmtPct = (n, d) => d > 0 ? Math.round(n / d * 100) + '%' : '—';
       const devEl = document.getElementById('diaOwnDevVal');
       const devSub = document.getElementById('diaOwnDevSub');
-      if (devEl) devEl.textContent = _fmtPct(devTraced, propsWithSales);
-      if (devSub) devSub.textContent = devTraced + ' of ' + propsWithSales + ' properties traced to developer';
+      if (devEl) devEl.textContent = _fmtPct(deepChains, propsWithOwnership);
+      if (devSub) devSub.textContent = deepChains + ' of ' + propsWithOwnership + ' properties with 3+ ownership records';
 
       const prospEl = document.getElementById('diaOwnProspVal');
       const prospSub = document.getElementById('diaOwnProspSub');
-      if (prospEl) prospEl.textContent = recentActivityOwners + ' / ' + ownersProspecting.length;
-      if (prospSub) prospSub.textContent = recentActivityOwners + ' with activity in 180d of ' + ownersProspecting.length + ' prospecting';
+      if (prospEl) prospEl.textContent = _fmtPct(recentActivityOwners, ownersWithSF.length);
+      if (prospSub) prospSub.textContent = recentActivityOwners + ' active in 180d of ' + ownersWithSF.length + ' SF-linked groups';
 
       const missEl = document.getElementById('diaOwnMissVal');
       const missSub = document.getElementById('diaOwnMissSub');
       if (missEl) {
-        missEl.textContent = missingSF + ' / ' + totalOwners;
+        missEl.textContent = _fmtPct(missingSF, totalOwners);
         missEl.style.color = missingSF > totalOwners * 0.5 ? '#f87171' : missingSF > totalOwners * 0.25 ? '#fbbf24' : '#34d399';
       }
-      if (missSub) missSub.textContent = missingSF + ' groups missing Salesforce of ' + totalOwners + ' total';
+      if (missSub) missSub.textContent = missingSF + ' of ' + totalOwners + ' groups missing Salesforce';
     } catch (err) {
       console.warn('Ownership coverage load failed:', err.message);
       const wrap = document.getElementById('diaOwnershipCoverage');
@@ -1021,9 +1016,9 @@ function renderDiaOverview() {
   // ═══════════════════════════════════════════════
   html += sectionHeader('Ownership Coverage', '🏛️', 'sales');
   html += '<div id="diaOwnershipCoverage"><div class="dia-grid dia-grid-3">';
-  html += infoCard({ title: 'Developer-Traced', value: '...', sub: 'loading ownership data', color: 'blue', id: 'diaOwnDevVal', subId: 'diaOwnDevSub' });
-  html += infoCard({ title: 'Actively Prospecting', value: '...', sub: 'loading activity data', color: 'green', id: 'diaOwnProspVal', subId: 'diaOwnProspSub' });
-  html += infoCard({ title: 'Missing SF Activity', value: '...', sub: 'loading salesforce data', color: 'red', id: 'diaOwnMissVal', subId: 'diaOwnMissSub' });
+  html += infoCard({ title: 'Ownership Depth', value: '...', sub: 'loading ownership data', color: 'blue', id: 'diaOwnDevVal', subId: 'diaOwnDevSub' });
+  html += infoCard({ title: 'SF Prospecting', value: '...', sub: 'loading activity data', color: 'green', id: 'diaOwnProspVal', subId: 'diaOwnProspSub' });
+  html += infoCard({ title: 'Missing SF Link', value: '...', sub: 'loading salesforce data', color: 'red', id: 'diaOwnMissVal', subId: 'diaOwnMissSub' });
   html += '</div></div>';
 
   // ═══════════════════════════════════════════════
