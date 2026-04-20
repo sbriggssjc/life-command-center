@@ -24,6 +24,8 @@ import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
 import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.js';
+import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
+import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
 import { domainQuery } from './_shared/domain-db.js';
 
 // ============================================================================
@@ -1268,91 +1270,39 @@ async function handleCopilotAction(req, res) {
 
   const { action_id, inputs } = req.body || {};
   if (!action_id) return res.status(400).json({ error: 'action_id required' });
-  if (!inputs) return res.status(400).json({ error: 'inputs required' });
+  if (!inputs)    return res.status(400).json({ error: 'inputs required' });
 
-  switch (action_id) {
-    case 'intake.stage.om.v1':
-      return handleCopilotStageOm(req, res, user, inputs);
-    default:
-      return res.status(400).json({ error: `Unknown action_id: ${action_id}` });
-  }
-}
-
-// ============================================================================
-// COPILOT STAGE OM — Stage an Offering Memorandum PDF for intake
-// Inserts into staged_intake_items + staged_intake_artifacts, returns immediately.
-// No extraction, no matching, no AI — async pipeline handles downstream.
-// ============================================================================
-
-async function handleCopilotStageOm(req, res, user, inputs) {
-  const { intake_source, intake_channel, intent, artifacts, seed_data, copilot_metadata } = inputs;
-
-  // Validate required fields
-  if (intake_source !== 'copilot') {
-    return res.status(400).json({ error: 'intake_source must be "copilot"' });
-  }
-  if (!artifacts?.primary_document) {
-    return res.status(400).json({ error: 'artifacts.primary_document is required' });
-  }
-  const doc = artifacts.primary_document;
-  if (!doc.file_id || !doc.file_name || !doc.storage_path) {
-    return res.status(400).json({ error: 'primary_document requires file_id, file_name, and storage_path' });
-  }
+  // Build authContext — prefer X-MS-Caller-* headers (multi-user future),
+  // fall back to the authenticated LCC user so today's single-user path works
+  // even before the Copilot Studio connector wires the caller headers.
+  const authContext = {
+    email:     (req.headers['x-ms-caller-email']  || user.email        || '').toLowerCase() || null,
+    name:       req.headers['x-ms-caller-name']   || user.display_name || null,
+    oid:        req.headers['x-ms-caller-oid']    || null,
+    tenant_id:  req.headers['x-ms-caller-tenant'] || null,
+  };
 
   const workspaceId = req.headers['x-lcc-workspace']
     || user.memberships?.[0]?.workspace_id
-    || process.env.LCC_DEFAULT_WORKSPACE_ID;
-  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+    || process.env.LCC_DEFAULT_WORKSPACE_ID
+    || null;
 
-  const intakeId = randomUUID();
-
-  // 1. Insert staged_intake_item
-  const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
-    intake_id:   intakeId,
-    source_type: 'document',
-    status:      'received',
-    workspace_id: workspaceId,
-    raw_payload: {
-      intake_source,
-      intake_channel: intake_channel || 'copilot_chat',
-      intent:         intent || null,
-      seed_data:      seed_data || null,
-      copilot_metadata: copilot_metadata || null,
-    },
-  });
-
-  if (!stageResult.ok) {
-    console.error('[copilot-stage-om] Failed to insert staged_intake_item:', stageResult.data);
-    return res.status(500).json({ error: 'Failed to stage intake item', detail: stageResult.data });
-  }
-
-  // 2. Insert staged_intake_artifact
-  const artifactResult = await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-    intake_id:    intakeId,
-    file_name:    doc.file_name,
-    file_type:    'application/pdf',
-    storage_path: doc.storage_path,
-    inline_data:  null,
-  });
-
-  if (!artifactResult.ok) {
-    console.error('[copilot-stage-om] Failed to insert staged_intake_artifact:', artifactResult.data);
-    // Item was created but artifact failed — still return the ID so it can be retried
-    return res.status(207).json({
-      ok: false,
-      status: 'partial',
-      staged_intake_item_id: intakeId,
-      error: 'Intake item created but artifact insert failed',
+  try {
+    let result;
+    if (action_id === 'intake.stage.om.v1') {
+      result = await handleIntakeStageOm({ inputs, authContext, workspaceId });
+    } else if (action_id === 'intake.finalize.om.v1') {
+      result = await handleIntakeFinalizeOm({ inputs });
+    } else {
+      return res.status(400).json({ error: `Unknown action_id: ${action_id}` });
+    }
+    return res.status(result.status).json(result.body);
+  } catch (err) {
+    console.error('[copilot-action] handler threw:', {
+      action_id, error: err?.message, stack: err?.stack,
     });
+    return res.status(500).json({ error: 'handler_exception', detail: err?.message });
   }
-
-  console.log(`[copilot-stage-om] Staged: ${intakeId}, file=${doc.file_name}, channel=${intake_channel}`);
-
-  return res.status(200).json({
-    ok: true,
-    status: 'received',
-    staged_intake_item_id: intakeId,
-  });
 }
 
 // ============================================================================
