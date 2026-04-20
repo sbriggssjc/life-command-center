@@ -105,8 +105,19 @@ export default withErrorHandler(async function handler(req, res) {
       return handleIntakePromote(req, res);
     case 'discard':
       return handleIntakeDiscard(req, res);
-    case 'copilot-action':
-      return handleCopilotAction(req, res);
+    case 'copilot-action': {
+      try {
+        const ret = await handleCopilotAction(req, res);
+        console.log('[intake.js] COPILOT_DIAG_V4 handleCopilotAction resolved; headersSent=', res.headersSent);
+        return ret;
+      } catch (outerErr) {
+        console.error('[intake.js] COPILOT_DIAG_V4 OUTER catch, throw escaped inner:', outerErr?.message, outerErr?.name, outerErr?.stack);
+        if (!res.headersSent) {
+          return res.status(500).json({ error: 'outer_catch', detail: outerErr?.message, name: outerErr?.name });
+        }
+        return;
+      }
+    }
     case 'parse-om':
       return handleParseOm(req, res);
     case 'ingest_pdf':
@@ -1273,9 +1284,18 @@ async function handleCopilotAction(req, res) {
     console.log('[copilot-action] COPILOT_DIAG_V2 about to call authenticate');
     const user = await authenticate(req, res);
     console.log('[copilot-action] COPILOT_DIAG_V3 authenticate returned; user?', !!user, 'email=', user?.email, 'membershipsLen=', user?.memberships?.length);
-    if (!user) return;
+    if (!user) { console.log('[copilot-action] COPILOT_DIAG_V4 user is falsy, returning'); return; }
+    console.log('[copilot-action] COPILOT_DIAG_V4 past user-null-check');
+    console.log('[copilot-action] COPILOT_DIAG_V4 req.body typeof=', typeof req.body, 'isNull=', req.body === null, 'isArr=', Array.isArray(req.body), 'ctor=', req.body?.constructor?.name);
 
-    const { action_id, inputs } = req.body || {};
+    let action_id, inputs;
+    try {
+      ({ action_id, inputs } = req.body || {});
+      console.log('[copilot-action] COPILOT_DIAG_V4 destructure OK');
+    } catch (destructureErr) {
+      console.error('[copilot-action] COPILOT_DIAG_V4 destructure threw:', destructureErr?.message, destructureErr?.name);
+      throw destructureErr;
+    }
     console.log('[copilot-action] COPILOT_DIAG_V3 parsed body; action_id=', action_id, 'hasInputs=', !!inputs);
     if (!action_id) return res.status(400).json({ error: 'action_id required' });
     if (!inputs)    return res.status(400).json({ error: 'inputs required' });
