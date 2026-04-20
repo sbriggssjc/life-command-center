@@ -4055,11 +4055,12 @@ function renderGovOverview() {
   // SECTION 12: OWNERSHIP COVERAGE
   // ═══════════════════════════════════════════════
   html += govSectionHeader('Ownership Coverage', '🏛️', 'ownership');
-  html += '<div id="govOwnershipCoverage" class="gov-grid gov-grid-3">';
+  html += '<div id="govOwnershipCoverage">';
+  html += '<div class="gov-grid gov-grid-3">';
   html += govCard({ title: 'Ownership Depth', value: '...', sub: 'loading ownership data', color: 'blue' });
   html += govCard({ title: 'SF Prospecting', value: '...', sub: 'loading activity data', color: 'green' });
   html += govCard({ title: 'Missing SF Link', value: '...', sub: 'loading salesforce data', color: 'red' });
-  html += '</div>';
+  html += '</div></div>';
 
   html += '</div>'; // end wrapper
   return html;
