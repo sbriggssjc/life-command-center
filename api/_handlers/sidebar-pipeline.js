@@ -1261,7 +1261,22 @@ async function upsertDomainProperty(domain, entity, metadata) {
   // Build property data from CoStar metadata — domain-aware field names.
   // Dialysis build stays as-is; government overrides follow below because
   // the gov properties table uses a different column set entirely.
-  const parsedSF = parseSF(metadata.square_footage);
+  // building_size fallback chain: CoStar square_footage → largest tenant SF → sf_leased
+  let parsedSF = parseSF(metadata.square_footage);
+  if (!parsedSF) {
+    // Try tenant SF data as fallback
+    const tenants = metadata.tenants || [];
+    const tenantSFs = tenants.map(t => parseSF(t.sf)).filter(Boolean);
+    if (tenantSFs.length > 0) {
+      // For single-tenant properties, tenant SF ≈ building SF
+      parsedSF = Math.max(...tenantSFs);
+      console.log(`[upsertDomainProperty] building_size derived from tenant SF: ${parsedSF}`);
+    }
+  }
+  if (!parsedSF) {
+    parsedSF = parseSF(metadata.sf_leased);
+    if (parsedSF) console.log(`[upsertDomainProperty] building_size derived from sf_leased: ${parsedSF}`);
+  }
   const propertyData = stripNulls({
     address,
     city: entity.city || null,
@@ -1497,6 +1512,36 @@ async function upsertPropertyAgency(propertyId, metadata) {
  *       county (NOT NULL), state_code (NOT NULL), tax_year (NOT NULL),
  *       assessed_value, data_hash
  */
+/**
+ * Link a public record (parcel or tax) to a property via the property_public_records join table.
+ * Deduplicates by property_id + record_type + record_id.
+ */
+async function linkPublicRecord(domain, propertyId, recordType, recordId) {
+  try {
+    // Check if link already exists
+    const existing = await domainQuery(domain, 'GET',
+      `property_public_records?property_id=eq.${propertyId}` +
+      `&record_type=eq.${encodeURIComponent(recordType)}` +
+      `&record_id=eq.${encodeURIComponent(recordId)}` +
+      `&select=id&limit=1`
+    );
+    if (existing.ok && existing.data?.length) return; // already linked
+
+    const r = await domainQuery(domain, 'POST', 'property_public_records', {
+      property_id: propertyId,
+      record_type: recordType,
+      record_id:   recordId,
+    });
+    if (r.ok) {
+      console.log(`[PublicRecords] Linked ${recordType} ${recordId} → property ${propertyId} (${domain})`);
+    } else {
+      console.error(`[PublicRecords] Failed to link ${recordType} → property ${propertyId}: status=${r.status}`, r.data);
+    }
+  } catch (err) {
+    console.error(`[PublicRecords] linkPublicRecord error:`, err?.message);
+  }
+}
+
 async function upsertPublicRecords(domain, propertyId, entity, metadata) {
   // ── Diagnostic: log what the extension actually sent ──────────────────
   const pubRecFields = {
@@ -1555,7 +1600,16 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
       });
       parcelData.data_hash = parcelHash;  // NOT NULL — ensure present after stripNulls
       const r = await domainQuery('dialysis', 'POST', 'parcel_records', parcelData);
-      if (r.ok) { count++; console.log(`[PublicRecords] INSERT dialysis parcel_records OK — apn=${apn}`); }
+      if (r.ok) {
+        count++;
+        console.log(`[PublicRecords] INSERT dialysis parcel_records OK — apn=${apn}`);
+        // Link parcel → property via join table
+        const createdParcel = Array.isArray(r.data) ? r.data[0] : r.data;
+        const parcelRecordId = createdParcel?.id;
+        if (parcelRecordId) {
+          await linkPublicRecord('dialysis', propertyId, 'parcel', parcelRecordId);
+        }
+      }
       else console.error(`[PublicRecords] INSERT dialysis parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
     } else {
       await domainPatch('dialysis',
@@ -1563,6 +1617,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         { assessed_value: assessed, county },
         'upsertPublicRecords:dialysis:parcel'
       );
+      // Ensure join table link exists for existing parcel
+      const existingParcelId = parcelLookup.data[0]?.id;
+      if (existingParcelId) {
+        await linkPublicRecord('dialysis', propertyId, 'parcel', existingParcelId);
+      }
     }
   }
 
@@ -1595,7 +1654,16 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         data_hash:            parcelHash,
       });
       const r = await domainQuery('government', 'POST', 'parcel_records', parcelData);
-      if (r.ok) { count++; console.log(`[PublicRecords] INSERT gov parcel_records OK — apn=${apn}`); }
+      if (r.ok) {
+        count++;
+        console.log(`[PublicRecords] INSERT gov parcel_records OK — apn=${apn}`);
+        // Link parcel → property via join table (if gov has property_public_records)
+        const createdParcel = Array.isArray(r.data) ? r.data[0] : r.data;
+        const parcelRecordId = createdParcel?.parcel_id;
+        if (parcelRecordId) {
+          await linkPublicRecord('government', propertyId, 'parcel', parcelRecordId);
+        }
+      }
       else console.error(`[PublicRecords] INSERT gov parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
     } else {
       await domainPatch('government',
@@ -1608,6 +1676,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         }),
         'upsertPublicRecords:gov:parcel'
       );
+      // Ensure join table link exists for existing parcel
+      const existingParcelId = parcelLookup.data[0]?.parcel_id;
+      if (existingParcelId) {
+        await linkPublicRecord('government', propertyId, 'parcel', existingParcelId);
+      }
     }
   }
 
@@ -1647,7 +1720,12 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         });
         taxData.data_hash = taxHash;  // NOT NULL — ensure present after stripNulls
         const r = await domainQuery('dialysis', 'POST', 'tax_records', taxData);
-        if (r.ok) { count++; console.log(`[PublicRecords] INSERT dialysis tax_records OK — apn=${apn} year=${ty.year}`); }
+        if (r.ok) {
+          count++;
+          console.log(`[PublicRecords] INSERT dialysis tax_records OK — apn=${apn} year=${ty.year}`);
+          const createdTax = Array.isArray(r.data) ? r.data[0] : r.data;
+          if (createdTax?.id) await linkPublicRecord('dialysis', propertyId, 'tax', createdTax.id);
+        }
         else console.error(`[PublicRecords] INSERT dialysis tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
       } else {
         await domainPatch('dialysis',
@@ -1655,6 +1733,9 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
           { assessed_value: ty.assessed },
           'upsertPublicRecords:dialysis:tax'
         );
+        // Ensure join table link for existing tax record
+        const existingTaxId = taxLookup.data[0]?.id;
+        if (existingTaxId) await linkPublicRecord('dialysis', propertyId, 'tax', existingTaxId);
       }
     }
   }
@@ -2271,8 +2352,11 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     const hasListingTxMarker = /(listing|asking|on[\s-]?market)/i.test(txTypeForGuard);
     const hasOnMarketNotes = /on[\s-]?market/i.test(notesForGuard);
 
-    if (!hasParseableDate || !hasPositivePrice
-        || hasListingTxMarker || hasOnMarketNotes) {
+    // Allow sales without a disclosed price through — "Not Disclosed",
+    // nominal transactions, and deed transfers are legitimate ownership
+    // transfers that should be recorded even without a dollar amount.
+    // Only block on missing date or listing/asking-price markers.
+    if (!hasParseableDate || hasListingTxMarker || hasOnMarketNotes) {
       await routeListingMisroute(domain, propertyId, saleData, {
         invalid_date: !hasParseableDate,
         invalid_price: !hasPositivePrice,
@@ -3901,6 +3985,22 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     return false;
   }
 
+  // ── Derive annual_rent from NOI for NNN/absolute leases ──────────────
+  // On absolute NNN leases, the tenant pays all expenses, so NOI ≈ annual_rent.
+  // If metadata.annual_rent is missing but NOI is present and the expense
+  // structure indicates NNN/absolute, use NOI as a derived annual_rent.
+  const expStructure = (metadata.expense_structure || metadata.lease_type || '').toLowerCase();
+  const isNNN = /\b(nnn|triple\s*net|absolute\s*net|absolute|bond)\b/i.test(expStructure);
+  let derivedAnnualRent = null;
+  if (!metadata.annual_rent && metadata.noi && isNNN) {
+    derivedAnnualRent = parseCurrency(metadata.noi);
+    if (derivedAnnualRent && derivedAnnualRent >= 100) {
+      console.log(`[upsertDomainLeases] Derived annual_rent=$${derivedAnnualRent} from NOI (NNN lease)`);
+    } else {
+      derivedAnnualRent = null;
+    }
+  }
+
   if (Array.isArray(tenants) && tenants.length > 0) {
     // Build one lease record per tenant entry, filtering out junk
     for (const t of tenants) {
@@ -3909,7 +4009,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       // (the per-SF rent misread as total rent). Reject obviously bogus values
       // below $100/yr — no real commercial lease has annual rent that low.
       const parsedAnnualRent = parseCurrency(metadata.annual_rent);
-      const safeAnnualRent = (parsedAnnualRent && parsedAnnualRent >= 100) ? parsedAnnualRent : null;
+      const safeAnnualRent = (parsedAnnualRent && parsedAnnualRent >= 100) ? parsedAnnualRent : derivedAnnualRent;
       leaseRecords.push({
         property_id: propertyId,
         tenant: t.name.trim(),
@@ -3933,7 +4033,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     if (!tenantName) return 0;
 
     const fallbackAnnualRent = parseCurrency(metadata.annual_rent);
-    const safeFallbackRent = (fallbackAnnualRent && fallbackAnnualRent >= 100) ? fallbackAnnualRent : null;
+    const safeFallbackRent = (fallbackAnnualRent && fallbackAnnualRent >= 100) ? fallbackAnnualRent : derivedAnnualRent;
     leaseRecords.push({
       property_id: propertyId,
       tenant: tenantName.trim(),
@@ -4259,6 +4359,53 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         anchor_rent_date:   anchorDate,
         anchor_rent_source: incomingAnchorSource,
       });
+    }
+  }
+
+  // ── Escalation derivation from OM/metadata fields ──────────────────────
+  // When metadata provides escalation info (lease_bump_pct, rent_escalations,
+  // or escalation text), create a lease_escalations row if none exists yet.
+  if (domain === 'dialysis' && count > 0) {
+    const bumpPct = metadata.lease_bump_pct != null ? Number(metadata.lease_bump_pct) : null;
+    const bumpIntervalMo = metadata.lease_bump_interval_mo
+      ? parseInt(metadata.lease_bump_interval_mo, 10) : null;
+    const escalationText = metadata.rent_escalations || metadata.escalation || null;
+    // Only proceed if we have SOME escalation signal
+    if (bumpPct || escalationText) {
+      // Find the active lease we just created/updated
+      const activeLease = await domainQuery(domain, 'GET',
+        `leases?property_id=eq.${propertyId}&is_active=eq.true` +
+        `&select=lease_id,annual_rent,lease_start,lease_expiration&limit=1`
+      );
+      const lease = activeLease.ok && activeLease.data?.length ? activeLease.data[0] : null;
+      if (lease) {
+        // Check if escalation already exists for this lease from OM/sidebar
+        const existEsc = await domainQuery(domain, 'GET',
+          `lease_escalations?lease_id=eq.${lease.lease_id}` +
+          `&escalation_type=eq.percentage&select=escalation_id&limit=1`
+        );
+        if (!existEsc.ok || !existEsc.data?.length) {
+          const escData = stripNulls({
+            lease_id:                      lease.lease_id,
+            property_id:                   parseInt(propertyId, 10),
+            escalation_type:               'percentage',
+            escalation_value:              bumpPct || null,
+            // annualized_escalation_percent is a GENERATED column — do not write it
+            escalation_frequency_years:    bumpIntervalMo ? bumpIntervalMo / 12 : 1,
+            rent_amount:                   lease.annual_rent ? Number(lease.annual_rent) : null,
+            effective_date:                lease.lease_start || null,
+            start_date:                    lease.lease_start || null,
+            end_date:                      lease.lease_expiration || null,
+            raw_escalation_text:           escalationText,
+          });
+          const escResult = await domainQuery(domain, 'POST', 'lease_escalations', escData);
+          if (escResult.ok) {
+            console.log(`[upsertDomainLeases] Created escalation for lease ${lease.lease_id}: ${bumpPct}% every ${bumpIntervalMo || 12}mo`);
+          } else {
+            console.error(`[upsertDomainLeases] Failed to create escalation:`, escResult.status, escResult.data);
+          }
+        }
+      }
     }
   }
 
