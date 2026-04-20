@@ -999,8 +999,8 @@
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
 
-      // Stop at next major section
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts)/i.test(line)) break;
+      // Stop at next major section (includes demographics, traffic, location sections)
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history)/i.test(line)) break;
 
       // Skip CoStar UI elements
       if (COSTAR_UI_REJECT.test(line)) continue;
@@ -1034,10 +1034,16 @@
 
       // Tenant name: anything else that's a reasonable-length text line
       // Reject CoStar field labels that appear in Lease/Sale tabs
-      const TENANT_SECTION_REJECT = /^(industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|submarket|market|market\s+data|analytics|reports|demographics|transit|walk\s+score|name|source|available|vacant|none|sf|sf\s+occupied|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|lease\s+type|lease\s+term|rent\/?sf|move\s+date|exp\s+date|floor|assessment|investment|research|my\s+notes|contacts|data|verified|confirmed)$/i;
+      const TENANT_SECTION_REJECT = /^(industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|submarket|market|market\s+data|analytics|reports|demographics|transit|walk\s+score|name|source|available|vacant|none|sf|sf\s+occupied|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|lease\s+type|lease\s+term|rent\/?sf|move\s+date|exp\s+date|floor|assessment|investment|research|my\s+notes|contacts|data|verified|confirmed|population|households|median\s+age|median\s+hh\s+income|daytime\s+employees|traffic|traffic\s+vol|last\s+measured|collection\s+street|cross\s+street|distance|location|nearby|environmental|flood|tax\s+history|assessment\s+history|transportation)$/i;
+      // Also reject: street names (ending in Ave/St/Blvd + optional direction),
+      // product attribution, growth projections, and store-type labels
+      const TENANT_STREET_JUNK = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
+      const TENANT_JUNK_PATTERN = /^(made\s+with\s+|.*trafficmetrix|.*growth\s+'\d|store\s+type)/i;
       if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
           !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
-          !TENANT_SECTION_REJECT.test(line)) {
+          !TENANT_SECTION_REJECT.test(line) &&
+          !TENANT_STREET_JUNK.test(line) &&
+          !TENANT_JUNK_PATTERN.test(line)) {
         // Push previous tenant
         if (current && current.name) {
           if (!tenants.some((t) => t.name === current.name)) tenants.push(current);

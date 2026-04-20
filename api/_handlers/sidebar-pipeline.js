@@ -3886,10 +3886,24 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     ? (metadata.document_type === 'lease_abstract' ? 'documented' : 'inferred')
     : 'inferred';
 
+  // ── Junk tenant filter (defense-in-depth against scraper bugs) ──────
+  // Reject tenant names that are obviously demographics, traffic, street names,
+  // or CoStar UI artifacts rather than real business/tenant names.
+  const JUNK_TENANT_RE = /^(population|households|median\s+(age|hh\s+income)|daytime\s+employees|traffic(\s+vol)?|last\s+measured|collection\s+street|cross\s+street|distance|store\s+type|made\s+with\s+)/i;
+  const STREET_NAME_RE = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
+  const GROWTH_RE = /growth\s+'\d/i;
+  function isJunkTenant(name) {
+    if (!name || name.length < 3) return true;
+    if (JUNK_TENANT_RE.test(name)) return true;
+    if (STREET_NAME_RE.test(name)) return true;
+    if (GROWTH_RE.test(name)) return true;
+    return false;
+  }
+
   if (Array.isArray(tenants) && tenants.length > 0) {
-    // Build one lease record per tenant entry
+    // Build one lease record per tenant entry, filtering out junk
     for (const t of tenants) {
-      if (!t.name) continue;
+      if (!t.name || isJunkTenant(t.name)) continue;
       leaseRecords.push({
         property_id: propertyId,
         tenant: t.name,
