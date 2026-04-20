@@ -1,22 +1,10 @@
 // api/_handlers/intake-finalize-om.js
 // Handler for copilot action: intake.finalize.om.v1
-// Confirms staged_intake_item is uploaded and transitions it into the triage queue.
+// Transitions the staged inbox_item from 'new' → 'triaged' for downstream processing.
 
-import { createClient } from '@supabase/supabase-js';
-
-let _lccOpps = null;
-function lccOpps() {
-  if (_lccOpps) return _lccOpps;
-  const url = process.env.LCC_OPPS_SUPABASE_URL;
-  const key = process.env.LCC_OPPS_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Missing LCC_OPPS_SUPABASE_URL or LCC_OPPS_SERVICE_ROLE_KEY');
-  _lccOpps = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
-  return _lccOpps;
-}
+import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 
 export async function handleIntakeFinalizeOm({ inputs }) {
-  const sb = lccOpps();
-
   if (!inputs?.staged_intake_item_id) {
     return { status: 400, body: { error: 'missing_staged_intake_item_id' } };
   }
@@ -26,52 +14,61 @@ export async function handleIntakeFinalizeOm({ inputs }) {
 
   const itemId = inputs.staged_intake_item_id;
 
-  // 1. Confirm the inbox_item exists + has at least one artifact.
-  const { data: item, error: itemErr } = await sb
-    .from('inbox_items')
-    .select('id, status, workspace_id, domain')
-    .eq('id', itemId)
-    .maybeSingle();
-  if (itemErr)      return { status: 500, body: { error: 'lookup_failed', detail: itemErr.message } };
-  if (!item)        return { status: 404, body: { error: 'inbox_item_not_found', staged_intake_item_id: itemId } };
+  // 1. Load item + current metadata (so we can merge, not overwrite)
+  const itemSel = await opsQuery('GET',
+    `inbox_items?id=eq.${pgFilterVal(itemId)}&select=id,status,workspace_id,domain,metadata&limit=1`
+  );
+  if (!itemSel.ok) {
+    return { status: 500, body: { error: 'lookup_failed', detail: itemSel.data } };
+  }
+  if (!itemSel.data?.length) {
+    return { status: 404, body: { error: 'inbox_item_not_found', staged_intake_item_id: itemId } };
+  }
+  const item = itemSel.data[0];
 
-  const { data: artifact, error: artErr } = await sb
-    .from('inbox_item_artifacts')
-    .select('id, storage_path, sha256')
-    .eq('inbox_item_id', itemId)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (artErr)       return { status: 500, body: { error: 'artifact_lookup_failed', detail: artErr.message } };
-  if (!artifact)    return { status: 409, body: { error: 'no_artifact_found', detail: 'stage-om must be called before finalize-om' } };
+  // 2. Confirm at least one artifact is attached
+  const artSel = await opsQuery('GET',
+    `inbox_item_artifacts?inbox_item_id=eq.${pgFilterVal(itemId)}&select=id,storage_path,sha256&order=created_at.asc&limit=1`
+  );
+  if (!artSel.ok) {
+    return { status: 500, body: { error: 'artifact_lookup_failed', detail: artSel.data } };
+  }
+  if (!artSel.data?.length) {
+    return { status: 409, body: { error: 'no_artifact_found', detail: 'stage-om must be called before finalize-om' } };
+  }
+  const artifact = artSel.data[0];
 
-  // 2. Transition status from 'new' to 'triaged' and record finalization metadata.
-  const { data: updated, error: updErr } = await sb
-    .from('inbox_items')
-    .update({
+  // 3. Merge finalization metadata with existing, transition status
+  const mergedMeta = {
+    ...(item.metadata || {}),
+    finalized: {
+      confirmed_at:   new Date().toISOString(),
+      notes:          inputs.notes ?? null,
+      intake_channel: inputs.intake_channel ?? null,
+    },
+  };
+
+  const updRes = await opsQuery('PATCH',
+    `inbox_items?id=eq.${pgFilterVal(itemId)}`,
+    {
       status: 'triaged',
       triaged_at: new Date().toISOString(),
-      metadata: {
-        finalized: {
-          confirmed_at: new Date().toISOString(),
-          notes: inputs.notes ?? null,
-          intake_channel: inputs.intake_channel ?? null,
-        },
-      },
-    })
-    .eq('id', itemId)
-    .select('id')
-    .single();
-  if (updErr)       return { status: 500, body: { error: 'finalize_update_failed', detail: updErr.message } };
+      metadata: mergedMeta,
+      updated_at: new Date().toISOString(),
+    }
+  );
+  if (!updRes.ok) {
+    return { status: updRes.status || 500, body: { error: 'finalize_update_failed', detail: updRes.data } };
+  }
 
   return {
     status: 200,
     body: {
       ok: true,
       status: 'queued',
-      staged_intake_item_id: updated.id,
+      staged_intake_item_id: item.id,
       intake_artifact_id: artifact.id,
-      processing_job_id: null, // populated once extraction pipeline is wired up
+      processing_job_id: null, // populated once the extraction pipeline is wired up
     },
   };
 }
