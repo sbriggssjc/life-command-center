@@ -3893,10 +3893,11 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   const STREET_NAME_RE = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
   const GROWTH_RE = /growth\s+'\d/i;
   function isJunkTenant(name) {
-    if (!name || name.length < 3) return true;
-    if (JUNK_TENANT_RE.test(name)) return true;
-    if (STREET_NAME_RE.test(name)) return true;
-    if (GROWTH_RE.test(name)) return true;
+    if (!name || name.trim().length < 3) return true;
+    const n = name.trim();
+    if (JUNK_TENANT_RE.test(n)) return true;
+    if (STREET_NAME_RE.test(n)) return true;
+    if (GROWTH_RE.test(n)) return true;
     return false;
   }
 
@@ -3904,15 +3905,20 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     // Build one lease record per tenant entry, filtering out junk
     for (const t of tenants) {
       if (!t.name || isJunkTenant(t.name)) continue;
+      // Guard: CoStar metadata.annual_rent is often a junk value like "$11"
+      // (the per-SF rent misread as total rent). Reject obviously bogus values
+      // below $100/yr — no real commercial lease has annual rent that low.
+      const parsedAnnualRent = parseCurrency(metadata.annual_rent);
+      const safeAnnualRent = (parsedAnnualRent && parsedAnnualRent >= 100) ? parsedAnnualRent : null;
       leaseRecords.push({
         property_id: propertyId,
-        tenant: t.name,
+        tenant: t.name.trim(),
         leased_area: parseSF(t.sf || metadata.sf_leased),
         lease_start: parseDate(t.lease_start || metadata.lease_commencement),
         lease_expiration: parseDate(t.lease_expiration || metadata.lease_expiration),
         expense_structure: t.lease_type || metadata.expense_structure || metadata.lease_type,
         rent_per_sf: parseCurrency(t.rent_per_sf || metadata.rent_per_sf),
-        annual_rent: parseCurrency(metadata.annual_rent),
+        annual_rent: safeAnnualRent,
         renewal_options: metadata.renewal_options || null,
         guarantor: metadata.guarantor || null,
         status: 'active',
@@ -3926,15 +3932,17 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     const tenantName = metadata.tenant_name || metadata.primary_tenant;
     if (!tenantName) return 0;
 
+    const fallbackAnnualRent = parseCurrency(metadata.annual_rent);
+    const safeFallbackRent = (fallbackAnnualRent && fallbackAnnualRent >= 100) ? fallbackAnnualRent : null;
     leaseRecords.push({
       property_id: propertyId,
-      tenant: tenantName,
+      tenant: tenantName.trim(),
       leased_area: parseSF(metadata.sf_leased),
       lease_start: parseDate(metadata.lease_commencement),
       lease_expiration: parseDate(metadata.lease_expiration),
       expense_structure: metadata.expense_structure || metadata.lease_type,
       rent_per_sf: parseCurrency(metadata.rent_per_sf),
-      annual_rent: parseCurrency(metadata.annual_rent),
+      annual_rent: safeFallbackRent,
       renewal_options: metadata.renewal_options || null,
       guarantor: metadata.guarantor || null,
       status: 'active',
@@ -3949,7 +3957,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   const existing = await domainQuery(
     domain, 'GET',
     `leases?property_id=eq.${propertyId}` +
-    `&select=lease_id,tenant,lease_start,lease_expiration,term_number,parent_lease_id,superseded_at,is_active,leased_area,renewal_options,expense_structure,operator` +
+    `&select=lease_id,tenant,lease_start,lease_expiration,term_number,parent_lease_id,superseded_at,is_active,leased_area,renewal_options,expense_structure,operator,annual_rent,rent_per_sf,source_confidence` +
     `&limit=50`
   );
   const existingLeases = existing.data || [];
@@ -4089,6 +4097,22 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         delete patchData.term_number;
         delete patchData.term_type;
         delete patchData.parent_lease_id;
+        // Don't overwrite existing rent data with lower-confidence CoStar values.
+        // If the existing lease has annual_rent from a documented/confirmed source,
+        // or the existing rent is much higher (>10x) than the incoming value,
+        // preserve the existing value — CoStar metadata often contains junk rent.
+        if (matchedLease.annual_rent && patchData.annual_rent) {
+          const existingIsHigherConfidence =
+            matchedLease.source_confidence === 'documented' ||
+            (matchedLease.source_confidence === 'inferred' && leaseConfidence === 'inferred' &&
+             matchedLease.annual_rent > patchData.annual_rent * 10);
+          if (existingIsHigherConfidence) {
+            console.log(`[upsertDomainLeases] preserving existing annual_rent=${matchedLease.annual_rent} ` +
+              `(${matchedLease.source_confidence}) over incoming=${patchData.annual_rent} (${leaseConfidence})`);
+            delete patchData.annual_rent;
+            delete patchData.rent_per_sf;
+          }
+        }
         await domainPatch(domain,
           `leases?lease_id=eq.${matchedLease.lease_id}`, patchData, 'upsertDomainLeases');
         leaseId = matchedLease.lease_id;
