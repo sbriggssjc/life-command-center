@@ -447,18 +447,69 @@ function classifyDomain(metadata, entityFields) {
 
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
 
+  // ── Diagnostic: log classifier inputs for debugging ──
+  const hasSaleNotes = !!metadata.sale_notes_raw;
+  const hasPdfTexts = Array.isArray(metadata.pdf_extracted_texts) && metadata.pdf_extracted_texts.length > 0;
+  const textLen = searchText.length;
+  const snippet = searchText.substring(0, 200);
+  console.log(`[classifyDomain] searchText length=${textLen}, hasSaleNotes=${hasSaleNotes}, hasPdfTexts=${hasPdfTexts}, snippet="${snippet}"`);
+
   // Check DIALYSIS FIRST — more specific domain, prevents misclassification
   for (const rx of DIALYSIS_TENANT_PATTERNS) {
-    if (rx.test(searchText)) return 'dialysis';
+    if (rx.test(searchText)) {
+      console.log(`[classifyDomain] → dialysis (matched ${rx})`);
+      return 'dialysis';
+    }
   }
 
   // Then check government
-  if (entityFields.asset_type === 'government_leased') return 'government';
+  if (entityFields.asset_type === 'government_leased') {
+    console.log(`[classifyDomain] → government (asset_type=government_leased)`);
+    return 'government';
+  }
   for (const rx of GOV_TENANT_PATTERNS) {
-    if (rx.test(searchText)) return 'government';
+    if (rx.test(searchText)) {
+      console.log(`[classifyDomain] → government (matched ${rx})`);
+      return 'government';
+    }
   }
 
+  console.log(`[classifyDomain] → null (no pattern matched)`);
   return null;
+}
+
+// Expose last classifier diagnostic for pipeline summary (debugging)
+let _lastClassifierDiag = null;
+function classifyDomainWithDiag(metadata, entityFields) {
+  const result = classifyDomain(metadata, entityFields);
+  // Build diagnostic snapshot
+  const textParts = [
+    metadata.tenant_name, metadata.primary_tenant, metadata.building_name,
+    entityFields.description, entityFields.name, metadata.asset_type,
+    metadata.property_type, metadata.property_subtype, metadata.occupancy_details,
+    metadata.sale_notes_raw,
+  ];
+  if (Array.isArray(metadata.tenants)) for (const t of metadata.tenants) { if (t.name) textParts.push(t.name); }
+  if (Array.isArray(metadata.contacts)) for (const c of metadata.contacts) { if (c.name) textParts.push(c.name); }
+  if (Array.isArray(metadata.pdf_extracted_texts)) for (const pdf of metadata.pdf_extracted_texts) { if (pdf.text) textParts.push(pdf.text.substring(0, 500)); }
+  const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
+
+  // Find which pattern matched
+  let matchedPattern = null;
+  for (const rx of DIALYSIS_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `DIA:${rx}`; break; } }
+  if (!matchedPattern && entityFields.asset_type === 'government_leased') matchedPattern = 'asset_type=government_leased';
+  if (!matchedPattern) { for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `GOV:${rx}`; break; } } }
+
+  _lastClassifierDiag = {
+    result,
+    matchedPattern: matchedPattern || 'none',
+    searchTextLen: searchText.length,
+    searchTextFirst200: searchText.substring(0, 200),
+    hasSaleNotes: !!metadata.sale_notes_raw,
+    hasPdfTexts: Array.isArray(metadata.pdf_extracted_texts) && metadata.pdf_extracted_texts.length > 0,
+    fieldSources: textParts.filter(Boolean).map((v, i) => `[${i}]${String(v).substring(0, 40)}`),
+  };
+  return result;
 }
 
 // ── Step 1: Unpack Contacts ─────────────────────────────────────────────────
@@ -796,7 +847,7 @@ async function writeExtractionSignal(propertyEntityId, metadata, domain, userId,
 // ── Step 4: Domain classification + update ──────────────────────────────────
 
 async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
-  const classified = classifyDomain(metadata, entity);
+  const classified = classifyDomainWithDiag(metadata, entity);
 
   if (classified) {
     // Positive keyword match — update if it changed
@@ -4714,6 +4765,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       domain_propagated: propagation.propagated || false,
       domain_property_id: propagation.property_id || null,
       domain_records: propagation.records || null,
+      _classifier_diag: _lastClassifierDiag,
     },
   };
   await opsQuery('PATCH',
@@ -4733,6 +4785,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     domain_propagated: propagation.propagated || false,
     domain_property_id: propagation.property_id || null,
     domain_records: propagation.records || null,
+    _classifier_diag: _lastClassifierDiag,
     processed_at: new Date().toISOString(),
   };
 }
