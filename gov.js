@@ -163,8 +163,14 @@ async function govWriteService(endpoint, data) {
 // Paginated fetch — loops with offset to get ALL rows past PostgREST 1000-row cap
 async function govQueryAll(table, select, params = {}) {
   let all = [], offset = 0;
-  const pageSize = 5000;  // MAX_LIMIT — minimise round-trips through serverless proxy
+  const pageSize = 1000;  // Match PostgREST max-rows cap (5000 caused pagination to stop early)
+  const maxTime = 120000; // 2-minute total timeout
+  const start = Date.now();
   while (true) {
+    if (Date.now() - start > maxTime) {
+      console.warn('govQueryAll(' + table + ') total timeout after ' + Math.round((Date.now() - start) / 1000) + 's — returning ' + all.length + ' rows');
+      break;
+    }
     const result = await govQuery(table, select, { ...params, limit: pageSize, offset, count: false });
     all = all.concat(result.data || []);
     if ((result.data || []).length < pageSize) break;

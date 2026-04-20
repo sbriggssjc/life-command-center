@@ -743,7 +743,8 @@ function renderDiaOverview() {
     try {
       // 1. Ownership depth: properties with 3+ ownership records = deep chain (likely traced to developer)
       //    Also count properties with ANY ownership vs total properties with sales
-      const ownHistory = await diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null' });
+      // Exclude CMS operator rows (notes LIKE 'CMS%') — those are tenant/operator data, not property ownership
+      const ownHistory = await diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null', filter2: 'or=(notes.not.like.CMS*,notes.is.null)' });
       const ownRows = ownHistory.data || ownHistory || [];
       const depthByProp = {};
       ownRows.forEach(o => {
