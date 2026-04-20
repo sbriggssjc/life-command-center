@@ -4706,6 +4706,9 @@ async function upsertGovListings(propertyId, entity, metadata) {
  * @returns {object} Summary of what was processed
  */
 export async function processSidebarExtraction(entityId, workspaceId, userId, opts = {}) {
+  const _PIPELINE_CODE_VERSION = 'v2.1-2026-04-20';
+  console.log(`[Sidebar pipeline] CODE_VERSION=${_PIPELINE_CODE_VERSION}, entityId=${entityId}`);
+
   // Fetch the full entity
   const entityResult = await opsQuery('GET',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}&select=*`
@@ -4766,6 +4769,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       domain_property_id: propagation.property_id || null,
       domain_records: propagation.records || null,
       _classifier_diag: _lastClassifierDiag,
+      _code_version: _PIPELINE_CODE_VERSION,
     },
   };
   await opsQuery('PATCH',
