@@ -3517,21 +3517,22 @@ function renderGovOverview() {
       const deepChains = Object.values(depthByProp).filter(d => d >= 3).length;
 
       // 2. Prospecting: true_owners with sf_account_id and recent activity
+      //    Gov uses sf_activities table (not salesforce_activities) with sf_account_id join
       const ownerRes = await govQueryAll('true_owners', 'true_owner_id,name,sf_account_id');
       const ownerRows = ownerRes.data || ownerRes || [];
       const totalOwners = ownerRows.length;
       const ownersWithSF = ownerRows.filter(o => o.sf_account_id);
       const missingSF = ownerRows.filter(o => !o.sf_account_id).length;
 
-      // Check SF activity in last 180 days using global activities array
+      // Query gov-specific sf_activities table for recent activity, join on sf_account_id
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
       const cutoffStr = cutoff180.toISOString().substring(0, 10);
-      const allActs = typeof activities !== 'undefined' ? activities : [];
       let recentActivityOwners = 0;
-      if (ownersWithSF.length > 0 && allActs.length > 0) {
-        const recentActs = allActs.filter(a => a.activity_date && a.activity_date >= cutoffStr);
-        const activeCompanies = new Set(recentActs.map(a => (a.company_name || '').toLowerCase()).filter(Boolean));
-        recentActivityOwners = ownersWithSF.filter(o => activeCompanies.has((o.name || '').toLowerCase())).length;
+      if (ownersWithSF.length > 0) {
+        const recentActs = await govQueryAll('sf_activities', 'sf_account_id,activity_date', { filter: 'activity_date=gte.' + cutoffStr });
+        const actRows = recentActs.data || recentActs || [];
+        const activeAccountIds = new Set(actRows.map(a => a.sf_account_id).filter(Boolean));
+        recentActivityOwners = ownersWithSF.filter(o => activeAccountIds.has(o.sf_account_id)).length;
       }
 
       // ── Update DOM ──

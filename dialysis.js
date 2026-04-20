@@ -753,7 +753,9 @@ function renderDiaOverview() {
       const propsWithOwnership = Object.keys(depthByProp).length;
       const deepChains = Object.values(depthByProp).filter(d => d >= 3).length;
 
-      // 2. Prospecting: true_owners with SF activity in last 180 days vs total with SF IDs
+      // 2. Prospecting: true_owners with SF activity in last 180 days via ID join
+      //    true_owners.salesforce_id is mostly Contact IDs (003*) with some Account IDs (001*)
+      //    Join to salesforce_activities via sf_contact_id, sf_company_id, OR true_owner_id
       const owners = await diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id');
       const ownerRows = owners.data || owners || [];
       const ownersWithSF = ownerRows.filter(o => o.salesforce_id);
@@ -761,10 +763,20 @@ function renderDiaOverview() {
       const cutoffStr = cutoff180.toISOString().substring(0, 10);
       let recentActivityOwners = 0;
       if (ownersWithSF.length > 0) {
-        const recentActs = await diaQueryAll('salesforce_activities', 'company_name,activity_date', { filter: 'activity_date=gte.' + cutoffStr });
+        // Pull recent activities with all linkable ID fields
+        const recentActs = await diaQueryAll('salesforce_activities', 'sf_contact_id,sf_company_id,true_owner_id,activity_date', { filter: 'activity_date=gte.' + cutoffStr });
         const actRows = recentActs.data || recentActs || [];
-        const activeCompanies = new Set(actRows.map(a => (a.company_name || '').toLowerCase()).filter(Boolean));
-        recentActivityOwners = ownersWithSF.filter(o => activeCompanies.has((o.name || '').toLowerCase())).length;
+        // Build sets of active IDs from all three link columns
+        const activeSfIds = new Set();
+        const activeTrueOwnerIds = new Set();
+        actRows.forEach(a => {
+          if (a.sf_contact_id) activeSfIds.add(a.sf_contact_id);
+          if (a.sf_company_id) activeSfIds.add(a.sf_company_id);
+          if (a.true_owner_id) activeTrueOwnerIds.add(a.true_owner_id);
+        });
+        recentActivityOwners = ownersWithSF.filter(o =>
+          activeSfIds.has(o.salesforce_id) || activeTrueOwnerIds.has(o.true_owner_id)
+        ).length;
       }
 
       // 3. Missing SF: owners without salesforce_id

@@ -1,52 +1,107 @@
 # LCC Template Health Report
 
-**Week of:** April 13, 2026
+**Week of:** April 20, 2026
 **Lookback window:** 120 days
-**Data source:** Direct Supabase query (LCC API returned 404 — deployment may need attention)
+**Run mode:** Direct Supabase query against `LCC Opps` (xengecqvemvfknjvbvrq).
+The Vercel API endpoint defined in the scheduled-task SKILL.md cannot be reached
+from the scheduler (see "Infrastructure" section below).
 
 ---
 
-## Summary
+## Executive Summary
 
-| Metric | Count |
-|---|---|
-| Total active templates | 14 |
-| Templates needing revision (edit rate >40%) | 0 |
-| Templates underperforming vs targets | N/A — no send data yet |
-| Stale templates (unused 90+ days) | 0 |
-| Templates with zero sends | **14** |
+Nothing requires revision this week. The template system is still pre-launch:
+14 active templates, **zero sends in the last 120 days**, zero broker
+refinements logged, zero performance rows flagged. There is no edit-pattern
+data to evaluate yet, so the "high edit rate" and "underperforming" checks
+return zero by definition.
 
-## Status: All Templates Pre-Launch
+| Metric | Count | Notes |
+|---|---|---|
+| Total templates (latest version) | 14 | |
+| Active (not deprecated) | 14 | |
+| Templates with sends in last 120d | 0 | |
+| Templates with zero sends | **14** | Same as last week |
+| Need revision (≥5 sends & avg edit >40%) | 0 | No sends to evaluate |
+| Underperforming vs targets | 0 | `template_performance` has no rows |
+| Stale (no send in 90d) | 14 | All templates are pre-launch |
+| Refinements logged in last 7d | 0 | `template_refinements` is empty |
+| Sends logged in last 7d | 0 | `template_sends` is empty |
 
-All 14 templates were created on April 7, 2026 (6 days ago) and have **zero recorded sends**. No performance data, edit distances, or engagement metrics exist yet. This is expected — the template system is newly deployed and hasn't been wired into active outreach workflows.
+## Templates Needing Revision
 
-## Template Inventory
+**None.** No template has accumulated the minimum send volume (5 sends with
+recorded `edit_distance_pct`) needed to trigger the revision rule. Once broker
+outreach starts flowing through the draft pipeline, this section will list
+template ID, name, average edit distance, and the auto-generated revision
+suggestion from the `/api/operations?_route=draft&action=health` endpoint.
 
-| ID | Name | Category | Performance Targets |
+## Active Template Inventory (no change from last week)
+
+| ID | Name | Category | Created |
 |---|---|---|---|
-| T-001 | First Touch | seller_bd | 35% open, 5% response |
-| T-002 | Cadence Follow-Up | seller_bd | 40% open, 8% response |
-| T-003 | Capital Markets Update | mass_marketing | 25% open, 8% click, 2% reply |
-| T-004 | Listing Announcement | buyer_bd | 40% open, 8% response |
-| T-005 | Early Look Preview | buyer_bd | 10% offer, 25% response |
-| T-006 | OM Download Follow-Up | buyer_bd | 40% response (flag <25%) |
-| T-007 | Seller Weekly Activity Report | seller_communication | 85% open |
-| T-008 | BOV Delivery Cover | seller_bd | 35% response, 12% listing conversion |
-| T-009 | Closing Announcement | listing_marketing | 30% open, 3% reply |
-| T-010 | Cold Ownership Inquiry | research_outreach | 3% response |
-| T-011 | Listing BD — Same Asset/State | buyer_bd | 40% open, 10% OM request |
-| T-012 | Listing BD — Owner Near Listing | buyer_bd | 30% open, 8% OM request |
-| T-013 | GSA Lease Award Congratulations | seller_bd (gov) | 50% open, 15% response |
-| T-014 | Report Request Fulfillment | seller_bd | 70% open, 5% reply |
+| T-001 | First Touch | seller_bd | 2026-04-13 |
+| T-002 | Cadence Follow-Up | seller_bd | 2026-04-13 |
+| T-003 | Capital Markets Update | mass_marketing | 2026-04-14 |
+| T-004 | Listing Announcement | buyer_bd | 2026-04-07 |
+| T-005 | Early Look Preview | buyer_bd | 2026-04-07 |
+| T-006 | OM Download Follow-Up | buyer_bd | 2026-04-07 |
+| T-007 | Seller Weekly Activity Report | seller_communication | 2026-04-07 |
+| T-008 | BOV Delivery Cover | seller_bd | 2026-04-07 |
+| T-009 | Closing Announcement | listing_marketing | 2026-04-07 |
+| T-010 | Cold Ownership Inquiry | research_outreach | 2026-04-07 |
+| T-011 | Listing BD — Same Asset / Same State | buyer_bd | 2026-04-07 |
+| T-012 | Listing BD — Owner Near Listing | buyer_bd | 2026-04-07 |
+| T-013 | GSA Lease Award Congratulations | seller_bd (gov) | 2026-04-13 |
+| T-014 | Report Request Fulfillment | seller_bd | 2026-04-07 |
 
-## Action Items
+## Action Items for the Week
 
-1. **LCC API is down** — all `/api/` routes return 404. The Vercel deployment needs investigation. The Next.js app serves its default 404 page for API routes, suggesting the serverless functions may not be deployed or the build is broken.
-
-2. **Start sending with templates** — until sends flow through the `template_sends` table, this health check will continue to report no actionable data. Priority templates to activate first: T-001 (First Touch), T-004 (Listing Announcement), T-008 (BOV Delivery Cover).
-
-3. **No refinements recorded** — the `template_refinements` table is empty, which is expected given no sends have occurred.
+1. **Start sending.** Two weeks of zero-send reports in a row. Until a broker
+   actually drafts/sends from these templates, this scheduled run produces
+   nothing actionable. Suggested first templates to wire into a real cadence:
+   T-001 (First Touch), T-004 (Listing Announcement), T-013 (GSA Lease Award
+   Congratulations) — each has clear targets and is tied to an active
+   workflow.
+2. **Fix the scheduled-task URL.** The `SKILL.md` for this task points to
+   `https://life-command-center.vercel.app/...`, but the actual production
+   deployment is `https://life-command-center-nine.vercel.app/...`. The wrong
+   URL returns `DEPLOYMENT_NOT_FOUND`. See infrastructure note for the patch.
+3. **Provision the production `LCC_API_KEY` for the scheduler.** Even with
+   the corrected URL, the endpoint requires `X-LCC-Key` /
+   `Authorization: Bearer`. The scheduler currently has no env access to the
+   production key, so this report will keep falling back to direct Supabase
+   queries until that is wired up.
 
 ## Infrastructure Note
 
-This report was generated by querying the LCC Opps Supabase database directly because the LCC Vercel API (`life-command-center.vercel.app/api/operations?_route=draft&action=health`) returned HTTP 404. The scheduled task definition references a POST to that endpoint — once the API deployment is restored, future runs should use the API endpoint for the full health evaluation (which includes auto-generated revision suggestions).
+The SKILL.md instructs the runner to POST to:
+
+```
+https://life-command-center.vercel.app/api/operations?_route=draft&action=health
+```
+
+That hostname returns `DEPLOYMENT_NOT_FOUND`. The live deployment (verified
+this morning) is:
+
+```
+https://life-command-center-nine.vercel.app/api/operations?_route=draft&action=health
+```
+
+Calling the live URL with `X-LCC-Key` returns `{"error":"Invalid API key"}`
+because the only key available to the scheduler is the *preview* key from
+`.vercel/.env.preview.local`. The production key needs to be added to the
+scheduled-task environment (or the SKILL.md should be updated to read it from
+Supabase Vault the way `lcc_cron_post()` does).
+
+Once both fixes are in place, the API path returns the richer payload that
+includes auto-generated revision suggestions per template — this report will
+then carry those through verbatim instead of recomputing from raw tables.
+
+## Verification
+
+- `template_definitions`: 14 latest-version rows, all `deprecated = false`.
+- `template_sends`: 0 rows total, 0 in last 7d, 0 in last 30d, 0 in last 120d.
+- `template_refinements`: 0 rows total.
+- `template_performance.flagged_for_review`: 0 rows true.
+- Direct query target: Supabase project `xengecqvemvfknjvbvrq` (LCC Opps).
