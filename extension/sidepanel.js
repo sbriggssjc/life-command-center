@@ -1014,16 +1014,18 @@ async function loadPropertyTab() {
           toast.textContent = `Intake id: ${b.intake_id} — ${b.message || ''}`;
           setTimeout(() => toast.remove(), 8000);
         } else {
-          const errDetail =
-            resp?.body?.error ||
-            resp?.body?.detail ||
-            resp?.error ||
-            `HTTP ${resp?.status || '?'}`;
+          const status = resp?.status ? `HTTP ${resp.status}` : '';
+          const errCode = resp?.body?.error || resp?.error || 'unknown';
+          const errDetail = resp?.body?.detail || '';
+          const contentType = resp?.contentType ? ` [${resp.contentType}]` : '';
           btn.textContent = 'Failed';
           btn.style.background = 'var(--red, #dc2626)';
           btn.style.color = '#fff';
-          toast.textContent = `Stage failed: ${errDetail}`;
-          setTimeout(() => toast.remove(), 8000);
+          toast.textContent = `Stage failed: ${status} ${errCode}${contentType} — ${errDetail}`;
+          toast.style.maxHeight = '120px';
+          toast.style.overflow = 'auto';
+          toast.style.fontSize = '10px';
+          setTimeout(() => toast.remove(), 20000);
           btn.disabled = false;
         }
       } catch (err) {

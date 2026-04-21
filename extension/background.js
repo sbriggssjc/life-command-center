@@ -439,7 +439,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           (msg.fileName && msg.fileName.trim()) ||
           (msg.url.split('/').pop() || 'upload.pdf').split('?')[0];
 
-        const postRes = await fetch(`${host}/api/intake/stage-om`, {
+        const stageUrl = `${host}/api/intake/stage-om`;
+        const postRes = await fetch(stageUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -462,11 +463,40 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             },
           }),
         });
-        const payload = await postRes.json().catch(() => ({ error: 'non_json_response' }));
+
+        // Capture body as text first, then attempt to parse JSON. This way we
+        // get useful diagnostics when the server returns HTML (deployment
+        // protection, CORS preflight fallback, etc.) or a plain-text error.
+        const rawBody = await postRes.text();
+        let payload = null;
+        let parseErr = null;
+        try { payload = JSON.parse(rawBody); }
+        catch (e) { parseErr = e.message; }
+
+        // Detailed logging so the service worker console surfaces failures.
+        if (!postRes.ok || parseErr) {
+          console.error('[STAGE_PDF_TO_LCC] non-success response', {
+            stageUrl,
+            status: postRes.status,
+            statusText: postRes.statusText,
+            contentType: postRes.headers.get('content-type'),
+            bodySnippet: rawBody.slice(0, 400),
+            parseErr,
+          });
+        }
+
         respond({
-          ok: postRes.ok && (payload?.ok !== false),
+          ok: postRes.ok && (payload?.ok !== false) && !parseErr,
           status: postRes.status,
-          body: payload,
+          statusText: postRes.statusText,
+          contentType: postRes.headers.get('content-type'),
+          body: payload || {
+            error: parseErr ? 'non_json_response' : 'unknown',
+            detail:
+              parseErr
+                ? `Server returned ${postRes.status} ${postRes.statusText}. First 200 bytes: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+                : rawBody.slice(0, 200),
+          },
           sizeBytes: buffer.byteLength,
           fileName,
         });
