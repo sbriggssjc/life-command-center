@@ -40,11 +40,22 @@ const SUPPORTED_EXCEL_TYPES = [
  * @returns {{ base64: string, media_type: string }}
  */
 async function fetchArtifactData(artifact) {
+  // Infer a media type from whatever the row has. Falls back to
+  // application/pdf since most OM artifacts are PDFs.
+  const inferMediaType = (contentTypeHeader) => {
+    if (artifact.mime_type) return artifact.mime_type;
+    if (contentTypeHeader)  return contentTypeHeader;
+    const fileName = (artifact.file_name || '').toLowerCase();
+    if (fileName.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (fileName.endsWith('.xls'))  return 'application/vnd.ms-excel';
+    return 'application/pdf';
+  };
+
   // Path 1: inline base64 data
   if (artifact.inline_data) {
     return {
       base64: artifact.inline_data,
-      media_type: artifact.mime_type || 'application/pdf'
+      media_type: inferMediaType(null),
     };
   }
 
@@ -65,14 +76,17 @@ async function fetchArtifactData(artifact) {
     }, 30000);
 
     if (!res.ok) {
-      throw new Error(`Storage fetch failed: ${res.status} ${res.statusText}`);
+      const bodyText = await res.text().catch(() => '');
+      throw new Error(
+        `Storage fetch failed: ${res.status} ${res.statusText} — url=${storageUrl} body=${bodyText.slice(0, 200)}`
+      );
     }
 
     const buffer = await res.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
     return {
       base64,
-      media_type: artifact.mime_type || res.headers.get('content-type') || 'application/pdf'
+      media_type: inferMediaType(res.headers.get('content-type')),
     };
   }
 
@@ -245,10 +259,28 @@ export async function processIntakeExtraction(intakeId) {
   );
   const artifacts = artifactsResult.ok ? (artifactsResult.data || []) : [];
 
-  // Filter to document types we can extract from
+  // Filter to document types we can extract from. Match on mime_type first
+  // (if populated), and fall back to file_type / file_name extension so rows
+  // with missing mime_type still get extracted.
   const documentArtifacts = artifacts.filter(a => {
-    const mime = (a.mime_type || '').toLowerCase();
-    return SUPPORTED_PDF_TYPES.includes(mime) || SUPPORTED_EXCEL_TYPES.includes(mime);
+    const mime     = (a.mime_type || '').toLowerCase();
+    const fileType = (a.file_type || '').toLowerCase();
+    const fileName = (a.file_name || '').toLowerCase();
+
+    if (SUPPORTED_PDF_TYPES.includes(mime))   return true;
+    if (SUPPORTED_EXCEL_TYPES.includes(mime)) return true;
+
+    // Extension-based fallback for rows where mime_type isn't set.
+    if (fileType === 'pdf' || fileName.endsWith('.pdf')) return true;
+    if (['xlsx', 'xls'].includes(fileType))  return true;
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) return true;
+
+    // If neither mime nor extension resolved but the artifact has bytes or
+    // a storage path, try it anyway — better to attempt than to silently
+    // filter it out. The AI extractor will reject unreadable content.
+    if (a.inline_data || a.storage_path) return true;
+
+    return false;
   });
 
   if (!documentArtifacts.length) {
