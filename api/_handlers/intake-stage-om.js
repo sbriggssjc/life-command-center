@@ -30,28 +30,26 @@ export async function handleIntakeStageOm({ inputs, authContext, workspaceId }) 
   }
 
   const doc = inputs?.artifacts?.primary_document;
-  if (!doc?.bytes_base64 && !doc?.file_id && !doc?.storage_path) {
+  if (!doc?.bytes_base64 && !doc?.data_uri && !doc?.file_id && !doc?.storage_path) {
     return {
       status: 400,
       body: {
         error: 'missing_primary_document_bytes',
         detail:
-          'artifacts.primary_document.bytes_base64 is required for inline ingestion. ' +
-          'Legacy file_id / storage_path are accepted only when the bot has already ' +
-          'uploaded the file to a resolvable location — this path is not currently enabled.',
+          'Provide artifacts.primary_document.bytes_base64 OR data_uri. ' +
+          'Legacy file_id / storage_path are not currently supported.',
       },
     };
   }
 
-  if (!doc.bytes_base64) {
+  if (!doc.bytes_base64 && !doc.data_uri) {
     return {
       status: 501,
       body: {
         error: 'byte_upload_required',
         detail:
-          'This API currently supports inline base64 ingestion only. Pass the PDF ' +
-          'bytes as artifacts.primary_document.bytes_base64.',
-        hint: 'Presigned-URL / Graph-handoff upload paths are planned for a future round.',
+          'This API accepts inline bytes only. Pass bytes_base64 (raw base64) ' +
+          'or data_uri (full "data:<mime>;base64,<body>" string).',
       },
     };
   }
@@ -59,11 +57,12 @@ export async function handleIntakeStageOm({ inputs, authContext, workspaceId }) 
   // ---- Delegate to shared pipeline ----------------------------------------
   return stageOmIntake(
     {
-      bytes_base64:     doc.bytes_base64,
-      file_name:        doc.file_name || 'upload.pdf',
-      mime_type:        doc.mime_type || 'application/pdf',
-      sha256:           doc.sha256 || null,
-      channel:          inputs.intake_channel,                  // 'copilot_chat' | 'outlook' | 'teams'
+      bytes_base64:     doc.bytes_base64 || null,
+      data_uri:         doc.data_uri     || null,
+      file_name:        doc.file_name    || 'upload.pdf',
+      mime_type:        doc.mime_type    || 'application/pdf',
+      sha256:           doc.sha256       || null,
+      channel:          inputs.intake_channel,
       note:             inputs.intent || null,
       entity_id:        inputs.seed_data?.entity_id || null,
       seed_data:        inputs.seed_data || null,

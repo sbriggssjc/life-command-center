@@ -31,7 +31,8 @@ const EXTRACT_RACE_MS         = 7000;             // keep under Vercel 10s timeo
 
 /**
  * @typedef {object} StageOmInput
- * @property {string}  bytes_base64         — base64 PDF/doc bytes (required)
+ * @property {string}  [bytes_base64]       — raw base64 PDF/doc bytes (EITHER this OR data_uri is required)
+ * @property {string}  [data_uri]           — full data: URI. Server strips the prefix and populates bytes_base64.
  * @property {string}  file_name            — original filename inc. extension
  * @property {string}  [mime_type]          — defaults to 'application/pdf'
  * @property {string}  [sha256]             — optional integrity hash
@@ -60,9 +61,37 @@ const EXTRACT_RACE_MS         = 7000;             // keep under Vercel 10s timeo
  * @returns {Promise<{status:number, body:object}>}
  */
 export async function stageOmIntake(input, auth, workspaceId) {
-  // ---- 0. Validate
+  // ---- 0a. Accept a data URI as an alternate to bytes_base64 —
+  //     lets Copilot Studio topics forward System.Activity.Attachments[1].ContentUrl
+  //     straight through without any Power Fx string-splitting on the client side.
+  if (input?.data_uri && typeof input.data_uri === 'string' && !input.bytes_base64) {
+    const dataUri = input.data_uri;
+    const commaIdx = dataUri.indexOf(',');
+    if (dataUri.startsWith('data:') && commaIdx > 0) {
+      input = {
+        ...input,
+        bytes_base64: dataUri.slice(commaIdx + 1),
+      };
+      if (!input.mime_type) {
+        const header = dataUri.slice(5, commaIdx);          // e.g. "application/pdf;base64"
+        const semiIdx = header.indexOf(';');
+        const mime = semiIdx > 0 ? header.slice(0, semiIdx) : header;
+        if (mime) input.mime_type = mime;
+      }
+    } else {
+      return {
+        status: 400,
+        body: {
+          error: 'invalid_data_uri',
+          detail: 'data_uri must start with "data:" and contain a comma separator.',
+        },
+      };
+    }
+  }
+
+  // ---- 0b. Validate bytes_base64 (after data-URI unwrap)
   if (!input?.bytes_base64 || typeof input.bytes_base64 !== 'string') {
-    return { status: 400, body: { error: 'missing_bytes_base64', detail: 'bytes_base64 (string) is required' } };
+    return { status: 400, body: { error: 'missing_bytes_base64', detail: 'bytes_base64 (or data_uri) is required' } };
   }
   if (!input?.file_name || typeof input.file_name !== 'string') {
     return { status: 400, body: { error: 'missing_file_name', detail: 'file_name (string) is required' } };
