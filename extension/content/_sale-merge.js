@@ -59,10 +59,17 @@
   }
 
   function pricesMatch(a, b, tolerance) {
-    // Missing price on either side — same CoStar transaction captured
-    // from a different tab (deed vs summary). Treat as same sale.
-    if (a === 0 || b === 0) return true;
-    return Math.abs(a - b) / Math.max(a, b) < tolerance;
+    // Both sides have real prices → within tolerance is the same sale.
+    if (a > 0 && b > 0) {
+      return Math.abs(a - b) / Math.max(a, b) < tolerance;
+    }
+    // Missing price on either side — might be the same CoStar transaction
+    // captured from a different tab (deed vs summary), or it might be a
+    // completely different transaction (a $10K seed transfer on the same
+    // day as a $45.75M acquisition). The caller must require a stronger
+    // match signal (buyer+seller names) before treating this as the same
+    // sale, so we return a sentinel ('missing') rather than a hard true.
+    return 'missing';
   }
 
   // Merge a new batch of sales into `existing` in place. Collapses the
@@ -94,7 +101,8 @@
         if (sDoc && eDoc && sDoc === eDoc) return true;
 
         const ePrice = normalizePrice(e.sale_price);
-        if (!pricesMatch(ePrice, sPrice, 0.05)) return false;
+        const priceResult = pricesMatch(ePrice, sPrice, 0.05);
+        if (priceResult === false) return false;
 
         const eDate = normalizeSaleDate(e.sale_date || e.recordation_date);
         const dateClose = daysBetween(sDate, eDate) <= 14;
@@ -103,6 +111,14 @@
         const eSeller = normalizeEntityName(e.seller || e.seller_name);
         const buyerMatch  = !!sBuyer  && !!eBuyer  && sBuyer  === eBuyer;
         const sellerMatch = !!sSeller && !!eSeller && sSeller === eSeller;
+
+        // When price is missing on either side we can't prove this is the
+        // same transaction from price alone — require that both parties
+        // to the transaction match exactly. A same-date coincidence is
+        // not enough (seed transfers and acquisitions often share a day).
+        if (priceResult === 'missing') {
+          return buyerMatch && sellerMatch;
+        }
 
         return dateClose || buyerMatch || sellerMatch;
       });

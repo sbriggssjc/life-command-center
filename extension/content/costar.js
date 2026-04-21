@@ -86,12 +86,17 @@
 
     if (!lines) lines = getPageLines();
     const data = extractFields(lines, url);
-    // Try DOM-based contact extraction first (captures mailto:/tel: icon links);
-    // fall back to text-based parsing for older layouts or when DOM yields nothing
-    let contacts = extractContactsFromDOM();
-    if (contacts.length === 0) {
-      contacts = extractContacts(lines);
-    }
+    // Run BOTH contact extractors (DOM-based captures mailto:/tel: icon
+    // links; text-based catches older layouts and blocks that don't have
+    // explicit contact links) and merge the results. Running only one
+    // path leaves gaps — a title rejected by one extractor can still
+    // slip through the other — so we merge first, then let the
+    // title/garbage filter below run once on the unified set.
+    const domContacts  = extractContactsFromDOM();
+    const textContacts = extractContacts(lines);
+    let contacts = [];
+    mergeContacts(contacts, domContacts);
+    mergeContacts(contacts, textContacts);
     enrichContactsFromDOM(contacts);
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
@@ -208,7 +213,15 @@
     }
 
     mergeContacts(accumulated.contacts, contacts);
-    // Sanitize: remove contacts with garbage names (addresses, dates, titles, etc.)
+    // Sanitize: remove contacts with garbage names (addresses, dates, titles, etc.).
+    // This filter runs on the FULL merged set (DOM + text + anything
+    // already accumulated from prior scans), so newly-added title patterns
+    // retroactively purge stale garbage that was stored before the
+    // pattern landed. The pass also flags single-token first-name-only
+    // captures with name_quality='first_only' instead of letting them
+    // through as usable contacts — downstream consumers (sidebar-pipeline
+    // contact writer) should route flagged rows to research_queue rather
+    // than accept them as resolved names.
     accumulated.contacts = (accumulated.contacts || []).filter(c => {
       if (!c.name) return false;
       if (isContactNameGarbage(c.name)) return false;
@@ -216,6 +229,17 @@
       if (/\d{5}[A-Z]/.test(c.name)) return false;
       // Reject very short non-names
       if (c.name.length <= 2) return false;
+      // Single-token names ("John") — flag for research rather than
+      // letting the enricher guess at a full name. Still drop outright
+      // when the role is a broker slot we know should always carry a
+      // "First Last" name on CoStar's Listing Broker / Buyer Broker
+      // panels, since those are the ones that hit sale_brokers.
+      if (!/\s/.test(c.name.trim())) {
+        const brokerRole = /^(listing_broker|buyer_broker)$/.test(c.role || '')
+          || (Array.isArray(c.roles) && c.roles.some(r => /^(listing_broker|buyer_broker)$/.test(r)));
+        if (brokerRole) return false;
+        c.name_quality = 'first_only';
+      }
       return true;
     });
     mergeTenants(accumulated.tenants, tenants);
@@ -643,6 +667,28 @@
         // Must look like a dollar amount (not a percentage — that's cap rate)
         if (/^\$[\d,.]+/.test(next) && !/%/.test(next)) data.price_per_sf = next;
         else if (/^\$[\d,.]+/.test(prev) && !/%/.test(prev)) data.price_per_sf = prev;
+      }
+
+      // Stat-card / summary loan fields. CoStar's Property Summary tab
+      // sometimes shows "Loan Amount: $23,500,000 · Loan Type: New
+      // Conventional · Origination: 2025-11-13" as a top-level block
+      // detached from the per-deed Transaction Details. Capture those
+      // at the root of the data payload so sidebar-pipeline's loan
+      // fallback path has something to compose when the deed history
+      // doesn't pair a lender with a loan_amount on a single row.
+      if (!data.loan_amount && /^loan\s+amount$/i.test(line)
+          && /^\$[\d,.]+/.test(next)) {
+        data.loan_amount = next;
+      }
+      if (!data.loan_type && /^loan\s+type$/i.test(line)
+          && next && next.length < 60 && !/^[\d$]/.test(next)) {
+        data.loan_type = next;
+      }
+      if (!data.loan_origination_date
+          && (/^(origination(\s+date)?|loan\s+origination(\s+date)?)$/i.test(line))
+          && next && next.length < 30
+          && /\d/.test(next)) {
+        data.loan_origination_date = next;
       }
 
       // ── Public Record tab: Assessment table (multi-year rows) ────────
@@ -1147,9 +1193,16 @@
   // Pure job titles that sometimes slip in as "names" when the DOM puts a
   // title on its own line (no preceding Name/Title pair to anchor on).
   const TITLE_ONLY_PATTERNS = [
-    /^(senior|junior|managing|executive|vice|chief|assistant)\s+(managing\s+)?(director|vice\s+president|vp|president|officer|partner|principal|consultant|broker|manager)\b/i,
-    /,\s*(capital\s+markets|brokerage|research|investment\s+sales|debt|equity)\s*$/i,
+    /^(senior|junior|managing|executive|vice|chief|assistant)\s+(managing\s+)?(director|vice\s+president|vp|president|officer|partner|principal|consultant|broker|manager|analyst|associate)\b/i,
+    // Title, Department suffix — "Senior Managing Director, Brokerage"
+    /,\s*(capital\s+markets|brokerage|research|investment\s+sales|debt|equity|acquisitions?|dispositions?|industrial|office|retail|multifamily)\s*$/i,
     /^senior\s+comps?\s+researcher\b/i,
+    // Bare title + department phrases that aren't personal names
+    /^(director|manager|analyst|associate|partner|principal|consultant|broker|president|agent)\s*,/i,
+    // Title without preceding qualifier but whose whole content is a title
+    /^(comps?\s+researcher|research\s+analyst|acquisitions?\s+(manager|director|associate|analyst)|asset\s+manager|portfolio\s+manager|transaction\s+manager|financial\s+analyst)\b/i,
+    // Titles that embed "of" — "Director of Acquisitions", "Head of Capital Markets"
+    /^(director|manager|head|vp|vice\s+president|president)\s+of\s+/i,
   ];
 
   // Reject city/state/zip patterns like "Saint Louis, MO 63125"
@@ -1436,6 +1489,13 @@
       // Reject garbage contact names (addresses, dates, role labels, titles)
       if (isContactNameGarbage(s)) return false;
       if (isAddress(s)) return false;
+      // Reject single-token first-name-only captures. CoStar contact
+      // blocks always print broker names as "First Last" (sometimes with
+      // a middle initial). A lone "John" slipping through here meant a
+      // logo/title boundary confused the extractor into treating the
+      // stray first-name token as a new person. Single-letter initials
+      // like "T Smith" are fine — they contain a space.
+      if (!/\s/.test(s.trim())) return false;
       return true;
     }
 
@@ -1698,7 +1758,11 @@
       if (phoneMatch) person.phones = [phoneMatch[0].trim()];
     }
 
-    // Name: look for prominent text elements (strong, heading, first link)
+    // Name: look for prominent text elements (strong, heading, first link).
+    // Require at least one space in the candidate so a stray first-name
+    // token from a logo/title boundary ("John") can't become the captured
+    // name. Single-token titles and role labels are already rejected by
+    // isContactNameGarbage, but broker names always arrive as "First Last".
     const nameEl = block.querySelector(
       'strong, b, h3, h4, h5, [class*="name"], [class*="Name"]'
     );
@@ -1707,6 +1771,7 @@
       if (candidate.length >= 3 && candidate.length <= 60 &&
           /^[A-Z]/.test(candidate) && !/@/.test(candidate) &&
           !/^\d/.test(candidate) && !/^(logo|http)/i.test(candidate) &&
+          /\s/.test(candidate) &&
           !isContactNameGarbage(candidate)) {
         person.name = candidate;
       }
@@ -1721,6 +1786,7 @@
         if (/^[A-Z][a-z]/.test(line) && !/@/.test(line) &&
             !/^\d/.test(line) && !/^(logo|http|www\.)/i.test(line) &&
             !/^(no\s+|source:|united states)/i.test(line) &&
+            /\s/.test(line) &&
             !isContactNameGarbage(line)) {
           person.name = line;
           break;

@@ -996,7 +996,32 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
            (c.email || c.phones?.length || c.phone);
   });
 
-  for (const person of people) {
+  // Low-confidence names (name_quality='first_only' from the Chrome
+  // extension) don't get written into contacts — they'd overwrite or
+  // dupe real broker rows with a stray first-name token. Route them to
+  // the research queue so an enrichment pass can resolve the full name
+  // from email/phone/LinkedIn rather than letting the default enricher
+  // guess (which tends to invent surnames like "JOHN CUNNINGHAM" where
+  // none is on the page).
+  if (domain === 'government') {
+    const lowConfidence = people.filter(c => c.name_quality === 'first_only');
+    for (const c of lowConfidence) {
+      await domainQuery('government', 'POST', 'ownership_research_queue', {
+        property_id:         propertyId,
+        address:             entity.address || null,
+        city:                entity.city    || null,
+        state:               entity.state   || null,
+        recorded_owner_name: `BROKER_FIRSTNAME_ONLY:${c.name} (${c.role || 'broker'})`,
+        source:              'costar_sidebar_firstname_only',
+        priority:            'low',
+        status:              'pending',
+        created_at:          new Date().toISOString(),
+      });
+    }
+  }
+  const writable = people.filter(c => c.name_quality !== 'first_only');
+
+  for (const person of writable) {
     const email   = person.email || null;
     const phone   = person.phones?.[0] || person.phone || null;
     const company = person.company || null;
@@ -1441,6 +1466,32 @@ async function upsertDomainProperty(domain, entity, metadata) {
     const landAcresRaw = metadata.lot_size && /AC/i.test(metadata.lot_size)
       ? parseAcres(metadata.lot_size) : null;
 
+    // Mirror most-recent sale fields onto properties so v_sales_comps /
+    // portfolio dashboards don't have to JOIN sales_transactions for
+    // headline numbers. Sales are upserted in Step 5b immediately after
+    // the property upsert, but the properties row also carries its own
+    // latest_deed_date / latest_sale_price columns (migration
+    // 20260326_public_record_property_signals.sql).
+    let latestDeedDate = null;
+    let latestSalePrice = null;
+    {
+      const sales = (metadata.sales_history || [])
+        .filter(s => s && s.sale_date)
+        .map(s => ({
+          date: parseDate(s.sale_date)?.split('T')[0] || null,
+          price: parseCurrency(s.sale_price),
+          deed_type: s.deed_type || null,
+        }))
+        .filter(s => s.date
+          && !(s.deed_type && MORTGAGE_DEED_TYPES.test(s.deed_type)));
+      sales.sort((a, b) =>
+        new Date(b.date).getTime() - new Date(a.date).getTime());
+      if (sales.length) {
+        latestDeedDate = sales[0].date;
+        latestSalePrice = sales[0].price || null;
+      }
+    }
+
     Object.assign(propertyData, stripNulls({
       rba:               parsedSF,
       year_built:        parseYearSafe(metadata.year_built),
@@ -1448,6 +1499,10 @@ async function upsertDomainProperty(domain, entity, metadata) {
       county:            metadata.county || entity.county || null,
       zip_code:          entity.zip || null,
       land_acres:        landAcresRaw || lotAcres,
+      // Gov properties.building_type exists (sql/20260304_initial_schema.sql:35)
+      // — preserve the classified value. Dialysis also has this column via
+      // supabase/migrations/20260416210000_add_building_type_to_properties.sql.
+      building_type:     classifyBuildingType(metadata, entity, primaryTenant),
       gov_occupancy_pct: parsePercent(metadata.occupancy),
       assessed_value:    parseCurrency(metadata.assessed_value),
       gross_rent:        parseCurrency(metadata.annual_rent),
@@ -1459,6 +1514,10 @@ async function upsertDomainProperty(domain, entity, metadata) {
       sf_leased:         parseSF(metadata.sf_leased),
       agency:            primaryTenant || null,
       agency_full_name:  primaryTenant || null,
+      // Mirror latest deed / sale from sales_history — these columns live
+      // on the gov properties row independently of sales_transactions.
+      latest_deed_date:  latestDeedDate,
+      latest_sale_price: latestSalePrice,
       data_source:       'costar_sidebar',
     }));
     // Remove any dialysis-only fields that may have been set
@@ -1471,7 +1530,6 @@ async function upsertDomainProperty(domain, entity, metadata) {
     delete propertyData.land_area;
     delete propertyData.is_single_tenant;
     delete propertyData.building_size;
-    delete propertyData.building_type;
     // Rent anchor columns live on the dialysis properties table only
     delete propertyData.anchor_rent;
     delete propertyData.anchor_rent_date;
@@ -1507,7 +1565,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
     await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
     if (domain === 'government' && metadata.lease_number) {
-      await linkGsaLease(propertyId, metadata.lease_number);
+      await linkGsaLease(propertyId, metadata.lease_number, metadata);
     }
     return propertyId;
   }
@@ -1518,7 +1576,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
     const created = Array.isArray(result.data) ? result.data[0] : result.data;
     const newPropertyId = created?.property_id || null;
     if (newPropertyId && domain === 'government' && metadata.lease_number) {
-      await linkGsaLease(newPropertyId, metadata.lease_number);
+      await linkGsaLease(newPropertyId, metadata.lease_number, metadata);
     }
     return newPropertyId;
   }
@@ -1532,7 +1590,7 @@ async function upsertDomainProperty(domain, entity, metadata) {
  * annual_rent, lease_expiration, sf_leased, agency, and government_type from
  * the GSA IOLP data already in the database.
  */
-async function linkGsaLease(propertyId, leaseNumber) {
+async function linkGsaLease(propertyId, leaseNumber, metadata = null) {
   if (!leaseNumber) return;
 
   // Find the GSA lease record
@@ -1548,24 +1606,54 @@ async function linkGsaLease(propertyId, leaseNumber) {
 
   const lease = leaseLookup.data[0];
 
-  // Link the GSA lease to the property and pull in lease data
+  // Guard against master-lease agency clobbering the CoStar-confirmed occupant.
+  // A master GSA lease (e.g. LPA00668) can cover a building whose actual
+  // occupant per CoStar is a sub-agency like FEMA. If the CoStar tenant
+  // already resolves to a government_agencies row, treat that as the
+  // authoritative occupant and do NOT overwrite the properties.agency /
+  // agency_full_name / government_type fields with the umbrella lease's
+  // values.
+  const costarTenant = (metadata?.tenants?.[0]?.name
+    || metadata?.tenant_name
+    || metadata?.primary_tenant
+    || null);
+  let preserveCostarTenant = false;
+  if (costarTenant) {
+    const costarLookup = await domainQuery('government', 'GET',
+      `government_agencies?full_name=ilike.*${encodeURIComponent(costarTenant)}*` +
+      `&select=agency_id&limit=1`
+    );
+    if (costarLookup.ok && costarLookup.data?.length) {
+      preserveCostarTenant = true;
+      console.log('[linkGsaLease] CoStar tenant', JSON.stringify(costarTenant),
+        'matched government_agencies — preserving tenant fields against lease',
+        leaseNumber);
+    }
+  }
+
+  // Always link the lease record and pull in lease-derived fields (SF, rent,
+  // expiration). Only the tenant-identity fields are gated by the guard above.
+  const patch = {
+    linked_gsa_lease_id: lease.lease_id,
+    lease_number:        leaseNumber,
+    sf_leased:           lease.sf_leased || null,
+    gross_rent:          lease.annual_rent || null,
+    lease_expiration:    lease.lease_expiration || null,
+  };
+  if (!preserveCostarTenant) {
+    patch.agency           = lease.agency || null;
+    patch.agency_full_name = lease.agency_full_name || null;
+    patch.government_type  = lease.government_type || null;
+  }
+
   await domainPatch('government',
     `properties?property_id=eq.${propertyId}`,
-    {
-      linked_gsa_lease_id: lease.lease_id,
-      lease_number:        leaseNumber,
-      // Populate from GSA lease record if not already set
-      agency:              lease.agency || null,
-      agency_full_name:    lease.agency_full_name || null,
-      sf_leased:           lease.sf_leased || null,
-      gross_rent:          lease.annual_rent || null,
-      lease_expiration:    lease.lease_expiration || null,
-      government_type:     lease.government_type || null,
-    },
+    patch,
     'linkGsaLease'
   );
 
-  console.log('[linkGsaLease] Linked lease', leaseNumber, 'to property', propertyId);
+  console.log('[linkGsaLease] Linked lease', leaseNumber, 'to property', propertyId,
+    preserveCostarTenant ? '(preserved CoStar tenant)' : '');
 }
 
 /**
@@ -1602,13 +1690,50 @@ async function upsertPropertyAgency(propertyId, metadata) {
     return 0;
   }
 
-  // Check existing link
+  // Check existing link for this exact agency
   const existing = await domainQuery('government', 'GET',
-    `property_agencies?property_id=eq.${propertyId}&agency_id=eq.${agency.agency_id}&select=property_agency_id&limit=1`
+    `property_agencies?property_id=eq.${propertyId}&agency_id=eq.${agency.agency_id}&select=property_agency_id,is_primary_tenant&limit=1`
   );
-  if (existing.ok && existing.data?.length) return 0; // already linked
 
-  // Create junction record
+  // Uniqueness/primacy invariant: at most one property_agencies row per
+  // property may hold is_primary_tenant=true. If a different agency
+  // (e.g. a stale PITTSBURGH FIELD OFFICE row from a lease-based
+  // ingest) currently holds primary on this property, demote it before
+  // promoting the CoStar-confirmed tenant. CoStar is treated as
+  // authoritative for primary-tenant identity on re-ingest.
+  const currentPrimaries = await domainQuery('government', 'GET',
+    `property_agencies?property_id=eq.${propertyId}&is_primary_tenant=eq.true` +
+    `&agency_id=neq.${agency.agency_id}&select=property_agency_id,agency_id&limit=5`
+  );
+  if (currentPrimaries.ok && Array.isArray(currentPrimaries.data)) {
+    for (const row of currentPrimaries.data) {
+      await domainPatch('government',
+        `property_agencies?property_agency_id=eq.${row.property_agency_id}`,
+        { is_primary_tenant: false },
+        'upsertPropertyAgency:demote'
+      );
+      console.log('[upsertPropertyAgency] demoted stale primary',
+        row.property_agency_id, 'agency_id=', row.agency_id,
+        'on property', propertyId);
+    }
+  }
+
+  if (existing.ok && existing.data?.length) {
+    // Already linked — make sure the CoStar-confirmed agency is flagged
+    // primary, which also covers the case where we previously demoted it
+    // and now need to promote it back.
+    const row = existing.data[0];
+    if (!row.is_primary_tenant) {
+      await domainPatch('government',
+        `property_agencies?property_agency_id=eq.${row.property_agency_id}`,
+        { is_primary_tenant: true },
+        'upsertPropertyAgency:promote'
+      );
+    }
+    return 0;
+  }
+
+  // Create junction record — primary by default for the CoStar tenant.
   const r = await domainQuery('government', 'POST', 'property_agencies', {
     property_id:     propertyId,
     agency_id:       agency.agency_id,
@@ -2493,6 +2618,48 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     if (lookup.ok && lookup.data?.length) {
       const existing = lookup.data[0];
 
+      // Price-tier guard: the ±45 day lookup window is wide enough to pull
+      // back a totally different economic transaction. A $10K nominal /
+      // seed / intra-entity transfer and a $45M+ arms-length acquisition
+      // can both recorded on the same property within weeks of each other
+      // (common on portfolio transfers into a new holding entity just
+      // before closing). If the existing row's price differs from the
+      // incoming price by more than 50%, they are distinct transactions
+      // — INSERT a new row instead of PATCHing the smaller price row
+      // with the larger sale's data (or vice versa).
+      if (soldPrice != null && soldPrice > 0
+          && existing.sold_price != null) {
+        const existingPrice = Number(existing.sold_price);
+        if (existingPrice > 0) {
+          const priceDelta = Math.abs(existingPrice - soldPrice)
+            / Math.max(existingPrice, soldPrice);
+          if (priceDelta > 0.5) {
+            console.log(
+              `[sales-dedup] price-tier mismatch on property=${propertyId}: ` +
+              `existing sale_id=${existing.sale_id} $${existingPrice} vs ` +
+              `incoming $${soldPrice} (delta=${(priceDelta*100).toFixed(1)}%) — ` +
+              `treating as distinct transactions, inserting new row`
+            );
+            const result = await domainQuery(domain, 'POST',
+              'sales_transactions', saleData);
+            if (result.ok) {
+              count++;
+              if (domain === 'dialysis') {
+                await createSaleAlert(propertyId, saleData);
+              }
+              const inserted = Array.isArray(result.data)
+                ? result.data[0] : result.data;
+              const newSaleId = inserted?.sale_id ?? null;
+              await closeActiveListingsOnSale(
+                domain, propertyId, datePart, saleData.sold_price, newSaleId
+              );
+              await linkSaleBrokers(domain, newSaleId, saleData);
+            }
+            continue;
+          }
+        }
+      }
+
       // Tight transaction-identity dedup: if an existing row is within
       // 14 days of the incoming sale_date AND within 5% of the incoming
       // sold_price, treat it as the same economic transaction (the gap
@@ -3210,14 +3377,29 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
 
   let count = 0;
   for (const sale of sales) {
-    if (!sale.lender || !sale.loan_amount) continue;
+    // Accept either `lender` (extractor default, parseDeedHistory line 2016)
+    // or `lender_name` (alternate emitted by sales_transactions enrichers
+    // and a few Public Records DOM paths). A sale that only carries
+    // `lender_name` — like the CMFG Life $23.5M loan on property 11450 —
+    // was silently being dropped here because the check required the
+    // literal `lender` key.
+    const lenderName = sale.lender || sale.lender_name || null;
+    // Loan amount can arrive under a few aliases depending on whether the
+    // row came from the Transaction Details stat card, the Loan Details
+    // sub-section, or a stand-alone Loans Initiated block.
+    const rawLoanAmount = sale.loan_amount
+      ?? sale.mortgage_amount
+      ?? sale.amount_financed
+      ?? null;
+    if (!lenderName || !rawLoanAmount) continue;
 
-    const lenderName = sale.lender;
-    const loanAmount = parseCurrency(sale.loan_amount);
+    const loanAmount = parseCurrency(rawLoanAmount);
     if (!loanAmount) continue;
 
     const originationDatePart =
-      parseDate(sale.loan_origination_date)?.split('T')[0] || null;
+      parseDate(sale.loan_origination_date
+        || sale.origination_date
+        || sale.mortgage_date)?.split('T')[0] || null;
 
     // Defensive dedup: the same mortgage can reach us twice — once from the
     // stat-card (signing date) and once from Public Records (recordation
@@ -3272,7 +3454,7 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
       loan_amount:      loanAmount,
       interest_rate:    parsePercent(sale.interest_rate),
       term_years:       sale.loan_term ? parseFloat(sale.loan_term) / 12 : null,
-      origination_date: parseDate(sale.loan_origination_date)?.split('T')[0] || null,
+      origination_date: originationDatePart,
       maturity_date:    parseDate(sale.maturity_date)?.split('T')[0] || null,
       data_source:      'costar_sidebar',
     }) : stripNulls({
@@ -3280,7 +3462,7 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
       lender_name:           lenderName,
       loan_amount:           loanAmount,
       loan_type:             loanType,
-      origination_date:      parseDate(sale.loan_origination_date)?.split('T')[0] || null,
+      origination_date:      originationDatePart,
       interest_rate_percent: parsePercent(sale.interest_rate),
       loan_term:             parseIntSafe(sale.loan_term),
       maturity_date:         parseDate(sale.maturity_date)?.split('T')[0] || null,
@@ -3293,6 +3475,89 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
       if (result.ok) count++;
+    }
+  }
+
+  // Fallback path: a loan shown on the sidebar UI (Lender: CMFG Life,
+  // Loan Amount: $23.5M) is sometimes split across a `role='lender'`
+  // contact row and a top-level stat-card loan_amount / loan_type pair,
+  // instead of being packed into a single sales_history entry. The
+  // sales_history iterator above misses those because neither row
+  // carries both `lender` AND `loan_amount`. Compose one loan write per
+  // distinct lender contact, using stat-card fields for amount/type and
+  // the most recent non-mortgage sale_date as the origination date.
+  const lenderContacts = (metadata.contacts || []).filter(c =>
+    (c.role === 'lender' || (Array.isArray(c.roles) && c.roles.includes('lender')))
+    && c.name && c.name.length > 2
+  );
+  if (lenderContacts.length > 0) {
+    const statLoanAmount = parseCurrency(
+      metadata.loan_amount
+        ?? metadata.current_loan_amount
+        ?? metadata.last_loan_amount
+    );
+    const statOrigination = parseDate(
+      metadata.loan_origination_date
+        ?? metadata.origination_date
+        ?? metadata.last_loan_origination_date
+    )?.split('T')[0] || null;
+
+    const mostRecentSale = (metadata.sales_history || [])
+      .filter(s => s.sale_date
+        && !(s.deed_type && MORTGAGE_DEED_TYPES.test(s.deed_type)))
+      .map(s => ({
+        date: parseDate(s.sale_date)?.split('T')[0] || null,
+      }))
+      .filter(s => s.date)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]
+      ?.date || null;
+
+    const fallbackAmount = statLoanAmount;
+    const fallbackDate = statOrigination || mostRecentSale;
+
+    for (const lender of lenderContacts) {
+      if (!fallbackAmount) continue;
+
+      // Check whether a loan with this amount already exists (either
+      // written by the sales_history loop above or a prior run). Match
+      // on property + amount within 1% to avoid writing the same loan
+      // twice when CMFG Life is also present on a sales_history row.
+      const amtLo = Math.floor(fallbackAmount * 0.99);
+      const amtHi = Math.ceil(fallbackAmount * 1.01);
+      const lookupSelect = domain === 'government'
+        ? 'loan_id'
+        : 'loan_id,lender_name';
+      const dupCheck = await domainQuery(domain, 'GET',
+        `loans?property_id=eq.${propertyId}` +
+        `&loan_amount=gte.${amtLo}&loan_amount=lte.${amtHi}` +
+        `&select=${lookupSelect}&limit=1`
+      );
+      if (dupCheck.ok && dupCheck.data?.length) continue;
+
+      const fallbackLoanType = mapLoanType(
+        metadata.loan_type || metadata.current_loan_type || null
+      );
+      const loanData = domain === 'government' ? stripNulls({
+        property_id:      propertyId,
+        loan_type:        fallbackLoanType,
+        loan_amount:      fallbackAmount,
+        origination_date: fallbackDate,
+        data_source:      'costar_sidebar',
+      }) : stripNulls({
+        property_id:      propertyId,
+        lender_name:      lender.name,
+        loan_amount:      fallbackAmount,
+        loan_type:        fallbackLoanType,
+        origination_date: fallbackDate,
+        data_source:      'costar_sidebar',
+      });
+
+      const result = await domainQuery(domain, 'POST', 'loans', loanData);
+      if (result.ok) {
+        count++;
+        console.log(`[upsertDomainLoans] fallback wrote loan for lender="${lender.name}" ` +
+          `amount=$${fallbackAmount} property=${propertyId}`);
+      }
     }
   }
 
