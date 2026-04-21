@@ -1014,19 +1014,28 @@ async function loadPropertyTab() {
           toast.textContent = `Intake id: ${b.intake_id} — ${b.message || ''}`;
           setTimeout(() => toast.remove(), 8000);
         } else {
+          const asString = (v) => {
+            if (v == null) return '';
+            if (typeof v === 'string') return v;
+            try { return JSON.stringify(v); } catch { return String(v); }
+          };
           const status = resp?.status ? `HTTP ${resp.status}` : '';
-          const errCode = resp?.body?.error || resp?.error || 'unknown';
-          const errDetail = resp?.body?.detail || '';
+          const errCode = asString(resp?.body?.error || resp?.error || 'unknown');
+          const errDetail = asString(resp?.body?.detail || resp?.body?.message || resp?.body || '');
           const contentType = resp?.contentType ? ` [${resp.contentType}]` : '';
           btn.textContent = 'Failed';
           btn.style.background = 'var(--red, #dc2626)';
           btn.style.color = '#fff';
           toast.textContent = `Stage failed: ${status} ${errCode}${contentType} — ${errDetail}`;
-          toast.style.maxHeight = '120px';
+          toast.style.maxHeight = '160px';
           toast.style.overflow = 'auto';
           toast.style.fontSize = '10px';
-          setTimeout(() => toast.remove(), 20000);
+          toast.style.whiteSpace = 'pre-wrap';
+          toast.style.userSelect = 'text';
+          setTimeout(() => toast.remove(), 30000);
           btn.disabled = false;
+          // Also dump to console for easier copying
+          console.error('[Stage to LCC] failed', resp);
         }
       } catch (err) {
         btn.textContent = 'Error';
