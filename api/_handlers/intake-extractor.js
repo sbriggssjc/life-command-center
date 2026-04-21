@@ -292,20 +292,45 @@ export async function processIntakeExtraction(intakeId) {
     return { ok: true, extraction_snapshot: null, error: 'No extractable documents' };
   }
 
-  // 3. Run extraction on each document artifact
+  // 3. Run extraction on each document artifact, tracking per-artifact status
   const extractions = [];
+  const perArtifactDiagnostics = [];
   for (const artifact of documentArtifacts) {
+    const diag = {
+      artifact_id: artifact.id,
+      file_name:   artifact.file_name,
+      mime_type:   artifact.mime_type,
+      has_inline:  !!artifact.inline_data,
+      has_storage: !!artifact.storage_path,
+    };
     try {
+      const t0 = Date.now();
       const { base64, media_type } = await fetchArtifactData(artifact);
+      diag.fetch_ms  = Date.now() - t0;
+      diag.fetched   = true;
+      diag.fetch_bytes = base64 ? Math.ceil(base64.length * 3 / 4) : 0;
+      diag.fetched_media_type = media_type;
+
+      const t1 = Date.now();
       const parsed = await callAiExtraction(base64, media_type);
+      diag.ai_ms = Date.now() - t1;
+
       if (parsed) {
+        diag.ai_ok = true;
+        diag.document_type = parsed.document_type || null;
         extractions.push(parsed);
       } else {
+        diag.ai_ok = false;
+        diag.ai_error = 'no_parseable_result';
         console.warn(`[intake-extractor] No parseable result for artifact_id=${artifact.id}`);
       }
     } catch (err) {
+      diag.fetched = diag.fetched ?? false;
+      diag.ai_ok   = false;
+      diag.error   = err?.message || String(err);
       console.error(`[intake-extractor] Artifact extraction failed (artifact_id=${artifact.id}):`, err.message);
     }
+    perArtifactDiagnostics.push(diag);
   }
 
   // 4. Merge results (prefer OM > lease_abstract > rent_roll)
@@ -366,7 +391,13 @@ export async function processIntakeExtraction(intakeId) {
     }
   }
 
-  return { ok: true, extraction_snapshot: mergedSnapshot };
+  return {
+    ok: true,
+    extraction_snapshot: mergedSnapshot,
+    artifact_count:   documentArtifacts.length,
+    extraction_count: extractions.length,
+    diagnostics:      perArtifactDiagnostics,
+  };
 }
 
 // ============================================================================
