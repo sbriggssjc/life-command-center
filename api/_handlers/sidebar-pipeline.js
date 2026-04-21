@@ -3216,11 +3216,50 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
     const loanAmount = parseCurrency(sale.loan_amount);
     if (!loanAmount) continue;
 
-    // Dedup by property_id + lender_name + loan_amount
-    const encodedLender = encodeURIComponent(lenderName);
+    const originationDatePart =
+      parseDate(sale.loan_origination_date)?.split('T')[0] || null;
+
+    // Defensive dedup: the same mortgage can reach us twice — once from the
+    // stat-card (signing date) and once from Public Records (recordation
+    // date), potentially with slightly different rounded loan amounts. Treat
+    // rows on the same property within ±5% of the loan amount as the same
+    // loan, and — when origination_date is known on both sides — require
+    // the dates to be within ±14 days. PostgREST can't express the ±5%
+    // band in a single URL, so we fetch the ±5% window and pick the best
+    // candidate in JS.
+    const amtLo = Math.floor(loanAmount * 0.95);
+    const amtHi = Math.ceil(loanAmount * 1.05);
+    const lenderFilter = domain === 'government'
+      ? ''  // gov loans has no lender_name column
+      : `&lender_name=ilike.${encodeURIComponent(lenderName)}`;
+    const lookupSelect = domain === 'government'
+      ? 'loan_id,loan_amount,origination_date'
+      : 'loan_id,loan_amount,origination_date,lender_name';
     const lookup = await domainQuery(domain, 'GET',
-      `loans?property_id=eq.${propertyId}&lender_name=ilike.${encodedLender}&loan_amount=eq.${loanAmount}&select=loan_id&limit=1`
+      `loans?property_id=eq.${propertyId}` +
+      `&loan_amount=gte.${amtLo}&loan_amount=lte.${amtHi}` +
+      `${lenderFilter}&select=${lookupSelect}&limit=5`
     );
+
+    let matchedLoanId = null;
+    if (lookup.ok && Array.isArray(lookup.data)) {
+      for (const cand of lookup.data) {
+        const candDate = cand.origination_date
+          ? String(cand.origination_date).split('T')[0]
+          : null;
+        let dateOk = true;
+        if (originationDatePart && candDate) {
+          const daysDiff = Math.abs(
+            new Date(candDate).getTime() - new Date(originationDatePart).getTime()
+          ) / 86400000;
+          dateOk = daysDiff <= 14;
+        }
+        if (dateOk) {
+          matchedLoanId = cand.loan_id;
+          break;
+        }
+      }
+    }
 
     const loanType = mapLoanType(sale.loan_type);
 
@@ -3248,9 +3287,9 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
       data_source:           'costar_sidebar',
     });
 
-    if (lookup.ok && lookup.data?.length) {
+    if (matchedLoanId != null) {
       await domainPatch(domain,
-        `loans?loan_id=eq.${lookup.data[0].loan_id}`, loanData, 'upsertDomainLoans');
+        `loans?loan_id=eq.${matchedLoanId}`, loanData, 'upsertDomainLoans');
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
       if (result.ok) count++;
