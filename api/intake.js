@@ -26,7 +26,7 @@ import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
 import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.js';
 import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
 import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
-import { domainQuery } from './_shared/domain-db.js';
+import { stageOmIntake } from './_shared/intake-om-pipeline.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -245,63 +245,57 @@ async function handleOutlookMessage(req, res) {
   if (existingCheck.ok && existingCheck.data?.length) {
     const existing = existingCheck.data[0];
 
-    // Check if a staged intake item already exists for this inbox item
-    const stagedCheck = await domainQuery('dialysis', 'GET',
-      `staged_intake_items?intake_id=eq.${existing.id}&select=intake_id&limit=1`
+    // Check if a staged intake item already exists for this inbox item (LCC Opps)
+    const stagedCheck = await opsQuery('GET',
+      `staged_intake_items?intake_id=eq.${pgFilterVal(existing.id)}&select=intake_id&limit=1`
     );
     const alreadyStaged = stagedCheck.ok && stagedCheck.data?.length > 0;
 
-    // If not yet staged and this email has attachments, run the bridge
+    // If not yet staged and this email has a usable attachment, run the
+    // unified pipeline. Same logic as the fresh-intake path above.
     if (!alreadyStaged && hasAttachments) {
       const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
-      const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
-        intake_id:            existing.id,
-        source_type:          'email',
-        internet_message_id:  internetMsgId || messageId || null,
-        status:               'queued',
-        raw_payload: {
-          subject,
-          from:           sender,
-          received:       receivedAtIso,
-          correlation_id: correlationId,
-          inbox_item_id:  existing.id,
-        },
-      });
-      if (stageResult.ok) {
-        for (const att of atts) {
-          if (!att.inline_data && !att.storage_path) continue;
-          await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-            intake_id:    existing.id,
-            file_name:    att.file_name || att.name || 'attachment',
-            file_type:    att.file_type || att.contentType || 'application/octet-stream',
-            storage_path: att.storage_path || null,
-            inline_data:  att.inline_data || att.content || null,
-          });
-        }
+      let primaryDocument = null;
 
-        // No direct attachments? Try to pull a PDF from URLs in the body.
-        if (atts.length === 0 && bodyForUrlScan) {
-          const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
-          for (const url of urlMatches.slice(0, 3)) {  // max 3 URLs to try
-            const fetched = await fetchUrlArtifact(url);
-            if (fetched) {
-              await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-                intake_id:    existing.id,
-                file_name:    fetched.fileName,
-                file_type:    fetched.contentType,
-                storage_path: url,            // keep the source URL
-                inline_data:  fetched.base64,
-              });
-              break;  // one OM per email is sufficient
-            }
+      if (atts.length > 0) {
+        const first = atts.find(a => a.inline_data || a.content || a.storage_path) || atts[0];
+        primaryDocument = {
+          bytes_base64: first.inline_data || first.content || null,
+          file_name:    first.file_name || first.name || 'attachment.pdf',
+          mime_type:    first.file_type || first.contentType || 'application/pdf',
+        };
+      } else if (bodyForUrlScan) {
+        const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
+        for (const url of urlMatches.slice(0, 3)) {
+          const fetched = await fetchUrlArtifact(url);
+          if (fetched) {
+            primaryDocument = {
+              bytes_base64: fetched.base64,
+              file_name:    fetched.fileName || 'om.pdf',
+              mime_type:    fetched.contentType || 'application/pdf',
+            };
+            break;
           }
         }
+      }
 
-        await Promise.race([
-          processIntakeExtraction(existing.id),
-          new Promise(r => setTimeout(r, 8000)),
-        ]).catch(err =>
-          console.error('[intake] dedup-path extraction failed:', existing.id, err.message)
+      if (primaryDocument && primaryDocument.bytes_base64) {
+        await stageOmIntake(
+          {
+            bytes_base64:     primaryDocument.bytes_base64,
+            file_name:        primaryDocument.file_name,
+            mime_type:        primaryDocument.mime_type,
+            channel:          'email',
+            note:             subject || null,
+            seed_data: { tags: ['email_intake', 'dedup_replay'] },
+          },
+          {
+            email:      sender?.email || user.email,
+            name:       sender?.name  || user.display_name || null,
+          },
+          workspaceId,
+        ).catch(err =>
+          console.error('[intake] dedup-path stageOmIntake failed:', existing.id, err.message)
         );
       }
     }
@@ -349,82 +343,82 @@ async function handleOutlookMessage(req, res) {
 
   const item = Array.isArray(result.data) ? result.data[0] : result.data;
 
-  // If email has attachments, bridge to staged intake pipeline.
-  // IMPORTANT: this must run BEFORE res.json() — Vercel serverless functions
-  // terminate immediately after the response is sent, so any async work started
-  // here and not awaited will be silently killed.
+  // If email has attachments (or a findable PDF URL in the body), bridge to
+  // the unified stageOmIntake pipeline. This replaces the legacy dual-DB
+  // path (dialysis_db writes, LCC-Opps reads) with a single LCC-Opps-native
+  // call that creates staged_intake_items + staged_intake_artifacts, fires
+  // the extractor, runs the matcher, and logs an entity-scoped memory event.
   let stagedIntakeId = null;
-  if (hasAttachments) {
-    // staged_intake_items.intake_id is a UUID column. correlationId is a
-    // synthetic "outlook-msg-<hash>-<ts>" string, so we can't use it here.
-    // Reuse the inbox_item's real UUID so re-runs for the same email map to
-    // the same staged row; fall back to a fresh UUID only if the insert above
-    // didn't return a row.
-    const candidateId = item?.id
-      ? item.id          // reuse the inbox_item UUID — same entity, same ID
-      : randomUUID();    // fallback for edge cases
+  {
+    // Collect the first candidate PDF: either an inline attachment or a
+    // body-URL-fetched PDF. Multi-PDF emails are not the common case; if one
+    // comes in, we stage the first and log a note for the rest.
+    const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+    let primaryDocument = null;
 
-    // 1. Create staged_intake_item
-    const stageResult = await domainQuery('dialysis', 'POST', 'staged_intake_items', {
-      intake_id:            candidateId,
-      source_type:          'email',
-      internet_message_id:  internetMsgId || messageId || null,
-      status:               'queued',
-      raw_payload: {
-        subject,
-        from:           sender,
-        received:       receivedAtIso,
-        correlation_id: correlationId,
-        inbox_item_id:  item?.id,
-      },
-    });
-
-    if (stageResult.ok) {
-      stagedIntakeId = candidateId;
-
-      // 2. Write artifacts if we have them
-      const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
-      for (const att of atts) {
-        await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-          intake_id:    stagedIntakeId,
-          file_name:    att.file_name || att.name || 'attachment',
-          file_type:    att.file_type || att.contentType || 'application/octet-stream',
-          storage_path: att.storage_path || null,
-          inline_data:  att.inline_data || att.content || null,
-        });
-      }
-
-      // 2b. No direct attachments? Try to pull a PDF from URLs in the body.
+    if (atts.length > 0) {
+      const first = atts.find(a => a.inline_data || a.content || a.storage_path) || atts[0];
+      primaryDocument = {
+        bytes_base64: first.inline_data || first.content || null,
+        file_name:    first.file_name || first.name || 'attachment.pdf',
+        mime_type:    first.file_type || first.contentType || 'application/pdf',
+      };
+    } else if (bodyForUrlScan) {
       // Power Automate sometimes signals has_attachments=true for inline
       // images/signatures while the real OM is linked from the body instead.
-      if (atts.length === 0 && bodyForUrlScan) {
-        const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
-        for (const url of urlMatches.slice(0, 3)) {  // max 3 URLs to try
-          const fetched = await fetchUrlArtifact(url);
-          if (fetched) {
-            await domainQuery('dialysis', 'POST', 'staged_intake_artifacts', {
-              intake_id:    stagedIntakeId,
-              file_name:    fetched.fileName,
-              file_type:    fetched.contentType,
-              storage_path: url,            // keep the source URL
-              inline_data:  fetched.base64,
-            });
-            break;  // one OM per email is sufficient
-          }
+      const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
+      for (const url of urlMatches.slice(0, 3)) {
+        const fetched = await fetchUrlArtifact(url);
+        if (fetched) {
+          primaryDocument = {
+            bytes_base64: fetched.base64,
+            file_name:    fetched.fileName || 'om.pdf',
+            mime_type:    fetched.contentType || 'application/pdf',
+          };
+          break;
         }
       }
+    }
 
-      // 3. Run extraction with a short timeout race.
-      // processIntakeExtraction calls OpenAI and can be long-running; we await
-      // up to 8s so it has a chance to complete within the same invocation
-      // (Vercel kills everything after res.json()). Staying under the 10s
-      // function limit preserves headroom for the response itself.
-      await Promise.race([
-        processIntakeExtraction(stagedIntakeId),
-        new Promise(resolve => setTimeout(resolve, 8000)),
-      ]).catch(err =>
-        console.error('[intake] staged extraction failed:', stagedIntakeId, err.message)
+    if (primaryDocument && primaryDocument.bytes_base64) {
+      const stageRes = await stageOmIntake(
+        {
+          bytes_base64:     primaryDocument.bytes_base64,
+          file_name:        primaryDocument.file_name,
+          mime_type:        primaryDocument.mime_type,
+          channel:          'email',
+          note:             subject || null,
+          seed_data: {
+            property: null,
+            tags:     ['email_intake'],
+          },
+          copilot_metadata: null,
+        },
+        {
+          email:      sender?.email || user.email,
+          name:       sender?.name  || user.display_name || null,
+          oid:        null,
+          tenant_id:  null,
+        },
+        workspaceId,
       );
+
+      if (stageRes.status === 200 && stageRes.body?.ok) {
+        stagedIntakeId = stageRes.body.intake_id;
+        // Link the email's inbox_item to the new staging record via metadata.
+        if (item?.id && stagedIntakeId && stagedIntakeId !== item.id) {
+          await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(item.id)}`, {
+            metadata: {
+              ...(item.metadata || {}),
+              bridged_to_intake_id: stagedIntakeId,
+            },
+          }).catch(() => {});
+        } else if (item?.id) {
+          stagedIntakeId = item.id;
+        }
+      } else {
+        console.error('[intake] stageOmIntake from email failed:', stageRes.status, stageRes.body?.error);
+      }
     }
   }
 
