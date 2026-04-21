@@ -974,6 +974,67 @@ async function loadPropertyTab() {
     });
   });
 
+  // "Stage to LCC" — sends the PDF to /api/intake/stage-om so it flows
+  // through the unified pipeline (inbox_items + staged_intake_items +
+  // AI extraction + property matching + memory log). Background.js handles
+  // the byte fetch + POST to avoid CORS on listing-site PDFs.
+  body.querySelectorAll('.doc-stage-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const url = btn.dataset.url;
+      const label = btn.dataset.label || '';
+      const card = btn.closest('.doc-card');
+      if (!url || !card) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Staging…';
+      const toast = document.createElement('div');
+      toast.className = 'update-toast';
+      toast.textContent = 'Posting to LCC intake…';
+      card.appendChild(toast);
+
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const sourceUrl = tabs?.[0]?.url || url;
+        const hostname = (() => { try { return new URL(sourceUrl).hostname; } catch { return null; } })();
+
+        const resp = await chrome.runtime.sendMessage({
+          type: 'STAGE_PDF_TO_LCC',
+          url,
+          fileName: label || undefined,
+          sourceUrl,
+          hostname,
+          intent: `Staged from ${hostname || 'browser'}`,
+        });
+
+        if (resp?.ok && resp?.body?.ok) {
+          const b = resp.body;
+          btn.textContent = `✓ Staged (${b.extraction_status || 'received'})`;
+          btn.style.background = 'var(--green)';
+          btn.style.color = '#fff';
+          toast.textContent = `Intake id: ${b.intake_id} — ${b.message || ''}`;
+          setTimeout(() => toast.remove(), 8000);
+        } else {
+          const errDetail =
+            resp?.body?.error ||
+            resp?.body?.detail ||
+            resp?.error ||
+            `HTTP ${resp?.status || '?'}`;
+          btn.textContent = 'Failed';
+          btn.style.background = 'var(--red, #dc2626)';
+          btn.style.color = '#fff';
+          toast.textContent = `Stage failed: ${errDetail}`;
+          setTimeout(() => toast.remove(), 8000);
+          btn.disabled = false;
+        }
+      } catch (err) {
+        btn.textContent = 'Error';
+        toast.textContent = `Stage error: ${err.message || err}`;
+        setTimeout(() => toast.remove(), 8000);
+        btn.disabled = false;
+      }
+    });
+  });
+
   // Action buttons
   if (ctx && ctx.address) {
     const sourceLabel = escapeHtml(domainLabel);
@@ -1859,6 +1920,7 @@ function renderDocuments(docs) {
       html += `<button class="btn btn-sm btn-secondary doc-open-btn" data-url="${escapeHtml(doc.url)}">Open</button>`;
     }
     html += `<button class="btn btn-sm btn-confirm doc-ingest-btn" data-url="${escapeHtml(doc.url || '')}">Ingest</button>`;
+    html += `<button class="btn btn-sm btn-primary doc-stage-btn" data-url="${escapeHtml(doc.url || '')}" data-label="${escapeHtml(doc.label || '')}" title="Stage this OM into LCC intake">Stage to LCC</button>`;
     html += '</div>';
     html += '</div>';
   }

@@ -386,4 +386,94 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     })();
     return true; // async response
   }
+
+  if (msg.type === 'FETCH_PDF_AS_BASE64') {
+    // Fetch a PDF by URL and return its base64 body so the sidepanel can
+    // POST it to /api/intake/stage-om as inline bytes. Runs here (not in
+    // sidepanel) to bypass CORS restrictions on the listing sites' PDFs.
+    (async () => {
+      try {
+        const r = await fetch(msg.url);
+        if (!r.ok) { respond({ ok: false, error: `HTTP ${r.status}` }); return; }
+        const buffer = await r.arrayBuffer();
+        // Chunked base64 conversion — avoids "Maximum call stack size
+        // exceeded" on large PDFs when using btoa(String.fromCharCode(...)).
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        const base64 = btoa(binary);
+        const mimeType = r.headers.get('content-type') || 'application/pdf';
+        respond({ ok: true, base64, mimeType, sizeBytes: buffer.byteLength });
+      } catch (err) {
+        respond({ ok: false, error: err.message });
+      }
+    })();
+    return true; // async response
+  }
+
+  if (msg.type === 'STAGE_PDF_TO_LCC') {
+    // Convenience: fetch PDF + POST to /api/intake/stage-om in a single
+    // background call. Sidepanel receives the final LCC response and doesn't
+    // need to handle bytes or API keys itself.
+    (async () => {
+      try {
+        const r = await fetch(msg.url);
+        if (!r.ok) { respond({ ok: false, error: `PDF fetch HTTP ${r.status}` }); return; }
+        const buffer = await r.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        const base64 = btoa(binary);
+        const mimeType = r.headers.get('content-type') || 'application/pdf';
+
+        const settings = await chrome.storage.local.get(['lccApiKey', 'lccWorkspace', 'lccHost']);
+        const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
+
+        const fileName =
+          (msg.fileName && msg.fileName.trim()) ||
+          (msg.url.split('/').pop() || 'upload.pdf').split('?')[0];
+
+        const postRes = await fetch(`${host}/api/intake/stage-om`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-LCC-Key': settings.lccApiKey || '',
+            ...(settings.lccWorkspace ? { 'X-LCC-Workspace': settings.lccWorkspace } : {}),
+          },
+          body: JSON.stringify({
+            intake_source: 'copilot',
+            intake_channel: 'sidebar',
+            intent: msg.intent || `Staged from ${msg.sourceUrl || msg.url}`,
+            artifacts: {
+              primary_document: {
+                bytes_base64: base64,
+                file_name:    fileName,
+                mime_type:    mimeType,
+              },
+            },
+            seed_data: {
+              tags: ['sidebar_intake', msg.hostname || 'browser'].filter(Boolean),
+            },
+          }),
+        });
+        const payload = await postRes.json().catch(() => ({ error: 'non_json_response' }));
+        respond({
+          ok: postRes.ok && (payload?.ok !== false),
+          status: postRes.status,
+          body: payload,
+          sizeBytes: buffer.byteLength,
+          fileName,
+        });
+      } catch (err) {
+        respond({ ok: false, error: err.message });
+      }
+    })();
+    return true; // async response
+  }
 });
