@@ -108,16 +108,41 @@ async function callAiExtraction(base64Data, mediaType) {
   const isPdf = mediaType === 'application/pdf';
   const isExcel = /spreadsheet|excel|xlsx|xls/i.test(mediaType || '');
 
-  // Build the attachment for invokeChatProvider.
-  // OpenAI accepts base64 images; PDFs are passed as file attachments that
-  // downstream providers can interpret. Excel/other binary types get no
-  // attachment — the model does best-effort extraction from the prompt.
-  const attachment = isPdf && base64Data ? {
-    type: 'file',
-    name: 'document.pdf',
-    mimeType: 'application/pdf',
-    data: base64Data,
-  } : null;
+  // Extract PDF text server-side with pdf-parse rather than trying to pass
+  // the raw file inline. The OpenAI Responses API path for PDFs via
+  // input_file has been unreliable across model versions, and our Supabase
+  // edge-function proxy strips attachments that don't match its legacy
+  // {data_url} shape. Text extraction sidesteps both issues and works with
+  // any model.
+  let pdfText = '';
+  let pdfPages = 0;
+  if (isPdf && base64Data) {
+    try {
+      const mod = await import('pdf-parse');
+      const pdfParse = mod.default || mod;
+      const buffer = Buffer.from(base64Data, 'base64');
+      const parsed = await pdfParse(buffer);
+      pdfText  = (parsed?.text || '').trim();
+      pdfPages = Number(parsed?.numpages || 0);
+    } catch (err) {
+      console.error('[intake-extractor] pdf-parse failed:', err?.message);
+    }
+  }
+
+  // Truncate extremely long text so we stay well under the model's context
+  // window and response budget. ~200k chars is well within gpt-4o-mini's
+  // 128k-token limit (roughly 500k chars) while leaving room for the prompt
+  // and response. Most OMs are 20-80k chars of text.
+  const MAX_TEXT_CHARS = 200_000;
+  if (pdfText.length > MAX_TEXT_CHARS) {
+    pdfText = pdfText.slice(0, MAX_TEXT_CHARS) + '\n\n[...truncated]';
+  }
+
+  const documentBody = isPdf
+    ? (pdfText
+        ? `Document (${pdfPages} pages) — extracted text:\n\n${pdfText}\n`
+        : '[Note: PDF text extraction returned empty. The file may be a scanned image. Attempt best-effort extraction from whatever structured metadata is available; return unknown/null for fields you cannot determine.]\n')
+    : '[Note: source is a non-PDF binary document. Extract any identifiable fields from context.]\n';
 
   const prompt = `Extract all available deal data from this CRE document.
 Return ONLY a JSON object — no markdown, no explanation, no preamble.
@@ -127,7 +152,8 @@ For monetary values, return numbers only (no $ or commas).
 For percentages, return decimals (7.5% → 7.5).
 For dates, return YYYY-MM-DD format.
 
-${isExcel && !attachment ? '[Note: source is a binary spreadsheet the model cannot parse directly — extract any identifiable fields from context.]\n\n' : ''}{
+${documentBody}
+{
   "document_type": "om|rent_roll|lease_abstract|flyer|unknown",
   "address": null,
   "city": null,
@@ -168,23 +194,15 @@ Look for keywords like "repair", "replace", "maintain", "responsible" near "roof
 If the document is an OM, these may appear in the lease abstract section.
 If not determinable, use null.`;
 
-  // Route PDF extraction directly through OpenAI — the edge-function path
-  // has its own attachment-normalization bug that expects `data_url` and
-  // emits `input_image` for everything. OpenAI Responses API needs
-  // `input_file` for PDFs, which invokeOpenAIResponses handles correctly
-  // after the 2026-04-21 fix.
-  const cfg = getAiConfig();
-  const route = {
-    provider: 'openai',
-    model:    cfg.chatModel || 'gpt-4o-mini',
-  };
-  const result = await invokeOpenAIResponses({
+  // Text-in-prompt extraction works with any provider (edge, openai, ollama)
+  // because we've already turned the PDF into plain text via pdf-parse.
+  const result = await invokeChatProvider({
     message:     prompt,
+    attachments: [],                // text is inline in the prompt now
     context:     null,
     history:     [],
-    attachments: attachment ? [attachment] : [],
-    cfg,
-    route,
+    user:        { id: 'system' },
+    workspaceId: null,
   });
 
   if (!result.ok) {
