@@ -299,7 +299,7 @@ function extractResponseText(data = {}) {
   return parts.join('\n').trim();
 }
 
-async function invokeOpenAIResponses({ message, context, history, attachments, cfg, route }) {
+export async function invokeOpenAIResponses({ message, context, history, attachments, cfg, route }) {
   if (!cfg.openaiApiKey) {
     return { ok: false, status: 503, data: { error: 'OPENAI_API_KEY is not configured' }, provider: 'openai' };
   }

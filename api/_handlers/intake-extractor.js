@@ -17,7 +17,7 @@
 
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
-import { invokeChatProvider, getAiConfig } from '../_shared/ai.js';
+import { invokeChatProvider, invokeOpenAIResponses, getAiConfig } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 
 // Document type priority for merging — OM data wins over rent roll / lease abstract
@@ -168,13 +168,23 @@ Look for keywords like "repair", "replace", "maintain", "responsible" near "roof
 If the document is an OM, these may appear in the lease abstract section.
 If not determinable, use null.`;
 
-  const result = await invokeChatProvider({
+  // Route PDF extraction directly through OpenAI — the edge-function path
+  // has its own attachment-normalization bug that expects `data_url` and
+  // emits `input_image` for everything. OpenAI Responses API needs
+  // `input_file` for PDFs, which invokeOpenAIResponses handles correctly
+  // after the 2026-04-21 fix.
+  const cfg = getAiConfig();
+  const route = {
+    provider: 'openai',
+    model:    cfg.chatModel || 'gpt-4o-mini',
+  };
+  const result = await invokeOpenAIResponses({
     message:     prompt,
-    attachments: attachment ? [attachment] : [],
     context:     null,
     history:     [],
-    user:        { id: 'system' },
-    workspaceId: null,
+    attachments: attachment ? [attachment] : [],
+    cfg,
+    route,
   });
 
   if (!result.ok) {
