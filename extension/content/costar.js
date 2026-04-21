@@ -758,13 +758,28 @@
       }
 
       // Also capture from "Tenants" header when only one tenant is shown
-      // (property detail shows a single tenant inline, not a full table)
-      if (!data.tenant_name && /^tenants?$/i.test(line) && next
-          && next.length > 2 && next.length < 80
-          && /^[A-Z]/.test(next)
-          && !TENANT_REJECT.test(next)
-          && !/^(at\s+sale|detail|directory|stacking)/i.test(next)) {
-        data.tenant_name = next;
+      // (property detail shows a single tenant inline, not a full table).
+      // On Industrial Sale Comp pages the next line is a summary bar like
+      // "Tenancy: Single · Owner Occupied: No · Est. Rent: $6 - 7/SF (Industrial)";
+      // skip past up to 2 summary-bar / SF-only lines to find the real tenant name.
+      if (!data.tenant_name && /^tenants?$/i.test(line)) {
+        const TENANT_SUMMARY_BAR = /^(tenancy[:\s]|single\s+tenant|multi.tenant|owner\s+occupied|est\.?\s*rent|net\s+lease|gross\s+lease|\$?\d)/i;
+        const SF_ONLY_LINE = /^[\d,]+\s*sf\s*$/i;
+        let cand = next;
+        let k = i + 1;
+        for (let s = 0; s < 3 && cand && (TENANT_SUMMARY_BAR.test(cand) || SF_ONLY_LINE.test(cand)); s++) {
+          k++;
+          cand = lines[k];
+        }
+        if (cand
+            && cand.length > 2 && cand.length < 80
+            && /^[A-Z]/.test(cand)
+            && !TENANT_REJECT.test(cand)
+            && !TENANT_SUMMARY_BAR.test(cand)
+            && !SF_ONLY_LINE.test(cand)
+            && !/^(at\s+sale|detail|directory|stacking)/i.test(cand)) {
+          data.tenant_name = cand;
+        }
       }
 
       // ── Additional property fields ────────────────────────────
@@ -988,6 +1003,39 @@
         parseTenantSection(lines, i + 1, tenants);
         continue;
       }
+
+      // Bare "Tenants" header used on Industrial Sale Comp pages — the
+      // body is a single-tenant summary bar followed by the tenant name
+      // and an SF value. parseTenantSection skips the summary bar lines.
+      if (/^tenants?$/i.test(line)) {
+        parseTenantSection(lines, i + 1, tenants);
+        continue;
+      }
+    }
+
+    // Fallback: single-tenant industrial block where neither structured
+    // section fired. Detect "Tenancy: Single" → next capitalized non-junk
+    // line → SF value, and synthesize one tenant entry from that block.
+    if (tenants.length === 0) {
+      for (let i = 0; i < lines.length; i++) {
+        if (!/tenancy\s*[:\s]\s*single/i.test(lines[i])) continue;
+        for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
+          const cand = lines[j];
+          if (!cand) continue;
+          if (/^[\d,]+\s*sf\s*$/i.test(cand)) continue;
+          if (/^(tenancy[:\s]|owner\s+occupied|est\.?\s*rent|net\s+lease|gross\s+lease|\$?\d)/i.test(cand)) continue;
+          if (cand.length < 3 || cand.length > 80) continue;
+          if (!/^[A-Z]/.test(cand)) continue;
+          if (/@/.test(cand) || /^https?:/i.test(cand)) continue;
+          const sfLine = lines[j + 1];
+          const hasSf = sfLine && /^[\d,]+(\s*sf)?$/i.test(sfLine);
+          const entry = { name: cand };
+          if (hasSf) entry.sf = sfLine.replace(/\s*sf\s*$/i, '').trim() + ' SF';
+          tenants.push(entry);
+          break;
+        }
+        if (tenants.length) break;
+      }
     }
 
     return tenants;
@@ -1007,6 +1055,10 @@
 
       // Skip lines that are just dates (month/year) — these are column values, not names
       if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(line)) continue;
+
+      // Skip summary-bar values seen under a bare "Tenants" header on
+      // Industrial Sale Comp pages (Tenancy:, Owner Occupied, Est. Rent).
+      if (/^(tenancy\s*[:\s]|owner\s+occupied|est\.?\s*rent|net\s+lease|gross\s+lease|nnn|modified\s+gross)/i.test(line)) continue;
 
       // SF value (often follows tenant name): "8,750" or "8,750 SF"
       if (/^[\d,]+(\s*sf)?$/i.test(line)) {

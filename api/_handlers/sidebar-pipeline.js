@@ -418,6 +418,11 @@ function classifyDomain(metadata, entityFields) {
     metadata.occupancy_details,
     // Sale notes narrative often names the tenant when structured fields don't
     metadata.sale_notes_raw,
+    // Industrial Sale Comp pages place tenant text in a summary/tenancy
+    // block rather than a labeled Tenant field; include those too.
+    metadata.tenants_raw,
+    metadata.tenancy_block,
+    metadata.investment_highlights,
   ];
 
   // Include tenant names from tenants[] array
@@ -487,7 +492,8 @@ function classifyDomainWithDiag(metadata, entityFields) {
     metadata.tenant_name, metadata.primary_tenant, metadata.building_name,
     entityFields.description, entityFields.name, metadata.asset_type,
     metadata.property_type, metadata.property_subtype, metadata.occupancy_details,
-    metadata.sale_notes_raw,
+    metadata.sale_notes_raw, metadata.tenants_raw, metadata.tenancy_block,
+    metadata.investment_highlights,
   ];
   if (Array.isArray(metadata.tenants)) for (const t of metadata.tenants) { if (t.name) textParts.push(t.name); }
   if (Array.isArray(metadata.contacts)) for (const c of metadata.contacts) { if (c.name) textParts.push(c.name); }
