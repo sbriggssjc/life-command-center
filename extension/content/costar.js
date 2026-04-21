@@ -382,12 +382,86 @@
     return rect.width > 0 && rect.height > 0;
   }
 
+  // Role priority for collapsing a multi-role contact to a single
+  // representative `.role` value that downstream code (sidebar, pipeline
+  // filters) reads. Higher priority = more actionable for prospecting.
+  const ROLE_PRIORITY = [
+    'listing_broker',
+    'buyer_broker',
+    'lender',
+    'true_buyer',
+    'true_seller',
+    'true_buyer_contact',
+    'true_seller_contact',
+    'buyer',
+    'seller',
+    'owner',
+  ];
+
+  function pickRepresentativeRole(roles) {
+    if (!Array.isArray(roles) || roles.length === 0) return null;
+    for (const r of ROLE_PRIORITY) {
+      if (roles.includes(r)) return r;
+    }
+    return roles[0];
+  }
+
+  function normalizeContactName(s) {
+    if (!s) return '';
+    return String(s)
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Merge a new batch of contacts into the accumulated array, deduping by
+  // normalized name. When the same person/entity appears under multiple
+  // roles (common on CoStar Sale Comp pages where one firm is listed as
+  // Listing Broker, Lender, and True Buyer), we collapse them into a single
+  // contact whose `roles[]` captures the full set and `role` holds the
+  // highest-priority representative for downstream single-role consumers.
   function mergeContacts(existing, newContacts) {
+    const rolesFor = (c) => {
+      if (Array.isArray(c.roles) && c.roles.length > 0) return c.roles;
+      if (c.role) return [c.role];
+      return [];
+    };
+
     for (const c of newContacts) {
-      const dup = existing.some((e) =>
-        e.name === c.name && e.role === c.role
-      );
-      if (!dup) existing.push(c);
+      const key = normalizeContactName(c.name);
+      if (!key) continue;
+      const dup = existing.find((e) => normalizeContactName(e.name) === key);
+
+      if (!dup) {
+        const cc = { ...c };
+        cc.roles = [...new Set(rolesFor(c))];
+        cc.role = pickRepresentativeRole(cc.roles) || c.role || null;
+        existing.push(cc);
+        continue;
+      }
+
+      if (!Array.isArray(dup.roles)) dup.roles = dup.role ? [dup.role] : [];
+      for (const r of rolesFor(c)) {
+        if (r && !dup.roles.includes(r)) dup.roles.push(r);
+      }
+      dup.role = pickRepresentativeRole(dup.roles) || dup.role || null;
+
+      // Merge scalar fields without clobbering existing non-empty values
+      for (const k of Object.keys(c)) {
+        if (k === 'role' || k === 'roles' || k === 'phones') continue;
+        if (c[k] != null && c[k] !== '' &&
+            (dup[k] == null || dup[k] === '')) {
+          dup[k] = c[k];
+        }
+      }
+      // Union phones
+      if (Array.isArray(c.phones) && c.phones.length) {
+        if (!Array.isArray(dup.phones)) dup.phones = [];
+        for (const p of c.phones) {
+          if (p && !dup.phones.includes(p)) dup.phones.push(p);
+        }
+      }
     }
   }
 
@@ -1124,10 +1198,19 @@
   // job titles when standalone, CoStar UI chrome, and address fragments.
   const CONTACT_NAME_REJECT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|no\s+buyer|no\s+seller|confirmed|verified|research\s+complete|comp\s+status|united\s+states|[a-z].*,\s*[a-z]{2}\s+\d{5}|logo|source|add\s+notes|name$)/i;
 
+  // Pure job titles that sometimes slip in as "names" when the DOM puts a
+  // title on its own line (no preceding Name/Title pair to anchor on).
+  const TITLE_ONLY_PATTERNS = [
+    /^(senior|junior|managing|executive|vice|chief|assistant)\s+(managing\s+)?(director|vice\s+president|vp|president|officer|partner|principal|consultant|broker|manager)\b/i,
+    /,\s*(capital\s+markets|brokerage|research|investment\s+sales|debt|equity)\s*$/i,
+    /^senior\s+comps?\s+researcher\b/i,
+  ];
+
   // Reject city/state/zip patterns like "Saint Louis, MO 63125"
   function isContactNameGarbage(s) {
     if (!s || s.length < 2) return true;
-    if (CONTACT_NAME_REJECT.test(s.trim())) return true;
+    const trimmed = s.trim();
+    if (CONTACT_NAME_REJECT.test(trimmed)) return true;
     // City, ST ZIP pattern (e.g. "Los Angeles, CA 90048")
     if (/^[A-Z][a-z]+.*,\s*[A-Z]{2}\s+\d{4,5}/.test(s)) return true;
     // Concatenated multi-line address (contains ZIP mid-string with no break)
@@ -1136,6 +1219,10 @@
     if (/\d{5}[A-Z]/.test(s)) return true;
     // Standalone date patterns
     if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d/i.test(s)) return true;
+    // Pure title strings masquerading as names
+    for (const pat of TITLE_ONLY_PATTERNS) {
+      if (pat.test(trimmed)) return true;
+    }
     return false;
   }
 
@@ -1413,10 +1500,13 @@
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
 
-      // Stop at section boundaries and page footer content
-      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources|verification|sale\s+comp|comparable|recorded\s+(seller|buyer)|lender|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
-      // Stop at other contact section headers (but not sub-labels within)
-      if (/^(seller|buyer\s+broker|listing\s+(broker|agent))$/i.test(line) && j > startIdx) break;
+      // Stop at section boundaries and page footer content (prefix match)
+      if (/^(transaction\s+details|building|land\b|market|tenants?\s+at|public\s+record|my\s+notes|sources|verification|sale\s+comp|comparable|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
+      // Stop at any contact-section header that appears as a standalone line.
+      // Required to prevent one section's parser (e.g. Listing Broker) from
+      // sweeping across adjacent sections (True Buyer, Recorded Buyer, Current
+      // Owner, Lender, …) and tagging those people with the wrong role.
+      if (j > startIdx && /^(true\s+(buyer|seller)|current\s+owner|recorded\s+(owner|buyer|seller)|buyer\s+broker|listing\s+(broker|agent)|lender|seller|buyer)$/i.test(line)) break;
 
       // Handle "logo" as separator — both standalone and concatenated
       if (/^logo$/i.test(line)) { pushCurrent(); continue; }
@@ -1516,45 +1606,108 @@
     return null;
   }
 
+  // Elements whose own text marks the end of the Contacts region (nothing
+  // after them belongs to any contact role). Matching is done against
+  // getOwnText (not textContent) to avoid matching parents that happen to
+  // contain the label deep in their subtree.
+  const SECTION_END_SENTINEL_RE = /^(my\s+notes|sources(\s+&\s+research)?|verification|documents?|assessment(\s+at\s+sale)?|public\s+record|tenants?\s+at|sale\s+comp\s+id|income\s+&\s+expenses|transaction\s+details|building(\s+summary|\s+information)?|land\b|market|investment\s+highlights)/i;
+
+  // `a.compareDocumentPosition(b) & FOLLOWING` is true when b follows a in
+  // document order (or is a descendant of a). We use this to bucket each
+  // mailto/tel link to the nearest section header that precedes it, cut off
+  // by any intervening end sentinel.
   function extractContactsFromDOM() {
     const contacts = [];
 
-    // Find all mailto: links on the page — if none, DOM extraction won't help
-    const allMailtoLinks = document.querySelectorAll('a[href^="mailto:"]');
-    const allTelLinks    = document.querySelectorAll('a[href^="tel:"]');
-    if (allMailtoLinks.length === 0 && allTelLinks.length === 0) return contacts;
+    const allLinks = document.querySelectorAll(
+      'a[href^="mailto:"],a[href^="tel:"]'
+    );
+    if (allLinks.length === 0) return contacts;
 
-    // Find contact section headers in the page. CoStar uses text labels like
-    // "True Buyer", "Listing Broker", etc. as section dividers.
-    const sectionHeaders = [];
-    const allElements = document.querySelectorAll('h1,h2,h3,h4,h5,h6,div,span,p,td,th,label');
+    // Collect role-section headers AND end sentinels in a single scan so
+    // they stay in document order. Each "Contacts" panel on CoStar holds
+    // several role headers inside one DOM subtree — we can't rely on a
+    // common ancestor to scope them; we have to slice by document order
+    // between adjacent markers.
+    const markers = [];
+    const allElements = document.querySelectorAll(
+      'h1,h2,h3,h4,h5,h6,div,span,p,td,th,label'
+    );
     for (const el of allElements) {
-      // Only consider elements whose own direct text matches a role header
-      // (skip containers whose children happen to contain the text)
       const ownText = getOwnText(el).trim();
+      if (!ownText || ownText.length > 80) continue;
       const role = roleFromHeader(ownText);
       if (role) {
-        sectionHeaders.push({ element: el, role, text: ownText });
+        markers.push({ element: el, kind: 'section', role, text: ownText });
+        continue;
+      }
+      if (SECTION_END_SENTINEL_RE.test(ownText)) {
+        markers.push({ element: el, kind: 'end', text: ownText });
       }
     }
-    if (sectionHeaders.length === 0) return contacts;
+    if (!markers.some(m => m.kind === 'section')) return contacts;
 
-    // For each section header, find the containing block and extract contacts
-    for (const header of sectionHeaders) {
-      // Walk up to find the section container (the card/panel holding this group)
-      const container = findContactContainer(header.element);
-      if (!container) continue;
+    // querySelectorAll returns elements in document order already; sort is
+    // defensive in case future refactors merge multiple queries here.
+    markers.sort((a, b) => {
+      if (a.element === b.element) return 0;
+      const p = a.element.compareDocumentPosition(b.element);
+      if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
 
-      // Find individual contact blocks within this container
-      // CoStar often uses divs with "logo" images as separators between people
-      const contactBlocks = findContactBlocks(container, header.element);
-
-      for (const block of contactBlocks) {
-        const person = extractPersonFromBlock(block);
-        if (person && person.name) {
-          person.role = header.role;
-          contacts.push(person);
+    // For a given link, walk the markers in reverse doc order and find the
+    // first one that precedes it. If that marker is an end sentinel, the
+    // link is outside any role section — drop it.
+    function ownerForLink(linkEl) {
+      let owner = null;
+      for (const m of markers) {
+        const p = m.element.compareDocumentPosition(linkEl);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) {
+          owner = m;                   // m precedes linkEl
+        } else {
+          break;                       // markers are in doc order
         }
+      }
+      return owner;
+    }
+
+    // Nearest reasonably-sized ancestor of the link — used as the "contact
+    // block" for name/title extraction. Bounded walk avoids climbing out of
+    // the role section.
+    function findBlockForLink(linkEl) {
+      let block = linkEl.parentElement;
+      for (let i = 0; i < 6; i++) {
+        if (!block || block === document.body) return null;
+        const text = (block.textContent || '').trim();
+        if (text.length >= 10 && text.length <= 500) return block;
+        block = block.parentElement;
+      }
+      return null;
+    }
+
+    // Dedup by (block, role) — the same block may hold both a mailto and a
+    // tel link; we want one contact row out of that, not two.
+    const seenBlockRoles = new Map(); // block → Set<role>
+    for (const link of allLinks) {
+      const owner = ownerForLink(link);
+      if (!owner || owner.kind !== 'section') continue;
+      const block = findBlockForLink(link);
+      if (!block) continue;
+
+      let roleSet = seenBlockRoles.get(block);
+      if (!roleSet) {
+        roleSet = new Set();
+        seenBlockRoles.set(block, roleSet);
+      }
+      if (roleSet.has(owner.role)) continue;
+      roleSet.add(owner.role);
+
+      const person = extractPersonFromBlock(block);
+      if (person && person.name) {
+        person.role = owner.role;
+        contacts.push(person);
       }
     }
 
@@ -1568,57 +1721,6 @@
       if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
     }
     return text;
-  }
-
-  // Walk up from a section header to find its containing block
-  function findContactContainer(headerEl) {
-    let el = headerEl;
-    for (let i = 0; i < 5; i++) {
-      el = el.parentElement;
-      if (!el || el === document.body) return null;
-      // A good container has mailto or tel links inside it
-      if (el.querySelector('a[href^="mailto:"],a[href^="tel:"]')) return el;
-    }
-    return null;
-  }
-
-  // Within a container, find blocks that each represent a single contact.
-  // Try common DOM patterns: list items, cards, then fall back to grouping
-  // around mailto/tel links.
-  function findContactBlocks(container, headerEl) {
-    // Strategy 1: look for structured list items or card-like elements
-    const cards = container.querySelectorAll(
-      'li, [class*="contact"], [class*="person"], [class*="broker"], [class*="card"]'
-    );
-    // Filter out cards that are ancestors of headerEl or the header itself
-    const validCards = Array.from(cards).filter(c =>
-      !c.contains(headerEl) && c !== headerEl &&
-      (c.querySelector('a[href^="mailto:"],a[href^="tel:"]') ||
-       c.textContent.length > 5)
-    );
-    if (validCards.length > 0) return validCards;
-
-    // Strategy 2: group by mailto/tel link ancestry — each link's nearest
-    // common container with a name-like text is a contact block
-    const linkEls = container.querySelectorAll('a[href^="mailto:"],a[href^="tel:"]');
-    const blocks = [];
-    const seen = new Set();
-    for (const link of linkEls) {
-      // Walk up to a reasonable parent that contains name + contact info
-      let block = link.parentElement;
-      for (let i = 0; i < 4; i++) {
-        if (!block || block === container) break;
-        const text = block.textContent || '';
-        // Stop when we find a block with enough text to contain a name
-        if (text.length > 10 && text.length < 500) break;
-        block = block.parentElement;
-      }
-      if (block && block !== container && !seen.has(block)) {
-        seen.add(block);
-        blocks.push(block);
-      }
-    }
-    return blocks;
   }
 
   // Extract a person's name, email, phone from a DOM block

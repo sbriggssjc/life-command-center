@@ -52,13 +52,13 @@ outputs:
           id:           { type: string }
           entity_type:  { type: string }
           display_name: { type: string }
-          domain:       { type: [string, "null"] }
+          domain:       { type: string, nullable: true }
           metadata:     { type: object }
-      resolve_notes:       { type: [object, "null"] }
-      last_touchpoint_at:  { type: [string, "null"] }
+      resolve_notes:       { type: object, nullable: true }
+      last_touchpoint_at:  { type: string, format: date-time, nullable: true }
       recent_interactions: { type: array, items: { type: object } }
       open_action_items:   { type: array, items: { type: object } }
       recent_inbox_items:  { type: array, items: { type: object } }
-      property_enrichment: { type: [object, "null"] }
+      property_enrichment: { type: object, nullable: true }
       window_days:         { type: integer }
       message:             { type: string }

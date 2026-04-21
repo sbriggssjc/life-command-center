@@ -249,8 +249,8 @@ components:
         classified_domain:
           type: string
           nullable: true
-          enum: [dialysis, government, netlease, null]
-          description: Domain inferred from OM content (when available).
+          enum: [dialysis, government, netlease]
+          description: Domain inferred from OM content (when available). May be null while extraction is still running.
         matched_entity_id:
           type: string
           format: uuid

@@ -92,8 +92,8 @@ outputs:
       staged_intake_item_id: { type: string, format: uuid }
       inbox_item_id:         { type: string, format: uuid }
       extraction_status:     { type: string, enum: [processing, review_required, failed] }
-      classified_domain:     { type: [string, "null"] }
-      matched_entity_id:     { type: [string, "null"] }
+      classified_domain:     { type: string, nullable: true }
+      matched_entity_id:     { type: string, nullable: true }
       entity_match_status:   { type: string, enum: [matched, unmatched, pending] }
       size_bytes:            { type: integer }
       message:               { type: string }

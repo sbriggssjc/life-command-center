@@ -46,7 +46,7 @@ outputs:
     type: object
     properties:
       ok:                 { type: boolean }
-      activity_event_id:  { type: [string, "null"] }
-      entity_id:          { type: [string, "null"] }
+      activity_event_id:  { type: string, format: uuid, nullable: true }
+      entity_id:          { type: string, format: uuid, nullable: true }
       fallback_category:  { type: boolean }
       message:            { type: string }
