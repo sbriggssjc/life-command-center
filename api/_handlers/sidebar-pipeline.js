@@ -2493,15 +2493,15 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     if (lookup.ok && lookup.data?.length) {
       const existing = lookup.data[0];
 
-      // Tighter dialysis dedup: if an existing row is within 30 days of the
-      // incoming sale_date AND within 2% of the incoming sold_price, treat
-      // it as the same economic transaction (deed date vs. contract date vs.
-      // recording date variants) and skip entirely. Land sales can
-      // legitimately cluster, so skip this tighter check when the price is
-      // under $1M and no tenant is present.
-      if (domain === 'dialysis'
-          && soldPrice != null
-          && existing.sold_price != null) {
+      // Tight transaction-identity dedup: if an existing row is within
+      // 14 days of the incoming sale_date AND within 5% of the incoming
+      // sold_price, treat it as the same economic transaction (the gap
+      // between a stat-card Transaction Date and a county Recordation
+      // Date for the same deed) and skip entirely. Land sales can
+      // legitimately cluster, so skip this tighter check when the price
+      // is under $1M and no tenant is present. Applies to both dialysis
+      // and government — previously dialysis-only at 30d/2%.
+      if (soldPrice != null && existing.sold_price != null) {
         const isLandSale = soldPrice < 1_000_000 && !primaryTenant;
         if (!isLandSale) {
           const existingDatePart = String(existing.sale_date).split('T')[0];
@@ -2512,38 +2512,44 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           const priceDelta = existingPrice > 0
             ? Math.abs(existingPrice - soldPrice) / existingPrice
             : Infinity;
-          if (daysDiff <= 30 && priceDelta <= 0.02) {
-            // Dedup match — same economic transaction. Don't create a duplicate,
-            // but DO patch enrichment fields (sale notes, brokers, etc.) that may
-            // have been added since the original ingestion.
-            const enrichPatch = {};
-            if (saleNotesRaw && !existing.sale_notes_raw) {
-              enrichPatch.sale_notes_raw = saleNotesRaw;
-              enrichPatch.sale_notes_extracted = Object.keys(saleNotesExtracted).length > 0
-                ? saleNotesExtracted : null;
-            }
-            if (saleData.listing_broker && !existing.listing_broker) {
-              enrichPatch.listing_broker = saleData.listing_broker;
-            }
-            if (saleData.procuring_broker && !existing.procuring_broker) {
-              enrichPatch.procuring_broker = saleData.procuring_broker;
-            }
-            if (saleData.buyer_name && !existing.buyer_name) {
-              enrichPatch.buyer_name = saleData.buyer_name;
-            }
-            if (saleData.seller_name && !existing.seller_name) {
-              enrichPatch.seller_name = saleData.seller_name;
-            }
-            // Also enrich notes if sale notes are new
-            if (saleNotesRaw && existing.notes && !existing.notes.includes('Sale Notes')) {
-              enrichPatch.notes = existing.notes + '; --- Sale Notes ---\n' + saleNotesRaw;
-            }
-            if (Object.keys(enrichPatch).length > 0) {
-              console.log(`[sales-dedup] enriching existing sale_id=${existing.sale_id} with ${Object.keys(enrichPatch).join(', ')}`);
-              await domainPatch(domain,
-                `sales_transactions?sale_id=eq.${existing.sale_id}`, enrichPatch, 'sales-dedup-enrich');
+          if (daysDiff <= 14 && priceDelta <= 0.05) {
+            // Dedup match — same economic transaction. Don't create a
+            // duplicate row. For dialysis, PATCH enrichment fields that
+            // may have arrived since the first capture (sale notes,
+            // brokers, buyer/seller). Government sales_transactions has
+            // a different column set and a dedicated Sales-Comps
+            // enrichment path, so skip the PATCH for gov.
+            if (domain === 'dialysis') {
+              const enrichPatch = {};
+              if (saleNotesRaw && !existing.sale_notes_raw) {
+                enrichPatch.sale_notes_raw = saleNotesRaw;
+                enrichPatch.sale_notes_extracted = Object.keys(saleNotesExtracted).length > 0
+                  ? saleNotesExtracted : null;
+              }
+              if (saleData.listing_broker && !existing.listing_broker) {
+                enrichPatch.listing_broker = saleData.listing_broker;
+              }
+              if (saleData.procuring_broker && !existing.procuring_broker) {
+                enrichPatch.procuring_broker = saleData.procuring_broker;
+              }
+              if (saleData.buyer_name && !existing.buyer_name) {
+                enrichPatch.buyer_name = saleData.buyer_name;
+              }
+              if (saleData.seller_name && !existing.seller_name) {
+                enrichPatch.seller_name = saleData.seller_name;
+              }
+              if (saleNotesRaw && existing.notes && !existing.notes.includes('Sale Notes')) {
+                enrichPatch.notes = existing.notes + '; --- Sale Notes ---\n' + saleNotesRaw;
+              }
+              if (Object.keys(enrichPatch).length > 0) {
+                console.log(`[sales-dedup] enriching existing sale_id=${existing.sale_id} with ${Object.keys(enrichPatch).join(', ')}`);
+                await domainPatch(domain,
+                  `sales_transactions?sale_id=eq.${existing.sale_id}`, enrichPatch, 'sales-dedup-enrich');
+              } else {
+                console.log(`[sales-dedup] skipping duplicate property=${propertyId} (no new enrichment data)`);
+              }
             } else {
-              console.log(`[sales-dedup] skipping duplicate property=${propertyId} (no new enrichment data)`);
+              console.log(`[sales-dedup] skipping duplicate domain=${domain} property=${propertyId} sale_id=${existing.sale_id} days=${daysDiff} priceDelta=${priceDelta.toFixed(3)}`);
             }
             continue;
           }

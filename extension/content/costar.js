@@ -465,64 +465,10 @@
     }
   }
 
-  // Normalize a price string to a number for comparison: "$2.7M" → 2700000
-  function normalizePrice(s) {
-    if (!s) return 0;
-    const cleaned = s.replace(/[^0-9.kmb]/gi, '');
-    let num = parseFloat(cleaned) || 0;
-    if (/[Mm]/.test(s)) num *= 1000000;
-    else if (/[Kk]/.test(s)) num *= 1000;
-    else if (/[Bb]/.test(s)) num *= 1000000000;
-    return num;
-  }
-
-  // Normalize a date string for comparison: various formats → "YYYY-MM-DD"-ish
-  function normalizeSaleDate(s) {
-    if (!s) return '';
-    // "Sep 30, 2022" → Date → toISOString prefix
-    // "9/30/2022" → Date → toISOString prefix
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-    return s.toLowerCase().trim();
-  }
-
-  // Count non-null, non-empty fields on a sale object
-  function saleFieldCount(s) {
-    return Object.keys(s).filter(k => s[k] != null && s[k] !== '').length;
-  }
-
-  function mergeSales(existing, newSales) {
-    for (const s of newSales) {
-      const sDate = normalizeSaleDate(s.sale_date);
-      const sPrice = normalizePrice(s.sale_price);
-
-      // Look for an existing entry with the same date and similar price
-      const matchIdx = existing.findIndex((e) => {
-        const eDate = normalizeSaleDate(e.sale_date);
-        if (eDate !== sDate) return false;
-        const ePrice = normalizePrice(e.sale_price);
-        // Same date: match if both prices are 0, one is missing (0),
-        // or both are within 5% of each other. Missing price = same sale,
-        // just captured from a different CoStar tab (e.g. deed vs summary).
-        if (ePrice === 0 || sPrice === 0) return true;
-        return Math.abs(ePrice - sPrice) / Math.max(ePrice, sPrice) < 0.05;
-      });
-
-      if (matchIdx === -1) {
-        // No match — add it
-        existing.push(s);
-      } else {
-        // Match found — merge: add new fields without overwriting existing
-        // (preserves OM-enriched fields like om_extracted, om_url, annual_rent)
-        const target = existing[matchIdx];
-        for (const [k, v] of Object.entries(s)) {
-          if (v != null && v !== '' && (target[k] == null || target[k] === '')) {
-            target[k] = v;
-          }
-        }
-      }
-    }
-  }
+  // Sale merge helpers live in content/_sale-merge.js (loaded before this
+  // script by manifest.json). That module attaches {mergeSales, ...} to
+  // globalThis so the same logic can be imported from Node tests.
+  const { mergeSales } = globalThis.__lccSaleMerge;
 
   function mergeTenants(existing, newTenants) {
     for (const t of newTenants) {
