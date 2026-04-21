@@ -181,11 +181,44 @@ If not determinable, use null.`;
     throw new Error(`AI provider error ${result.status}: ${JSON.stringify(result.data)}`);
   }
 
-  // Extract JSON from response text
-  const text = result.data?.response || result.data?.content || '';
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No JSON found in AI response');
-  return JSON.parse(jsonMatch[0]);
+  // Extract JSON from response text. AI models return content in different
+  // shapes depending on provider/SDK version; check the most common first.
+  const text =
+    result.data?.response ||
+    result.data?.content  ||
+    result.data?.choices?.[0]?.message?.content ||
+    result.data?.completion ||
+    (typeof result.data === 'string' ? result.data : '') ||
+    '';
+
+  if (!text || typeof text !== 'string') {
+    throw new Error(
+      `AI response had no text content. data keys: ${Object.keys(result.data || {}).join(', ')}`
+    );
+  }
+
+  // Strategy 1: markdown fenced block (```json ... ``` or ``` ... ```)
+  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (fenceMatch) {
+    try { return JSON.parse(fenceMatch[1]); } catch (e) {
+      console.warn('[intake-extractor] fenced-JSON parse failed:', e.message);
+    }
+  }
+
+  // Strategy 2: greediest outer object match
+  const braceMatch = text.match(/\{[\s\S]*\}/);
+  if (braceMatch) {
+    try { return JSON.parse(braceMatch[0]); } catch (e) {
+      console.warn('[intake-extractor] brace-JSON parse failed:', e.message);
+    }
+  }
+
+  // If we're here, no JSON was found. Throw with a rich diagnostic so the
+  // per-artifact diagnostics log shows WHAT the model actually returned.
+  const preview = text.slice(0, 600).replace(/\s+/g, ' ');
+  throw new Error(
+    `No JSON found in AI response. Text preview (first 600 chars): "${preview}"`
+  );
 }
 
 // ============================================================================
