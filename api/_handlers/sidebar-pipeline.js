@@ -977,43 +977,92 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
   const PERSON_ROLES = ['listing_broker', 'buyer_broker',
     'true_buyer_contact', 'true_seller_contact'];
 
-  const people = contacts.filter(c =>
-    PERSON_ROLES.includes(c.role) &&
-    c.name && c.name.length > 2 && c.name.length < 80 &&
-    (c.email || c.phones?.length || c.phone)
-  );
+  // Read roles[] if present (set by the CoStar extractor's dedupe pass) and
+  // fall back to the single-value .role. A person who is both listing broker
+  // and buyer broker on the same deal arrives as one contact with
+  // roles=['listing_broker','buyer_broker'] — we want one row per role in
+  // the government DB (typed contact_type column) and a single row with
+  // concatenated roles in the dialysis DB (free-text role column).
+  const rolesOf = (c) => {
+    if (Array.isArray(c.roles) && c.roles.length > 0) return c.roles;
+    if (c.role) return [c.role];
+    return [];
+  };
+
+  const people = contacts.filter(c => {
+    const rs = rolesOf(c);
+    return rs.some(r => PERSON_ROLES.includes(r)) &&
+           c.name && c.name.length > 2 && c.name.length < 80 &&
+           (c.email || c.phones?.length || c.phone);
+  });
 
   for (const person of people) {
     const email   = person.email || null;
     const phone   = person.phones?.[0] || person.phone || null;
     const company = person.company || null;
     const normName = person.name.trim().toLowerCase();
+    const personRoles = rolesOf(person).filter(r => PERSON_ROLES.includes(r));
 
-    const existingId = await findExisting(email, normName, null);
-
-    if (existingId) {
-      const patch = {};
-      if (email) patch[col.email] = email;
-      if (phone) patch[col.phone] = phone;
-      if (company) patch.company = company;
-      if (Object.keys(patch).length) {
-        await domainPatch(domain,
-          `contacts?${col.id}=eq.${existingId}`, patch,
-          'upsertSidebarContacts:personUpdate'
-        );
+    if (domain === 'government') {
+      // One contacts row per role — contact_type is a typed column used by
+      // downstream queries that filter "show me all listing brokers".
+      for (const role of personRoles) {
+        const existingId = await findExisting(email, normName, role);
+        if (existingId) {
+          const patch = {};
+          if (email) patch[col.email] = email;
+          if (phone) patch[col.phone] = phone;
+          if (company) patch.company = company;
+          if (Object.keys(patch).length) {
+            await domainPatch(domain,
+              `contacts?${col.id}=eq.${existingId}`, patch,
+              'upsertSidebarContacts:personUpdate'
+            );
+          }
+        } else {
+          const row = {
+            [col.name]:  person.name.trim(),
+            [col.email]: email,
+            [col.phone]: phone,
+            company:     company,
+            title:       person.title || null,
+            [col.role]:  role,
+            data_source: 'costar_sidebar',
+          };
+          const r = await domainQuery(domain, 'POST', 'contacts', row);
+          if (r.ok) count++;
+        }
       }
     } else {
-      const row = {
-        [col.name]:  person.name.trim(),
-        [col.email]: email,
-        [col.phone]: phone,
-        company:     company,
-        title:       person.title || null,
-        [col.role]:  person.role,
-        data_source: 'costar_sidebar',
-      };
-      const r = await domainQuery(domain, 'POST', 'contacts', row);
-      if (r.ok) count++;
+      // Dialysis DB: single row per person; role column gets a comma
+      // list when multiple roles apply.
+      const existingId = await findExisting(email, normName, null);
+      const roleStr = personRoles.join(',') || person.role || null;
+      if (existingId) {
+        const patch = {};
+        if (email) patch[col.email] = email;
+        if (phone) patch[col.phone] = phone;
+        if (company) patch.company = company;
+        if (roleStr) patch[col.role] = roleStr;
+        if (Object.keys(patch).length) {
+          await domainPatch(domain,
+            `contacts?${col.id}=eq.${existingId}`, patch,
+            'upsertSidebarContacts:personUpdate'
+          );
+        }
+      } else {
+        const row = {
+          [col.name]:  person.name.trim(),
+          [col.email]: email,
+          [col.phone]: phone,
+          company:     company,
+          title:       person.title || null,
+          [col.role]:  roleStr,
+          data_source: 'costar_sidebar',
+        };
+        const r = await domainQuery(domain, 'POST', 'contacts', row);
+        if (r.ok) count++;
+      }
     }
   }
 
@@ -1029,50 +1078,97 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
     seller:      'seller',
   };
 
-  const entities = contacts.filter(c =>
-    ENTITY_ROLE_MAP[c.role] &&
-    c.name && c.name.length > 2 && c.name.length < 80
-  );
+  // Entities that have at least one recognised entity role. Exclude anything
+  // already classified as a person (roles[] includes a PERSON_ROLE) so a
+  // single contact never flows through both loops.
+  const entities = contacts.filter(c => {
+    const rs = rolesOf(c);
+    const hasEntity = rs.some(r => ENTITY_ROLE_MAP[r]);
+    const hasPerson = rs.some(r => PERSON_ROLES.includes(r));
+    return hasEntity && !hasPerson &&
+           c.name && c.name.length > 2 && c.name.length < 80;
+  });
 
   for (const ent of entities) {
     const email      = ent.email || null;
     const phone      = ent.phones?.[0] || ent.phone || null;
     const website    = ent.website || null;
-    const mappedRole = ENTITY_ROLE_MAP[ent.role];
     const normName   = ent.name.trim().toLowerCase();
+    const mappedRoles = [...new Set(
+      rolesOf(ent).map(r => ENTITY_ROLE_MAP[r]).filter(Boolean)
+    )];
 
-    const existingId = await findExisting(email, normName, mappedRole);
-
-    if (existingId) {
-      const patch = {};
-      if (email)       patch[col.email] = email;
-      if (phone)       patch[col.phone] = phone;
-      if (website)     { patch.website = website; patch.title = `Website: ${website}`; }
-      if (ent.address) patch.address = ent.address;
-      if (ent.city)    patch.city = ent.city;
-      if (ent.state)   patch.state = ent.state;
-      if (Object.keys(patch).length) {
-        await domainPatch(domain,
-          `contacts?${col.id}=eq.${existingId}`, patch,
-          'upsertSidebarContacts:entityUpdate'
-        );
+    if (domain === 'government') {
+      for (const mappedRole of mappedRoles) {
+        const existingId = await findExisting(email, normName, mappedRole);
+        if (existingId) {
+          const patch = {};
+          if (email)       patch[col.email] = email;
+          if (phone)       patch[col.phone] = phone;
+          if (website)     { patch.website = website; patch.title = `Website: ${website}`; }
+          if (ent.address) patch.address = ent.address;
+          if (ent.city)    patch.city = ent.city;
+          if (ent.state)   patch.state = ent.state;
+          if (Object.keys(patch).length) {
+            await domainPatch(domain,
+              `contacts?${col.id}=eq.${existingId}`, patch,
+              'upsertSidebarContacts:entityUpdate'
+            );
+          }
+        } else {
+          const row = {
+            [col.name]:  ent.name.trim(),
+            [col.email]: email,
+            [col.phone]: phone,
+            company:     ent.name.trim(),
+            title:       website ? `Website: ${website}` : null,
+            [col.role]:  mappedRole,
+            website:     website,
+            address:     ent.address || null,
+            city:        ent.city || null,
+            state:       ent.state || null,
+            data_source: 'costar_sidebar',
+          };
+          const r = await domainQuery(domain, 'POST', 'contacts', row);
+          if (r.ok) count++;
+        }
       }
     } else {
-      const row = {
-        [col.name]:  ent.name.trim(),
-        [col.email]: email,
-        [col.phone]: phone,
-        company:     ent.name.trim(),
-        title:       website ? `Website: ${website}` : null,
-        [col.role]:  mappedRole,
-        website:     website,
-        address:     ent.address || null,
-        city:        ent.city || null,
-        state:       ent.state || null,
-        data_source: 'costar_sidebar',
-      };
-      const r = await domainQuery(domain, 'POST', 'contacts', row);
-      if (r.ok) count++;
+      const existingId = await findExisting(email, normName, null);
+      const roleStr = mappedRoles.join(',') ||
+                      ENTITY_ROLE_MAP[ent.role] || null;
+      if (existingId) {
+        const patch = {};
+        if (email)       patch[col.email] = email;
+        if (phone)       patch[col.phone] = phone;
+        if (website)     { patch.website = website; patch.title = `Website: ${website}`; }
+        if (ent.address) patch.address = ent.address;
+        if (ent.city)    patch.city = ent.city;
+        if (ent.state)   patch.state = ent.state;
+        if (roleStr)     patch[col.role] = roleStr;
+        if (Object.keys(patch).length) {
+          await domainPatch(domain,
+            `contacts?${col.id}=eq.${existingId}`, patch,
+            'upsertSidebarContacts:entityUpdate'
+          );
+        }
+      } else {
+        const row = {
+          [col.name]:  ent.name.trim(),
+          [col.email]: email,
+          [col.phone]: phone,
+          company:     ent.name.trim(),
+          title:       website ? `Website: ${website}` : null,
+          [col.role]:  roleStr,
+          website:     website,
+          address:     ent.address || null,
+          city:        ent.city || null,
+          state:       ent.state || null,
+          data_source: 'costar_sidebar',
+        };
+        const r = await domainQuery(domain, 'POST', 'contacts', row);
+        if (r.ok) count++;
+      }
     }
   }
 
