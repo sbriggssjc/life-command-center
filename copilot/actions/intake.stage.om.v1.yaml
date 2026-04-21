@@ -1,8 +1,10 @@
 action_id: intake.stage.om.v1
-display_name: "Stage OM Intake"
+display_name: "Stage OM Intake (inline)"
 description: >
   Stages a property Offering Memorandum (PDF) for downstream extraction
-  and matching. This action performs ingestion ONLY and returns immediately.
+  and matching. Accepts the PDF inline as base64 bytes (≤25MB). Returns
+  the intake_id plus current extraction_status and matched_entity_id
+  (when extraction resolves fast enough to be known synchronously).
 category: intake
 risk_tier: read_only
 confirmation_required: false
@@ -25,9 +27,10 @@ inputs:
         enum: [copilot]
       intake_channel:
         type: string
-        enum: [outlook, copilot_chat, teams]
+        enum: [copilot_chat, outlook, teams]
       intent:
         type: string
+        description: Free-text upload context.
 
       artifacts:
         type: object
@@ -36,15 +39,15 @@ inputs:
           primary_document:
             type: object
             required:
-              - file_id
+              - bytes_base64
               - file_name
-              - storage_path
             properties:
-              file_id:
+              bytes_base64:
                 type: string
+                description: Base64 PDF bytes (strip data-URI prefix).
               file_name:
                 type: string
-              storage_path:
+              mime_type:
                 type: string
               sha256:
                 type: string
@@ -52,6 +55,9 @@ inputs:
       seed_data:
         type: object
         properties:
+          entity_id:
+            type: string
+            format: uuid
           property:
             type: object
             properties:
@@ -72,14 +78,22 @@ inputs:
         type: object
         properties:
           conversation_id: { type: string }
-          message_id: { type: string }
-          model: { type: string }
-          run_id: { type: string }
+          message_id:      { type: string }
+          model:           { type: string }
+          run_id:          { type: string }
 
 outputs:
   schema:
     type: object
     properties:
-      ok: { type: boolean }
-      status: { type: string }
-      staged_intake_item_id: { type: string }
+      ok:                    { type: boolean }
+      status:                { type: string, enum: [received, partial] }
+      intake_id:             { type: string, format: uuid }
+      staged_intake_item_id: { type: string, format: uuid }
+      inbox_item_id:         { type: string, format: uuid }
+      extraction_status:     { type: string, enum: [processing, review_required, failed] }
+      classified_domain:     { type: [string, "null"] }
+      matched_entity_id:     { type: [string, "null"] }
+      entity_match_status:   { type: string, enum: [matched, unmatched, pending] }
+      size_bytes:            { type: integer }
+      message:               { type: string }

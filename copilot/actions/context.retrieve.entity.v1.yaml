@@ -1,0 +1,64 @@
+action_id: context.retrieve.entity.v1
+display_name: "Retrieve Entity Context"
+description: >
+  Pulls the full working memory for a single canonical entity (contact,
+  property, or organization). Returns: the entity record, recent
+  interactions (Copilot turns, emails, notes, system events), open action
+  items, recent inbox items, and property-specific enrichment when
+  applicable. Call this at the start of any conversation that mentions a
+  specific person, property, or company so the agent has prior-interaction
+  memory before responding.
+category: context
+risk_tier: read_only
+confirmation_required: false
+
+owner:
+  orchestrator: lcc
+  systems_of_record:
+    - lcc
+
+inputs:
+  schema:
+    type: object
+    properties:
+      entity_id:
+        type: string
+        format: uuid
+      entity_name:
+        type: string
+      entity_type:
+        type: string
+        enum: [contact, property, organization]
+      window_days:
+        type: integer
+        default: 90
+        minimum: 1
+        maximum: 730
+      interaction_limit:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    # entity_id OR entity_name must be provided; handler validates.
+
+outputs:
+  schema:
+    type: object
+    properties:
+      ok: { type: boolean }
+      entity:
+        type: object
+        properties:
+          id:           { type: string }
+          entity_type:  { type: string }
+          display_name: { type: string }
+          domain:       { type: [string, "null"] }
+          metadata:     { type: object }
+      resolve_notes:       { type: [object, "null"] }
+      last_touchpoint_at:  { type: [string, "null"] }
+      recent_interactions: { type: array, items: { type: object } }
+      open_action_items:   { type: array, items: { type: object } }
+      recent_inbox_items:  { type: array, items: { type: object } }
+      property_enrichment: { type: [object, "null"] }
+      window_days:         { type: integer }
+      message:             { type: string }

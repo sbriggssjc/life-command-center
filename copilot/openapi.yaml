@@ -1,31 +1,36 @@
 openapi: 3.0.3
 info:
-  title: LCC Copilot Actions API
-  description: >
-    Typed action endpoints for Microsoft Copilot Studio integration with
-    Life Command Center. All actions are dispatched through the unified
-    copilot action gateway.
-  version: 1.0.0
-
+  title: LCC Copilot Actions Gateway
+  version: "1.1.0"
+  description: |
+    Typed Copilot actions for the LCC Deal Agent. Base path is the
+    LCC Vercel deploy; the single gateway is `POST /api/copilot/action`
+    which dispatches by `action_id`. Convenience aliases are exposed for
+    each action so Power Platform custom connectors can surface them as
+    first-class operations.
 servers:
-  - url: https://life-command-center.vercel.app
-    description: Production
+  - url: https://{host}
+    variables:
+      host:
+        default: lcc.vercel.app
+        description: LCC deployment host
 
 paths:
   /api/copilot/action:
     post:
       operationId: copilotAction
       summary: Dispatch a typed Copilot action
-      description: >
+      description: |
         Unified gateway for all Copilot actions. Routes to the appropriate
-        handler based on the action_id field.
+        handler based on the `action_id` field. Supported values:
+        `intake.stage.om.v1`, `intake.finalize.om.v1`,
+        `context.retrieve.entity.v1`, `memory.log.turn.v1`.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              oneOf:
-                - $ref: "#/components/schemas/IntakeStageOmRequest"
+              $ref: "#/components/schemas/CopilotActionRequest"
       responses:
         "200":
           description: Action completed successfully
@@ -34,22 +39,28 @@ paths:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/IntakeStageOmResponse"
+                  - $ref: "#/components/schemas/IntakeFinalizeOmResponse"
+                  - $ref: "#/components/schemas/RetrieveEntityContextResponse"
+                  - $ref: "#/components/schemas/MemoryLogTurnResponse"
         "400":
           description: Invalid request (missing fields or unknown action_id)
         "401":
           description: Authentication required
+        "413":
+          description: Payload too large (inline OM > 25MB)
         "500":
           description: Server error
 
-  /intake/stage-om:
+  /api/intake/stage-om:
     post:
       operationId: intakeStageOm
       summary: Stage an Offering Memorandum for intake
       description: >
         Convenience alias. Equivalent to POST /api/copilot/action with
-        action_id = intake.stage.om.v1. Stages a property OM PDF into
-        staged_intake_items and staged_intake_artifacts for downstream
-        extraction and matching.
+        action_id = intake.stage.om.v1. Stages a property OM PDF inline
+        (base64) into inbox_items + staged_intake_items, kicks off AI
+        extraction + property matching, and logs an interaction for
+        entity-scoped memory.
       requestBody:
         required: true
         content:
@@ -58,115 +69,328 @@ paths:
               $ref: "#/components/schemas/IntakeStageOmInputs"
       responses:
         "200":
-          description: Intake staged
+          description: Intake staged + extraction kicked off
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/IntakeStageOmResponse"
 
+  /api/intake/finalize-om:
+    post:
+      operationId: intakeFinalizeOm
+      summary: Finalize staged OM intake
+      description: >
+        Idempotent status probe. Flips the staged inbox_item from 'new' to
+        'triaged' and reports current extraction / match status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntakeFinalizeOmInputs"
+      responses:
+        "200":
+          description: Finalized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntakeFinalizeOmResponse"
+
+  /api/context/retrieve-entity:
+    post:
+      operationId: contextRetrieveEntity
+      summary: Retrieve full entity context (timeline + open work + recent inbox)
+      description: >
+        THE memory-retrieval action for the Deal Agent. Call at the start of
+        any conversation that mentions a specific contact, property, or
+        organization. Returns the canonical entity, recent interactions,
+        open tasks, recent inbox items, and property enrichment when relevant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetrieveEntityContextInputs"
+      responses:
+        "200":
+          description: Context retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetrieveEntityContextResponse"
+
+  /api/memory/log-turn:
+    post:
+      operationId: memoryLogTurn
+      summary: Log an agent-worthy insight, preference, or commitment
+      description: >
+        Explicit memory write. Use to capture information the agent decides
+        should persist across conversations (e.g., a user preference, a
+        contact's stated objection, a commitment made).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryLogTurnInputs"
+      responses:
+        "200":
+          description: Turn logged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryLogTurnResponse"
+
 components:
   schemas:
-    IntakeStageOmRequest:
+    # ------------------------------------------------------------------ #
+    # Gateway envelope                                                    #
+    # ------------------------------------------------------------------ #
+    CopilotActionRequest:
       type: object
-      required:
-        - action_id
-        - inputs
+      required: [action_id, inputs]
       properties:
         action_id:
           type: string
-          enum: [intake.stage.om.v1]
+          enum:
+            - intake.stage.om.v1
+            - intake.finalize.om.v1
+            - context.retrieve.entity.v1
+            - memory.log.turn.v1
         inputs:
-          $ref: "#/components/schemas/IntakeStageOmInputs"
+          type: object
+          description: Action-specific input envelope.
 
+    # ------------------------------------------------------------------ #
+    # intake.stage.om.v1                                                  #
+    # ------------------------------------------------------------------ #
     IntakeStageOmInputs:
       type: object
-      required:
-        - intake_source
-        - intake_channel
-        - artifacts
+      required: [intake_source, intake_channel, artifacts]
       properties:
         intake_source:
           type: string
           enum: [copilot]
         intake_channel:
           type: string
-          enum: [outlook, copilot_chat, teams]
+          enum: [copilot_chat, outlook, teams]
         intent:
           type: string
-          description: Free-text intent description from the Copilot conversation
+          description: Free-text description of the upload context.
         artifacts:
           type: object
-          required:
-            - primary_document
+          required: [primary_document]
           properties:
             primary_document:
               type: object
-              required:
-                - file_id
-                - file_name
-                - storage_path
+              required: [bytes_base64, file_name]
               properties:
-                file_id:
+                bytes_base64:
                   type: string
-                  description: Unique file identifier
+                  description: >
+                    Base64-encoded PDF bytes. Maximum ~25 MB decoded size.
+                    Pass the raw body of a data URI (strip the
+                    `data:<mime>;base64,` prefix).
                 file_name:
                   type: string
-                  description: Original filename (e.g. "123-Main-St-OM.pdf")
-                storage_path:
+                  description: Original filename including extension, e.g. "123-Main-OM.pdf".
+                mime_type:
                   type: string
-                  description: Supabase storage path or URL to the PDF
+                  description: Defaults to application/pdf.
                 sha256:
                   type: string
-                  description: Optional SHA-256 hash for integrity verification
+                  description: Optional SHA-256 hash for integrity verification.
         seed_data:
           type: object
-          description: Optional pre-extracted property data from Copilot context
+          description: Optional pre-extracted property hints. Downstream matcher uses these as tie-breakers.
           properties:
+            entity_id:
+              type: string
+              format: uuid
+              description: Optional pre-link to a known canonical entity.
             property:
               type: object
               properties:
-                name:
-                  type: string
+                name: { type: string }
                 address:
                   type: object
                   properties:
-                    line1:
-                      type: string
-                    city:
-                      type: string
-                    state:
-                      type: string
-                    postal_code:
-                      type: string
+                    line1: { type: string }
+                    city: { type: string }
+                    state: { type: string }
+                    postal_code: { type: string }
             tags:
               type: array
-              items:
-                type: string
+              items: { type: string }
         copilot_metadata:
           type: object
-          description: Copilot session context for traceability
+          description: Copilot session context for traceability.
           properties:
-            conversation_id:
-              type: string
-            message_id:
-              type: string
-            model:
-              type: string
-            run_id:
-              type: string
+            conversation_id: { type: string }
+            message_id:      { type: string }
+            model:           { type: string }
+            run_id:          { type: string }
 
     IntakeStageOmResponse:
       type: object
       properties:
-        ok:
-          type: boolean
-        status:
+        ok:                   { type: boolean }
+        status:               { type: string, enum: [received, partial], description: Stage status (synchronous) }
+        intake_id:            { type: string, format: uuid }
+        staged_intake_item_id: { type: string, format: uuid, description: Alias for intake_id (backwards compat). }
+        inbox_item_id:         { type: string, format: uuid }
+        extraction_status:
           type: string
-          enum: [received, partial]
+          enum: [processing, review_required, failed]
+          description: >
+            processing — extraction kicked off but not finished within the
+            race window. review_required — extraction produced a snapshot
+            ready for triage. failed — no extraction possible.
+        classified_domain:
+          type: string
+          nullable: true
+          enum: [dialysis, government, netlease, null]
+          description: Domain inferred from OM content (when available).
+        matched_entity_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Canonical entity id when the matcher found a property hit.
+        entity_match_status:
+          type: string
+          enum: [matched, unmatched, pending]
+        size_bytes: { type: integer }
+        message:    { type: string, description: Human-readable summary for the agent to surface. }
+
+    # ------------------------------------------------------------------ #
+    # intake.finalize.om.v1                                               #
+    # ------------------------------------------------------------------ #
+    IntakeFinalizeOmInputs:
+      type: object
+      required: [staged_intake_item_id, confirm_upload_complete]
+      properties:
         staged_intake_item_id:
           type: string
           format: uuid
-          description: UUID of the created staged_intake_items row
+        confirm_upload_complete:
+          type: boolean
+          description: Must be true. Kept for protocol parity with the legacy presigned-URL flow.
+        intake_channel:
+          type: string
+          enum: [copilot_chat, outlook, teams]
+        notes:
+          type: string
+
+    IntakeFinalizeOmResponse:
+      type: object
+      properties:
+        ok:                     { type: boolean }
+        status:                 { type: string, enum: [queued, processing] }
+        staged_intake_item_id:  { type: string, format: uuid }
+        intake_id:              { type: string, format: uuid }
+        extraction_status:      { type: string }
+        classified_domain:      { type: string, nullable: true }
+        matched_entity_id:      { type: string, nullable: true }
+        message:                { type: string }
+
+    # ------------------------------------------------------------------ #
+    # context.retrieve.entity.v1                                          #
+    # ------------------------------------------------------------------ #
+    RetrieveEntityContextInputs:
+      type: object
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+          description: Preferred. UUID of the canonical entity.
+        entity_name:
+          type: string
+          description: >
+            Fallback. Case-insensitive substring match against display_name.
+            Returns top hit with resolve_notes flagging ambiguity.
+        entity_type:
+          type: string
+          enum: [contact, property, organization]
+          description: Optional filter to disambiguate name lookups.
+        window_days:
+          type: integer
+          default: 90
+          minimum: 1
+          maximum: 730
+        interaction_limit:
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+
+    RetrieveEntityContextResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        entity:
+          type: object
+          properties:
+            id:           { type: string, format: uuid }
+            entity_type:  { type: string }
+            display_name: { type: string }
+            domain:       { type: string, nullable: true }
+            metadata:     { type: object }
+        resolve_notes:
+          type: object
+          nullable: true
+          description: Populated when a name lookup matched multiple candidates.
+        last_touchpoint_at: { type: string, format: date-time, nullable: true }
+        recent_interactions:
+          type: array
+          items: { type: object }
+        open_action_items:
+          type: array
+          items: { type: object }
+        recent_inbox_items:
+          type: array
+          items: { type: object }
+        property_enrichment:
+          type: object
+          nullable: true
+        window_days: { type: integer }
+        message:     { type: string }
+
+    # ------------------------------------------------------------------ #
+    # memory.log.turn.v1                                                  #
+    # ------------------------------------------------------------------ #
+    MemoryLogTurnInputs:
+      type: object
+      required: [summary, channel]
+      properties:
+        summary:
+          type: string
+          description: One-line human summary of the insight to remember.
+        turn_text:
+          type: string
+          description: Optional verbatim text (e.g., the user's exact words).
+        entity_id:
+          type: string
+          format: uuid
+        entity_name:
+          type: string
+        channel:
+          type: string
+          enum: [copilot_chat, outlook, teams, sidebar]
+        kind:
+          type: string
+          enum: [preference, insight, commitment, objection, note]
+          default: note
+        metadata:
+          type: object
+
+    MemoryLogTurnResponse:
+      type: object
+      properties:
+        ok:                 { type: boolean }
+        activity_event_id:  { type: string, format: uuid, nullable: true }
+        entity_id:          { type: string, format: uuid, nullable: true }
+        fallback_category:  { type: boolean, description: True if the preferred enum value was not yet present in the DB. }
+        message:            { type: string }
 
   securitySchemes:
     ApiKeyAuth:

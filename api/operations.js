@@ -695,6 +695,35 @@ const ACTION_REGISTRY = {
   escalate_action:             { method: 'POST', path: 'operations?action=escalate', tier: 3, confirm: 'explicit' },
 };
 
+/**
+ * Build a short human-readable summary of a dispatched action for the
+ * activity_events timeline. Kept intentionally compact — action-specific
+ * handlers can override the summary in their own memory writes.
+ */
+function deriveActionSummary(actionName, params, result) {
+  const safeParams = params || {};
+  switch (actionName) {
+    case 'draft_outreach_email':
+      return `Drafted outreach email${safeParams.contact_name ? ` for ${safeParams.contact_name}` : ''}`;
+    case 'draft_seller_update_email':
+      return `Drafted seller update${safeParams.property_name ? ` for ${safeParams.property_name}` : ''}`;
+    case 'create_todo_task':
+      return `Created To Do task${safeParams.title ? `: "${safeParams.title}"` : ''}`;
+    case 'generate_document':
+      return `Generated ${safeParams.document_type || 'document'}${safeParams.entity_id ? ` for entity ${safeParams.entity_id.slice(0, 8)}` : ''}`;
+    case 'ingest_pdf_document':
+      return `Ingested PDF: ${safeParams.file_name || 'unnamed'}`;
+    case 'triage_inbox_item':
+      return `Triaged inbox item → ${safeParams.status || 'updated'}`;
+    case 'promote_intake_to_action':
+      return `Promoted inbox item to shared action`;
+    case 'update_execution_task_status':
+      return `Updated task status → ${safeParams.status || 'changed'}`;
+    default:
+      return `Copilot action: ${actionName}`;
+  }
+}
+
 async function dispatchAction(actionName, params, user, workspaceId, req) {
   const spec = ACTION_REGISTRY[actionName];
   if (!spec) {
@@ -725,23 +754,60 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
     };
   }
 
+  // Dispatch the handler, then log a memory interaction if the action
+  // succeeded and touched an entity. Failures do NOT log (keeps the
+  // timeline clean — only successful state changes are remembered).
+  let result;
+
   // AI-powered actions have dedicated handlers
   if (spec.handler) {
     switch (spec.handler) {
-      case 'daily_briefing':          return handleDailyBriefing(params, user, workspaceId, req);
-      case 'prospecting_brief':      return handleProspectingBrief(params, user, workspaceId);
-      case 'draft_outreach':         return handleDraftOutreachEmail(params, user, workspaceId);
-      case 'draft_seller_update':    return handleDraftSellerUpdate(params, user, workspaceId);
-      case 'create_todo_task':       return createTodoTask(params, user, workspaceId);
-      case 'listing_pursuit_dossier': return handleListingPursuitDossier(params, user, workspaceId);
-      case 'teams_card':             return generateTeamsCard(params);
-      case 'relationship_context':   return handleRelationshipContext(params, user, workspaceId);
-      case 'pipeline_intelligence':  return handlePipelineIntelligence(params, user, workspaceId);
-      case 'guided_entity_merge':    return handleGuidedEntityMerge(params, user, workspaceId);
-      case 'document_assembly':     return handleDocumentAssembly(params, user, workspaceId);
-      case 'ingest_pdf':            return ingestPdfWorker(params, user, workspaceId);
+      case 'daily_briefing':          result = await handleDailyBriefing(params, user, workspaceId, req); break;
+      case 'prospecting_brief':       result = await handleProspectingBrief(params, user, workspaceId); break;
+      case 'draft_outreach':          result = await handleDraftOutreachEmail(params, user, workspaceId); break;
+      case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
+      case 'create_todo_task':        result = await createTodoTask(params, user, workspaceId); break;
+      case 'listing_pursuit_dossier': result = await handleListingPursuitDossier(params, user, workspaceId); break;
+      case 'teams_card':              result = await generateTeamsCard(params); break;
+      case 'relationship_context':    result = await handleRelationshipContext(params, user, workspaceId); break;
+      case 'pipeline_intelligence':   result = await handlePipelineIntelligence(params, user, workspaceId); break;
+      case 'guided_entity_merge':     result = await handleGuidedEntityMerge(params, user, workspaceId); break;
+      case 'document_assembly':       result = await handleDocumentAssembly(params, user, workspaceId); break;
+      case 'ingest_pdf':              result = await ingestPdfWorker(params, user, workspaceId); break;
       default: return { ok: false, error: `Unknown handler: ${spec.handler}` };
     }
+
+    // Fire-and-forget memory write for successful TIER ≥ 1 actions that
+    // touched an entity. Does not block the response. Always wrapped in
+    // try/catch inside the helper so a log failure never affects the action.
+    if (result?.ok && spec.tier >= 1) {
+      try {
+        const { logCopilotInteraction } = await import('./_shared/memory.js');
+        const entityId =
+          params?.entity_id
+          ?? result?.data?.entity_id
+          ?? result?.entity_id
+          ?? result?.data?.matched_entity_id
+          ?? null;
+        await logCopilotInteraction({
+          workspaceId,
+          actorId:     user.id,
+          entityId,
+          channel:     params?._channel || 'copilot_chat',
+          actionId:    actionName,
+          summary:     deriveActionSummary(actionName, params, result),
+          metadata: {
+            dispatch_tier: spec.tier,
+            handler:       spec.handler,
+            params_keys:   Object.keys(params || {}).filter((k) => !k.startsWith('_')),
+          },
+        });
+      } catch (err) {
+        console.error('[dispatchAction] memory log failed:', actionName, err?.message);
+      }
+    }
+
+    return result;
   }
 
   // Build internal fetch URL using internal API calls for GET reads

@@ -1,0 +1,52 @@
+action_id: memory.log.turn.v1
+display_name: "Log Conversational Memory"
+description: >
+  Explicit memory write. The agent calls this when it decides a piece of
+  context should persist across future conversations — a user preference,
+  a contact's stated objection, a commitment made, an insight about a
+  property. Writes to the entity-scoped activity_events timeline so that
+  subsequent context.retrieve.entity.v1 calls surface it.
+category: context
+risk_tier: write_light
+confirmation_required: false
+
+owner:
+  orchestrator: lcc
+  systems_of_record:
+    - lcc
+
+inputs:
+  schema:
+    type: object
+    required: [summary, channel]
+    properties:
+      summary:
+        type: string
+        description: One-line human summary.
+      turn_text:
+        type: string
+        description: Optional verbatim text.
+      entity_id:
+        type: string
+        format: uuid
+      entity_name:
+        type: string
+      channel:
+        type: string
+        enum: [copilot_chat, outlook, teams, sidebar]
+      kind:
+        type: string
+        enum: [preference, insight, commitment, objection, note]
+        default: note
+      metadata:
+        type: object
+
+outputs:
+  schema:
+    type: object
+    properties:
+      ok:                 { type: boolean }
+      activity_event_id:  { type: [string, "null"] }
+      entity_id:          { type: [string, "null"] }
+      fallback_category:  { type: boolean }
+      message:            { type: string }

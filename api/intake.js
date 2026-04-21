@@ -1276,7 +1276,9 @@ async function handleCopilotAction(req, res) {
     } catch (bodyErr) {
       return res.status(400).json({ error: 'invalid_json_body', detail: bodyErr?.message });
     }
-    const { action_id, inputs } = body;
+    // action_id from body OR from the convenience-path rewrite query param
+    const action_id = body.action_id || req.query?._preset_action || null;
+    const inputs = body.inputs || (action_id && body.action_id ? null : body); // convenience-path: body IS the inputs
     if (!action_id) return res.status(400).json({ error: 'action_id required' });
     if (!inputs)    return res.status(400).json({ error: 'inputs required' });
 
@@ -1300,11 +1302,29 @@ async function handleCopilotAction(req, res) {
       result = await handleIntakeStageOm({ inputs, authContext, workspaceId });
     } else if (action_id === 'intake.finalize.om.v1') {
       result = await handleIntakeFinalizeOm({ inputs });
+    } else if (action_id === 'context.retrieve.entity.v1') {
+      const { handleRetrieveEntityContext } = await import('./_handlers/retrieve-entity-context.js');
+      result = await handleRetrieveEntityContext({ inputs, authContext, workspaceId });
+    } else if (action_id === 'memory.log.turn.v1') {
+      const { handleMemoryLogTurn } = await import('./_handlers/memory-log-turn.js');
+      result = await handleMemoryLogTurn({ inputs, authContext, workspaceId });
     } else {
-      return res.status(400).json({ error: `Unknown action_id: ${action_id}` });
+      return res.status(400).json({
+        error: 'unknown_action_id',
+        action_id,
+        supported: [
+          'intake.stage.om.v1',
+          'intake.finalize.om.v1',
+          'context.retrieve.entity.v1',
+          'memory.log.turn.v1',
+        ],
+      });
     }
     return res.status(result.status).json(result.body);
   } catch (err) {
+    // Log the full error server-side for diagnostics, but return a user-safe
+    // envelope so the Copilot agent doesn't surface "SystemError" for what
+    // are often soft/expected failures (missing entity, malformed input, etc.)
     console.error('[copilot-action] handler threw:', {
       action_id: req.body?.action_id,
       error: err?.message,
@@ -1313,11 +1333,14 @@ async function handleCopilotAction(req, res) {
       stack: err?.stack,
     });
     if (res.headersSent) return;
+    const isDev = process.env.LCC_ENV === 'development';
     return res.status(500).json({
+      ok: false,
       error: 'copilot_action_exception',
-      detail: err?.message || String(err),
-      name: err?.name || null,
-      code: err?.code || null,
+      detail: isDev ? (err?.message || String(err)) : 'Unexpected server error. Contact LCC support with the request id.',
+      action_id: req.body?.action_id || null,
+      hint: 'If this persists, the underlying handler raised a runtime error. Check LCC logs for the request trace.',
+      ...(isDev ? { name: err?.name || null, code: err?.code || null } : {}),
     });
   }
 }
