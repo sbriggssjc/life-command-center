@@ -237,12 +237,44 @@ function toResponseMessage(role, text, attachments = [], contextText = '') {
   }
   if (role === 'user' && Array.isArray(attachments)) {
     attachments.forEach((item) => {
-      if (!item?.data_url) return;
-      content.push({
-        type: 'input_image',
-        image_url: item.data_url,
-        detail: 'auto',
-      });
+      if (!item) return;
+
+      // Normalize attachment shape. Accept either:
+      //   { data_url: "data:<mime>;base64,..." }   (legacy shape)
+      //   { data: <base64>, mimeType, name, type } (intake-extractor shape)
+      const mime = (item.mimeType || item.mime_type || '').toLowerCase();
+      const rawBase64 = item.data || item.base64 || null;
+      let dataUrl = item.data_url || null;
+      if (!dataUrl && rawBase64) {
+        dataUrl = `data:${mime || 'application/octet-stream'};base64,${rawBase64}`;
+      }
+      if (!dataUrl) return;
+
+      const isPdf   = mime === 'application/pdf' || dataUrl.startsWith('data:application/pdf');
+      const isImage = mime.startsWith('image/')  || dataUrl.startsWith('data:image/');
+
+      if (isPdf) {
+        // OpenAI Responses API — PDFs as input_file with file_data
+        content.push({
+          type:      'input_file',
+          filename:  item.name || item.file_name || 'document.pdf',
+          file_data: dataUrl,
+        });
+      } else if (isImage) {
+        content.push({
+          type:      'input_image',
+          image_url: dataUrl,
+          detail:    'auto',
+        });
+      } else {
+        // Unknown binary — attempt file attachment anyway; providers that
+        // can't handle will ignore.
+        content.push({
+          type:      'input_file',
+          filename:  item.name || item.file_name || 'attachment',
+          file_data: dataUrl,
+        });
+      }
     });
   }
   return {
