@@ -415,9 +415,12 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   }
 
   if (msg.type === 'STAGE_PDF_TO_LCC') {
-    // Convenience: fetch PDF + POST to /api/intake/stage-om in a single
-    // background call. Sidepanel receives the final LCC response and doesn't
-    // need to handle bytes or API keys itself.
+    // Two-path dispatch:
+    //  - If `lccIntakeFlowUrl` is set in storage, POST to the Power Automate
+    //    Flow A (bypasses Vercel's 4.5MB body cap — flow routes bytes through
+    //    Supabase Storage pre-signed upload, then hits LCC with a tiny
+    //    storage_path reference)
+    //  - Else fall back to the direct POST path (works for ≤3MB PDFs)
     (async () => {
       try {
         const r = await fetch(msg.url);
@@ -432,13 +435,68 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const base64 = btoa(binary);
         const mimeType = r.headers.get('content-type') || 'application/pdf';
 
-        const settings = await chrome.storage.local.get(['lccApiKey', 'lccWorkspace', 'lccHost']);
+        const settings = await chrome.storage.local.get([
+          'lccApiKey', 'lccWorkspace', 'lccHost', 'lccIntakeFlowUrl'
+        ]);
         const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
 
         const fileName =
           (msg.fileName && msg.fileName.trim()) ||
           (msg.url.split('/').pop() || 'upload.pdf').split('?')[0];
 
+        // ── Path A: Power Automate flow (preferred, no size cap) ──────────
+        if (settings.lccIntakeFlowUrl) {
+          try {
+            const flowRes = await fetch(settings.lccIntakeFlowUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                file_name:    fileName,
+                mime_type:    mimeType,
+                bytes_base64: base64,
+                source_url:   msg.sourceUrl || msg.url,
+                hostname:     msg.hostname || null,
+                intent:       msg.intent || `Staged from ${msg.hostname || 'browser'}`,
+              }),
+            });
+            const flowText = await flowRes.text();
+            let flowBody = null;
+            try { flowBody = JSON.parse(flowText); } catch { /* non-json */ }
+            if (flowRes.ok && flowBody?.ok) {
+              respond({
+                ok:         true,
+                status:     flowRes.status,
+                body:       flowBody,
+                sizeBytes:  buffer.byteLength,
+                fileName,
+                path:       'power_automate_flow',
+              });
+              return;
+            }
+            console.error('[STAGE_PDF_TO_LCC] flow returned non-ok', {
+              flowUrl: settings.lccIntakeFlowUrl.replace(/\?.*$/, '?<redacted>'),
+              status: flowRes.status,
+              bodySnippet: flowText.slice(0, 400),
+            });
+            respond({
+              ok: false,
+              status: flowRes.status,
+              body: flowBody || { error: 'flow_non_ok', detail: flowText.slice(0, 200) },
+              path: 'power_automate_flow',
+            });
+            return;
+          } catch (flowErr) {
+            console.error('[STAGE_PDF_TO_LCC] flow fetch threw', flowErr);
+            respond({
+              ok: false,
+              error: `Flow call failed: ${flowErr.message}`,
+              path: 'power_automate_flow',
+            });
+            return;
+          }
+        }
+
+        // ── Path B: direct POST to LCC (legacy, 4.5MB cap on Vercel Hobby) ─
         const stageUrl = `${host}/api/intake/stage-om`;
         const postRes = await fetch(stageUrl, {
           method: 'POST',

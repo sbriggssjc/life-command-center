@@ -89,9 +89,20 @@ export async function stageOmIntake(input, auth, workspaceId) {
     }
   }
 
-  // ---- 0b. Validate bytes_base64 (after data-URI unwrap)
-  if (!input?.bytes_base64 || typeof input.bytes_base64 !== 'string') {
-    return { status: 400, body: { error: 'missing_bytes_base64', detail: 'bytes_base64 (or data_uri) is required' } };
+  // ---- 0b. storage_path path — file already uploaded to Supabase Storage.
+  //     No bytes in the request; the artifact row stores the path and the
+  //     extractor fetches bytes via OPS_URL/storage/v1/object/<path>.
+  const hasStoragePath = input?.storage_path && typeof input.storage_path === 'string';
+
+  // ---- 0c. Validate we have SOMETHING (bytes or storage path)
+  if (!hasStoragePath && (!input?.bytes_base64 || typeof input.bytes_base64 !== 'string')) {
+    return {
+      status: 400,
+      body: {
+        error: 'missing_primary_document_bytes',
+        detail: 'Provide bytes_base64, data_uri, or storage_path.',
+      },
+    };
   }
   if (!input?.file_name || typeof input.file_name !== 'string') {
     return { status: 400, body: { error: 'missing_file_name', detail: 'file_name (string) is required' } };
@@ -100,14 +111,19 @@ export async function stageOmIntake(input, auth, workspaceId) {
     return { status: 400, body: { error: 'missing_channel', detail: 'channel is required (copilot_chat|outlook|teams|sidebar|email)' } };
   }
 
-  const bytesLen = Math.ceil((input.bytes_base64.length * 3) / 4);
-  if (bytesLen > OM_INLINE_MAX_BYTES) {
+  const bytesLen = hasStoragePath
+    ? (input.size_bytes || 0)
+    : Math.ceil((input.bytes_base64.length * 3) / 4);
+  // Size cap only applies to inline bytes — storage_path ingestion has no
+  // size limit at the LCC level (Supabase Storage handles any file up to
+  // its bucket cap, set in the Supabase dashboard).
+  if (!hasStoragePath && bytesLen > OM_INLINE_MAX_BYTES) {
     return {
       status: 413,
       body: {
         error: 'file_too_large',
         detail: `Inline OM payload must be ≤ ${OM_INLINE_MAX_BYTES} bytes (~25MB). Received ~${bytesLen}.`,
-        hint: 'For larger files, use the future presigned-upload action (not yet enabled).',
+        hint: 'Use the prepare-upload → storage_path flow for larger files.',
       },
     };
   }
@@ -310,13 +326,17 @@ export async function stageOmIntake(input, auth, workspaceId) {
     };
   }
 
+  // The artifact row carries EITHER inline_data (small inline payload) or
+  // storage_path (reference to bytes in Supabase Storage). The extractor
+  // handles both paths; having both is redundant but safe.
   const artRes = await opsQuery('POST', 'staged_intake_artifacts', {
     intake_id:    inboxItemId,
     file_name:    input.file_name,
     file_type:    fileExt,
     mime_type:    mimeType,
-    inline_data:  input.bytes_base64,
-    size_bytes:   bytesLen,
+    inline_data:  hasStoragePath ? null : input.bytes_base64,
+    storage_path: hasStoragePath ? input.storage_path : null,
+    size_bytes:   bytesLen || null,
     sha256:       input.sha256 ?? null,
   });
   if (!artRes.ok) {

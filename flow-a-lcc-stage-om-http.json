@@ -1,0 +1,152 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "file_name":    { "type": "string" },
+            "mime_type":    { "type": "string" },
+            "bytes_base64": { "type": "string" },
+            "source_url":   { "type": "string" },
+            "hostname":     { "type": "string" },
+            "intent":       { "type": "string" }
+          },
+          "required": ["file_name", "bytes_base64"]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Init_LCC_Host": {
+      "runAfter": {},
+      "type": "InitializeVariable",
+      "inputs": { "variables": [ { "name": "LccHost", "type": "string", "value": "https://life-command-center-nine.vercel.app" } ] }
+    },
+    "Init_LCC_Api_Key": {
+      "runAfter": { "Init_LCC_Host": ["Succeeded"] },
+      "type": "InitializeVariable",
+      "inputs": { "variables": [ { "name": "LccApiKey", "type": "string", "value": "REPLACE_WITH_YOUR_LCC_API_KEY" } ] }
+    },
+    "Call_PrepareUpload": {
+      "runAfter": { "Init_LCC_Api_Key": ["Succeeded"] },
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri":    "@{concat(variables('LccHost'), '/api/intake/prepare-upload')}",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-LCC-Key":    "@{variables('LccApiKey')}"
+        },
+        "body": {
+          "file_name":      "@{triggerBody()?['file_name']}",
+          "mime_type":      "@{coalesce(triggerBody()?['mime_type'], 'application/pdf')}",
+          "intake_channel": "sidebar"
+        }
+      }
+    },
+    "Parse_PrepareUpload": {
+      "runAfter": { "Call_PrepareUpload": ["Succeeded"] },
+      "type": "ParseJson",
+      "inputs": {
+        "content": "@body('Call_PrepareUpload')",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok":           { "type": "boolean" },
+            "storage_path": { "type": "string" },
+            "upload_url":   { "type": "string" },
+            "upload_token": { "type": "string" }
+          }
+        }
+      }
+    },
+    "Decode_Bytes": {
+      "runAfter": { "Parse_PrepareUpload": ["Succeeded"] },
+      "type": "Compose",
+      "inputs": "@base64ToBinary(triggerBody()?['bytes_base64'])"
+    },
+    "PUT_To_Supabase_Storage": {
+      "runAfter": { "Decode_Bytes": ["Succeeded"] },
+      "type": "Http",
+      "inputs": {
+        "method": "PUT",
+        "uri":    "@body('Parse_PrepareUpload')?['upload_url']",
+        "headers": {
+          "Content-Type":  "@{coalesce(triggerBody()?['mime_type'], 'application/pdf')}",
+          "Authorization": "@{concat('Bearer ', body('Parse_PrepareUpload')?['upload_token'])}",
+          "x-upsert":      "true"
+        },
+        "body": "@outputs('Decode_Bytes')"
+      }
+    },
+    "Call_StageOm": {
+      "runAfter": { "PUT_To_Supabase_Storage": ["Succeeded"] },
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri":    "@{concat(variables('LccHost'), '/api/intake/stage-om')}",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-LCC-Key":    "@{variables('LccApiKey')}"
+        },
+        "body": {
+          "intake_source":  "copilot",
+          "intake_channel": "sidebar",
+          "intent": "@{coalesce(triggerBody()?['intent'], concat('Staged from ', coalesce(triggerBody()?['hostname'], 'unknown')))}",
+          "artifacts": {
+            "primary_document": {
+              "storage_path": "@{body('Parse_PrepareUpload')?['storage_path']}",
+              "file_name":    "@{triggerBody()?['file_name']}",
+              "mime_type":    "@{coalesce(triggerBody()?['mime_type'], 'application/pdf')}"
+            }
+          },
+          "seed_data": {
+            "tags": [ "sidebar_intake", "power_automate" ]
+          }
+        }
+      }
+    },
+    "Parse_StageOm_Response": {
+      "runAfter": { "Call_StageOm": ["Succeeded", "Failed"] },
+      "type": "ParseJson",
+      "inputs": {
+        "content": "@body('Call_StageOm')",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok":                { "type": "boolean" },
+            "intake_id":         { "type": "string" },
+            "extraction_status": { "type": "string" },
+            "classified_domain": { "type": ["string", "null"] },
+            "matched_entity_id": { "type": ["string", "null"] },
+            "message":           { "type": "string" }
+          }
+        }
+      }
+    },
+    "Respond_To_Caller": {
+      "runAfter": { "Parse_StageOm_Response": ["Succeeded", "Failed"] },
+      "type": "Response",
+      "kind": "Http",
+      "inputs": {
+        "statusCode": 200,
+        "headers": { "Content-Type": "application/json" },
+        "body": {
+          "ok":                "@coalesce(body('Parse_StageOm_Response')?['ok'], false)",
+          "intake_id":         "@coalesce(body('Parse_StageOm_Response')?['intake_id'], '')",
+          "storage_path":      "@coalesce(body('Parse_PrepareUpload')?['storage_path'], '')",
+          "extraction_status": "@coalesce(body('Parse_StageOm_Response')?['extraction_status'], 'unknown')",
+          "classified_domain": "@coalesce(body('Parse_StageOm_Response')?['classified_domain'], '')",
+          "matched_entity_id": "@coalesce(body('Parse_StageOm_Response')?['matched_entity_id'], '')",
+          "message":           "@coalesce(body('Parse_StageOm_Response')?['message'], 'Stage failed')"
+        }
+      }
+    }
+  },
+  "outputs": {}
+}

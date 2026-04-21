@@ -30,26 +30,12 @@ export async function handleIntakeStageOm({ inputs, authContext, workspaceId }) 
   }
 
   const doc = inputs?.artifacts?.primary_document;
-  if (!doc?.bytes_base64 && !doc?.data_uri && !doc?.file_id && !doc?.storage_path) {
+  if (!doc?.bytes_base64 && !doc?.data_uri && !doc?.storage_path) {
     return {
       status: 400,
       body: {
         error: 'missing_primary_document_bytes',
-        detail:
-          'Provide artifacts.primary_document.bytes_base64 OR data_uri. ' +
-          'Legacy file_id / storage_path are not currently supported.',
-      },
-    };
-  }
-
-  if (!doc.bytes_base64 && !doc.data_uri) {
-    return {
-      status: 501,
-      body: {
-        error: 'byte_upload_required',
-        detail:
-          'This API accepts inline bytes only. Pass bytes_base64 (raw base64) ' +
-          'or data_uri (full "data:<mime>;base64,<body>" string).',
+        detail: 'Provide artifacts.primary_document.bytes_base64, data_uri, or storage_path.',
       },
     };
   }
@@ -59,6 +45,8 @@ export async function handleIntakeStageOm({ inputs, authContext, workspaceId }) 
     {
       bytes_base64:     doc.bytes_base64 || null,
       data_uri:         doc.data_uri     || null,
+      storage_path:     doc.storage_path || null,
+      size_bytes:       doc.size_bytes   || null,
       file_name:        doc.file_name    || 'upload.pdf',
       mime_type:        doc.mime_type    || 'application/pdf',
       sha256:           doc.sha256       || null,

@@ -51,6 +51,7 @@
     { "source": "/api/copilot/action", "destination": "/api/intake?_route=copilot-action" },
     { "source": "/api/intake/stage-om", "destination": "/api/intake?_route=copilot-action&_preset_action=intake.stage.om.v1" },
     { "source": "/api/intake/finalize-om", "destination": "/api/intake?_route=copilot-action&_preset_action=intake.finalize.om.v1" },
+    { "source": "/api/intake/prepare-upload", "destination": "/api/intake?_route=copilot-action&_preset_action=intake.prepare_upload.v1" },
     { "source": "/api/context/retrieve-entity", "destination": "/api/intake?_route=copilot-action&_preset_action=context.retrieve.entity.v1" },
     { "source": "/api/memory/log-turn", "destination": "/api/intake?_route=copilot-action&_preset_action=memory.log.turn.v1" },
     { "source": "/api/intake-outlook-message", "destination": "/api/intake?_route=outlook-message" },

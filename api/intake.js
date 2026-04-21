@@ -1302,6 +1302,9 @@ async function handleCopilotAction(req, res) {
     } else if (action_id === 'memory.log.turn.v1') {
       const { handleMemoryLogTurn } = await import('./_handlers/memory-log-turn.js');
       result = await handleMemoryLogTurn({ inputs, authContext, workspaceId });
+    } else if (action_id === 'intake.prepare_upload.v1') {
+      const { handleIntakePrepareUpload } = await import('./_handlers/intake-prepare-upload.js');
+      result = await handleIntakePrepareUpload({ inputs, authContext });
     } else {
       return res.status(400).json({
         error: 'unknown_action_id',
