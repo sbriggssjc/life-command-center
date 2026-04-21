@@ -1028,22 +1028,30 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
     const normName = person.name.trim().toLowerCase();
     const personRoles = rolesOf(person).filter(r => PERSON_ROLES.includes(r));
 
+    // Force-refresh contact rows on every re-ingest so updated_at
+    // advances as the audit signal. Even when nothing has changed, stamp
+    // updated_at = now() and re-apply the latest email/phone/company
+    // values so the row carries the freshest provenance. Dropping the
+    // early-return on "no new fields" path is intentional per the
+    // idempotency audit.
+    const nowIso = new Date().toISOString();
     if (domain === 'government') {
       // One contacts row per role — contact_type is a typed column used by
       // downstream queries that filter "show me all listing brokers".
       for (const role of personRoles) {
         const existingId = await findExisting(email, normName, role);
         if (existingId) {
-          const patch = {};
+          const patch = {
+            updated_at:  nowIso,
+            data_source: 'costar_sidebar',
+          };
           if (email) patch[col.email] = email;
           if (phone) patch[col.phone] = phone;
           if (company) patch.company = company;
-          if (Object.keys(patch).length) {
-            await domainPatch(domain,
-              `contacts?${col.id}=eq.${existingId}`, patch,
-              'upsertSidebarContacts:personUpdate'
-            );
-          }
+          await domainPatch(domain,
+            `contacts?${col.id}=eq.${existingId}`, patch,
+            'upsertSidebarContacts:personUpdate'
+          );
         } else {
           const row = {
             [col.name]:  person.name.trim(),
@@ -1064,17 +1072,18 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
       const existingId = await findExisting(email, normName, null);
       const roleStr = personRoles.join(',') || person.role || null;
       if (existingId) {
-        const patch = {};
+        const patch = {
+          updated_at:  nowIso,
+          data_source: 'costar_sidebar',
+        };
         if (email) patch[col.email] = email;
         if (phone) patch[col.phone] = phone;
         if (company) patch.company = company;
         if (roleStr) patch[col.role] = roleStr;
-        if (Object.keys(patch).length) {
-          await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, patch,
-            'upsertSidebarContacts:personUpdate'
-          );
-        }
+        await domainPatch(domain,
+          `contacts?${col.id}=eq.${existingId}`, patch,
+          'upsertSidebarContacts:personUpdate'
+        );
       } else {
         const row = {
           [col.name]:  person.name.trim(),
@@ -1123,23 +1132,25 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
       rolesOf(ent).map(r => ENTITY_ROLE_MAP[r]).filter(Boolean)
     )];
 
+    const entityNowIso = new Date().toISOString();
     if (domain === 'government') {
       for (const mappedRole of mappedRoles) {
         const existingId = await findExisting(email, normName, mappedRole);
         if (existingId) {
-          const patch = {};
+          const patch = {
+            updated_at:  entityNowIso,
+            data_source: 'costar_sidebar',
+          };
           if (email)       patch[col.email] = email;
           if (phone)       patch[col.phone] = phone;
           if (website)     { patch.website = website; patch.title = `Website: ${website}`; }
           if (ent.address) patch.address = ent.address;
           if (ent.city)    patch.city = ent.city;
           if (ent.state)   patch.state = ent.state;
-          if (Object.keys(patch).length) {
-            await domainPatch(domain,
-              `contacts?${col.id}=eq.${existingId}`, patch,
-              'upsertSidebarContacts:entityUpdate'
-            );
-          }
+          await domainPatch(domain,
+            `contacts?${col.id}=eq.${existingId}`, patch,
+            'upsertSidebarContacts:entityUpdate'
+          );
         } else {
           const row = {
             [col.name]:  ent.name.trim(),
@@ -1163,7 +1174,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
       const roleStr = mappedRoles.join(',') ||
                       ENTITY_ROLE_MAP[ent.role] || null;
       if (existingId) {
-        const patch = {};
+        const patch = {
+          updated_at:  entityNowIso,
+          data_source: 'costar_sidebar',
+        };
         if (email)       patch[col.email] = email;
         if (phone)       patch[col.phone] = phone;
         if (website)     { patch.website = website; patch.title = `Website: ${website}`; }
@@ -1171,12 +1185,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
         if (ent.city)    patch.city = ent.city;
         if (ent.state)   patch.state = ent.state;
         if (roleStr)     patch[col.role] = roleStr;
-        if (Object.keys(patch).length) {
-          await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, patch,
-            'upsertSidebarContacts:entityUpdate'
-          );
-        }
+        await domainPatch(domain,
+          `contacts?${col.id}=eq.${existingId}`, patch,
+          'upsertSidebarContacts:entityUpdate'
+        );
       } else {
         const row = {
           [col.name]:  ent.name.trim(),
@@ -1277,8 +1289,12 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   const sfResult = await crossReferenceSalesforce(domain, propertyId);
   results.records.sf_matches = sfResult.matched;
 
-  // Step 5e: Upsert leases (dialysis only — gov skipped for now)
-  results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
+  // Step 5e: Upsert leases
+  if (domain === 'dialysis') {
+    results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
+  } else if (domain === 'government') {
+    results.records.leases = await upsertGovernmentLeases(propertyId, metadata);
+  }
 
   // Step 5e2: Upsert named contacts (brokers, true owner contacts → CRM)
   results.records.contacts = await upsertSidebarContacts(
@@ -1301,6 +1317,24 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     } catch (err) {
       console.error('[cap-rate-recalc] post-propagate error:', err?.message || err);
     }
+  }
+
+  // Step 5h: Stamp properties.last_ingested_at so the audit trail shows
+  // when CoStar last refreshed this property. The gov properties table
+  // has this column from the initial schema; dialysis added it in
+  // migration 20260421000000_properties_last_ingested_at.sql (included
+  // with this change). Failures are logged but non-fatal since the
+  // upstream writes are what actually carry the refreshed data.
+  try {
+    const nowIso = new Date().toISOString();
+    await domainPatch(
+      domain,
+      `properties?property_id=eq.${propertyId}`,
+      { last_ingested_at: nowIso },
+      'propagateToDomainDbDirect:last_ingested_at'
+    );
+  } catch (err) {
+    console.error('[last_ingested_at] stamp failed:', err?.message || err);
   }
 
   return { propagated: true, ...results };
@@ -1692,45 +1726,63 @@ async function upsertPropertyAgency(propertyId, metadata) {
 
   // Check existing link for this exact agency
   const existing = await domainQuery('government', 'GET',
-    `property_agencies?property_id=eq.${propertyId}&agency_id=eq.${agency.agency_id}&select=property_agency_id,is_primary_tenant&limit=1`
+    `property_agencies?property_id=eq.${propertyId}&agency_id=eq.${agency.agency_id}` +
+    `&select=property_agency_id,is_primary_tenant,data_source&limit=1`
   );
 
   // Uniqueness/primacy invariant: at most one property_agencies row per
-  // property may hold is_primary_tenant=true. If a different agency
-  // (e.g. a stale PITTSBURGH FIELD OFFICE row from a lease-based
-  // ingest) currently holds primary on this property, demote it before
-  // promoting the CoStar-confirmed tenant. CoStar is treated as
-  // authoritative for primary-tenant identity on re-ingest.
+  // property may hold is_primary_tenant=true. Priority source for the
+  // CoStar-driven sidebar pipeline is 'costar_sidebar', with 'frpp' as
+  // an accepted peer (the FRPP loader is the other trusted writer). On
+  // re-ingest we demote any primary row for this property whose
+  // data_source is NEITHER of those trusted sources, then we insert or
+  // promote the CoStar row to primary. The parallel select of
+  // data_source is only so we can include it in the log.
+  const PRIORITY_SOURCES = ['costar_sidebar', 'frpp'];
   const currentPrimaries = await domainQuery('government', 'GET',
     `property_agencies?property_id=eq.${propertyId}&is_primary_tenant=eq.true` +
-    `&agency_id=neq.${agency.agency_id}&select=property_agency_id,agency_id&limit=5`
+    `&select=property_agency_id,agency_id,data_source&limit=10`
   );
   if (currentPrimaries.ok && Array.isArray(currentPrimaries.data)) {
     for (const row of currentPrimaries.data) {
+      // Leave this row alone if it's already the CoStar-targeted agency
+      // and came from a trusted source — we'll refresh it below. Only
+      // demote OTHER primaries (different agency_id) or stale rows from
+      // non-priority sources.
+      const sameAgency = row.agency_id === agency.agency_id;
+      const trustedSource = PRIORITY_SOURCES.includes(row.data_source);
+      if (sameAgency && trustedSource) continue;
       await domainPatch('government',
         `property_agencies?property_agency_id=eq.${row.property_agency_id}`,
-        { is_primary_tenant: false },
+        { is_primary_tenant: false, updated_at: new Date().toISOString() },
         'upsertPropertyAgency:demote'
       );
-      console.log('[upsertPropertyAgency] demoted stale primary',
-        row.property_agency_id, 'agency_id=', row.agency_id,
+      console.log('[upsertPropertyAgency] demoted primary',
+        row.property_agency_id,
+        'agency_id=', row.agency_id,
+        'data_source=', row.data_source,
         'on property', propertyId);
     }
   }
 
   if (existing.ok && existing.data?.length) {
-    // Already linked — make sure the CoStar-confirmed agency is flagged
-    // primary, which also covers the case where we previously demoted it
-    // and now need to promote it back.
+    // Already linked — always PATCH (even when no field changes) so the
+    // row's updated_at advances on re-ingest. This is the audit signal
+    // the ops team relies on to confirm CoStar actually touched the
+    // property_agencies row during a refresh.
     const row = existing.data[0];
-    if (!row.is_primary_tenant) {
-      await domainPatch('government',
-        `property_agencies?property_agency_id=eq.${row.property_agency_id}`,
-        { is_primary_tenant: true },
-        'upsertPropertyAgency:promote'
-      );
-    }
-    return 0;
+    await domainPatch('government',
+      `property_agencies?property_agency_id=eq.${row.property_agency_id}`,
+      {
+        is_primary_tenant: true,
+        agency_code:       agency.code || null,
+        government_type:   agency.government_type || null,
+        data_source:       'costar_sidebar',
+        updated_at:        new Date().toISOString(),
+      },
+      'upsertPropertyAgency:refresh'
+    );
+    return 1;
   }
 
   // Create junction record — primary by default for the CoStar tenant.
@@ -2424,28 +2476,71 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     }
 
     const soldPrice = parseCurrency(sale.sale_price);
+    const docNum = sale.document_number
+      ? String(sale.document_number).trim()
+      : null;
 
-    // Check for existing sale by property_id within a ±45 day window.
-    // CoStar often records the same transaction with two different dates
-    // (deed recording date vs. stat-card transaction date), which can differ
-    // by days to weeks. An exact-date match creates a duplicate on every
-    // re-save, so we treat any sale on the same property within ±45 days as
-    // the same transaction and PATCH it instead of inserting.
+    // Match predicate for existing sales:
+    //   1. By document_number first — same deed is always the same sale.
+    //   2. Else by price ±5% AND sale_date ±14 days — economic identity.
+    //   3. Else fall through to INSERT (distinct transaction).
+    // The previous implementation pulled back any row within ±45 days
+    // (limit=1) and PATCHed it, which collapsed a $10K seed transfer and
+    // a $45.75M acquisition that happened on the same property a few
+    // days apart into one row.
     const datePart = saleDate.split('T')[0]; // YYYY-MM-DD
     const saleD = new Date(datePart);
-    const lo = new Date(saleD); lo.setDate(lo.getDate() - 45);
-    const hi = new Date(saleD); hi.setDate(hi.getDate() + 45);
+    const lo = new Date(saleD); lo.setDate(lo.getDate() - 14);
+    const hi = new Date(saleD); hi.setDate(hi.getDate() + 14);
     const loStr = lo.toISOString().split('T')[0];
     const hiStr = hi.toISOString().split('T')[0];
 
     const lookupSelect = domain === 'government'
-      ? 'sale_id,sale_date'
-      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
-    const lookupPath =
-      `sales_transactions?property_id=eq.${propertyId}` +
-      `&sale_date=gte.${loStr}&sale_date=lte.${hiStr}` +
-      `&select=${lookupSelect}&limit=1`;
-    const lookup = await domainQuery(domain, 'GET', lookupPath);
+      ? 'sale_id,sale_date,sold_price,document_number'
+      : 'sale_id,sale_date,sold_price,document_number,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
+
+    // Stage 1: document_number lookup (most authoritative — same deed).
+    let lookup = { ok: false, data: [] };
+    if (docNum) {
+      lookup = await domainQuery(domain, 'GET',
+        `sales_transactions?property_id=eq.${propertyId}` +
+        `&document_number=eq.${encodeURIComponent(docNum)}` +
+        `&select=${lookupSelect}&limit=1`
+      );
+    }
+
+    // Stage 2: price ±5% AND date ±14d window. Fetch candidates in the
+    // 14-day window and JS-filter by price — PostgREST can't express
+    // "within ±5% of incoming" in a single URL.
+    if (!lookup.ok || !lookup.data?.length) {
+      const windowLookup = await domainQuery(domain, 'GET',
+        `sales_transactions?property_id=eq.${propertyId}` +
+        `&sale_date=gte.${loStr}&sale_date=lte.${hiStr}` +
+        `&select=${lookupSelect}&limit=5`
+      );
+      if (windowLookup.ok && Array.isArray(windowLookup.data)
+          && windowLookup.data.length) {
+        if (soldPrice == null || soldPrice <= 0) {
+          // Missing price on incoming — can't verify economic identity
+          // on price. Only match if the window has exactly one candidate
+          // with a missing/zero price too, to avoid picking the wrong
+          // row when several deeds cluster on the same week.
+          const ambiguous = windowLookup.data.filter(r =>
+            r.sold_price == null || Number(r.sold_price) <= 0);
+          if (ambiguous.length === 1) {
+            lookup = { ok: true, data: [ambiguous[0]] };
+          }
+        } else {
+          const compatible = windowLookup.data.find(r => {
+            const rp = Number(r.sold_price);
+            if (!Number.isFinite(rp) || rp <= 0) return false;
+            const delta = Math.abs(rp - soldPrice) / Math.max(rp, soldPrice);
+            return delta <= 0.05;
+          });
+          if (compatible) lookup = { ok: true, data: [compatible] };
+        }
+      }
+    }
 
     // Only apply current brokers to the current/most-recent sale. Historical
     // deed-record sales predate the current broker engagement and must not
@@ -2618,112 +2713,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
     if (lookup.ok && lookup.data?.length) {
       const existing = lookup.data[0];
 
-      // Price-tier guard: the ±45 day lookup window is wide enough to pull
-      // back a totally different economic transaction. A $10K nominal /
-      // seed / intra-entity transfer and a $45M+ arms-length acquisition
-      // can both recorded on the same property within weeks of each other
-      // (common on portfolio transfers into a new holding entity just
-      // before closing). If the existing row's price differs from the
-      // incoming price by more than 50%, they are distinct transactions
-      // — INSERT a new row instead of PATCHing the smaller price row
-      // with the larger sale's data (or vice versa).
-      if (soldPrice != null && soldPrice > 0
-          && existing.sold_price != null) {
-        const existingPrice = Number(existing.sold_price);
-        if (existingPrice > 0) {
-          const priceDelta = Math.abs(existingPrice - soldPrice)
-            / Math.max(existingPrice, soldPrice);
-          if (priceDelta > 0.5) {
-            console.log(
-              `[sales-dedup] price-tier mismatch on property=${propertyId}: ` +
-              `existing sale_id=${existing.sale_id} $${existingPrice} vs ` +
-              `incoming $${soldPrice} (delta=${(priceDelta*100).toFixed(1)}%) — ` +
-              `treating as distinct transactions, inserting new row`
-            );
-            const result = await domainQuery(domain, 'POST',
-              'sales_transactions', saleData);
-            if (result.ok) {
-              count++;
-              if (domain === 'dialysis') {
-                await createSaleAlert(propertyId, saleData);
-              }
-              const inserted = Array.isArray(result.data)
-                ? result.data[0] : result.data;
-              const newSaleId = inserted?.sale_id ?? null;
-              await closeActiveListingsOnSale(
-                domain, propertyId, datePart, saleData.sold_price, newSaleId
-              );
-              await linkSaleBrokers(domain, newSaleId, saleData);
-            }
-            continue;
-          }
-        }
-      }
-
-      // Tight transaction-identity dedup: if an existing row is within
-      // 14 days of the incoming sale_date AND within 5% of the incoming
-      // sold_price, treat it as the same economic transaction (the gap
-      // between a stat-card Transaction Date and a county Recordation
-      // Date for the same deed) and skip entirely. Land sales can
-      // legitimately cluster, so skip this tighter check when the price
-      // is under $1M and no tenant is present. Applies to both dialysis
-      // and government — previously dialysis-only at 30d/2%.
-      if (soldPrice != null && existing.sold_price != null) {
-        const isLandSale = soldPrice < 1_000_000 && !primaryTenant;
-        if (!isLandSale) {
-          const existingDatePart = String(existing.sale_date).split('T')[0];
-          const existingTime = new Date(existingDatePart).getTime();
-          const incomingTime = new Date(datePart).getTime();
-          const daysDiff = Math.abs(existingTime - incomingTime) / (1000 * 60 * 60 * 24);
-          const existingPrice = Number(existing.sold_price);
-          const priceDelta = existingPrice > 0
-            ? Math.abs(existingPrice - soldPrice) / existingPrice
-            : Infinity;
-          if (daysDiff <= 14 && priceDelta <= 0.05) {
-            // Dedup match — same economic transaction. Don't create a
-            // duplicate row. For dialysis, PATCH enrichment fields that
-            // may have arrived since the first capture (sale notes,
-            // brokers, buyer/seller). Government sales_transactions has
-            // a different column set and a dedicated Sales-Comps
-            // enrichment path, so skip the PATCH for gov.
-            if (domain === 'dialysis') {
-              const enrichPatch = {};
-              if (saleNotesRaw && !existing.sale_notes_raw) {
-                enrichPatch.sale_notes_raw = saleNotesRaw;
-                enrichPatch.sale_notes_extracted = Object.keys(saleNotesExtracted).length > 0
-                  ? saleNotesExtracted : null;
-              }
-              if (saleData.listing_broker && !existing.listing_broker) {
-                enrichPatch.listing_broker = saleData.listing_broker;
-              }
-              if (saleData.procuring_broker && !existing.procuring_broker) {
-                enrichPatch.procuring_broker = saleData.procuring_broker;
-              }
-              if (saleData.buyer_name && !existing.buyer_name) {
-                enrichPatch.buyer_name = saleData.buyer_name;
-              }
-              if (saleData.seller_name && !existing.seller_name) {
-                enrichPatch.seller_name = saleData.seller_name;
-              }
-              if (saleNotesRaw && existing.notes && !existing.notes.includes('Sale Notes')) {
-                enrichPatch.notes = existing.notes + '; --- Sale Notes ---\n' + saleNotesRaw;
-              }
-              if (Object.keys(enrichPatch).length > 0) {
-                console.log(`[sales-dedup] enriching existing sale_id=${existing.sale_id} with ${Object.keys(enrichPatch).join(', ')}`);
-                await domainPatch(domain,
-                  `sales_transactions?sale_id=eq.${existing.sale_id}`, enrichPatch, 'sales-dedup-enrich');
-              } else {
-                console.log(`[sales-dedup] skipping duplicate property=${propertyId} (no new enrichment data)`);
-              }
-            } else {
-              console.log(`[sales-dedup] skipping duplicate domain=${domain} property=${propertyId} sale_id=${existing.sale_id} days=${daysDiff} priceDelta=${priceDelta.toFixed(3)}`);
-            }
-            continue;
-          }
-        }
-      }
-
-      // Update existing
+      // Lookup already proved identity (document_number OR price ±5%
+      // AND date ±14d). Treat as the same sale and refresh it so the
+      // re-ingest advances updated_at and pulls in any new fields from
+      // this CoStar capture. Previous tight-dedup "skip" block was
+      // redundant given the new lookup and blocked the audit timestamps
+      // this audit demands, so it has been removed.
       let patchData = saleData;
 
       // Preserve confirmed cap rate data: if a sale already has a
@@ -2744,6 +2739,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
           delete patchData.stated_cap_rate;
         }
       }
+
+      // Force an updated_at bump so the audit trail shows this re-ingest
+      // actually refreshed the row even if every other field happened to
+      // be identical. Supabase maintains updated_at via a trigger, but
+      // a no-op PATCH can be a no-op — include an explicit timestamp.
+      patchData.updated_at = new Date().toISOString();
 
       await domainPatch(domain,
         `sales_transactions?sale_id=eq.${existing.sale_id}`, patchData, 'upsertDomainSales');
@@ -3448,6 +3449,7 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
     // Government loans table has different column names (no text lender
     // column, term_years instead of loan_term, interest_rate instead of
     // interest_rate_percent), so build a domain-specific payload.
+    const nowIso = new Date().toISOString();
     const loanData = domain === 'government' ? stripNulls({
       property_id:      propertyId,
       loan_type:        loanType,
@@ -3470,8 +3472,14 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
     });
 
     if (matchedLoanId != null) {
+      // Always PATCH on re-ingest so loans.updated_at advances (the ops
+      // audit signal that CoStar re-touched the row). Explicit
+      // updated_at is added on top of the fresh payload.
       await domainPatch(domain,
-        `loans?loan_id=eq.${matchedLoanId}`, loanData, 'upsertDomainLoans');
+        `loans?loan_id=eq.${matchedLoanId}`,
+        { ...loanData, updated_at: nowIso },
+        'upsertDomainLoans'
+      );
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
       if (result.ok) count++;
@@ -4372,6 +4380,93 @@ async function promotePropertyAnchorRent(domain, propertyId, candidate) {
 }
 
 /**
+ * Upsert a CoStar-sourced lease row on the government leases table.
+ *
+ * Government-domain context: the GSA master-lease loader seeds leases
+ * with data_source='excel_master' carrying the umbrella-lease tenant
+ * (e.g. "PITTSBURGH FIELD OFFICE"). CoStar may identify a different
+ * actual occupant (e.g. FEMA under LPA00668). Rather than mutating the
+ * master-lease row, this writer maintains a PARALLEL
+ * data_source='costar_sidebar' row keyed on (property_id, lease_number,
+ * tenant_agency) so both facts are preserved and downstream queries
+ * can prefer the costar_sidebar row when reporting the actual occupant.
+ *
+ * This function always PATCHes the matched costar_sidebar row on
+ * re-ingest so the audit trail (leases.updated_at) advances, even when
+ * no underlying field changes.
+ *
+ * Returns the number of leases written (inserted or updated).
+ */
+async function upsertGovernmentLeases(propertyId, metadata) {
+  const tenantAgency = (metadata?.tenants?.[0]?.name
+    || metadata?.tenant_name
+    || metadata?.primary_tenant
+    || null);
+  if (!tenantAgency) return 0;
+
+  const leaseNumber = metadata.lease_number || null;
+  const annualRent  = parseCurrency(metadata.annual_rent);
+  const rentPsf     = parseCurrency(metadata.rent_per_sf);
+  const commence    = parseDate(metadata.lease_commencement)?.split('T')[0] || null;
+  const expire      = parseDate(metadata.lease_expiration)?.split('T')[0] || null;
+  const govType     = metadata.government_type || null;
+
+  // Look up a costar_sidebar-sourced row already tied to this property
+  // (+ lease_number + tenant_agency when available). Intentionally
+  // scoped to data_source='costar_sidebar' so we never overwrite the
+  // excel_master master-lease row — the priority-source rule from the
+  // audit is that costar_sidebar and excel_master coexist, and our
+  // downstream reporting picks costar_sidebar first.
+  let filter = `property_id=eq.${propertyId}&data_source=eq.costar_sidebar`;
+  if (leaseNumber) {
+    filter += `&lease_number=eq.${encodeURIComponent(leaseNumber)}`;
+  }
+  filter += `&tenant_agency=eq.${encodeURIComponent(tenantAgency)}`;
+  const existing = await domainQuery('government', 'GET',
+    `leases?${filter}&select=lease_id&limit=1`
+  );
+
+  const payload = {
+    property_id:        propertyId,
+    lease_number:       leaseNumber,
+    tenant_agency:      tenantAgency,
+    tenant_agency_full: tenantAgency,
+    government_type:    govType,
+    commencement_date:  commence,
+    expiration_date:    expire,
+    annual_rent:        annualRent,
+    rent_psf:           rentPsf,
+    expense_structure:  metadata.expense_structure || metadata.lease_type || null,
+    renewal_options:    metadata.renewal_options || null,
+    data_source:        'costar_sidebar',
+    updated_at:         new Date().toISOString(),
+  };
+
+  if (existing.ok && existing.data?.length) {
+    await domainPatch('government',
+      `leases?lease_id=eq.${existing.data[0].lease_id}`,
+      payload,
+      'upsertGovernmentLeases:refresh'
+    );
+    console.log(`[upsertGovernmentLeases] refreshed costar_sidebar lease ` +
+      `lease_id=${existing.data[0].lease_id} property=${propertyId} ` +
+      `tenant_agency=${JSON.stringify(tenantAgency)}`);
+    return 1;
+  }
+
+  const r = await domainQuery('government', 'POST', 'leases', payload);
+  if (r.ok) {
+    console.log(`[upsertGovernmentLeases] inserted costar_sidebar lease ` +
+      `property=${propertyId} tenant_agency=${JSON.stringify(tenantAgency)} ` +
+      `lease_number=${leaseNumber || 'null'}`);
+    return 1;
+  }
+  console.error('[upsertGovernmentLeases] INSERT failed:',
+    r.status, r.data);
+  return 0;
+}
+
+/**
  * Upsert lease records in the domain database.
  * Uses a parent-child consolidation model: extensions/renewals reference
  * the original lease via parent_lease_id rather than creating independent rows.
@@ -4384,7 +4479,8 @@ async function promotePropertyAnchorRent(domain, propertyId, candidate) {
  * the existing active lease is superseded and a new term is created.
  * When dates match, the existing row is PATCHed with updated data.
  *
- * Skips government domain (not yet supported).
+ * Skips government domain — see upsertGovernmentLeases above for the
+ * gov-specific writer (different schema, different conflict semantics).
  */
 async function upsertDomainLeases(domain, propertyId, metadata) {
   // Domain guard — only dialysis for now

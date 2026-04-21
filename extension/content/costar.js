@@ -432,11 +432,24 @@
 
   function normalizeContactName(s) {
     if (!s) return '';
-    return String(s)
+    let n = String(s)
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+    // Strip middle initials so "Howard A Traul" and "Howard Traul" collapse
+    // to the same dedup key. Handles single-letter tokens anywhere except
+    // the first position (never drop the leading initial of names like
+    // "T Boone Pickens"). Runs until stable because three-token middle
+    // names ("John A B Smith") need multiple passes.
+    let prev;
+    do {
+      prev = n;
+      n = n.replace(/^(\S+(?:\s+\S+)*?)\s+[a-z](?=\s+\S+)/g, '$1');
+    } while (n !== prev);
+    // Also drop a trailing generational suffix (jr, sr, ii, iii, iv).
+    n = n.replace(/\s+(jr|sr|ii|iii|iv|v)$/i, '').trim();
+    return n;
   }
 
   // Merge a new batch of contacts into the accumulated array, deduping by
@@ -1113,8 +1126,12 @@
     for (let j = startIdx; j < lines.length; j++) {
       const line = lines[j];
 
-      // Stop at next major section (includes demographics, traffic, location sections)
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history)/i.test(line)) break;
+      // Stop at next major section (includes demographics, traffic, location,
+      // property-description sections, and CoStar chrome panels). Without
+      // these stops, extractTenants bleeds past the real Tenants block and
+      // picks up lines like "About the Owner", "Amenities", "Airport X.XX mi",
+      // "Drive …", and CoStar-branded footers as if they were tenants.
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|sale\s+notes|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
 
       // Skip CoStar UI elements
       if (COSTAR_UI_REJECT.test(line)) continue;
@@ -1188,7 +1205,7 @@
   // Shared reject pattern for strings that should never be treated as a contact name.
   // Covers: city/state/zip lines, date strings ("Since ..."), role labels,
   // job titles when standalone, CoStar UI chrome, and address fragments.
-  const CONTACT_NAME_REJECT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|no\s+buyer|no\s+seller|confirmed|verified|research\s+complete|comp\s+status|united\s+states|[a-z].*,\s*[a-z]{2}\s+\d{5}|logo|source|add\s+notes|name$)/i;
+  const CONTACT_NAME_REJECT = /^(since\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|since\s+\d|seller\s*$|buyer\s*$|buyer\s+contacts?|seller\s+contacts?|investment\s+manager|research\s+consultant|other\s*[-–—]\s*private|president|vice\s+president|officer|director|manager|analyst|consultant|partner|principal|agent|broker|owner|lender|not\s+disclosed|not\s+available|no\s+buyer|no\s+seller|confirmed|verified|research\s+complete|comp\s+status|united\s+states|[a-z].*,\s*[a-z]{2}\s+\d{5}|logo|source|add\s+notes|name$|developer(\s*[-–—]\s*\w+)?$|sale\s+notes?$|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport(\s|$)|drive(\s+time|\s+to|\s+distance)?$|costar\s+(est|group|comp|research)|investment\s+highlights|property\s+(highlights|summary)|developer\s*[-–—]\s*(regional|national|local))/i;
 
   // Pure job titles that sometimes slip in as "names" when the DOM puts a
   // title on its own line (no preceding Name/Title pair to anchor on).
