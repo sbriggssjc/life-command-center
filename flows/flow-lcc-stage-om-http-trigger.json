@@ -1,0 +1,150 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "contentUrl":     { "type": "string" },
+            "fileName":       { "type": "string" },
+            "mimeType":       { "type": "string" },
+            "intent":         { "type": "string" },
+            "conversationId": { "type": "string" },
+            "messageId":      { "type": "string" },
+            "userEmail":      { "type": "string" }
+          },
+          "required": ["contentUrl", "fileName"]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Initialize_LccApiKey": {
+      "runAfter": {},
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name":  "LccApiKey",
+            "type":  "string",
+            "value": "REPLACE_WITH_YOUR_LCC_API_KEY"
+          }
+        ]
+      }
+    },
+    "Is_data_URI": {
+      "runAfter": { "Initialize_LccApiKey": ["Succeeded"] },
+      "type": "If",
+      "expression": {
+        "equals": [
+          "@startsWith(coalesce(triggerBody()?['contentUrl'], ''), 'data:')",
+          true
+        ]
+      },
+      "actions": {
+        "BytesFromDataUri": {
+          "type": "Compose",
+          "inputs": "@split(triggerBody()?['contentUrl'], ',')?[1]"
+        }
+      },
+      "else": {
+        "actions": {
+          "Invoke_an_HTTP_request": {
+            "type": "Http",
+            "inputs": {
+              "method": "GET",
+              "uri": "@{triggerBody()?['contentUrl']}"
+            }
+          },
+          "BytesFromHttp": {
+            "runAfter": { "Invoke_an_HTTP_request": ["Succeeded"] },
+            "type": "Compose",
+            "inputs": "@base64(body('Invoke_an_HTTP_request'))"
+          }
+        }
+      }
+    },
+    "BytesBase64": {
+      "runAfter": { "Is_data_URI": ["Succeeded"] },
+      "type": "Compose",
+      "inputs": "@if(startsWith(coalesce(triggerBody()?['contentUrl'], ''), 'data:'), outputs('BytesFromDataUri'), outputs('BytesFromHttp'))"
+    },
+    "POST_to_LCC_stage_om": {
+      "runAfter": { "BytesBase64": ["Succeeded"] },
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri":    "https://life-command-center-nine.vercel.app/api/intake/stage-om",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-LCC-Key":    "@{variables('LccApiKey')}"
+        },
+        "body": {
+          "intake_source":  "copilot",
+          "intake_channel": "copilot_chat",
+          "intent":         "@{triggerBody()?['intent']}",
+          "artifacts": {
+            "primary_document": {
+              "bytes_base64": "@{outputs('BytesBase64')}",
+              "file_name":    "@{triggerBody()?['fileName']}",
+              "mime_type":    "@{coalesce(triggerBody()?['mimeType'], 'application/pdf')}"
+            }
+          },
+          "copilot_metadata": {
+            "conversation_id": "@{triggerBody()?['conversationId']}",
+            "message_id":      "@{triggerBody()?['messageId']}"
+          }
+        }
+      }
+    },
+    "Parse_StageResponse": {
+      "runAfter": { "POST_to_LCC_stage_om": ["Succeeded", "Failed"] },
+      "type": "ParseJson",
+      "inputs": {
+        "content": "@body('POST_to_LCC_stage_om')",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok":                    { "type": "boolean" },
+            "status":                { "type": "string" },
+            "intake_id":             { "type": "string" },
+            "staged_intake_item_id": { "type": "string" },
+            "inbox_item_id":         { "type": "string" },
+            "extraction_status":     { "type": "string" },
+            "classified_domain":     { "type": ["string", "null"] },
+            "matched_entity_id":     { "type": ["string", "null"] },
+            "entity_match_status":   { "type": "string" },
+            "size_bytes":            { "type": "integer" },
+            "message":               { "type": "string" },
+            "error":                 { "type": ["string", "null"] },
+            "detail":                { "type": ["string", "null"] },
+            "hint":                  { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "Respond_via_HTTP": {
+      "runAfter": { "Parse_StageResponse": ["Succeeded", "Failed"] },
+      "type": "Response",
+      "kind": "Http",
+      "inputs": {
+        "statusCode": 200,
+        "headers": { "Content-Type": "application/json" },
+        "body": {
+          "ok":                "@coalesce(body('Parse_StageResponse')?['ok'], false)",
+          "intake_id":         "@coalesce(body('Parse_StageResponse')?['intake_id'], '')",
+          "extraction_status": "@coalesce(body('Parse_StageResponse')?['extraction_status'], 'unknown')",
+          "classified_domain": "@coalesce(body('Parse_StageResponse')?['classified_domain'], '')",
+          "matched_entity_id": "@coalesce(body('Parse_StageResponse')?['matched_entity_id'], '')",
+          "message":           "@coalesce(body('Parse_StageResponse')?['message'], body('Parse_StageResponse')?['detail'], 'Stage failed')",
+          "errorDetail":       "@coalesce(body('Parse_StageResponse')?['error'], '')"
+        }
+      }
+    }
+  },
+  "outputs": {}
+}
