@@ -77,15 +77,23 @@ async function recordFeedback(req, res) {
   }
 
   // Snapshot the matcher's current suggestion so the feedback row is
-  // self-contained even if the match row is later overwritten.
+  // self-contained even if the match row is later overwritten. Don't rely
+  // on a `created_at` column existing on staged_intake_matches — older
+  // rows may not have it. Order by `id` desc (monotonically increasing)
+  // as a portable fallback.
   let originalMatch = null;
   const matchLookup = await opsQuery('GET',
     `staged_intake_matches?intake_id=eq.${pgFilterVal(intake_id)}` +
-    `&select=id,reason,property_id,confidence,match_result,created_at` +
-    `&order=created_at.desc&limit=1`
+    `&select=id,reason,property_id,confidence,match_result` +
+    `&order=id.desc&limit=1`
   );
   if (matchLookup.ok && Array.isArray(matchLookup.data) && matchLookup.data.length) {
     originalMatch = matchLookup.data[0];
+  } else if (!matchLookup.ok) {
+    // Surface the error in logs but continue — feedback is still useful
+    // even without a snapshot of what the matcher suggested.
+    console.warn('[intake-feedback] match snapshot lookup failed:',
+      matchLookup.status, JSON.stringify(matchLookup.data || {}).slice(0, 200));
   }
 
   const row = {
@@ -110,12 +118,38 @@ async function recordFeedback(req, res) {
 
   // Use resolution=merge-duplicates so a second vote from the same user on
   // the same intake updates the previous row (respects uq_sif_intake_user).
+  // PostgREST requires `on_conflict=col1,col2` in the URL to know which
+  // unique index to target; without it the INSERT fails with 409 instead of
+  // upserting.
   const insertResult = await opsQuery(
     'POST',
-    'staged_intake_feedback',
+    'staged_intake_feedback?on_conflict=intake_id,user_id',
     row,
     { Prefer: 'return=representation,resolution=merge-duplicates' }
   );
+
+  // If the partial unique index (WHERE user_id IS NOT NULL) prevents
+  // on_conflict from resolving on some deployments, fall back to an
+  // explicit PATCH on the matching row.
+  if (!insertResult.ok && insertResult.status === 409) {
+    const patchResult = await opsQuery(
+      'PATCH',
+      `staged_intake_feedback?intake_id=eq.${pgFilterVal(intake_id)}` +
+        `&user_id=eq.${pgFilterVal(user.id)}`,
+      row,
+      { Prefer: 'return=representation' }
+    );
+    if (patchResult.ok) {
+      const patched = Array.isArray(patchResult.data) ? patchResult.data[0] : patchResult.data;
+      return res.status(200).json({
+        ok: true,
+        feedback: patched,
+        intake_status: await updateIntakeStatus(intake_id, decision),
+        upserted: true,
+      });
+    }
+    // Fall through to the generic error below if PATCH also failed.
+  }
 
   if (!insertResult.ok) {
     return res.status(insertResult.status || 500).json({
@@ -128,8 +162,18 @@ async function recordFeedback(req, res) {
     ? insertResult.data[0]
     : insertResult.data;
 
-  // If the human corrected the match, also update staged_intake_items status
-  // so the UI reflects the resolution. Keep the original match row for audit.
+  const newStatus = await updateIntakeStatus(intake_id, decision);
+
+  return res.status(200).json({
+    ok: true,
+    feedback: inserted,
+    intake_status: newStatus,
+  });
+}
+
+// Map a feedback decision to a staged_intake_items.status and persist it.
+// Returns the applied status (or null if decision doesn't dictate one).
+async function updateIntakeStatus(intake_id, decision) {
   const newStatus =
       decision === 'approved'  ? 'matched'
     : decision === 'corrected' ? 'matched'
@@ -147,12 +191,7 @@ async function recordFeedback(req, res) {
       console.error('[intake-feedback] status update failed:', intake_id, err.message)
     );
   }
-
-  return res.status(200).json({
-    ok: true,
-    feedback: inserted,
-    intake_status: newStatus,
-  });
+  return newStatus;
 }
 
 async function listFeedback(req, res) {
