@@ -263,9 +263,12 @@ async function handleOutlookMessage(req, res) {
       let primaryDocument = null;
 
       if (atts.length > 0) {
-        const first = atts.find(a => a.inline_data || a.content || a.storage_path) || atts[0];
+        const first = atts.find(a => a.storage_path) ||
+                      atts.find(a => a.inline_data || a.content) ||
+                      atts[0];
         primaryDocument = {
           bytes_base64: first.inline_data || first.content || null,
+          storage_path: first.storage_path || null,
           file_name:    first.file_name || first.name || 'attachment.pdf',
           mime_type:    first.file_type || first.contentType || 'application/pdf',
         };
@@ -276,6 +279,7 @@ async function handleOutlookMessage(req, res) {
           if (fetched) {
             primaryDocument = {
               bytes_base64: fetched.base64,
+              storage_path: null,
               file_name:    fetched.fileName || 'om.pdf',
               mime_type:    fetched.contentType || 'application/pdf',
             };
@@ -284,10 +288,11 @@ async function handleOutlookMessage(req, res) {
         }
       }
 
-      if (primaryDocument && primaryDocument.bytes_base64) {
+      if (primaryDocument && (primaryDocument.bytes_base64 || primaryDocument.storage_path)) {
         await stageOmIntake(
           {
-            bytes_base64:     primaryDocument.bytes_base64,
+            bytes_base64:     primaryDocument.bytes_base64 || undefined,
+            storage_path:     primaryDocument.storage_path || undefined,
             file_name:        primaryDocument.file_name,
             mime_type:        primaryDocument.mime_type,
             channel:          'email',
@@ -362,9 +367,18 @@ async function handleOutlookMessage(req, res) {
     let primaryDocument = null;
 
     if (atts.length > 0) {
-      const first = atts.find(a => a.inline_data || a.content || a.storage_path) || atts[0];
+      // Prefer a storage_path-bearing attachment when available — Power
+      // Automate's Outlook flow for large emails uploads to Supabase via
+      // prepare-upload first, then posts this endpoint with just the
+      // storage reference. Falls back to inline base64 when PA hasn't
+      // pre-uploaded (small files) or when the payload came from another
+      // caller that only sent inline bytes.
+      const first = atts.find(a => a.storage_path) ||
+                    atts.find(a => a.inline_data || a.content) ||
+                    atts[0];
       primaryDocument = {
         bytes_base64: first.inline_data || first.content || null,
+        storage_path: first.storage_path || null,
         file_name:    first.file_name || first.name || 'attachment.pdf',
         mime_type:    first.file_type || first.contentType || 'application/pdf',
       };
@@ -377,6 +391,7 @@ async function handleOutlookMessage(req, res) {
         if (fetched) {
           primaryDocument = {
             bytes_base64: fetched.base64,
+            storage_path: null,
             file_name:    fetched.fileName || 'om.pdf',
             mime_type:    fetched.contentType || 'application/pdf',
           };
@@ -385,10 +400,11 @@ async function handleOutlookMessage(req, res) {
       }
     }
 
-    if (primaryDocument && primaryDocument.bytes_base64) {
+    if (primaryDocument && (primaryDocument.bytes_base64 || primaryDocument.storage_path)) {
       const stageRes = await stageOmIntake(
         {
-          bytes_base64:     primaryDocument.bytes_base64,
+          bytes_base64:     primaryDocument.bytes_base64 || undefined,
+          storage_path:     primaryDocument.storage_path || undefined,
           file_name:        primaryDocument.file_name,
           mime_type:        primaryDocument.mime_type,
           channel:          'email',
