@@ -561,17 +561,26 @@ export async function processIntakeExtraction(intakeId) {
     }
 
     const baseUrl = process.env.LCC_BASE_URL || 'https://life-command-center-nine.vercel.app';
-    sendTeamsAlert({
-      title:    'New OM / Deal Document Staged',
-      summary:  mergedSnapshot.address
-                  ? `${docTypeLabel} for ${mergedSnapshot.address}`
-                  : `${docTypeLabel} staged for review`,
-      severity: matchResult?.status === 'matched' ? 'success' : 'high',
-      facts,
-      actions:  [{ label: 'View intake in LCC', url: `${baseUrl}/ops?intake=${intakeId}` }],
-    })
-      .then(() => console.log('[intake-extractor] Teams alert POST attempted for', intakeId))
-      .catch(err => console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message));
+    // IMPORTANT: await this fetch. On Vercel serverless, fire-and-forget
+    // promises get terminated when the function returns — the fetch
+    // starts but never completes (or never reaches the wire), which is
+    // exactly what we observed. sendTeamsAlert has its own try/catch so
+    // this awaited call is still safe: worst case it returns quickly
+    // after logging an error, and extraction results are already persisted.
+    try {
+      await sendTeamsAlert({
+        title:    'New OM / Deal Document Staged',
+        summary:  mergedSnapshot.address
+                    ? `${docTypeLabel} for ${mergedSnapshot.address}`
+                    : `${docTypeLabel} staged for review`,
+        severity: matchResult?.status === 'matched' ? 'success' : 'high',
+        facts,
+        actions:  [{ label: 'View intake in LCC', url: `${baseUrl}/ops?intake=${intakeId}` }],
+      });
+      console.log('[intake-extractor] Teams alert POST completed for', intakeId);
+    } catch (err) {
+      console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message);
+    }
   }
 
   // Surface runtime config status inline so the extract endpoint is
