@@ -19,7 +19,14 @@ import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
+import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { createRequire } from 'module';
+
+// Document types worth signalling to Teams. These are the ones the PDF
+// extractor produces when the artifact is clearly deal-relevant (listing
+// OM, broker flyer, lease abstract showing financials, sold comp). Other
+// types (rent_roll, unknown) don't fire alerts to avoid channel noise.
+const DEAL_DOCUMENT_TYPES = new Set(['om', 'flyer', 'marketing_brochure', 'comp', 'lease_abstract']);
 
 // createRequire'd to avoid pdf-parse 1.1.1's broken-under-ESM debug block
 // in index.js (it tries to readFileSync a bundled test PDF at load time).
@@ -508,6 +515,51 @@ export async function processIntakeExtraction(intakeId) {
       matchError = err.message;
       console.error('[intake-matcher] Match failed:', intakeId, err.message);
     }
+  }
+
+  // Fire Teams alert when the PDF itself is clearly deal-relevant. This is
+  // more reliable than the email-body-only classifier in intake.js's
+  // runEntityExtraction — that path sees only the email text (usually a
+  // disclaimer/signature) and misses OMs where the deal content lives in
+  // the PDF attachment. Fires in parallel with runEntityExtraction; the
+  // two paths send different cards and both are harmless if duplicated.
+  if (mergedSnapshot && DEAL_DOCUMENT_TYPES.has(mergedSnapshot.document_type || '')) {
+    const docTypeLabel =
+        mergedSnapshot.document_type === 'om'                 ? 'Listing OM'
+      : mergedSnapshot.document_type === 'flyer'              ? 'Broker Flyer'
+      : mergedSnapshot.document_type === 'marketing_brochure' ? 'Marketing Brochure'
+      : mergedSnapshot.document_type === 'comp'               ? 'Sales Comp'
+      : mergedSnapshot.document_type === 'lease_abstract'     ? 'Lease Abstract'
+      : mergedSnapshot.document_type;
+
+    const facts = [
+      ['Document', docTypeLabel],
+    ];
+    if (mergedSnapshot.address) {
+      const loc = [mergedSnapshot.address, mergedSnapshot.city, mergedSnapshot.state]
+        .filter(Boolean).join(', ');
+      facts.push(['Property', loc]);
+    }
+    if (mergedSnapshot.tenant_name)  facts.push(['Tenant',       mergedSnapshot.tenant_name]);
+    if (mergedSnapshot.asking_price) facts.push(['Asking price', `$${Number(mergedSnapshot.asking_price).toLocaleString()}`]);
+    if (mergedSnapshot.cap_rate)     facts.push(['Cap rate',     `${mergedSnapshot.cap_rate}%`]);
+    if (mergedSnapshot.noi)          facts.push(['NOI',          `$${Number(mergedSnapshot.noi).toLocaleString()}`]);
+    if (matchResult?.status === 'matched') {
+      facts.push(['Matched',        `${matchResult.domain} / ${matchResult.reason} (${matchResult.confidence})`]);
+    } else if (matchResult?.status === 'unmatched') {
+      facts.push(['Match',          'No match — triage required']);
+    }
+
+    const baseUrl = process.env.LCC_BASE_URL || 'https://life-command-center-nine.vercel.app';
+    sendTeamsAlert({
+      title:    'New OM / Deal Document Staged',
+      summary:  mergedSnapshot.address
+                  ? `${docTypeLabel} for ${mergedSnapshot.address}`
+                  : `${docTypeLabel} staged for review`,
+      severity: matchResult?.status === 'matched' ? 'success' : 'high',
+      facts,
+      actions:  [{ label: 'View intake in LCC', url: `${baseUrl}/ops?intake=${intakeId}` }],
+    }).catch(err => console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message));
   }
 
   return {
