@@ -500,21 +500,38 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           throw new Error('prepare-upload refused');
         }
 
+        // MV3 service workers sometimes send `Content-Length: 0` when the
+        // body is a bare ArrayBuffer. Wrapping in a Blob is the reliable way
+        // to force the correct body size and MIME type. See:
+        //   https://bugs.chromium.org/p/chromium/issues/detail?id=1141986
+        const putBody = new Blob([buffer], { type: mimeType });
+        console.log('[STAGE_PDF_TO_LCC] Path C PUT', {
+          url_host:   (() => { try { return new URL(prepBody.upload_url).host; } catch { return 'unknown'; } })(),
+          object:     prepBody.storage_path,
+          body_bytes: putBody.size,
+          expected:   buffer.byteLength,
+        });
         const putRes = await fetch(prepBody.upload_url, {
           method: prepBody.upload_method || 'PUT',
           headers: {
             'Content-Type': mimeType,
             ...(prepBody.upload_headers || {}),
           },
-          body: buffer,
+          body: putBody,
+        });
+        const putRespText = await putRes.text().catch(() => '');
+        console.log('[STAGE_PDF_TO_LCC] Path C PUT response', {
+          status: putRes.status,
+          ok:     putRes.ok,
+          body:   putRespText.slice(0, 300),
         });
         if (!putRes.ok) {
-          const putText = await putRes.text().catch(() => '');
           trail.push({
-            path:   'prepare_upload',
-            step:   'storage_put',
-            status: putRes.status,
-            detail: putText.slice(0, 200),
+            path:        'prepare_upload',
+            step:        'storage_put',
+            status:      putRes.status,
+            detail:      putRespText.slice(0, 200),
+            body_bytes:  putBody.size,
           });
           throw new Error('storage PUT failed');
         }
