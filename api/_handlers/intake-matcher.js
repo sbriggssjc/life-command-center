@@ -20,7 +20,7 @@
 
 import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
-import { normalizeAddress } from '../_shared/entity-link.js';
+import { normalizeAddress, stripDirectional, normalizeState } from '../_shared/entity-link.js';
 
 const DIALYSIS_KEYWORDS = /davita|fresenius|dialysis|kidney|renal/i;
 
@@ -121,12 +121,23 @@ async function fuzzyAddressMatch(domain, normalizedAddr, state) {
   );
   if (!result.ok || !result.data?.length) return null;
 
+  // Apply stripDirectional on BOTH sides so "991 johnstown rd" vs
+  // "991 e johnstown rd" compares at distance 0 instead of 2.
+  const queryNoDir = stripDirectional(normalizedAddr);
+
   let bestMatch = null;
   let bestDistance = Infinity;
 
   for (const prop of result.data) {
-    const propNorm = normalizeAddress(prop.address);
-    const dist = levenshtein(normalizedAddr, propNorm);
+    if (!prop.address) continue;
+    const propNorm  = normalizeAddress(prop.address);
+    const propNoDir = stripDirectional(propNorm);
+    // Take the tighter of (raw normalized distance, direction-stripped
+    // distance) so we don't downgrade the match when the directionals
+    // happen to agree.
+    const distRaw   = levenshtein(normalizedAddr, propNorm);
+    const distNoDir = levenshtein(queryNoDir, propNoDir);
+    const dist = Math.min(distRaw, distNoDir);
     if (dist <= 3 && dist < bestDistance) {
       bestDistance = dist;
       bestMatch = prop;
@@ -180,7 +191,8 @@ async function tenantCityStateMatch(domain, tenant, city, state) {
  * Returns first successful match or null.
  */
 async function matchAgainstDomain(domain, address, state, city, tenant) {
-  const norm = address ? normalizeAddress(address) : '';
+  const norm    = address ? normalizeAddress(address) : '';
+  const noDir   = norm     ? stripDirectional(norm)   : '';
 
   // 1. Exact address + state
   if (address && state) {
@@ -192,6 +204,20 @@ async function matchAgainstDomain(domain, address, state, city, tenant) {
   if (norm && state) {
     const normalized = await normalizedAddressMatch(domain, norm, state);
     if (normalized) return normalized;
+  }
+
+  // 2b. Normalized + directional-stripped. Catches "991 Johnstown Rd"
+  //     vs "991 E Johnstown Rd" style mismatches where the source doc
+  //     and the canonical record disagree on whether the directional
+  //     is present. Only run when stripping actually changed something,
+  //     otherwise it's a duplicate of step 2.
+  if (noDir && noDir !== norm && state) {
+    const noDirMatch = await normalizedAddressMatch(domain, noDir, state);
+    if (noDirMatch) {
+      noDirMatch.reason = 'normalized_address_no_directional';
+      noDirMatch.confidence = 0.93;
+      return noDirMatch;
+    }
   }
 
   // 3. Fuzzy address match (Levenshtein <= 3)
@@ -209,6 +235,129 @@ async function matchAgainstDomain(domain, address, state, city, tenant) {
   return null;
 }
 
+// ============================================================================
+// LCC-NATIVE ENTITY LOOKUP
+// ============================================================================
+// The sidebar/CoStar ingestion already populates `entities` on the LCC Opps
+// Supabase (entity_type='asset'). Many dialysis/government properties live
+// there first — the domain DBs (dialysis_db, government_db) are curated
+// subsets that may not include every address the LCC org has touched. Check
+// LCC entities before falling through to the domain DBs so intake links to
+// the same record the sidebar uses.
+
+async function lccExactAddressMatch(address, state) {
+  const path = `entities?entity_type=eq.asset` +
+    `&address=eq.${encodeURIComponent(address)}` +
+    `&state=eq.${encodeURIComponent(state)}` +
+    `&select=id,address,city,state,metadata&limit=3`;
+  const result = await opsQuery('GET', path);
+  if (result.ok && Array.isArray(result.data) && result.data.length) {
+    return {
+      status: 'matched',
+      reason: 'exact_address_lcc',
+      confidence: 1.0,
+      property_id: result.data[0].id,
+      domain: 'lcc',
+      candidates: result.data,
+    };
+  }
+  return null;
+}
+
+async function lccNormalizedAddressMatch(normalizedAddr, state) {
+  const path = `entities?entity_type=eq.asset` +
+    `&address=ilike.${encodeURIComponent(normalizedAddr)}` +
+    `&state=eq.${encodeURIComponent(state)}` +
+    `&select=id,address,city,state,metadata&limit=3`;
+  const result = await opsQuery('GET', path);
+  if (result.ok && Array.isArray(result.data) && result.data.length) {
+    return {
+      status: 'matched',
+      reason: 'normalized_address_lcc',
+      confidence: 0.95,
+      property_id: result.data[0].id,
+      domain: 'lcc',
+      candidates: result.data,
+    };
+  }
+  return null;
+}
+
+async function lccFuzzyAddressMatch(normalizedAddr, state) {
+  // Pull up to 100 same-state assets and score via Levenshtein on normalized
+  // addresses. Same pattern as fuzzyAddressMatch() but against LCC entities,
+  // with stripDirectional applied to both sides so directional-only diffs
+  // compare at distance 0.
+  const path = `entities?entity_type=eq.asset` +
+    `&state=eq.${encodeURIComponent(state)}` +
+    `&select=id,address,city,state,metadata&limit=100`;
+  const result = await opsQuery('GET', path);
+  if (!result.ok || !Array.isArray(result.data) || !result.data.length) return null;
+
+  const queryNoDir = stripDirectional(normalizedAddr);
+
+  let bestMatch = null;
+  let bestDistance = Infinity;
+  for (const prop of result.data) {
+    if (!prop.address) continue;
+    const propNorm  = normalizeAddress(prop.address);
+    const propNoDir = stripDirectional(propNorm);
+    const distRaw   = levenshtein(normalizedAddr, propNorm);
+    const distNoDir = levenshtein(queryNoDir, propNoDir);
+    const dist = Math.min(distRaw, distNoDir);
+    if (dist <= 3 && dist < bestDistance) {
+      bestDistance = dist;
+      bestMatch = prop;
+    }
+  }
+
+  if (bestMatch) {
+    return {
+      status: 'matched',
+      reason: 'fuzzy_address_lcc',
+      confidence: fuzzyConfidence(bestDistance),
+      property_id: bestMatch.id,
+      domain: 'lcc',
+      candidates: [bestMatch],
+    };
+  }
+  return null;
+}
+
+async function matchAgainstLcc(address, state) {
+  if (!address || !state) return null;
+  const norm  = normalizeAddress(address);
+  const noDir = stripDirectional(norm);
+
+  // 1. Exact
+  const exact = await lccExactAddressMatch(address, state);
+  if (exact) return exact;
+
+  // 2. Normalized
+  if (norm) {
+    const normalized = await lccNormalizedAddressMatch(norm, state);
+    if (normalized) return normalized;
+  }
+
+  // 2b. Normalized + directional-stripped
+  if (noDir && noDir !== norm) {
+    const noDirMatch = await lccNormalizedAddressMatch(noDir, state);
+    if (noDirMatch) {
+      noDirMatch.reason = 'normalized_address_no_directional_lcc';
+      noDirMatch.confidence = 0.93;
+      return noDirMatch;
+    }
+  }
+
+  // 3. Fuzzy
+  if (norm) {
+    const fuzzy = await lccFuzzyAddressMatch(norm, state);
+    if (fuzzy) return fuzzy;
+  }
+
+  return null;
+}
+
 /**
  * Match an intake extraction snapshot to an existing property in the
  * dialysis or government domain databases.
@@ -219,7 +368,10 @@ async function matchAgainstDomain(domain, address, state, city, tenant) {
  */
 export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
   const address = extractionSnapshot.address;
-  const state   = extractionSnapshot.state;
+  // AI extractors commonly emit "Ohio" while domain DBs and LCC entities
+  // store "OH". Normalize at the top so every downstream filter uses the
+  // canonical 2-letter code.
+  const state   = normalizeState(extractionSnapshot.state);
   const city    = extractionSnapshot.city;
   const tenant  = extractionSnapshot.tenant_name;
 
@@ -229,19 +381,26 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
     return noData;
   }
 
-  // Determine primary domain — try dialysis first if tenant looks like dialysis
+  // 0. LCC-native entity lookup. The sidebar/CoStar pipeline often has
+  //    already populated `entities` for this property — check there first
+  //    so intake links to the same record the sidebar uses, regardless of
+  //    whether the property also lives in a domain-specific DB.
+  let match = address ? await matchAgainstLcc(address, state) : null;
+
+  // 1. Determine primary domain — try dialysis first if tenant looks like dialysis
   const isDialysis = tenant && DIALYSIS_KEYWORDS.test(tenant);
   const primaryDomain = isDialysis ? 'dialysis' : 'government';
   const secondaryDomain = primaryDomain === 'dialysis' ? 'government' : 'dialysis';
 
-  // Try primary domain first
-  let match = await matchAgainstDomain(primaryDomain, address, state, city, tenant);
+  // 2. Primary domain
+  if (!match) {
+    match = await matchAgainstDomain(primaryDomain, address, state, city, tenant);
+  }
 
-  // Fallback: try the other domain
+  // 3. Fallback: try the other domain
   if (!match) {
     const crossMatch = await matchAgainstDomain(secondaryDomain, address, state, city, tenant);
     if (crossMatch) {
-      // Slightly lower confidence for cross-domain matches
       crossMatch.reason = `${crossMatch.reason}_cross_domain`;
       crossMatch.confidence = Math.min(crossMatch.confidence, 0.90);
       match = crossMatch;

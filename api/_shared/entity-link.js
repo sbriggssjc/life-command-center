@@ -48,6 +48,53 @@ export function stripStreetSuffix(normalizedAddr) {
     .trim();
 }
 
+/**
+ * Strip directional tokens (North/South/East/West and their abbreviations)
+ * from a normalized address. "991 e johnstown rd" and "991 johnstown rd"
+ * both become "991 johnstown rd" after this. Used as an extra fallback
+ * when the normalized-address ilike doesn't match because the canonical
+ * source has a directional prefix but the ingested document omitted it
+ * (or vice versa).
+ */
+export function stripDirectional(normalizedAddr) {
+  if (!normalizedAddr) return '';
+  return normalizedAddr
+    .replace(/\b(northeast|northwest|southeast|southwest|north|south|east|west)\b\.?/gi, ' ')
+    .replace(/\b(ne|nw|se|sw|n|s|e|w)\b\.?(?=\s)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Full-name → USPS 2-letter code map for state normalization. AI extractors
+// commonly emit "Ohio" while domain databases store "OH" — without this,
+// `state=eq.` filters return zero candidates.
+const STATE_NAME_TO_CODE = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA',
+  kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD',
+  massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO',
+  montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH',
+  oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
+  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+  'district of columbia': 'DC', 'puerto rico': 'PR',
+};
+
+/**
+ * Normalize a US state value to its 2-letter USPS code.
+ * 2-letter input → uppercased; full-name → code via map; unknown → uppercased
+ * (so the filter still runs, just won't match).
+ */
+export function normalizeState(state) {
+  if (!state) return '';
+  const raw = String(state).trim();
+  if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
+  const key = raw.toLowerCase().replace(/\s+/g, ' ');
+  return STATE_NAME_TO_CODE[key] || raw.toUpperCase();
+}
+
 function inferEntityType(sourceType, seedFields = {}) {
   const type = String(sourceType || '').toLowerCase();
   if (['contact', 'person', 'owner_contact'].includes(type)) return 'person';
