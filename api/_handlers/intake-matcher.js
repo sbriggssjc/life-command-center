@@ -69,10 +69,11 @@ function fuzzyConfidence(distance) {
  * Attempt exact address + state match against a domain's properties table.
  */
 async function exactAddressMatch(domain, address, state) {
+  const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
   const result = await domainQuery(domain, 'GET',
     `properties?address=eq.${encodeURIComponent(address)}` +
     `&state=eq.${encodeURIComponent(state)}` +
-    `&select=property_id,address,tenant&limit=3`
+    `&select=${selectCols}&limit=3`
   );
   if (result.ok && result.data?.length) {
     return {
@@ -91,10 +92,11 @@ async function exactAddressMatch(domain, address, state) {
  * Attempt normalized address ilike match against a domain's properties table.
  */
 async function normalizedAddressMatch(domain, normalizedAddr, state) {
+  const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
   const result = await domainQuery(domain, 'GET',
     `properties?address=ilike.${encodeURIComponent(normalizedAddr)}` +
     `&state=eq.${encodeURIComponent(state)}` +
-    `&select=property_id,address,tenant&limit=3`
+    `&select=${selectCols}&limit=3`
   );
   if (result.ok && result.data?.length) {
     return {
@@ -115,9 +117,10 @@ async function normalizedAddressMatch(domain, normalizedAddr, state) {
  */
 async function fuzzyAddressMatch(domain, normalizedAddr, state) {
   // Fetch properties in the same state to compare against
+  const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
   const result = await domainQuery(domain, 'GET',
     `properties?state=eq.${encodeURIComponent(state)}` +
-    `&select=property_id,address,tenant&limit=50`
+    `&select=${selectCols}&limit=50`
   );
   if (!result.ok || !result.data?.length) return null;
 
@@ -157,14 +160,35 @@ async function fuzzyAddressMatch(domain, normalizedAddr, state) {
   return null;
 }
 
+// Each domain DB uses a different column name for the occupant/tenant:
+//   dialysis.properties.tenant         — operator name (Fresenius / DaVita / ...)
+//   government.properties.agency       — short agency name (CBP, GSA, ...)
+// Using the wrong column produces a 400 "column does not exist" from Supabase,
+// which domainQuery swallows silently and makes the match step look like a
+// legitimate no-match.
+const TENANT_COLUMN_BY_DOMAIN = {
+  dialysis:   'tenant',
+  government: 'agency',
+};
+
+// Select lists also differ because gov has no `tenant` column. Returning
+// only columns that exist for the domain keeps the response shape sane.
+const SELECT_BY_DOMAIN = {
+  dialysis:   'property_id,address,tenant',
+  government: 'property_id,address,agency,agency_full_name',
+};
+
 /**
  * Tenant + city + state fallback match when no address match found.
+ * Column name differs by domain (see TENANT_COLUMN_BY_DOMAIN).
  */
 async function tenantCityStateMatch(domain, tenant, city, state) {
-  const filters = [`tenant=ilike.*${encodeURIComponent(tenant)}*`];
+  const tenantCol = TENANT_COLUMN_BY_DOMAIN[domain] || 'tenant';
+  const selectCols = SELECT_BY_DOMAIN[domain] || 'property_id,address';
+  const filters = [`${tenantCol}=ilike.*${encodeURIComponent(tenant)}*`];
   if (city) filters.push(`city=ilike.${encodeURIComponent(city)}`);
   if (state) filters.push(`state=eq.${encodeURIComponent(state)}`);
-  filters.push('select=property_id,address,tenant', 'limit=3');
+  filters.push(`select=${selectCols}`, 'limit=3');
 
   const result = await domainQuery(domain, 'GET',
     `properties?${filters.join('&')}`
