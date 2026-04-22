@@ -495,12 +495,17 @@ export async function processIntakeExtraction(intakeId) {
 
   console.log(`[intake-extractor] Done: intake_id=${intakeId}, extractions=${extractions.length}/${documentArtifacts.length}`);
 
-  // Run property matcher after extraction completes
+  // Run property matcher after extraction completes and surface its
+  // result so callers of /api/intake-extract can see what matched without
+  // a separate staged_intake_matches query.
+  let matchResult = null;
+  let matchError  = null;
   if (mergedSnapshot) {
     try {
-      const matchResult = await matchIntakeToProperty(intakeId, mergedSnapshot);
+      matchResult = await matchIntakeToProperty(intakeId, mergedSnapshot);
       console.log('[intake-matcher]', intakeId, matchResult.status, matchResult.confidence);
     } catch (err) {
+      matchError = err.message;
       console.error('[intake-matcher] Match failed:', intakeId, err.message);
     }
   }
@@ -511,6 +516,8 @@ export async function processIntakeExtraction(intakeId) {
     artifact_count:   documentArtifacts.length,
     extraction_count: extractions.length,
     diagnostics:      perArtifactDiagnostics,
+    match_result:     matchResult,
+    match_error:      matchError,
   };
 }
 
