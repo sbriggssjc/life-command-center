@@ -523,7 +523,17 @@ export async function processIntakeExtraction(intakeId) {
   // disclaimer/signature) and misses OMs where the deal content lives in
   // the PDF attachment. Fires in parallel with runEntityExtraction; the
   // two paths send different cards and both are harmless if duplicated.
-  if (mergedSnapshot && DEAL_DOCUMENT_TYPES.has(mergedSnapshot.document_type || '')) {
+  const docType = mergedSnapshot?.document_type || '';
+  const isDealDoc = DEAL_DOCUMENT_TYPES.has(docType);
+  const hasWebhookUrl = !!process.env.TEAMS_INTAKE_WEBHOOK_URL;
+  console.log('[intake-extractor] Teams alert check:', JSON.stringify({
+    intake_id: intakeId,
+    document_type: docType,
+    is_deal_doc: isDealDoc,
+    has_webhook_url: hasWebhookUrl,
+    will_fire: isDealDoc && hasWebhookUrl,
+  }));
+  if (mergedSnapshot && isDealDoc) {
     const docTypeLabel =
         mergedSnapshot.document_type === 'om'                 ? 'Listing OM'
       : mergedSnapshot.document_type === 'flyer'              ? 'Broker Flyer'
@@ -559,7 +569,9 @@ export async function processIntakeExtraction(intakeId) {
       severity: matchResult?.status === 'matched' ? 'success' : 'high',
       facts,
       actions:  [{ label: 'View intake in LCC', url: `${baseUrl}/ops?intake=${intakeId}` }],
-    }).catch(err => console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message));
+    })
+      .then(() => console.log('[intake-extractor] Teams alert POST attempted for', intakeId))
+      .catch(err => console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message));
   }
 
   return {
