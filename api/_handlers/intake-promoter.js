@@ -92,16 +92,20 @@ function buildGovListingRow(intakeId, snapshot, match) {
 // Dialysis available_listings has a very different shape — price-change-
 // tracking oriented, no address/city/state/tenant columns (those live on
 // properties). We populate the fields the dia schema has and skip the rest.
+// Cap rate stored as decimal (0.0918) per chk_*_cap_rate_range check
+// constraints (valid range 0.005–0.30).
 function buildDiaListingRow(intakeId, snapshot, match) {
-  const capRate = snapshot.cap_rate != null ? Number(snapshot.cap_rate) : null;
+  const capRateDecimal = snapshot.cap_rate != null
+    ? Number(snapshot.cap_rate) / 100
+    : null;
   return {
     property_id:        Number(match.property_id),
     listing_broker:     snapshot.listing_broker || null,
     broker_email:       snapshot.listing_broker_email || null,
     initial_price:      snapshot.asking_price || null,
     last_price:         snapshot.asking_price || null,
-    current_cap_rate:   capRate,
-    initial_cap_rate:   capRate,
+    current_cap_rate:   capRateDecimal,
+    initial_cap_rate:   capRateDecimal,
     status:             'active',
     listing_date:       new Date().toISOString().slice(0, 10),
     last_seen:          new Date().toISOString().slice(0, 10),
@@ -238,29 +242,42 @@ async function promoteBrokerContact(domain, snapshot) {
 // has a cap_rate (from CoStar or a human edit), leave it alone.
 
 async function promotePropertyFinancials(domain, propertyId, snapshot) {
-  const pk = 'property_id';
+  // Dialysis properties schema has no cap_rate/noi/rent columns (those
+  // live on leases/sales_transactions in that domain). Nothing to do.
+  if (domain !== 'government') {
+    return { ok: true, skipped: `property_financials_not_supported_for_${domain}` };
+  }
+
+  // Gov properties has gross_rent + noi (but NOT cap_rate — cap is
+  // stored on available_listings / sales_transactions / view-computed).
+  // Build the patch from whatever the snapshot has, then filter to
+  // only fields currently null on the property so we don't overwrite
+  // curated data.
   const patch = {};
-  if (snapshot.cap_rate != null) patch.cap_rate = domain === 'government'
-    ? Number(snapshot.cap_rate) / 100   // gov stores as decimal
-    : Number(snapshot.cap_rate);
-  if (snapshot.noi != null)          patch.noi = snapshot.noi;
-  if (snapshot.annual_rent != null)  patch.gross_rent = snapshot.annual_rent;  // gov column
+  if (snapshot.noi != null)          patch.noi        = Number(snapshot.noi);
+  if (snapshot.annual_rent != null)  patch.gross_rent = Number(snapshot.annual_rent);
   if (!Object.keys(patch).length) {
     return { ok: false, skipped: 'nothing_to_update' };
   }
 
-  // Fetch current values to decide what to patch. Only fill blanks.
   const existing = await domainQuery(
-    domain,
+    'government',
     'GET',
-    `properties?${pk}=eq.${Number(propertyId)}&select=cap_rate,noi,gross_rent&limit=1`
+    `properties?property_id=eq.${Number(propertyId)}&select=noi,gross_rent&limit=1`
   );
-  if (!existing.ok || !Array.isArray(existing.data) || !existing.data.length) {
-    return { ok: false, skipped: 'property_not_found' };
+  if (!existing.ok) {
+    return {
+      ok: false,
+      skipped: 'property_lookup_failed',
+      status: existing.status,
+      detail: existing.data,
+    };
+  }
+  if (!Array.isArray(existing.data) || !existing.data.length) {
+    return { ok: false, skipped: 'property_not_found', property_id: propertyId };
   }
   const current = existing.data[0] || {};
   const filteredPatch = {};
-  if (current.cap_rate   == null && patch.cap_rate   != null) filteredPatch.cap_rate   = patch.cap_rate;
   if (current.noi        == null && patch.noi        != null) filteredPatch.noi        = patch.noi;
   if (current.gross_rent == null && patch.gross_rent != null) filteredPatch.gross_rent = patch.gross_rent;
   if (!Object.keys(filteredPatch).length) {
@@ -268,9 +285,9 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
   }
 
   const patchRes = await domainQuery(
-    domain,
+    'government',
     'PATCH',
-    `properties?${pk}=eq.${Number(propertyId)}`,
+    `properties?property_id=eq.${Number(propertyId)}`,
     filteredPatch
   );
   return patchRes.ok
