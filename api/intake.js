@@ -1457,7 +1457,9 @@ async function loadPdfBuffer({ file_content_base64, file_url }) {
 
 async function extractPdfText(buffer) {
   try {
-    const mod = await import('pdf-parse');
+    // See intake-extractor.js for why we import the internal entrypoint —
+    // pdf-parse 1.1.1 has a debug block in index.js that throws under ESM.
+    const mod = await import('pdf-parse/lib/pdf-parse.js');
     const pdfParse = mod.default || mod;
     const out = await pdfParse(buffer);
     return {

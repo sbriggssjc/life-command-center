@@ -118,7 +118,11 @@ async function callAiExtraction(base64Data, mediaType) {
   let pdfPages = 0;
   if (isPdf && base64Data) {
     try {
-      const mod = await import('pdf-parse');
+      // Import the internal entrypoint directly — pdf-parse 1.1.1's top-level
+      // index.js has a debug block that runs at import time under ESM and
+      // throws because it can't find its bundled test PDF. The real parsing
+      // logic lives in lib/pdf-parse.js and has no such debug code.
+      const mod = await import('pdf-parse/lib/pdf-parse.js');
       const pdfParse = mod.default || mod;
       const buffer = Buffer.from(base64Data, 'base64');
       const parsed = await pdfParse(buffer);
