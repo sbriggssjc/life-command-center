@@ -15,6 +15,11 @@
 // ============================================================================
 
 import { createHash, randomUUID } from 'crypto';
+import { createRequire } from 'module';
+
+// CJS require for packages that don't work under ESM dynamic import (see
+// pdf-parse 1.1.1 debug-block issue documented in intake-extractor.js).
+const nodeRequire = createRequire(import.meta.url);
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
@@ -1457,10 +1462,7 @@ async function loadPdfBuffer({ file_content_base64, file_url }) {
 
 async function extractPdfText(buffer) {
   try {
-    // See intake-extractor.js for why we import the internal entrypoint —
-    // pdf-parse 1.1.1 has a debug block in index.js that throws under ESM.
-    const mod = await import('pdf-parse/lib/pdf-parse.js');
-    const pdfParse = mod.default || mod;
+    const pdfParse = nodeRequire('pdf-parse');
     const out = await pdfParse(buffer);
     return {
       ok: true,

@@ -19,6 +19,12 @@ import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
+import { createRequire } from 'module';
+
+// createRequire'd to avoid pdf-parse 1.1.1's broken-under-ESM debug block
+// in index.js (it tries to readFileSync a bundled test PDF at load time).
+// require() sets module.parent correctly so the debug block stays dormant.
+const nodeRequire = createRequire(import.meta.url);
 
 // Document type priority for merging — OM data wins over rent roll / lease abstract
 const DOC_TYPE_PRIORITY = { om: 3, lease_abstract: 2, rent_roll: 1, unknown: 0 };
@@ -116,22 +122,26 @@ async function callAiExtraction(base64Data, mediaType) {
   // any model.
   let pdfText = '';
   let pdfPages = 0;
+  let pdfExtractError = null;
   if (isPdf && base64Data) {
     try {
-      // Import the internal entrypoint directly — pdf-parse 1.1.1's top-level
-      // index.js has a debug block that runs at import time under ESM and
-      // throws because it can't find its bundled test PDF. The real parsing
-      // logic lives in lib/pdf-parse.js and has no such debug code.
-      const mod = await import('pdf-parse/lib/pdf-parse.js');
-      const pdfParse = mod.default || mod;
+      const pdfParse = nodeRequire('pdf-parse');
       const buffer = Buffer.from(base64Data, 'base64');
       const parsed = await pdfParse(buffer);
       pdfText  = (parsed?.text || '').trim();
       pdfPages = Number(parsed?.numpages || 0);
     } catch (err) {
-      console.error('[intake-extractor] pdf-parse failed:', err?.message);
+      pdfExtractError = err?.message || String(err);
+      console.error('[intake-extractor] pdf-parse failed:', pdfExtractError);
     }
   }
+  // Emit sidechannel diagnostics so the per-artifact diagnostics row shows
+  // what pdf-parse actually did.
+  globalThis.__lastPdfParseInfo = {
+    pages: pdfPages,
+    textLen: pdfText.length,
+    error: pdfExtractError,
+  };
 
   // Truncate extremely long text so we stay well under the model's context
   // window and response budget. ~200k chars is well within gpt-4o-mini's
@@ -377,7 +387,16 @@ export async function processIntakeExtraction(intakeId) {
       diag.fetched_media_type = media_type;
 
       const t1 = Date.now();
+      // callAiExtraction returns a result object and may have annotated
+      // extraction metadata on the call — we also attach pdf-parse diagnostics
+      // via a module-level sidechannel so the per-artifact row shows WHY
+      // text extraction returned empty, if it did.
       const parsed = await callAiExtraction(base64, media_type);
+      if (typeof globalThis.__lastPdfParseInfo === 'object') {
+        diag.pdf_pages = globalThis.__lastPdfParseInfo.pages;
+        diag.pdf_text_len = globalThis.__lastPdfParseInfo.textLen;
+        diag.pdf_parse_error = globalThis.__lastPdfParseInfo.error;
+      }
       diag.ai_ms = Date.now() - t1;
 
       if (parsed) {
