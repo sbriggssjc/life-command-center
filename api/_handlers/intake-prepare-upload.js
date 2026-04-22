@@ -146,12 +146,19 @@ export async function handleIntakePrepareUpload({ inputs, authContext }) {
       storage_path:  fullPath,                      // what the caller passes to stage-om later
       upload_url:    uploadUrl,                     // PUT the bytes here
       upload_method: 'PUT',
-      upload_token:  derivedToken,                  // if caller needs Bearer header separately
+      upload_token:  derivedToken,                  // exposed only for callers
+                                                    // that PUT without the
+                                                    // ?token in the URL; the
+                                                    // default flow doesn't
+                                                    // need it.
       upload_headers: {
-        // Most Supabase versions accept the URL as-is (token embedded) OR
-        // with an explicit Bearer header. Include both hints for client flexibility.
-        'x-upsert':      'true',                    // overwrite if path collides
-        ...(derivedToken ? { 'Authorization': `Bearer ${derivedToken}` } : {}),
+        // Supabase's signed-upload flow authenticates via the `?token=` in
+        // the URL only. Do NOT add an Authorization header — when both
+        // Authorization and ?token are present, Supabase's auth middleware
+        // decodes Authorization as a JWT, fails, and silently discards the
+        // request body while still returning 200 OK and Content-Length: 0.
+        // storage-js's uploadToSignedUrl uses only these two headers.
+        'x-upsert':   'true',                       // overwrite if path collides
       },
       bucket:        BUCKET,
       object_path:   objectPath,
