@@ -19,6 +19,7 @@ import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { invokeChatProvider, invokeOpenAIResponses, getAiConfig } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
+import { promoteIntakeToDomainListing } from './intake-promoter.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { createRequire } from 'module';
 
@@ -517,6 +518,21 @@ export async function processIntakeExtraction(intakeId) {
     }
   }
 
+  // Promote confident OM matches into the matched domain's available_listings
+  // table. This is what makes the property appear in the broker's
+  // "available for sale" view. Gated on document_type='om',
+  // matched + high confidence, and a supported domain (currently gov).
+  let promotionResult = null;
+  if (mergedSnapshot && matchResult) {
+    try {
+      promotionResult = await promoteIntakeToDomainListing(intakeId, mergedSnapshot, matchResult);
+      console.log('[intake-promoter]', intakeId, JSON.stringify(promotionResult));
+    } catch (err) {
+      promotionResult = { ok: false, error: err?.message };
+      console.error('[intake-promoter] Promotion failed:', intakeId, err?.message);
+    }
+  }
+
   // Fire Teams alert when the PDF itself is clearly deal-relevant. This is
   // more reliable than the email-body-only classifier in intake.js's
   // runEntityExtraction — that path sees only the email text (usually a
@@ -607,6 +623,7 @@ export async function processIntakeExtraction(intakeId) {
     diagnostics:      perArtifactDiagnostics,
     match_result:     matchResult,
     match_error:      matchError,
+    promotion_result: promotionResult,
     runtime_config:   runtimeConfig,
   };
 }
