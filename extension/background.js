@@ -441,9 +441,20 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         return;
       }
 
-      const settings = await chrome.storage.local.get([
-        'lccApiKey', 'lccWorkspace', 'lccHost', 'lccIntakeFlowUrl'
-      ]);
+      // API key and host URL live in `chrome.storage.sync` under the
+      // LCC_API_KEY / LCC_RAILWAY_URL keys (written by settings.js and read
+      // by the rest of this file). The flow URL is device-specific and lives
+      // in `chrome.storage.local`. Mixing these up used to leave X-LCC-Key
+      // empty here, which made prepare-upload 401 while stage-om's laxer auth
+      // still let inline-bytes Path B through.
+      const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_WORKSPACE']);
+      const localConfig = await chrome.storage.local.get(['lccIntakeFlowUrl']);
+      const settings = {
+        lccApiKey:        syncConfig.LCC_API_KEY      || '',
+        lccHost:          syncConfig.LCC_RAILWAY_URL  || '',
+        lccWorkspace:     syncConfig.LCC_WORKSPACE    || '',
+        lccIntakeFlowUrl: localConfig.lccIntakeFlowUrl || '',
+      };
       const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
       const apiHeaders = {
         'X-LCC-Key': settings.lccApiKey || '',
@@ -477,6 +488,15 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 
       // ── Path C: prepare-upload → client PUT → stage-om(storage_path) ────
       try {
+        console.log('[STAGE_PDF_TO_LCC] Path C prepare-upload request', {
+          url:           `${host}/api/intake/prepare-upload`,
+          has_api_key:   !!settings.lccApiKey,
+          api_key_len:   (settings.lccApiKey || '').length,
+          api_key_head:  (settings.lccApiKey || '').slice(0, 6),
+          workspace:     settings.lccWorkspace || null,
+          file_name:     fileName,
+          mime_type:     mimeType,
+        });
         const prepRes = await fetch(`${host}/api/intake/prepare-upload`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...apiHeaders },
@@ -489,15 +509,31 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const prepText = await prepRes.text();
         let prepBody = null;
         try { prepBody = JSON.parse(prepText); } catch { /* non-json */ }
+        console.log('[STAGE_PDF_TO_LCC] Path C prepare-upload response', {
+          status:       prepRes.status,
+          ok:           prepRes.ok,
+          content_type: prepRes.headers.get('content-type'),
+          body_ok:      prepBody?.ok,
+          body_error:   prepBody?.error,
+          body_detail:  prepBody?.detail,
+          body_snippet: prepText.slice(0, 300),
+          has_upload_url: !!prepBody?.upload_url,
+        });
 
         if (!prepRes.ok || !prepBody?.ok || !prepBody.upload_url || !prepBody.storage_path) {
+          const reason =
+            !prepRes.ok     ? `HTTP ${prepRes.status}` :
+            !prepBody?.ok   ? `body.ok=${prepBody?.ok}` :
+            !prepBody.upload_url   ? 'missing upload_url' :
+            !prepBody.storage_path ? 'missing storage_path' : 'unknown';
           trail.push({
             path: 'prepare_upload',
             step: 'mint_signed_url',
             status: prepRes.status,
+            reason,
             detail: prepBody?.error || prepBody?.detail || prepText.slice(0, 200),
           });
-          throw new Error('prepare-upload refused');
+          throw new Error(`prepare-upload refused (${reason})`);
         }
 
         // MV3 service workers sometimes send `Content-Length: 0` when the
