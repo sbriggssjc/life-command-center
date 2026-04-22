@@ -36,6 +36,17 @@ import { normalizeState } from '../_shared/entity-link.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
+// Document types that represent on-market listing marketing. Full OMs,
+// 1-page broker flyers, and marketing brochures all contain listing-grade
+// data (address, tenant, price, cap rate, lease terms, broker) and should
+// populate available_listings identically. Comps and lease abstracts are
+// deal-adjacent but not listings-of-record; they stay out of this set.
+const LISTING_DOCUMENT_TYPES = new Set([
+  'om',
+  'flyer',
+  'marketing_brochure',
+]);
+
 // ============================================================================
 // 1. AVAILABLE_LISTINGS MAPPERS (per domain)
 // ============================================================================
@@ -272,9 +283,10 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
 // ============================================================================
 
 export async function promoteIntakeToDomainListing(intakeId, snapshot, match) {
-  // Guard: must be an OM
-  if (snapshot?.document_type !== 'om') {
-    return { ok: false, skipped: 'not_an_om', document_type: snapshot?.document_type || null };
+  // Guard: must be a listing-grade document (OM, flyer, or marketing brochure)
+  const docType = snapshot?.document_type || null;
+  if (!LISTING_DOCUMENT_TYPES.has(docType)) {
+    return { ok: false, skipped: 'not_a_listing_doc', document_type: docType };
   }
 
   // Guard: must be a matched record with enough confidence
