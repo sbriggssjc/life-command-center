@@ -83,6 +83,15 @@ async function fetchArtifactData(artifact) {
 
     if (!res.ok) {
       const bodyText = await res.text().catch(() => '');
+      // Surface response headers before throwing so the per-artifact diag can
+      // see WHY the fetch failed.
+      globalThis.__lastStorageFetchInfo = {
+        status:         res.status,
+        content_length: res.headers.get('content-length'),
+        content_type:   res.headers.get('content-type'),
+        url:            storageUrl,
+        body_snippet:   bodyText.slice(0, 200),
+      };
       throw new Error(
         `Storage fetch failed: ${res.status} ${res.statusText} — url=${storageUrl} body=${bodyText.slice(0, 200)}`
       );
@@ -90,6 +99,18 @@ async function fetchArtifactData(artifact) {
 
     const buffer = await res.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
+    // Expose success-case metadata too — so even a 200-with-empty-body case
+    // surfaces Supabase's reported content-length vs. the bytes we actually
+    // received. A mismatch (content-length > buffer.byteLength) points at a
+    // chunked-transfer or encoding bug; matching zeros means the object is
+    // really empty in storage.
+    globalThis.__lastStorageFetchInfo = {
+      status:         res.status,
+      content_length: res.headers.get('content-length'),
+      content_type:   res.headers.get('content-type'),
+      actual_bytes:   buffer.byteLength,
+      url:            storageUrl,
+    };
     return {
       base64,
       media_type: inferMediaType(res.headers.get('content-type')),
@@ -385,6 +406,15 @@ export async function processIntakeExtraction(intakeId) {
       diag.fetched   = true;
       diag.fetch_bytes = base64 ? Math.ceil(base64.length * 3 / 4) : 0;
       diag.fetched_media_type = media_type;
+      // Attach storage-fetch sidechannel (Content-Length, Content-Type, etc.)
+      // so a mismatch between Supabase's reported size and the bytes we
+      // decoded is visible in the per-artifact diagnostic row.
+      if (typeof globalThis.__lastStorageFetchInfo === 'object' && globalThis.__lastStorageFetchInfo !== null) {
+        diag.storage_content_length = globalThis.__lastStorageFetchInfo.content_length;
+        diag.storage_content_type   = globalThis.__lastStorageFetchInfo.content_type;
+        diag.storage_actual_bytes   = globalThis.__lastStorageFetchInfo.actual_bytes;
+        diag.storage_status         = globalThis.__lastStorageFetchInfo.status;
+      }
 
       const t1 = Date.now();
       // callAiExtraction returns a result object and may have annotated
