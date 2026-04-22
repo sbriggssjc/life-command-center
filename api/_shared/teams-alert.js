@@ -19,7 +19,7 @@
  */
 export async function sendTeamsAlert({ title, summary, facts = [], actions = [], severity = 'info', webhookUrl }) {
   const url = webhookUrl || process.env.TEAMS_INTAKE_WEBHOOK_URL;
-  if (!url) return; // silently skip if not configured
+  if (!url) return { ok: false, reason: 'no_webhook_url' };
 
   const card = {
     type: "message",
@@ -52,15 +52,36 @@ export async function sendTeamsAlert({ title, summary, facts = [], actions = [],
     }]
   };
 
+  // Return a small status object so callers can surface whether the POST
+  // actually succeeded — crucial for debugging inconsistent Teams webhook
+  // behavior without access to runtime console logs.
   try {
-    await fetch(url, {
+    const t0 = Date.now();
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(card)
     });
+    const ms = Date.now() - t0;
+    let bodyText = '';
+    try { bodyText = (await res.text()).slice(0, 300); } catch { /* ignore */ }
+    return {
+      ok: res.ok,
+      status: res.status,
+      ms,
+      body_snippet: bodyText,
+      url_length: url.length,
+      url_has_sig: /[?&]sig=/.test(url),
+    };
   } catch (err) {
     console.error('[Teams alert failed]', err?.message);
-    // never throw — Teams alerts are best-effort
+    return {
+      ok: false,
+      reason: 'fetch_threw',
+      error: err?.message || String(err),
+      url_length: url.length,
+      url_has_sig: /[?&]sig=/.test(url),
+    };
   }
 }
 

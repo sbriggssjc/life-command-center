@@ -533,6 +533,7 @@ export async function processIntakeExtraction(intakeId) {
     has_webhook_url: hasWebhookUrl,
     will_fire: isDealDoc && hasWebhookUrl,
   }));
+  let teamsAlertResult = null;
   if (mergedSnapshot && isDealDoc) {
     const docTypeLabel =
         mergedSnapshot.document_type === 'om'                 ? 'Listing OM'
@@ -563,12 +564,9 @@ export async function processIntakeExtraction(intakeId) {
     const baseUrl = process.env.LCC_BASE_URL || 'https://life-command-center-nine.vercel.app';
     // IMPORTANT: await this fetch. On Vercel serverless, fire-and-forget
     // promises get terminated when the function returns — the fetch
-    // starts but never completes (or never reaches the wire), which is
-    // exactly what we observed. sendTeamsAlert has its own try/catch so
-    // this awaited call is still safe: worst case it returns quickly
-    // after logging an error, and extraction results are already persisted.
+    // starts but never completes (or never reaches the wire).
     try {
-      await sendTeamsAlert({
+      teamsAlertResult = await sendTeamsAlert({
         title:    'New OM / Deal Document Staged',
         summary:  mergedSnapshot.address
                     ? `${docTypeLabel} for ${mergedSnapshot.address}`
@@ -577,8 +575,9 @@ export async function processIntakeExtraction(intakeId) {
         facts,
         actions:  [{ label: 'View intake in LCC', url: `${baseUrl}/ops?intake=${intakeId}` }],
       });
-      console.log('[intake-extractor] Teams alert POST completed for', intakeId);
+      console.log('[intake-extractor] Teams alert result:', JSON.stringify(teamsAlertResult));
     } catch (err) {
+      teamsAlertResult = { ok: false, reason: 'extractor_caught', error: err?.message };
       console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message);
     }
   }
@@ -597,6 +596,7 @@ export async function processIntakeExtraction(intakeId) {
     document_type:              mergedSnapshot?.document_type || null,
     is_deal_doc:                DEAL_DOCUMENT_TYPES.has(mergedSnapshot?.document_type || ''),
     teams_alert_attempted:      !!webhookUrl && DEAL_DOCUMENT_TYPES.has(mergedSnapshot?.document_type || ''),
+    teams_alert_result:         teamsAlertResult,
   };
 
   return {
