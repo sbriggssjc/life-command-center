@@ -574,6 +574,22 @@ export async function processIntakeExtraction(intakeId) {
       .catch(err => console.warn('[intake-extractor] Teams alert failed (non-fatal):', err?.message));
   }
 
+  // Surface runtime config status inline so the extract endpoint is
+  // self-diagnosing — Vercel's runtime-log MCP surface only returns HTTP
+  // access logs, not console.log output, which makes debugging config
+  // drift hard. Instead, return the relevant env-var presence flags in
+  // the response body so a single curl can confirm what's set.
+  const webhookUrl = process.env.TEAMS_INTAKE_WEBHOOK_URL || '';
+  let webhookHost = null;
+  try { webhookHost = webhookUrl ? new URL(webhookUrl).host : null; } catch { /* ignore */ }
+  const runtimeConfig = {
+    has_teams_webhook_url:      !!webhookUrl,
+    teams_webhook_host:         webhookHost,
+    document_type:              mergedSnapshot?.document_type || null,
+    is_deal_doc:                DEAL_DOCUMENT_TYPES.has(mergedSnapshot?.document_type || ''),
+    teams_alert_attempted:      !!webhookUrl && DEAL_DOCUMENT_TYPES.has(mergedSnapshot?.document_type || ''),
+  };
+
   return {
     ok: true,
     extraction_snapshot: mergedSnapshot,
@@ -582,6 +598,7 @@ export async function processIntakeExtraction(intakeId) {
     diagnostics:      perArtifactDiagnostics,
     match_result:     matchResult,
     match_error:      matchError,
+    runtime_config:   runtimeConfig,
   };
 }
 
