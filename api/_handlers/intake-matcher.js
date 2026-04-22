@@ -443,18 +443,21 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
  * Persist match result to staged_intake_matches and update the intake item status.
  */
 async function writeMatchResult(intakeId, match) {
-  // Write to staged_intake_matches
+  // Write to staged_intake_matches — one row per matcher run; latest-by-
+  // created_at is the authoritative match for the intake.
   const insertResult = await opsQuery('POST', 'staged_intake_matches', {
     intake_id:    intakeId,
     decision:     match.status === 'matched' ? 'auto_matched' : 'needs_review',
     reason:       match.reason || 'no_address_match',
-    property_id:  match.property_id || null,
+    domain:       match.domain || null,
+    property_id:  match.property_id != null ? String(match.property_id) : null,
     confidence:   match.confidence,
     match_result: match,
   });
 
   if (!insertResult.ok) {
-    console.error('[intake-matcher] Failed to write match result:', insertResult.data);
+    console.error('[intake-matcher] Failed to write match result:',
+      insertResult.status, JSON.stringify(insertResult.data || {}).slice(0, 200));
   }
 
   // Update intake item status
