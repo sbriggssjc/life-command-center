@@ -59,6 +59,13 @@ async function recordFeedback(req, res) {
     corrected_property_id,
     reason_text,
     metadata,
+    // Caller-provided matcher snapshot fields — a triage UI already has the
+    // match from its extract response, so it should pass these directly
+    // instead of forcing a DB roundtrip. Falls back to DB lookup below.
+    match_reason,
+    match_domain,
+    match_property_id,
+    match_confidence,
   } = body;
 
   if (!intake_id || typeof intake_id !== 'string') {
@@ -76,24 +83,40 @@ async function recordFeedback(req, res) {
     });
   }
 
-  // Snapshot the matcher's current suggestion so the feedback row is
-  // self-contained even if the match row is later overwritten. Don't rely
-  // on a `created_at` column existing on staged_intake_matches — older
-  // rows may not have it. Order by `id` desc (monotonically increasing)
-  // as a portable fallback.
+  // Build the originalMatch snapshot from two sources, in order:
+  //   1. Fields provided by the caller in the POST body (preferred — fresh
+  //      from the extract response the UI just saw).
+  //   2. staged_intake_matches lookup (fallback — useful for out-of-band
+  //      callers like Power Automate flows that don't have the match in hand).
   let originalMatch = null;
-  const matchLookup = await opsQuery('GET',
-    `staged_intake_matches?intake_id=eq.${pgFilterVal(intake_id)}` +
-    `&select=id,reason,property_id,confidence,match_result` +
-    `&order=id.desc&limit=1`
-  );
-  if (matchLookup.ok && Array.isArray(matchLookup.data) && matchLookup.data.length) {
-    originalMatch = matchLookup.data[0];
-  } else if (!matchLookup.ok) {
-    // Surface the error in logs but continue — feedback is still useful
-    // even without a snapshot of what the matcher suggested.
-    console.warn('[intake-feedback] match snapshot lookup failed:',
-      matchLookup.status, JSON.stringify(matchLookup.data || {}).slice(0, 200));
+
+  if (match_reason || match_domain || match_property_id != null || match_confidence != null) {
+    originalMatch = {
+      id:           match_id || null,
+      reason:       match_reason     || null,
+      property_id:  match_property_id != null ? String(match_property_id) : null,
+      confidence:   typeof match_confidence === 'number' ? match_confidence : null,
+      match_result: { domain: match_domain || null },
+    };
+  } else {
+    const matchLookup = await opsQuery('GET',
+      `staged_intake_matches?intake_id=eq.${pgFilterVal(intake_id)}` +
+      `&select=id,reason,property_id,confidence,match_result` +
+      `&order=id.desc&limit=1`
+    );
+    if (matchLookup.ok && Array.isArray(matchLookup.data) && matchLookup.data.length) {
+      originalMatch = matchLookup.data[0];
+    } else {
+      // Log the exact state so we can debug silent failures (either the
+      // matcher never wrote, or the query fell afoul of a schema mismatch).
+      console.warn('[intake-feedback] match snapshot lookup empty or failed:',
+        JSON.stringify({
+          ok:     matchLookup.ok,
+          status: matchLookup.status,
+          rowCount: Array.isArray(matchLookup.data) ? matchLookup.data.length : null,
+          detail: JSON.stringify(matchLookup.data || {}).slice(0, 200),
+        }));
+    }
   }
 
   const row = {

@@ -71,6 +71,27 @@ def main():
     hdrs = {"X-LCC-Key": args.api_key}
     intake = args.intake_id
 
+    # ---- 0. Fetch the current matcher suggestion so we can pass it to ---
+    # ----    the feedback call (mimics what a triage UI would do) -------
+    status, body = http_json(
+        "POST",
+        f"{args.host}/api/intake-extract?intake_id={intake}",
+        headers=hdrs,
+    )
+    pretty("[0] POST extract (get current match)", status, body)
+    match_fields = {}
+    try:
+        extract = json.loads(body)
+        mr = extract.get("match_result") or {}
+        match_fields = {
+            "match_reason":      mr.get("reason"),
+            "match_domain":      mr.get("domain"),
+            "match_property_id": mr.get("property_id"),
+            "match_confidence":  mr.get("confidence"),
+        }
+    except Exception:
+        pass
+
     # ---- 1. Approve ------------------------------------------------------
     status, body = http_json(
         "POST",
@@ -80,9 +101,10 @@ def main():
             "intake_id": intake,
             "decision":  "approved",
             "reason_text": "Integration test — approval path",
+            **match_fields,
         },
     )
-    pretty("[1] POST feedback (approved)", status, body)
+    pretty("[1] POST feedback (approved, with match snapshot)", status, body)
 
     # ---- 2. List history -------------------------------------------------
     status, body = http_json(
@@ -103,6 +125,7 @@ def main():
             "corrected_domain":      "lcc",
             "corrected_property_id": "00000000-0000-0000-0000-000000000000",
             "reason_text": "Integration test — correction path (should upsert, not insert)",
+            **match_fields,
         },
     )
     pretty("[3] POST feedback (corrected, upsert)", status, body)
