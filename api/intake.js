@@ -249,18 +249,29 @@ async function handleOutlookMessage(req, res) {
   // Dedup guard: Power Automate's flagged-email trigger fires multiple times
   // (typically 3–6) for the same email within a minute. Check if this
   // correlation_id already exists in inbox_items before inserting a new row.
+  // NOTE: we also select `metadata` so we can read the bridged_to_intake_id
+  // that the fresh-path writes on successful staging. Without this, replays
+  // would (a) re-stage the email because the alreadyStaged check was looking
+  // up staged_intake_items by the WRONG UUID (inbox_item.id instead of the
+  // staged intake's own id), and (b) return an invalid staged_intake_id to
+  // the caller.
   const existingCheck = await opsQuery('GET',
     `inbox_items?metadata->>correlation_id=eq.${encodeURIComponent(correlationId)}` +
     `&workspace_id=eq.${encodeURIComponent(workspaceId)}` +
-    `&select=id,status&limit=1`
+    `&select=id,status,metadata&limit=1`
   );
 
   if (existingCheck.ok && existingCheck.data?.length) {
     const existing = existingCheck.data[0];
+    const bridgedIntakeId = existing.metadata?.bridged_to_intake_id || null;
 
-    // Check if a staged intake item already exists for this inbox item (LCC Opps)
+    // Look up the staged row by the REAL intake_id (from the metadata
+    // bridge), not by the inbox_item id. Fall back to the legacy check only
+    // if no bridge is recorded yet (first fresh-path hasn't finished its
+    // PATCH, or an older inbox_item predates the bridge).
+    const stagedLookupId = bridgedIntakeId || existing.id;
     const stagedCheck = await opsQuery('GET',
-      `staged_intake_items?intake_id=eq.${pgFilterVal(existing.id)}&select=intake_id&limit=1`
+      `staged_intake_items?intake_id=eq.${pgFilterVal(stagedLookupId)}&select=intake_id&limit=1`
     );
     const alreadyStaged = stagedCheck.ok && stagedCheck.data?.length > 0;
 
@@ -322,8 +333,10 @@ async function handleOutlookMessage(req, res) {
       ok: true,
       deduplicated: true,
       correlation_id: correlationId,
-      inbox_item_id:  existing.id,
-      staged_intake_id: (!alreadyStaged && hasAttachments) ? existing.id : null,
+      inbox_item_id:    existing.id,
+      // Always return the real staged intake id (from metadata bridge) when
+      // we have one — regardless of whether we re-ran staging on this replay.
+      staged_intake_id: bridgedIntakeId || null,
       message: 'Already ingested',
     });
   }
