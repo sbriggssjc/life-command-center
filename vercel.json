@@ -61,6 +61,8 @@
     { "source": "/api/intake-promote", "destination": "/api/intake?_route=promote" },
     { "source": "/api/intake-discard", "destination": "/api/intake?_route=discard" },
     { "source": "/api/intake-pdf", "destination": "/api/intake?_route=ingest_pdf" },
+    { "source": "/api/intake/feedback", "destination": "/api/intake?_route=feedback" },
+    { "source": "/api/intake/accuracy", "destination": "/api/intake?_route=accuracy" },
     { "source": "/api/inbox", "destination": "/api/queue?_route=inbox" },
     { "source": "/api/preassemble", "destination": "/api/operations?_route=context&action=preassemble-nightly" },
     { "source": "/api/context", "destination": "/api/operations?_route=context" },

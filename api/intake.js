@@ -113,9 +113,17 @@ export default withErrorHandler(async function handler(req, res) {
       return handleParseOm(req, res);
     case 'ingest_pdf':
       return handleIngestPdf(req, res);
+    case 'feedback': {
+      const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
+      return handleIntakeFeedback(req, res);
+    }
+    case 'accuracy': {
+      const { handleMatcherAccuracy } = await import('./_handlers/intake-feedback.js');
+      return handleMatcherAccuracy(req, res);
+    }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action, parse-om, ingest_pdf'
+        error: 'Invalid _route. Use: outlook-message, summary, extract, queue, promote, discard, copilot-action, parse-om, ingest_pdf, feedback, accuracy'
       });
   }
 });
