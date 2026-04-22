@@ -201,6 +201,16 @@
       </div>
     </div>
 
+    <!-- Intake -->
+    <div class="section">
+      <div class="section-title">OM Intake</div>
+      <div class="field">
+        <label for="intakeFlowUrl">Power Automate Flow A URL</label>
+        <input type="password" id="intakeFlowUrl" placeholder="https://...powerautomate.com/.../invoke?sig=...">
+        <div class="hint">The HTTP trigger URL for the "Stage OM" flow. When set, the "Stage to LCC" button routes large PDFs through this flow (bypasses 4.5MB Vercel cap). Leave empty to use the direct-POST fallback (≤3MB PDFs only).</div>
+      </div>
+    </div>
+
     <!-- Preferences -->
     <div class="section">
       <div class="section-title">Preferences</div>

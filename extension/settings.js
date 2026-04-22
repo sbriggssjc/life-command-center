@@ -12,11 +12,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     'showDia',
   ]);
 
+  // The Power Automate flow URL lives in chrome.storage.local (not .sync)
+  // because it's device-specific (different per installation) and can be
+  // large. background.js reads from .local.
+  const localConfig = await chrome.storage.local.get(['lccIntakeFlowUrl']);
+
   document.getElementById('railwayUrl').value = config.LCC_RAILWAY_URL || '';
   document.getElementById('apiKey').value = config.LCC_API_KEY || '';
   document.getElementById('defaultTab').value = config.defaultTab || 'briefing';
   document.getElementById('showGov').checked = config.showGov !== false;
   document.getElementById('showDia').checked = config.showDia !== false;
+
+  const flowField = document.getElementById('intakeFlowUrl');
+  if (flowField) flowField.value = localConfig.lccIntakeFlowUrl || '';
 
   // Test connection
   document.getElementById('testConnection').addEventListener('click', async () => {
@@ -72,6 +80,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     await chrome.storage.sync.set(settings);
+
+    // Save the flow URL separately to chrome.storage.local
+    const flowUrl = document.getElementById('intakeFlowUrl')?.value.trim() || '';
+    if (flowUrl) {
+      await chrome.storage.local.set({ lccIntakeFlowUrl: flowUrl });
+    } else {
+      await chrome.storage.local.remove('lccIntakeFlowUrl');
+    }
+
     showToast('Settings saved', 'success');
   });
 });
