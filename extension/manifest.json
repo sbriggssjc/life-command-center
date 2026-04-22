@@ -13,6 +13,7 @@
   "host_permissions": [
     "https://*.railway.app/*",
     "https://*.vercel.app/*",
+    "https://*.supabase.co/*",
     "https://outlook.office.com/*",
     "https://outlook.office365.com/*",
     "https://*.costar.com/*",

@@ -415,125 +415,227 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   }
 
   if (msg.type === 'STAGE_PDF_TO_LCC') {
-    // Two-path dispatch:
-    //  - If `lccIntakeFlowUrl` is set in storage, POST to the Power Automate
-    //    Flow A (bypasses Vercel's 4.5MB body cap — flow routes bytes through
-    //    Supabase Storage pre-signed upload, then hits LCC with a tiny
-    //    storage_path reference)
-    //  - Else fall back to the direct POST path (works for ≤3MB PDFs)
+    // Three-path dispatch (most-preferred first):
+    //  Path C — /api/intake/prepare-upload → client PUT to Supabase Storage
+    //           → /api/intake/stage-om { storage_path }. No size cap (100 MB
+    //           bucket limit), no Vercel body cap, no Power Automate. This is
+    //           the preferred path whenever the LCC API is reachable.
+    //  Path A — Power Automate Flow A at `lccIntakeFlowUrl`. Legacy; kept as
+    //           a fallback so non-browser intake sources (SharePoint drop,
+    //           email-to-flow, mobile shortcuts) keep working. Only used if
+    //           Path C fails AND a flow URL is configured.
+    //  Path B — direct inline POST to /api/intake/stage-om with
+    //           `bytes_base64`. Subject to Vercel's ~4.5 MB body cap; last
+    //           resort when Path C is misconfigured and Flow A isn't wired.
     (async () => {
+      // ---- Shared setup ---------------------------------------------------
+      let buffer, mimeType, sizeBytes;
       try {
         const r = await fetch(msg.url);
         if (!r.ok) { respond({ ok: false, error: `PDF fetch HTTP ${r.status}` }); return; }
-        const buffer = await r.arrayBuffer();
+        buffer    = await r.arrayBuffer();
+        mimeType  = r.headers.get('content-type') || 'application/pdf';
+        sizeBytes = buffer.byteLength;
+      } catch (fetchErr) {
+        respond({ ok: false, error: `PDF fetch threw: ${fetchErr.message}` });
+        return;
+      }
+
+      const settings = await chrome.storage.local.get([
+        'lccApiKey', 'lccWorkspace', 'lccHost', 'lccIntakeFlowUrl'
+      ]);
+      const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
+      const apiHeaders = {
+        'X-LCC-Key': settings.lccApiKey || '',
+        ...(settings.lccWorkspace ? { 'X-LCC-Workspace': settings.lccWorkspace } : {}),
+      };
+
+      const fileName =
+        (msg.fileName && msg.fileName.trim()) ||
+        (msg.url.split('/').pop() || 'upload.pdf').split('?')[0];
+
+      const seedTags = ['sidebar_intake', msg.hostname || 'browser'].filter(Boolean);
+      const intent   = msg.intent || `Staged from ${msg.sourceUrl || msg.url}`;
+
+      // Only compute base64 when a fallback path actually needs it.
+      let base64 = null;
+      const getBase64 = () => {
+        if (base64 !== null) return base64;
         const bytes = new Uint8Array(buffer);
         let binary = '';
         const CHUNK = 0x8000;
         for (let i = 0; i < bytes.length; i += CHUNK) {
           binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
         }
-        const base64 = btoa(binary);
-        const mimeType = r.headers.get('content-type') || 'application/pdf';
+        base64 = btoa(binary);
+        return base64;
+      };
 
-        const settings = await chrome.storage.local.get([
-          'lccApiKey', 'lccWorkspace', 'lccHost', 'lccIntakeFlowUrl'
-        ]);
-        const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
+      // Track each path's failure so the final response can surface *why*
+      // we fell all the way through, not just the last error.
+      const trail = [];
 
-        const fileName =
-          (msg.fileName && msg.fileName.trim()) ||
-          (msg.url.split('/').pop() || 'upload.pdf').split('?')[0];
+      // ── Path C: prepare-upload → client PUT → stage-om(storage_path) ────
+      try {
+        const prepRes = await fetch(`${host}/api/intake/prepare-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            file_name:      fileName,
+            mime_type:      mimeType,
+            intake_channel: 'sidebar',
+          }),
+        });
+        const prepText = await prepRes.text();
+        let prepBody = null;
+        try { prepBody = JSON.parse(prepText); } catch { /* non-json */ }
 
-        // ── Path A: Power Automate flow (preferred, no size cap) ──────────
-        if (settings.lccIntakeFlowUrl) {
-          try {
-            const flowRes = await fetch(settings.lccIntakeFlowUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                file_name:    fileName,
-                mime_type:    mimeType,
-                bytes_base64: base64,
-                source_url:   msg.sourceUrl || msg.url,
-                hostname:     msg.hostname || null,
-                intent:       msg.intent || `Staged from ${msg.hostname || 'browser'}`,
-              }),
-            });
-            const flowText = await flowRes.text();
-            let flowBody = null;
-            try { flowBody = JSON.parse(flowText); } catch { /* non-json */ }
-            if (flowRes.ok && flowBody?.ok) {
-              respond({
-                ok:         true,
-                status:     flowRes.status,
-                body:       flowBody,
-                sizeBytes:  buffer.byteLength,
-                fileName,
-                path:       'power_automate_flow',
-              });
-              return;
-            }
-            console.error('[STAGE_PDF_TO_LCC] flow returned non-ok', {
-              flowUrl: settings.lccIntakeFlowUrl.replace(/\?.*$/, '?<redacted>'),
-              status: flowRes.status,
-              bodySnippet: flowText.slice(0, 400),
-            });
-            respond({
-              ok: false,
-              status: flowRes.status,
-              body: flowBody || { error: 'flow_non_ok', detail: flowText.slice(0, 200) },
-              path: 'power_automate_flow',
-            });
-            return;
-          } catch (flowErr) {
-            console.error('[STAGE_PDF_TO_LCC] flow fetch threw', flowErr);
-            respond({
-              ok: false,
-              error: `Flow call failed: ${flowErr.message}`,
-              path: 'power_automate_flow',
-            });
-            return;
-          }
+        if (!prepRes.ok || !prepBody?.ok || !prepBody.upload_url || !prepBody.storage_path) {
+          trail.push({
+            path: 'prepare_upload',
+            step: 'mint_signed_url',
+            status: prepRes.status,
+            detail: prepBody?.error || prepBody?.detail || prepText.slice(0, 200),
+          });
+          throw new Error('prepare-upload refused');
         }
 
-        // ── Path B: direct POST to LCC (legacy, 4.5MB cap on Vercel Hobby) ─
-        const stageUrl = `${host}/api/intake/stage-om`;
-        const postRes = await fetch(stageUrl, {
-          method: 'POST',
+        const putRes = await fetch(prepBody.upload_url, {
+          method: prepBody.upload_method || 'PUT',
           headers: {
-            'Content-Type': 'application/json',
-            'X-LCC-Key': settings.lccApiKey || '',
-            ...(settings.lccWorkspace ? { 'X-LCC-Workspace': settings.lccWorkspace } : {}),
+            'Content-Type': mimeType,
+            ...(prepBody.upload_headers || {}),
           },
+          body: buffer,
+        });
+        if (!putRes.ok) {
+          const putText = await putRes.text().catch(() => '');
+          trail.push({
+            path:   'prepare_upload',
+            step:   'storage_put',
+            status: putRes.status,
+            detail: putText.slice(0, 200),
+          });
+          throw new Error('storage PUT failed');
+        }
+
+        const stageRes = await fetch(`${host}/api/intake/stage-om`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
           body: JSON.stringify({
-            intake_source: 'copilot',
+            intake_source:  'copilot',
             intake_channel: 'sidebar',
-            intent: msg.intent || `Staged from ${msg.sourceUrl || msg.url}`,
+            intent,
             artifacts: {
               primary_document: {
-                bytes_base64: base64,
+                storage_path: prepBody.storage_path,
                 file_name:    fileName,
                 mime_type:    mimeType,
               },
             },
-            seed_data: {
-              tags: ['sidebar_intake', msg.hostname || 'browser'].filter(Boolean),
-            },
+            seed_data: { tags: seedTags },
           }),
         });
+        const stageText = await stageRes.text();
+        let stageBody = null;
+        try { stageBody = JSON.parse(stageText); } catch { /* non-json */ }
 
-        // Capture body as text first, then attempt to parse JSON. This way we
-        // get useful diagnostics when the server returns HTML (deployment
-        // protection, CORS preflight fallback, etc.) or a plain-text error.
+        if (stageRes.ok && stageBody?.ok) {
+          respond({
+            ok:        true,
+            status:    stageRes.status,
+            body:      stageBody,
+            sizeBytes,
+            fileName,
+            path:      'prepare_upload',
+          });
+          return;
+        }
+        trail.push({
+          path:   'prepare_upload',
+          step:   'stage_om_ref',
+          status: stageRes.status,
+          detail: stageBody?.error || stageBody?.detail || stageText.slice(0, 200),
+        });
+        throw new Error('stage-om (storage_path) refused');
+      } catch (pcErr) {
+        console.warn('[STAGE_PDF_TO_LCC] Path C failed, falling back', pcErr.message, trail);
+        // fall through to Path A / Path B
+      }
+
+      // ── Path A: Power Automate flow (legacy, only if configured) ────────
+      if (settings.lccIntakeFlowUrl) {
+        try {
+          const flowRes = await fetch(settings.lccIntakeFlowUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_name:    fileName,
+              mime_type:    mimeType,
+              bytes_base64: getBase64(),
+              source_url:   msg.sourceUrl || msg.url,
+              hostname:     msg.hostname || null,
+              intent,
+            }),
+          });
+          const flowText = await flowRes.text();
+          let flowBody = null;
+          try { flowBody = JSON.parse(flowText); } catch { /* non-json */ }
+          if (flowRes.ok && flowBody?.ok) {
+            respond({
+              ok:        true,
+              status:    flowRes.status,
+              body:      flowBody,
+              sizeBytes,
+              fileName,
+              path:      'power_automate_flow',
+            });
+            return;
+          }
+          trail.push({
+            path:   'power_automate_flow',
+            status: flowRes.status,
+            detail: flowText.slice(0, 200),
+          });
+          console.error('[STAGE_PDF_TO_LCC] Flow A returned non-ok', {
+            flowUrl: settings.lccIntakeFlowUrl.replace(/\?.*$/, '?<redacted>'),
+            status: flowRes.status,
+            bodySnippet: flowText.slice(0, 400),
+          });
+        } catch (flowErr) {
+          trail.push({ path: 'power_automate_flow', error: flowErr.message });
+          console.error('[STAGE_PDF_TO_LCC] Flow A fetch threw', flowErr);
+        }
+      }
+
+      // ── Path B: direct inline POST (Vercel ~4.5MB cap) ──────────────────
+      try {
+        const stageUrl = `${host}/api/intake/stage-om`;
+        const postRes = await fetch(stageUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            intake_source:  'copilot',
+            intake_channel: 'sidebar',
+            intent,
+            artifacts: {
+              primary_document: {
+                bytes_base64: getBase64(),
+                file_name:    fileName,
+                mime_type:    mimeType,
+              },
+            },
+            seed_data: { tags: seedTags },
+          }),
+        });
         const rawBody = await postRes.text();
         let payload = null;
         let parseErr = null;
         try { payload = JSON.parse(rawBody); }
         catch (e) { parseErr = e.message; }
 
-        // Detailed logging so the service worker console surfaces failures.
         if (!postRes.ok || parseErr) {
-          console.error('[STAGE_PDF_TO_LCC] non-success response', {
+          console.error('[STAGE_PDF_TO_LCC] Path B non-success', {
             stageUrl,
             status: postRes.status,
             statusText: postRes.statusText,
@@ -541,25 +643,40 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             bodySnippet: rawBody.slice(0, 400),
             parseErr,
           });
+          trail.push({
+            path:   'inline_post',
+            status: postRes.status,
+            detail: parseErr
+              ? `non-JSON response (first 200b): ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+              : rawBody.slice(0, 200),
+          });
         }
 
         respond({
-          ok: postRes.ok && (payload?.ok !== false) && !parseErr,
-          status: postRes.status,
-          statusText: postRes.statusText,
+          ok:          postRes.ok && (payload?.ok !== false) && !parseErr,
+          status:      postRes.status,
+          statusText:  postRes.statusText,
           contentType: postRes.headers.get('content-type'),
           body: payload || {
-            error: parseErr ? 'non_json_response' : 'unknown',
-            detail:
-              parseErr
-                ? `Server returned ${postRes.status} ${postRes.statusText}. First 200 bytes: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
-                : rawBody.slice(0, 200),
+            error:  parseErr ? 'non_json_response' : 'all_paths_failed',
+            detail: parseErr
+              ? `Server returned ${postRes.status} ${postRes.statusText}. First 200 bytes: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+              : rawBody.slice(0, 200),
+            trail,
           },
-          sizeBytes: buffer.byteLength,
+          sizeBytes,
           fileName,
+          path: 'inline_post',
         });
       } catch (err) {
-        respond({ ok: false, error: err.message });
+        respond({
+          ok:    false,
+          error: err.message,
+          body:  { error: 'all_paths_failed', detail: err.message, trail },
+          path:  'inline_post',
+          sizeBytes,
+          fileName,
+        });
       }
     })();
     return true; // async response
