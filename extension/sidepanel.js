@@ -997,13 +997,26 @@ async function loadPropertyTab() {
         const sourceUrl = tabs?.[0]?.url || url;
         const hostname = (() => { try { return new URL(sourceUrl).hostname; } catch { return null; } })();
 
+        // Derive a real filename from the URL's last path segment (ignoring
+        // querystring). The doc card's `label` is a display string like
+        // "Marketing Brochure/Flyer" — not safe to use as a filename.
+        const urlFileName = (() => {
+          try {
+            const u = new URL(url);
+            const last = u.pathname.split('/').filter(Boolean).pop() || '';
+            const decoded = decodeURIComponent(last);
+            if (decoded && /\.(pdf|xlsx?|docx?)$/i.test(decoded)) return decoded;
+          } catch {}
+          return 'document.pdf';
+        })();
+
         const resp = await chrome.runtime.sendMessage({
           type: 'STAGE_PDF_TO_LCC',
           url,
-          fileName: label || undefined,
+          fileName: urlFileName,
           sourceUrl,
           hostname,
-          intent: `Staged from ${hostname || 'browser'}`,
+          intent: `Staged from ${hostname || 'browser'}${label ? ` — ${label}` : ''}`,
         });
 
         if (resp?.ok && resp?.body?.ok) {

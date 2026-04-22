@@ -63,10 +63,29 @@ export async function handleIntakePrepareUpload({ inputs, authContext }) {
 
   // ---- 1. Build a unique storage path keyed by date + UUID + sanitized name
   const today = new Date().toISOString().slice(0, 10);           // YYYY-MM-DD
-  const safeName = inputs.file_name
+
+  // Infer an extension from the MIME type when the file_name doesn't have one.
+  // Supabase Storage and most CDNs gate on path extension; missing extensions
+  // sometimes cause the object to be written but unreadable via REST fetch.
+  const mimeExtMap = {
+    'application/pdf':                                                    '.pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':  '.xlsx',
+    'application/vnd.ms-excel':                                           '.xls',
+    'application/msword':                                                 '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  };
+  const fallbackExt = mimeExtMap[(inputs.mime_type || 'application/pdf').toLowerCase()] || '.bin';
+
+  let safeName = inputs.file_name
     .replace(/[^\w.\-]+/g, '-')     // strip spaces + symbols
     .replace(/^-+|-+$/g, '')        // trim leading/trailing dashes
-    .slice(0, 120) || 'upload.pdf';
+    .slice(0, 120) || 'upload';
+
+  // Guarantee an extension; sidebar doc-card labels often don't include one.
+  if (!/\.[a-z0-9]{2,6}$/i.test(safeName)) {
+    safeName += fallbackExt;
+  }
+
   const objectId = randomUUID();
   const objectPath = `${today}/${objectId}-${safeName}`;          // within the bucket
   const fullPath   = `${BUCKET}/${objectPath}`;                   // bucket + path (what stageOmIntake stores)
