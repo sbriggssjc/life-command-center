@@ -7,11 +7,13 @@
 -- into gov.available_listings — re-extracts of the same intake should
 -- update the same listing row instead of creating duplicates.
 --
--- Partial index so legacy rows (source_listing_ref IS NULL from
--- costar_sidebar / excel_master / manual paths) don't conflict with the
--- intake-driven entries.
+-- IMPORTANT: full (non-partial) unique index. Partial indexes with a
+-- WHERE predicate cannot be used as ON CONFLICT targets when PostgREST
+-- specifies columns via on_conflict=source_listing_ref. Standard SQL
+-- treats multiple NULL values as distinct, so legacy rows with NULL
+-- source_listing_ref (from costar_sidebar / excel_master / manual paths)
+-- coexist without conflict.
 -- ============================================================================
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_available_listings_source_ref
-    ON public.available_listings (source_listing_ref)
-    WHERE source_listing_ref IS NOT NULL;
+    ON public.available_listings (source_listing_ref);
