@@ -441,21 +441,21 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         return;
       }
 
-      // API key and host URL live in `chrome.storage.sync` under the
-      // LCC_API_KEY / LCC_RAILWAY_URL keys (written by settings.js and read
-      // by the rest of this file). The flow URL is device-specific and lives
-      // in `chrome.storage.local`. Mixing these up used to leave X-LCC-Key
-      // empty here, which made prepare-upload 401 while stage-om's laxer auth
-      // still let inline-bytes Path B through.
-      const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_WORKSPACE']);
+      // API key lives in `chrome.storage.sync` under LCC_API_KEY (where
+      // settings.js writes it). The intake endpoints (prepare-upload,
+      // stage-om, extract) live on Vercel, not on the Railway MCP server —
+      // so `LCC_RAILWAY_URL` is the wrong host to use here. Hardcode the
+      // Vercel origin with an optional LCC_VERCEL_URL override for staging
+      // environments. Strip trailing slashes to avoid `host//api/...` 404s.
+      const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
       const localConfig = await chrome.storage.local.get(['lccIntakeFlowUrl']);
+      const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
       const settings = {
-        lccApiKey:        syncConfig.LCC_API_KEY      || '',
-        lccHost:          syncConfig.LCC_RAILWAY_URL  || '',
-        lccWorkspace:     syncConfig.LCC_WORKSPACE    || '',
+        lccApiKey:        syncConfig.LCC_API_KEY     || '',
+        lccWorkspace:     syncConfig.LCC_WORKSPACE   || '',
         lccIntakeFlowUrl: localConfig.lccIntakeFlowUrl || '',
       };
-      const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
+      const host = String(rawHost).replace(/\/+$/, '');  // strip trailing slash(es)
       const apiHeaders = {
         'X-LCC-Key': settings.lccApiKey || '',
         ...(settings.lccWorkspace ? { 'X-LCC-Workspace': settings.lccWorkspace } : {}),
