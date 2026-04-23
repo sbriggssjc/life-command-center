@@ -1,4 +1,5 @@
 import { opsQuery, pgFilterVal } from './ops-db.js';
+import { syncSalesforceForEntity } from './salesforce-sync.js';
 
 export function normalizeCanonicalName(name) {
   return String(name || '')
@@ -247,11 +248,44 @@ export async function ensureEntityLink({
     createdIdentity = true;
   }
 
+  // --- Salesforce auto-link (best effort; never fails the caller) ----------
+  // Any time LCC creates a brand-new entity, try to stitch a Salesforce
+  // match onto it so the sidebar/search/contact-merge paths all see the link
+  // without a downstream write needing to re-check SF. Only runs for people
+  // (email) and organizations (name) — assets don't have a reliable SF key.
+  //
+  // Skipped when:
+  //   - entity already existed (createdEntity=false); that path has either
+  //     been synced before or lives in a flow that handles SF itself
+  //     (unified_contacts promoter does its own backfill).
+  //   - entity is an asset (no SF analog).
+  //   - SF isn't configured (syncSalesforceForEntity short-circuits).
+  //
+  // We fire-and-await (not fire-and-forget) so we can attach the result to
+  // the return payload — handy for tests and for observability. Errors are
+  // swallowed inside syncSalesforceForEntity, so this is still safe.
+  let salesforce = null;
+  if (createdEntity && resolvedEntity && resolvedEntity.entity_type !== 'asset') {
+    try {
+      salesforce = await syncSalesforceForEntity({
+        workspaceId,
+        entityId:   resolvedEntity.id,
+        entityType: resolvedEntity.entity_type,
+        name:       resolvedEntity.name || candidateName,
+        email:      seedFields.email || resolvedEntity.email,
+        reason:     `ensureEntityLink:${sourceSystem || 'unknown'}`,
+      });
+    } catch (err) {
+      console.warn('[ensureEntityLink] SF sync failed (non-fatal):', err?.message || err);
+    }
+  }
+
   return {
     ok: true,
     entity: resolvedEntity,
     entityId: resolvedEntity.id,
     createdEntity,
-    createdIdentity
+    createdIdentity,
+    salesforce,
   };
 }

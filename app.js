@@ -298,6 +298,188 @@ function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replac
 // Safe URL for href attributes — blocks javascript: and data: schemes
 function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
 
+// ============================================================
+// MARKETING COLLATERAL ICON CELL
+// ============================================================
+// Listings carry up to three kinds of "marketing collateral" links we want
+// brokers to hit from a dashboard row without ever opening the detail pane:
+//   1. The OM / flyer PDF living in Supabase Storage (intake_artifact_path).
+//   2. The marketplace listing URL (Crexi, LoopNet, CoStar, Brevitas, etc.).
+//   3. A brokerage property microsite / flyer hosted on the listing broker's
+//      domain (tracked via tracked_urls jsonb array).
+//
+// gov and dia each store these under slightly different column names, so the
+// caller passes a tiny mapping. The function returns an HTML string ready to
+// drop into a <td> whose outer element has onclick="event.stopPropagation()".
+//
+// Detected known domains and their icons:
+//   crexi.com         → "C"  (with brand color)
+//   loopnet.com       → "L"
+//   costar.com        → "★"
+//   brevitas.com      → "B"
+//   realcrowd.com     → "R"
+//   ten-x.com         → "X"
+//   marcusmillichap.com, cbre.com, colliers.com, jll.com, northmarq.com,
+//   cushmanwakefield.com, kidder.com, stream.com, nmrk.com, newmarkkf.com,
+//   or any other brokerage hostname → generic 🏢 "site" button
+//
+// Any domain we don't recognize still gets a generic 🔗 tooltip with the
+// hostname so the user can mouse-hover to see where the link goes before
+// clicking.
+//
+// @param {object} row   - the listing row (gov or dia)
+// @param {object} map   - field-name mapping, e.g.
+//                         { pdf:'intake_artifact_path',
+//                           pdfType:'intake_artifact_type',
+//                           primaryUrl:'source_url',
+//                           trackedUrls:'tracked_urls' }
+// @returns {string} HTML (may be empty string when row has no links)
+function buildCollateralIcons(row, map) {
+  if (!row || !map) return '';
+  const icons = [];
+
+  // --- 1) OM PDF -----------------------------------------------------------
+  const pdfPath = row[map.pdf];
+  if (pdfPath) {
+    const type = row[map.pdfType];
+    const label = (type === 'flyer')              ? 'View flyer'
+                : (type === 'marketing_brochure') ? 'View brochure'
+                : 'View OM';
+    // openIntakeArtifact is defined per-dashboard (gov.js/dialysis.js both
+    // attach it to window) so the same button works on either page.
+    icons.push(`<button class="gov-row-action" onclick='openIntakeArtifact(${JSON.stringify(pdfPath)})' title="${label}">📄</button>`);
+  }
+
+  // --- 2) Gather URLs ------------------------------------------------------
+  const urls = [];
+  const pushUrl = (u) => {
+    if (!u) return;
+    const s = String(u).trim();
+    if (!s) return;
+    const lower = s.toLowerCase();
+    if (!(lower.startsWith('http://') || lower.startsWith('https://'))) return;
+    if (urls.indexOf(s) === -1) urls.push(s);
+  };
+  pushUrl(row[map.primaryUrl]);
+  const tracked = row[map.trackedUrls];
+  if (Array.isArray(tracked)) {
+    tracked.forEach(pushUrl);
+  } else if (typeof tracked === 'string') {
+    // Tolerate stringly-encoded jsonb from older rows.
+    try {
+      const parsed = JSON.parse(tracked);
+      if (Array.isArray(parsed)) parsed.forEach(pushUrl);
+    } catch (_) { /* leave alone */ }
+  }
+  // Also support a handful of flat legacy columns if the caller opted in.
+  if (map.extraUrlFields && Array.isArray(map.extraUrlFields)) {
+    for (const field of map.extraUrlFields) pushUrl(row[field]);
+  }
+
+  if (urls.length === 0) return icons.join('');
+
+  // --- 3) Classify by hostname --------------------------------------------
+  const MARKETPLACES = {
+    'crexi.com':     { label: 'C', title: 'Crexi',      color: '#0a65e7' },
+    'loopnet.com':   { label: 'L', title: 'LoopNet',    color: '#d35400' },
+    'costar.com':    { label: '★', title: 'CoStar',     color: '#1f6feb' },
+    'brevitas.com':  { label: 'B', title: 'Brevitas',   color: '#5a3dbf' },
+    'realcrowd.com': { label: 'R', title: 'RealCrowd',  color: '#2e8b57' },
+    'ten-x.com':     { label: 'X', title: 'Ten-X',      color: '#c0392b' },
+  };
+  const BROKERAGE_HOSTS = new Set([
+    'marcusmillichap.com','cbre.com','colliers.com','jll.com','northmarq.com',
+    'cushmanwakefield.com','kidder.com','stream.com','nmrk.com','newmarkkf.com',
+    'svn.com','avisonyoung.com','eastdilsecured.com','lee-associates.com',
+    'naiglobal.com','transwestern.com','berkadia.com',
+  ]);
+
+  const getHost = (u) => {
+    try { return new URL(u).hostname.replace(/^www\./i, '').toLowerCase(); }
+    catch (_) { return ''; }
+  };
+
+  const renderedHosts = new Set();
+  for (const url of urls) {
+    const host = getHost(url);
+    if (!host) continue;
+    if (renderedHosts.has(host)) continue;  // don't double-render
+    renderedHosts.add(host);
+
+    const mk = MARKETPLACES[host];
+    if (mk) {
+      icons.push(
+        `<a class="gov-row-action" href="${safeHref(url)}" target="_blank" rel="noopener noreferrer"` +
+        ` onclick="event.stopPropagation()" title="View on ${mk.title}"` +
+        ` style="color:${mk.color};font-weight:700">${mk.label}</a>`
+      );
+      continue;
+    }
+    if (BROKERAGE_HOSTS.has(host) || host.endsWith('.com') || host.endsWith('.net')) {
+      // Default to a brokerage-microsite icon for anything that looks like a
+      // real website; covers listing-broker microsites we haven't indexed.
+      const tip = (BROKERAGE_HOSTS.has(host) ? 'Broker microsite: ' : 'Listing page: ') + host;
+      icons.push(
+        `<a class="gov-row-action" href="${safeHref(url)}" target="_blank" rel="noopener noreferrer"` +
+        ` onclick="event.stopPropagation()" title="${esc(tip)}">🌐</a>`
+      );
+      continue;
+    }
+    // Fallback — totally unknown host, show generic link icon with hover tip.
+    icons.push(
+      `<a class="gov-row-action" href="${safeHref(url)}" target="_blank" rel="noopener noreferrer"` +
+      ` onclick="event.stopPropagation()" title="${esc(host)}">🔗</a>`
+    );
+  }
+
+  return icons.join('');
+}
+// Expose on window so any dashboard module can reach it without imports.
+if (typeof window !== 'undefined') window.buildCollateralIcons = buildCollateralIcons;
+
+/**
+ * One-click "View OM / View Flyer" handler for any listing that carries an
+ * intake_artifact_path. Mints a fresh signed Supabase Storage download URL
+ * via /api/intake/artifact and opens it in a new tab. Signed URLs expire
+ * after 1 hour; each click mints a fresh one so long-lived tabs stay safe.
+ *
+ * Defined in app.js (not gov.js) so both the government dashboard and the
+ * dialysis dashboard (and any future dashboard) can wire the same button
+ * without duplicating the network plumbing.
+ */
+window.openIntakeArtifact = async function(storagePath) {
+  if (!storagePath) {
+    if (typeof showToast === 'function') showToast('No document linked to this listing', 'error');
+    return;
+  }
+  try {
+    // auth.js's global fetch interceptor auto-injects the X-LCC-Key header,
+    // so a plain window.fetch is sufficient. LCC_AUTH.apiFetch is preferred
+    // when present (adds telemetry).
+    const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+    const resp = await doFetch('/api/intake/artifact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storage_path: storagePath }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => '');
+      console.error('[openIntakeArtifact] mint failed', resp.status, err);
+      if (typeof showToast === 'function') showToast('Could not open document (' + resp.status + ')', 'error');
+      return;
+    }
+    const data = await resp.json();
+    if (!data?.signed_url) {
+      if (typeof showToast === 'function') showToast('No signed URL returned', 'error');
+      return;
+    }
+    window.open(data.signed_url, '_blank', 'noopener,noreferrer');
+  } catch (err) {
+    console.error('[openIntakeArtifact] exception', err);
+    if (typeof showToast === 'function') showToast('Error opening document: ' + (err?.message || err), 'error');
+  }
+};
+
 // Build both desktop (ms-outlook:) and web fallback links for an email.
 // Prefer a search-based web URL over the Graph `webLink`, because Graph's
 // webLink embeds a mutable REST item ID. That ID is invalidated any time the

@@ -6564,7 +6564,18 @@ async function renderDiaSales() {
       html += tdr(r.dom != null ? r.dom + 'd' : '—');
     }
     html += '<td style="text-align:center;position:sticky;right:0;background:var(--s1);z-index:1;border-left:1px solid var(--border);padding:4px" onclick="event.stopPropagation()">';
-    html += '<div style="display:flex;gap:3px;justify-content:center">';
+    html += '<div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">';
+    // Marketing collateral icons — OM PDF + any marketplace/broker URLs.
+    // Dia schema uses separate `url` + `listing_url` text columns (no
+    // tracked_urls jsonb), so surface both via extraUrlFields.
+    if (typeof buildCollateralIcons === 'function') {
+      html += buildCollateralIcons(r, {
+        pdf:             'intake_artifact_path',
+        pdfType:         'intake_artifact_type',
+        primaryUrl:      'url',
+        extraUrlFields:  ['listing_url']
+      });
+    }
     html += '<button class="gov-row-action" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Ownership")\' title="View owner & contacts">📞</button>';
     html += '<button class="gov-row-action accent" onclick=\'showDetail(' + safeJSON(r) + ', "dia-clinic", "Intel")\' title="Research & intel">🔍</button>';
     html += '</div></td>';

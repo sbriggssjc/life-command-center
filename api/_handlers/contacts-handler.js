@@ -19,6 +19,8 @@
 
 import { authenticate, requireRole, handleCors } from '../_shared/auth.js';
 import { opsQuery, isOpsConfigured, withErrorHandler } from '../_shared/ops-db.js';
+import { lookupSalesforceIds } from '../_shared/salesforce-sync.js';
+import { isSalesforceConfigured } from '../_shared/salesforce.js';
 
 const GOV_URL = process.env.GOV_SUPABASE_URL;
 const GOV_KEY = process.env.GOV_SUPABASE_KEY;
@@ -917,6 +919,38 @@ async function ingestContact(req, res, user) {
       propagationScope: 'contact_change_log'
     });
 
+    // --- Salesforce auto-link on create --------------------------------------
+    // New contact just landed in LCC. If it didn't come from the Salesforce
+    // source and still has empty sf_* columns, run a quick PA-proxy lookup so
+    // brokers see the SF link immediately instead of waiting for an overnight
+    // sync. Only fires when SF is configured; best-effort.
+    try {
+      if (source !== 'salesforce' && isSalesforceConfigured() && !newContact.sf_contact_id) {
+        const sfPatch = {};
+        if (email) {
+          const hit = await lookupSalesforceIds({ kind: 'person', email, reason: 'contacts_ingest_create' });
+          if (hit?.sf_contact_id) {
+            sfPatch.sf_contact_id = hit.sf_contact_id;
+            if (hit.sf_account_id) sfPatch.sf_account_id = hit.sf_account_id;
+          }
+        }
+        if (!sfPatch.sf_account_id && company_name) {
+          const hit = await lookupSalesforceIds({ kind: 'organization', name: company_name, reason: 'contacts_ingest_create_company' });
+          if (hit?.sf_account_id) sfPatch.sf_account_id = hit.sf_account_id;
+        }
+        if (Object.keys(sfPatch).length > 0) {
+          sfPatch.sf_last_synced = new Date().toISOString();
+          await govQuery('PATCH',
+            `unified_contacts?unified_id=eq.${pgVal(created.unified_id)}`,
+            sfPatch
+          );
+          console.log('[ingestContact] SF auto-link applied', { unified_id: created.unified_id, ...sfPatch });
+        }
+      }
+    } catch (err) {
+      console.warn('[ingestContact] SF auto-link failed (non-fatal):', err?.message || err);
+    }
+
     return res.status(201).json({
       action: 'created',
       unified_id: created.unified_id,
@@ -1151,6 +1185,52 @@ async function mergeContacts(req, res, user) {
 
   // Delete the merged contact
   await govQuery('DELETE', `unified_contacts?unified_id=eq.${pgVal(merge_id)}`);
+
+  // --- Salesforce auto-link on merge ---------------------------------------
+  // Whenever two contacts are consolidated, this is exactly the moment we
+  // should ask Salesforce "do you know this person?" — the surviving row
+  // either inherits its SF link from the merged row (handled above via
+  // fillable-fields) or still has sf_contact_id=null, in which case we now
+  // have fresh email/name/company to run a new lookup against. Best-effort;
+  // failure here never breaks the merge.
+  try {
+    if (isSalesforceConfigured()) {
+      // Reread the post-merge row so we act on the merged-in values.
+      const postMergeRes = await govQuery('GET',
+        `unified_contacts?unified_id=eq.${pgVal(keep_id)}&select=sf_contact_id,sf_account_id,email,email_secondary,first_name,last_name,company_name&limit=1`
+      );
+      const post = postMergeRes.data?.[0];
+      if (post) {
+        const sfPatch = {};
+        // Person lookup by email (primary or secondary) if contact_id still empty.
+        if (!post.sf_contact_id) {
+          const candidateEmail = post.email || post.email_secondary;
+          if (candidateEmail) {
+            const hit = await lookupSalesforceIds({ kind: 'person', email: candidateEmail, reason: 'contact_merge' });
+            if (hit?.sf_contact_id) {
+              sfPatch.sf_contact_id = hit.sf_contact_id;
+              if (!post.sf_account_id && hit.sf_account_id) sfPatch.sf_account_id = hit.sf_account_id;
+            }
+          }
+        }
+        // Org lookup by company_name if account_id still empty and we have a company.
+        if (!post.sf_account_id && !sfPatch.sf_account_id && post.company_name) {
+          const hit = await lookupSalesforceIds({ kind: 'organization', name: post.company_name, reason: 'contact_merge_company' });
+          if (hit?.sf_account_id) sfPatch.sf_account_id = hit.sf_account_id;
+        }
+        if (Object.keys(sfPatch).length > 0) {
+          sfPatch.sf_last_synced = new Date().toISOString();
+          await govQuery('PATCH',
+            `unified_contacts?unified_id=eq.${pgVal(keep_id)}`,
+            sfPatch
+          );
+          console.log('[mergeContacts] SF auto-link applied', { keep_id, ...sfPatch });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[mergeContacts] SF auto-link failed (non-fatal):', err?.message || err);
+  }
 
   // Update merge queue if queue_id provided
   if (queue_id) {
