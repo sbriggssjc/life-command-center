@@ -351,8 +351,11 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
   // NOTE: full_name is a GENERATED column (computed from first_name +
   // last_name by Postgres) — omit it from the insert or PostgREST
   // returns 428C9 "cannot insert a non-DEFAULT value into generated column".
+  // NOTE: contact_class has a CHECK constraint — only 'business' or
+  // 'personal' are allowed. Brokers are business contacts; the broker
+  // role lives on contact_type instead.
   const row = {
-    contact_class: 'broker',
+    contact_class: 'business',
     first_name:    firstName,
     last_name:     lastName,
     email,
