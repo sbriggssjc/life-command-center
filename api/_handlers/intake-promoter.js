@@ -801,15 +801,49 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     };
   }
 
-  // Guard: supported domains only
-  if (match.domain !== 'government' && match.domain !== 'dialysis') {
-    return { ok: false, skipped: 'domain_not_supported', domain: match.domain };
+  // ---- Normalize match: if this is an LCC-native match but the entity
+  //      represents a gov/dia property (domain_property_id stored in its
+  //      metadata by a prior promoter run), hydrate back to that domain
+  //      so downstream promotions still update the correct records. Without
+  //      this, the second-and-later ingestions for the same property get
+  //      matched to the LCC entity and then skipped entirely.
+  let effectiveMatch = match;
+  if (match.domain === 'lcc' && match.property_id) {
+    const entityLookup = await opsQuery('GET',
+      `entities?id=eq.${encodeURIComponent(match.property_id)}&select=id,domain,metadata&limit=1`
+    );
+    if (entityLookup.ok && Array.isArray(entityLookup.data) && entityLookup.data.length) {
+      const ent = entityLookup.data[0];
+      const domainProp = ent.metadata?.domain_property_id;
+      if (domainProp && (ent.domain === 'government' || ent.domain === 'dialysis')) {
+        effectiveMatch = {
+          ...match,
+          domain:      ent.domain,
+          property_id: domainProp,
+          reason:      `${match.reason}_via_lcc_bridge`,
+          lcc_entity_id: match.property_id,  // preserve the LCC entity UUID
+        };
+      }
+    }
+  }
+
+  // Guard: supported domains only (now applied against effectiveMatch)
+  if (effectiveMatch.domain !== 'government' && effectiveMatch.domain !== 'dialysis') {
+    return {
+      ok: false,
+      skipped: 'domain_not_supported',
+      domain: effectiveMatch.domain,
+      original_match_domain: match.domain,
+    };
   }
 
   // Guard: we need a property_id
-  if (match.property_id == null) {
+  if (effectiveMatch.property_id == null) {
     return { ok: false, skipped: 'no_property_id' };
   }
+
+  // Use effectiveMatch from here on so the rest of the code is unchanged.
+  match = effectiveMatch;
 
   // Run the three domain-DB promotions in parallel — each is independent
   // and has its own try/catch.
