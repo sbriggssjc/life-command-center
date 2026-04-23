@@ -344,7 +344,7 @@ function mergeExtractions(results) {
  * @param {string} intakeId — UUID of the staged_intake_item
  * @returns {{ ok: boolean, extraction_snapshot: object|null, error?: string }}
  */
-export async function processIntakeExtraction(intakeId) {
+export async function processIntakeExtraction(intakeId, context = {}) {
   console.log(`[intake-extractor] Starting extraction for intake_id=${intakeId}`);
 
   // 1. Fetch the staged intake item
@@ -355,6 +355,24 @@ export async function processIntakeExtraction(intakeId) {
     const msg = `Intake item not found: ${intakeId}`;
     console.error(`[intake-extractor] ${msg}`);
     return { ok: false, extraction_snapshot: null, error: msg };
+  }
+
+  // Fall back to the staged intake's own workspace_id if the caller didn't
+  // supply one. Actor_id is best-effort: if the HTTP handler passed one,
+  // use it; otherwise fall through to the inbox_item's source_user_id
+  // (the person who originally triggered the intake) so property timeline
+  // entries attribute correctly.
+  const stagedItem = itemResult.data[0];
+  const resolvedWorkspaceId = context.workspaceId || stagedItem?.workspace_id || null;
+  let resolvedActorId = context.actorId || null;
+  if (!resolvedActorId) {
+    // Try to look up the linked inbox_item's source_user_id.
+    const inboxLookup = await opsQuery('GET',
+      `inbox_items?id=eq.${encodeURIComponent(intakeId)}&select=source_user_id&limit=1`
+    );
+    if (inboxLookup.ok && Array.isArray(inboxLookup.data) && inboxLookup.data.length) {
+      resolvedActorId = inboxLookup.data[0].source_user_id || null;
+    }
   }
 
   // 2. Fetch associated artifacts
@@ -525,7 +543,12 @@ export async function processIntakeExtraction(intakeId) {
   let promotionResult = null;
   if (mergedSnapshot && matchResult) {
     try {
-      promotionResult = await promoteIntakeToDomainListing(intakeId, mergedSnapshot, matchResult);
+      promotionResult = await promoteIntakeToDomainListing(
+        intakeId,
+        mergedSnapshot,
+        matchResult,
+        { workspaceId: resolvedWorkspaceId, actorId: resolvedActorId }
+      );
       console.log('[intake-promoter]', intakeId, JSON.stringify(promotionResult));
     } catch (err) {
       promotionResult = { ok: false, error: err?.message };
@@ -661,7 +684,10 @@ export async function handleExtractRoute(req, res) {
   void getAiConfig();
 
   try {
-    const result = await processIntakeExtraction(intakeId);
+    const result = await processIntakeExtraction(intakeId, {
+      workspaceId,
+      actorId: user.id,
+    });
     return res.status(result.ok ? 200 : 500).json(result);
   } catch (err) {
     console.error('[intake-extractor] Manual extraction failed:', err.message);

@@ -32,6 +32,7 @@
 // ============================================================================
 
 import { domainQuery } from '../_shared/domain-db.js';
+import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { normalizeState } from '../_shared/entity-link.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
@@ -296,10 +297,146 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
 }
 
 // ============================================================================
+// 4. UNIFIED CONTACT SYNC (cross-domain broker entry for hot-contact briefings)
+// ============================================================================
+//
+// Daily briefing's "hot contacts" section queries lcc_opps.unified_contacts
+// not the domain contacts tables. After the domain contact is created we
+// also upsert a unified_contacts row linking back via gov_contact_id or
+// dia_contact_id so the broker shows up in briefings immediately.
+//
+// Uniqueness is on LOWER(email) WHERE email IS NOT NULL (partial unique
+// index), which PostgREST can't target with on_conflict — so we use a
+// check-then-insert-or-patch pattern.
+
+async function promoteUnifiedContact(domain, snapshot, domainContactId) {
+  const email = (snapshot.listing_broker_email || '').trim();
+  const name  = (snapshot.listing_broker || '').trim();
+  if (!email) {
+    return { ok: false, skipped: 'no_email_no_unified_contact' };
+  }
+
+  // Split "First Last" into first/last (best-effort; keeps full_name intact).
+  let firstName = null, lastName = null;
+  if (name) {
+    const parts = name.split(/\s+/);
+    firstName = parts[0] || null;
+    lastName  = parts.length > 1 ? parts.slice(1).join(' ') : null;
+  }
+
+  // Link column differs per domain — gov_contact_id or dia_contact_id.
+  const linkCol = domain === 'government' ? 'gov_contact_id' : 'dia_contact_id';
+
+  const existing = await opsQuery('GET',
+    `unified_contacts?email=ilike.${encodeURIComponent(email)}&select=unified_id,${linkCol}&limit=1`
+  );
+
+  if (existing.ok && Array.isArray(existing.data) && existing.data.length) {
+    const row = existing.data[0];
+    // Row exists. If the domain link isn't set yet, patch it. Otherwise
+    // leave the row alone — curated data wins.
+    if (!row[linkCol] && domainContactId) {
+      const patchRes = await opsQuery('PATCH',
+        `unified_contacts?unified_id=eq.${pgFilterVal(row.unified_id)}`,
+        { [linkCol]: domainContactId }
+      );
+      return patchRes.ok
+        ? { ok: true, unified_id: row.unified_id, linked: true }
+        : { ok: false, skipped: 'link_patch_failed', status: patchRes.status, detail: patchRes.data };
+    }
+    return { ok: true, unified_id: row.unified_id, skipped: 'already_linked' };
+  }
+
+  // No existing unified_contacts row — insert a fresh one.
+  const row = {
+    contact_class: 'broker',
+    first_name:    firstName,
+    last_name:     lastName,
+    full_name:     name || email,
+    email,
+    company_name:  snapshot.listing_firm || null,
+    title:         'Listing Broker',
+    contact_type:  'broker',
+    [linkCol]:     domainContactId || null,
+  };
+  const insertRes = await opsQuery('POST', 'unified_contacts', row, { Prefer: 'return=representation' });
+  if (!insertRes.ok) {
+    return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
+  }
+  const inserted = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
+  return { ok: true, unified_id: inserted?.unified_id || null, inserted: true };
+}
+
+// ============================================================================
+// 5. ACTIVITY EVENT (property-scoped timeline entry)
+// ============================================================================
+//
+// Drops a row in lcc_opps.activity_events so the property's timeline/feed
+// surfaces the OM ingestion. entity_id links to the LCC entity ONLY if
+// there is one for the matched property — for gov/dia matches we don't
+// auto-create an LCC entity, so entity_id stays null and property_id
+// is stored in metadata for anyone who wants to filter/display.
+
+async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, match, listingResult) {
+  if (!workspaceId || !actorId) {
+    return { ok: false, skipped: 'no_workspace_or_actor' };
+  }
+
+  const docTypeLabel =
+      snapshot?.document_type === 'om'                 ? 'Offering Memo'
+    : snapshot?.document_type === 'flyer'              ? 'Broker Flyer'
+    : snapshot?.document_type === 'marketing_brochure' ? 'Marketing Brochure'
+    : 'Listing document';
+  const brokerPart = snapshot?.listing_broker
+    ? ` from ${snapshot.listing_broker}${snapshot.listing_firm ? ' (' + snapshot.listing_firm + ')' : ''}`
+    : '';
+  const addressPart = snapshot?.address ? ` for ${snapshot.address}` : '';
+
+  const title = `${docTypeLabel} received${addressPart}`;
+  const body  = `Staged from LCC OM intake${brokerPart}. Auto-matched to ${match.domain} property ${match.property_id} (${match.reason}, confidence ${match.confidence}).`;
+
+  // entity_id is the LCC entity UUID if the matched domain is 'lcc'; null
+  // for gov/dia matches (they don't have LCC entities yet).
+  const entityId = match.domain === 'lcc' ? match.property_id : null;
+
+  const row = {
+    workspace_id: workspaceId,
+    actor_id:     actorId,
+    visibility:   'shared',
+    category:     'system',
+    title,
+    body,
+    entity_id:    entityId,
+    source_type:  'intake_om',
+    domain:       match.domain || null,
+    metadata: {
+      intake_id:         intakeId,
+      document_type:     snapshot?.document_type || null,
+      match_reason:      match.reason || null,
+      match_domain:      match.domain || null,
+      match_property_id: match.property_id || null,
+      match_confidence:  match.confidence || null,
+      listing_id:        listingResult?.listing_id || null,
+      listing_firm:      snapshot?.listing_firm || null,
+      listing_broker:    snapshot?.listing_broker || null,
+      broker_email:      snapshot?.listing_broker_email || null,
+    },
+    occurred_at: new Date().toISOString(),
+  };
+
+  const result = await opsQuery('POST', 'activity_events', row, { Prefer: 'return=representation' });
+  if (!result.ok) {
+    return { ok: false, skipped: 'insert_failed', status: result.status, detail: result.data };
+  }
+  const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
+  return { ok: true, activity_event_id: inserted?.id || null };
+}
+
+// ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
 
-export async function promoteIntakeToDomainListing(intakeId, snapshot, match) {
+export async function promoteIntakeToDomainListing(intakeId, snapshot, match, context = {}) {
   // Guard: must be a listing-grade document (OM, flyer, or marketing brochure)
   const docType = snapshot?.document_type || null;
   if (!LISTING_DOCUMENT_TYPES.has(docType)) {
@@ -329,12 +466,24 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match) {
     return { ok: false, skipped: 'no_property_id' };
   }
 
-  // Run all three promotions in parallel. Each has its own try/catch at
-  // the domainQuery layer; failures in one don't block the others.
+  // Run the three domain-DB promotions in parallel — each is independent
+  // and has its own try/catch. After those, run the two LCC-opps-side
+  // follow-ups (unified_contacts sync + activity_event) sequentially
+  // because the unified contact sync needs the domain contact_id from
+  // the broker-contact result.
   const [listingResult, contactResult, financialsResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promoteBrokerContact(match.domain, snapshot).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
+  ]);
+
+  // LCC-side follow-ups run in parallel after domain promotions settle.
+  const domainContactId = contactResult?.contact_id || null;
+  const [unifiedContactResult, activityEventResult] = await Promise.all([
+    promoteUnifiedContact(match.domain, snapshot, domainContactId)
+      .catch(e => ({ ok: false, error: e?.message })),
+    promoteActivityEvent(intakeId, context.workspaceId, context.actorId, snapshot, match, listingResult)
+      .catch(e => ({ ok: false, error: e?.message })),
   ]);
 
   return {
@@ -343,5 +492,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match) {
     listing:               listingResult,
     broker_contact:        contactResult,
     property_financials:   financialsResult,
+    unified_contact:       unifiedContactResult,
+    activity_event:        activityEventResult,
   };
 }
