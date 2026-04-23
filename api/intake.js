@@ -1347,6 +1347,9 @@ async function handleCopilotAction(req, res) {
     } else if (action_id === 'intake.prepare_upload.v1') {
       const { handleIntakePrepareUpload } = await import('./_handlers/intake-prepare-upload.js');
       result = await handleIntakePrepareUpload({ inputs, authContext });
+    } else if (action_id === 'intake.artifact_download.v1') {
+      const { handleIntakeArtifactDownload } = await import('./_handlers/intake-artifact-download.js');
+      result = await handleIntakeArtifactDownload({ inputs, authContext });
     } else {
       return res.status(400).json({
         error: 'unknown_action_id',

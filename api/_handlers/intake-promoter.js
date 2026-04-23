@@ -34,6 +34,7 @@
 import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
+import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -52,7 +53,7 @@ const LISTING_DOCUMENT_TYPES = new Set([
 // 1. AVAILABLE_LISTINGS MAPPERS (per domain)
 // ============================================================================
 
-function buildGovListingRow(intakeId, snapshot, match) {
+function buildGovListingRow(intakeId, snapshot, match, artifact) {
   const state = normalizeState(snapshot.state);
   const brokerEmail = (snapshot.listing_broker_email || '').toLowerCase();
   const firm        = (snapshot.listing_firm || '').toLowerCase();
@@ -87,6 +88,11 @@ function buildGovListingRow(intakeId, snapshot, match) {
     listing_date:       new Date().toISOString().slice(0, 10),
     first_seen_at:      new Date().toISOString(),
     last_seen_at:       new Date().toISOString(),
+    // Link back to the Supabase Storage object that seeded this listing
+    // so the dashboard can render a one-click "View OM" button via
+    // /api/intake/artifact?storage_path=...
+    intake_artifact_path: artifact?.storage_path || null,
+    intake_artifact_type: snapshot.document_type || null,
   };
 }
 
@@ -95,7 +101,7 @@ function buildGovListingRow(intakeId, snapshot, match) {
 // properties). We populate the fields the dia schema has and skip the rest.
 // Cap rate stored as decimal (0.0918) per chk_*_cap_rate_range check
 // constraints (valid range 0.005–0.30).
-function buildDiaListingRow(intakeId, snapshot, match) {
+function buildDiaListingRow(intakeId, snapshot, match, artifact) {
   const capRateDecimal = snapshot.cap_rate != null
     ? Number(snapshot.cap_rate) / 100
     : null;
@@ -113,14 +119,31 @@ function buildDiaListingRow(intakeId, snapshot, match) {
     is_active:          true,
     seller_name:        snapshot.seller_name || null,
     notes:              `Staged from LCC OM intake ${intakeId}`,
+    intake_artifact_path: artifact?.storage_path || null,
+    intake_artifact_type: snapshot.document_type || null,
   };
 }
 
 async function promoteListing(domain, intakeId, snapshot, match) {
   const isGov = domain === 'government';
+
+  // Look up the first staged artifact so we can link intake_artifact_path
+  // back to the listing — gives the dashboard a one-click "View OM" path.
+  // One extra GET but it's cheap; runs alongside the domain upsert.
+  let artifact = null;
+  try {
+    const artLookup = await opsQuery('GET',
+      `staged_intake_artifacts?intake_id=eq.${pgFilterVal(intakeId)}` +
+      `&select=storage_path,file_name,mime_type&order=created_at.asc&limit=1`
+    );
+    if (artLookup.ok && Array.isArray(artLookup.data) && artLookup.data.length) {
+      artifact = artLookup.data[0];
+    }
+  } catch { /* artifact link is nice-to-have, not critical */ }
+
   const row = isGov
-    ? buildGovListingRow(intakeId, snapshot, match)
-    : buildDiaListingRow(intakeId, snapshot, match);
+    ? buildGovListingRow(intakeId, snapshot, match, artifact)
+    : buildDiaListingRow(intakeId, snapshot, match, artifact);
 
   if (isGov) {
     // Gov has a unique index on source_listing_ref — use PostgREST upsert.
@@ -369,7 +392,53 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
     return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
   }
   const inserted = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
-  return { ok: true, unified_id: inserted?.unified_id || null, inserted: true };
+  const result = { ok: true, unified_id: inserted?.unified_id || null, inserted: true };
+
+  // Best-effort Salesforce Contact lookup — runs only if SF is configured.
+  // Populates unified_contacts.sf_contact_id + (if we have a domain contact)
+  // the gov/dia contacts.sf_contact_id so existing SF-aware code paths see
+  // the broker.
+  if (isSalesforceConfigured()) {
+    try {
+      const sfRes = await findSalesforceContactByEmail(email);
+      if (sfRes.ok && sfRes.contact?.Id) {
+        const sfId = sfRes.contact.Id;
+        const sfAccountId = sfRes.contact.AccountId || null;
+        // Patch the unified_contacts row we just created
+        const patchUnified = await opsQuery('PATCH',
+          `unified_contacts?unified_id=eq.${pgFilterVal(inserted.unified_id)}`,
+          {
+            sf_contact_id: sfId,
+            ...(sfAccountId ? { sf_account_id: sfAccountId } : {}),
+            sf_last_synced: new Date().toISOString(),
+          }
+        );
+        // Patch the domain contact if we have one
+        if (domainContactId) {
+          await domainQuery(
+            domain,
+            'PATCH',
+            `contacts?contact_id=eq.${encodeURIComponent(domainContactId)}`,
+            { sf_contact_id: sfId, sf_last_synced: new Date().toISOString() }
+          ).catch(() => {});
+        }
+        result.sf_linked = {
+          sf_contact_id: sfId,
+          sf_account_id: sfAccountId,
+          sf_name: sfRes.contact.Name || null,
+          unified_patched: patchUnified.ok,
+        };
+      } else {
+        result.sf_linked = { reason: sfRes.reason || 'sf_contact_not_found' };
+      }
+    } catch (err) {
+      result.sf_linked = { error: err?.message };
+    }
+  } else {
+    result.sf_linked = { reason: 'sf_not_configured' };
+  }
+
+  return result;
 }
 
 // ============================================================================
@@ -662,6 +731,54 @@ async function resolveOwnerLinks(match, snapshot) {
           owner_id: row.recorded_owner_id,
           name: row.name,
           reason: 'pre_linked_but_no_sf_account_id',
+        });
+      }
+    }
+  }
+
+  // ---- Salesforce account link: best-effort. For every sf_sync_flag
+  //      that represents an owner with no sf_account_id, try to find a
+  //      matching SF Account by name and PATCH the owner row. Only runs
+  //      when SF is configured — otherwise we leave the flags in place
+  //      for manual triage.
+  result.sf_lookup = { configured: isSalesforceConfigured(), attempted: 0, linked: 0, failures: [] };
+  if (isSalesforceConfigured()) {
+    for (const flag of result.sf_sync_flags) {
+      result.sf_lookup.attempted += 1;
+      try {
+        const sfRes = await findSalesforceAccountByName(flag.name);
+        if (sfRes.ok && sfRes.account?.Id) {
+          const table = flag.kind === 'true_owner' ? 'true_owners' : 'recorded_owners';
+          const pk    = flag.kind === 'true_owner' ? 'true_owner_id' : 'recorded_owner_id';
+          const patchRes = await domainQuery(
+            'government',
+            'PATCH',
+            `${table}?${pk}=eq.${encodeURIComponent(flag.owner_id)}`,
+            { sf_account_id: sfRes.account.Id, sf_last_synced: new Date().toISOString() }
+          );
+          if (patchRes.ok) {
+            flag.sf_linked      = true;
+            flag.sf_account_id  = sfRes.account.Id;
+            flag.sf_account_name = sfRes.account.Name;
+            result.sf_lookup.linked += 1;
+          } else {
+            result.sf_lookup.failures.push({
+              owner_id: flag.owner_id,
+              name: flag.name,
+              stage: 'patch',
+              status: patchRes.status,
+              detail: patchRes.data,
+            });
+          }
+        } else if (sfRes.reason) {
+          flag.sf_lookup_result = sfRes.reason;
+        }
+      } catch (err) {
+        result.sf_lookup.failures.push({
+          owner_id: flag.owner_id,
+          name: flag.name,
+          stage: 'lookup_exception',
+          error: err?.message,
         });
       }
     }

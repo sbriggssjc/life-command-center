@@ -300,7 +300,7 @@ async function loadGovData() {
         'listing_id, property_id, address, city, state, asking_price, asking_cap_rate, ' +
         'listing_source, listing_status, url_status, days_on_market, tenant_agency, ' +
         'first_seen_at, listing_date, listing_broker, listing_firm, annual_rent, lease_expiration, ' +
-        'square_feet, ' +
+        'square_feet, intake_artifact_path, intake_artifact_type, ' +
         'property:properties(year_built,land_acres,rba,assessed_owner,recorded_owner_id,true_owner_id)',
         // Sort by most-recently-ingested first so freshly staged OMs
         // (asking_price=NULL government build-to-suits, etc.) surface
@@ -690,7 +690,7 @@ function listingsTable(rows) {
   html += '<th>Year</th><th>SF</th><th>Acres</th>';
   html += '<th>Asking</th><th>Cap Rate</th><th>DOM</th>';
   html += '<th>Owner</th><th>Status</th><th>Source</th>';
-  html += '<th style="text-align:center;min-width:80px">Actions</th>';
+  html += '<th style="text-align:center;min-width:100px">Actions</th>';
   html += '</tr></thead><tbody>';
 
   rows.slice(0, 50).forEach(r => {
@@ -716,6 +716,15 @@ function listingsTable(rows) {
     html += `<td><span class="pill">${cleanLabel(status)}</span></td>`;
     html += `<td>${esc(cleanLabel(r.listing_source || ''))}</td>`;
     html += `<td style="text-align:center" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:center">`;
+    // "View OM" appears only when the listing has an intake artifact path.
+    // The window.openIntakeArtifact handler (defined below) mints a signed
+    // URL and opens it in a new tab.
+    if (r.intake_artifact_path) {
+      const label = (r.intake_artifact_type === 'flyer')              ? 'View flyer'
+                  : (r.intake_artifact_type === 'marketing_brochure') ? 'View brochure'
+                  : 'View OM';
+      html += `<button class="gov-row-action" onclick='openIntakeArtifact(${JSON.stringify(r.intake_artifact_path)})' title="${label}">📄</button>`;
+    }
     html += `<button class="gov-row-action" onclick='showDetail(${safeJSON(r)}, "gov-listing", "Ownership")' title="View owner & contacts">📞</button>`;
     html += `<button class="gov-row-action accent" onclick='showDetail(${safeJSON(r)}, "gov-listing", "Intel")' title="Research & intel">🔍</button>`;
     html += `</div></td>`;
@@ -4446,6 +4455,44 @@ function buildGovPipelineTable(allLeads) {
   html += '</div>';
   return html;
 }
+
+/**
+ * One-click "View OM / View Flyer" handler for available listings. Mints a
+ * fresh signed Supabase Storage download URL via /api/intake/artifact and
+ * opens it in a new tab. Signed URLs expire after 1 hour; each click gets
+ * a fresh one so the tab can be left open for hours without issue.
+ */
+window.openIntakeArtifact = async function(storagePath) {
+  if (!storagePath) {
+    showToast('No document linked to this listing', 'error');
+    return;
+  }
+  try {
+    // auth.js's global fetch interceptor auto-injects the X-LCC-Key header
+    // so a plain window.fetch is enough.
+    const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+    const resp = await doFetch('/api/intake/artifact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storage_path: storagePath }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => '');
+      console.error('[openIntakeArtifact] mint failed', resp.status, err);
+      showToast('Could not open document (' + resp.status + ')', 'error');
+      return;
+    }
+    const data = await resp.json();
+    if (!data?.signed_url) {
+      showToast('No signed URL returned', 'error');
+      return;
+    }
+    window.open(data.signed_url, '_blank', 'noopener,noreferrer');
+  } catch (err) {
+    console.error('[openIntakeArtifact] exception', err);
+    showToast('Error opening document: ' + (err?.message || err), 'error');
+  }
+};
 
 /**
  * Re-render just the pipeline table (on search/sort change without full re-render).
