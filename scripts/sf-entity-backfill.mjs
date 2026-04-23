@@ -62,9 +62,32 @@ const DIA_URL = env.DIA_SUPABASE_URL;
 const DIA_KEY = env.DIA_SUPABASE_KEY;
 const SF_URL  = env.SF_LOOKUP_WEBHOOK_URL;
 
-if (!OPS_URL || !OPS_KEY) {
-  console.error('Missing OPS_SUPABASE_URL / OPS_SUPABASE_KEY — cannot read entity graph.');
+// Validate env vars and print a precise, actionable diagnostic if any are
+// missing. OPS is hard-required (the entity graph lives there). GOV is
+// strongly recommended but optional — without it we skip the gov.true_owners
+// sweep but still handle unified_contacts mirroring. DIA + SF_URL are
+// optional (DIA for dia.contacts sweep; SF_URL only used with --live).
+const missing = [];
+if (!OPS_URL) missing.push('OPS_SUPABASE_URL');
+if (!OPS_KEY) missing.push('OPS_SUPABASE_KEY');
+const missingOptional = [];
+if (!GOV_URL) missingOptional.push('GOV_SUPABASE_URL');
+if (!GOV_KEY) missingOptional.push('GOV_SUPABASE_KEY');
+if (!DIA_URL) missingOptional.push('DIA_SUPABASE_URL');
+if (!DIA_KEY) missingOptional.push('DIA_SUPABASE_KEY');
+if (LIVE && !SF_URL) missingOptional.push('SF_LOOKUP_WEBHOOK_URL (required with --live)');
+
+if (missing.length) {
+  console.error(`\nMissing required env vars: ${missing.join(', ')}`);
+  console.error(`\nFix: pull from Vercel:`);
+  console.error(`  vercel env pull .env.local`);
+  console.error(`Or copy from Vercel Dashboard → Settings → Environment Variables (Production) into .env.local.\n`);
   process.exit(1);
+}
+if (missingOptional.length) {
+  console.warn(`\nOptional env vars not set — some backfill paths will be skipped:`);
+  missingOptional.forEach((v) => console.warn(`  - ${v}`));
+  console.warn('');
 }
 
 // ---------- thin REST helpers --------------------------------------------------

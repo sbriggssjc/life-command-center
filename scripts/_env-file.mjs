@@ -9,7 +9,18 @@ export function parseEnvText(raw) {
     const idx = trimmed.indexOf('=');
     if (idx === -1) return;
     const key = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1);
+    let value = trimmed.slice(idx + 1).trim();
+    // Strip surrounding double/single quotes that `vercel env pull` writes
+    // around every value (and most other env-writers do too). Without this,
+    // downstream code gets URLs like `"https://foo.supabase.co"` with literal
+    // quote characters, which fetch() rejects with ERR_INVALID_URL.
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+       (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
     env[key] = value;
   });
   return env;
