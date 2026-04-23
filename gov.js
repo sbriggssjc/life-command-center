@@ -6169,7 +6169,13 @@ async function renderGovSales() {
         ask_cap: r.asking_cap_rate ? parseFloat(r.asking_cap_rate) : null,
         seller: r.seller,
         listing_broker: r.listing_broker,
-        dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null
+        dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null,
+        // Marketing collateral — passed through so the Actions cell can
+        // render the same icon set the Listings table shows (2026-04-23).
+        intake_artifact_path: r.intake_artifact_path || null,
+        intake_artifact_type: r.intake_artifact_type || null,
+        source_url:           r.source_url || null,
+        tracked_urls:         r.tracked_urls || null
       };
     }
   });
@@ -6379,9 +6385,20 @@ async function renderGovSales() {
       html += td(r.listing_broker, true);
       html += tdr(r.dom != null ? r.dom + 'd' : '—');
     }
-    // Sticky actions column
+    // Sticky actions column — Available rows additionally show the marketing
+    // collateral icon strip (OM PDF, Crexi/LoopNet badges, brokerage site).
+    // Sales Comps rows skip the collateral icons (sold comps rarely carry
+    // a live OM/marketplace link anymore).
     html += '<td style="padding:8px;border-bottom:1px solid var(--border);text-align:center;position:sticky;right:0;background:var(--s1);z-index:1" onclick="event.stopPropagation()">';
-    html += '<div style="display:flex;gap:3px;justify-content:center">';
+    html += '<div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">';
+    if (!isComps && typeof buildCollateralIcons === 'function') {
+      html += buildCollateralIcons(r, {
+        pdf:         'intake_artifact_path',
+        pdfType:     'intake_artifact_type',
+        primaryUrl:  'source_url',
+        trackedUrls: 'tracked_urls'
+      });
+    }
     html += '<button class="gov-row-action" onclick=\'showDetail(' + rowData + ', "gov-ownership", "Ownership")\' title="View owner & contacts">📞</button>';
     html += '<button class="gov-row-action accent" onclick=\'showDetail(' + rowData + ', "gov-ownership", "Intel")\' title="Research & intel">🔍</button>';
     html += '</div></td>';

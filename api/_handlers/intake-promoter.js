@@ -375,6 +375,62 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
 }
 
 // ============================================================================
+// 3b. LEASE EXPENSE PROPAGATION
+// ============================================================================
+//
+// The Sales/Available tab surfaces `expenses` via v_available_listings which
+// COALESCEs properties.expenses → active_lease.expense_structure. OM
+// extractions carry `expense_structure` (e.g. "Modified Gross" for Plano);
+// propagating it to the active lease stops the dashboard from showing '—'
+// on every ingested deal. Like promotePropertyFinancials, this is strictly
+// fill-blanks-only so we don't overwrite curated lease data.
+//
+// "Active lease" = the lease on this property with the latest
+// commencement_date that hasn't been superseded. If no such lease exists,
+// we skip — creating a fresh lease from an OM is out of scope for this
+// bridge.
+async function promoteLeaseExpenses(domain, propertyId, snapshot) {
+  if (domain !== 'government') {
+    // Dia has lease-level expense columns too but stored differently
+    // (separate hvac/roof/structure responsibility fields). Left for a
+    // future pass.
+    return { ok: true, skipped: `lease_expenses_not_supported_for_${domain}` };
+  }
+
+  const expenseStructure = (snapshot.expense_structure || '').trim();
+  if (!expenseStructure) return { ok: false, skipped: 'no_expense_structure_in_snapshot' };
+
+  // Find the active lease on this property — most-recent commencement,
+  // not superseded, not expired past today.
+  const todayIso = new Date().toISOString().split('T')[0];
+  const activeLookup = await domainQuery(
+    'government',
+    'GET',
+    `leases?property_id=eq.${Number(propertyId)}` +
+    `&superseded_at=is.null` +
+    `&or=(expiration_date.gte.${todayIso},expiration_date.is.null)` +
+    `&select=lease_id,lease_number,expense_structure&order=commencement_date.desc.nullslast&limit=1`
+  );
+  if (!activeLookup.ok || !activeLookup.data?.length) {
+    return { ok: true, skipped: 'no_active_lease' };
+  }
+  const active = activeLookup.data[0];
+  if (active.expense_structure) {
+    return { ok: true, skipped: 'lease_expense_already_populated', current: active.expense_structure };
+  }
+
+  const patchRes = await domainQuery(
+    'government',
+    'PATCH',
+    `leases?lease_id=eq.${encodeURIComponent(active.lease_id)}`,
+    { expense_structure: expenseStructure }
+  );
+  return patchRes.ok
+    ? { ok: true, lease_id: active.lease_id, expense_structure: expenseStructure }
+    : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+}
+
+// ============================================================================
 // 4. UNIFIED CONTACT SYNC (cross-domain broker entry for hot-contact briefings)
 // ============================================================================
 //
@@ -1080,12 +1136,13 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // Use effectiveMatch from here on so the rest of the code is unchanged.
   match = effectiveMatch;
 
-  // Run the three domain-DB promotions in parallel — each is independent
+  // Run the four domain-DB promotions in parallel — each is independent
   // and has its own try/catch.
-  const [listingResult, contactResult, financialsResult] = await Promise.all([
+  const [listingResult, contactResult, financialsResult, leaseExpensesResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promoteBrokerContact(match.domain, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
+    promoteLeaseExpenses(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
   ]);
 
   // LCC-entity bridge + unified-contact sync + owner resolution run in
@@ -1117,16 +1174,42 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       .catch(e => ({ ok: false, error: e?.message })),
   ]);
 
+  // --- Post-promotion: refresh the gov Sales/Available materialized view ---
+  // so the dashboard immediately reflects the new listing + property
+  // enrichment (year_built, land_acres, expenses, OM path, DOM fallback).
+  // Uses the same PostgREST RPC plumbing as the domain writes. Failure
+  // here is non-fatal — the next scheduled refresh (pg_cron) would catch
+  // up anyway, but shipping the freshness interactively keeps the UX
+  // snappy for the broker who just ingested the OM.
+  let matRefreshResult = { ok: true, skipped: 'not_gov' };
+  if (match.domain === 'government') {
+    try {
+      const refreshRes = await domainQuery(
+        'government',
+        'POST',
+        'rpc/lcc_refresh_available_listings',
+        {}
+      );
+      matRefreshResult = refreshRes.ok
+        ? { ok: true }
+        : { ok: false, status: refreshRes.status, detail: refreshRes.data };
+    } catch (err) {
+      matRefreshResult = { ok: false, error: err?.message };
+    }
+  }
+
   return {
     ok:                    listingResult.ok,
     domain:                match.domain,
     listing:               listingResult,
     broker_contact:        contactResult,
     property_financials:   financialsResult,
+    lease_expenses:        leaseExpensesResult,
     lcc_entity:            lccEntityResult,
     unified_contact:       unifiedContactResult,
     owner_resolution:      ownerResolutionResult,
     merge_check:           mergeCheckResult,
     activity_event:        activityEventResult,
+    mat_view_refresh:      matRefreshResult,
   };
 }

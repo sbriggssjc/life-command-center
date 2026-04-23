@@ -1519,13 +1519,50 @@ function _udTabRentRoll() {
         return da - db2;
       });
 
-      sortedTerms.forEach((t) => {
-        const tType = t.term_type || (t.parent_lease_id ? 'extension' : 'original');
-        const tNum = t.term_number || 1;
-        const isActiveTerm = t.is_active === true || t.is_active === 'true';
+      // Determine lease type + label for each row. Gov and dia use different
+      // schemas:
+      //   - dia:  term_type / parent_lease_id / term_number (extension chain)
+      //   - gov:  is_superseding / is_first_generation / is_renewed flags,
+      //           plus tenant_agency + lease_number as the natural ID.
+      //
+      // For gov rows we derive a human-readable label from the flags (e.g.
+      // "Succession" when is_superseding=true, or fall back to the tenant
+      // agency name) instead of defaulting every row to "Original (Term 1)",
+      // which was the Plano bug the user flagged on 2026-04-23.
+      sortedTerms.forEach((t, idx) => {
+        // dia-style fields first — if present, use them as-is.
+        let tType = t.term_type || (t.parent_lease_id ? 'extension' : null);
+        let tNum  = t.term_number || null;
+
+        // gov-style fallback: figure out what this lease represents in a
+        // cross-generation tenant timeline.
+        if (!tType) {
+          if (t.is_first_generation === true) tType = 'original';
+          else if (t.is_superseding === true) tType = 'succession';
+          else if (t.is_renewed     === true) tType = 'renewal';
+          else                                 tType = 'original';
+        }
+        if (!tNum) tNum = idx + 1;
+
+        const isActiveTerm = t.is_active === true || t.is_active === 'true'
+          || (t.is_active === undefined && !t.superseded_at &&
+              (!t.expiration_date || new Date(t.expiration_date) >= new Date()));
         const dotColor = isActiveTerm ? 'var(--green)' : 'var(--text3)';
-        const typeLabel = tType === 'original' ? 'Original' : tType === 'extension' ? 'Extension' : tType === 'renewal' ? 'Renewal' : (tType.charAt(0).toUpperCase() + tType.slice(1));
-        const tStart = _fmtDate(t.lease_start || t.lease_commencement);
+
+        // Build a readable label. Gov leases benefit from showing the
+        // tenant_agency inline so a 17-year GSA timeline with two different
+        // agencies doesn't read as two identical "Original (Term 1)" cards.
+        const typeLabelMap = {
+          original:   'Original',
+          extension:  'Extension',
+          renewal:    'Renewal',
+          succession: 'Succession',
+        };
+        const typeLabel = typeLabelMap[tType] || (tType.charAt(0).toUpperCase() + tType.slice(1));
+        const tenantAgency = t.tenant_agency || t.tenant_agency_full || null;
+        const leaseNum     = t.lease_number || null;
+
+        const tStart = _fmtDate(t.lease_start || t.lease_commencement || t.commencement_date);
         const tEnd = _fmtDate(t.lease_expiration || t.expiration_date);
         const tRent = t.annual_rent ? fmt(t.annual_rent) : null;
         const tArea = t.leased_area ? fmtN(t.leased_area) + ' SF' : null;
@@ -1534,8 +1571,10 @@ function _udTabRentRoll() {
         html += '<div style="position:relative;margin-bottom:10px">';
         html += `<div style="position:absolute;left:-17px;top:4px;width:8px;height:8px;border-radius:50%;background:${dotColor};border:2px solid var(--bg)"></div>`;
         html += '<div style="background:var(--s2);border-radius:8px;padding:10px 12px;border:1px solid var(--border)">';
-        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">`;
+        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">`;
         html += `<span style="font-size:11px;font-weight:700;color:${isActiveTerm ? 'var(--green)' : 'var(--text2)'}">${esc(typeLabel)} (Term ${tNum})</span>`;
+        if (tenantAgency) html += `<span style="font-size:11px;color:var(--text);font-weight:600">${esc(tenantAgency)}</span>`;
+        if (leaseNum)     html += `<span style="font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">${esc(leaseNum)}</span>`;
         if (isActiveTerm) html += '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600">Active</span>';
         if (t.superseded_at) html += `<span style="font-size:9px;color:var(--text3)">Superseded ${esc(_fmtDate(t.superseded_at))}</span>`;
         html += '</div>';
