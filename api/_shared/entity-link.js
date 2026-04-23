@@ -217,16 +217,24 @@ export async function ensureEntityLink({
   }
 
   if (externalId && sourceSystem && sourceType) {
-    const identityRes = await opsQuery('POST', 'external_identities', {
-      workspace_id: workspaceId,
-      entity_id: resolvedEntity.id,
-      source_system: sourceSystem,
-      source_type: sourceType,
-      external_id: externalId,
-      external_url: externalUrl || null,
-      metadata,
-      last_synced_at: new Date().toISOString()
-    }, { 'Prefer': 'return=representation,resolution=merge-duplicates' });
+    // Target the compound unique index via explicit on_conflict so
+    // PostgREST's resolution=merge-duplicates actually kicks in — without
+    // the column list, PostgREST defaults to the PK and the upsert falls
+    // back to INSERT, which then violates the unique constraint.
+    const identityRes = await opsQuery('POST',
+      'external_identities?on_conflict=workspace_id,source_system,source_type,external_id',
+      {
+        workspace_id: workspaceId,
+        entity_id: resolvedEntity.id,
+        source_system: sourceSystem,
+        source_type: sourceType,
+        external_id: externalId,
+        external_url: externalUrl || null,
+        metadata,
+        last_synced_at: new Date().toISOString()
+      },
+      { 'Prefer': 'return=representation,resolution=merge-duplicates' }
+    );
 
     if (!identityRes.ok) {
       return {

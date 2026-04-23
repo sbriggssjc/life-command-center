@@ -530,14 +530,44 @@ async function resolveOwnerLinks(match, snapshot) {
     return result;
   }
 
+  // Normalize the owner name for fuzzy matching:
+  //   - strip commas (break PostgREST's or=() comma parsing)
+  //   - strip trailing entity suffixes that vary between records
+  //     ("TEXAS GSA HOLDINGS, LP" ~ "TEXAS GSA HOLDINGS LP" ~ "TEXAS GSA HOLDINGS")
+  //   - collapse whitespace
+  // Then use wildcard ilike so rows with slightly different suffixes still
+  // match. We do TWO separate queries (name + canonical_name) rather than
+  // one or=(...) with commas — the PostgREST or= parser treats unescaped
+  // commas as condition separators and breaks on names like
+  // "TEXAS GSA HOLDINGS, LP".
+  const coreName = ownerName
+    .replace(/,/g, ' ')
+    .replace(/\b(LLC|L\.L\.C\.|LP|L\.P\.|INC|INC\.|CORP|CORP\.|LLP|CO|LTD|PLLC)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const pattern = `*${coreName}*`;
+  const lookupOwner = async (table, pkCol, idCol) => {
+    // Run two ilike queries — one on name, one on canonical_name —
+    // then de-dupe by primary key.
+    const [byName, byCanon] = await Promise.all([
+      domainQuery('government', 'GET',
+        `${table}?name=ilike.${encodeURIComponent(pattern)}&select=${pkCol},name,sf_account_id&limit=5`
+      ),
+      domainQuery('government', 'GET',
+        `${table}?canonical_name=ilike.${encodeURIComponent(pattern)}&select=${pkCol},name,sf_account_id&limit=5`
+      ),
+    ]);
+    const rows = [];
+    const seen = new Set();
+    for (const r of (byName.data || [])) { if (!seen.has(r[pkCol])) { seen.add(r[pkCol]); rows.push(r); } }
+    for (const r of (byCanon.data || [])) { if (!seen.has(r[pkCol])) { seen.add(r[pkCol]); rows.push(r); } }
+    return rows;
+  };
+
   // ---- Try true_owner first (typically the money-party behind the LP/LLC)
   if (!prop.true_owner_id) {
-    const toLookup = await domainQuery(
-      'government',
-      'GET',
-      `true_owners?or=(name.ilike.${encodeURIComponent(ownerName)},canonical_name.ilike.${encodeURIComponent(ownerName)})` +
-      `&select=true_owner_id,name,sf_account_id&limit=5`
-    );
+    const toRows = await lookupOwner('true_owners', 'true_owner_id', 'true_owner_id');
+    const toLookup = { ok: true, data: toRows };
     if (toLookup.ok && Array.isArray(toLookup.data) && toLookup.data.length) {
       const best = toLookup.data[0];
       const patchRes = await domainQuery(
@@ -588,12 +618,8 @@ async function resolveOwnerLinks(match, snapshot) {
 
   // ---- recorded_owner: same pattern
   if (!prop.recorded_owner_id) {
-    const roLookup = await domainQuery(
-      'government',
-      'GET',
-      `recorded_owners?or=(name.ilike.${encodeURIComponent(ownerName)},canonical_name.ilike.${encodeURIComponent(ownerName)})` +
-      `&select=recorded_owner_id,name,sf_account_id&limit=5`
-    );
+    const roRows = await lookupOwner('recorded_owners', 'recorded_owner_id', 'recorded_owner_id');
+    const roLookup = { ok: true, data: roRows };
     if (roLookup.ok && Array.isArray(roLookup.data) && roLookup.data.length) {
       const best = roLookup.data[0];
       const patchRes = await domainQuery(
