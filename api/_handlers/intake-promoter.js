@@ -350,92 +350,104 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
   // Link column differs per domain — gov_contact_id or dia_contact_id.
   const linkCol = domain === 'government' ? 'gov_contact_id' : 'dia_contact_id';
 
+  // Pull the current sf_contact_id too so we can decide whether to run
+  // SF backfill — rows created before SF was wired have it as NULL.
   const existing = await opsQuery('GET',
-    `unified_contacts?email=ilike.${encodeURIComponent(email)}&select=unified_id,${linkCol}&limit=1`
+    `unified_contacts?email=ilike.${encodeURIComponent(email)}` +
+    `&select=unified_id,sf_contact_id,sf_account_id,${linkCol}&limit=1`
   );
 
+  let unifiedId = null;
+  let existingRow = null;
+  let wasInserted = false;
+
   if (existing.ok && Array.isArray(existing.data) && existing.data.length) {
-    const row = existing.data[0];
-    // Row exists. If the domain link isn't set yet, patch it. Otherwise
-    // leave the row alone — curated data wins.
-    if (!row[linkCol] && domainContactId) {
-      const patchRes = await opsQuery('PATCH',
-        `unified_contacts?unified_id=eq.${pgFilterVal(row.unified_id)}`,
+    existingRow = existing.data[0];
+    unifiedId = existingRow.unified_id;
+    // If the domain link isn't set yet, patch it in. sf_contact_id backfill
+    // happens below regardless of whether the row was new or pre-existing.
+    if (!existingRow[linkCol] && domainContactId) {
+      await opsQuery('PATCH',
+        `unified_contacts?unified_id=eq.${pgFilterVal(unifiedId)}`,
         { [linkCol]: domainContactId }
-      );
-      return patchRes.ok
-        ? { ok: true, unified_id: row.unified_id, linked: true }
-        : { ok: false, skipped: 'link_patch_failed', status: patchRes.status, detail: patchRes.data };
-    }
-    return { ok: true, unified_id: row.unified_id, skipped: 'already_linked' };
-  }
-
-  // No existing unified_contacts row — insert a fresh one.
-  // NOTE: full_name is a GENERATED column (computed from first_name +
-  // last_name by Postgres) — omit it from the insert or PostgREST
-  // returns 428C9 "cannot insert a non-DEFAULT value into generated column".
-  // NOTE: contact_class has a CHECK constraint — only 'business' or
-  // 'personal' are allowed. Brokers are business contacts; the broker
-  // role lives on contact_type instead.
-  const row = {
-    contact_class: 'business',
-    first_name:    firstName,
-    last_name:     lastName,
-    email,
-    company_name:  snapshot.listing_firm || null,
-    title:         'Listing Broker',
-    contact_type:  'broker',
-    [linkCol]:     domainContactId || null,
-  };
-  const insertRes = await opsQuery('POST', 'unified_contacts', row, { Prefer: 'return=representation' });
-  if (!insertRes.ok) {
-    return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
-  }
-  const inserted = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
-  const result = { ok: true, unified_id: inserted?.unified_id || null, inserted: true };
-
-  // Best-effort Salesforce Contact lookup — runs only if SF is configured.
-  // Populates unified_contacts.sf_contact_id + (if we have a domain contact)
-  // the gov/dia contacts.sf_contact_id so existing SF-aware code paths see
-  // the broker.
-  if (isSalesforceConfigured()) {
-    try {
-      const sfRes = await findSalesforceContactByEmail(email);
-      if (sfRes.ok && sfRes.contact?.Id) {
-        const sfId = sfRes.contact.Id;
-        const sfAccountId = sfRes.contact.AccountId || null;
-        // Patch the unified_contacts row we just created
-        const patchUnified = await opsQuery('PATCH',
-          `unified_contacts?unified_id=eq.${pgFilterVal(inserted.unified_id)}`,
-          {
-            sf_contact_id: sfId,
-            ...(sfAccountId ? { sf_account_id: sfAccountId } : {}),
-            sf_last_synced: new Date().toISOString(),
-          }
-        );
-        // Patch the domain contact if we have one
-        if (domainContactId) {
-          await domainQuery(
-            domain,
-            'PATCH',
-            `contacts?contact_id=eq.${encodeURIComponent(domainContactId)}`,
-            { sf_contact_id: sfId, sf_last_synced: new Date().toISOString() }
-          ).catch(() => {});
-        }
-        result.sf_linked = {
-          sf_contact_id: sfId,
-          sf_account_id: sfAccountId,
-          sf_name: sfRes.contact.Name || null,
-          unified_patched: patchUnified.ok,
-        };
-      } else {
-        result.sf_linked = { reason: sfRes.reason || 'sf_contact_not_found' };
-      }
-    } catch (err) {
-      result.sf_linked = { error: err?.message };
+      ).catch(() => {});
     }
   } else {
+    // No existing unified_contacts row — insert a fresh one.
+    // full_name is a GENERATED column (omit from insert); contact_class
+    // has a CHECK constraint ('business' or 'personal' only).
+    const newRow = {
+      contact_class: 'business',
+      first_name:    firstName,
+      last_name:     lastName,
+      email,
+      company_name:  snapshot.listing_firm || null,
+      title:         'Listing Broker',
+      contact_type:  'broker',
+      [linkCol]:     domainContactId || null,
+    };
+    const insertRes = await opsQuery('POST', 'unified_contacts', newRow, { Prefer: 'return=representation' });
+    if (!insertRes.ok) {
+      return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
+    }
+    const inserted = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
+    unifiedId  = inserted?.unified_id || null;
+    existingRow = { unified_id: unifiedId, sf_contact_id: null, sf_account_id: null };
+    wasInserted = true;
+  }
+
+  const result = {
+    ok: true,
+    unified_id: unifiedId,
+    inserted: wasInserted,
+    ...(wasInserted ? {} : { skipped_insert: 'already_existed' }),
+  };
+
+  // Salesforce Contact lookup — runs for both fresh inserts AND existing
+  // rows that haven't been SF-linked yet. This is the backfill path for
+  // brokers inserted before SF was configured.
+  if (!isSalesforceConfigured()) {
     result.sf_linked = { reason: 'sf_not_configured' };
+    return result;
+  }
+  if (existingRow?.sf_contact_id) {
+    result.sf_linked = { reason: 'already_linked', sf_contact_id: existingRow.sf_contact_id };
+    return result;
+  }
+
+  try {
+    const sfRes = await findSalesforceContactByEmail(email);
+    if (sfRes.ok && sfRes.contact?.Id) {
+      const sfId = sfRes.contact.Id;
+      const sfAccountId = sfRes.contact.AccountId || null;
+      const patchUnified = await opsQuery('PATCH',
+        `unified_contacts?unified_id=eq.${pgFilterVal(unifiedId)}`,
+        {
+          sf_contact_id: sfId,
+          ...(sfAccountId ? { sf_account_id: sfAccountId } : {}),
+          sf_last_synced: new Date().toISOString(),
+        }
+      );
+      if (domainContactId) {
+        await domainQuery(
+          domain,
+          'PATCH',
+          `contacts?contact_id=eq.${encodeURIComponent(domainContactId)}`,
+          { sf_contact_id: sfId, sf_last_synced: new Date().toISOString() }
+        ).catch(() => {});
+      }
+      result.sf_linked = {
+        sf_contact_id: sfId,
+        sf_account_id: sfAccountId,
+        sf_name: sfRes.contact.Name || null,
+        unified_patched: patchUnified.ok,
+        backfilled: !wasInserted,   // true when we linked a pre-existing row
+      };
+    } else {
+      result.sf_linked = { reason: sfRes.reason || 'sf_contact_not_found' };
+    }
+  } catch (err) {
+    result.sf_linked = { error: err?.message };
   }
 
   return result;
