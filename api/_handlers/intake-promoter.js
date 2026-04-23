@@ -802,11 +802,17 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   }
 
   // ---- Normalize match: if this is an LCC-native match but the entity
-  //      represents a gov/dia property (domain_property_id stored in its
-  //      metadata by a prior promoter run), hydrate back to that domain
-  //      so downstream promotions still update the correct records. Without
+  //      represents a gov/dia property, hydrate back to that domain so
+  //      downstream promotions still update the correct records. Without
   //      this, the second-and-later ingestions for the same property get
   //      matched to the LCC entity and then skipped entirely.
+  //
+  //      Two lookup paths, in order of preference:
+  //        1. entity.metadata.domain_property_id (if a prior promoter run
+  //           wrote it there)
+  //        2. external_identities row where entity_id matches and
+  //           source_system is 'gov_db'/'dia_db' (authoritative back-ref
+  //           set by ensureEntityLink regardless of metadata)
   let effectiveMatch = match;
   if (match.domain === 'lcc' && match.property_id) {
     const entityLookup = await opsQuery('GET',
@@ -814,13 +820,32 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     );
     if (entityLookup.ok && Array.isArray(entityLookup.data) && entityLookup.data.length) {
       const ent = entityLookup.data[0];
-      const domainProp = ent.metadata?.domain_property_id;
-      if (domainProp && (ent.domain === 'government' || ent.domain === 'dialysis')) {
+      let domainProp = ent.metadata?.domain_property_id || null;
+      let domain = ent.domain;
+
+      // Fallback: look up the external_identity for this entity if
+      // metadata doesn't carry the domain property_id.
+      if (!domainProp) {
+        const idLookup = await opsQuery('GET',
+          `external_identities?entity_id=eq.${encodeURIComponent(match.property_id)}` +
+          `&source_system=in.(gov_db,dia_db)` +
+          `&select=source_system,external_id&limit=1`
+        );
+        if (idLookup.ok && Array.isArray(idLookup.data) && idLookup.data.length) {
+          const row = idLookup.data[0];
+          domainProp = row.external_id;
+          if (!domain || domain === 'lcc') {
+            domain = row.source_system === 'gov_db' ? 'government' : 'dialysis';
+          }
+        }
+      }
+
+      if (domainProp && (domain === 'government' || domain === 'dialysis')) {
         effectiveMatch = {
           ...match,
-          domain:      ent.domain,
-          property_id: domainProp,
-          reason:      `${match.reason}_via_lcc_bridge`,
+          domain,
+          property_id:  Number.isFinite(Number(domainProp)) ? Number(domainProp) : domainProp,
+          reason:       `${match.reason}_via_lcc_bridge`,
           lcc_entity_id: match.property_id,  // preserve the LCC entity UUID
         };
       }
