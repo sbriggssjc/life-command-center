@@ -44,8 +44,13 @@ import { loadEnvForScripts } from './_env-file.mjs';
 
 const env = loadEnvForScripts();
 const argv = process.argv.slice(2);
-const APPLY = argv.includes('--apply');
-const LIVE  = argv.includes('--live');
+const APPLY   = argv.includes('--apply');
+const LIVE    = argv.includes('--live');
+const VERBOSE = argv.includes('--verbose') || argv.includes('-v');
+// Default: newest entities first so recent deals (more likely to have
+// usable SF linkage via unified_contacts / true_owners) get tried first.
+// `--oldest` flips the order for exhaustive historical sweeps.
+const ORDER = argv.includes('--oldest') ? 'created_at.asc' : 'created_at.desc';
 const LIMIT = (() => {
   const i = argv.indexOf('--limit');
   if (i === -1) return null;
@@ -179,8 +184,14 @@ async function mergeEntitySalesforce({ workspaceId, entityId, sfPayload }) {
 
 // ---------- per-entity backfill ----------------------------------------------
 async function backfillOne(entity) {
-  const lines = [];
-  const outcome = { entity_id: entity.id, name: entity.name, type: entity.entity_type, applied: [], skipped: [] };
+  const outcome = {
+    entity_id: entity.id,
+    name:      entity.name,
+    type:      entity.entity_type,
+    applied:   [],
+    reasons:   [],  // diagnostic trail of what was tried + why it succeeded/failed
+  };
+  const note = (msg) => { outcome.reasons.push(msg); };
 
   // 1. Collect SF ids that already exist on linked domain rows.
   const identities = await ops('GET',
@@ -190,6 +201,9 @@ async function backfillOne(entity) {
   for (const row of identities.data || []) {
     idMap[`${row.source_system}/${row.source_type}`] = row.external_id;
   }
+  if (idMap['salesforce/Contact'] || idMap['salesforce/Account']) {
+    note(`already has SF identity (${Object.keys(idMap).filter(k => k.startsWith('salesforce')).join(', ')})`);
+  }
 
   let foundContactId = null;
   let foundAccountId = null;
@@ -197,49 +211,82 @@ async function backfillOne(entity) {
 
   // Domain lookups — only run queries that make sense for this entity type.
   if (entity.entity_type === 'person') {
-    // Look for a unified_contacts match by email (preferred) or name.
-    if (entity.email) {
+    if (!entity.email) {
+      note('person has no email — no domain lookup key available');
+    } else {
+      // Look for a unified_contacts match by email.
       const r = await ops('GET',
         `unified_contacts?email=ilike.${encodeURIComponent(entity.email)}&select=unified_id,sf_contact_id,sf_account_id&limit=1`
       );
-      if (r.ok && r.data?.length && r.data[0].sf_contact_id) {
+      if (!r.ok) {
+        note(`unified_contacts query failed (${r.status})`);
+      } else if (!r.data?.length) {
+        note(`unified_contacts: no row for email ${entity.email}`);
+      } else if (!r.data[0].sf_contact_id) {
+        note(`unified_contacts: row found but sf_contact_id is null`);
+      } else {
         foundContactId = r.data[0].sf_contact_id;
         foundAccountId = r.data[0].sf_account_id || null;
         provenance.push('unified_contacts.email');
+        note(`unified_contacts → sf_contact_id ${foundContactId}`);
       }
-    }
-    // gov.contacts fallback
-    if (!foundContactId && entity.email && GOV_URL) {
-      const r = await gov('GET',
-        `contacts?email=ilike.${encodeURIComponent(entity.email)}&select=contact_id,sf_contact_id,sf_account_id&limit=1`
-      );
-      if (r.ok && r.data?.length && r.data[0].sf_contact_id) {
-        foundContactId = r.data[0].sf_contact_id;
-        foundAccountId = foundAccountId || r.data[0].sf_account_id || null;
-        provenance.push('gov.contacts.email');
+
+      // gov.contacts fallback
+      if (!foundContactId && GOV_URL) {
+        const r2 = await gov('GET',
+          `contacts?email=ilike.${encodeURIComponent(entity.email)}&select=contact_id,sf_contact_id,sf_account_id&limit=1`
+        );
+        if (!r2.ok) {
+          note(`gov.contacts query failed (${r2.status})`);
+        } else if (!r2.data?.length) {
+          note(`gov.contacts: no row for email ${entity.email}`);
+        } else if (!r2.data[0].sf_contact_id) {
+          note(`gov.contacts: row found but sf_contact_id is null`);
+        } else {
+          foundContactId = r2.data[0].sf_contact_id;
+          foundAccountId = foundAccountId || r2.data[0].sf_account_id || null;
+          provenance.push('gov.contacts.email');
+          note(`gov.contacts → sf_contact_id ${foundContactId}`);
+        }
       }
     }
   } else if (entity.entity_type === 'organization') {
-    // true_owners (canonical ownership entities) match by canonical name
-    if (entity.name && GOV_URL) {
+    if (!entity.name) {
+      note('organization has no name — cannot look up');
+    } else if (!GOV_URL) {
+      note('GOV_SUPABASE_URL not configured — skipping true_owners sweep');
+    } else {
       const norm = normalizeName(entity.name);
-      if (norm) {
+      if (!norm) {
+        note(`organization name "${entity.name}" normalized to empty string`);
+      } else {
         const r = await gov('GET',
           `true_owners?canonical_name=ilike.${encodeURIComponent('%' + norm + '%')}&select=true_owner_id,name,canonical_name,sf_account_id&limit=5`
         );
-        if (r.ok && r.data?.length) {
+        if (!r.ok) {
+          note(`true_owners query failed (${r.status})`);
+        } else if (!r.data?.length) {
+          note(`true_owners: no ILIKE match for "${norm}"`);
+        } else {
           let best = null, bestScore = 0;
           for (const cand of r.data) {
             const s = scoreName(normalizeName(cand.canonical_name || cand.name), norm);
             if (s > bestScore) { bestScore = s; best = cand; }
           }
-          if (best && best.sf_account_id && bestScore >= 0.5) {
+          if (!best || bestScore < 0.5) {
+            note(`true_owners: ${r.data.length} candidates but best score ${bestScore.toFixed(2)} < 0.5 threshold (best="${best?.name || '?'}")`);
+          } else if (!best.sf_account_id) {
+            note(`true_owners: best match "${best.name}" (score ${bestScore.toFixed(2)}) has null sf_account_id`);
+          } else {
             foundAccountId = best.sf_account_id;
             provenance.push(`gov.true_owners(${bestScore.toFixed(2)})`);
+            note(`true_owners → "${best.name}" (score ${bestScore.toFixed(2)}) → sf_account_id ${foundAccountId}`);
           }
         }
       }
     }
+  } else {
+    note(`entity_type=${entity.entity_type} not supported`);
   }
 
   // 2. Live PA lookup if still missing (requires --live).
@@ -295,10 +342,10 @@ async function backfillOne(entity) {
 
 // ---------- main --------------------------------------------------------------
 async function main() {
-  console.log(`[sf-backfill] start  apply=${APPLY}  live=${LIVE}  limit=${LIMIT ?? '∞'}  workspace=${WORKSPACE_ID || 'all'}`);
+  console.log(`[sf-backfill] start  apply=${APPLY}  live=${LIVE}  verbose=${VERBOSE}  order=${ORDER}  limit=${LIMIT ?? '∞'}  workspace=${WORKSPACE_ID || 'all'}`);
 
   // Only persons and organizations benefit — assets don't have SF analogs.
-  let path = `entities?select=id,workspace_id,name,entity_type,email&entity_type=in.(person,organization)&order=created_at.asc`;
+  let path = `entities?select=id,workspace_id,name,entity_type,email&entity_type=in.(person,organization)&order=${encodeURIComponent(ORDER)}`;
   if (WORKSPACE_ID) path += `&workspace_id=eq.${WORKSPACE_ID}`;
   if (LIMIT) path += `&limit=${LIMIT}`;
   const list = await ops('GET', path);
@@ -307,6 +354,12 @@ async function main() {
   console.log(`[sf-backfill] scanning ${rows.length} entities`);
 
   const stats = { scanned: 0, matched: 0, identity_writes: 0, metadata_writes: 0, no_match: 0, errors: 0 };
+  // Track the most common no-match reasons so the summary shows where the
+  // sweep is being starved. Helps decide whether to widen the matcher (e.g.
+  // lower the 0.5 name-score threshold), populate more domain-side SF ids,
+  // or just accept that the entity universe has low SF overlap.
+  const reasonTally = new Map();
+
   for (const e of rows) {
     stats.scanned += 1;
     try {
@@ -318,9 +371,20 @@ async function main() {
           if (a.identity) stats.identity_writes += 1;
           if (a.metadata_merge) stats.metadata_writes += 1;
         }
-        console.log(`  [hit] ${out.entity_id.slice(0,8)}… "${String(out.name).slice(0, 60)}" → ${out.applied.map(a => a.identity || 'metadata').join(', ')}${APPLY ? '' : ' (dry)'}`);
+        console.log(`  [hit] ${out.entity_id.slice(0,8)}… "${String(out.name).slice(0, 60)}" (${out.type}) → ${out.applied.map(a => a.identity || 'metadata').join(', ')}${APPLY ? '' : ' (dry)'}`);
+        if (VERBOSE && out.reasons.length) {
+          out.reasons.forEach(r => console.log(`        · ${r}`));
+        }
       } else {
         stats.no_match += 1;
+        // Log the last-reason summary when verbose; tally always.
+        const tailReason = out.reasons[out.reasons.length - 1] || 'no_signal';
+        const bucket = tailReason.split(':')[0].replace(/[0-9]+/g, '').slice(0, 60);
+        reasonTally.set(bucket, (reasonTally.get(bucket) || 0) + 1);
+        if (VERBOSE) {
+          console.log(`  [miss] ${out.entity_id.slice(0,8)}… "${String(out.name).slice(0, 60)}" (${out.type})`);
+          out.reasons.forEach(r => console.log(`        · ${r}`));
+        }
       }
     } catch (err) {
       stats.errors += 1;
@@ -328,6 +392,14 @@ async function main() {
     }
   }
   console.log('[sf-backfill] done', stats);
+  if (stats.no_match > 0) {
+    const top = [...reasonTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    console.log('[sf-backfill] top no-match reasons:');
+    top.forEach(([r, n]) => console.log(`  ${n}×  ${r}`));
+    if (!VERBOSE) {
+      console.log('[sf-backfill] re-run with --verbose to see the full per-entity reason trail.');
+    }
+  }
 }
 
 main().catch(err => { console.error('FATAL', err); process.exit(1); });
