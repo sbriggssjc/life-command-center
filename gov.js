@@ -293,8 +293,15 @@ async function loadGovData() {
       ),
       govQuery('properties', 'property_id', { limit: 0 }),
       govQueryAll('available_listings',
-        'listing_id, address, city, state, asking_price, asking_cap_rate, listing_source, listing_status, url_status, days_on_market, tenant_agency',
-        { order: 'asking_price.desc' }
+        'listing_id, address, city, state, asking_price, asking_cap_rate, listing_source, listing_status, url_status, days_on_market, tenant_agency, first_seen_at, listing_date, listing_broker, listing_firm',
+        // Sort by most-recently-ingested first so freshly staged OMs
+        // (asking_price=NULL government build-to-suits, etc.) surface
+        // at the top of the display instead of getting buried 250+ rows
+        // deep. `listing_date.desc` is a coarse date column; we fall back
+        // to `asking_price.desc` as a tiebreaker for rows with the same
+        // date so the classic "biggest deals first" view still holds
+        // within a given day.
+        { order: 'listing_date.desc.nullslast,asking_price.desc.nullslast' }
       )
     ]);
 
@@ -4415,27 +4422,40 @@ window.govRenderPipelineTable = function() {
 };
 
 function renderGovListings() {
-  const activeListings = govData.listings.filter(l => l.listing_status === 'active').length;
-  const totalAsking = govData.listings.reduce((sum, l) => sum + (l.asking_price || 0), 0);
-  const underContract = govData.listings.filter(l => l.listing_status === 'under_contract').length;
-  
+  // Active-listing filter is normalized case-insensitively — older rows use
+  // 'Active' / 'active' / 'For Sale' interchangeably.
+  const isActive = (l) => {
+    const s = (l.listing_status || '').toLowerCase();
+    return s === 'active' || s === 'for_sale' || s === 'for sale';
+  };
+  const activeRows  = govData.listings.filter(isActive);
+  const activeCount = activeRows.length;
+  const totalAsking = activeRows.reduce((sum, l) => sum + (l.asking_price || 0), 0);
+  const underContract = govData.listings.filter(l =>
+    (l.listing_status || '').toLowerCase() === 'under_contract'
+  ).length;
+
   // === Action guidance banner ===
   let html = '<div style="padding:10px 14px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid #34d399;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
   html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>Active Listings</strong> — Monitor government-leased properties currently on market. Click any listing to view asking price, lease details, and market comps. Identify acquisition opportunities or competitive intelligence for your pipeline.</div>';
   html += '</div>';
 
   html += '<div class="gov-metrics">';
-  html += metricHTML('Active Listings', fmtN(activeListings), 'Currently on market', 'blue');
+  html += metricHTML('Active Listings', fmtN(activeCount), 'Currently on market', 'blue');
   html += metricHTML('Total Asking', fmt(totalAsking), 'Combined value', 'green');
   html += metricHTML('All Listings', fmtN(govData.listings.length), 'All statuses', 'yellow');
   html += metricHTML('Under Contract', fmtN(underContract), 'Pending', 'purple');
   html += '</div>';
-  
+
+  // Show active listings only in the table, sorted newest-first (matches the
+  // server-side order). 100-row slice keeps the DOM small; rare dormant
+  // rows stay in the data pool for the metrics count but don't clutter
+  // the display.
   html += '<div class="table-section">';
   html += '<h3>Available Listings</h3>';
-  html += listingsTable(govData.listings.slice(0, 100));
+  html += listingsTable(activeRows.slice(0, 100));
   html += '</div>';
-  
+
   return html;
 }
 
