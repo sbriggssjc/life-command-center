@@ -33,7 +33,7 @@
 
 import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { normalizeState } from '../_shared/entity-link.js';
+import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -368,7 +368,170 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
 }
 
 // ============================================================================
-// 5. ACTIVITY EVENT (property-scoped timeline entry)
+// 4b. CONTACT MERGE QUEUE CHECK
+// ============================================================================
+//
+// After inserting a brand-new unified_contact for the broker, scan for
+// potential duplicates of this same person already in the system under
+// a different email/form. Focuses on the two cheap signals that catch the
+// majority of real-world broker variants:
+//
+//   - Same full_name (case-insensitive) with different email
+//     ("Geoffrey Ficke" at Colliers as a personal email vs corporate)
+//   - Same last_name + company_name with a fuzzy first-name match
+//     ("Geoff Ficke" vs "Geoffrey Ficke" at Colliers)
+//
+// Writes candidates to government.contact_merge_queue (shared table used
+// by the existing contacts triage UI at operations.js:1855). match_score
+// >= 0.85 gets queued. This runs fire-and-forget on a best-effort basis —
+// a failure here does not block promotion.
+
+async function checkBrokerMergeCandidates(unifiedId, snapshot) {
+  if (!unifiedId) return { ok: false, skipped: 'no_unified_id' };
+  const fullName = (snapshot.listing_broker || '').trim();
+  const email    = (snapshot.listing_broker_email || '').trim().toLowerCase();
+  const company  = (snapshot.listing_firm || '').trim();
+
+  if (!fullName && !email) {
+    return { ok: false, skipped: 'insufficient_signals' };
+  }
+
+  // Parse first/last name for comparison.
+  const nameParts = fullName.split(/\s+/).filter(Boolean);
+  const firstName = nameParts[0] || null;
+  const lastName  = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
+
+  // Pull candidate unified_contacts to check against — cap the pool at
+  // 50 to keep this fast. Prefer rows with matching last_name or
+  // matching company, which is where real duplicates cluster.
+  const filters = [];
+  if (lastName) filters.push(`last_name=ilike.${encodeURIComponent(lastName)}`);
+  else if (fullName) filters.push(`full_name=ilike.${encodeURIComponent(fullName)}`);
+  else if (company) filters.push(`company_name=ilike.${encodeURIComponent(company)}`);
+  filters.push(`unified_id=neq.${pgFilterVal(unifiedId)}`);
+  filters.push('select=unified_id,full_name,first_name,last_name,email,company_name');
+  filters.push('limit=50');
+
+  const candidates = await opsQuery('GET', `unified_contacts?${filters.join('&')}`);
+  if (!candidates.ok || !Array.isArray(candidates.data) || !candidates.data.length) {
+    return { ok: true, candidates_found: 0 };
+  }
+
+  const queued = [];
+  for (const cand of candidates.data) {
+    let score  = 0;
+    let reason = '';
+
+    // 1. Exact email match (shouldn't happen since we skip that case in
+    //    promoteUnifiedContact, but defensive)
+    if (email && (cand.email || '').toLowerCase() === email) {
+      score = 1.0;
+      reason = 'duplicate_email';
+    }
+    // 2. Exact full-name match (different email or record)
+    else if (fullName && (cand.full_name || '').toLowerCase().trim() === fullName.toLowerCase().trim()) {
+      score = 0.90;
+      reason = 'exact_name_match';
+    }
+    // 3. Same last_name + company (fuzzy first-name signal)
+    else if (lastName && (cand.last_name || '').toLowerCase() === lastName.toLowerCase()
+          && company && (cand.company_name || '').toLowerCase().includes(company.toLowerCase())) {
+      // If first-names also share the same initial letter it's a stronger
+      // signal (Geoff / Geoffrey both start with G).
+      const candFirst = (cand.first_name || '').toLowerCase();
+      const myFirst   = (firstName || '').toLowerCase();
+      if (candFirst && myFirst && candFirst[0] === myFirst[0]) {
+        score = 0.85;
+        reason = 'name_company_initial_match';
+      }
+    }
+
+    if (score >= 0.85 && reason) {
+      // Insert into the shared contact_merge_queue (lives on gov DB per
+      // existing convention in contacts-handler.js). contact_a / contact_b
+      // are unified_ids.
+      const insertRes = await domainQuery('government', 'POST', 'contact_merge_queue', {
+        contact_a:    unifiedId,
+        contact_b:    cand.unified_id,
+        match_score:  score,
+        match_reason: reason,
+        status:       'pending',
+      });
+      if (insertRes.ok) {
+        queued.push({ unified_id: cand.unified_id, reason, score });
+      }
+    }
+  }
+
+  return { ok: true, candidates_found: candidates.data.length, queued };
+}
+
+// ============================================================================
+// 5. LCC ENTITY LINK (cross-domain handle for sidebar timeline)
+// ============================================================================
+//
+// When an OM matches a gov/dia property, there may or may not be an LCC
+// entity already representing it. The sidebar timeline + context-retrieve
+// APIs all key off `entity_id` on activity_events / action_items — so if
+// we don't have an entity we're invisible to the sidebar.
+//
+// ensureEntityLink (from entity-link.js) creates or fetches an LCC entity
+// keyed by (source_system, external_id) in external_identities. Creating
+// one for the matched property gives us a stable UUID the rest of the
+// platform can refer to, and future intakes that hit the same property
+// find this entity via lccNativeMatch before touching the domain DB.
+
+async function promoteLccEntity(workspaceId, actorId, snapshot, match) {
+  if (!workspaceId) return { ok: false, skipped: 'no_workspace' };
+  if (match.domain !== 'government' && match.domain !== 'dialysis') {
+    return { ok: true, skipped: 'lcc_entity_not_needed_for_domain', domain: match.domain };
+  }
+
+  // sourceSystem mirrors the pattern used by sidebar-pipeline when it
+  // creates entities from CoStar DOM scrapes (gov_db / dia_db).
+  const sourceSystem = match.domain === 'government' ? 'gov_db' : 'dia_db';
+  const externalId   = String(match.property_id);
+
+  const result = await ensureEntityLink({
+    workspaceId,
+    userId:       actorId,
+    sourceSystem,
+    sourceType:   'property',
+    externalId,
+    domain:       match.domain,
+    seedFields: {
+      address:  snapshot.address || null,
+      city:     snapshot.city || null,
+      state:    normalizeState(snapshot.state) || null,
+      zip:      snapshot.zip_code || null,
+      asset_type: snapshot.property_type || null,
+      description: snapshot.tenant_name
+        ? `${snapshot.tenant_name}${snapshot.listing_firm ? ` — listed by ${snapshot.listing_firm}` : ''}`
+        : null,
+      domain: match.domain,
+    },
+    metadata: {
+      // Preserve the back-reference to the domain property so downstream
+      // lookups can bridge LCC entity → domain-DB property. Matches the
+      // sidebar-pipeline convention for CoStar-sourced entities.
+      domain_property_id: match.property_id,
+      bridge_source:      'intake_promoter',
+    },
+  });
+
+  if (!result.ok) {
+    return { ok: false, skipped: 'ensure_link_failed', detail: result };
+  }
+  return {
+    ok:           true,
+    entity_id:    result.entity?.id || result.entityId || null,
+    created:      !!result.createdEntity,
+    identity_created: !!result.createdIdentity,
+  };
+}
+
+// ============================================================================
+// 6. ACTIVITY EVENT (property-scoped timeline entry)
 // ============================================================================
 //
 // Drops a row in lcc_opps.activity_events so the property's timeline/feed
@@ -377,7 +540,7 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
 // auto-create an LCC entity, so entity_id stays null and property_id
 // is stored in metadata for anyone who wants to filter/display.
 
-async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, match, listingResult) {
+async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, match, listingResult, lccEntityId) {
   if (!workspaceId || !actorId) {
     return { ok: false, skipped: 'no_workspace_or_actor' };
   }
@@ -395,9 +558,13 @@ async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, ma
   const title = `${docTypeLabel} received${addressPart}`;
   const body  = `Staged from LCC OM intake${brokerPart}. Auto-matched to ${match.domain} property ${match.property_id} (${match.reason}, confidence ${match.confidence}).`;
 
-  // entity_id is the LCC entity UUID if the matched domain is 'lcc'; null
-  // for gov/dia matches (they don't have LCC entities yet).
-  const entityId = match.domain === 'lcc' ? match.property_id : null;
+  // entity_id handles both LCC-native matches (match.property_id is the
+  // LCC entity UUID) and gov/dia matches that just had an LCC entity
+  // auto-created via promoteLccEntity. Fall back to null if we have
+  // neither (shouldn't happen in production but guards the NOT NULL).
+  const entityId = match.domain === 'lcc'
+    ? match.property_id
+    : (lccEntityId || null);
 
   const row = {
     workspace_id: workspaceId,
@@ -467,22 +634,36 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   }
 
   // Run the three domain-DB promotions in parallel — each is independent
-  // and has its own try/catch. After those, run the two LCC-opps-side
-  // follow-ups (unified_contacts sync + activity_event) sequentially
-  // because the unified contact sync needs the domain contact_id from
-  // the broker-contact result.
+  // and has its own try/catch.
   const [listingResult, contactResult, financialsResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promoteBrokerContact(match.domain, snapshot).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
   ]);
 
-  // LCC-side follow-ups run in parallel after domain promotions settle.
-  const domainContactId = contactResult?.contact_id || null;
-  const [unifiedContactResult, activityEventResult] = await Promise.all([
-    promoteUnifiedContact(match.domain, snapshot, domainContactId)
+  // LCC-entity bridge runs FIRST among LCC-side follow-ups because the
+  // activity_event needs its entity_id. Unified contact sync can run in
+  // parallel; it doesn't depend on the entity.
+  const [lccEntityResult, unifiedContactResult] = await Promise.all([
+    promoteLccEntity(context.workspaceId, context.actorId, snapshot, match)
       .catch(e => ({ ok: false, error: e?.message })),
-    promoteActivityEvent(intakeId, context.workspaceId, context.actorId, snapshot, match, listingResult)
+    promoteUnifiedContact(match.domain, snapshot, contactResult?.contact_id || null)
+      .catch(e => ({ ok: false, error: e?.message })),
+  ]);
+
+  // Merge-queue check + activity_event both depend on the LCC-side results
+  // above. Run them in parallel now that we have everything we need.
+  const lccEntityId = lccEntityResult?.entity_id || null;
+  const unifiedId   = unifiedContactResult?.unified_id || null;
+  const [mergeCheckResult, activityEventResult] = await Promise.all([
+    // Only check merges when we just INSERTED a fresh unified_contact
+    // (not when we found an existing linked one — those are already
+    // the canonical version).
+    unifiedContactResult?.inserted
+      ? checkBrokerMergeCandidates(unifiedId, snapshot)
+          .catch(e => ({ ok: false, error: e?.message }))
+      : Promise.resolve({ ok: false, skipped: 'contact_pre_existing' }),
+    promoteActivityEvent(intakeId, context.workspaceId, context.actorId, snapshot, match, listingResult, lccEntityId)
       .catch(e => ({ ok: false, error: e?.message })),
   ]);
 
@@ -492,7 +673,9 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     listing:               listingResult,
     broker_contact:        contactResult,
     property_financials:   financialsResult,
+    lcc_entity:            lccEntityResult,
     unified_contact:       unifiedContactResult,
+    merge_check:           mergeCheckResult,
     activity_event:        activityEventResult,
   };
 }
