@@ -333,8 +333,11 @@ async function backfillOne(entity) {
     sfPayload.source = provenance.join(',');
     const r = await mergeEntitySalesforce({ workspaceId: entity.workspace_id, entityId: entity.id, sfPayload });
     outcome.applied.push({ metadata_merge: Object.keys(sfPayload), ok: r.ok, dry: !APPLY });
-  } else {
-    outcome.skipped.push('no_match');
+  } else if (!outcome.reasons.length) {
+    // Never left a reason trail — surface a generic marker so the tally
+    // can bucket it. (backfillOne always notes SOMETHING in the normal
+    // flow; this is defensive belt-and-suspenders.)
+    outcome.reasons.push('no_match');
   }
 
   return outcome;
