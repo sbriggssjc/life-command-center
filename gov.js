@@ -293,7 +293,15 @@ async function loadGovData() {
       ),
       govQuery('properties', 'property_id', { limit: 0 }),
       govQueryAll('available_listings',
-        'listing_id, address, city, state, asking_price, asking_cap_rate, listing_source, listing_status, url_status, days_on_market, tenant_agency, first_seen_at, listing_date, listing_broker, listing_firm',
+        // Embed the matched property row via FK so the UI can show
+        // year_built / land_acres / assessed_owner without a second
+        // round-trip. PostgREST resource-embed syntax (properties is
+        // the FK target of available_listings.property_id).
+        'listing_id, property_id, address, city, state, asking_price, asking_cap_rate, ' +
+        'listing_source, listing_status, url_status, days_on_market, tenant_agency, ' +
+        'first_seen_at, listing_date, listing_broker, listing_firm, annual_rent, lease_expiration, ' +
+        'square_feet, ' +
+        'property:properties(year_built,land_acres,rba,assessed_owner,recorded_owner_id,true_owner_id)',
         // Sort by most-recently-ingested first so freshly staged OMs
         // (asking_price=NULL government build-to-suits, etc.) surface
         // at the top of the display instead of getting buried 250+ rows
@@ -655,22 +663,56 @@ function listingsTable(rows) {
   if (!rows || rows.length === 0) {
     return '<div class="table-empty">No listings yet</div>';
   }
-  
+
+  // DOM = days since listing_date (client-computed). Rows from CoStar have
+  // days_on_market populated; LCC-intake rows are fresh so compute from date.
+  const today = new Date();
+  const computeDom = (r) => {
+    if (r.days_on_market != null && r.days_on_market !== '') return r.days_on_market;
+    if (!r.listing_date) return '-';
+    const ms = today - new Date(r.listing_date);
+    const days = Math.floor(ms / 86400000);
+    return days >= 0 ? days : '-';
+  };
+  // Handle both r.property (embed from FK join) and legacy rows without it.
+  const propOf = (r) => r.property || {};
+  const sfOf   = (r) => {
+    // Prefer listing.square_feet (building SF from OM), fall back to
+    // property.rba (rentable building area) from gov properties.
+    if (r.square_feet) return r.square_feet;
+    const p = propOf(r);
+    return p.rba || null;
+  };
+  const acres = (r) => propOf(r).land_acres || null;
+
   let html = '<div class="table-wrapper"><table class="data-table"><thead><tr>';
-  html += '<th>Tenant</th><th>Address</th><th>City, State</th><th>Asking</th><th>Cap Rate</th><th>DOM</th><th>Status</th><th>Source</th><th style="text-align:center;min-width:80px">Actions</th>';
+  html += '<th>Tenant</th><th>Address</th><th>City, State</th>';
+  html += '<th>Year</th><th>SF</th><th>Acres</th>';
+  html += '<th>Asking</th><th>Cap Rate</th><th>DOM</th>';
+  html += '<th>Owner</th><th>Status</th><th>Source</th>';
+  html += '<th style="text-align:center;min-width:80px">Actions</th>';
   html += '</tr></thead><tbody>';
 
   rows.slice(0, 50).forEach(r => {
+    const p = propOf(r);
     const capRate = r.asking_cap_rate ? pct(r.asking_cap_rate) : '-';
     const status = r.listing_status || 'active';
+    const sf = sfOf(r);
+    const ac = acres(r);
+    const yb = p.year_built;
+    const owner = p.assessed_owner || '';
 
     html += `<tr class="clickable-tr" onclick='showDetail(${safeJSON(r)}, "gov-listing")'>`;
     html += `<td class="truncate" style="font-weight:500">${esc(norm(r.tenant_agency) || '—')}</td>`;
     html += `<td class="truncate">${esc(norm(r.address) || '')}</td>`;
     html += `<td>${esc(norm(r.city) || '')}${r.state ? ', ' + esc(r.state) : ''}</td>`;
+    html += `<td>${yb || '-'}</td>`;
+    html += `<td>${sf ? fmtN(sf) : '-'}</td>`;
+    html += `<td>${ac != null ? Number(ac).toFixed(2) : '-'}</td>`;
     html += `<td>${fmt(r.asking_price || 0)}</td>`;
     html += `<td>${capRate}</td>`;
-    html += `<td>${r.days_on_market || '-'}</td>`;
+    html += `<td>${computeDom(r)}</td>`;
+    html += `<td class="truncate" title="${esc(owner)}">${esc(owner || '-')}</td>`;
     html += `<td><span class="pill">${cleanLabel(status)}</span></td>`;
     html += `<td>${esc(cleanLabel(r.listing_source || ''))}</td>`;
     html += `<td style="text-align:center" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:center">`;
@@ -679,7 +721,7 @@ function listingsTable(rows) {
     html += `</div></td>`;
     html += '</tr>';
   });
-  
+
   html += '</tbody></table></div>';
   return html;
 }

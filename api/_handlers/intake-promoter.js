@@ -348,11 +348,13 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
   }
 
   // No existing unified_contacts row — insert a fresh one.
+  // NOTE: full_name is a GENERATED column (computed from first_name +
+  // last_name by Postgres) — omit it from the insert or PostgREST
+  // returns 428C9 "cannot insert a non-DEFAULT value into generated column".
   const row = {
     contact_class: 'broker',
     first_name:    firstName,
     last_name:     lastName,
-    full_name:     name || email,
     email,
     company_name:  snapshot.listing_firm || null,
     title:         'Listing Broker',
@@ -464,6 +466,179 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
   }
 
   return { ok: true, candidates_found: candidates.data.length, queued };
+}
+
+// ============================================================================
+// 4c. OWNER RESOLUTION (property.recorded_owner_id / true_owner_id + SF flag)
+// ============================================================================
+//
+// The OM rarely spells out a seller for government properties (build-to-
+// suits are negotiated; buyer never sees the full title chain on page 1).
+// What the gov property row DOES have is `assessed_owner` (from public
+// records) and `notes` (often "GSA Lessor: <entity>"). Use those as the
+// signal. Try to:
+//
+//   - If property.true_owner_id is null: ILIKE-match property.assessed_owner
+//     against public.true_owners.name / canonical_name → link if found.
+//   - If property.recorded_owner_id is null: same approach against
+//     recorded_owners.
+//   - Whether or not we resolved, surface the owner's sf_account_id to
+//     the caller so triage UI can flag "owner needs SF link" when null.
+//
+// This runs only for gov matches today. Dialysis has different owner
+// structures (operator + landlord separation) that need their own mapper.
+
+async function resolveOwnerLinks(match, snapshot) {
+  if (match.domain !== 'government') {
+    return { ok: true, skipped: `owner_resolution_not_implemented_for_${match.domain}` };
+  }
+  const propertyId = Number(match.property_id);
+
+  // Pull current owner state + assessed_owner from the property
+  const propRes = await domainQuery(
+    'government',
+    'GET',
+    `properties?property_id=eq.${propertyId}&select=recorded_owner_id,true_owner_id,assessed_owner,notes&limit=1`
+  );
+  if (!propRes.ok || !Array.isArray(propRes.data) || !propRes.data.length) {
+    return { ok: false, skipped: 'property_not_found' };
+  }
+  const prop = propRes.data[0];
+
+  // Signal for resolution: prefer snapshot.seller_name (OM said so), then
+  // property.assessed_owner (public records), then parse property.notes
+  // ("GSA Lessor: X"). Normalize to a single best-guess name.
+  let ownerName = (snapshot?.seller_name || '').trim()
+               || (prop.assessed_owner || '').trim();
+  if (!ownerName && typeof prop.notes === 'string') {
+    const m = prop.notes.match(/(?:GSA\s+Lessor|Lessor|Owner)\s*:\s*([^\n,;]+)/i);
+    if (m) ownerName = m[1].trim();
+  }
+
+  const result = {
+    ok: true,
+    owner_name_used: ownerName || null,
+    recorded_owner: { already_linked: !!prop.recorded_owner_id },
+    true_owner:     { already_linked: !!prop.true_owner_id },
+    sf_sync_flags:  [],
+  };
+  if (!ownerName) {
+    result.skipped = 'no_owner_signal';
+    return result;
+  }
+
+  // ---- Try true_owner first (typically the money-party behind the LP/LLC)
+  if (!prop.true_owner_id) {
+    const toLookup = await domainQuery(
+      'government',
+      'GET',
+      `true_owners?or=(name.ilike.${encodeURIComponent(ownerName)},canonical_name.ilike.${encodeURIComponent(ownerName)})` +
+      `&select=true_owner_id,name,sf_account_id&limit=5`
+    );
+    if (toLookup.ok && Array.isArray(toLookup.data) && toLookup.data.length) {
+      const best = toLookup.data[0];
+      const patchRes = await domainQuery(
+        'government',
+        'PATCH',
+        `properties?property_id=eq.${propertyId}`,
+        { true_owner_id: best.true_owner_id }
+      );
+      result.true_owner = {
+        already_linked:  false,
+        resolved_id:     best.true_owner_id,
+        resolved_name:   best.name,
+        sf_account_id:   best.sf_account_id || null,
+        patched:         patchRes.ok,
+      };
+      if (!best.sf_account_id) {
+        result.sf_sync_flags.push({
+          kind: 'true_owner',
+          owner_id: best.true_owner_id,
+          name: best.name,
+          reason: 'no_sf_account_id — surface for manual SF match',
+        });
+      }
+    } else {
+      result.true_owner.lookup = 'no_match';
+    }
+  } else {
+    // Already linked — surface the SF sync status
+    const existing = await domainQuery(
+      'government',
+      'GET',
+      `true_owners?true_owner_id=eq.${encodeURIComponent(prop.true_owner_id)}&select=true_owner_id,name,sf_account_id&limit=1`
+    );
+    if (existing.ok && existing.data?.length) {
+      const row = existing.data[0];
+      result.true_owner.resolved_name = row.name;
+      result.true_owner.sf_account_id = row.sf_account_id || null;
+      if (!row.sf_account_id) {
+        result.sf_sync_flags.push({
+          kind: 'true_owner',
+          owner_id: row.true_owner_id,
+          name: row.name,
+          reason: 'pre_linked_but_no_sf_account_id',
+        });
+      }
+    }
+  }
+
+  // ---- recorded_owner: same pattern
+  if (!prop.recorded_owner_id) {
+    const roLookup = await domainQuery(
+      'government',
+      'GET',
+      `recorded_owners?or=(name.ilike.${encodeURIComponent(ownerName)},canonical_name.ilike.${encodeURIComponent(ownerName)})` +
+      `&select=recorded_owner_id,name,sf_account_id&limit=5`
+    );
+    if (roLookup.ok && Array.isArray(roLookup.data) && roLookup.data.length) {
+      const best = roLookup.data[0];
+      const patchRes = await domainQuery(
+        'government',
+        'PATCH',
+        `properties?property_id=eq.${propertyId}`,
+        { recorded_owner_id: best.recorded_owner_id }
+      );
+      result.recorded_owner = {
+        already_linked:  false,
+        resolved_id:     best.recorded_owner_id,
+        resolved_name:   best.name,
+        sf_account_id:   best.sf_account_id || null,
+        patched:         patchRes.ok,
+      };
+      if (!best.sf_account_id) {
+        result.sf_sync_flags.push({
+          kind: 'recorded_owner',
+          owner_id: best.recorded_owner_id,
+          name: best.name,
+          reason: 'no_sf_account_id — surface for manual SF match',
+        });
+      }
+    } else {
+      result.recorded_owner.lookup = 'no_match';
+    }
+  } else {
+    const existing = await domainQuery(
+      'government',
+      'GET',
+      `recorded_owners?recorded_owner_id=eq.${encodeURIComponent(prop.recorded_owner_id)}&select=recorded_owner_id,name,sf_account_id&limit=1`
+    );
+    if (existing.ok && existing.data?.length) {
+      const row = existing.data[0];
+      result.recorded_owner.resolved_name = row.name;
+      result.recorded_owner.sf_account_id = row.sf_account_id || null;
+      if (!row.sf_account_id) {
+        result.sf_sync_flags.push({
+          kind: 'recorded_owner',
+          owner_id: row.recorded_owner_id,
+          name: row.name,
+          reason: 'pre_linked_but_no_sf_account_id',
+        });
+      }
+    }
+  }
+
+  return result;
 }
 
 // ============================================================================
@@ -641,13 +816,16 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
   ]);
 
-  // LCC-entity bridge runs FIRST among LCC-side follow-ups because the
-  // activity_event needs its entity_id. Unified contact sync can run in
-  // parallel; it doesn't depend on the entity.
-  const [lccEntityResult, unifiedContactResult] = await Promise.all([
+  // LCC-entity bridge + unified-contact sync + owner resolution run in
+  // parallel — none depends on the others. Owner resolution also happens
+  // in domain DB (gov for now); activity_event later references the
+  // entity and listing but not owner.
+  const [lccEntityResult, unifiedContactResult, ownerResolutionResult] = await Promise.all([
     promoteLccEntity(context.workspaceId, context.actorId, snapshot, match)
       .catch(e => ({ ok: false, error: e?.message })),
     promoteUnifiedContact(match.domain, snapshot, contactResult?.contact_id || null)
+      .catch(e => ({ ok: false, error: e?.message })),
+    resolveOwnerLinks(match, snapshot)
       .catch(e => ({ ok: false, error: e?.message })),
   ]);
 
@@ -675,6 +853,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     property_financials:   financialsResult,
     lcc_entity:            lccEntityResult,
     unified_contact:       unifiedContactResult,
+    owner_resolution:      ownerResolutionResult,
     merge_check:           mergeCheckResult,
     activity_event:        activityEventResult,
   };
