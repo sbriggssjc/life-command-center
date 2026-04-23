@@ -6397,6 +6397,66 @@ async function _udRenderActivityLogAsync(bodyEl) {
     }
   } catch (_) {}
 
+  // 6. LCC activity_events — OM intake, outbound calls/emails, pipeline stage
+  //    advances, etc. These live in lcc_opps and are fetched via the
+  //    retrieve-entity-context Copilot action (which returns
+  //    recent_interactions from activity_events + memory).
+  //    Scott 2026-04-23: without this the Activity Log never shows OM
+  //    intake events even though intake-promoter writes one.
+  try {
+    const entityName =
+      _udCache.property?.address ||
+      _udCache.fallback?.address ||
+      _udCache.entityMeta?.name ||
+      null;
+    if (entityName) {
+      const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+      const lccRes = await doFetch('/api/context/retrieve-entity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_name:        entityName,
+          entity_type:        'property',
+          window_days:        730,
+          interaction_limit:  100,
+        }),
+      });
+      if (lccRes.ok) {
+        const lccData = await lccRes.json();
+        const interactions = lccData?.recent_interactions || [];
+        interactions.forEach(it => {
+          // De-dupe against events we already emitted from _salesCache
+          // (same source_type='sale'/'listing' would double up).
+          const srcType = (it.source_type || it.type || '').toLowerCase();
+          if (srcType === 'sale' || srcType === 'listing') return;
+
+          const colorMap = {
+            intake_om:        'var(--accent)',
+            email_received:   '#3b82f6',
+            email_sent:       '#3b82f6',
+            call_logged:      'var(--green)',
+            meeting:          '#8b5cf6',
+            pipeline_advance: 'var(--yellow)',
+            note:             'var(--text3)',
+          };
+          events.push({
+            kind:   'lcc_' + (srcType || 'activity'),
+            date:   it.occurred_at || it.created_at || it.date,
+            title:  it.title || it.subject || it.source_type || 'LCC activity',
+            detail: [
+              it.summary || it.description || null,
+              it.actor_name   ? 'By ' + it.actor_name   : null,
+              it.source_surface ? 'Surface: ' + it.source_surface : null,
+            ].filter(Boolean).join(' · '),
+            color: colorMap[srcType] || 'var(--accent)',
+          });
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Activity Log: LCC interactions feed load failed', e);
+  }
+
   // Sort oldest → newest (chronological)
   events.sort((a, b) => {
     const ta = Date.parse(a.date || '') || 0;

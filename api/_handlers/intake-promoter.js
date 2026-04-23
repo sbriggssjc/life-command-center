@@ -375,6 +375,111 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
 }
 
 // ============================================================================
+// 3c. PROSPECT LEAD UPSERT (so the Pipeline tab surfaces OM-promoted deals)
+// ============================================================================
+//
+// Plano revealed a gap: the OM-promoted listing appears on Sales/Available
+// (from v_available_listings → available_listings) but NOT on the Pipeline
+// tab, because that tab queries prospect_leads. Without a lead row,
+// intake-promoted deals are invisible to the broker's "what do I have to
+// work on" view.
+//
+// Behavior:
+//   - If a prospect_leads row already exists for this property_id (prior
+//     ownership-change or CoStar scan picked it up), UPDATE it with fresh
+//     intake context — fill-blanks-only, so we don't clobber human edits.
+//   - Otherwise INSERT a new lead_source='lcc_intake_om' row with whatever
+//     the OM snapshot yielded.
+//
+// Only runs for gov for now. Dia has a different lead-gen surface.
+async function promoteProspectLead(domain, propertyId, snapshot, match, listingId) {
+  if (domain !== 'government') {
+    return { ok: true, skipped: `prospect_lead_not_supported_for_${domain}` };
+  }
+  if (!propertyId) return { ok: false, skipped: 'no_property_id' };
+
+  const today = new Date().toISOString().split('T')[0];
+  const fields = {
+    tenant_agency:        snapshot.tenant_agency || snapshot.tenant_name || null,
+    agency_full_name:     snapshot.agency_full_name || null,
+    government_type:      snapshot.government_type || 'federal',
+    source_listing_id:    listingId || null,
+    listing_status:       'active',
+    listing_date:         snapshot.listing_date || today,
+    listing_broker_name:  snapshot.listing_broker || null,
+    listing_broker_firm:  snapshot.listing_firm || null,
+    listing_broker_email: snapshot.listing_broker_email || null,
+    listing_broker_phone: snapshot.listing_broker_phone || null,
+    asking_price:         snapshot.asking_price || null,
+    asking_cap_rate:      snapshot.cap_rate || null,
+    year_built:           snapshot.year_built ? parseInt(snapshot.year_built, 10) : null,
+    land_acres:           snapshot.land_acres || (snapshot.lot_sf ? Math.round((Number(snapshot.lot_sf) / 43560) * 100) / 100 : null),
+    rba:                  snapshot.building_sf ? parseInt(snapshot.building_sf, 10) : null,
+    square_feet:          snapshot.building_sf ? parseInt(snapshot.building_sf, 10) : null,
+    annual_rent:          snapshot.annual_rent ? Number(snapshot.annual_rent) : null,
+    lease_expiration:     snapshot.lease_expiration || null,
+    true_owner:           snapshot.seller_name || snapshot.owner_name || null,
+    recorded_owner:       snapshot.seller_name || snapshot.owner_name || null,
+    is_already_listed:    true,
+  };
+  // Drop null fields so COALESCE doesn't pointlessly "update" to null.
+  for (const k of Object.keys(fields)) {
+    if (fields[k] == null || fields[k] === '') delete fields[k];
+  }
+
+  // Find existing row by matched_property_id.
+  const existing = await domainQuery(
+    'government',
+    'GET',
+    `prospect_leads?matched_property_id=eq.${Number(propertyId)}&select=lead_id,${Object.keys(fields).join(',')}&limit=1`
+  );
+  if (existing.ok && existing.data?.length) {
+    // Fill-blanks-only update so we don't stomp on user-edited fields.
+    const current = existing.data[0];
+    const patch = {};
+    for (const k of Object.keys(fields)) {
+      if (current[k] == null || current[k] === '') patch[k] = fields[k];
+    }
+    if (!Object.keys(patch).length) {
+      return { ok: true, lead_id: current.lead_id, skipped: 'already_populated' };
+    }
+    patch.updated_at = new Date().toISOString();
+    const patchRes = await domainQuery(
+      'government',
+      'PATCH',
+      `prospect_leads?lead_id=eq.${encodeURIComponent(current.lead_id)}`,
+      patch
+    );
+    return patchRes.ok
+      ? { ok: true, lead_id: current.lead_id, updated: true, fields: Object.keys(patch) }
+      : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+  }
+
+  // INSERT fresh lead row.
+  const row = {
+    matched_property_id:  Number(propertyId),
+    lead_source:          'lcc_intake_om',
+    address:              snapshot.address || null,
+    city:                 snapshot.city || null,
+    state:                snapshot.state || null,
+    zip_code:             snapshot.zip_code || null,
+    ...fields,
+  };
+  const insertRes = await domainQuery(
+    'government',
+    'POST',
+    'prospect_leads',
+    row,
+    { Prefer: 'return=representation' }
+  );
+  if (!insertRes.ok) {
+    return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
+  }
+  const inserted = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
+  return { ok: true, lead_id: inserted?.lead_id || null, inserted: true };
+}
+
+// ============================================================================
 // 3b. LEASE EXPENSE PROPAGATION
 // ============================================================================
 //
@@ -1136,14 +1241,22 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // Use effectiveMatch from here on so the rest of the code is unchanged.
   match = effectiveMatch;
 
-  // Run the four domain-DB promotions in parallel — each is independent
-  // and has its own try/catch.
+  // Run the first four domain-DB promotions in parallel; the prospect lead
+  // upsert needs the listing_id that promoteListing returns, so it runs
+  // after.
   const [listingResult, contactResult, financialsResult, leaseExpensesResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promoteBrokerContact(match.domain, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
     promoteLeaseExpenses(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
   ]);
+
+  // Pipeline lead — runs after the listing is written so we can stamp the
+  // lead row with source_listing_id. Ensures OM-promoted deals show up on
+  // the Pipeline tab, not just Sales/Available.
+  const pipelineLeadResult = await promoteProspectLead(
+    match.domain, match.property_id, snapshot, match, listingResult?.listing_id || null
+  ).catch(e => ({ ok: false, error: e?.message }));
 
   // LCC-entity bridge + unified-contact sync + owner resolution run in
   // parallel — none depends on the others. Owner resolution also happens
@@ -1205,6 +1318,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     broker_contact:        contactResult,
     property_financials:   financialsResult,
     lease_expenses:        leaseExpensesResult,
+    pipeline_lead:         pipelineLeadResult,
     lcc_entity:            lccEntityResult,
     unified_contact:       unifiedContactResult,
     owner_resolution:      ownerResolutionResult,

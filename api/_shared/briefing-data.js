@@ -269,6 +269,61 @@ export async function fetchInboxSummary(workspaceId, limit = 10) {
   };
 }
 
+/**
+ * Newly promoted OM intakes within the last N hours.
+ *
+ * Surfaces OMs that made it through the full pipeline (extraction → match →
+ * promote) in the recent past so the daily briefing tells a broker "4 new
+ * deals landed overnight — here they are." Queries
+ * staged_intake_promotions, which intake-promoter writes one row per
+ * successful promotion to.
+ *
+ * Designed to be called from the briefing assembler (Phase 4b) and
+ * rendered as its own "New OM Intakes" section alongside Inbox Summary.
+ *
+ * @param {string} workspaceId
+ * @param {number} hours   — lookback window (default 24h)
+ * @param {number} limit   — max rows (default 10)
+ */
+export async function fetchNewIntakes(workspaceId, hours = 24, limit = 10) {
+  const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+  // pipeline_result is the promoter's full response blob (listing,
+  // broker_contact, property_financials, etc.). We unpack it client-side
+  // to avoid scattering jsonb extraction across the rendering code.
+  const path =
+    `staged_intake_promotions?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
+    `&promoted_at=gte.${encodeURIComponent(sinceIso)}` +
+    `&select=id,intake_id,entity_id,pipeline_result,promoted_at,promoted_by` +
+    `&order=promoted_at.desc&limit=${Math.max(1, Math.min(limit, 50))}`;
+  const res = await opsQuery('GET', path);
+  const rawItems = Array.isArray(res.data) ? res.data : [];
+  const items = rawItems.map((r) => {
+    const pr = r.pipeline_result || {};
+    const listing = pr.listing || {};
+    const snap    = pr.snapshot || {};
+    return {
+      id:              r.id,
+      intake_id:       r.intake_id,
+      entity_id:       r.entity_id,
+      promoted_at:     r.promoted_at,
+      domain:          pr.domain || null,
+      property_id:     pr.match?.property_id || listing.property_id || null,
+      listing_id:      listing.listing_id || null,
+      address:         snap.address || listing.address || null,
+      city:            snap.city || listing.city || null,
+      state:           snap.state || listing.state || null,
+      tenant_agency:   snap.tenant_agency || snap.tenant_name || null,
+      listing_broker:  snap.listing_broker || null,
+      asking_price:    snap.asking_price ?? null,
+    };
+  });
+  return {
+    window_hours: hours,
+    count:        items.length,
+    items,
+  };
+}
+
 export async function fetchUnassignedWork(workspaceId, limit = 10) {
   const path =
     `v_unassigned_work?workspace_id=eq.${encodeURIComponent(workspaceId)}` +

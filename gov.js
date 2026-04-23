@@ -4478,6 +4478,34 @@ window.govRenderPipelineTable = function() {
   container.innerHTML = buildGovPipelineTable(dedupedLeads);
 };
 
+// Shared NM/Northmarq/Briggs-team detector. Mirrors the logic
+// renderGovNorthmarqMetrics uses for comps so market-share counts stay
+// consistent across dashboard sections. Returns true when a listing was
+// worked by Northmarq / the Briggs team based on broker/firm strings or
+// the is_northmarq flag set by enrichment jobs.
+function _govIsNorthmarqListing(r) {
+  if (!r) return false;
+  if (r.is_northmarq) return true;
+  const haystack = (
+    (r.listing_broker || '') + ' ' +
+    (r.listing_firm   || '') + ' ' +
+    (r.broker_phone   || '') + ' ' +
+    (r.broker_email   || '') + ' ' +
+    (r.seller_name    || '')
+  ).toLowerCase();
+  return /northmarq|north\s*marq|nm\s+capital|briggs|hellwig|corriston|sjc[;:]|sbriggs/i.test(haystack);
+}
+
+// Filter state for the listings tab. Toggles between:
+//   'all'  — every active listing (prior default)
+//   'mine' — only listings where the NM/Briggs team has a role
+// Persisted in-memory per session.
+let govListingOwnership = 'all';
+window.setGovListingOwnership = function(view) {
+  govListingOwnership = view;
+  renderGovTab();
+};
+
 function renderGovListings() {
   // Active-listing filter is normalized case-insensitively — older rows use
   // 'Active' / 'active' / 'For Sale' interchangeably.
@@ -4491,6 +4519,8 @@ function renderGovListings() {
   const underContract = govData.listings.filter(l =>
     (l.listing_status || '').toLowerCase() === 'under_contract'
   ).length;
+  const myActiveRows = activeRows.filter(_govIsNorthmarqListing);
+  const myCount = myActiveRows.length;
 
   // === Action guidance banner ===
   let html = '<div style="padding:10px 14px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid #34d399;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
@@ -4504,13 +4534,19 @@ function renderGovListings() {
   html += metricHTML('Under Contract', fmtN(underContract), 'Pending', 'purple');
   html += '</div>';
 
-  // Show active listings only in the table, sorted newest-first (matches the
-  // server-side order). 100-row slice keeps the DOM small; rare dormant
-  // rows stay in the data pool for the metrics count but don't clutter
-  // the display.
+  // === Ownership filter toggle ===
+  // Lets the broker flip between all active listings and just the ones
+  // that are worked by Northmarq / the Briggs team. "Mine" uses the same
+  // detector the market-share metric uses, so the counts reconcile.
+  const selectedRows = govListingOwnership === 'mine' ? myActiveRows : activeRows;
+  html += '<div style="display:flex;gap:8px;align-items:center;margin:14px 0 6px 0;flex-wrap:wrap">';
+  html += `<button class="pill${govListingOwnership === 'all'  ? ' active' : ''}" onclick="setGovListingOwnership('all')">All (${fmtN(activeCount)})</button>`;
+  html += `<button class="pill${govListingOwnership === 'mine' ? ' active' : ''}" onclick="setGovListingOwnership('mine')" title="Northmarq / Briggs team listings only">My Listings (${fmtN(myCount)})</button>`;
+  html += '</div>';
+
   html += '<div class="table-section">';
-  html += '<h3>Available Listings</h3>';
-  html += listingsTable(activeRows.slice(0, 100));
+  html += '<h3>' + (govListingOwnership === 'mine' ? 'My Listings' : 'Available Listings') + '</h3>';
+  html += listingsTable(selectedRows.slice(0, 100));
   html += '</div>';
 
   return html;

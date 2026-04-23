@@ -34,6 +34,7 @@ import {
   fetchRecentSfActivity,
   fetchHotContacts,
   fetchDiaPipeline,
+  fetchNewIntakes,
   buildStrategicPriorities,
   deriveItemTitle,
 } from '../_shared/briefing-data.js';
@@ -186,7 +187,36 @@ function renderQueueSection(workCounts, inboxSummary) {
   );
 }
 
-function renderHtml({ subject, priorities, syncHealth, workCounts, inboxSummary, generatedAt }) {
+// New OM intakes promoted in the last 24h. Renders as a standalone section
+// between Pipeline and Queue so freshly-landed deals get visible real estate
+// in the daily briefing instead of buried inside activity feeds.
+function renderNewIntakesSection(newIntakes) {
+  const items = newIntakes?.items || [];
+  if (!items.length) return '';
+  const rows = items.slice(0, 10).map((it) => {
+    const loc = [it.city, it.state].filter(Boolean).join(', ');
+    const title = it.address || it.tenant_agency || '(untitled)';
+    const broker = it.listing_broker ? ' · ' + it.listing_broker : '';
+    const price = it.asking_price
+      ? ' · $' + Number(it.asking_price).toLocaleString('en-US', { maximumFractionDigits: 0 })
+      : '';
+    return `<tr>` +
+      `<td style="${FONT}padding:6px 20px;font-size:13px;color:#222;border-bottom:1px solid #eee;">` +
+      `<strong>${escapeHtml(title)}</strong>` +
+      (loc ? ` <span style="color:#666">· ${escapeHtml(loc)}</span>` : '') +
+      ` <span style="color:#888">(${escapeHtml((it.domain || 'gov').toUpperCase())})</span>` +
+      escapeHtml(broker + price) +
+      `</td></tr>`;
+  }).join('');
+  const subtitle = `${newIntakes.count} OM${newIntakes.count === 1 ? '' : 's'} promoted in the last ${newIntakes.window_hours || 24}h`;
+  return (
+    renderSectionHeader('New OM Intakes — ' + subtitle) +
+    `<tr><td style="padding:0 20px;"><table role="presentation" cellpadding="0" ` +
+    `cellspacing="0" border="0" width="100%">${rows}</table></td></tr>`
+  );
+}
+
+function renderHtml({ subject, priorities, syncHealth, workCounts, inboxSummary, newIntakes, generatedAt }) {
   const header =
     `<tr><td style="${FONT}background:${HEADER};color:#ffffff;` +
     `padding:20px;text-align:left;">` +
@@ -205,6 +235,7 @@ function renderHtml({ subject, priorities, syncHealth, workCounts, inboxSummary,
     renderStrategicSection(priorities) +
     renderUrgentSection(priorities) +
     renderPipelineSection(priorities, syncHealth) +
+    renderNewIntakesSection(newIntakes) +
     renderQueueSection(workCounts, inboxSummary) +
     footer +
     `</table>`
@@ -225,7 +256,7 @@ function textItem(item) {
   return bits.length ? `  - ${title} [${bits.join(' | ')}]` : `  - ${title}`;
 }
 
-function renderText({ subject, priorities, syncHealth, workCounts, inboxSummary, generatedAt }) {
+function renderText({ subject, priorities, syncHealth, workCounts, inboxSummary, newIntakes, generatedAt }) {
   const lines = [];
   lines.push(subject);
   lines.push(`Generated ${new Date(generatedAt).toUTCString()}`);
@@ -256,6 +287,27 @@ function renderText({ subject, priorities, syncHealth, workCounts, inboxSummary,
   lines.push(
     `  connectors: ${s.healthy || 0} healthy, ${s.degraded || 0} degraded, ${s.error || 0} error`,
   );
+  lines.push('');
+
+  const intakes = newIntakes?.items || [];
+  lines.push(`NEW OM INTAKES (last ${newIntakes?.window_hours || 24}h)`);
+  if (intakes.length) {
+    intakes.slice(0, 10).forEach((it) => {
+      const loc = [it.city, it.state].filter(Boolean).join(', ');
+      const title = it.address || it.tenant_agency || '(untitled)';
+      const bits = [loc, (it.domain || 'gov').toUpperCase()].filter(Boolean).join(' | ');
+      lines.push(`  - ${title} [${bits}]`);
+      if (it.listing_broker || it.asking_price) {
+        const sub = [
+          it.listing_broker ? 'broker ' + it.listing_broker : null,
+          it.asking_price ? '$' + Number(it.asking_price).toLocaleString('en-US', { maximumFractionDigits: 0 }) : null,
+        ].filter(Boolean).join(' · ');
+        lines.push(`    ${sub}`);
+      }
+    });
+  } else {
+    lines.push('  (none)');
+  }
   lines.push('');
 
   lines.push('QUEUE SUMMARY');
@@ -344,6 +396,7 @@ export async function briefingEmailHandler(req, res) {
     sfActivity,
     hotContacts,
     diaPipeline,
+    newIntakes,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts),
     safe(() => fetchMyWork(workspaceId, userId, 15), []),
@@ -353,6 +406,10 @@ export async function briefingEmailHandler(req, res) {
     safe(() => fetchRecentSfActivity(workspaceId, 30), []),
     safe(() => fetchHotContacts(15), []),
     safe(fetchDiaPipeline, { deals: [], leads: [] }),
+    // New OM intakes that landed in the last 24h — surfaces freshly
+    // promoted deals in the daily email so a broker sees "3 new deals
+    // overnight" without having to poll the Sales/Available tab.
+    safe(() => fetchNewIntakes(workspaceId, 24, 10), { window_hours: 24, count: 0, items: [] }),
   ]);
 
   let priorities;
@@ -380,10 +437,10 @@ export async function briefingEmailHandler(req, res) {
 
   const subject = formatSubject(new Date(generatedAt));
   const html = renderHtml({
-    subject, priorities, syncHealth, workCounts, inboxSummary, generatedAt,
+    subject, priorities, syncHealth, workCounts, inboxSummary, newIntakes, generatedAt,
   });
   const text = renderText({
-    subject, priorities, syncHealth, workCounts, inboxSummary, generatedAt,
+    subject, priorities, syncHealth, workCounts, inboxSummary, newIntakes, generatedAt,
   });
 
   res.status(200).json({
