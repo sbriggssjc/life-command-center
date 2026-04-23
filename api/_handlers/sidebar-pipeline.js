@@ -5348,29 +5348,46 @@ async function upsertGovListings(propertyId, entity, metadata) {
   record.property_id = propertyId;
   record.listing_status = 'Active';
 
-  // Dedup: find ANY existing listing for this property (not just Active)
-  const lookup = await domainQuery('government', 'GET',
+  // Dedup: the 2026-04-23 migration adds a partial unique index on
+  // (property_id, listing_source, listing_status, listing_date). Use
+  // PostgREST's resolution=merge-duplicates so re-scraping the same CoStar
+  // page updates the existing row instead of inserting a fresh one. This
+  // replaces the old "find latest, decide INSERT vs PATCH" logic that
+  // produced 3-Sold-row groups when the auto-close PATCH below flipped the
+  // prior row to Sold between consecutive sidebar hits.
+  //
+  // When a prior Active row exists for this property with an OLDER
+  // listing_date, we still want to update *that* one (the user's re-scrape
+  // is the same listing even if CoStar changed the listing_date). So we do
+  // a single pre-check looking for an Active row on the same property and,
+  // if found, PATCH it. Otherwise we upsert via on_conflict.
+  const activeLookup = await domainQuery('government', 'GET',
     `available_listings?property_id=eq.${propertyId}` +
-    `&select=listing_id,listing_status&order=listing_date.desc.nullslast&limit=1`
+    `&listing_source=eq.costar_sidebar&listing_status=eq.Active` +
+    `&select=listing_id&limit=1`
   );
-
-  if (lookup.ok && lookup.data?.length) {
-    const existing = lookup.data[0];
-    if (existing.listing_status === 'Active') {
-      // Update existing Active listing
-      const { property_id: _pid, ...patchData } = record;
-      await domainPatch('government',
-        `available_listings?listing_id=eq.${existing.listing_id}`,
-        patchData, 'upsertGovListings:update'
-      );
-      return 0;
-    }
-    // Existing listing is under_contract/sold/superseded — create new Active
-    // (fall through to INSERT below)
+  if (activeLookup.ok && activeLookup.data?.length) {
+    const existingId = activeLookup.data[0].listing_id;
+    const { property_id: _pid, ...patchData } = record;
+    await domainPatch('government',
+      `available_listings?listing_id=eq.${existingId}`,
+      patchData, 'upsertGovListings:updateActive'
+    );
+    // Fall through to the auto-close-on-sale check below so a fresh sale
+    // still flips this row to Sold in one round of work.
+    var _existingActiveId = existingId;  // eslint-disable-line no-var
   }
 
-  // INSERT new listing
-  const result = await domainQuery('government', 'POST', 'available_listings', record);
+  // Upsert using the compound unique index. If no Active row matched above,
+  // this INSERTs; otherwise the PATCH above already ran and this becomes a
+  // no-op conflict-merge against the row we just updated.
+  const result = !(typeof _existingActiveId !== 'undefined' && _existingActiveId)
+    ? await domainQuery('government', 'POST',
+        'available_listings?on_conflict=property_id,listing_source,listing_status,listing_date',
+        record,
+        { Prefer: 'return=representation,resolution=merge-duplicates' }
+      )
+    : { ok: true };
   if (!result.ok) return 0;
 
   // Post-insert check: if a closed sale already exists for this property

@@ -197,34 +197,51 @@ async function promoteListing(domain, intakeId, snapshot, match) {
 // 2. BROKER CONTACT UPSERT (check-then-insert by email)
 // ============================================================================
 
-async function promoteBrokerContact(domain, snapshot) {
+async function promoteBrokerContact(domain, snapshot, match) {
   const brokerName  = (snapshot.listing_broker || '').trim();
   const brokerEmail = (snapshot.listing_broker_email || '').trim();
   if (!brokerName && !brokerEmail) {
     return { ok: false, skipped: 'no_broker_info' };
   }
 
-  // Gov table columns: name, email, phone, company, title, data_source, role
-  //                    (role stored in `contact_type` per our schema peek)
-  // Dia table columns: contact_name, contact_email, contact_phone, company, title, role
+  // Gov table columns: name, email, phone, company, title, data_source,
+  //                    contact_type, property_id
+  // Dia table columns: contact_name, contact_email, contact_phone, company,
+  //                    title, role, property_id
   const isGov = domain === 'government';
   const emailCol = isGov ? 'email' : 'contact_email';
 
-  // Check if a contact with this email already exists. If so, skip to avoid
-  // disturbing curated data; callers can surface a "duplicate detected" if
-  // they want to merge.
+  // Resolve the property_id so the contact is filterable from the detail
+  // pane's "contacts for this property" lookup. Without this link, a freshly
+  // ingested OM leaves 0 contacts visible on the property even though the
+  // broker row exists (2026-04-23 Plano diagnosis: contact_count=0 on
+  // property 12971 despite Geoff Ficke being in gov.contacts).
+  const propertyId = match?.property_id || null;
+
+  // Check if a contact with this email already exists. If so, ONLY backfill
+  // property_id when missing — don't overwrite curated fields.
   if (brokerEmail) {
     const existing = await domainQuery(
       domain,
       'GET',
-      `contacts?${emailCol}=ilike.${encodeURIComponent(brokerEmail)}&select=contact_id&limit=1`
+      `contacts?${emailCol}=ilike.${encodeURIComponent(brokerEmail)}&select=contact_id,property_id&limit=1`
     );
     if (existing.ok && Array.isArray(existing.data) && existing.data.length) {
-      return { ok: true, skipped: 'existing_contact', contact_id: existing.data[0].contact_id };
+      const row0 = existing.data[0];
+      if (propertyId && !row0.property_id) {
+        await domainQuery(
+          domain,
+          'PATCH',
+          `contacts?contact_id=eq.${encodeURIComponent(row0.contact_id)}`,
+          { property_id: propertyId }
+        ).catch(() => {});
+      }
+      return { ok: true, skipped: 'existing_contact', contact_id: row0.contact_id, property_id: propertyId };
     }
   }
 
-  // No existing match → insert a fresh contact.
+  // No existing match → insert a fresh contact, now including property_id
+  // so the detail-pane contacts lookup (property_id=eq.X) returns it.
   const row = isGov
     ? {
         name:            brokerName || brokerEmail || 'Unknown Broker',
@@ -233,6 +250,7 @@ async function promoteBrokerContact(domain, snapshot) {
         title:           'Listing Broker',
         contact_type:    'broker',
         data_source:     'lcc_intake_om',
+        property_id:     propertyId,
       }
     : {
         contact_name:    brokerName || brokerEmail || 'Unknown Broker',
@@ -240,6 +258,7 @@ async function promoteBrokerContact(domain, snapshot) {
         company:         snapshot.listing_firm || null,
         title:           'Listing Broker',
         role:            'broker',
+        property_id:     propertyId,
       };
 
   const result = await domainQuery(
@@ -253,7 +272,7 @@ async function promoteBrokerContact(domain, snapshot) {
     return { ok: false, skipped: 'insert_failed', status: result.status, detail: result.data };
   }
   const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
-  return { ok: true, contact_id: inserted?.contact_id || null, inserted: true };
+  return { ok: true, contact_id: inserted?.contact_id || null, inserted: true, property_id: propertyId };
 }
 
 // ============================================================================
@@ -272,14 +291,47 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
     return { ok: true, skipped: `property_financials_not_supported_for_${domain}` };
   }
 
-  // Gov properties has gross_rent + noi (but NOT cap_rate — cap is
-  // stored on available_listings / sales_transactions / view-computed).
-  // Build the patch from whatever the snapshot has, then filter to
-  // only fields currently null on the property so we don't overwrite
-  // curated data.
+  // Gov properties has gross_rent + noi + year_built + land_acres + rba.
+  // (cap_rate lives on available_listings / sales_transactions / view-computed.)
+  //
+  // Snapshot field map:
+  //   snapshot.noi            → properties.noi
+  //   snapshot.annual_rent    → properties.gross_rent
+  //   snapshot.year_built     → properties.year_built           (2026-04-23)
+  //   snapshot.land_acres OR
+  //   snapshot.lot_sf         → properties.land_acres (÷43,560) (2026-04-23)
+  //   snapshot.building_sf OR
+  //   snapshot.square_footage → properties.rba                  (2026-04-23)
+  //
+  // Only fields currently null on the property get patched so we never
+  // overwrite curated data.
   const patch = {};
-  if (snapshot.noi != null)          patch.noi        = Number(snapshot.noi);
-  if (snapshot.annual_rent != null)  patch.gross_rent = Number(snapshot.annual_rent);
+  if (snapshot.noi != null)             patch.noi        = Number(snapshot.noi);
+  if (snapshot.annual_rent != null)     patch.gross_rent = Number(snapshot.annual_rent);
+
+  // year_built: accept an int 1800–current year. Reject junk.
+  const yb = parseInt(snapshot.year_built, 10);
+  if (Number.isFinite(yb) && yb >= 1800 && yb <= new Date().getFullYear() + 2) {
+    patch.year_built = yb;
+  }
+
+  // land_acres: prefer explicit acres, else convert lot_sf (43,560 sf/acre).
+  const lotSf = snapshot.lot_sf != null ? Number(snapshot.lot_sf) : null;
+  const acres = snapshot.land_acres != null
+    ? Number(snapshot.land_acres)
+    : (lotSf && lotSf > 0 ? Math.round((lotSf / 43560) * 100) / 100 : null);
+  if (Number.isFinite(acres) && acres > 0 && acres < 100000) {
+    patch.land_acres = acres;
+  }
+
+  // rba (rentable building area): prefer building_sf, else square_footage.
+  const rba = snapshot.building_sf != null
+    ? Number(snapshot.building_sf)
+    : (snapshot.square_footage != null ? Number(snapshot.square_footage) : null);
+  if (Number.isFinite(rba) && rba >= 500 && rba < 10000000) {
+    patch.rba = Math.round(rba);
+  }
+
   if (!Object.keys(patch).length) {
     return { ok: false, skipped: 'nothing_to_update' };
   }
@@ -287,7 +339,7 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
   const existing = await domainQuery(
     'government',
     'GET',
-    `properties?property_id=eq.${Number(propertyId)}&select=noi,gross_rent&limit=1`
+    `properties?property_id=eq.${Number(propertyId)}&select=noi,gross_rent,year_built,land_acres,rba&limit=1`
   );
   if (!existing.ok) {
     return {
@@ -304,6 +356,9 @@ async function promotePropertyFinancials(domain, propertyId, snapshot) {
   const filteredPatch = {};
   if (current.noi        == null && patch.noi        != null) filteredPatch.noi        = patch.noi;
   if (current.gross_rent == null && patch.gross_rent != null) filteredPatch.gross_rent = patch.gross_rent;
+  if (current.year_built == null && patch.year_built != null) filteredPatch.year_built = patch.year_built;
+  if (current.land_acres == null && patch.land_acres != null) filteredPatch.land_acres = patch.land_acres;
+  if (current.rba        == null && patch.rba        != null) filteredPatch.rba        = patch.rba;
   if (!Object.keys(filteredPatch).length) {
     return { ok: true, skipped: 'all_fields_already_populated', current_values: current };
   }
@@ -1029,7 +1084,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   // and has its own try/catch.
   const [listingResult, contactResult, financialsResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
-    promoteBrokerContact(match.domain, snapshot).catch(e => ({ ok: false, error: e?.message })),
+    promoteBrokerContact(match.domain, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
   ]);
 
