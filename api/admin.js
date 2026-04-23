@@ -77,10 +77,54 @@ export default withErrorHandler(async function handler(req, res) {
     case 'edge-brief':  return handleEdgeBriefingProxy(req, res);
     case 'cms-match':   return handleCmsMatch(req, res);
     case 'ownership-reconcile': return handleOwnershipReconcile(req, res);
+    case 'sf-sync-queue':       return handleSfSyncQueue(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// SF SYNC QUEUE
+// ============================================================================
+// POST body: { kind: 'create_account'|'create_opportunity'|..., payload: {...} }
+// Inserts a pending row into lcc_opps.sf_sync_queue. A Power Automate flow
+// polls this table, executes the write against Salesforce (using the same
+// SSO-backed SF connector the lookup flow uses), and updates status/result.
+//
+// This exists because Scott's org can't register a Connected App for OAuth,
+// so every SF write has to be brokered by a PA flow. LCC writes the intent
+// to Supabase; PA reads it and performs the SF side-effect.
+async function handleSfSyncQueue(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const { kind, payload } = req.body || {};
+  const validKinds = ['create_account','create_opportunity','update_account','find_account','link_contact'];
+  if (!kind || !validKinds.includes(kind)) {
+    return res.status(400).json({ error: `kind must be one of: ${validKinds.join(', ')}` });
+  }
+
+  const workspaceId = user.memberships?.[0]?.workspace_id || null;
+  const insertRes = await opsQuery('POST', 'sf_sync_queue', {
+    workspace_id:  workspaceId,
+    kind,
+    payload:       payload || {},
+    status:        'pending',
+    requested_by:  user.display_name || user.email || 'unknown',
+  }, { 'Prefer': 'return=representation' });
+
+  if (!insertRes.ok) {
+    return res.status(insertRes.status || 500).json({
+      error: 'Failed to queue SF sync request',
+      detail: insertRes.data,
+    });
+  }
+  const row = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
+  return res.status(201).json({ ok: true, queue_id: row?.id, kind, status: 'pending' });
+}
 
 // ============================================================================
 // WORKSPACES

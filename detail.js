@@ -1313,6 +1313,227 @@ function _udTabOverview() {
 
   let extra = '';
 
+  // ── MARKETING COLLATERAL ────────────────────────────────────────────────
+  // One-click access to OM PDF / Flyer / Marketplace (Crexi, LoopNet, …) /
+  // broker microsite. Reads from the same fields the listings table uses
+  // (intake_artifact_path + intake_artifact_type + source_url + tracked_urls)
+  // but surfaces them prominently instead of tucked into a sticky Actions
+  // column. Scott 2026-04-23: "I still don't see the section where I can
+  // click on the marketing materials or OM."
+  {
+    const fb = _udCache?.fallback || {};
+    const p  = _udCache?.property || {};
+    const listingRow = {
+      intake_artifact_path: fb.intake_artifact_path || p.intake_artifact_path || null,
+      intake_artifact_type: fb.intake_artifact_type || p.intake_artifact_type || null,
+      source_url:           fb.source_url           || p.source_url           || null,
+      tracked_urls:         fb.tracked_urls         || p.tracked_urls         || null,
+      // dia-side field names get normalized via extraUrlFields below
+      url:                  fb.url                  || p.url                  || null,
+      listing_url:          fb.listing_url          || p.listing_url          || null,
+    };
+    const hasAnything = !!(listingRow.intake_artifact_path || listingRow.source_url
+      || listingRow.url || listingRow.listing_url
+      || (Array.isArray(listingRow.tracked_urls) && listingRow.tracked_urls.length));
+
+    if (hasAnything && typeof buildCollateralIcons === 'function') {
+      extra += '<div class="detail-section">';
+      extra += '<div class="detail-section-title">Marketing Collateral</div>';
+      extra += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px">';
+      // Compact icon strip (same helper the table uses).
+      extra += buildCollateralIcons(listingRow, {
+        pdf:            'intake_artifact_path',
+        pdfType:        'intake_artifact_type',
+        primaryUrl:     'source_url',
+        trackedUrls:    'tracked_urls',
+        extraUrlFields: ['url', 'listing_url'],
+      });
+      extra += '</div>';
+
+      // Human-readable accompanying list so the icons are self-describing.
+      // Build it from the same fields; skip if nothing to show.
+      const descLines = [];
+      if (listingRow.intake_artifact_path) {
+        const typeLabel = listingRow.intake_artifact_type === 'flyer' ? 'Flyer'
+          : listingRow.intake_artifact_type === 'marketing_brochure' ? 'Marketing Brochure'
+          : 'Offering Memorandum';
+        descLines.push(
+          `<li><a href="javascript:void(0)" onclick='openIntakeArtifact(${JSON.stringify(listingRow.intake_artifact_path)})' style="color:var(--accent)">📄 ${esc(typeLabel)} PDF</a>` +
+          ` <span style="color:var(--text3);font-size:11px">(mints a 1-hour signed download)</span></li>`
+        );
+      }
+      const urls = [];
+      if (listingRow.source_url)  urls.push(listingRow.source_url);
+      if (listingRow.url)         urls.push(listingRow.url);
+      if (listingRow.listing_url) urls.push(listingRow.listing_url);
+      if (Array.isArray(listingRow.tracked_urls)) urls.push(...listingRow.tracked_urls);
+      const seenUrl = new Set();
+      for (const u of urls) {
+        if (!u || seenUrl.has(u)) continue;
+        seenUrl.add(u);
+        let host = '';
+        try { host = new URL(u).hostname.replace(/^www\./,''); } catch (_) { /* */ }
+        const label = host.includes('crexi')        ? 'Crexi listing'
+                    : host.includes('loopnet')      ? 'LoopNet listing'
+                    : host.includes('costar')       ? 'CoStar page'
+                    : host.includes('brevitas')     ? 'Brevitas listing'
+                    : host.includes('ten-x')        ? 'Ten-X auction'
+                    : (host || 'External link');
+        descLines.push(`<li><a href="${safeHref(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">🔗 ${esc(label)}</a> <span style="color:var(--text3);font-size:11px">${esc(host)}</span></li>`);
+      }
+      if (descLines.length) {
+        extra += `<ul style="margin:10px 0 0 0;padding-left:18px;font-size:12px;line-height:1.7">${descLines.join('')}</ul>`;
+      }
+      extra += '</div>';
+    }
+  }
+
+  // ── DATA RESOLUTION STATUS ─────────────────────────────────────────────
+  // Transparency panel: shows what the LCC pipeline has already wired up
+  // for this property and what's still outstanding. Scott 2026-04-23:
+  // "I'd like some indicator that ownership resolution has been run and
+  // entity registration has been matched and no salesforce has been
+  // matched so we need to create a record and open an opportunity."
+  //
+  // Surfaces (with color-coded chips + action buttons):
+  //   1. Ownership resolution — true_owner + recorded_owner names
+  //   2. LCC entity registration — entity_id + link
+  //   3. Salesforce Account — sf_account_id on true_owner, with deep link
+  //   4. Salesforce Opportunity — pipeline_stage proxy + open-in-SF button
+  {
+    const p   = _udCache?.property || {};
+    const fb  = _udCache?.fallback || {};
+    const own = _udCache?.ownership || null;
+    const trueOwnerId     = p.true_owner_id     || fb.true_owner_id     || own?.true_owner_id     || null;
+    const recordedOwnerId = p.recorded_owner_id || fb.recorded_owner_id || own?.recorded_owner_id || null;
+    const trueOwnerName   = own?.true_owner_name   || p.true_owner_name   || fb.true_owner_name   || p.assessed_owner || null;
+    const recordedName    = own?.recorded_owner_name || p.recorded_owner_name || fb.recorded_owner_name || null;
+    const trueSfAccount   = own?.true_sf_acct || p.true_owner_sf_account_id || null;
+    const entityMeta      = _udCache?.entityMeta || {};
+    const lccEntityId     = entityMeta.entity_id || entityMeta.id || _udCache?.lccEntityId || null;
+    const sfOppOpen       = !!(entityMeta.sf_opportunity_id || p.sf_opportunity_id);
+    const sfInstanceUrl   = (typeof LCC_CONFIG !== 'undefined' && LCC_CONFIG.sf_instance_url) ||
+                            (typeof window !== 'undefined' && window.SF_INSTANCE_URL) || '';
+
+    const chip = (opts) => {
+      const palette = {
+        ok:      { bg: 'rgba(34,197,94,0.12)',  fg: '#16a34a', label: '✓' },
+        warn:    { bg: 'rgba(245,158,11,0.15)', fg: '#d97706', label: '!' },
+        missing: { bg: 'rgba(239,68,68,0.12)',  fg: '#dc2626', label: '×' },
+      };
+      const c = palette[opts.status] || palette.missing;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:${c.bg};color:${c.fg};border-radius:8px;font-size:12px;flex-wrap:wrap">` +
+        `<span style="font-weight:700;font-size:14px;line-height:1">${c.label}</span>` +
+        `<div style="flex:1;min-width:0">` +
+          `<div style="font-weight:600">${esc(opts.title)}</div>` +
+          (opts.detail ? `<div style="font-size:11px;color:var(--text2);opacity:0.9">${opts.detail}</div>` : '') +
+        `</div>` +
+        (opts.action ? opts.action : '') +
+      `</div>`;
+    };
+
+    const btn = (onclick, label, variant) => {
+      const styles = variant === 'primary'
+        ? 'background:var(--accent);color:#fff;border:none'
+        : 'background:var(--s2);color:var(--text);border:1px solid var(--border)';
+      return `<button onclick="${onclick}" style="padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;${styles}">${esc(label)}</button>`;
+    };
+
+    extra += '<div class="detail-section">';
+    extra += '<div class="detail-section-title">Data Resolution Status</div>';
+    extra += '<div style="display:grid;grid-template-columns:1fr;gap:6px;margin-top:4px">';
+
+    // 1) Ownership resolution
+    if (trueOwnerId || recordedOwnerId) {
+      const parts = [];
+      if (trueOwnerName)  parts.push(`True: <strong>${esc(trueOwnerName)}</strong>`);
+      if (recordedName && recordedName !== trueOwnerName) parts.push(`Recorded: <strong>${esc(recordedName)}</strong>`);
+      extra += chip({
+        status: 'ok',
+        title:  'Ownership Resolved',
+        detail: parts.join(' · ') || 'Owner chain linked',
+      });
+    } else {
+      extra += chip({
+        status: 'missing',
+        title:  'Ownership Not Resolved',
+        detail: 'No true_owner or recorded_owner linked yet',
+        action: btn(
+          `_udBtnGuard(this, function(){_udResolveOwner(${propertyId || 'null'})})`,
+          'Resolve owners', 'primary'
+        ),
+      });
+    }
+
+    // 2) LCC entity registration
+    if (lccEntityId) {
+      extra += chip({
+        status: 'ok',
+        title:  'LCC Entity Registered',
+        detail: `ID: <code style="font-family:'JetBrains Mono',monospace;font-size:10px">${esc(String(lccEntityId).slice(0,8))}…</code>`,
+      });
+    } else {
+      extra += chip({
+        status: 'warn',
+        title:  'LCC Entity Not Registered',
+        detail: 'No canonical entity link yet — run intake promotion or the sidebar pipeline',
+      });
+    }
+
+    // 3) Salesforce Account match
+    if (trueSfAccount) {
+      const sfUrl = sfInstanceUrl ? `${sfInstanceUrl.replace(/\/+$/,'')}/lightning/r/Account/${trueSfAccount}/view` : '';
+      const openBtn = sfUrl
+        ? `<a href="${esc(sfUrl)}" target="_blank" rel="noopener noreferrer" style="padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);color:var(--accent);border:1px solid var(--border);text-decoration:none">Open in SF</a>`
+        : '';
+      extra += chip({
+        status: 'ok',
+        title:  'Salesforce Account Matched',
+        detail: `ID: ${esc(trueSfAccount)}`,
+        action: openBtn,
+      });
+    } else if (trueOwnerName) {
+      extra += chip({
+        status: 'missing',
+        title:  'No Salesforce Account',
+        detail: `Owner "${esc(trueOwnerName)}" is not linked to an SF Account — needs creation`,
+        action:
+          btn(`_udBtnGuard(this, function(){_udSfCreateAccount(${JSON.stringify(trueOwnerName)}, ${JSON.stringify(trueOwnerId || '')})})`, 'Create SF Account', 'primary') +
+          ' ' +
+          btn(`_udBtnGuard(this, function(){_udSfFindAccount(${JSON.stringify(trueOwnerName)}, ${JSON.stringify(trueOwnerId || '')})})`, 'Search SF'),
+      });
+    } else {
+      extra += chip({
+        status: 'warn',
+        title:  'Salesforce Match Pending',
+        detail: 'No owner identified yet — resolve ownership first',
+      });
+    }
+
+    // 4) Salesforce Opportunity
+    if (sfOppOpen) {
+      extra += chip({
+        status: 'ok',
+        title:  'Salesforce Opportunity Open',
+        detail: 'Tracked in prospecting pipeline',
+      });
+    } else {
+      const canCreate = !!trueSfAccount; // need an SF account first
+      extra += chip({
+        status: canCreate ? 'warn' : 'missing',
+        title:  'No Salesforce Opportunity',
+        detail: canCreate
+          ? 'SF Account linked — ready to create an Opportunity'
+          : 'Create SF Account before opening Opportunity',
+        action: canCreate
+          ? btn(`_udBtnGuard(this, function(){_udSfCreateOpportunity(${JSON.stringify(trueSfAccount)}, ${propertyId || 'null'})})`, 'Open Opportunity', 'primary')
+          : '',
+      });
+    }
+
+    extra += '</div></div>';
+  }
+
   // ── LOAN / DEBT (moved from Intel tab) ──────────────────────────────────
   if (propertyId) {
     extra += '<div class="detail-section">';
@@ -1388,6 +1609,171 @@ function _udTabOverview() {
   }
 
   return pill + body + extra;
+}
+
+// ============================================================================
+// DATA RESOLUTION ACTION HANDLERS
+// ============================================================================
+// These handlers are called from the Data Resolution Status chips on the
+// Overview tab. Each is best-effort: on failure they toast the error so the
+// user can see what went wrong without losing their place.
+
+/**
+ * Kick off owner-resolution for a gov property. Hits the intake-promoter's
+ * standalone owner-resolve action, which queries true_owners +
+ * recorded_owners by assessed_owner / ILIKE-fuzzy match and PATCHes the
+ * property row. Also runs the SF account lookup where configured.
+ */
+async function _udResolveOwner(propertyId) {
+  if (!propertyId) { showToast('No property_id', 'error'); return; }
+  try {
+    const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+    // Uses the existing /api/ownership-reconcile endpoint (handled by
+    // admin.js handleOwnershipReconcile). That endpoint scans the owner
+    // tables by assessed_owner and PATCHes properties.true_owner_id /
+    // recorded_owner_id; it also fires the SF account lookup where
+    // SF_LOOKUP_WEBHOOK_URL is configured, populating sf_account_id on
+    // matching owner rows.
+    const res = await doFetch('/api/ownership-reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ property_id: propertyId }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const linked = data?.true_owner_id || data?.recorded_owner_id || data?.resolved;
+    showToast(
+      linked ? `Owner resolved: ${data.true_owner_name || data.recorded_owner_name || 'linked'}`
+             : 'Owner reconcile ran — no confident match found',
+      linked ? 'success' : 'info'
+    );
+    if (_udCache?.db && _udCache?.ids) {
+      openUnifiedDetail(_udCache.db, _udCache.ids, _udCache.fallback, window._udTab);
+    }
+  } catch (err) {
+    console.error('[_udResolveOwner]', err);
+    showToast('Owner resolution failed: ' + (err?.message || err), 'error');
+  }
+}
+
+/**
+ * Search Salesforce for an Account matching this owner name (via the
+ * existing PA proxy). Shows the best candidate in a toast so the broker
+ * can eyeball before linking.
+ */
+async function _udSfFindAccount(ownerName, ownerId) {
+  if (!ownerName) { showToast('No owner name', 'error'); return; }
+  // Queue a find_account ask for the PA flow. The same flow that performs
+  // writes can also do a synchronous LIKE search; until it's polled, we
+  // just tell the user the request is enqueued so they know clicks did
+  // something. (Owner-reconcile already does a best-effort SF lookup
+  // during its run; this button is for "re-try the search" flows.)
+  try {
+    const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+    const res = await doFetch('/api/sf-sync-queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'find_account',
+        payload: {
+          name:     ownerName,
+          owner_id: ownerId || null,
+          source:   'detail_pane_status_chip',
+        },
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${txt ? ': ' + txt.slice(0, 120) : ''}`);
+    }
+    showToast(`SF search queued for "${ownerName}" — check back in a minute.`, 'info');
+  } catch (err) {
+    console.error('[_udSfFindAccount]', err);
+    showToast('Search failed: ' + (err?.message || err), 'error');
+  }
+}
+
+/**
+ * Request creation of a new Salesforce Account for this owner. Scott's
+ * org uses SSO and LCC proxies SF writes via Power Automate, so this
+ * dispatches to the sf_sync_flags queue rather than calling SF directly.
+ * A follow-up PA flow reads the flag and creates the Account.
+ */
+async function _udSfCreateAccount(ownerName, ownerId) {
+  if (!ownerName) { showToast('No owner name', 'error'); return; }
+  try {
+    const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+    const res = await doFetch('/api/sf-sync-queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'create_account',
+        payload: {
+          name:     ownerName,
+          owner_id: ownerId || null,
+          source:   'detail_pane_status_chip',
+        },
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${txt ? ': ' + txt.slice(0, 120) : ''}`);
+    }
+    const data = await res.json();
+    showToast(
+      `Queued SF Account creation for "${ownerName}" (queue ${data?.queue_id?.slice(0,8)}…). Power Automate will pick it up.`,
+      'success'
+    );
+  } catch (err) {
+    console.error('[_udSfCreateAccount]', err);
+    showToast('Queue failed: ' + (err?.message || err), 'error');
+  }
+}
+
+/**
+ * Open a new Salesforce Opportunity against the matched Account for this
+ * property. Goes through the outbound SF sync action that the pipeline
+ * pill already uses to log stage changes — giving us a consistent write
+ * path whether the broker advances from Prospect → Pitched via the pill
+ * or clicks "Open Opportunity" here.
+ */
+async function _udSfCreateOpportunity(sfAccountId, propertyId) {
+  if (!sfAccountId) { showToast('No SF Account linked', 'error'); return; }
+  try {
+    const doFetch = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.apiFetch) ? LCC_AUTH.apiFetch : fetch;
+    const res = await doFetch('/api/sf-sync-queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'create_opportunity',
+        payload: {
+          sf_account_id: sfAccountId,
+          property_id:   propertyId || null,
+          stage_name:    'Prospecting',
+          source:        'detail_pane_status_chip',
+        },
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${txt ? ': ' + txt.slice(0, 120) : ''}`);
+    }
+    const data = await res.json();
+    showToast(
+      `Opportunity creation queued (queue ${data?.queue_id?.slice(0,8)}…). Power Automate will pick it up.`,
+      'success'
+    );
+  } catch (err) {
+    console.error('[_udSfCreateOpportunity]', err);
+    showToast('Queue failed: ' + (err?.message || err), 'error');
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window._udResolveOwner       = _udResolveOwner;
+  window._udSfFindAccount      = _udSfFindAccount;
+  window._udSfCreateAccount    = _udSfCreateAccount;
+  window._udSfCreateOpportunity = _udSfCreateOpportunity;
 }
 
 // ─── RENT ROLL TAB ───────────────────────────────────────────────────────────
@@ -2683,13 +3069,105 @@ function _udTabOperations() {
   const db = _udCache.db;
   const rankings = _udCache.rankings;
 
-  // Gov properties don't have operational metrics
+  // ── GOV operations: agency context, tenant succession, fed-tenant links ─
+  // Previously this tab was an empty-state for gov. That left a visible gap
+  // on every GSA listing. Surface what we already have from the cache
+  // (agency, agency_full, government_type, firm_term_remaining, lease
+  // chronology) plus quick-jump links to the federal workforce / budget
+  // context tools a broker would normally hit manually (OPM FedScope for
+  // employee counts, USAspending for obligations, Beta.SAM for contract
+  // history). This is NOT a full build-out (see Task #43) but beats blank.
   if (db === 'gov') {
-    return '<div class="detail-empty" style="text-align:center;padding:32px">' +
-      '<div style="font-size:32px;margin-bottom:12px">&#x1F3DB;</div>' +
-      '<div style="color:var(--text2)">Government properties do not have clinic operational metrics.</div>' +
-      '<div style="color:var(--text3);margin-top:8px;font-size:13px">Lease performance data is available on the Lease tab.</div>' +
-      '</div>';
+    const p = _udCache.property || {};
+    const fb = _udCache.fallback || {};
+    const leases = (_udCache.leases || []).slice().sort((a, b) => {
+      const da = new Date(a.commencement_date || a.lease_start || 0);
+      const db2 = new Date(b.commencement_date || b.lease_start || 0);
+      return da - db2;
+    });
+
+    const agency      = p.agency || p.tenant_agency || fb.agency || fb.tenant_agency || null;
+    const agencyFull  = p.agency_full_name || p.agency_full || fb.agency_full_name || fb.agency_full || null;
+    const govType     = p.government_type || fb.government_type || null;
+    const state       = p.state || fb.state || null;
+    const city        = p.city  || fb.city  || null;
+    const firmTermRem = p.firm_term_remaining != null ? parseFloat(p.firm_term_remaining) : null;
+    const termRem     = p.term_remaining != null ? parseFloat(p.term_remaining) : null;
+    const representingAgency = p.representing_agency || leases[leases.length - 1]?.representing_agency || null;
+
+    const uniqTenants = new Set(leases.map(l => l.tenant_agency || l.tenant).filter(Boolean));
+    const tenantCount = uniqTenants.size;
+
+    const fmtYr = (v) => (v == null ? '—' : parseFloat(v).toFixed(1) + ' yr');
+
+    let h = '';
+
+    // Agency header card
+    h += '<div class="detail-section">';
+    h += '<div class="detail-section-title">Agency Operation</div>';
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;font-size:13px">';
+    const row = (label, val) =>
+      `<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:2px">${esc(label)}</div>` +
+      `<div style="color:var(--text)">${val || '<span style=\"color:var(--text3)\">—</span>'}</div></div>`;
+    h += row('Agency (Short)', agency ? esc(agency) : null);
+    h += row('Agency (Full)', agencyFull ? esc(agencyFull) : null);
+    h += row('Government Level', govType ? esc(govType.charAt(0).toUpperCase() + govType.slice(1)) : null);
+    h += row('Representing Agency', representingAgency ? esc(representingAgency) : null);
+    h += row('Firm Term Remaining', firmTermRem != null ? fmtYr(firmTermRem) : null);
+    h += row('Total Term Remaining', termRem != null ? fmtYr(termRem) : null);
+    h += row('Tenant Succession', tenantCount ? `${tenantCount} tenant${tenantCount > 1 ? 's' : ''} historically at this address` : null);
+    h += row('Location', [city, state].filter(Boolean).join(', ') || null);
+    h += '</div></div>';
+
+    // Tenant chronology — one line per lease, useful for "who's been here"
+    if (leases.length) {
+      h += '<div class="detail-section">';
+      h += '<div class="detail-section-title">Tenant Chronology</div>';
+      h += '<div style="margin-top:6px">';
+      leases.forEach(l => {
+        const tenant = l.tenant_agency || l.tenant || '(unknown)';
+        const start  = l.commencement_date || l.lease_start || null;
+        const end    = l.expiration_date   || l.lease_expiration || null;
+        const rent   = l.annual_rent != null ? '$' + fmtN(Math.round(parseFloat(l.annual_rent))) : null;
+        const psf    = l.rent_psf   != null ? '$' + parseFloat(l.rent_psf).toFixed(2) + '/SF' : null;
+        const isSup  = l.is_superseding === true;
+        const isFg   = l.is_first_generation === true;
+        const isSup2 = !!l.superseded_at;
+        const typeLabel = isSup2 ? 'Superseded' : (isSup ? 'Succession' : (isFg ? 'Original' : 'Lease'));
+        const typeColor = isSup2 ? 'var(--text3)' : (isSup ? '#f59e0b' : 'var(--green)');
+        h += '<div style="display:flex;gap:10px;align-items:center;padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;flex-wrap:wrap">';
+        h += `<span style="font-size:10px;font-weight:700;color:${typeColor};min-width:80px">${esc(typeLabel)}</span>`;
+        h += `<span style="flex:1;font-weight:600;font-size:13px">${esc(tenant)}</span>`;
+        if (start || end) h += `<span style="font-size:11px;color:var(--text2)">${esc(_fmtDate(start) || '?')} → ${esc(_fmtDate(end) || '?')}</span>`;
+        if (rent) h += `<span style="font-size:11px;color:var(--green)">${esc(rent)}</span>`;
+        if (psf)  h += `<span style="font-size:11px;color:var(--text2)">${esc(psf)}</span>`;
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
+
+    // Federal-tenant research helpers: deep links to the public tools a
+    // broker would use to size the operation (headcount, budget, contracts).
+    // Skipped for non-federal (state/local) rows since those sources don't
+    // apply. OPM FedScope's URL structure doesn't support per-agency deep
+    // links from the public portal, so we fall back to a search URL.
+    if ((govType || '').toLowerCase() === 'federal' && agency) {
+      const aQ = encodeURIComponent(agencyFull || agency);
+      h += '<div class="detail-section">';
+      h += '<div class="detail-section-title">Research</div>';
+      h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">';
+      const link = (url, label) =>
+        `<a href="${safeHref(url)}" target="_blank" rel="noopener noreferrer" style="padding:6px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--accent);font-size:12px;font-weight:600;text-decoration:none">${esc(label)}</a>`;
+      h += link(`https://www.fedscope.opm.gov/`, 'OPM FedScope (workforce)');
+      h += link(`https://www.usaspending.gov/search/?hash=&filters=${encodeURIComponent('{"recipient_search_text":["' + (agencyFull || agency) + '"]}')}`, 'USAspending (budget)');
+      h += link(`https://sam.gov/search/?index=_all&sfm%5Bsimple_search%5D%5BsearchString%5D=${aQ}`, 'SAM.gov (contracts)');
+      h += link(`https://www.google.com/search?q=${aQ}+${encodeURIComponent(city || '')}+${encodeURIComponent(state || '')}+employees+headcount`, 'Web search: employees');
+      h += '</div>';
+      h += '<div style="font-size:11px;color:var(--text3);margin-top:6px">Full agency profile build-out (employee counts, budget appropriation, operational overview) is planned — these links jump to the public data sources a broker would normally pull manually.</div>';
+      h += '</div>';
+    }
+
+    return h;
   }
 
   // When v_property_rankings has no row but we have a resolved CMS link, build
