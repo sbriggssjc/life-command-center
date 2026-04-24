@@ -154,15 +154,23 @@ async function main() {
         const s = scoreName(targetNorm, normalizeBusinessName(c.Name));
         if (s > bestScore) { bestScore = s; best = c; }
       }
-      // Accept at exact-match threshold OR at 0.85 with BillingState cross-validation
+      // Accept at exact-match threshold (1.00, no validation needed) OR at
+      // MIN_SCORE with BillingState cross-validation. The SAFE_SCORE threshold
+      // is hardcoded at 1.00 because substring matches below 1.00 have real
+      // false-positive risk (e.g. "NGP" → "5118 de Longpre LLC"), and the
+      // only honest way to accept them is with a second signal like the
+      // candidate's BillingState matching one of the owner's property states.
+      const SAFE_SCORE = 1.00;
       let accepted = false;
       let validationNote = '';
-      if (best && bestScore >= MIN_SCORE) {
+      if (!best || bestScore < MIN_SCORE) {
+        stats.low_confidence++; continue;
+      }
+      if (bestScore >= SAFE_SCORE) {
         accepted = true;
-      } else if (best && bestScore >= 0.85) {
-        // Second-chance path: cross-validate via property state. SF candidate
-        // must have a BillingState that matches at least one of the owner's
-        // property states (true_owner or recorded_owner on gov.properties).
+      } else {
+        // Below SAFE_SCORE (i.e. a substring-match 0.85 or token-jaccard):
+        // require property-state cross-validation before linking.
         const sfState   = String(best.BillingState || '').trim().toUpperCase();
         const ownerStates = await fetchOwnerPropertyStates(ownerId);
         if (!sfState || ownerStates.length === 0) {
@@ -182,7 +190,6 @@ async function main() {
           continue;
         }
       }
-      if (!accepted) { stats.low_confidence++; continue; }
 
       // Is this owner already linked?
       const cur = await gov('GET',
