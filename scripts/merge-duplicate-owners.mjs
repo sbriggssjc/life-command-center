@@ -225,7 +225,7 @@ async function computeImpact(pair) {
     `properties?true_owner_id=eq.${encodeURIComponent(drop.true_owner_id)}&select=property_id&limit=1`
   );
   const historyCount = await gov('GET',
-    `ownership_history?owner_id=eq.${encodeURIComponent(drop.true_owner_id)}&select=ownership_id&limit=1`
+    `ownership_history?true_owner_id=eq.${encodeURIComponent(drop.true_owner_id)}&select=ownership_id&limit=1`
   );
 
   return {
@@ -259,13 +259,13 @@ async function applyMerge(keep, drop, impact) {
     if (!r.ok) throw new Error(`PATCH true_owner_id failed: ${r.status} ${JSON.stringify(r.data)}`);
   }
 
-  console.log(`    (c) UPDATE ownership_history owner_id: ${drop.true_owner_id.slice(0,8)} → ${keep.true_owner_id.slice(0,8)} (${impact.history} rows)`);
+  console.log(`    (c) UPDATE ownership_history true_owner_id: ${drop.true_owner_id.slice(0,8)} → ${keep.true_owner_id.slice(0,8)} (${impact.history} rows)`);
   if (impact.history !== 'n/a' && impact.history > 0) {
     const r = await gov('PATCH',
-      `ownership_history?owner_id=eq.${encodeURIComponent(drop.true_owner_id)}`,
-      { owner_id: keep.true_owner_id }
+      `ownership_history?true_owner_id=eq.${encodeURIComponent(drop.true_owner_id)}`,
+      { true_owner_id: keep.true_owner_id }
     );
-    if (!r.ok) console.warn(`    WARN: ownership_history PATCH failed: ${r.status} ${JSON.stringify(r.data)}`);
+    if (!r.ok) throw new Error(`ownership_history PATCH failed: ${r.status} ${JSON.stringify(r.data)}`);
   }
 
   if (impact.copySfFromDropToKeep) {
