@@ -111,6 +111,48 @@ export async function stageOmIntake(input, auth, workspaceId) {
     return { status: 400, body: { error: 'missing_channel', detail: 'channel is required (copilot_chat|outlook|teams|sidebar|email)' } };
   }
 
+  // ---- 0d. Reject signature-image noise attachments BEFORE writing anything.
+  //
+  // Originally added in intake-stage-om.js (the Copilot action handler),
+  // but that filter missed the email path which calls stageOmIntake
+  // directly from api/intake.js. 2026-04-24 E2E test confirmed:
+  // emails forwarded to the LCC inbox with an inline image signature
+  // (Outlook 'image001.png' etc.) were still creating intakes with
+  // doc_type=unknown + empty snapshot. Move the filter here so it
+  // protects every channel.
+  {
+    const mimeType = String(input.mime_type || '').toLowerCase();
+    const fileName = String(input.file_name || '').trim();
+    const isImageMime = mimeType.startsWith('image/');
+    const isSignaturePattern =
+      /^image\d+\.(png|jpg|jpeg|gif)$/i.test(fileName) ||
+      /^outlook-logo/i.test(fileName) ||
+      /^signature/i.test(fileName) ||
+      /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\.(png|jpg|jpeg)$/i.test(fileName);
+    if (isImageMime && isSignaturePattern) {
+      return {
+        status: 200,
+        body: {
+          ok: false,
+          skipped: 'noise_attachment',
+          detail: `Rejected ${fileName} (${mimeType}) — appears to be an email signature graphic, not an OM.`,
+          channel: input.channel,
+        },
+      };
+    }
+    if (isImageMime) {
+      return {
+        status: 200,
+        body: {
+          ok: false,
+          skipped: 'unsupported_attachment_type',
+          detail: `Rejected ${fileName || 'unnamed'} (${mimeType}) — stage-om only accepts PDF/docx OMs.`,
+          channel: input.channel,
+        },
+      };
+    }
+  }
+
   const bytesLen = hasStoragePath
     ? (input.size_bytes || 0)
     : Math.ceil((input.bytes_base64.length * 3) / 4);

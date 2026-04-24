@@ -97,12 +97,19 @@ async function scan() {
   for (const item of list.data || []) {
     const intakeId = item.intake_id;
 
-    // Latest extraction?
+    // Latest extraction? document_type is sometimes stored on the column
+    // directly, and sometimes only inside extraction_snapshot — check both.
     const ex = await ops('GET',
       `staged_intake_extractions?intake_id=eq.${encodeURIComponent(intakeId)}` +
-      `&select=document_type&order=created_at.desc&limit=1`
+      `&select=document_type,extraction_snapshot&order=created_at.desc&limit=1`
     );
-    const extract = (ex.ok && ex.data?.[0]?.document_type) || '—';
+    let extract = '—';
+    if (ex.ok && ex.data?.length) {
+      const r = ex.data[0];
+      extract = r.document_type
+        || r.extraction_snapshot?.document_type
+        || 'extracted';  // row exists, doctype unknown
+    }
 
     // Latest match?
     const mt = await ops('GET',
