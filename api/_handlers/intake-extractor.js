@@ -375,6 +375,35 @@ export async function processIntakeExtraction(intakeId, context = {}) {
     }
   }
 
+  // 1b. Short-circuit if an extraction already exists for this intake.
+  //     This happens when the Copilot race-timeout fired before the
+  //     matcher+promoter could complete in the same invocation — the
+  //     extraction row landed but downstream steps got killed by the
+  //     Vercel 10s cap. Re-running AI extraction would cost 6-8s and
+  //     leave no budget for matcher/promoter, so reuse the existing
+  //     snapshot and skip straight to match+promote (which fits in 3-4s).
+  //
+  //     Bypass with context.forceReextract=true to get the original
+  //     full-rerun behavior (e.g. when the user explicitly requests
+  //     re-extraction after editing the artifact).
+  if (!context.forceReextract) {
+    const existingEx = await opsQuery('GET',
+      `staged_intake_extractions?intake_id=eq.${encodeURIComponent(intakeId)}` +
+      `&select=extraction_snapshot,document_type,created_at` +
+      `&order=created_at.desc&limit=1`
+    );
+    if (existingEx.ok && Array.isArray(existingEx.data) && existingEx.data.length) {
+      const cachedSnapshot = existingEx.data[0].extraction_snapshot;
+      if (cachedSnapshot && typeof cachedSnapshot === 'object') {
+        console.log(`[intake-extractor] Reusing existing extraction for intake_id=${intakeId} (skipping AI)`);
+        return await runDownstreamPipeline(intakeId, cachedSnapshot, {
+          workspaceId: resolvedWorkspaceId,
+          actorId:     resolvedActorId,
+        });
+      }
+    }
+  }
+
   // 2. Fetch associated artifacts
   const artifactsResult = await opsQuery('GET',
     `staged_intake_artifacts?intake_id=eq.${encodeURIComponent(intakeId)}&select=*&order=created_at.asc`
@@ -521,9 +550,33 @@ export async function processIntakeExtraction(intakeId, context = {}) {
 
   console.log(`[intake-extractor] Done: intake_id=${intakeId}, extractions=${extractions.length}/${documentArtifacts.length}`);
 
-  // Run property matcher after extraction completes and surface its
-  // result so callers of /api/intake-extract can see what matched without
-  // a separate staged_intake_matches query.
+  // Hand off to the downstream pipeline (matcher → promoter → Teams alert).
+  // Extracted into its own helper so /api/intake-extract retries (and the
+  // cached-extraction short-circuit above) can skip re-running AI and still
+  // get the full matcher+promoter cycle within the 10s budget.
+  const downstream = await runDownstreamPipeline(intakeId, mergedSnapshot, {
+    workspaceId:       resolvedWorkspaceId,
+    actorId:           resolvedActorId,
+    artifactCount:     documentArtifacts.length,
+    extractionCount:   extractions.length,
+    diagnostics:       perArtifactDiagnostics,
+  });
+  return downstream;
+}
+
+// ============================================================================
+// Downstream pipeline: matcher → promoter → Teams alert.
+// Called from both the fresh-extraction path (processIntakeExtraction main
+// body) and the cached-extraction short-circuit. Takes a merged snapshot
+// rather than running AI — all steps here are DB-only and finish in 3-4s,
+// which is why this path is safe to retry after the 7s Copilot race killed
+// downstream work on the first attempt.
+// ============================================================================
+async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
+  const resolvedWorkspaceId = ctx.workspaceId || null;
+  const resolvedActorId     = ctx.actorId     || null;
+
+  // Run property matcher
   let matchResult = null;
   let matchError  = null;
   if (mergedSnapshot) {
@@ -536,10 +589,7 @@ export async function processIntakeExtraction(intakeId, context = {}) {
     }
   }
 
-  // Promote confident OM matches into the matched domain's available_listings
-  // table. This is what makes the property appear in the broker's
-  // "available for sale" view. Gated on document_type='om',
-  // matched + high confidence, and a supported domain (currently gov).
+  // Promote confident OM matches into the matched domain's available_listings table
   let promotionResult = null;
   if (mergedSnapshot && matchResult) {
     try {
@@ -641,9 +691,9 @@ export async function processIntakeExtraction(intakeId, context = {}) {
   return {
     ok: true,
     extraction_snapshot: mergedSnapshot,
-    artifact_count:   documentArtifacts.length,
-    extraction_count: extractions.length,
-    diagnostics:      perArtifactDiagnostics,
+    artifact_count:   ctx.artifactCount ?? 0,
+    extraction_count: ctx.extractionCount ?? 0,
+    diagnostics:      ctx.diagnostics || [],
     match_result:     matchResult,
     match_error:      matchError,
     promotion_result: promotionResult,
