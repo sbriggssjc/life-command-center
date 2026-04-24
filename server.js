@@ -134,6 +134,63 @@ app.all('/api/intake-promote', (req, res) => { req.query._route = 'promote'; int
 app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; intakeHandler(req, res); });
 app.all('/api/intake-pdf', (req, res) => { req.query._route = 'ingest_pdf'; intakeHandler(req, res); });
 
+// intake rewrites — slash-path Copilot action presets. These were present in
+// vercel.json's rewrites but missing from server.js, so PA Flow requests to
+// Railway hit Express's 404 handler. 2026-04-24 E2E test: PA Flow's
+// LCC Flagged Email Intake calls /api/intake/prepare-upload (signed Storage
+// upload URL step) and /api/intake/finalize-om. Also /api/intake/artifact
+// is the signed-download endpoint used by the dashboard's "View OM" button.
+app.all('/api/intake/stage-om', (req, res) => {
+  req.query._route = 'copilot-action';
+  req.query._preset_action = 'intake.stage.om.v1';
+  intakeHandler(req, res);
+});
+app.all('/api/intake/prepare-upload', (req, res) => {
+  req.query._route = 'copilot-action';
+  req.query._preset_action = 'intake.prepare_upload.v1';
+  intakeHandler(req, res);
+});
+app.all('/api/intake/finalize-om', (req, res) => {
+  req.query._route = 'copilot-action';
+  req.query._preset_action = 'intake.finalize.om.v1';
+  intakeHandler(req, res);
+});
+app.all('/api/intake/artifact', (req, res) => {
+  req.query._route = 'copilot-action';
+  req.query._preset_action = 'intake.artifact_download.v1';
+  intakeHandler(req, res);
+});
+app.all('/api/intake/feedback', (req, res) => {
+  req.query._route = 'feedback';
+  intakeHandler(req, res);
+});
+app.all('/api/intake/accuracy', (req, res) => {
+  req.query._route = 'accuracy';
+  intakeHandler(req, res);
+});
+app.all('/api/context/retrieve-entity', (req, res) => {
+  req.query._route = 'copilot-action';
+  req.query._preset_action = 'context.retrieve.entity.v1';
+  intakeHandler(req, res);
+});
+app.all('/api/memory/log-turn', (req, res) => {
+  req.query._route = 'copilot-action';
+  req.query._preset_action = 'memory.log.turn.v1';
+  intakeHandler(req, res);
+});
+
+// Copilot chat slash-paths per-surface — vercel.json uses :action path
+// parameter. Express translates to :action route param, read into
+// req.params.action and forwarded as _copilot_path query.
+const copilotSurfaces = ['portfolio', 'ops', 'outreach', 'workflow', 'domain'];
+for (const surface of copilotSurfaces) {
+  app.all(`/api/copilot/${surface}/:action`, (req, res) => {
+    req.query._route = 'chat';
+    req.query._copilot_path = req.params.action;
+    operationsHandler(req, res);
+  });
+}
+
 // ── Primary handler routes (9 canonical endpoints) ──────────────────────────
 app.all('/api/actions', actionsHandler);
 app.all('/api/admin', adminHandler);
