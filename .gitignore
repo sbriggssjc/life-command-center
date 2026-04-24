@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 .vercel/
 .tmp_flow_audit/
+
+.env*.local
