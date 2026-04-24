@@ -40,6 +40,45 @@ export async function handleIntakeStageOm({ inputs, authContext, workspaceId }) 
     };
   }
 
+  // --- Bug E fix (2026-04-24): reject inline email-signature graphics ----
+  // The flagged-email PA flow fires one stage-om call per attachment, so
+  // every flagged email that has an inline signature logo produces a
+  // noise row in staged_intake_items. Audit 2026-04-24 found 60% of
+  // recent email intake queue was these images. Two signals used:
+  //   (a) mime_type starts with 'image/' (PDFs/docx are the real OMs),
+  //   (b) file_name matches the well-known signature patterns.
+  const mimeType = String(doc.mime_type || '').toLowerCase();
+  const fileName = String(doc.file_name || '').trim();
+  const isImageMime = mimeType.startsWith('image/');
+  const isSignaturePattern =
+    /^image\d+\.(png|jpg|jpeg|gif)$/i.test(fileName) ||
+    /^outlook-logo/i.test(fileName) ||
+    /^signature/i.test(fileName);
+  if (isImageMime && isSignaturePattern) {
+    return {
+      status: 200,
+      body: {
+        ok: false,
+        skipped: 'noise_attachment',
+        detail: `Rejected ${fileName} (${mimeType}) — appears to be an email signature graphic, not an OM.`,
+      },
+    };
+  }
+  // Also reject image-only attachments even without the signature pattern —
+  // OMs are always PDF or docx in practice. A loose image with no telltale
+  // name may be a property photo attached separately; still not a stage-able
+  // document.
+  if (isImageMime) {
+    return {
+      status: 200,
+      body: {
+        ok: false,
+        skipped: 'unsupported_attachment_type',
+        detail: `Rejected ${fileName || 'unnamed'} (${mimeType}) — stage-om only accepts PDF/docx OMs.`,
+      },
+    };
+  }
+
   // ---- Delegate to shared pipeline ----------------------------------------
   return stageOmIntake(
     {

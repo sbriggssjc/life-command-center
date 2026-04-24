@@ -1194,7 +1194,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       let domainProp = ent.metadata?.domain_property_id || null;
       let domain = ent.domain;
 
-      // Fallback: look up the external_identity for this entity if
+      // Fallback 1: look up the external_identity for this entity if
       // metadata doesn't carry the domain property_id.
       if (!domainProp) {
         const idLookup = await opsQuery('GET',
@@ -1207,6 +1207,41 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
           domainProp = row.external_id;
           if (!domain || domain === 'lcc') {
             domain = row.source_system === 'gov_db' ? 'government' : 'dialysis';
+          }
+        }
+      }
+
+      // Fallback 2 (2026-04-24 — Bug A fix): the Chrome sidebar writes
+      // `source_system='costar'` on the external_identities row (not
+      // `gov_db`/`dia_db`), so Fallback 1 misses every CoStar-scraped
+      // entity. If we still don't have a domainProp but the entity
+      // itself carries a domain + address (`entity.name` is typically
+      // the street address for asset entities), look up the actual
+      // domain property by normalized address.
+      if (!domainProp && (domain === 'dialysis' || domain === 'government')) {
+        const addrLike = String(ent.name || ent.metadata?.address || '').trim();
+        const stateGuess = ent.metadata?.state || snapshot?.state || null;
+        if (addrLike) {
+          const addrEsc = encodeURIComponent(`*${addrLike.split(',')[0]}*`);
+          const dq = domain === 'dialysis' ? 'dialysis' : 'government';
+          let lookupPath = `properties?address=ilike.${addrEsc}&select=property_id,address,city,state&limit=5`;
+          if (stateGuess) lookupPath += `&state=eq.${encodeURIComponent(stateGuess)}`;
+          try {
+            const domLookup = await domainQuery(dq, 'GET', lookupPath);
+            if (domLookup.ok && Array.isArray(domLookup.data) && domLookup.data.length) {
+              // Best match: prefer exact address equality (case-insensitive)
+              const normalized = addrLike.toLowerCase().replace(/[.,]/g, '').trim();
+              const hit = domLookup.data.find(p =>
+                String(p.address || '').toLowerCase().replace(/[.,]/g, '').includes(normalized)
+                || normalized.includes(String(p.address || '').toLowerCase().replace(/[.,]/g, ''))
+              ) || domLookup.data[0];
+              if (hit?.property_id) {
+                domainProp = hit.property_id;
+                console.log(`[intake-promoter] LCC-bridge resolved via address lookup: entity=${match.property_id} → ${dq} property_id=${hit.property_id}`);
+              }
+            }
+          } catch (err) {
+            console.warn('[intake-promoter] address-fallback lookup failed:', err?.message);
           }
         }
       }
@@ -1311,9 +1346,13 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     }
   }
 
-  return {
+  const result = {
     ok:                    listingResult.ok,
     domain:                match.domain,
+    match:                 { property_id: match.property_id, reason: match.reason, lcc_entity_id: match.lcc_entity_id || null },
+    snapshot:              { address: snapshot?.address, city: snapshot?.city, state: snapshot?.state,
+                             tenant_agency: snapshot?.tenant_agency || snapshot?.tenant_name,
+                             listing_broker: snapshot?.listing_broker, asking_price: snapshot?.asking_price },
     listing:               listingResult,
     broker_contact:        contactResult,
     property_financials:   financialsResult,
@@ -1326,4 +1365,32 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     activity_event:        activityEventResult,
     mat_view_refresh:      matRefreshResult,
   };
+
+  // --- Promotion log (Bug D fix, 2026-04-24) -------------------------
+  // Write one row per successful promotion to staged_intake_promotions.
+  // Previously this was missing entirely — the daily briefing's "New OM
+  // Intakes" section (fetchNewIntakes queries this table) silently returned
+  // empty forever. The inserted row carries the full pipeline_result blob
+  // so the briefing / audit queries can unpack without re-joining.
+  // Best-effort: a failure here never breaks the caller's response.
+  if (listingResult.ok) {
+    try {
+      await opsQuery('POST',
+        'staged_intake_promotions',
+        {
+          workspace_id:  context.workspaceId,
+          intake_id:     intakeId,
+          entity_id:     lccEntityResult?.entity_id || null,
+          promoted_by:   context.actorId || null,
+          pipeline_result: result,
+          promoted_at:   new Date().toISOString(),
+        },
+        { 'Prefer': 'return=minimal' }
+      );
+    } catch (err) {
+      console.warn('[intake-promoter] staged_intake_promotions insert failed (non-fatal):', err?.message);
+    }
+  }
+
+  return result;
 }

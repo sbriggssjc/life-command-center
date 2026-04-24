@@ -1337,6 +1337,36 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     console.error('[last_ingested_at] stamp failed:', err?.message || err);
   }
 
+  // Step 5i (Bug C fix, 2026-04-24): write the domain-bridge
+  // external_identities row. Without this, an asset entity created by
+  // CoStar sidebar is orphaned — it has external_identities{source_system:
+  // 'costar'} but no pointer back to the actual gov/dia property_id. That
+  // broke the LCC-bridge unwrap in intake-promoter (relied on source_system
+  // IN ('gov_db','dia_db')) and left 172 assets unlinked in the last 14
+  // days. Idempotent upsert keyed on (workspace_id, source_system,
+  // source_type, external_id); safe to re-run.
+  if (propertyId && entity?.id && entity?.workspace_id) {
+    const sourceSystem = domain === 'government' ? 'gov_db' : 'dia_db';
+    try {
+      const nowIso = new Date().toISOString();
+      await opsQuery('POST',
+        'external_identities?on_conflict=workspace_id,source_system,source_type,external_id',
+        {
+          workspace_id: entity.workspace_id,
+          entity_id:    entity.id,
+          source_system: sourceSystem,
+          source_type:  'property',
+          external_id:  String(propertyId),
+          metadata:     { synced_via: 'sidebar-pipeline.propagateToDomainDbDirect' },
+          last_synced_at: nowIso,
+        },
+        { 'Prefer': 'return=minimal,resolution=merge-duplicates' }
+      );
+    } catch (err) {
+      console.warn('[sidebar-pipeline] domain bridge identity insert failed (non-fatal):', err?.message || err);
+    }
+  }
+
   return { propagated: true, ...results };
 }
 
