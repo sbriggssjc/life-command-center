@@ -146,7 +146,21 @@ async function promoteListing(domain, intakeId, snapshot, match) {
     : buildDiaListingRow(intakeId, snapshot, match, artifact);
 
   if (isGov) {
-    // Gov has a unique index on source_listing_ref — use PostgREST upsert.
+    // Gov has TWO unique indexes on available_listings:
+    //   1. source_listing_ref (one row per intake)
+    //   2. (property_id, listing_source, listing_status, listing_date)
+    //      — only one active LCC-sourced listing per property per day.
+    //
+    // PostgREST on_conflict= only handles a single index. If multiple OMs
+    // for the same property land on the same day, the first inserts cleanly
+    // via on_conflict=source_listing_ref, but subsequent inserts blow up
+    // with 23505 against the second index.
+    //
+    // Fix: detect that specific 23505, look up the existing listing, and
+    // PATCH it with only the non-null fields from the new row. This turns
+    // "3 OMs for one property on one day" into "1 row, progressively
+    // enriched as each OM arrives" — which is the behavior we actually
+    // want for broker updates, corrections, and re-sends.
     const result = await domainQuery(
       'government',
       'POST',
@@ -154,9 +168,53 @@ async function promoteListing(domain, intakeId, snapshot, match) {
       row,
       { Prefer: 'return=representation,resolution=merge-duplicates' }
     );
-    return result.ok
-      ? { ok: true, listing_id: (Array.isArray(result.data) ? result.data[0] : result.data)?.listing_id || null }
-      : { ok: false, status: result.status, detail: result.data };
+    if (result.ok) {
+      return { ok: true, listing_id: (Array.isArray(result.data) ? result.data[0] : result.data)?.listing_id || null };
+    }
+
+    const isDupKeyOnDateIndex =
+      result.status === 409 &&
+      result.data?.code === '23505' &&
+      /property_source_status_date_uniq/.test(String(result.data?.message || ''));
+
+    if (!isDupKeyOnDateIndex) {
+      return { ok: false, status: result.status, detail: result.data };
+    }
+
+    // Look up the existing row that blocked us
+    const existingRes = await domainQuery(
+      'government',
+      'GET',
+      `available_listings?property_id=eq.${row.property_id}` +
+      `&listing_source=eq.${encodeURIComponent(row.listing_source)}` +
+      `&listing_status=eq.${encodeURIComponent(row.listing_status)}` +
+      `&listing_date=eq.${encodeURIComponent(row.listing_date)}` +
+      `&select=listing_id&limit=1`
+    );
+    if (!existingRes.ok || !existingRes.data?.length) {
+      return { ok: false, status: 500, detail: { error: 'lookup_existing_failed_after_23505', primary_error: result.data } };
+    }
+    const existingId = existingRes.data[0].listing_id;
+
+    // PATCH only the non-null fields so a later OM enriches the row
+    // without clobbering curated data from the first one. Skip
+    // source_listing_ref (that's the first insert's intake_id, keep it)
+    // and first_seen_at (only update last_seen_at).
+    const patchRow = Object.fromEntries(
+      Object.entries(row).filter(([k, v]) => v != null && k !== 'source_listing_ref' && k !== 'first_seen_at')
+    );
+    patchRow.last_seen_at = new Date().toISOString();
+
+    const patchRes = await domainQuery(
+      'government',
+      'PATCH',
+      `available_listings?listing_id=eq.${encodeURIComponent(existingId)}`,
+      patchRow,
+      { Prefer: 'return=representation' }
+    );
+    return patchRes.ok
+      ? { ok: true, listing_id: existingId, merged_into_existing: true }
+      : { ok: false, status: patchRes.status, detail: patchRes.data, stage: 'patch_after_23505' };
   }
 
   // Dialysis has no unique source-ref column. Check-then-insert: find any

@@ -186,7 +186,9 @@ async function main() {
         const why = prom?.skipped || prom?.error || 'no_prom_result';
         console.log(`ok  [${reused}]  match=${match?.status}/${match?.reason}/${match?.confidence}  prom=SKIP(${why})`);
         if (prom && Object.keys(prom).length > 2) {
-          console.log(`     prom=${JSON.stringify(prom).slice(0, 300)}`);
+          // Print full JSON without truncation — the actual failure detail
+          // from PostgREST lives deep in the response and truncation hides it.
+          console.log(`     prom=${JSON.stringify(prom, null, 2)}`);
         }
       }
     } else {
