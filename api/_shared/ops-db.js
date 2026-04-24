@@ -3,6 +3,25 @@
 // Life Command Center — Phase 2
 // ============================================================================
 
+// Boot-time loud warning if the LCC Opps creds are missing. Without this,
+// the 2026-04-24 outage (OPS_SUPABASE_KEY missing from Vercel Production
+// env) surfaced ONLY as 503 errors with no log trail — every requireOps()
+// call returned 503 JSON but nothing ever threw or logged. This module is
+// imported by every API handler, so this warning fires on every cold start
+// when any of the three Supabase creds is absent.
+(function warnOnMissingCreds() {
+  const missing = [];
+  if (!process.env.OPS_SUPABASE_URL) missing.push('OPS_SUPABASE_URL');
+  if (!process.env.OPS_SUPABASE_KEY) missing.push('OPS_SUPABASE_KEY');
+  if (!process.env.GOV_SUPABASE_URL) missing.push('GOV_SUPABASE_URL');
+  if (!process.env.GOV_SUPABASE_KEY) missing.push('GOV_SUPABASE_KEY');
+  if (!process.env.DIA_SUPABASE_URL) missing.push('DIA_SUPABASE_URL');
+  if (!process.env.DIA_SUPABASE_KEY) missing.push('DIA_SUPABASE_KEY');
+  if (missing.length) {
+    console.warn(`[ops-db] WARN: missing env vars on cold start: ${missing.join(', ')} — requests will 503 until these are set + redeployed`);
+  }
+})();
+
 function opsUrl() {
   return process.env.OPS_SUPABASE_URL;
 }

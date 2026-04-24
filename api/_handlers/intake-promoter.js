@@ -1448,6 +1448,23 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     } catch (err) {
       console.warn('[intake-promoter] staged_intake_promotions insert failed (non-fatal):', err?.message);
     }
+
+    // Flip staged_intake_items.status to 'finalized' so the review queue
+    // UI stops showing promoted intakes as needing review. Before this,
+    // the whole pipeline ran to completion — listings written, owner
+    // linked, broker contact created, activity event logged — but the
+    // top-level status never moved off 'review_required', leaving stale
+    // badges in the dashboard's triage views. Best-effort: failure here
+    // doesn't break the caller's response shape.
+    try {
+      await opsQuery('PATCH',
+        `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+        { status: 'finalized', updated_at: new Date().toISOString() },
+        { 'Prefer': 'return=minimal' }
+      );
+    } catch (err) {
+      console.warn('[intake-promoter] status flip to finalized failed (non-fatal):', err?.message);
+    }
   }
 
   return result;

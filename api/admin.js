@@ -656,6 +656,29 @@ async function handleDiag(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
 
+  // Lightweight env-var presence probe — no secret required. Added after the
+  // 2026-04-24 outage where OPS_SUPABASE_KEY went missing from Vercel Prod
+  // and every endpoint silently 503'd with no actionable signal. Call from
+  // the browser or PowerShell: /api/diag?kind=env
+  if (req.query.kind === 'env') {
+    return res.status(200).json({
+      ops_url_set:  !!process.env.OPS_SUPABASE_URL,
+      ops_key_set:  !!process.env.OPS_SUPABASE_KEY,
+      gov_url_set:  !!process.env.GOV_SUPABASE_URL,
+      gov_key_set:  !!process.env.GOV_SUPABASE_KEY,
+      dia_url_set:  !!process.env.DIA_SUPABASE_URL,
+      dia_key_set:  !!process.env.DIA_SUPABASE_KEY,
+      lcc_api_key_set:    !!process.env.LCC_API_KEY,
+      anthropic_key_set:  !!process.env.ANTHROPIC_API_KEY,
+      teams_webhook_set:  !!process.env.TEAMS_INTAKE_WEBHOOK_URL,
+      sf_webhook_set:     !!process.env.SF_LOOKUP_WEBHOOK_URL,
+      ms_graph_token_set: !!process.env.MS_GRAPH_TOKEN,
+      vercel_env:         process.env.VERCEL_ENV || null,
+      lcc_env:            process.env.LCC_ENV || null,
+      node_version:       process.version,
+    });
+  }
+
   const secret = process.env.DIAG_SECRET || 'lcc-diag-2024';
   if (req.query.secret !== secret) {
     return res.status(403).json({ error: 'Forbidden — pass ?secret=<DIAG_SECRET>' });
