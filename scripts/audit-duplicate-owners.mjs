@@ -77,12 +77,22 @@ function levenshtein(a, b) {
 async function main() {
   console.log(`[audit-duplicates] strategy=${STRATEGY}\n`);
 
-  // Pull all true_owners. Small enough dataset — a few thousand at most.
-  const ownersRes = await gov('GET',
-    `true_owners?select=true_owner_id,name,canonical_name,sf_account_id,state&limit=5000`
-  );
-  if (!ownersRes.ok) { console.error('fetch failed', ownersRes.status); process.exit(1); }
-  const owners = ownersRes.data || [];
+  // Pull ALL true_owners, paginating — Supabase PostgREST caps at 1000 rows
+  // per response regardless of explicit limit.
+  const owners = [];
+  let offset = 0;
+  const PAGE_SIZE = 1000;
+  while (true) {
+    const r = await gov('GET',
+      `true_owners?select=true_owner_id,name,canonical_name,sf_account_id,state` +
+      `&order=true_owner_id.asc&limit=${PAGE_SIZE}&offset=${offset}`
+    );
+    if (!r.ok) { console.error('fetch failed', r.status, r.data); process.exit(1); }
+    const batch = r.data || [];
+    owners.push(...batch);
+    if (batch.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
   console.log(`Loaded ${owners.length} true_owners\n`);
 
   // Build property-state cache (one owner at a time — many owners have no
@@ -157,17 +167,33 @@ async function main() {
     }
   }
 
-  // Strategy 3: low edit distance + shared state
+  // Strategy 3: low edit distance + shared state + first-token identity.
+  // Without the first-token-identity guard, this strategy catches false
+  // positives like "CGB Properties" ↔ "CMH Properties" (distance 2 on the
+  // 3-letter prefix — totally different companies that only share the
+  // word "Properties" post-normalization). Requiring the first token to
+  // match filters those out while still catching true typos like
+  // "Northmarq" ↔ "Northmark" or "Easterly" ↔ "Eastrly".
   if (STRATEGY === 'all' || STRATEGY === '3') {
     const byNorm = owners.map(o => ({ o, norm: normalizeName(o.canonical_name || o.name) }))
-      .filter(x => x.norm.length >= 6);  // skip very short
+      .filter(x => x.norm.length >= 8);   // raised from 6 — short names too noisy
     const seen = new Set(pairs.map(p => [p.a.true_owner_id, p.b.true_owner_id].sort().join('|')));
     for (let i = 0; i < byNorm.length; i++) {
       for (let j = i + 1; j < byNorm.length; j++) {
-        const dist = levenshtein(byNorm[i].norm, byNorm[j].norm);
-        const maxLen = Math.max(byNorm[i].norm.length, byNorm[j].norm.length);
+        const normA = byNorm[i].norm, normB = byNorm[j].norm;
+        const dist  = levenshtein(normA, normB);
+        const maxLen = Math.max(normA.length, normB.length);
         if (dist === 0) continue;
-        if (dist > 2 || dist / maxLen > 0.25) continue;
+        if (dist > 2 || dist / maxLen > 0.20) continue;
+
+        // Require the first meaningful token to be identical — companies
+        // distinguish themselves by their FIRST word, and fuzz here is
+        // almost always wrong (BB Properties vs CGB Properties, etc.).
+        const firstA = normA.split(' ')[0];
+        const firstB = normB.split(' ')[0];
+        if (firstA !== firstB) continue;
+        if (firstA.length < 3) continue;   // initials match too often
+
         const a = byNorm[i].o, b = byNorm[j].o;
         const key = [a.true_owner_id, b.true_owner_id].sort().join('|');
         if (seen.has(key)) continue;
@@ -178,7 +204,7 @@ async function main() {
         const shared = aSt.states.filter(s => bSt.states.includes(s));
         if (shared.length === 0) continue;
 
-        pairs.push({ a, b, reason: `fuzzy_name(d=${dist})+shared_state:${shared.join(',')}` });
+        pairs.push({ a, b, reason: `fuzzy_name(d=${dist})+first_token="${firstA}"+shared_state:${shared.join(',')}` });
       }
     }
   }
