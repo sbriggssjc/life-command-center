@@ -179,10 +179,19 @@ async function main() {
       results.ok++;
       const match = r.data?.match_result || null;
       const prom  = r.data?.promotion_result || null;
-      console.log(`ok  match=${match?.status || '?'}/${match?.reason || '?'}  prom=${prom?.ok ? 'yes' : 'no'}`);
+      const reused = r.data?.extraction_count === 0 ? 'cached' : 'fresh';
+      if (prom?.ok) {
+        console.log(`ok  [${reused}]  match=${match?.status}/${match?.reason}/${match?.confidence}  prom=yes`);
+      } else {
+        const why = prom?.skipped || prom?.error || 'no_prom_result';
+        console.log(`ok  [${reused}]  match=${match?.status}/${match?.reason}/${match?.confidence}  prom=SKIP(${why})`);
+        if (prom && Object.keys(prom).length > 2) {
+          console.log(`     prom=${JSON.stringify(prom).slice(0, 300)}`);
+        }
+      }
     } else {
       results.err++;
-      console.log(`err status=${r.status}  ${JSON.stringify(r.data).slice(0, 120)}`);
+      console.log(`err status=${r.status}  ${JSON.stringify(r.data).slice(0, 200)}`);
     }
     // 300ms between requests — don't hammer the endpoint, AI extractions are expensive
     await new Promise(r => setTimeout(r, 300));

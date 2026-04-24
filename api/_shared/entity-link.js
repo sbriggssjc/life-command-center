@@ -19,7 +19,13 @@ export function normalizeCanonicalName(name) {
  */
 export function normalizeAddress(addr) {
   if (!addr) return '';
-  return String(addr).trim()
+  // Strip trailing ", City, ST ZIP" — AI extractors often emit full
+  // "37139 Highway 26, Sandy, OR 97055" while the domain DBs store only the
+  // street portion "37139 Us-26 Hwy". Truncating at the first comma gives
+  // the matcher a fair chance on the street address alone. Street addresses
+  // almost never contain commas, so this is safe in practice.
+  const beforeComma = String(addr).split(',')[0];
+  return beforeComma.trim()
     .replace(/\bStreet\b/gi, 'St')
     .replace(/\bAvenue\b/gi, 'Ave')
     .replace(/\bBoulevard\b/gi, 'Blvd')
