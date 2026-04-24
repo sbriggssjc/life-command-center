@@ -2,14 +2,22 @@
 // CORS — Cross-Origin Resource Sharing headers for Edge Functions
 // Life Command Center — Infrastructure Migration Phase 0
 //
-// The frontend is served from Vercel (different origin than Supabase Edge).
-// These headers allow browser requests to reach Edge Functions.
+// The frontend is served from a different origin than Supabase Edge Functions.
+// These headers allow browser requests to reach Edge Functions from the
+// LCC app host (production) and local dev servers.
 // ============================================================================
 
-const VERCEL_URL = Deno.env.get("VERCEL_FRONTEND_URL") || "https://life-command-center.vercel.app";
+// Primary frontend URL. Env var (preferred) → LCC_BASE_URL env →
+// Railway fallback. The dead *.vercel.app URL has been removed because
+// the LCC app is deployed on Railway and the .vercel.app alias returns
+// DEPLOYMENT_NOT_FOUND (see 2026-04-24 hostname audit).
+const FRONTEND_URL = Deno.env.get("VERCEL_FRONTEND_URL")
+  || Deno.env.get("LCC_BASE_URL")
+  || "https://tranquil-delight-production-633f.up.railway.app";
 
 const ALLOWED_ORIGINS: string[] = [
-  VERCEL_URL,
+  FRONTEND_URL,
+  "https://tranquil-delight-production-633f.up.railway.app",
   "http://localhost:3000",
   "http://localhost:5500",
   "http://127.0.0.1:5500",
@@ -22,7 +30,7 @@ const ALLOWED_ORIGINS: string[] = [
  */
 export function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") || "";
-  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : VERCEL_URL;
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : FRONTEND_URL;
   return {
     "Access-Control-Allow-Origin": allowed,
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",

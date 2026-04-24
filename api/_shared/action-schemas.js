@@ -849,7 +849,7 @@ export const ACTION_SCHEMAS = {
  * @param {string} baseUrl - The public base URL (e.g., https://lcc.vercel.app)
  * @returns {object} OpenAPI 3.0 spec object
  */
-export function generateOpenApiSpec(registry, baseUrl = 'https://life-command-center.vercel.app') {
+export function generateOpenApiSpec(registry, baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app') {
   const spec = {
     openapi: '3.0.3',
     info: {
@@ -978,7 +978,7 @@ export function generateOpenApiSpec(registry, baseUrl = 'https://life-command-ce
  * @param {string} baseUrl
  * @returns {object} Plugin manifest
  */
-export function generatePluginManifest(baseUrl = 'https://life-command-center.vercel.app') {
+export function generatePluginManifest(baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app') {
   return {
     schema_version: 'v1',
     name_for_human: 'Life Command Center',

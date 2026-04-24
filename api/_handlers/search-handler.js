@@ -52,7 +52,10 @@ import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { verifyApiKey } from './property-handler.js';
 
-const VERCEL_BASE = 'https://life-command-center-nine.vercel.app';
+// LCC app base URL for deep-linking from search results. Single source of
+// truth is LCC_BASE_URL env var (set in Railway prod env). Fallback is the
+// current Railway auto-generated subdomain in case the env var is missing.
+const VERCEL_BASE = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app';
 
 function enc(v) {
   return encodeURIComponent(String(v));

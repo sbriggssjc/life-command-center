@@ -1356,7 +1356,7 @@ async function handleListingPursuitDossier(params, user, workspaceId) {
 
 function generateTeamsCard(params) {
   const { card_type, data, lcc_host } = params || {};
-  const baseUrl = lcc_host || process.env.LCC_APP_URL || 'https://life-command-center.vercel.app';
+  const baseUrl = lcc_host || process.env.LCC_APP_URL || process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app';
 
   if (card_type === 'inbox_triage') {
     const item = data || {};
@@ -2020,7 +2020,7 @@ function formatForTeams(actionId, result) {
       {
         type: 'Action.OpenUrl',
         title: 'Open in LCC',
-        url: 'https://life-command-center.vercel.app'
+        url: process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app'
       }
     ]
   };
@@ -2040,7 +2040,7 @@ function formatForOutlookDigest(actionId, result) {
   return {
     title,
     summary: itemCount != null ? `${itemCount} item${itemCount !== 1 ? 's' : ''}` : 'Completed',
-    link: 'https://life-command-center.vercel.app',
+    link: process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app',
     timestamp: new Date().toISOString()
   };
 }
@@ -2944,7 +2944,12 @@ async function handleChatRoute(req, res) {
   // --- OpenAPI spec / plugin manifest (GET, no auth required) ---
   if (req.query?.copilot_spec) {
     const proto = req.headers?.['x-forwarded-proto'] || 'https';
-    const host = req.headers?.host || 'life-command-center.vercel.app';
+    // Prefer the actual incoming host header (always correct for the real
+    // request path); only fall back to env var when host is missing (rare).
+    // Strip any leading scheme from LCC_BASE_URL since we concatenate proto below.
+    const fallbackHost = (process.env.LCC_BASE_URL || 'tranquil-delight-production-633f.up.railway.app')
+      .replace(/^https?:\/\//, '');
+    const host = req.headers?.host || fallbackHost;
     const baseUrl = `${proto}://${host}`;
 
     if (req.query.copilot_spec === 'manifest') {

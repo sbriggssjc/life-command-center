@@ -60,7 +60,7 @@ def main():
     ap.add_argument(
         "--host",
         default=os.environ.get(
-            "LCC_VERCEL_URL", "https://life-command-center-nine.vercel.app"
+            "LCC_VERCEL_URL", os.environ.get("LCC_BASE_URL", "https://tranquil-delight-production-633f.up.railway.app")
         ).rstrip("/"),
     )
     args = ap.parse_args()

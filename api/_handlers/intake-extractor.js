@@ -650,7 +650,7 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
       facts.push(['Match',          'No match — triage required']);
     }
 
-    const baseUrl = process.env.LCC_BASE_URL || 'https://life-command-center-nine.vercel.app';
+    const baseUrl = process.env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app';
     // IMPORTANT: await this fetch. On Vercel serverless, fire-and-forget
     // promises get terminated when the function returns — the fetch
     // starts but never completes (or never reaches the wire).

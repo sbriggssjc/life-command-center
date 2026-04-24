@@ -173,11 +173,11 @@ def convert_3_to_2(spec_3):
     if servers:
         from urllib.parse import urlparse
         u = urlparse(servers[0]["url"])
-        spec["host"]     = u.netloc or "life-command-center-nine.vercel.app"
+        spec["host"]     = u.netloc or "tranquil-delight-production-633f.up.railway.app"
         spec["basePath"] = u.path.rstrip("/") or "/"
         spec["schemes"]  = [u.scheme or "https"]
     else:
-        spec["host"]     = "life-command-center-nine.vercel.app"
+        spec["host"]     = "tranquil-delight-production-633f.up.railway.app"
         spec["basePath"] = "/"
         spec["schemes"]  = ["https"]
 

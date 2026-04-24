@@ -43,7 +43,7 @@ const EXPLICIT_IDS = (() => {
 const OPS_URL     = env.OPS_SUPABASE_URL;
 const OPS_KEY     = env.OPS_SUPABASE_KEY;
 const LCC_API_KEY = env.LCC_API_KEY;
-const LCC_APP_URL = env.LCC_APP_URL || env.LCC_BASE_URL || 'https://life-command-center.vercel.app';
+const LCC_APP_URL = env.LCC_APP_URL || env.LCC_BASE_URL || 'https://tranquil-delight-production-633f.up.railway.app';
 
 if (!OPS_URL || !OPS_KEY) { console.error('Missing OPS_SUPABASE_URL / OPS_SUPABASE_KEY'); process.exit(1); }
 if (APPLY && !LCC_API_KEY) { console.error('Missing LCC_API_KEY (needed to POST to /api/intake-extract)'); process.exit(1); }
