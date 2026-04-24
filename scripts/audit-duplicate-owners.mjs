@@ -118,7 +118,13 @@ async function main() {
 
   const pairs = [];   // { a, b, reason }
 
-  // Strategy 1: same sf_account_id
+  // Strategy 1: same sf_account_id — but filter out parent/subsidiary
+  // structures. In SF, a single Account (e.g. "UIRC") often has many
+  // property-specific subsidiary LLCs under it in owner namespaces
+  // (UIRC-GSA V BROWNSVILLE TX LLC, UIRC-GSA DEMING NM LLC, etc.) — those
+  // legitimately share the parent SF Id but are DIFFERENT legal entities,
+  // not duplicates. Signal to keep: BOTH owners must have normalized
+  // names that look similar (edit distance <= 3 OR prefix relationship).
   if (STRATEGY === 'all' || STRATEGY === '1') {
     const bySfId = new Map();
     for (const o of owners) {
@@ -128,10 +134,17 @@ async function main() {
     }
     for (const [sfId, group] of bySfId.entries()) {
       if (group.length < 2) continue;
-      // Report every pairwise combination
       for (let i = 0; i < group.length; i++) {
         for (let j = i + 1; j < group.length; j++) {
-          pairs.push({ a: group[i], b: group[j], reason: `same_sf_account_id:${sfId}` });
+          const ni = normalizeName(group[i].canonical_name || group[i].name);
+          const nj = normalizeName(group[j].canonical_name || group[j].name);
+          // Require similarity: either prefix relationship OR small edit distance.
+          const isPrefix = (ni.startsWith(nj + ' ') || nj.startsWith(ni + ' '));
+          const dist = levenshtein(ni, nj);
+          const maxLen = Math.max(ni.length, nj.length);
+          const isClose = (dist <= 3 && maxLen > 0 && dist / maxLen < 0.25);
+          if (!isPrefix && !isClose) continue;   // different legal entities under one parent SF Account
+          pairs.push({ a: group[i], b: group[j], reason: `same_sf_account_id:${sfId}+name_similar` });
         }
       }
     }
