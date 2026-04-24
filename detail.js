@@ -82,6 +82,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
 
   _setUdCache(null);
   _opsExtraCache = null; // reset operations extra data for new clinic
+  _opsGovCache   = null; // reset gov Operations cache for new property
   _salesCache = null; // reset sales data for new property
   const panel = document.getElementById('detailPanel');
   const overlay = document.getElementById('detailOverlay');
@@ -927,8 +928,97 @@ window._udCmsTypeahead = _udCmsTypeahead;
 
 /** Lazy-load additional clinic data for the Operations tab, then render */
 let _opsExtraCache = null; // { medicare_id, patientHistory, trends, quality, financialDetail, costReports, payerMix, lease }
+// Separate cache for gov-domain Operations data (FRPP, OPM workforce, agency
+// portfolio, GSA lease timeline). Keyed on property_id so re-opening the
+// same property uses the cache. Cleared on openUnifiedDetail.
+let _opsGovCache = null; // { property_id, extProperty, frpp, opmRollup, agencyPortfolio, gsaTimeline }
+
 async function _udRenderOperationsAsync(bodyEl) {
   const fb = _udCache.fallback || {};
+  const db = _udCache.db;
+  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+
+  // ── GOV BRANCH ──────────────────────────────────────────────────────
+  // Lazy-load FRPP + OPM + agency-portfolio + GSA-lease-timeline context
+  // for federal government properties. The MVP _udTabOperations already
+  // handles the case where this cache is empty; it just won't show the
+  // richer panels.
+  if (db === 'gov' && propertyId) {
+    if (_opsGovCache && _opsGovCache.property_id === propertyId) {
+      if (bodyEl) bodyEl.innerHTML = _udTabOperations();
+      return;
+    }
+    if (bodyEl) bodyEl.innerHTML = _opsLoadingSkeleton();
+
+    const gov = { property_id: propertyId, extProperty: null, frpp: null, opmRollup: null, agencyPortfolio: null, gsaTimeline: [] };
+    try {
+      // Extra property columns not exposed by v_property_detail
+      const extPromise = govQuery('properties',
+        'property_id,agency,agency_full_name,agency_id,federal_employee_count,opm_headcount,workforce_trend,agency_risk_level,linked_frpp_id,government_type,representing_agency',
+        { filter: `property_id=eq.${encodeURIComponent(propertyId)}`, limit: 1 }
+      ).catch(() => null);
+
+      // FRPP record — most recent fiscal_year for this property
+      const frppPromise = govQuery('frpp_records',
+        'frpp_id,fiscal_year,using_agency,reporting_agency,using_bureau,property_type,property_use,utilization,asset_status,num_federal_employees,num_federal_contractors,annual_rent_to_lessor,annual_maintenance,annual_operations,replacement_value,condition_index,repair_needs,building_age,congressional_district,field_office,reduce_footprint,sustainability,rent_psf',
+        { filter: `property_id=eq.${encodeURIComponent(propertyId)}`, order: 'fiscal_year.desc.nullslast', limit: 1 }
+      ).catch(() => null);
+
+      // GSA lease timeline for any lease_number on this property. Need
+      // the lease_numbers first; we already have them in _udCache.leases.
+      const leaseNums = (_udCache.leases || [])
+        .map(l => l.lease_number)
+        .filter(Boolean);
+      const timelinePromise = leaseNums.length
+        ? govQuery('gsa_lease_timeline',
+            'timeline_id,lease_number,first_snapshot_date,last_snapshot_date,snapshots_count,current_annual_rent,current_lease_rsf,current_lessor_name,current_expiration_date,last_change_type,extension_count,landlord_change_count,is_active,bridge_lease_flag',
+            { filter: `lease_number=in.(${leaseNums.map(n => encodeURIComponent(n)).join(',')})`, limit: 10 }
+          ).catch(() => null)
+        : Promise.resolve(null);
+
+      const [extRes, frppRes, timelineRes] = await Promise.all([extPromise, frppPromise, timelinePromise]);
+      gov.extProperty = Array.isArray(extRes?.data) ? extRes.data[0] : (Array.isArray(extRes) ? extRes[0] : null);
+      gov.frpp        = Array.isArray(frppRes?.data) ? frppRes.data[0] : (Array.isArray(frppRes) ? frppRes[0] : null);
+      gov.gsaTimeline = Array.isArray(timelineRes?.data) ? timelineRes.data : (Array.isArray(timelineRes) ? timelineRes : []);
+
+      // Now that we have the resolved agency name + city, fetch OPM
+      // workforce rollup + agency portfolio. These are dependent on the
+      // extProperty result so they run sequentially after the first
+      // parallel batch.
+      const agencyName = gov.extProperty?.agency_full_name || gov.extProperty?.agency || _udCache.property?.agency || null;
+      const city       = _udCache.property?.city || fb.city || null;
+
+      if (agencyName) {
+        const [opmRes, portfolioRes] = await Promise.all([
+          city
+            ? govQuery('opm_agency_location_rollups',
+                'snapshot_month,agency,subagency,state,city,employment_total,hires_total,separations_total,telework_eligible_total,telework_participants_total,retirement_eligible_total,hiring_vs_attrition_ratio',
+                {
+                  filter:  `agency=ilike.${encodeURIComponent(agencyName)}`,
+                  filter2: `city=ilike.${encodeURIComponent(city)}`,
+                  order:   'snapshot_month.desc',
+                  limit:   1
+                }
+              ).catch(() => null)
+            : Promise.resolve(null),
+          govQuery('v_agency_portfolio',
+            'agency_name,government_type,cabinet_department,property_count,total_sf,total_annual_rent,avg_rent_psf,active_count,vacating_count',
+            { filter: `agency_name=ilike.${encodeURIComponent(agencyName)}`, limit: 1 }
+          ).catch(() => null)
+        ]);
+        gov.opmRollup       = Array.isArray(opmRes?.data) ? opmRes.data[0] : (Array.isArray(opmRes) ? opmRes[0] : null);
+        gov.agencyPortfolio = Array.isArray(portfolioRes?.data) ? portfolioRes.data[0] : (Array.isArray(portfolioRes) ? portfolioRes[0] : null);
+      }
+    } catch (err) {
+      console.warn('Gov Operations extra data load error:', err);
+    }
+
+    _opsGovCache = gov;
+    if (bodyEl) bodyEl.innerHTML = _udTabOperations();
+    return;
+  }
+
+  // ── DIA BRANCH ──────────────────────────────────────────────────────
   // Resolve the medicare_id in priority order:
   //   1) cached/resolved CMS facility match (property_cms_link)
   //   2) rankings row (v_property_rankings.medicare_id)
@@ -939,8 +1029,9 @@ async function _udRenderOperationsAsync(bodyEl) {
 
   // If we have no clinicId and no rankings yet, try to auto-match now.
   // This covers the case where the user opens the Operations tab directly
-  // on a property that hasn't been resolved yet.
-  const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
+  // on a property that hasn't been resolved yet. (propertyId is already
+  // declared above, at the top of _udRenderOperationsAsync, for the gov
+  // branch — reuse it here.)
   if (!clinicId && !_udCache.rankings && _udCache.db === 'dia' && propertyId) {
     if (bodyEl) bodyEl.innerHTML = _opsLoadingSkeleton();
     try { await _udResolveCmsFacility(propertyId); } catch (e) { console.warn(e); }
@@ -3099,6 +3190,29 @@ function _udTabOperations() {
     const tenantCount = uniqTenants.size;
 
     const fmtYr = (v) => (v == null ? '—' : parseFloat(v).toFixed(1) + ' yr');
+    const fmtMoney = (v) => (v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }));
+    const fmtNum   = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US'));
+
+    // Pull the lazy-loaded gov cache (FRPP, OPM, agency portfolio, timeline).
+    // When absent (cache miss, dia open, or Operations tab never clicked),
+    // the extra cards below simply don't render — the MVP agency + chronology
+    // sections still show.
+    const gov  = (typeof _opsGovCache !== 'undefined' && _opsGovCache && _opsGovCache.property_id === (p.property_id || fb.property_id || _udCache.ids?.property_id))
+      ? _opsGovCache : null;
+    const ext  = gov?.extProperty || {};
+    const frpp = gov?.frpp || null;
+    const opm  = gov?.opmRollup || null;
+    const agp  = gov?.agencyPortfolio || null;
+    const timeline = gov?.gsaTimeline || [];
+
+    // Resolve the best agency name + employee count with the enriched data
+    // layered on top.
+    const federalEmployees = ext.federal_employee_count ?? (frpp?.num_federal_employees) ?? null;
+    const opmHeadcount     = ext.opm_headcount ?? null;
+    const workforceTrend   = ext.workforce_trend || null;
+    const agencyRiskLevel  = ext.agency_risk_level || null;
+    const cabinetDept      = agp?.cabinet_department || null;
+    const frppId           = ext.linked_frpp_id || frpp?.real_property_uid || null;
 
     let h = '';
 
@@ -3111,13 +3225,129 @@ function _udTabOperations() {
       `<div style="color:var(--text)">${val || '<span style=\"color:var(--text3)\">—</span>'}</div></div>`;
     h += row('Agency (Short)', agency ? esc(agency) : null);
     h += row('Agency (Full)', agencyFull ? esc(agencyFull) : null);
+    h += row('Cabinet Department', cabinetDept ? esc(cabinetDept) : null);
     h += row('Government Level', govType ? esc(govType.charAt(0).toUpperCase() + govType.slice(1)) : null);
     h += row('Representing Agency', representingAgency ? esc(representingAgency) : null);
+    h += row('Agency Risk Level', agencyRiskLevel ? esc(agencyRiskLevel.charAt(0).toUpperCase() + agencyRiskLevel.slice(1)) : null);
     h += row('Firm Term Remaining', firmTermRem != null ? fmtYr(firmTermRem) : null);
     h += row('Total Term Remaining', termRem != null ? fmtYr(termRem) : null);
     h += row('Tenant Succession', tenantCount ? `${tenantCount} tenant${tenantCount > 1 ? 's' : ''} historically at this address` : null);
     h += row('Location', [city, state].filter(Boolean).join(', ') || null);
+    h += row('FRPP ID', frppId ? esc(frppId) : null);
     h += '</div></div>';
+
+    // ── Workforce card ──────────────────────────────────────────────
+    // Two tiers of data: (a) per-property employee counts from FRPP
+    // (num_federal_employees + contractors), (b) agency-level OPM
+    // workforce rollup for this city (employment totals, hires/separations,
+    // telework eligibility, retirement risk). Hides when no data is
+    // available for the agency at this location.
+    if (federalEmployees != null || frpp?.num_federal_contractors != null || opm) {
+      h += '<div class="detail-section">';
+      h += '<div class="detail-section-title">Workforce</div>';
+      h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:6px;font-size:13px">';
+      h += row('Federal Employees (this site)', federalEmployees != null ? fmtNum(federalEmployees) : null);
+      h += row('Federal Contractors (this site)', frpp?.num_federal_contractors != null ? fmtNum(frpp.num_federal_contractors) : null);
+      h += row('Workforce Trend (agency)', workforceTrend ? esc(workforceTrend.charAt(0).toUpperCase() + workforceTrend.slice(1)) : null);
+
+      if (opm) {
+        h += row('OPM Employment (agency + city)',
+          opm.employment_total != null ? `${fmtNum(opm.employment_total)}` +
+            (opm.snapshot_month ? ` <span style="font-size:10px;color:var(--text3)">as of ${esc(_fmtDate(opm.snapshot_month))}</span>` : '') : null);
+        h += row('Hires / Separations (YTD)',
+          (opm.hires_total != null || opm.separations_total != null)
+            ? `${fmtNum(opm.hires_total || 0)} in · ${fmtNum(opm.separations_total || 0)} out` : null);
+        h += row('Hire-to-Attrition Ratio',
+          opm.hiring_vs_attrition_ratio != null
+            ? parseFloat(opm.hiring_vs_attrition_ratio).toFixed(2) +
+              (opm.hiring_vs_attrition_ratio > 1 ? ' <span style="color:var(--green);font-size:10px">(growing)</span>'
+                : opm.hiring_vs_attrition_ratio < 0.9 ? ' <span style="color:#f59e0b;font-size:10px">(shrinking)</span>'
+                : ' <span style="color:var(--text3);font-size:10px">(stable)</span>')
+            : null);
+        h += row('Telework Participants',
+          opm.telework_participants_total != null
+            ? `${fmtNum(opm.telework_participants_total)} of ${fmtNum(opm.telework_eligible_total || 0)} eligible` : null);
+        h += row('Retirement-Eligible',
+          opm.retirement_eligible_total != null
+            ? fmtNum(opm.retirement_eligible_total) +
+              (opm.employment_total ? ` <span style="font-size:10px;color:var(--text3)">(${Math.round(100 * opm.retirement_eligible_total / opm.employment_total)}%)</span>` : '')
+            : null);
+      } else if (opmHeadcount != null) {
+        h += row('OPM Headcount (agency-wide)', fmtNum(opmHeadcount));
+      }
+      h += '</div></div>';
+    }
+
+    // ── FRPP (Federal Real Property) card ───────────────────────────
+    // Per-building asset data from frpp_records: property use, utilization,
+    // annual rent to lessor, maintenance + operations spend, replacement
+    // value, condition index, building age. These are the fields OMB
+    // tracks on the federal real-estate rollup and tell you whether GSA
+    // sees this building as a keeper vs. a disposal candidate.
+    if (frpp) {
+      h += '<div class="detail-section">';
+      h += '<div class="detail-section-title">Federal Real Property (FRPP)';
+      if (frpp.fiscal_year) h += ` <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:6px">FY ${esc(frpp.fiscal_year)}</span>`;
+      h += '</div>';
+      h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;font-size:13px">';
+      h += row('Property Type', frpp.property_type ? esc(frpp.property_type) : null);
+      h += row('Property Use', frpp.property_use ? esc(frpp.property_use) : null);
+      h += row('Utilization', frpp.utilization ? esc(frpp.utilization) : null);
+      h += row('Asset Status', frpp.asset_status ? esc(frpp.asset_status) : null);
+      h += row('Building Age', frpp.building_age != null ? `${frpp.building_age} yr` : null);
+      h += row('Congressional District', frpp.congressional_district ? esc(frpp.congressional_district) : null);
+      h += row('Annual Rent to Lessor', frpp.annual_rent_to_lessor != null ? fmtMoney(frpp.annual_rent_to_lessor) : null);
+      h += row('Annual Maintenance', frpp.annual_maintenance != null ? fmtMoney(frpp.annual_maintenance) : null);
+      h += row('Annual Operations Spend', frpp.annual_operations != null ? fmtMoney(frpp.annual_operations) : null);
+      h += row('Replacement Value', frpp.replacement_value != null ? fmtMoney(frpp.replacement_value) : null);
+      h += row('Condition Index', frpp.condition_index != null ? parseFloat(frpp.condition_index).toFixed(2) : null);
+      h += row('Repair Backlog', frpp.repair_needs != null ? fmtMoney(frpp.repair_needs) : null);
+      h += row('Reduce-the-Footprint Status', frpp.reduce_footprint ? esc(frpp.reduce_footprint) : null);
+      h += row('Using Bureau', frpp.using_bureau ? esc(frpp.using_bureau) : null);
+      h += '</div></div>';
+    }
+
+    // ── GSA lease history card (when snapshot-tracked) ──────────────
+    // gsa_lease_timeline tracks how a lease has evolved across GSA's
+    // monthly inventory snapshots. Useful signals: extension_count (how
+    // many times the tenure has been extended), landlord_change_count
+    // (whether the lessor has been flipped), bridge_lease_flag (GSA's
+    // "we'll sign a short extension while we figure out what we're
+    // really doing" marker — huge tell for upcoming renewal activity).
+    if (timeline.length) {
+      h += '<div class="detail-section">';
+      h += '<div class="detail-section-title">GSA Lease Timeline Snapshots</div>';
+      h += '<div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">';
+      timeline.forEach(t => {
+        h += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">';
+        h += `<span style="font-weight:700;color:var(--text);font-family:'JetBrains Mono',monospace;min-width:80px">${esc(t.lease_number || '—')}</span>`;
+        if (t.current_lessor_name)       h += `<span style="color:var(--text)">${esc(t.current_lessor_name)}</span>`;
+        if (t.current_annual_rent)       h += `<span style="color:var(--green)">${fmtMoney(t.current_annual_rent)}</span>`;
+        if (t.current_lease_rsf)         h += `<span style="color:var(--text2)">${fmtNum(t.current_lease_rsf)} RSF</span>`;
+        if (t.current_expiration_date)   h += `<span style="color:var(--text2)">exp. ${esc(_fmtDate(t.current_expiration_date))}</span>`;
+        if (t.extension_count > 0)       h += `<span style="color:#f59e0b;font-size:11px">${t.extension_count} extension${t.extension_count > 1 ? 's' : ''}</span>`;
+        if (t.landlord_change_count > 0) h += `<span style="color:#8b5cf6;font-size:11px">${t.landlord_change_count} landlord change${t.landlord_change_count > 1 ? 's' : ''}</span>`;
+        if (t.bridge_lease_flag)         h += `<span style="color:#ef4444;font-size:11px;font-weight:600">BRIDGE LEASE</span>`;
+        if (t.snapshots_count)           h += `<span style="color:var(--text3);font-size:10px">${t.snapshots_count} snapshots</span>`;
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
+
+    // ── Agency portfolio context (scale reference) ──────────────────
+    if (agp) {
+      h += '<div class="detail-section">';
+      h += '<div class="detail-section-title">Agency Portfolio Scale</div>';
+      h += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Where this property sits in the broader ' + esc(agp.agency_name) + ' portfolio across our dataset.</div>';
+      h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:13px">';
+      h += row('Properties', agp.property_count != null ? fmtNum(agp.property_count) : null);
+      h += row('Total SF', agp.total_sf != null ? fmtNum(agp.total_sf) + ' SF' : null);
+      h += row('Total Annual Rent', agp.total_annual_rent != null ? fmtMoney(agp.total_annual_rent) : null);
+      h += row('Avg Rent /SF', agp.avg_rent_psf != null ? '$' + parseFloat(agp.avg_rent_psf).toFixed(2) + '/SF' : null);
+      h += row('Active Locations', agp.active_count != null ? fmtNum(agp.active_count) : null);
+      h += row('Vacating Locations', agp.vacating_count != null ? fmtNum(agp.vacating_count) + (agp.vacating_count > 0 ? ' <span style="color:#f59e0b;font-size:10px">(consolidation signal)</span>' : '') : null);
+      h += '</div></div>';
+    }
 
     // Tenant chronology — one line per lease, useful for "who's been here"
     if (leases.length) {
