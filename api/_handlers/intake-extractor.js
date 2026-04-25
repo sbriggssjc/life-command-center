@@ -49,6 +49,59 @@ const SUPPORTED_EXCEL_TYPES = [
 // ============================================================================
 
 /**
+ * Defensive recovery for double-base64-encoded artifacts.
+ *
+ * Background (2026-04-25): the Power Automate Outlook flow was uploading
+ * `attachment.contentBytes` (already base64) directly to a Supabase Storage
+ * signed URL, instead of decoding to bytes first. Result: storage objects
+ * whose body is the literal ASCII base64 string of a PDF — bytes start with
+ * "JVBERi0x..." (b64 of "%PDF-1.") rather than "%PDF-1.". pdf-parse rejects
+ * those with "Invalid PDF structure".
+ *
+ * The right fix is upstream (decode in PA before PUT), but as a safety net
+ * we detect the pattern here and recover transparently. Only triggers when:
+ *   1. The bytes don't already start with a known binary header (%PDF, PK..)
+ *   2. The bytes are pure base64 alphabet
+ *   3. Decoding produces a recognizable PDF or DOCX header
+ *
+ * Returns { recovered: bool, buffer: ArrayBuffer-like }.
+ */
+function recoverIfBase64Wrapped(buffer) {
+  if (!buffer || buffer.byteLength < 8) return { recovered: false, buffer };
+  const head = Buffer.from(buffer).subarray(0, 4);
+  // Real PDF starts with "%PDF" (0x25 0x50 0x44 0x46) — leave alone.
+  if (head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) {
+    return { recovered: false, buffer };
+  }
+  // Real docx/zip starts with "PK\x03\x04" — leave alone.
+  if (head[0] === 0x50 && head[1] === 0x4B && head[2] === 0x03 && head[3] === 0x04) {
+    return { recovered: false, buffer };
+  }
+  // Sample first 4096 bytes; if anything outside the base64 alphabet appears,
+  // we can't safely decode — bail.
+  const sampleLen = Math.min(buffer.byteLength, 4096);
+  const sample = Buffer.from(buffer).subarray(0, sampleLen).toString('latin1');
+  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(sample)) return { recovered: false, buffer };
+  // Header sanity check on the sample.
+  const looksLikePdf  = sample.startsWith('JVBERi');     // base64 of "%PDF"
+  const looksLikeDocx = sample.startsWith('UEsDB');      // base64 of "PK\x03\x04"
+  if (!looksLikePdf && !looksLikeDocx) return { recovered: false, buffer };
+  try {
+    const decoded = Buffer.from(Buffer.from(buffer).toString('latin1'), 'base64');
+    if (decoded.length < 8) return { recovered: false, buffer };
+    if (decoded[0] === 0x25 && decoded[1] === 0x50 && decoded[2] === 0x44 && decoded[3] === 0x46) {
+      return { recovered: true, buffer: decoded, kind: 'pdf' };
+    }
+    if (decoded[0] === 0x50 && decoded[1] === 0x4B && decoded[2] === 0x03 && decoded[3] === 0x04) {
+      return { recovered: true, buffer: decoded, kind: 'docx' };
+    }
+    return { recovered: false, buffer };
+  } catch {
+    return { recovered: false, buffer };
+  }
+}
+
+/**
  * Fetch artifact binary data — from inline_data (base64) or Supabase storage.
  * @param {object} artifact - staged_intake_artifacts row
  * @returns {{ base64: string, media_type: string }}
@@ -105,8 +158,17 @@ async function fetchArtifactData(artifact) {
       );
     }
 
-    const buffer = await res.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString('base64');
+    const rawBuffer = await res.arrayBuffer();
+    // Defensive recovery: if the storage object is literally base64 text
+    // (uploader didn't decode before PUT), unwrap it transparently and log
+    // the recovery so the surrounding diagnostic surfaces it.
+    const recovery = recoverIfBase64Wrapped(rawBuffer);
+    const finalBuffer = recovery.recovered ? recovery.buffer : rawBuffer;
+    const base64 = Buffer.from(finalBuffer).toString('base64');
+    if (recovery.recovered) {
+      console.warn('[intake-extractor] base64-wrapped storage object detected and unwrapped:',
+        artifact.storage_path, `kind=${recovery.kind} raw=${rawBuffer.byteLength} decoded=${finalBuffer.length}`);
+    }
     // Expose success-case metadata too — so even a 200-with-empty-body case
     // surfaces Supabase's reported content-length vs. the bytes we actually
     // received. A mismatch (content-length > buffer.byteLength) points at a
@@ -116,7 +178,10 @@ async function fetchArtifactData(artifact) {
       status:         res.status,
       content_length: res.headers.get('content-length'),
       content_type:   res.headers.get('content-type'),
-      actual_bytes:   buffer.byteLength,
+      actual_bytes:   rawBuffer.byteLength,
+      decoded_bytes:  recovery.recovered ? finalBuffer.length : null,
+      base64_unwrapped: recovery.recovered,
+      base64_unwrap_kind: recovery.recovered ? recovery.kind : null,
       url:            storageUrl,
     };
     return {

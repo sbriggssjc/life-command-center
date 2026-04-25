@@ -200,6 +200,50 @@ async function fetchUrlArtifact(url) {
   }
 }
 
+// Pick the OM-eligible attachment from a Power Automate attachments[] array.
+//
+// Background: Outlook emails commonly arrive with 3 attachments — the actual
+// OM PDF plus two signature graphics (image001.png + image002.jpg). The
+// previous "first with storage_path" picker grabbed image001.png because PA
+// uploads attachments in their email-order and the sig images come first in
+// most Outlook payloads. The OM PDF was uploaded to storage but never staged.
+//
+// This helper screens out signature-shaped images and other non-OM types
+// before applying the storage_path > inline > index-zero preference.
+//
+// Bug E follow-up (2026-04-25): the noise filter inside stageOmIntake catches
+// signature images after the picker passes them through, but it can't tell
+// the picker to look at the next attachment instead. Filter at the picker.
+function pickPrimaryOmAttachment(atts) {
+  if (!Array.isArray(atts) || atts.length === 0) return null;
+
+  const isLikelyOm = (a) => {
+    const fn = String(a?.file_name || a?.name || '').toLowerCase().trim();
+    const mt = String(a?.file_type || a?.contentType || a?.mime_type || '').toLowerCase();
+
+    // Reject obvious noise — Outlook signature graphics + bare images.
+    if (mt.startsWith('image/')) return false;
+    if (/^image\d+\.(png|jpg|jpeg|gif|bmp)$/i.test(fn)) return false;
+    if (/^outlook-logo/i.test(fn) || /^signature/i.test(fn)) return false;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|jpeg)$/i.test(fn)) return false;
+
+    // Accept OM-shaped attachments: PDF / Word.
+    if (/\.(pdf|docx?)$/i.test(fn)) return true;
+    if (mt === 'application/pdf') return true;
+    if (mt.includes('msword') || mt.includes('officedocument.wordprocessingml')) return true;
+
+    // Anything else (xlsx, zip, eml, unknown) — skip; the OM is virtually
+    // always a PDF or docx in practice.
+    return false;
+  };
+
+  const eligible = atts.filter(isLikelyOm);
+  return eligible.find(a => a.storage_path)
+      || eligible.find(a => a.inline_data || a.content)
+      || eligible[0]
+      || null;
+}
+
 async function handleOutlookMessage(req, res) {
   console.log('[intake-outlook-message] diag req:', JSON.stringify({ method: req.method, bodyKeys: Object.keys(req.body || {}), hasMessageId: !!(req.body?.message_id || req.body?.id || req.body?.internet_message_id || req.body?.internetMessageId), hasWorkspaceHeader: !!req.headers['x-lcc-workspace'], bodyType: typeof req.body }));
   if (req.method !== 'POST') {
@@ -282,16 +326,20 @@ async function handleOutlookMessage(req, res) {
       let primaryDocument = null;
 
       if (atts.length > 0) {
-        const first = atts.find(a => a.storage_path) ||
-                      atts.find(a => a.inline_data || a.content) ||
-                      atts[0];
-        primaryDocument = {
-          bytes_base64: first.inline_data || first.content || null,
-          storage_path: first.storage_path || null,
-          file_name:    first.file_name || first.name || 'attachment.pdf',
-          mime_type:    first.file_type || first.contentType || 'application/pdf',
-        };
-      } else if (bodyForUrlScan) {
+        const first = pickPrimaryOmAttachment(atts);
+        if (first) {
+          primaryDocument = {
+            bytes_base64: first.inline_data || first.content || null,
+            storage_path: first.storage_path || null,
+            file_name:    first.file_name || first.name || 'attachment.pdf',
+            mime_type:    first.file_type || first.contentType || first.mime_type || 'application/pdf',
+          };
+        }
+      }
+      // Fall through to body-URL scan when no OM-eligible attachment was
+      // picked — covers emails whose only attachments are signature images
+      // but the real OM is linked from the body.
+      if (!primaryDocument && bodyForUrlScan) {
         const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
         for (const url of urlMatches.slice(0, 3)) {
           const fetched = await fetchUrlArtifact(url);
@@ -388,24 +436,27 @@ async function handleOutlookMessage(req, res) {
     let primaryDocument = null;
 
     if (atts.length > 0) {
-      // Prefer a storage_path-bearing attachment when available — Power
-      // Automate's Outlook flow for large emails uploads to Supabase via
-      // prepare-upload first, then posts this endpoint with just the
-      // storage reference. Falls back to inline base64 when PA hasn't
-      // pre-uploaded (small files) or when the payload came from another
-      // caller that only sent inline bytes.
-      const first = atts.find(a => a.storage_path) ||
-                    atts.find(a => a.inline_data || a.content) ||
-                    atts[0];
-      primaryDocument = {
-        bytes_base64: first.inline_data || first.content || null,
-        storage_path: first.storage_path || null,
-        file_name:    first.file_name || first.name || 'attachment.pdf',
-        mime_type:    first.file_type || first.contentType || 'application/pdf',
-      };
-    } else if (bodyForUrlScan) {
-      // Power Automate sometimes signals has_attachments=true for inline
-      // images/signatures while the real OM is linked from the body instead.
+      // pickPrimaryOmAttachment screens out signature graphics (image001.png,
+      // image002.jpg, etc.) before applying the storage_path > inline >
+      // index-zero preference. Power Automate's Outlook flow for large emails
+      // uploads attachments to Supabase via prepare-upload first, then posts
+      // this endpoint with just the storage references; the picker selects
+      // the OM PDF rather than whichever signature graphic happens to be
+      // first in the email's attachment order.
+      const first = pickPrimaryOmAttachment(atts);
+      if (first) {
+        primaryDocument = {
+          bytes_base64: first.inline_data || first.content || null,
+          storage_path: first.storage_path || null,
+          file_name:    first.file_name || first.name || 'attachment.pdf',
+          mime_type:    first.file_type || first.contentType || first.mime_type || 'application/pdf',
+        };
+      }
+    }
+    // Fall through to body-URL scan when no OM-eligible attachment was
+    // picked — covers emails whose only attachments are signature images
+    // but the real OM is linked from the body (Dropbox / Google Drive / etc.).
+    if (!primaryDocument && bodyForUrlScan) {
       const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
       for (const url of urlMatches.slice(0, 3)) {
         const fetched = await fetchUrlArtifact(url);
