@@ -38,6 +38,100 @@ import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceCont
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
+// ============================================================================
+// FIELD-LEVEL PROVENANCE RECORDER (Phase 2.1, 2026-04-25)
+// ============================================================================
+//
+// Calls public.lcc_merge_field on LCC Opps for each (table, field) the
+// promoter writes from an OM. Records source='om_extraction' against the
+// shared field_source_priority registry. enforce_mode=record_only across
+// the board today, so this is observation-only — every actual UPDATE in
+// the rest of this file still happens unchanged. When a field's
+// enforce_mode is later flipped to 'warn' or 'strict', callers should
+// inspect the returned decision before performing their UPDATE.
+//
+// Sources used:
+//   - 'om_extraction'  — AI-extracted from any OM PDF (email or sidebar)
+//   - 'lease_document' — would be used by a future signed-lease ingester
+//   - 'derived_from_rent' — computed cap rates / projections
+// See docs/architecture/data_quality_self_learning_loop.md and
+// supabase/migrations/20260425210000_lcc_field_provenance_and_priority.sql.
+
+const OM_EXTRACTION_DEFAULT_CONFIDENCE = 0.7; // AI-extracted, no per-field score
+
+/**
+ * Record one field's provenance via lcc_merge_field. Best-effort —
+ * a failure here NEVER blocks the actual write. Return the decision
+ * envelope so callers can opt into honoring it later.
+ */
+async function recordFieldProvenance(args) {
+  const {
+    workspaceId, targetDatabase, targetTable, recordPk, fieldName,
+    value, source, sourceRunId, confidence, recordedBy,
+  } = args;
+  if (value === undefined || value === null) return null;
+  if (!targetTable || !recordPk || !fieldName || !source) return null;
+  try {
+    const res = await opsQuery('POST', 'rpc/lcc_merge_field', {
+      p_workspace_id:     workspaceId || null,
+      p_target_database:  targetDatabase,
+      p_target_table:     targetTable,
+      p_record_pk:        String(recordPk),
+      p_field_name:       fieldName,
+      p_value:            value,
+      p_source:           source,
+      p_source_run_id:    sourceRunId || null,
+      p_confidence:       confidence ?? null,
+      p_recorded_by:      recordedBy || null,
+    });
+    if (!res.ok) {
+      // Don't spam logs on first deploy if the function isn't there yet.
+      return null;
+    }
+    const row = Array.isArray(res.data) ? res.data[0] : res.data;
+    return row || null;
+  } catch (err) {
+    // Best-effort — never block a real write on provenance recording.
+    console.warn('[provenance] recordFieldProvenance failed:', err?.message);
+    return null;
+  }
+}
+
+/**
+ * Record provenance for a batch of OM-derived fields on a single row.
+ *
+ * @param {object} ctx
+ * @param {string} ctx.targetDatabase  - 'dia_db' | 'gov_db' | 'lcc_opps'
+ * @param {string} ctx.targetTable     - e.g. 'dia.properties'
+ * @param {string|number} ctx.recordPk - the row's pk (UUID, integer, etc.)
+ * @param {string} ctx.intakeId        - source_run_id; ties back to staged_intake_items
+ * @param {string} ctx.workspaceId
+ * @param {string} ctx.actorId
+ * @param {Object<string, *>} fieldValues - { field_name: value }
+ * @param {Object<string, number>} [perFieldConfidence] - optional override
+ */
+async function recordOmFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}) {
+  if (!ctx?.targetTable || !ctx?.recordPk) return;
+  const promises = [];
+  for (const [fieldName, value] of Object.entries(fieldValues)) {
+    if (value === undefined || value === null) continue;
+    promises.push(recordFieldProvenance({
+      workspaceId:    ctx.workspaceId,
+      targetDatabase: ctx.targetDatabase,
+      targetTable:    ctx.targetTable,
+      recordPk:       ctx.recordPk,
+      fieldName,
+      value,
+      source:         'om_extraction',
+      sourceRunId:    ctx.intakeId,
+      confidence:     perFieldConfidence[fieldName] ?? OM_EXTRACTION_DEFAULT_CONFIDENCE,
+      recordedBy:     ctx.actorId,
+    }));
+  }
+  // Best-effort — race them in parallel, don't await failure.
+  await Promise.allSettled(promises);
+}
+
 // Document types that represent on-market listing marketing. Full OMs,
 // 1-page broker flyers, and marketing brochures all contain listing-grade
 // data (address, tenant, price, cap rate, lease terms, broker) and should
@@ -412,7 +506,7 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     'dialysis',
     'GET',
     `properties?property_id=eq.${Number(propertyId)}` +
-    `&select=year_built,lot_sf,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source&limit=1`
+    `&select=year_built,lot_sf,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
   );
   if (!existing.ok || !Array.isArray(existing.data) || !existing.data.length) {
     return { ok: false, skipped: 'property_not_found', property_id: propertyId };
@@ -424,6 +518,12 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
   const yb = parseInt(snapshot.year_built, 10);
   if (current.year_built == null && Number.isFinite(yb) && yb >= 1800 && yb <= new Date().getFullYear() + 2) {
     patch.year_built = yb;
+  }
+
+  // parcel_number — only fill if NULL, normalized to a trimmed string
+  const parcel = snapshot.parcel_number != null ? String(snapshot.parcel_number).trim() : null;
+  if (current.parcel_number == null && parcel) {
+    patch.parcel_number = parcel;
   }
 
   // lot_sf — fill when NULL or 0 (existing data sometimes has 0.0 placeholders)
@@ -1705,6 +1805,103 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     } catch (err) {
       console.warn('[intake-promoter] dia broker FK chain failed (non-fatal):', err?.message);
     }
+  }
+
+  // ── Phase 2.1 (2026-04-25): record field-level provenance ─────────────
+  // For every field this promoter just wrote from the OM, log a row to
+  // public.field_provenance via lcc_merge_field. Source='om_extraction',
+  // source_run_id=intakeId. Every priority entry is enforce_mode=record_only
+  // today, so this is observation-only — actual UPDATEs above ran unchanged.
+  // See docs/architecture/data_quality_self_learning_loop.md.
+  try {
+    const targetDb = match.domain === 'dialysis' ? 'dia_db' : 'gov_db';
+    const tablePrefix = match.domain === 'dialysis' ? 'dia' : 'gov';
+    const provCtx = {
+      targetDatabase: targetDb,
+      workspaceId:    context.workspaceId,
+      actorId:        context.actorId,
+      intakeId,
+    };
+
+    // 1. Listing fields
+    if (listingResult?.ok && listingResult.listing_id) {
+      await recordOmFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.available_listings`, recordPk: listingResult.listing_id },
+        {
+          initial_price:    snapshot.asking_price ?? null,
+          last_price:       snapshot.asking_price ?? null,
+          current_cap_rate: snapshot.cap_rate != null ? snapshot.cap_rate / 100 : null,
+          initial_cap_rate: snapshot.cap_rate != null ? snapshot.cap_rate / 100 : null,
+          listing_broker:   snapshot.listing_broker || null,
+          broker_email:     snapshot.listing_broker_email || null,
+          price_per_sf:     snapshot.price_per_sf ?? null,
+          seller_name:      snapshot.seller_name || null,
+        }
+      );
+    }
+
+    // 2. Broker contact fields (the email is the identity column we treat as the field key)
+    if (contactResult?.ok && contactResult.contact_id) {
+      await recordOmFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.contacts`, recordPk: contactResult.contact_id },
+        {
+          contact_email: snapshot.listing_broker_email || null,
+          contact_name:  snapshot.listing_broker || null,
+          company:       snapshot.listing_firm || null,
+          title:         'Listing Broker',
+        }
+      );
+    }
+
+    // 3. Property fields backfilled from the OM (only when promoter actually patched them)
+    const propPatched = financialsResult?.patched_fields || [];
+    if (propPatched.length && match.property_id) {
+      const propValues = {};
+      for (const f of propPatched) {
+        if (f === 'year_built')         propValues.year_built         = snapshot.year_built;
+        else if (f === 'lot_sf')        propValues.lot_sf             = snapshot.lot_sf;
+        else if (f === 'parcel_number') propValues.parcel_number      = snapshot.parcel_number;
+        else if (f === 'lease_commencement') propValues.lease_commencement = snapshot.lease_commencement;
+        else if (f === 'anchor_rent')        propValues.anchor_rent        = snapshot.annual_rent;
+        else if (f === 'anchor_rent_date')   propValues.anchor_rent_date   = snapshot.lease_commencement;
+        else if (f === 'noi')                propValues.noi                = snapshot.noi;
+        else if (f === 'gross_rent')         propValues.gross_rent         = snapshot.annual_rent;
+        else if (f === 'land_acres')         propValues.land_acres         = snapshot.land_acres
+                                                                          ?? (snapshot.lot_sf ? snapshot.lot_sf / 43560 : null);
+        else if (f === 'rba')                propValues.rba                = snapshot.building_sf;
+      }
+      await recordOmFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: match.property_id },
+        propValues
+      );
+    }
+
+    // 4. Lease fields (dialysis only — gov has a different lease lifecycle)
+    if (match.domain === 'dialysis' && diaLeaseResult?.ok && diaLeaseResult.lease_id) {
+      await recordOmFieldsProvenance(
+        { targetDatabase: 'dia_db', targetTable: 'dia.leases', recordPk: diaLeaseResult.lease_id,
+          intakeId, workspaceId: context.workspaceId, actorId: context.actorId },
+        {
+          tenant:                  snapshot.tenant_name || null,
+          guarantor:               snapshot.tenant_guarantor || null,
+          lease_start:             snapshot.lease_commencement || null,
+          lease_expiration:        snapshot.lease_expiration || null,
+          expense_structure:       snapshot.expense_structure || null,
+          rent:                    snapshot.annual_rent ?? null,
+          rent_per_sf:             snapshot.rent_per_sf ?? null,
+          leased_area:             snapshot.building_sf ?? null,
+          renewal_options:         snapshot.renewal_options || null,
+          roof_responsibility:     snapshot.roof_responsibility || null,
+          structure_responsibility:snapshot.structure_responsibility || null,
+          hvac_responsibility:     snapshot.hvac_responsibility || null,
+          parking_responsibility:  snapshot.parking_responsibility || null,
+        }
+      );
+    }
+  } catch (err) {
+    // Provenance recording is non-fatal — keep the response shape stable
+    // even if the merge function isn't deployed or LCC Opps is degraded.
+    console.warn('[intake-promoter] field provenance recording failed (non-fatal):', err?.message);
   }
 
   // Pipeline lead — runs after the listing is written so we can stamp the

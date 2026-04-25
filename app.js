@@ -612,6 +612,66 @@ window.openOutlookEmail = function (evt, desktopUrl, webUrl) {
   return false;
 };
 
+// Bug L wiring (2026-04-25): the inbox row's "View match →" pill calls
+// this with the staged_intake_items.intake_id. We look up the matched
+// property + domain via /api/intake?_route=queue&intake_id=X, fetch the
+// property record from the appropriate domain DB, and hand it to
+// showDetail() with the Sales tab pre-selected so the user lands on the
+// listing+OM-artifact context for the email they were just looking at.
+window.openIntakeFromInbox = async function (intakeId) {
+  if (!intakeId) return;
+  try {
+    const qRes = await fetch(`/api/intake?_route=queue&intake_id=${encodeURIComponent(intakeId)}`, {
+      credentials: 'include',
+    });
+    const qData = await qRes.json().catch(() => null);
+    const row = (qData?.rows || qData?.items || (Array.isArray(qData) ? qData : null) || [])[0];
+    if (!row) {
+      try { console.warn('[LCC-Intake] no queue row for intake_id', intakeId, qData); } catch (_) {}
+      if (typeof showToast === 'function') showToast('No matched property found for this intake.', 'warn');
+      return;
+    }
+
+    // The matcher's row exposes domain + matched_property_id. The queue
+    // endpoint maps `match.property_id` (canonical) and `match.domain`
+    // (canonical), with legacy `matched_property_id` / `matched_domain`
+    // aliases for older callers — check both shapes defensively.
+    const m = row.match || row.staged_intake_matches?.[0] || {};
+    const propertyId = m.property_id || m.matched_property_id || row.matched_property_id || null;
+    const domain     = m.domain || m.matched_domain || row.matched_domain || null;
+    if (!propertyId || !domain) {
+      if (typeof showToast === 'function') showToast('Intake has no matched property yet.', 'warn');
+      return;
+    }
+
+    // Fetch the property from the right domain DB. Both helpers are
+    // exposed globally (dialysis.js and gov.js) — fall back to a stub
+    // record so showDetail at least opens the panel with the property_id
+    // visible if the helper isn't available.
+    let propertyRow = null;
+    if (domain === 'dialysis' && typeof window.diaQuery === 'function') {
+      const r = await window.diaQuery('properties', '*', { filter: `property_id=eq.${propertyId}`, limit: 1 });
+      const arr = Array.isArray(r) ? r : (r?.data || []);
+      propertyRow = arr[0] || null;
+    } else if (domain === 'government' && typeof window.govQuery === 'function') {
+      const r = await window.govQuery('properties', '*', { filter: `property_id=eq.${propertyId}`, limit: 1 });
+      const arr = Array.isArray(r) ? r : (r?.data || []);
+      propertyRow = arr[0] || null;
+    }
+    if (!propertyRow) propertyRow = { property_id: propertyId };
+
+    const source = domain === 'dialysis' ? 'dia-clinic' : 'gov-ownership';
+    if (typeof showDetail === 'function') {
+      showDetail(propertyRow, source, 'Sales');
+    } else if (typeof showUnifiedDetail === 'function') {
+      showUnifiedDetail(propertyRow, source, 'Sales');
+    }
+  } catch (err) {
+    try { console.error('[LCC-Intake] openIntakeFromInbox failed', err); } catch (_) {}
+    if (typeof showToast === 'function') showToast('Failed to open matched property.', 'error');
+  }
+};
+
 // Display normalization — title case, clean formatting for consistent display
 function norm(s) {
   if (!s) return '';

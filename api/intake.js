@@ -1143,17 +1143,26 @@ async function handleIntakeQueue(req, res) {
 
   const limit = parseLimit(req.query.limit);
   const domain = req.query.domain || null; // optional: 'dialysis' | 'government'
+  const singleIntakeId = req.query.intake_id ? String(req.query.intake_id) : null;
 
-  // Query staged_intake_items joined with extractions and matches
-  let path = `staged_intake_items?workspace_id=eq.${encodeURIComponent(workspaceId)}`
-    + `&status=in.(extracted,matched,review_needed)`
-    + `&select=intake_id,status,raw_payload,source_email_subject,source_email_sender,created_at,`
+  // Query staged_intake_items joined with extractions and matches.
+  // Single-intake mode (when ?intake_id=X is supplied) drops the status
+  // filter so finalized intakes can also be looked up — the inbox UI's
+  // "View match →" pill calls this with a finalized intake_id and needs
+  // the matched property/domain regardless of status.
+  let path = `staged_intake_items?workspace_id=eq.${encodeURIComponent(workspaceId)}`;
+  if (singleIntakeId) {
+    path += `&intake_id=eq.${encodeURIComponent(singleIntakeId)}`;
+  } else {
+    path += `&status=in.(extracted,matched,review_needed)`;
+  }
+  path += `&select=intake_id,status,raw_payload,source_email_subject,source_email_sender,created_at,`
     + `staged_intake_extractions(extraction_snapshot),`
-    + `staged_intake_matches(match_result,confidence,matched_property_id,matched_domain)`
-    + `&order=created_at.desc&limit=${limit}`;
+    + `staged_intake_matches(match_result,confidence,matched_property_id,matched_domain,property_id,domain,decision,reason)`
+    + `&order=created_at.desc&limit=${singleIntakeId ? 1 : limit}`;
 
   // If domain filter requested, only show items whose match or extraction indicates that domain
-  if (domain) {
+  if (domain && !singleIntakeId) {
     path += `&or=(staged_intake_matches.matched_domain.eq.${encodeURIComponent(domain)},`
       + `raw_payload->>domain.eq.${encodeURIComponent(domain)})`;
   }

@@ -4532,16 +4532,34 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
 
   // ── Junk tenant filter (defense-in-depth against scraper bugs) ──────
   // Reject tenant names that are obviously demographics, traffic, street names,
-  // or CoStar UI artifacts rather than real business/tenant names.
+  // OM table-of-contents headers, NAICS classifications, or CoStar UI
+  // artifacts rather than real business/tenant names.
+  //
+  // Bug M (2026-04-25): the V2 sidebar OM intake on property 29237 wrote
+  // tenant='Loan' / 'Financials' / 'Changes' / 'Health Care and Social
+  // Assistance' (NAICS sector 62) into dialysis.leases. The first three
+  // are OM table-of-contents headers picked up by the CoStar sidebar
+  // parser; the last is a NAICS classification mislabeled as a tenant.
+  // Extending the filter here so they're rejected at write time.
   const JUNK_TENANT_RE = /^(population|households|median\s+(age|hh\s+income)|daytime\s+employees|traffic(\s+vol)?|last\s+measured|collection\s+street|cross\s+street|distance|store\s+type|made\s+with\s+)/i;
   const STREET_NAME_RE = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
   const GROWTH_RE = /growth\s+'\d/i;
+  // OM table-of-contents headers + section labels. Single-word ones first,
+  // then multi-word phrases. Anchored ^...$ so they only match standalone
+  // values, not real tenants whose names happen to contain these words
+  // (e.g. "First National Bank" is fine; bare "Financials" is not).
+  const OM_SECTION_RE = /^(loan|loans|financial|financials|changes|recent\s+changes|summary|executive\s+summary|investment\s+highlights|property\s+overview|location\s+overview|tenant\s+overview|lease\s+abstract|rent\s+roll|operating\s+statement|comparable\s+sales|sales\s+comps|lease\s+comps|disclaimer|confidentiality|table\s+of\s+contents|appendix|exhibits?)\s*$/i;
+  // NAICS sector names (Census Bureau industry classifications). These
+  // sometimes leak through CoStar's "industry" field into tenant.
+  const NAICS_SECTOR_RE = /^(agriculture|mining|utilities|construction|manufacturing|wholesale\s+trade|retail\s+trade|transportation\s+and\s+warehousing|information|finance\s+and\s+insurance|real\s+estate(\s+and\s+rental(\s+and\s+leasing)?)?|professional(,?\s+scientific(,?\s+and\s+technical\s+services)?)?|management\s+of\s+companies|administrative(\s+and\s+support)?|educational\s+services|health\s+care(\s+and\s+social\s+assistance)?|arts(,?\s+entertainment(,?\s+and\s+recreation)?)?|accommodation(\s+and\s+food\s+services)?|other\s+services|public\s+administration)\s*$/i;
   function isJunkTenant(name) {
     if (!name || name.trim().length < 3) return true;
     const n = name.trim();
     if (JUNK_TENANT_RE.test(n)) return true;
     if (STREET_NAME_RE.test(n)) return true;
     if (GROWTH_RE.test(n)) return true;
+    if (OM_SECTION_RE.test(n)) return true;
+    if (NAICS_SECTOR_RE.test(n)) return true;
     return false;
   }
 
