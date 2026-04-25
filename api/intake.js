@@ -340,7 +340,15 @@ async function handleOutlookMessage(req, res) {
     // Re-stage only when the prior attempt is genuinely lost — no bridge
     // recorded AND no recent staging claim. Otherwise trust the in-flight
     // call (within window) or the already-staged row (bridge present).
-    if (!alreadyStaged && !stagingInFlight && hasAttachments) {
+    //
+    // Bug P fix (2026-04-25): the original gate also required
+    // `hasAttachments`, which prevented body-only emails from being
+    // re-staged on replay. With the body-only fallback below, the
+    // dedup-replay path needs to run for any email with content
+    // (attachment OR body) — gating on hasAttachments meant that
+    // re-flagged body-only emails would silently dedup-skip without
+    // ever reaching the body-as-text artifact synthesis.
+    if (!alreadyStaged && !stagingInFlight) {
       const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
       let primaryDocument = null;
 
@@ -394,7 +402,21 @@ async function handleOutlookMessage(req, res) {
       }
 
       if (primaryDocument && (primaryDocument.bytes_base64 || primaryDocument.storage_path)) {
-        await stageOmIntake(
+        // Bug Q fix (2026-04-25): claim the staging slot on the existing
+        // inbox_item BEFORE awaiting stageOmIntake, mirroring the fresh-path.
+        // Without this PATCH, multiple PA replays (3-6× per flag event) all
+        // see no claim, all enter this re-stage branch, and each calls
+        // stageOmIntake — producing orphan duplicate stagings (Waycross +
+        // Plano, 6 orphans on 2026-04-25). The claim makes subsequent
+        // arrivals treat staging as in-flight and short-circuit.
+        await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(existing.id)}`, {
+          metadata: {
+            ...(existing.metadata || {}),
+            staging_started_at: new Date().toISOString(),
+          },
+        }).catch(err => console.error('[intake] dedup-replay staging claim PATCH failed:', err?.message));
+
+        const stageRes = await stageOmIntake(
           {
             bytes_base64:     primaryDocument.bytes_base64 || undefined,
             storage_path:     primaryDocument.storage_path || undefined,
@@ -409,9 +431,24 @@ async function handleOutlookMessage(req, res) {
             name:       sender?.name  || user.display_name || null,
           },
           workspaceId,
-        ).catch(err =>
-          console.error('[intake] dedup-path stageOmIntake failed:', existing.id, err.message)
-        );
+        ).catch(err => {
+          console.error('[intake] dedup-path stageOmIntake failed:', existing.id, err.message);
+          return null;
+        });
+
+        // Bug R fix (2026-04-25): patch bridged_to_intake_id back onto the
+        // existing flagged_email row so future dedup hits short-circuit
+        // cleanly via `alreadyStaged=true` instead of falling through to
+        // re-stage. Same patch the fresh-path does after a successful stage.
+        if (stageRes?.status === 200 && stageRes.body?.ok && stageRes.body.intake_id && stageRes.body.intake_id !== existing.id) {
+          await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(existing.id)}`, {
+            metadata: {
+              ...(existing.metadata || {}),
+              staging_started_at: existing.metadata?.staging_started_at || new Date().toISOString(),
+              bridged_to_intake_id: stageRes.body.intake_id,
+            },
+          }).catch(err => console.error('[intake] dedup-replay bridge PATCH failed:', err?.message));
+        }
       }
     }
 

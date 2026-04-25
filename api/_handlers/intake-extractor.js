@@ -773,6 +773,43 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
     teams_alert_result:         teamsAlertResult,
   };
 
+  // Bug S fix (2026-04-25): persist runtime_config + match/promotion summary
+  // into staged_intake_items.raw_payload so SQL audits can see Teams alert
+  // outcomes (attempted? succeeded? webhook status?) without probing the
+  // /api/intake-extract endpoint per-intake. The earlier extraction_result
+  // PATCH (line ~613) ran BEFORE the downstream pipeline, so it doesn't
+  // capture the Teams alert result. This second PATCH appends.
+  // Best-effort — failure here doesn't break the response.
+  try {
+    const cur = await opsQuery('GET',
+      `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}&select=raw_payload&limit=1`
+    );
+    const curPayload = cur.ok && cur.data?.length ? (cur.data[0].raw_payload || {}) : {};
+    const prevExtraction = curPayload.extraction_result || {};
+    await opsQuery('PATCH',
+      `staged_intake_items?intake_id=eq.${encodeURIComponent(intakeId)}`,
+      {
+        raw_payload: {
+          ...curPayload,
+          extraction_result: {
+            ...prevExtraction,
+            // Don't clobber the OM extraction snapshot; just add downstream summary.
+            match_status:        matchResult?.status || null,
+            match_confidence:    matchResult?.confidence || null,
+            match_property_id:   matchResult?.property_id || null,
+            match_domain:        matchResult?.domain || null,
+            promotion_ok:        promotionResult?.ok ?? null,
+            promotion_listing_id: promotionResult?.listing?.listing_id || null,
+            runtime_config:      runtimeConfig,
+            downstream_completed_at: new Date().toISOString(),
+          },
+        },
+      }
+    );
+  } catch (err) {
+    console.warn('[intake-extractor] downstream payload PATCH failed (non-fatal):', err?.message);
+  }
+
   return {
     ok: true,
     extraction_snapshot: mergedSnapshot,
