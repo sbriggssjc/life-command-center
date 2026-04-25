@@ -105,12 +105,30 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
   const capRateDecimal = snapshot.cap_rate != null
     ? Number(snapshot.cap_rate) / 100
     : null;
+
+  // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
+  // so the Sales/Available table's Price/SF column populates without a
+  // join through the leases view. Prefer extraction-supplied (most
+  // accurate; the OM usually states the figure verbatim) and fall back
+  // to ask_price / building_sf when the extractor missed it.
+  let pricePerSf = null;
+  if (snapshot.price_per_sf != null && Number(snapshot.price_per_sf) > 0) {
+    pricePerSf = Number(snapshot.price_per_sf);
+  } else if (snapshot.asking_price && snapshot.building_sf) {
+    const askPrice = Number(snapshot.asking_price);
+    const sf       = Number(snapshot.building_sf);
+    if (askPrice > 0 && sf > 0) {
+      pricePerSf = Math.round((askPrice / sf) * 100) / 100;
+    }
+  }
+
   return {
     property_id:        Number(match.property_id),
     listing_broker:     snapshot.listing_broker || null,
     broker_email:       snapshot.listing_broker_email || null,
     initial_price:      snapshot.asking_price || null,
     last_price:         snapshot.asking_price || null,
+    price_per_sf:       pricePerSf,
     current_cap_rate:   capRateDecimal,
     initial_cap_rate:   capRateDecimal,
     status:             'active',
@@ -255,11 +273,53 @@ async function promoteListing(domain, intakeId, snapshot, match) {
 // 2. BROKER CONTACT UPSERT (check-then-insert by email)
 // ============================================================================
 
+// Bug H fix (2026-04-25): when an OM lists multiple brokers as a single
+// comma-joined string ("Kevin Boeve, James Taylor" with paired emails),
+// split into separate contact rows so each broker is a first-class CRM
+// entity. Returns an array of {name, email} pairs. Falls back to a single
+// pair when the lengths don't match (uneven counts → unsafe to split).
+function splitBrokerPairs(rawName, rawEmail) {
+  const names  = String(rawName  || '').split(',').map(s => s.trim()).filter(Boolean);
+  const emails = String(rawEmail || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (names.length > 1 && names.length === emails.length) {
+    return names.map((n, i) => ({ name: n, email: emails[i] }));
+  }
+  // Uneven or single-broker input → leave as a single combined record.
+  return [{ name: rawName || null, email: rawEmail || null }];
+}
+
 async function promoteBrokerContact(domain, snapshot, match) {
   const brokerName  = (snapshot.listing_broker || '').trim();
   const brokerEmail = (snapshot.listing_broker_email || '').trim();
   if (!brokerName && !brokerEmail) {
     return { ok: false, skipped: 'no_broker_info' };
+  }
+
+  const pairs = splitBrokerPairs(brokerName, brokerEmail);
+  // Multi-broker case: recurse for each pair, return primary + additional_ids.
+  if (pairs.length > 1) {
+    const results = [];
+    for (const pair of pairs) {
+      const subSnapshot = {
+        ...snapshot,
+        listing_broker:       pair.name,
+        listing_broker_email: pair.email,
+      };
+      // eslint-disable-next-line no-await-in-loop -- sequential to avoid email-uniqueness races
+      const r = await promoteBrokerContact(domain, subSnapshot, match);
+      results.push(r);
+    }
+    const successes = results.filter(r => r.ok);
+    if (!successes.length) {
+      return { ok: false, skipped: 'all_split_inserts_failed', results };
+    }
+    return {
+      ok: true,
+      contact_id: successes[0].contact_id || null,
+      additional_contact_ids: successes.slice(1).map(r => r.contact_id).filter(Boolean),
+      split_count: successes.length,
+      property_id: match?.property_id || null,
+    };
   }
 
   // Gov table columns: name, email, phone, company, title, data_source,
@@ -552,11 +612,146 @@ async function promoteProspectLead(domain, propertyId, snapshot, match, listingI
 // commencement_date that hasn't been superseded. If no such lease exists,
 // we skip — creating a fresh lease from an OM is out of scope for this
 // bridge.
+// Bug I fix (2026-04-25): the dia promoter wasn't writing the OM-derived
+// lease into dialysis.leases, so v_available_listings (which JOINs the
+// most recent active lease) kept showing stale terms — wrong expense
+// structure, wrong rent, wrong renewal text — even after a fresh OM
+// landed. This writer creates a new lease row from the OM and deactivates
+// any existing leases that have already expired, leaving overlapping
+// active leases (which need human reconciliation) alone with a warning.
+async function promoteDiaLeaseFromOm(propertyId, snapshot) {
+  // Need at least commencement OR expiration to write a sensible lease row.
+  const commencement = snapshot.lease_commencement || null;
+  const expiration   = snapshot.lease_expiration   || null;
+  if (!commencement && !expiration) {
+    return { ok: true, skipped: 'no_lease_dates_in_snapshot' };
+  }
+
+  // Build payload from snapshot fields that map cleanly onto dia.leases.
+  const annualRent = snapshot.annual_rent != null ? Number(snapshot.annual_rent) : null;
+  const rentPerSf  = snapshot.rent_per_sf != null ? Number(snapshot.rent_per_sf) : null;
+  const buildingSf = snapshot.building_sf != null ? Number(snapshot.building_sf) : null;
+  const renewalText = snapshot.renewal_options
+    ? String(snapshot.renewal_options).trim()
+    : null;
+
+  const newLease = {
+    property_id:               Number(propertyId),
+    tenant:                    snapshot.tenant_name      || null,
+    guarantor:                 snapshot.tenant_guarantor || null,
+    lease_start:               commencement,
+    lease_expiration:          expiration,
+    expense_structure:         snapshot.expense_structure || null,
+    rent:                      Number.isFinite(annualRent) && annualRent > 0 ? annualRent : null,
+    rent_per_sf:               Number.isFinite(rentPerSf) && rentPerSf > 0 ? rentPerSf : null,
+    leased_area:               Number.isFinite(buildingSf) && buildingSf > 0 ? buildingSf : null,
+    sqft:                      Number.isFinite(buildingSf) && buildingSf > 0 ? buildingSf : null,
+    renewal_options:           renewalText,
+    renewal_option_text:       renewalText,
+    roof_responsibility:       snapshot.roof_responsibility       || null,
+    hvac_responsibility:       snapshot.hvac_responsibility       || null,
+    parking_responsibility:    snapshot.parking_responsibility    || null,
+    structure_responsibility:  snapshot.structure_responsibility  || null,
+    status:                    'active',
+    is_active:                 true,
+  };
+
+  // Strip null fields so PostgREST doesn't try to overwrite defaults.
+  const insertPayload = Object.fromEntries(
+    Object.entries(newLease).filter(([, v]) => v !== null)
+  );
+
+  // Avoid duplicate: if an active lcc-intake-sourced lease already exists
+  // for this property with the same lease_start, PATCH it instead of
+  // inserting a second one. We use lease_start as the dedup key because
+  // this domain has no source-of-truth column on leases.
+  if (commencement) {
+    const existing = await domainQuery(
+      'dialysis',
+      'GET',
+      `leases?property_id=eq.${Number(propertyId)}` +
+      `&lease_start=eq.${encodeURIComponent(commencement)}` +
+      `&select=lease_id,is_active&limit=1`
+    );
+    if (existing.ok && Array.isArray(existing.data) && existing.data.length) {
+      const existingId = existing.data[0].lease_id;
+      const patchRes = await domainQuery(
+        'dialysis',
+        'PATCH',
+        `leases?lease_id=eq.${encodeURIComponent(existingId)}`,
+        insertPayload,
+        { Prefer: 'return=representation' }
+      );
+      return patchRes.ok
+        ? { ok: true, lease_id: existingId, action: 'patched_existing' }
+        : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+    }
+  }
+
+  // Insert fresh.
+  const insertRes = await domainQuery(
+    'dialysis',
+    'POST',
+    'leases',
+    insertPayload,
+    { Prefer: 'return=representation' }
+  );
+  if (!insertRes.ok) {
+    return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
+  }
+  const inserted = Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data;
+  const newLeaseId = inserted?.lease_id || null;
+
+  // Deactivate genuinely-expired leases for this property — but only when
+  // the OM's commencement supersedes them (lease_expiration < commencement).
+  // Active overlapping leases get a warning so the user can reconcile.
+  let deactivated = 0;
+  let overlapping = 0;
+  if (commencement) {
+    const others = await domainQuery(
+      'dialysis',
+      'GET',
+      `leases?property_id=eq.${Number(propertyId)}` +
+      `&lease_id=neq.${encodeURIComponent(newLeaseId)}` +
+      `&is_active=eq.true` +
+      `&select=lease_id,lease_start,lease_expiration&limit=20`
+    );
+    if (others.ok && Array.isArray(others.data)) {
+      for (const o of others.data) {
+        if (o.lease_expiration && o.lease_expiration < commencement) {
+          // eslint-disable-next-line no-await-in-loop
+          const dRes = await domainQuery(
+            'dialysis',
+            'PATCH',
+            `leases?lease_id=eq.${encodeURIComponent(o.lease_id)}`,
+            { is_active: false }
+          );
+          if (dRes.ok) deactivated++;
+        } else {
+          overlapping++;
+        }
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    lease_id: newLeaseId,
+    action: 'inserted_new',
+    deactivated_expired: deactivated,
+    overlapping_active: overlapping,
+    overlap_warning: overlapping > 0
+      ? `${overlapping} other active lease(s) overlap; manual reconciliation may be needed`
+      : null,
+  };
+}
+
 async function promoteLeaseExpenses(domain, propertyId, snapshot) {
   if (domain !== 'government') {
-    // Dia has lease-level expense columns too but stored differently
-    // (separate hvac/roof/structure responsibility fields). Left for a
-    // future pass.
+    // Dia leases are now handled by promoteDiaLeaseFromOm (called from
+    // promoteIntakeToDomainListing), which writes the OM lease verbatim
+    // into dialysis.leases. This gov-only function stays focused on
+    // patching expense_structure onto the existing gov lease row.
     return { ok: true, skipped: `lease_expenses_not_supported_for_${domain}` };
   }
 
@@ -1336,13 +1531,102 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
 
   // Run the first four domain-DB promotions in parallel; the prospect lead
   // upsert needs the listing_id that promoteListing returns, so it runs
-  // after.
-  const [listingResult, contactResult, financialsResult, leaseExpensesResult] = await Promise.all([
+  // after. promoteDiaLeaseFromOm only fires when domain is 'dialysis' (gov
+  // has its own dedicated leases table managed elsewhere); when not
+  // applicable it returns {ok:true, skipped:...} and is a no-op.
+  const [listingResult, contactResult, financialsResult, leaseExpensesResult, diaLeaseResult] = await Promise.all([
     promoteListing(match.domain, intakeId, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promoteBrokerContact(match.domain, snapshot, match).catch(e => ({ ok: false, error: e?.message })),
     promotePropertyFinancials(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
     promoteLeaseExpenses(match.domain, match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message })),
+    match.domain === 'dialysis'
+      ? promoteDiaLeaseFromOm(match.property_id, snapshot).catch(e => ({ ok: false, error: e?.message }))
+      : Promise.resolve({ ok: true, skipped: `dia_lease_only_for_dialysis` }),
   ]);
+
+  // Bug J fix (2026-04-25): wire the freshly-created broker contact back
+  // onto the listing as listing_broker_id. Important note on schema: the
+  // dialysis `available_listings.listing_broker_id` is a BIGINT FK to the
+  // `brokers` table (integer pk), NOT to `contacts` (uuid pk). The two
+  // tables are linked via `brokers.contact_id`. So the chain is:
+  //   1. promoteBrokerContact already created the contact (uuid)
+  //   2. Find or upsert a `brokers` row by email, set its contact_id back
+  //   3. PATCH listing.listing_broker_id with that integer broker_id
+  // Without step 2, the listing FK stays null and CRM filters by broker
+  // miss OM-promoted listings even though the contact exists.
+  // Best-effort: failure is logged but doesn't block the rest of the
+  // pipeline. Only runs for dialysis; gov has its own broker model.
+  if (
+    match.domain === 'dialysis' &&
+    listingResult?.ok && listingResult.listing_id &&
+    contactResult?.ok && contactResult.contact_id
+  ) {
+    const allContactIds = [contactResult.contact_id, ...(contactResult.additional_contact_ids || [])];
+    const pairs = splitBrokerPairs(snapshot.listing_broker || '', snapshot.listing_broker_email || '');
+
+    let primaryBrokerId = null;
+    try {
+      for (let i = 0; i < pairs.length; i++) {
+        const pair = pairs[i];
+        const linkedContactId = allContactIds[i] || null;
+        if (!pair.email && !pair.name) continue;
+
+        // Find existing brokers row by email (canonical) or normalized name.
+        let brokerId = null;
+        if (pair.email) {
+          const found = await domainQuery(
+            'dialysis',
+            'GET',
+            `brokers?email=ilike.${encodeURIComponent(pair.email)}&select=broker_id,contact_id&limit=1`
+          );
+          if (found.ok && Array.isArray(found.data) && found.data.length) {
+            brokerId = found.data[0].broker_id;
+            // Backfill contact_id link if the existing brokers row is missing it
+            if (linkedContactId && !found.data[0].contact_id) {
+              await domainQuery(
+                'dialysis',
+                'PATCH',
+                `brokers?broker_id=eq.${brokerId}`,
+                { contact_id: linkedContactId }
+              ).catch(() => {});
+            }
+          }
+        }
+        // Insert a fresh brokers row when none was found.
+        if (!brokerId) {
+          const insRes = await domainQuery(
+            'dialysis',
+            'POST',
+            'brokers',
+            {
+              broker_name:     pair.name || pair.email || 'Unknown Broker',
+              email:           pair.email || null,
+              company:         snapshot.listing_firm || null,
+              contact_id:      linkedContactId,
+              normalized_name: (pair.name || '').toLowerCase().trim() || null,
+            },
+            { Prefer: 'return=representation' }
+          );
+          if (insRes.ok) {
+            const inserted = Array.isArray(insRes.data) ? insRes.data[0] : insRes.data;
+            brokerId = inserted?.broker_id || null;
+          }
+        }
+        if (i === 0) primaryBrokerId = brokerId;
+      }
+
+      if (primaryBrokerId) {
+        await domainQuery(
+          'dialysis',
+          'PATCH',
+          `available_listings?listing_id=eq.${encodeURIComponent(listingResult.listing_id)}`,
+          { listing_broker_id: primaryBrokerId, broker_id: primaryBrokerId }
+        );
+      }
+    } catch (err) {
+      console.warn('[intake-promoter] dia broker FK chain failed (non-fatal):', err?.message);
+    }
+  }
 
   // Pipeline lead — runs after the listing is written so we can stamp the
   // lead row with source_listing_id. Ensures OM-promoted deals show up on
@@ -1415,6 +1699,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     broker_contact:        contactResult,
     property_financials:   financialsResult,
     lease_expenses:        leaseExpensesResult,
+    dia_lease:             diaLeaseResult,
     pipeline_lead:         pipelineLeadResult,
     lcc_entity:            lccEntityResult,
     unified_contact:       unifiedContactResult,

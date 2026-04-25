@@ -308,20 +308,39 @@ async function handleOutlookMessage(req, res) {
   if (existingCheck.ok && existingCheck.data?.length) {
     const existing = existingCheck.data[0];
     const bridgedIntakeId = existing.metadata?.bridged_to_intake_id || null;
+    const stagingStartedAt = existing.metadata?.staging_started_at || null;
 
-    // Look up the staged row by the REAL intake_id (from the metadata
-    // bridge), not by the inbox_item id. Fall back to the legacy check only
-    // if no bridge is recorded yet (first fresh-path hasn't finished its
-    // PATCH, or an older inbox_item predates the bridge).
-    const stagedLookupId = bridgedIntakeId || existing.id;
-    const stagedCheck = await opsQuery('GET',
-      `staged_intake_items?intake_id=eq.${pgFilterVal(stagedLookupId)}&select=intake_id&limit=1`
-    );
-    const alreadyStaged = stagedCheck.ok && stagedCheck.data?.length > 0;
+    // Bug F (2026-04-25): Power Automate's flagged-email V3 trigger fires
+    // the flow 2-6 times for a single flag event within ~10 seconds. The
+    // legacy dedup checked `staged_intake_items.intake_id = existing.id`
+    // (the flagged_email row's own id) — which never matches because
+    // staging uses a separate email_om bridge uuid. Plus, the
+    // `bridged_to_intake_id` metadata patch only happens AFTER stageOmIntake
+    // completes (3-10s), so concurrent POSTs in that window all saw "no
+    // bridge yet" and re-staged. Result: duplicate staged_intake_items per
+    // flag event, with the LCC-Opps side double-billed even when the
+    // dialysis listing was idempotent.
+    //
+    // Fix: pre-claim the slot via `staging_started_at` written BEFORE the
+    // stageOmIntake await (see fresh-path below). Subsequent arrivals see
+    // a recent claim and short-circuit. After 60s the claim is treated as
+    // stale (the original call presumably died) and re-stage is allowed.
+    const STAGING_CLAIM_WINDOW_MS = 60_000;
+    const stagingInFlight = !!(stagingStartedAt &&
+      (Date.now() - new Date(stagingStartedAt).getTime() < STAGING_CLAIM_WINDOW_MS));
 
-    // If not yet staged and this email has a usable attachment, run the
-    // unified pipeline. Same logic as the fresh-intake path above.
-    if (!alreadyStaged && hasAttachments) {
+    let alreadyStaged = false;
+    if (bridgedIntakeId) {
+      const stagedCheck = await opsQuery('GET',
+        `staged_intake_items?intake_id=eq.${pgFilterVal(bridgedIntakeId)}&select=intake_id&limit=1`
+      );
+      alreadyStaged = stagedCheck.ok && stagedCheck.data?.length > 0;
+    }
+
+    // Re-stage only when the prior attempt is genuinely lost — no bridge
+    // recorded AND no recent staging claim. Otherwise trust the in-flight
+    // call (within window) or the already-staged row (bridge present).
+    if (!alreadyStaged && !stagingInFlight && hasAttachments) {
       const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
       let primaryDocument = null;
 
@@ -421,6 +440,19 @@ async function handleOutlookMessage(req, res) {
   }
 
   const item = Array.isArray(result.data) ? result.data[0] : result.data;
+
+  // Bug F claim (2026-04-25): mark the slot as "staging in progress" BEFORE
+  // we await stageOmIntake (which can take 3-10s for the extraction race).
+  // Subsequent PA replays of the same flag event see this timestamp and
+  // short-circuit in the dedup branch instead of staging duplicates.
+  if (item?.id) {
+    await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(item.id)}`, {
+      metadata: {
+        ...(item.metadata || {}),
+        staging_started_at: new Date().toISOString(),
+      },
+    }).catch(err => console.error('[intake] staging claim PATCH failed:', err?.message));
+  }
 
   // If email has attachments (or a findable PDF URL in the body), bridge to
   // the unified stageOmIntake pipeline. This replaces the legacy dual-DB

@@ -5973,6 +5973,22 @@ function _salesRenderListing(l) {
     html += `<div style="font-size:12px;margin-bottom:2px"><span style="color:var(--text3)">Broker:</span> <span style="color:var(--text)">${esc(l.listing_broker)}</span></div>`;
   }
 
+  // OM artifact icon — surface the staged OM PDF on the property detail
+  // page so it's reachable without going to the Sales/Available view.
+  // Same buildCollateralIcons() helper as dialysis.js uses, only fires
+  // when the listing has an intake_artifact_path populated.
+  if (l.intake_artifact_path && typeof buildCollateralIcons === 'function') {
+    html += '<div style="margin-top:8px;display:flex;gap:6px;align-items:center">';
+    html += '<span style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">Marketing:</span>';
+    html += buildCollateralIcons(l, {
+      pdf:            'intake_artifact_path',
+      pdfType:        'intake_artifact_type',
+      primaryUrl:     'url',
+      extraUrlFields: ['listing_url'],
+    });
+    html += '</div>';
+  }
+
   return html;
 }
 
