@@ -420,6 +420,168 @@ async function invokeOllamaChat({ message, context, history, attachments, cfg, r
   };
 }
 
+// ============================================================================
+// EXTRACTION-AI FALLBACK CHAIN
+// ============================================================================
+//
+// Bug T (2026-04-25): the OM extractor was hitting Claude 30K-input-tokens/min
+// rate limits during burst ingestion (22 body-only emails × 30-100K chars each
+// burned through the org budget in seconds). Five extractions returned 429 and
+// landed as status='failed'.
+//
+// Fix: route extraction through a fallback chain rather than the single
+// configured chat provider. Primary attempts go through invokeChatProvider
+// (whatever's configured — typically the edge function fronting Claude).
+// On 429 or 5xx, fall back to OpenAI directly with a smaller/cheaper model
+// (different rate-limit pool). On second 429, sleep + retry primary.
+//
+// Configure the chain via env: AI_EXTRACTION_FALLBACK_CHAIN as a JSON array
+// of {provider, model} pairs, e.g.
+//   [{"provider":"openai","model":"gpt-4o-mini"},{"provider":"openai","model":"gpt-4o"}]
+// Defaults to a single OpenAI gpt-4o-mini fallback when unset.
+
+const DEFAULT_EXTRACTION_FALLBACK = [
+  { provider: 'openai', model: 'gpt-4o-mini' },
+];
+
+const RATE_LIMIT_BACKOFF_MS = 35_000; // claude resets per-minute
+const MAX_RETRY_AFTER_FALLBACK = 1;
+
+function getExtractionFallbackChain() {
+  const env = process.env.AI_EXTRACTION_FALLBACK_CHAIN;
+  if (!env) return DEFAULT_EXTRACTION_FALLBACK;
+  try {
+    const parsed = JSON.parse(env);
+    if (Array.isArray(parsed) && parsed.every(s => s.provider && s.model)) return parsed;
+  } catch { /* fall through to default */ }
+  return DEFAULT_EXTRACTION_FALLBACK;
+}
+
+function isRateLimitOrTransient(result) {
+  if (!result) return true;
+  if (result.status === 429) return true;
+  if (result.status >= 500 && result.status < 600) return true;
+  // Some providers return 200 with an error inside the body. Detect Claude's
+  // error envelope when relayed through the edge function as a 200.
+  const errMsg = String(
+    result.data?.error ||
+    result.data?.details?.error?.message ||
+    result.data?.message ||
+    ''
+  ).toLowerCase();
+  if (/rate.?limit|too many requests|quota|exceed/.test(errMsg)) return true;
+  return false;
+}
+
+/**
+ * Direct OpenAI extraction call (no Copilot system prompt — extraction has
+ * its own self-contained prompt). Returns same shape as invokeChatProvider:
+ * { ok, status, data: { response, model, usage }, provider }
+ */
+async function invokeOpenAIExtraction({ prompt, model, cfg }) {
+  if (!cfg.openaiApiKey) {
+    return { ok: false, status: 503, data: { error: 'OPENAI_API_KEY missing' }, provider: 'openai' };
+  }
+  try {
+    const res = await fetch(`${cfg.openaiBaseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        Authorization:   `Bearer ${cfg.openaiApiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        // No instructions field — the extraction prompt is self-contained,
+        // we don't want the Copilot system prompt biasing structured output.
+        input: prompt,
+        store: false,
+      }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch { data = { error: 'Invalid OpenAI response' }; }
+    const responseText = extractResponseText(data);
+    return {
+      ok: res.ok,
+      status: res.status,
+      provider: 'openai',
+      data: {
+        ...data,
+        model: data?.model || model,
+        response: responseText || '',
+      },
+    };
+  } catch (err) {
+    return { ok: false, status: 0, data: { error: err?.message || String(err) }, provider: 'openai' };
+  }
+}
+
+/**
+ * Extraction AI with multi-model fallback chain.
+ *
+ * Strategy:
+ *   1. Try primary provider (whatever invokeChatProvider routes to)
+ *   2. On 429/5xx, try each fallback model in chain (different rate pools)
+ *   3. If all fallbacks fail, sleep RATE_LIMIT_BACKOFF_MS and retry primary once
+ *   4. Return the result with metadata about which model succeeded
+ *
+ * @param {string} prompt - Self-contained extraction prompt
+ * @returns Same shape as invokeChatProvider, plus a `tried` array describing fallbacks
+ */
+export async function invokeExtractionAI({ prompt }) {
+  const cfg = getAiConfig();
+  const tried = [];
+
+  // Step 1: primary
+  const primary = await invokeChatProvider({
+    message: prompt,
+    attachments: [],
+    context: null,
+    history: [],
+    user: { id: 'system' },
+    workspaceId: null,
+  });
+  tried.push({ stage: 'primary', provider: primary.provider, status: primary.status });
+  if (primary.ok && !isRateLimitOrTransient(primary)) {
+    return { ...primary, tried };
+  }
+
+  // Step 2: walk the fallback chain (different model pools)
+  const chain = getExtractionFallbackChain();
+  for (const step of chain) {
+    let result = null;
+    if (step.provider === 'openai') {
+      result = await invokeOpenAIExtraction({ prompt, model: step.model, cfg });
+    } else {
+      // Future: support anthropic-direct, ollama, etc. Skip unknown providers.
+      continue;
+    }
+    tried.push({ stage: 'fallback', provider: step.provider, model: step.model, status: result.status });
+    if (result.ok && !isRateLimitOrTransient(result)) {
+      return { ...result, tried, fellBackFrom: primary.provider };
+    }
+  }
+
+  // Step 3: backoff + retry primary once
+  for (let i = 0; i < MAX_RETRY_AFTER_FALLBACK; i++) {
+    await new Promise(r => setTimeout(r, RATE_LIMIT_BACKOFF_MS));
+    const retry = await invokeChatProvider({
+      message: prompt,
+      attachments: [],
+      context: null,
+      history: [],
+      user: { id: 'system' },
+      workspaceId: null,
+    });
+    tried.push({ stage: 'retry_after_backoff', provider: retry.provider, status: retry.status, attempt: i + 1 });
+    if (retry.ok && !isRateLimitOrTransient(retry)) {
+      return { ...retry, tried };
+    }
+  }
+
+  // All paths exhausted — return the primary failure with full chain context
+  return { ...primary, tried, exhausted: true };
+}
+
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   const route = resolveAiRoute(cfg, context);

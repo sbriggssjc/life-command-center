@@ -45,6 +45,29 @@ When an email has no OM-eligible attachment, `handleOutlookMessage` synthesizes 
 
 See `docs/architecture/om_intake_pipeline.md` for the full reference.
 
+## Multi-model AI fallback for extraction (2026-04-25)
+
+The OM extractor (`api/_handlers/intake-extractor.js::callAiExtraction`) routes through `invokeExtractionAI` in `_shared/ai.js` rather than `invokeChatProvider` directly. The fallback chain:
+
+1. **Primary** — whatever `invokeChatProvider` routes to (typically Claude via the Supabase edge function)
+2. **On 429 / 5xx** — walk the `AI_EXTRACTION_FALLBACK_CHAIN` env (JSON array of `{provider, model}`); default is `[{"provider":"openai","model":"gpt-4o-mini"}]`. OpenAI sits in a separate rate-limit pool from Claude.
+3. **On final failure** — sleep 35s, retry primary once
+4. Returns the result with a `tried` array describing which providers/models were attempted
+
+Each per-artifact diagnostic now records `ai_chain`, `ai_fell_back`, `ai_final_provider`, `ai_final_model` so the SQL audit can see fallback frequency:
+
+```sql
+SELECT
+  intake_id,
+  raw_payload->'extraction_result' AS extraction
+FROM staged_intake_items
+WHERE raw_payload->'extraction_result'->'diagnostics'->0->>'ai_fell_back' = 'true';
+```
+
+Required env: `OPENAI_API_KEY` in Vercel. Override the chain with `AI_EXTRACTION_FALLBACK_CHAIN='[{"provider":"openai","model":"gpt-4o"}]'` to use a different fallback model.
+
+Also: text/plain artifacts (email-body intakes) are capped at 80K chars vs 200K for PDFs — most flyer emails have all the deal data in the first 30-50K chars; the rest is signature blocks and forwarded thread history that burns tokens for no extraction value.
+
 ## Field-level data provenance (Phase 1, 2026-04-25)
 
 LCC Opps now has three artifacts that observe every cross-table field write to curated tables:

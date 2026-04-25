@@ -17,7 +17,7 @@
 
 import { opsQuery, fetchWithTimeout } from '../_shared/ops-db.js';
 import { authenticate, requireRole } from '../_shared/auth.js';
-import { invokeChatProvider, invokeOpenAIResponses, getAiConfig } from '../_shared/ai.js';
+import { invokeChatProvider, invokeOpenAIResponses, getAiConfig, invokeExtractionAI } from '../_shared/ai.js';
 import { matchIntakeToProperty } from './intake-matcher.js';
 import { promoteIntakeToDomainListing } from './intake-promoter.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
@@ -254,10 +254,16 @@ async function callAiExtraction(base64Data, mediaType) {
   };
 
   // Truncate extremely long text so we stay well under the model's context
-  // window and response budget. ~200k chars is well within gpt-4o-mini's
-  // 128k-token limit (roughly 500k chars) while leaving room for the prompt
-  // and response. Most OMs are 20-80k chars of text.
-  const MAX_TEXT_CHARS = 200_000;
+  // window and response budget. PDFs (real OMs) get a generous cap because
+  // they're often image-heavy and need full page text for tenant/lease
+  // language. Email bodies (text/plain) get a smaller cap — most flyer
+  // emails have all the deal data in the first 30-50K characters; anything
+  // beyond is signature blocks, disclaimers, footer boilerplate, and
+  // forwarded thread history that mostly burns Claude tokens for no
+  // extraction value. Bug U fix (2026-04-25): smaller email cap drops
+  // input-token usage by ~60% on body-only intakes, helping stay under
+  // the 30K/min Claude rate limit during burst ingestion.
+  const MAX_TEXT_CHARS = isText ? 80_000 : 200_000;
   if (pdfText.length > MAX_TEXT_CHARS) {
     pdfText = pdfText.slice(0, MAX_TEXT_CHARS) + '\n\n[...truncated]';
   }
@@ -322,19 +328,28 @@ Look for keywords like "repair", "replace", "maintain", "responsible" near "roof
 If the document is an OM, these may appear in the lease abstract section.
 If not determinable, use null.`;
 
-  // Text-in-prompt extraction works with any provider (edge, openai, ollama)
-  // because we've already turned the PDF into plain text via pdf-parse.
-  const result = await invokeChatProvider({
-    message:     prompt,
-    attachments: [],                // text is inline in the prompt now
-    context:     null,
-    history:     [],
-    user:        { id: 'system' },
-    workspaceId: null,
-  });
+  // Text-in-prompt extraction routed through the multi-model fallback chain.
+  // Primary attempt → invokeChatProvider (typically Claude via edge fn).
+  // On 429 / 5xx → fall back through the AI_EXTRACTION_FALLBACK_CHAIN env
+  // (default: OpenAI gpt-4o-mini, separate rate-limit pool from Claude).
+  // On final failure → backoff + retry primary once. See _shared/ai.js
+  // invokeExtractionAI for the full chain logic.
+  const result = await invokeExtractionAI({ prompt });
+
+  // Surface which model actually succeeded into per-artifact diagnostics.
+  // Lets the SQL audit query show "this intake fell back from edge → openai
+  // gpt-4o-mini" so we can monitor fallback frequency over time.
+  globalThis.__lastAiCallInfo = {
+    tried:         result.tried || [],
+    fell_back:     Boolean(result.fellBackFrom),
+    fellBackFrom:  result.fellBackFrom || null,
+    final_provider: result.provider,
+    final_model:   result.data?.model || null,
+    exhausted:     Boolean(result.exhausted),
+  };
 
   if (!result.ok) {
-    throw new Error(`AI provider error ${result.status}: ${JSON.stringify(result.data)}`);
+    throw new Error(`AI provider error ${result.status} (chain: ${JSON.stringify(result.tried)}): ${JSON.stringify(result.data).slice(0, 400)}`);
   }
 
   // Extract JSON from response text. AI models return content in different
@@ -566,6 +581,14 @@ export async function processIntakeExtraction(intakeId, context = {}) {
         diag.pdf_pages = globalThis.__lastPdfParseInfo.pages;
         diag.pdf_text_len = globalThis.__lastPdfParseInfo.textLen;
         diag.pdf_parse_error = globalThis.__lastPdfParseInfo.error;
+      }
+      // Surface multi-model fallback info — lets the SQL audit see when
+      // primary 429s pushed extraction onto the OpenAI backup pool.
+      if (typeof globalThis.__lastAiCallInfo === 'object' && globalThis.__lastAiCallInfo !== null) {
+        diag.ai_chain          = globalThis.__lastAiCallInfo.tried || [];
+        diag.ai_fell_back      = globalThis.__lastAiCallInfo.fell_back || false;
+        diag.ai_final_provider = globalThis.__lastAiCallInfo.final_provider || null;
+        diag.ai_final_model    = globalThis.__lastAiCallInfo.final_model || null;
       }
       diag.ai_ms = Date.now() - t1;
 
