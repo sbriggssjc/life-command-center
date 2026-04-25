@@ -734,6 +734,21 @@ function inboxItemHTML(item, idx) {
     html += `<a href="${hrefSafe}" target="_blank" rel="noopener" onclick="event.stopPropagation();return (window.openOutlookEmail ? window.openOutlookEmail(event, ${jsonSafe(emailLinks.desktop)}, ${jsonSafe(emailLinks.web)}) : true)" style="display:inline-block;margin-bottom:6px;font-size:11px;color:var(--accent);text-decoration:none">Open in Outlook ↗</a>`;
   }
 
+  // Bug L fix (2026-04-25): when a flagged-email inbox row was bridged to a
+  // staged_intake (i.e. the OM intake pipeline ran on it), surface that
+  // bridge so triage doesn't have to leave the inbox to know what got
+  // matched/promoted. Reads metadata.bridged_to_intake_id (set by
+  // handleOutlookMessage after stageOmIntake completes).
+  const bridgedIntakeId = item?.metadata?.bridged_to_intake_id || null;
+  if (bridgedIntakeId) {
+    const intakeShort = String(bridgedIntakeId).slice(0, 8);
+    html += `<div style="display:inline-flex;align-items:center;gap:6px;margin:0 0 6px;padding:3px 8px;border-radius:10px;background:rgba(52,211,153,0.10);border:1px solid rgba(52,211,153,0.35);font-size:11px;color:var(--text2)">`;
+    html += `<span style="color:#34d399;font-weight:600">⚙ Staged</span>`;
+    html += `<span style="color:var(--text3)">intake ${esc(intakeShort)}…</span>`;
+    html += `<button class="q-link" onclick="event.stopPropagation();(window.openIntakeFromInbox ? window.openIntakeFromInbox(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}')) : (location.hash='#intake/' + encodeURIComponent(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}'))))" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">View match →</button>`;
+    html += `</div>`;
+  }
+
   // Normalized quick actions
   html += '<div class="q-actions">';
   if (item.status === 'new') {

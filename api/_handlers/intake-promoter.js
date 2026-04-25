@@ -402,9 +402,88 @@ async function promoteBrokerContact(domain, snapshot, match) {
 // and the property has no cap_rate, populate it. If the property already
 // has a cap_rate (from CoStar or a human edit), leave it alone.
 
+// Dialysis-side property back-write — narrower than gov because the
+// dia.properties schema has no cap_rate/noi/gross_rent/rba columns. We
+// fill year_built, lot_sf, lease_commencement when NULL, and refresh
+// anchor_rent + anchor_rent_date + anchor_rent_source whenever the OM's
+// lease commencement is newer than the property's recorded anchor date.
+async function promoteDiaPropertyFromOm(propertyId, snapshot) {
+  const existing = await domainQuery(
+    'dialysis',
+    'GET',
+    `properties?property_id=eq.${Number(propertyId)}` +
+    `&select=year_built,lot_sf,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source&limit=1`
+  );
+  if (!existing.ok || !Array.isArray(existing.data) || !existing.data.length) {
+    return { ok: false, skipped: 'property_not_found', property_id: propertyId };
+  }
+  const current = existing.data[0];
+  const patch = {};
+
+  // year_built — only fill if NULL, range-validate
+  const yb = parseInt(snapshot.year_built, 10);
+  if (current.year_built == null && Number.isFinite(yb) && yb >= 1800 && yb <= new Date().getFullYear() + 2) {
+    patch.year_built = yb;
+  }
+
+  // lot_sf — fill when NULL or 0 (existing data sometimes has 0.0 placeholders)
+  const lotSf = snapshot.lot_sf != null ? Number(snapshot.lot_sf) : null;
+  if (
+    (current.lot_sf == null || Number(current.lot_sf) === 0) &&
+    Number.isFinite(lotSf) && lotSf > 0 && lotSf < 100_000_000
+  ) {
+    patch.lot_sf = Math.round(lotSf);
+  }
+
+  // lease_commencement — only fill if NULL
+  const commencement = snapshot.lease_commencement || null;
+  if (current.lease_commencement == null && commencement) {
+    patch.lease_commencement = commencement;
+  }
+
+  // anchor_rent / anchor_rent_date / anchor_rent_source — refresh when the
+  // OM's commencement strictly post-dates the recorded anchor. The
+  // dia v_sales_comps view's rent projection rolls forward from the
+  // anchor (CLAUDE.md), so a stale anchor pollutes downstream comps.
+  const annualRent = snapshot.annual_rent != null ? Number(snapshot.annual_rent) : null;
+  if (commencement && Number.isFinite(annualRent) && annualRent > 0) {
+    const omIsNewer =
+      current.anchor_rent_date == null ||
+      String(commencement) > String(current.anchor_rent_date);
+    if (omIsNewer) {
+      patch.anchor_rent        = annualRent;
+      patch.anchor_rent_date   = commencement;
+      patch.anchor_rent_source = 'om_confirmed';
+    }
+  }
+
+  if (!Object.keys(patch).length) {
+    return { ok: true, skipped: 'all_fields_already_populated_or_curated', current_values: current };
+  }
+
+  const patchRes = await domainQuery(
+    'dialysis',
+    'PATCH',
+    `properties?property_id=eq.${Number(propertyId)}`,
+    patch
+  );
+  return patchRes.ok
+    ? { ok: true, patched_fields: Object.keys(patch), patch }
+    : { ok: false, skipped: 'patch_failed', status: patchRes.status, detail: patchRes.data };
+}
+
 async function promotePropertyFinancials(domain, propertyId, snapshot) {
-  // Dialysis properties schema has no cap_rate/noi/rent columns (those
-  // live on leases/sales_transactions in that domain). Nothing to do.
+  // Bug K fix (2026-04-25): dialysis properties don't carry cap_rate/noi/rent
+  // (those live on leases/sales_transactions), but they DO carry year_built,
+  // lot_sf, lease_commencement, and anchor_rent. Backfill those from the OM
+  // when they're missing or when the OM lease is newer than the recorded
+  // anchor — same conservative "fill blanks; don't clobber curated data"
+  // rule as gov, with one exception: anchor_rent updates when lease_commencement
+  // strictly post-dates anchor_rent_date, because by definition a newer lease
+  // is the right anchor.
+  if (domain === 'dialysis') {
+    return promoteDiaPropertyFromOm(propertyId, snapshot);
+  }
   if (domain !== 'government') {
     return { ok: true, skipped: `property_financials_not_supported_for_${domain}` };
   }
