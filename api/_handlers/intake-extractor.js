@@ -207,6 +207,13 @@ async function fetchArtifactData(artifact) {
 async function callAiExtraction(base64Data, mediaType) {
   const isPdf = mediaType === 'application/pdf';
   const isExcel = /spreadsheet|excel|xlsx|xls/i.test(mediaType || '');
+  // Bug O fix (2026-04-25): support text/plain and text/html artifacts so
+  // email-body-only intakes (flagged emails with no PDF attachment) can be
+  // staged + extracted. The handler in api/intake.js synthesizes a
+  // text/plain artifact from subject+body when no OM-eligible attachment
+  // is found. Skip pdf-parse for these — the bytes ARE the text.
+  const isText = /^text\//i.test(mediaType || '')
+              || mediaType === 'message/rfc822';
 
   // Extract PDF text server-side with pdf-parse rather than trying to pass
   // the raw file inline. The OpenAI Responses API path for PDFs via
@@ -228,13 +235,22 @@ async function callAiExtraction(base64Data, mediaType) {
       pdfExtractError = err?.message || String(err);
       console.error('[intake-extractor] pdf-parse failed:', pdfExtractError);
     }
+  } else if (isText && base64Data) {
+    try {
+      pdfText = Buffer.from(base64Data, 'base64').toString('utf8').trim();
+    } catch (err) {
+      pdfExtractError = err?.message || String(err);
+      console.error('[intake-extractor] text decode failed:', pdfExtractError);
+    }
   }
   // Emit sidechannel diagnostics so the per-artifact diagnostics row shows
-  // what pdf-parse actually did.
+  // what extraction actually did. (Field name kept as __lastPdfParseInfo
+  // for backwards-compat with the diagnostics consumer.)
   globalThis.__lastPdfParseInfo = {
     pages: pdfPages,
     textLen: pdfText.length,
     error: pdfExtractError,
+    extractor: isPdf ? 'pdf-parse' : (isText ? 'text-decode' : 'none'),
   };
 
   // Truncate extremely long text so we stay well under the model's context
@@ -250,6 +266,10 @@ async function callAiExtraction(base64Data, mediaType) {
     ? (pdfText
         ? `Document (${pdfPages} pages) — extracted text:\n\n${pdfText}\n`
         : '[Note: PDF text extraction returned empty. The file may be a scanned image. Attempt best-effort extraction from whatever structured metadata is available; return unknown/null for fields you cannot determine.]\n')
+    : isText
+      ? (pdfText
+          ? `Email / text document — content:\n\n${pdfText}\n`
+          : '[Note: text source was empty after decoding.]\n')
     : '[Note: source is a non-PDF binary document. Extract any identifiable fields from context.]\n';
 
   const prompt = `Extract all available deal data from this CRE document.
@@ -262,7 +282,7 @@ For dates, return YYYY-MM-DD format.
 
 ${documentBody}
 {
-  "document_type": "om|rent_roll|lease_abstract|flyer|unknown",
+  "document_type": "om|rent_roll|lease_abstract|flyer|marketing_brochure|price_change|broker_email|market_update|email_update|comp|unknown",
   "address": null,
   "city": null,
   "state": null,

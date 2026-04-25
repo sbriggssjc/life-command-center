@@ -4552,6 +4552,14 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   // NAICS sector names (Census Bureau industry classifications). These
   // sometimes leak through CoStar's "industry" field into tenant.
   const NAICS_SECTOR_RE = /^(agriculture|mining|utilities|construction|manufacturing|wholesale\s+trade|retail\s+trade|transportation\s+and\s+warehousing|information|finance\s+and\s+insurance|real\s+estate(\s+and\s+rental(\s+and\s+leasing)?)?|professional(,?\s+scientific(,?\s+and\s+technical\s+services)?)?|management\s+of\s+companies|administrative(\s+and\s+support)?|educational\s+services|health\s+care(\s+and\s+social\s+assistance)?|arts(,?\s+entertainment(,?\s+and\s+recreation)?)?|accommodation(\s+and\s+food\s+services)?|other\s+services|public\s+administration)\s*$/i;
+  // Bug N (2026-04-25): CoStar's "For Lease at Sale" / "Tenants" panels
+  // contain availability metric labels ("Smallest Space", "Max Contiguous",
+  // "Office Avail", "Retail Avail" etc.) that the sidebar parser was
+  // reading as tenant names with associated SF values. The sidebar wrote
+  // 22+ junk lease rows across 5 properties on 2026-04-21 → 2026-04-25.
+  // Add anchored matchers for these CoStar UI artifacts plus tenancy
+  // metadata lines that show up in the same panel.
+  const COSTAR_PANEL_RE = /^(smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|vacant\s+space|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied|for\s+lease(\s+at\s+sale)?|(office|retail|industrial|warehouse|flex|medical|r\&d|land|other)\s+(avail(able)?|sf))\s*$/i;
   function isJunkTenant(name) {
     if (!name || name.trim().length < 3) return true;
     const n = name.trim();
@@ -4560,6 +4568,7 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     if (GROWTH_RE.test(n)) return true;
     if (OM_SECTION_RE.test(n)) return true;
     if (NAICS_SECTOR_RE.test(n)) return true;
+    if (COSTAR_PANEL_RE.test(n)) return true;
     return false;
   }
 

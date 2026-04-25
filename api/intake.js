@@ -374,6 +374,25 @@ async function handleOutlookMessage(req, res) {
         }
       }
 
+      // Bug O fix: same email-body fallback as the fresh-path. See above.
+      if (!primaryDocument) {
+        const synthParts = [];
+        if (subject) synthParts.push(`Subject: ${subject}`);
+        const bodyText = bodyForUrlScan || bodyPreview || '';
+        if (bodyText) synthParts.push(bodyText);
+        const synthText = synthParts.join('\n\n').trim();
+        if (synthText.length >= 100) {
+          const synthBase64 = Buffer.from(synthText, 'utf8').toString('base64');
+          const filenameSuffix = (graphRestId || internetMsgId || 'msg').slice(-12).replace(/[^A-Za-z0-9_-]/g, '');
+          primaryDocument = {
+            bytes_base64: synthBase64,
+            storage_path: null,
+            file_name:    `email-body-${filenameSuffix}.txt`,
+            mime_type:    'text/plain',
+          };
+        }
+      }
+
       if (primaryDocument && (primaryDocument.bytes_base64 || primaryDocument.storage_path)) {
         await stageOmIntake(
           {
@@ -501,6 +520,32 @@ async function handleOutlookMessage(req, res) {
           };
           break;
         }
+      }
+    }
+
+    // Bug O fix (2026-04-25): when the email has neither an OM-eligible
+    // attachment nor a trusted-host PDF URL, stage the email BODY itself
+    // as a text artifact so the AI extractor still runs on it. This
+    // captures price-change updates, broker-list emails, marketing copy
+    // and other deal-relevant emails that don't carry a PDF.
+    // Threshold: 100 chars of combined subject+body. Below that, the
+    // email is signal-light enough that staging would just add inbox
+    // noise (e.g. "Thanks!" replies).
+    if (!primaryDocument) {
+      const synthParts = [];
+      if (subject) synthParts.push(`Subject: ${subject}`);
+      const bodyText = bodyForUrlScan || bodyPreview || '';
+      if (bodyText) synthParts.push(bodyText);
+      const synthText = synthParts.join('\n\n').trim();
+      if (synthText.length >= 100) {
+        const synthBase64 = Buffer.from(synthText, 'utf8').toString('base64');
+        const filenameSuffix = (graphRestId || internetMsgId || 'msg').slice(-12).replace(/[^A-Za-z0-9_-]/g, '');
+        primaryDocument = {
+          bytes_base64: synthBase64,
+          storage_path: null,
+          file_name:    `email-body-${filenameSuffix}.txt`,
+          mime_type:    'text/plain',
+        };
       }
     }
 
