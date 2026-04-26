@@ -77,9 +77,30 @@ LCC Opps now has three artifacts that observe every cross-table field write to c
 - **`lcc_merge_field()`** — single SQL function that records provenance and returns the decision. Application write paths consult the decision; in record_only mode UPDATEs still run unchanged.
 - Views: `v_field_provenance_current` (latest authoritative per field), `v_field_provenance_conflicts` (open same-priority disagreements pending review).
 
-Currently instrumented: OM intake promoter (Phase 2.1). Pending: CoStar sidebar, CMS sync, county records sync, manual edits, Salesforce.
+Currently instrumented: OM intake promoter (Phase 2.1), CoStar sidebar (Phase 2.2 — properties, available_listings, leases, sales_transactions, contacts, parcel_records, tax_records). Pending: CMS sync, county records sync, manual edits, Salesforce.
+
+Sidebar instrumentation (Phase 2.2.b, 2026-04-26): writers `upsertDomainLeases`, `upsertDomainSales`, `upsertSidebarContacts`, `upsertPublicRecords` accept an optional `provCollect` array and push `{table, recordPk, fields}` per successful INSERT/PATCH. `propagateToDomainDbDirect` flushes the array through `recordCoStarFieldsProvenance` after all writers run. Default confidence 0.6 (CoStar aggregator-quality). Priority registry: see `supabase/migrations/20260426110000_field_source_priority_phase_22b_extension.sql`.
 
 See `docs/architecture/data_quality_self_learning_loop.md` for the Phase 1-4 rollout plan and `supabase/migrations/20260425210000_lcc_field_provenance_and_priority.sql` for the schema.
+
+## Auto-correction triggers + data quality views (2026-04-25)
+
+Dialysis DB has two new artifacts for self-cleaning:
+
+- **`auto_supersede_expired_leases()`** trigger on `dia.leases` (AFTER INSERT OR UPDATE OF is_active, lease_start) — when a new active lease lands, marks any other active lease on the same property whose `lease_expiration < new lease.lease_start` as `superseded`. Conservative: doesn't touch overlapping leases (those need human review). Migration: `20260425230000_dia_lease_auto_supersede_on_insert.sql`.
+
+- **`v_data_quality_issues`** + **`v_data_quality_summary`** views (dia DB) — surface patterns the triggers can't safely auto-correct:
+  - `duplicate_property_address` — same normalized address+state used by multiple property_ids (1,061 rows in audit; merge candidates need human review)
+  - `multi_active_lease` — properties with >1 active lease that the auto-supersede couldn't resolve (1,007 properties)
+  - `listing_after_sale` — active listings whose property has a sale recorded BEFORE the listing_date (the close_listing_on_sale trigger missed)
+  - `orphan_listing` — listings whose property_id no longer exists
+  - `lease_no_dates` — active leases with neither lease_start nor lease_expiration (947 placeholder rows)
+
+  Migration: `20260425230500_dia_v_data_quality_issues.sql`. Use from a triage UI:
+  ```sql
+  SELECT * FROM v_data_quality_summary;
+  SELECT * FROM v_data_quality_issues WHERE issue_kind='multi_active_lease' ORDER BY severity DESC;
+  ```
 
 ## Junk-value filters (sidebar parser defense)
 

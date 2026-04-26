@@ -38,21 +38,26 @@ import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 // block costar_sidebar (priority 60-70) from clobbering om_extraction
 // (priority 30-50) on fields like rent / cap_rate / tenant.
 //
-// Coverage in this PR:
+// Coverage in this PR (Phase 2.2.a + 2.2.b, 2026-04-26):
 //   - upsertDomainProperty            ← address, tenant, year_built, lot_sf, etc.
 //   - upsertDialysisListings          ← initial_price, cap_rate, listing_broker
 //   - upsertGovListings               ← same on gov side
-//   - upsertDomainLeases              ← rent, expense_structure, lease dates
-//   - upsertSidebarContacts           ← name, email, role
+//   - upsertDomainLeases              ← rent, expense_structure, lease dates  (2.2.b: per-row)
+//   - upsertSidebarContacts           ← name, email, role                       (2.2.b: per-row)
+//   - upsertDomainSales               ← sold_price, sale_date, buyer, seller    (2.2.b: per-row)
+//   - upsertPublicRecords             ← parcel apn, assessed_value              (2.2.b: per-row)
 //
-// Coverage deferred to Phase 2.2.b (next session):
-//   - upsertPublicRecords (parcel + tax)
-//   - upsertDomainSales (sales_transactions)
+// Coverage still deferred (lower-priority writers — write less-frequently-conflicted data):
 //   - upsertDocumentLinks
 //   - upsertDialysisDeedRecords / upsertGovernmentDeedRecords
 //   - upsertDomainLoans
 //   - upsertDomainOwners (recorded + true)
 //   - upsertDialysisBrokerLinks / upsertGovBrokers
+//
+// Phase 2.2.b mechanism: writers accept an optional `provCollect` array and
+// push `{table, recordPk, fields, confidence?}` entries on each successful
+// INSERT/PATCH. `propagateToDomainDbDirect` then flushes that array through
+// `recordCoStarFieldsProvenance` after all writers have run.
 //
 // CoStar default confidence is 0.6 — lower than OM extraction (0.7) since
 // CoStar data is aggregator-quality and sometimes lags actual lease
@@ -92,6 +97,22 @@ async function recordFieldProvenance(args) {
  * @param {Object<string,*>} fieldValues - { field_name: value }
  * @param {Object<string,number>} [perFieldConfidence]
  */
+/**
+ * Push a per-row provenance entry into `provCollect` (Phase 2.2.b helper).
+ * Safe to call with provCollect=undefined — no-op in that case so writers
+ * stay backwards-compatible with non-sidebar callers.
+ */
+function pushProvenance(provCollect, table, recordPk, fields, confidence) {
+  if (!Array.isArray(provCollect) || !table || !recordPk || !fields) return;
+  // Drop null/undefined fields up front so the consumer doesn't have to.
+  const filtered = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== null && v !== undefined && v !== '') filtered[k] = v;
+  }
+  if (Object.keys(filtered).length === 0) return;
+  provCollect.push({ table, recordPk: String(recordPk), fields: filtered, confidence });
+}
+
 async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}) {
   if (!ctx?.targetTable || !ctx?.recordPk) return;
   const promises = [];
@@ -1042,11 +1063,20 @@ async function upsertDocumentLinks(domain, propertyId, metadata) {
   return count;
 }
 
-async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
+async function upsertSidebarContacts(domain, propertyId, entity, metadata, provCollect) {
   const contacts = metadata.contacts || [];
   let count = 0;
   const col = CONTACT_COLS[domain];
   if (!col) return 0;
+
+  // ── Helper: collect provenance for a contact row write ────────────────
+  // Mirrors the row shape we just persisted into contacts (gov or dialysis
+  // both follow CONTACT_COLS[domain].name/email/phone/role). recordPk is
+  // the primary key whose name varies by domain — col.id resolves it.
+  function collectContactProv(rowPk, fieldsObj) {
+    if (!rowPk) return;
+    pushProvenance(provCollect, 'contacts', rowPk, fieldsObj);
+  }
 
   // ── Helper: find existing contact by email then by name ──────────────
   async function findExisting(email, normName, roleFilter) {
@@ -1143,6 +1173,11 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
             `contacts?${col.id}=eq.${existingId}`, patch,
             'upsertSidebarContacts:personUpdate'
           );
+          collectContactProv(existingId, {
+            [col.name]: person.name.trim(),
+            [col.email]: email, [col.phone]: phone, company,
+            [col.role]: role,
+          });
         } else {
           const row = {
             [col.name]:  person.name.trim(),
@@ -1154,7 +1189,15 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
             data_source: 'costar_sidebar',
           };
           const r = await domainQuery(domain, 'POST', 'contacts', row);
-          if (r.ok) count++;
+          if (r.ok) {
+            count++;
+            const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+            collectContactProv(inserted?.[col.id], {
+              [col.name]: person.name.trim(),
+              [col.email]: email, [col.phone]: phone, company,
+              [col.role]: role,
+            });
+          }
         }
       }
     } else {
@@ -1175,6 +1218,11 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
           `contacts?${col.id}=eq.${existingId}`, patch,
           'upsertSidebarContacts:personUpdate'
         );
+        collectContactProv(existingId, {
+          [col.name]: person.name.trim(),
+          [col.email]: email, [col.phone]: phone, company,
+          [col.role]: roleStr,
+        });
       } else {
         const row = {
           [col.name]:  person.name.trim(),
@@ -1186,7 +1234,15 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
           data_source: 'costar_sidebar',
         };
         const r = await domainQuery(domain, 'POST', 'contacts', row);
-        if (r.ok) count++;
+        if (r.ok) {
+          count++;
+          const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+          collectContactProv(inserted?.[col.id], {
+            [col.name]: person.name.trim(),
+            [col.email]: email, [col.phone]: phone, company,
+            [col.role]: roleStr,
+          });
+        }
       }
     }
   }
@@ -1242,6 +1298,12 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
             `contacts?${col.id}=eq.${existingId}`, patch,
             'upsertSidebarContacts:entityUpdate'
           );
+          collectContactProv(existingId, {
+            [col.name]: ent.name.trim(),
+            [col.email]: email, [col.phone]: phone,
+            [col.role]: mappedRole, website,
+            address: ent.address, city: ent.city, state: ent.state,
+          });
         } else {
           const row = {
             [col.name]:  ent.name.trim(),
@@ -1257,7 +1319,16 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
             data_source: 'costar_sidebar',
           };
           const r = await domainQuery(domain, 'POST', 'contacts', row);
-          if (r.ok) count++;
+          if (r.ok) {
+            count++;
+            const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+            collectContactProv(inserted?.[col.id], {
+              [col.name]: ent.name.trim(),
+              [col.email]: email, [col.phone]: phone,
+              [col.role]: mappedRole, website,
+              address: ent.address, city: ent.city, state: ent.state,
+            });
+          }
         }
       }
     } else {
@@ -1280,6 +1351,12 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
           `contacts?${col.id}=eq.${existingId}`, patch,
           'upsertSidebarContacts:entityUpdate'
         );
+        collectContactProv(existingId, {
+          [col.name]: ent.name.trim(),
+          [col.email]: email, [col.phone]: phone,
+          [col.role]: roleStr, website,
+          address: ent.address, city: ent.city, state: ent.state,
+        });
       } else {
         const row = {
           [col.name]:  ent.name.trim(),
@@ -1295,7 +1372,16 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
           data_source: 'costar_sidebar',
         };
         const r = await domainQuery(domain, 'POST', 'contacts', row);
-        if (r.ok) count++;
+        if (r.ok) {
+          count++;
+          const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+          collectContactProv(inserted?.[col.id], {
+            [col.name]: ent.name.trim(),
+            [col.email]: email, [col.phone]: phone,
+            [col.role]: roleStr, website,
+            address: ent.address, city: ent.city, state: ent.state,
+          });
+        }
       }
     }
   }
@@ -1307,6 +1393,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata) {
 
 async function propagateToDomainDbDirect(domain, entity, metadata) {
   const results = { domain, property_id: null, records: {} };
+
+  // Phase 2.2.b: shared array writers push per-row provenance entries onto.
+  // Flushed at the end of this function via recordCoStarFieldsProvenance.
+  const provCollect = [];
 
   // Step 5a: Upsert property record
   const propertyId = await upsertDomainProperty(domain, entity, metadata);
@@ -1325,11 +1415,11 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
 
   // Step 5a2: Upsert public records (parcel + tax from CoStar sidebar)
   results.records.public_records = await upsertPublicRecords(
-    domain, propertyId, entity, metadata
+    domain, propertyId, entity, metadata, provCollect
   );
 
   // Step 5b: Upsert sales transactions
-  results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata);
+  results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata, provCollect);
 
   // Step 5b0: Upsert document links from CoStar "Documents" section
   results.records.document_links = await upsertDocumentLinks(domain, propertyId, metadata);
@@ -1382,14 +1472,14 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
 
   // Step 5e: Upsert leases
   if (domain === 'dialysis') {
-    results.records.leases = await upsertDomainLeases(domain, propertyId, metadata);
+    results.records.leases = await upsertDomainLeases(domain, propertyId, metadata, provCollect);
   } else if (domain === 'government') {
     results.records.leases = await upsertGovernmentLeases(propertyId, metadata);
   }
 
   // Step 5e2: Upsert named contacts (brokers, true owner contacts → CRM)
   results.records.contacts = await upsertSidebarContacts(
-    domain, propertyId, entity, metadata
+    domain, propertyId, entity, metadata, provCollect
   );
 
   // Step 5f: Auto-enqueue ownership research if true_owner still unknown (gov)
@@ -1502,7 +1592,28 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
       );
     }
 
-    // 2. Available_listings — look up by property_id since the writer
+    // 2. Phase 2.2.b — flush per-row entries collected by leases / sales /
+    //    contacts / public_records writers. Each entry: {table, recordPk,
+    //    fields, confidence?}. The writers stamp `dia.<table>` etc. so we
+    //    don't need to re-prefix here.
+    if (provCollect.length > 0) {
+      for (const entry of provCollect) {
+        // Allow writers to override default confidence per-row (e.g. lease
+        // rent from a confirmed lease abstract should carry higher
+        // confidence than CoStar metadata's "Asking Rent" panel value).
+        const perField = {};
+        if (entry.confidence != null) {
+          for (const k of Object.keys(entry.fields)) perField[k] = entry.confidence;
+        }
+        await recordCoStarFieldsProvenance(
+          { ...provCtx, targetTable: `${tablePrefix}.${entry.table}`, recordPk: entry.recordPk },
+          entry.fields,
+          perField
+        );
+      }
+    }
+
+    // 3. Available_listings — look up by property_id since the writer
     //    returns a count, not the listing_id. Most recent CoStar-sourced
     //    listing for this property is the one we just wrote.
     if (propertyId && results.records?.listings && results.records.listings > 0) {
@@ -2045,7 +2156,7 @@ async function linkPublicRecord(domain, propertyId, recordType, recordId) {
   }
 }
 
-async function upsertPublicRecords(domain, propertyId, entity, metadata) {
+async function upsertPublicRecords(domain, propertyId, entity, metadata, provCollect) {
   // ── Diagnostic: log what the extension actually sent ──────────────────
   const pubRecFields = {
     parcel_number: metadata.parcel_number || null,
@@ -2111,6 +2222,9 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         const parcelRecordId = createdParcel?.id;
         if (parcelRecordId) {
           await linkPublicRecord('dialysis', propertyId, 'parcel', parcelRecordId);
+          pushProvenance(provCollect, 'parcel_records', parcelRecordId, {
+            apn, county, assessed_value: assessed,
+          });
         }
       }
       else console.error(`[PublicRecords] INSERT dialysis parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
@@ -2124,6 +2238,9 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
       const existingParcelId = parcelLookup.data[0]?.id;
       if (existingParcelId) {
         await linkPublicRecord('dialysis', propertyId, 'parcel', existingParcelId);
+        pushProvenance(provCollect, 'parcel_records', existingParcelId, {
+          apn, county, assessed_value: assessed,
+        });
       }
     }
   }
@@ -2165,6 +2282,10 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         const parcelRecordId = createdParcel?.parcel_id;
         if (parcelRecordId) {
           await linkPublicRecord('government', propertyId, 'parcel', parcelRecordId);
+          pushProvenance(provCollect, 'parcel_records', parcelRecordId, {
+            apn, county, land_value: landVal, improvement_value: impVal,
+            total_assessed_value: assessed,
+          });
         }
       }
       else console.error(`[PublicRecords] INSERT gov parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
@@ -2183,6 +2304,10 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
       const existingParcelId = parcelLookup.data[0]?.parcel_id;
       if (existingParcelId) {
         await linkPublicRecord('government', propertyId, 'parcel', existingParcelId);
+        pushProvenance(provCollect, 'parcel_records', existingParcelId, {
+          apn, county, land_value: landVal, improvement_value: impVal,
+          total_assessed_value: assessed,
+        });
       }
     }
   }
@@ -2227,7 +2352,12 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
           count++;
           console.log(`[PublicRecords] INSERT dialysis tax_records OK — apn=${apn} year=${ty.year}`);
           const createdTax = Array.isArray(r.data) ? r.data[0] : r.data;
-          if (createdTax?.id) await linkPublicRecord('dialysis', propertyId, 'tax', createdTax.id);
+          if (createdTax?.id) {
+            await linkPublicRecord('dialysis', propertyId, 'tax', createdTax.id);
+            pushProvenance(provCollect, 'tax_records', createdTax.id, {
+              apn, tax_year: ty.year, assessed_value: ty.assessed,
+            });
+          }
         }
         else console.error(`[PublicRecords] INSERT dialysis tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
       } else {
@@ -2238,7 +2368,12 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
         );
         // Ensure join table link for existing tax record
         const existingTaxId = taxLookup.data[0]?.id;
-        if (existingTaxId) await linkPublicRecord('dialysis', propertyId, 'tax', existingTaxId);
+        if (existingTaxId) {
+          await linkPublicRecord('dialysis', propertyId, 'tax', existingTaxId);
+          pushProvenance(provCollect, 'tax_records', existingTaxId, {
+            apn, tax_year: ty.year, assessed_value: ty.assessed,
+          });
+        }
       }
     }
   }
@@ -2271,7 +2406,16 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
           data_hash:      taxHash,
         });
         const r = await domainQuery('government', 'POST', 'tax_records', taxData);
-        if (r.ok) { count++; console.log(`[PublicRecords] INSERT gov tax_records OK — apn=${apn} year=${ty.year}`); }
+        if (r.ok) {
+          count++;
+          console.log(`[PublicRecords] INSERT gov tax_records OK — apn=${apn} year=${ty.year}`);
+          const createdTax = Array.isArray(r.data) ? r.data[0] : r.data;
+          if (createdTax?.tax_record_id) {
+            pushProvenance(provCollect, 'tax_records', createdTax.tax_record_id, {
+              tax_year: ty.year, assessed_value: ty.assessed,
+            });
+          }
+        }
         else console.error(`[PublicRecords] INSERT gov tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
       } else {
         await domainPatch('government',
@@ -2279,6 +2423,12 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata) {
           { assessed_value: ty.assessed },
           'upsertPublicRecords:gov:tax'
         );
+        const existingTaxRecordId = taxLookup.data[0]?.tax_record_id;
+        if (existingTaxRecordId) {
+          pushProvenance(provCollect, 'tax_records', existingTaxRecordId, {
+            tax_year: ty.year, assessed_value: ty.assessed,
+          });
+        }
       }
     }
   }
@@ -2614,7 +2764,7 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
  * Upsert sales transactions in the domain database.
  * Matches by property_id + sale_date + sold_price for deduplication.
  */
-async function upsertDomainSales(domain, propertyId, entity, metadata) {
+async function upsertDomainSales(domain, propertyId, entity, metadata, provCollect) {
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
@@ -2961,6 +3111,18 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
       );
       // Link brokers from text fields to sale_brokers table
       await linkSaleBrokers(domain, existing.sale_id, saleData);
+      // Phase 2.2.b: record per-row provenance for the refreshed sale
+      pushProvenance(provCollect, 'sales_transactions', existing.sale_id, {
+        sale_date:        saleData.sale_date,
+        sold_price:       saleData.sold_price,
+        buyer_name:       saleData.buyer_name || saleData.buyer || null,
+        seller_name:      saleData.seller_name || saleData.seller || null,
+        stated_cap_rate:  saleData.stated_cap_rate ?? null,
+        sold_cap_rate:    saleData.sold_cap_rate ?? null,
+        listing_broker:   saleData.listing_broker || null,
+        procuring_broker: saleData.procuring_broker || saleData.purchasing_broker || null,
+        transaction_type: saleData.transaction_type || null,
+      });
     } else {
       // Create new
       const result = await domainQuery(domain, 'POST', 'sales_transactions', saleData);
@@ -2981,6 +3143,20 @@ async function upsertDomainSales(domain, propertyId, entity, metadata) {
         );
         // Link brokers from text fields to sale_brokers table
         await linkSaleBrokers(domain, newSaleId, saleData);
+        // Phase 2.2.b: record per-row provenance for the new sale
+        if (newSaleId) {
+          pushProvenance(provCollect, 'sales_transactions', newSaleId, {
+            sale_date:        saleData.sale_date,
+            sold_price:       saleData.sold_price,
+            buyer_name:       saleData.buyer_name || saleData.buyer || null,
+            seller_name:      saleData.seller_name || saleData.seller || null,
+            stated_cap_rate:  saleData.stated_cap_rate ?? null,
+            sold_cap_rate:    saleData.sold_cap_rate ?? null,
+            listing_broker:   saleData.listing_broker || null,
+            procuring_broker: saleData.procuring_broker || saleData.purchasing_broker || null,
+            transaction_type: saleData.transaction_type || null,
+          });
+        }
       }
     }
   }
@@ -4684,7 +4860,7 @@ async function upsertGovernmentLeases(propertyId, metadata) {
  * Skips government domain — see upsertGovernmentLeases above for the
  * gov-specific writer (different schema, different conflict semantics).
  */
-async function upsertDomainLeases(domain, propertyId, metadata) {
+async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
   // Domain guard — only dialysis for now
   if (domain !== 'dialysis') return 0;
 
@@ -4732,6 +4908,11 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
   // Add anchored matchers for these CoStar UI artifacts plus tenancy
   // metadata lines that show up in the same panel.
   const COSTAR_PANEL_RE = /^(smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|vacant\s+space|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied|for\s+lease(\s+at\s+sale)?|(office|retail|industrial|warehouse|flex|medical|r\&d|land|other)\s+(avail(able)?|sf))\s*$/i;
+  // Bug V (2026-04-25): cleanup of 947 lease_no_dates rows surfaced
+  // additional junk-tenant patterns the existing filters missed. These
+  // are OM/CoStar UI labels and lease-type values being misread as
+  // tenant names (audit deactivated 69 rows with these).
+  const COSTAR_EXTRA_JUNK_RE = /^(triple\s+net|double\s+net|absolute\s+net|anchor|anchors|anchored|asking|starting|withheld|analytics|store\s+type|store\s+layout|cam|cam\s+(charges|recovery)|public\s+transportation|commuter\s+rail|highway\s+access|about\s+the\s+(architect|developer|owner)|united\s+states|investment\s+grade|credit\s+rating|net\s+(operating\s+income|leasable\s+area)|gross\s+leasable\s+area|nra|gla|noi|rba|year\s+(built|renovated)|building\s+(class|size|type)|lot\s+size)\s*$/i;
   function isJunkTenant(name) {
     if (!name || name.trim().length < 3) return true;
     const n = name.trim();
@@ -4741,6 +4922,9 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
     if (OM_SECTION_RE.test(n)) return true;
     if (NAICS_SECTOR_RE.test(n)) return true;
     if (COSTAR_PANEL_RE.test(n)) return true;
+    if (COSTAR_EXTRA_JUNK_RE.test(n)) return true;
+    // City+state+zip residue — "West Chicago, IL 60185" or just "<city>, <state>"
+    if (/^[a-z\s]+,\s*[a-z]{2}(\s+\d{5}(-\d{4})?)?$/i.test(n)) return true;
     return false;
   }
 
@@ -4949,6 +5133,16 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         leaseId = Array.isArray(result.data) ? result.data[0]?.lease_id : result.data?.lease_id;
         console.log(`[upsertDomainLeases] created new ${termType} lease_id=${leaseId} ` +
           `term ${maxTermNumber + 1} for property=${propertyId}`);
+        // Phase 2.2.b: provenance for the new term lease
+        pushProvenance(provCollect, 'leases', leaseId, {
+          tenant:            cleaned.tenant,
+          annual_rent:       cleaned.annual_rent,
+          rent_per_sf:       cleaned.rent_per_sf,
+          leased_area:       cleaned.leased_area,
+          lease_start:       cleaned.lease_start,
+          lease_expiration:  cleaned.lease_expiration,
+          expense_structure: cleaned.expense_structure,
+        });
       } else {
         // ── Same term or partial update → PATCH existing lease ──
         const { property_id: _pid, ...patchData } = cleaned;
@@ -4975,6 +5169,18 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
         await domainPatch(domain,
           `leases?lease_id=eq.${matchedLease.lease_id}`, patchData, 'upsertDomainLeases');
         leaseId = matchedLease.lease_id;
+        // Phase 2.2.b: provenance for the patched lease (only fields that
+        // actually went in via patchData — preserves the per-field skip
+        // logic above where existing rent was kept on conflict).
+        pushProvenance(provCollect, 'leases', leaseId, {
+          tenant:            patchData.tenant,
+          annual_rent:       patchData.annual_rent,
+          rent_per_sf:       patchData.rent_per_sf,
+          leased_area:       patchData.leased_area,
+          lease_start:       patchData.lease_start,
+          lease_expiration:  patchData.lease_expiration,
+          expense_structure: patchData.expense_structure,
+        });
       }
     } else {
       // ── No existing lease for this tenant → INSERT as original term ──
@@ -4995,6 +5201,16 @@ async function upsertDomainLeases(domain, propertyId, metadata) {
       count++;
       existingTenants.add(tenantKey); // prevent double-insert within same run
       leaseId = Array.isArray(result.data) ? result.data[0]?.lease_id : result.data?.lease_id;
+      // Phase 2.2.b: provenance for the original-term lease
+      pushProvenance(provCollect, 'leases', leaseId, {
+        tenant:            cleaned.tenant,
+        annual_rent:       cleaned.annual_rent,
+        rent_per_sf:       cleaned.rent_per_sf,
+        leased_area:       cleaned.leased_area,
+        lease_start:       cleaned.lease_start,
+        lease_expiration:  cleaned.lease_expiration,
+        expense_structure: cleaned.expense_structure,
+      });
     }
 
     // Write escalation data from CoStar estimated rent range
