@@ -824,6 +824,24 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
             promotion_ok:        promotionResult?.ok ?? null,
             promotion_listing_id: promotionResult?.listing?.listing_id || null,
             runtime_config:      runtimeConfig,
+            // Persist per-artifact diagnostics (incl. ai_chain, ai_fell_back,
+            // ai_final_provider, ai_final_model) so SQL audits can see when
+            // multi-model fallback fired during burst ingestion. Trim to the
+            // fields we actually query — full diagnostics are also returned
+            // in the API response if needed for live debugging.
+            diagnostics: (ctx.diagnostics || []).map(d => ({
+              file_name:         d.file_name,
+              mime_type:         d.mime_type,
+              ai_ms:             d.ai_ms,
+              ai_ok:             d.ai_ok,
+              ai_fell_back:      d.ai_fell_back || false,
+              ai_final_provider: d.ai_final_provider || null,
+              ai_final_model:    d.ai_final_model || null,
+              ai_chain:          d.ai_chain || [],
+              document_type:     d.document_type,
+              pdf_text_len:      d.pdf_text_len,
+              pdf_parse_error:   d.pdf_parse_error,
+            })),
             downstream_completed_at: new Date().toISOString(),
           },
         },
