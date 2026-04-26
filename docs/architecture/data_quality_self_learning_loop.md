@@ -63,25 +63,63 @@ Three artifacts on LCC Opps:
 
 **Behavior change today: zero.** Every priority entry is `enforce_mode='record_only'`. Application write paths still execute their own UPDATEs unchanged. The function is a passive observer until we wire callers.
 
-## Phase 2 — Wire write paths to record (next 1-2 sessions)
+## Phase 2 — Wire write paths to record (in progress)
 
 For each ingestion path, before its existing UPDATE/INSERT, call `lcc_merge_field()` to record provenance. Continue performing the existing write as before. This produces real data in `field_provenance` so we can see what's writing what, validate the priority registry against reality, and identify which fields actually have multi-source conflicts in practice.
 
-Order of rollout (highest signal first):
+### Phase 2.1 — OM intake promoter ✅ SHIPPED 2026-04-25
 
-1. **OM intake promoter** (`api/_handlers/intake-promoter.js`) — record from `promoteListing`, `promoteBrokerContact`, `promotePropertyFinancials`, `promoteDiaPropertyFromOm`, `promoteDiaLeaseFromOm`, `promoteUnifiedContact`. Source name: `om_email_intake` or `om_sidebar` based on `input.channel`.
+`api/_handlers/intake-promoter.js::promoteIntakeToDomainListing` now calls `recordOmFieldsProvenance` after each downstream writer:
 
-2. **CoStar sidebar pipeline** (`api/_handlers/sidebar-pipeline.js`) — record from `upsertDomainProperty`, `upsertDomainLeases`, `upsertGovListings`, `upsertDialysisListings`, `upsertSidebarContacts`, `upsertDomainOwners`. Source name: `costar_sidebar`.
+- `promoteListing` → `dia.available_listings` / `gov.available_listings`
+- `promoteBrokerContact` → `dia.contacts` / `gov.contacts`
+- `promotePropertyFinancials` / `promoteDiaPropertyFromOm` → properties
+- `promoteDiaLeaseFromOm` → `dia.leases`
 
-3. **CMS sync** (whatever populates `properties.medicare_id`, `tenant`, chain reporting). Source name: `cms_chain_org`.
+Source name: `om_extraction`. Source run id: `intake_id`. Confirmed working — every recent OM intake records 6-27 field writes per row.
 
-4. **County records sync** (whatever populates `properties.assessed_owner`, `parcel_number`, `tax_year`). Source name: `county_records`.
+### Phase 2.2 — CoStar sidebar pipeline (in progress)
 
-5. **Manual edits via `data_corrections`** path (`api/admin.js` apply-change). Source name: `manual_edit`. Highest priority on every field.
+#### Phase 2.2.a — properties + listings ✅ SHIPPED 2026-04-25
 
-6. **Salesforce two-way sync.** Source names: `salesforce` (when SF is the writer), with field-by-field priority TBD by which SF object owns the field.
+`api/_handlers/sidebar-pipeline.js::propagateToDomainDbDirect` now calls `recordCoStarFieldsProvenance` after the `external_identities` PATCH for:
 
-After Phase 2 is deployed for a week, query `v_field_provenance_conflicts` and inspect what's actually conflicting. Tune priorities. Add missing fields to the registry.
+- **Properties** — address, city, state, zip_code, tenant, year_built, building_size/rba, lot_sf, land_acres, parcel_number
+- **available_listings** — looked up by `property_id` after the writer runs since the writer returns a count not an id; records initial_price, last_price, current_cap_rate, initial_cap_rate, listing_broker, broker_email, seller_name, listing_date
+
+Source name: `costar_sidebar`. Source run id: `costar:<entity.id>`. Default confidence: 0.6 (lower than OM's 0.7 because CoStar data is aggregator-quality and lags real lease modifications).
+
+#### Phase 2.2.b — leases, contacts, sales_transactions, etc. ⏳ DEFERRED
+
+The remaining sidebar writers return counts not row PKs, which prevents post-hoc provenance recording. Phase 2.2.b will modify writer return shapes to expose the row PKs they wrote (or insert per-row provenance recording inside each writer). Coverage to add:
+
+- `upsertDomainLeases` — leases
+- `upsertSidebarContacts` — contacts
+- `upsertDomainSales` — sales_transactions
+- `upsertPublicRecords` — parcel + tax records
+- `upsertDocumentLinks` — document_links
+- `upsertDialysisDeedRecords` / `upsertGovernmentDeedRecords` — deed records
+- `upsertDomainLoans` — loans
+- `upsertDomainOwners` — recorded_owners + ownership_history
+- `upsertDialysisBrokerLinks` / `upsertGovBrokers` — broker linkages
+
+### Phase 2.3 — CMS chain-org sync ⏳ NOT STARTED
+
+Whatever process populates `dia.properties.medicare_id`, `tenant`, chain reporting. Source name: `cms_chain_org`. Highest non-manual priority for tenant on dialysis.
+
+### Phase 2.4 — County records sync ⏳ NOT STARTED
+
+Whatever process populates `properties.assessed_owner`, `parcel_number`, `tax_year`, `latest_deed_date`. Source name: `county_records`. Highest non-manual priority for address, parcel_number, ownership.
+
+### Phase 2.5 — Manual edits ⏳ NOT STARTED
+
+`api/admin.js` apply-change path. Source name: `manual_edit`. Highest priority on every field — explicit human override always wins.
+
+### Phase 2.6 — Salesforce two-way sync ⏳ NOT STARTED
+
+Source name: `salesforce`. Per-field priority TBD by which SF object owns the field.
+
+After all of Phase 2 is deployed for a week, query `v_field_provenance_conflicts` and inspect what's actually conflicting. Tune priorities. Add missing fields to the registry.
 
 ## Phase 3 — Flip enforcement (after Phase 2 + tuning)
 

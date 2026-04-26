@@ -22,6 +22,97 @@ import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 
+// ============================================================================
+// FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
+// ============================================================================
+//
+// Records every cross-table field write that the CoStar sidebar performs into
+// public.field_provenance via lcc_merge_field RPC. Source='costar_sidebar'.
+// All entries default to enforce_mode=record_only so this is observation-only
+// — actual UPDATEs in this file still happen unchanged.
+//
+// Why CoStar sidebar specifically: the audit on 2026-04-25 showed CoStar
+// captures consistently overwriting OM-derived data because CoStar runs
+// after OM intake on most properties. The merge function consults the
+// per-field priority registry and (in strict mode, future phase) will
+// block costar_sidebar (priority 60-70) from clobbering om_extraction
+// (priority 30-50) on fields like rent / cap_rate / tenant.
+//
+// Coverage in this PR:
+//   - upsertDomainProperty            ← address, tenant, year_built, lot_sf, etc.
+//   - upsertDialysisListings          ← initial_price, cap_rate, listing_broker
+//   - upsertGovListings               ← same on gov side
+//   - upsertDomainLeases              ← rent, expense_structure, lease dates
+//   - upsertSidebarContacts           ← name, email, role
+//
+// Coverage deferred to Phase 2.2.b (next session):
+//   - upsertPublicRecords (parcel + tax)
+//   - upsertDomainSales (sales_transactions)
+//   - upsertDocumentLinks
+//   - upsertDialysisDeedRecords / upsertGovernmentDeedRecords
+//   - upsertDomainLoans
+//   - upsertDomainOwners (recorded + true)
+//   - upsertDialysisBrokerLinks / upsertGovBrokers
+//
+// CoStar default confidence is 0.6 — lower than OM extraction (0.7) since
+// CoStar data is aggregator-quality and sometimes lags actual lease
+// modifications by weeks/months.
+
+const COSTAR_DEFAULT_CONFIDENCE = 0.6;
+
+async function recordFieldProvenance(args) {
+  const { workspaceId, targetDatabase, targetTable, recordPk, fieldName,
+          value, source, sourceRunId, confidence, recordedBy } = args;
+  if (value === undefined || value === null) return null;
+  if (!targetTable || !recordPk || !fieldName || !source) return null;
+  try {
+    const res = await opsQuery('POST', 'rpc/lcc_merge_field', {
+      p_workspace_id:     workspaceId || null,
+      p_target_database:  targetDatabase,
+      p_target_table:     targetTable,
+      p_record_pk:        String(recordPk),
+      p_field_name:       fieldName,
+      p_value:            value,
+      p_source:           source,
+      p_source_run_id:    sourceRunId || null,
+      p_confidence:       confidence ?? null,
+      p_recorded_by:      recordedBy || null,
+    });
+    if (!res.ok) return null;
+    return Array.isArray(res.data) ? res.data[0] : res.data;
+  } catch (err) {
+    // Best-effort — never block a real write on provenance recording.
+    return null;
+  }
+}
+
+/**
+ * Record provenance for a batch of CoStar-derived fields on a single row.
+ * @param {object} ctx { targetDatabase, targetTable, recordPk, sidebarRunId, workspaceId, actorId }
+ * @param {Object<string,*>} fieldValues - { field_name: value }
+ * @param {Object<string,number>} [perFieldConfidence]
+ */
+async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}) {
+  if (!ctx?.targetTable || !ctx?.recordPk) return;
+  const promises = [];
+  for (const [fieldName, value] of Object.entries(fieldValues)) {
+    if (value === undefined || value === null) continue;
+    promises.push(recordFieldProvenance({
+      workspaceId:    ctx.workspaceId,
+      targetDatabase: ctx.targetDatabase,
+      targetTable:    ctx.targetTable,
+      recordPk:       ctx.recordPk,
+      fieldName,
+      value,
+      source:         'costar_sidebar',
+      sourceRunId:    ctx.sidebarRunId,
+      confidence:     perFieldConfidence[fieldName] ?? COSTAR_DEFAULT_CONFIDENCE,
+      recordedBy:     ctx.actorId,
+    }));
+  }
+  await Promise.allSettled(promises);
+}
+
 // ── Role → relationship_type mapping ────────────────────────────────────────
 
 const ROLE_TO_RELATIONSHIP = {
@@ -1365,6 +1456,87 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     } catch (err) {
       console.warn('[sidebar-pipeline] domain bridge identity insert failed (non-fatal):', err?.message || err);
     }
+  }
+
+  // ── Phase 2.2 (2026-04-25): record CoStar field provenance ────────────
+  // For each cross-table field this sidebar capture wrote, log a row to
+  // public.field_provenance via lcc_merge_field. Source='costar_sidebar',
+  // source_run_id=entity.id (the LCC entity that owns this CoStar capture).
+  // Every priority entry is enforce_mode=record_only today, so this is
+  // observation-only — actual upserts above ran unchanged.
+  //
+  // Phase 2.2.a coverage (this PR): properties + the listing rows we just
+  // wrote (looked up by property_id). Phase 2.2.b deferred: leases,
+  // contacts, sales_transactions, public_records, deed records, loans,
+  // ownership_history. Those writers return counts not row PKs; Phase
+  // 2.2.b will modify their return shapes to expose the PKs they wrote.
+  try {
+    const targetDb = domain === 'dialysis' ? 'dia_db' : 'gov_db';
+    const tablePrefix = domain === 'dialysis' ? 'dia' : 'gov';
+    const provCtx = {
+      targetDatabase: targetDb,
+      sidebarRunId:   entity?.id ? `costar:${entity.id}` : null,
+      workspaceId:    entity?.workspace_id || null,
+      actorId:        entity?.created_by || null,
+    };
+
+    // 1. Property fields — direct from entity + metadata (what CoStar
+    //    actually advertised before the writer applied any cleaning).
+    if (propertyId) {
+      const sizeKey = domain === 'government' ? 'rba' : 'building_size';
+      const propValues = {
+        address:         entity.address    || metadata.address    || null,
+        city:            entity.city       || metadata.city       || null,
+        state:           entity.state      || metadata.state      || null,
+        zip_code:        entity.zip        || metadata.zip        || null,
+        tenant:          metadata.tenant_name || metadata.primary_tenant || null,
+        year_built:      metadata.year_built  || null,
+        [sizeKey]:       metadata.sf_total || metadata.building_sf || null,
+        lot_sf:          metadata.lot_sf || null,
+        land_acres:      metadata.land_acres || null,
+        parcel_number:   metadata.parcel_number || metadata.apn || null,
+      };
+      await recordCoStarFieldsProvenance(
+        { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: propertyId },
+        propValues
+      );
+    }
+
+    // 2. Available_listings — look up by property_id since the writer
+    //    returns a count, not the listing_id. Most recent CoStar-sourced
+    //    listing for this property is the one we just wrote.
+    if (propertyId && results.records?.listings && results.records.listings > 0) {
+      try {
+        const listingLookup = await domainQuery(
+          domain, 'GET',
+          `available_listings?property_id=eq.${propertyId}` +
+          `&order=last_seen.desc.nullslast,listing_id.desc&select=listing_id&limit=1`
+        );
+        const latestListing = listingLookup.ok && listingLookup.data?.length
+          ? listingLookup.data[0]
+          : null;
+        if (latestListing?.listing_id) {
+          const listingValues = {
+            initial_price:    metadata.list_price || metadata.asking_price || null,
+            last_price:       metadata.list_price || metadata.asking_price || null,
+            current_cap_rate: metadata.cap_rate != null ? Number(metadata.cap_rate) / 100 : null,
+            initial_cap_rate: metadata.cap_rate != null ? Number(metadata.cap_rate) / 100 : null,
+            listing_broker:   metadata.listing_broker || null,
+            broker_email:     metadata.listing_broker_email || null,
+            seller_name:      metadata.seller_name || null,
+            listing_date:     metadata.listing_date || null,
+          };
+          await recordCoStarFieldsProvenance(
+            { ...provCtx, targetTable: `${tablePrefix}.available_listings`, recordPk: latestListing.listing_id },
+            listingValues
+          );
+        }
+      } catch (err) {
+        // Listing provenance is observation-only; failure here is noise.
+      }
+    }
+  } catch (err) {
+    console.warn('[sidebar-pipeline] field provenance recording failed (non-fatal):', err?.message);
   }
 
   return { propagated: true, ...results };
