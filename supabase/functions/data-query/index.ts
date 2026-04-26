@@ -65,6 +65,10 @@ const DIA_READ_TABLES = new Set([
   "v_payer_mix_geo_averages",
   "property_cms_link", "property_cms_link_history",
   "ingestion_log",
+  // Data quality triage views (Phase 2.x)
+  "v_data_quality_summary",
+  "v_data_quality_issues",
+  "v_property_merge_candidates",
 ]);
 
 const DIA_WRITE_TABLES = new Set([

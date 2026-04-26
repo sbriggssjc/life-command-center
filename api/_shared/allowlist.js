@@ -131,6 +131,10 @@ export const DIA_READ_TABLES = new Set([
   'v_lease_extensions_summary',
   'v_clinic_payer_mix',
   'v_payer_mix_geo_averages',
+  // Data quality triage views (Phase 2.x)
+  'v_data_quality_summary',
+  'v_data_quality_issues',
+  'v_property_merge_candidates',
 ]);
 
 // Dialysis Supabase — allowed tables for write (POST/PATCH)

@@ -968,8 +968,158 @@ async function renderDataQualityPage() {
     html += '</div>';
   });
 
+  // ── Domain DB data quality (dialysis v_data_quality_*) ───────────────────
+  // Anchor element rendered immediately so the page paints; the dia data
+  // quality widget hydrates asynchronously via diaQuery (loaded by
+  // dialysis.js as a global).
+  html += '<div id="diaDataQualityWidgets"><div class="widget"><div class="widget-title">Domain Data Quality (dialysis)</div><div class="loading"><span class="spinner"></span></div></div></div>';
+
   el.innerHTML = html;
   perf.end();
+
+  // Hydrate the dia data quality widget out-of-band.
+  if (typeof renderDiaDataQualityWidgets === 'function') {
+    renderDiaDataQualityWidgets().catch(err => {
+      console.error('[renderDiaDataQualityWidgets] failed:', err);
+    });
+  }
+}
+
+// ─── Domain (dialysis) data quality — pulls v_data_quality_summary +
+// v_data_quality_issues from dia Supabase via /api/dia-query and renders
+// a grouped triage panel. Each row links to property detail when possible.
+let _diaQualityFilter = 'all'; // 'all' | <issue_kind>
+async function renderDiaDataQualityWidgets() {
+  const host = document.getElementById('diaDataQualityWidgets');
+  if (!host) return;
+  if (typeof diaQuery !== 'function') {
+    host.innerHTML = '<div class="widget"><div class="widget-title">Domain Data Quality (dialysis)</div><div class="ops-empty">diaQuery helper not loaded</div></div>';
+    return;
+  }
+
+  const [summary, issues] = await Promise.all([
+    diaQuery('v_data_quality_summary', '*', { order: 'total_severity.desc', limit: 50 }),
+    diaQuery(
+      'v_data_quality_issues', '*',
+      _diaQualityFilter === 'all'
+        ? { order: 'severity.desc', limit: 50 }
+        : { filter: 'issue_kind=eq.' + encodeURIComponent(_diaQualityFilter), order: 'severity.desc', limit: 50 }
+    )
+  ]);
+
+  // Pretty-name each issue_kind so the cards stay scannable.
+  const KIND_LABELS = {
+    duplicate_property_address: 'Duplicate property address',
+    multi_active_lease:         'Multi-active lease (one property, multiple active leases)',
+    listing_after_sale:         'Listing after sale',
+    orphan_listing:             'Orphan listing (property missing)',
+    lease_no_dates:             'Lease with no dates',
+  };
+  const KIND_HINTS = {
+    duplicate_property_address: 'Auto-merge cron handles 5/min. Remaining are placeholder addresses needing manual review.',
+    multi_active_lease:         'Auto-supersede only resolves cleanly disjoint terms — these have overlapping or unclear chains.',
+    listing_after_sale:         'Closed-on-sale trigger missed; flip status to Sold.',
+    orphan_listing:             'Property was deleted — listing should be removed or repointed.',
+    lease_no_dates:             'Active lease without lease_start or lease_expiration. Source data missing dates.',
+  };
+
+  let html = '';
+
+  // Summary metric cards
+  html += '<div class="widget"><div class="widget-title">Domain Data Quality (dialysis)</div>';
+  if (!summary || summary.length === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">No issues — dialysis data is clean.</div>';
+  } else {
+    html += '<div class="metrics-grid" style="margin-bottom:12px">';
+    for (const row of summary) {
+      const tone = row.worst_severity >= 5 ? 'red' : row.worst_severity >= 3 ? 'yellow' : 'green';
+      const label = KIND_LABELS[row.issue_kind] || row.issue_kind;
+      const sub = `worst severity ${row.worst_severity}`;
+      html += metricCardHTML(label, row.issue_count || 0, sub, tone);
+    }
+    html += '</div>';
+
+    // Filter buttons
+    html += '<div class="ops-filters" style="margin-bottom:12px">';
+    html += `<button class="ops-filter ${_diaQualityFilter === 'all' ? 'active' : ''}" onclick="_diaQualityFilter='all';renderDiaDataQualityWidgets()">All issues</button>`;
+    for (const row of summary) {
+      const active = _diaQualityFilter === row.issue_kind ? 'active' : '';
+      html += `<button class="ops-filter ${active}" onclick="_diaQualityFilter=${jsStringArg(row.issue_kind)};renderDiaDataQualityWidgets()">${esc(KIND_LABELS[row.issue_kind] || row.issue_kind)} (${row.issue_count})</button>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Detail rows for the active filter
+  if (summary && summary.length > 0) {
+    html += '<div class="widget">';
+    const detailTitle = _diaQualityFilter === 'all' ? 'Top issues by severity' : (KIND_LABELS[_diaQualityFilter] || _diaQualityFilter);
+    html += `<div class="widget-title">${esc(detailTitle)}`;
+    if (_diaQualityFilter !== 'all' && KIND_HINTS[_diaQualityFilter]) {
+      html += `<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">${esc(KIND_HINTS[_diaQualityFilter])}</span>`;
+    }
+    html += '</div>';
+
+    if (!issues || issues.length === 0) {
+      html += '<div class="ops-empty">No rows for this filter.</div>';
+    } else {
+      for (const item of issues.slice(0, 50)) {
+        // record_id is a property_id for property-scoped issues (most kinds)
+        // or a listing_id for orphan_listing. Wire a "Open property" button
+        // that uses the existing showDetail(record, source) flow when
+        // record_id parses as a numeric property_id.
+        const propLikePid = /^\d+$/.test(String(item.record_id)) ? Number(item.record_id) : null;
+        const sevTone = item.severity >= 5 ? 'pri-high' : item.severity >= 3 ? 'pri-med' : 'pri-low';
+
+        html += `<div class="q-item">
+          <div class="q-item-header">
+            <span class="q-item-title">${esc(item.detail_1 || '(no detail)')}</span>
+            <div class="q-item-badges">
+              <span class="q-badge ${sevTone}">severity ${item.severity ?? '-'}</span>
+              ${item.issue_kind ? `<span class="q-badge">${esc(KIND_LABELS[item.issue_kind] || item.issue_kind)}</span>` : ''}
+            </div>
+          </div>
+          <div class="q-item-meta">
+            ${item.detail_2 ? `<span>${esc(item.detail_2)}</span>` : ''}
+            ${item.detail_3 ? `<span>${esc(item.detail_3)}</span>` : ''}
+            ${item.suggested_action ? `<span style="color:var(--text2);font-style:italic">→ ${esc(item.suggested_action)}</span>` : ''}
+          </div>
+          <div class="q-actions">
+            ${propLikePid != null && item.issue_kind !== 'orphan_listing' ? `<button class="q-action primary" onclick="opsOpenDiaProperty(${propLikePid})">Open property ${propLikePid}</button>` : ''}
+            <button class="q-action" onclick="createQualityFollowup(${jsStringArg('Resolve ' + (KIND_LABELS[item.issue_kind] || item.issue_kind) + ' — ' + (item.detail_1 || item.record_id))})">Create Follow-up</button>
+          </div>
+        </div>`;
+      }
+      if (issues.length >= 50) {
+        html += '<div class="q-item-meta" style="padding:8px 12px">Showing first 50. Filter to a kind for the full list within that kind.</div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  host.innerHTML = html;
+}
+
+// Open a dialysis property by ID via the same showDetail() flow used elsewhere.
+async function opsOpenDiaProperty(propertyId) {
+  if (!propertyId) return;
+  try {
+    const rows = await diaQuery('properties', 'property_id,address,city,state,tenant',
+      { filter: 'property_id=eq.' + propertyId, limit: 1 });
+    const prop = rows?.[0];
+    if (!prop) { showToast('Property ' + propertyId + ' not found in dialysis DB', 'error'); return; }
+    if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
+    showDetail({
+      property_id: prop.property_id,
+      address:     prop.address || '',
+      city:        prop.city || '',
+      state:       prop.state || '',
+      tenant:      prop.tenant || '',
+    }, 'dia-clinic');
+  } catch (err) {
+    console.error('opsOpenDiaProperty error:', err);
+    showToast('Could not open property: ' + (err?.message || err), 'error');
+  }
 }
 
 async function viewEntity(entityId) {
