@@ -84,7 +84,25 @@ async function recordFieldProvenance(args) {
       p_recorded_by:      recordedBy || null,
     });
     if (!res.ok) return null;
-    return Array.isArray(res.data) ? res.data[0] : res.data;
+    const result = Array.isArray(res.data) ? res.data[0] : res.data;
+
+    // Phase 3 (2026-04-26): when enforce_mode is `warn` or `strict` and the
+    // merge function decided this write is a `skip` (lower-priority source
+    // can't override) or `conflict` (same-priority disagreement), log a
+    // warning so it surfaces in Vercel function logs. The actual UPDATE in
+    // the writer above already happened — this is the visibility hook the
+    // architectural plan calls for before flipping `strict` mode (which
+    // would refactor writers to consult priority BEFORE writing).
+    if (result && (result.enforce_mode === 'warn' || result.enforce_mode === 'strict')
+        && (result.decision === 'skip' || result.decision === 'conflict')) {
+      console.warn(
+        `[field-provenance:${result.enforce_mode}] ${result.decision} on ` +
+        `${targetTable}.${fieldName} record=${recordPk}: ${result.decision_reason} ` +
+        `(incoming source=${source} priority=${result.new_priority}, ` +
+        `current source=${result.current_source} priority=${result.current_priority})`
+      );
+    }
+    return result;
   } catch (err) {
     // Best-effort — never block a real write on provenance recording.
     return null;
@@ -1027,7 +1045,7 @@ const CONTACT_COLS = {
 
 // ── Upsert document links from CoStar "Documents" section ─────────────
 
-async function upsertDocumentLinks(domain, propertyId, metadata) {
+async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
   const docs = metadata.document_links;
   if (!Array.isArray(docs) || docs.length === 0) return 0;
 
@@ -1057,7 +1075,18 @@ async function upsertDocumentLinks(domain, propertyId, metadata) {
       r = await domainQuery(domain, 'POST', 'property_documents', row);
     }
 
-    if (r.ok) count++;
+    if (r.ok) {
+      count++;
+      const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+      const docId = inserted?.document_id || inserted?.id;
+      if (docId) {
+        pushProvenance(provCollect, 'property_documents', docId, {
+          file_name:     fileName,
+          document_type: row.document_type,
+          source_url:    row.source_url,
+        });
+      }
+    }
     else console.error(`[doc-links] insert also failed for ${fileName}:`, r.status, JSON.stringify(r.data));
   }
   return count;
@@ -1422,7 +1451,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   results.records.sales = await upsertDomainSales(domain, propertyId, entity, metadata, provCollect);
 
   // Step 5b0: Upsert document links from CoStar "Documents" section
-  results.records.document_links = await upsertDocumentLinks(domain, propertyId, metadata);
+  results.records.document_links = await upsertDocumentLinks(domain, propertyId, metadata, provCollect);
 
   // Step 5b0.5: Auto-stage gov comp to sf_comps_staging for Salesforce sync
   if (domain === 'government' && results.records.sales > 0) {
@@ -1439,25 +1468,25 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
 
   // Step 5b2: Upsert broker links
   if (domain === 'dialysis') {
-    results.records.brokers = await upsertDialysisBrokerLinks(propertyId, results.records.sales, metadata);
+    results.records.brokers = await upsertDialysisBrokerLinks(propertyId, results.records.sales, metadata, provCollect);
   }
   if (domain === 'government') {
-    results.records.brokers = await upsertGovBrokers(propertyId, metadata);
+    results.records.brokers = await upsertGovBrokers(propertyId, metadata, provCollect);
   }
 
   // Step 5b3: Upsert deed records
   if (domain === 'dialysis') {
-    results.records.deed_records = await upsertDialysisDeedRecords(propertyId, entity, metadata);
+    results.records.deed_records = await upsertDialysisDeedRecords(propertyId, entity, metadata, provCollect);
   }
   if (domain === 'government') {
-    results.records.deed_records = await upsertGovernmentDeedRecords(entity, metadata);
+    results.records.deed_records = await upsertGovernmentDeedRecords(entity, metadata, provCollect);
   }
 
   // Step 5c: Upsert loans
-  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata);
+  results.records.loans = await upsertDomainLoans(domain, propertyId, metadata, provCollect);
 
   // Step 5d: Upsert recorded owners + ownership history
-  const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata);
+  const ownerResults = await upsertDomainOwners(domain, propertyId, entity, metadata, provCollect);
   results.records.owners = ownerResults.owners;
   results.records.history = ownerResults.history;
 
@@ -3273,7 +3302,7 @@ async function stageGovCompForSalesforce(propertyId, entity, metadata) {
  * Collects broker names from metadata.contacts[], normalizes them, upserts into
  * the brokers table, then links each broker to the relevant sale via sale_brokers.
  */
-async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
+async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata, provCollect) {
   const contacts = metadata.contacts;
   if (!Array.isArray(contacts)) return 0;
 
@@ -3368,6 +3397,13 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       if (!ins.ok || !ins.data?.length) continue;
       brokerId = ins.data[0].broker_id;
       created++;
+      // Phase 2.2.c: provenance for newly inserted broker (person)
+      pushProvenance(provCollect, 'brokers', brokerId, {
+        broker_name: name,
+        email:       contact.email || null,
+        phone:       contact.phones?.[0] || null,
+        company:     contact.company || null,
+      });
     }
 
     // Link broker to each sale for this property written in this pipeline run
@@ -3485,6 +3521,13 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
       if (!ins.ok || !ins.data?.length) continue;
       brokerId = ins.data[0].broker_id;
       created++;
+      // Phase 2.2.c: provenance for newly inserted firm broker
+      pushProvenance(provCollect, 'brokers', brokerId, {
+        broker_name: firmName,
+        email:       firm.email || null,
+        phone:       firm.phones?.[0] || null,
+        company:     firmName,
+      });
     }
 
     // Link firm broker to each sale
@@ -3561,7 +3604,7 @@ async function upsertDialysisBrokerLinks(propertyId, salesResult, metadata) {
  *
  * Returns count of broker records created.
  */
-async function upsertGovBrokers(propertyId, metadata) {
+async function upsertGovBrokers(propertyId, metadata, provCollect) {
   const contacts = metadata.contacts;
   if (!Array.isArray(contacts)) return 0;
 
@@ -3602,6 +3645,8 @@ async function upsertGovBrokers(propertyId, metadata) {
       if (Object.keys(patchData).length > 0) {
         await domainPatch('government',
           `brokers?broker_id=eq.${existing.broker_id}`, patchData, 'upsertGovBrokers');
+        // Phase 2.2.c: provenance for the patched fields only
+        pushProvenance(provCollect, 'brokers', existing.broker_id, patchData);
       }
     } else {
       // INSERT new broker record
@@ -3614,7 +3659,17 @@ async function upsertGovBrokers(propertyId, metadata) {
         active: true,
       });
       const ins = await domainQuery('government', 'POST', 'brokers', brokerData);
-      if (ins.ok) created++;
+      if (ins.ok) {
+        created++;
+        const inserted = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+        if (inserted?.broker_id) {
+          pushProvenance(provCollect, 'brokers', inserted.broker_id, {
+            name, firm: contact.company || null,
+            email: contact.email || null,
+            phone: contact.phones?.[0] || null,
+          });
+        }
+      }
     }
   }
 
@@ -3628,7 +3683,7 @@ async function upsertGovBrokers(propertyId, metadata) {
  * Deed records are immutable — existing records are never updated.
  * Returns count of records inserted.
  */
-async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
+async function upsertDialysisDeedRecords(propertyId, entity, metadata, provCollect) {
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
@@ -3667,7 +3722,21 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
     deedRecord.data_hash = dataHash;
 
     const result = await domainQuery('dialysis', 'POST', 'deed_records', deedRecord);
-    if (result.ok) inserted++;
+    if (result.ok) {
+      inserted++;
+      const created = Array.isArray(result.data) ? result.data[0] : result.data;
+      const deedId = created?.id || created?.deed_id;
+      if (deedId) {
+        pushProvenance(provCollect, 'deed_records', deedId, {
+          document_number: deedRecord.document_number,
+          deed_type:       deedRecord.deed_type,
+          grantor:         deedRecord.grantor,
+          grantee:         deedRecord.grantee,
+          recording_date:  deedRecord.recording_date,
+          consideration:   deedRecord.consideration,
+        });
+      }
+    }
   }
 
   return inserted;
@@ -3680,7 +3749,7 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata) {
  * available fields only, using document_number as the dedup key.
  * Filters out mortgage-type deeds via MORTGAGE_DEED_TYPES.
  */
-async function upsertGovernmentDeedRecords(entity, metadata) {
+async function upsertGovernmentDeedRecords(entity, metadata, provCollect) {
   const deedSales = (metadata.sales_history || []).filter(s =>
     s.document_number &&
     s.deed_type &&
@@ -3702,7 +3771,7 @@ async function upsertGovernmentDeedRecords(entity, metadata) {
     const dateStr = parseDate(sale.recordation_date || sale.sale_date)
       ?.split('T')[0] || null;
 
-    const r = await domainQuery('government', 'POST', 'deed_records', {
+    const deedRow = {
       document_number: sale.document_number,
       deed_type:       sale.deed_type || null,
       grantor:         sale.seller    || null,
@@ -3713,8 +3782,23 @@ async function upsertGovernmentDeedRecords(entity, metadata) {
       state_code:      entity.state   || null,
       data_hash:       dataHash,
       raw_payload:     sale,
-    });
-    if (r.ok) count++;
+    };
+    const r = await domainQuery('government', 'POST', 'deed_records', deedRow);
+    if (r.ok) {
+      count++;
+      const created = Array.isArray(r.data) ? r.data[0] : r.data;
+      const deedId = created?.deed_id || created?.id;
+      if (deedId) {
+        pushProvenance(provCollect, 'deed_records', deedId, {
+          document_number: deedRow.document_number,
+          deed_type:       deedRow.deed_type,
+          grantor:         deedRow.grantor,
+          grantee:         deedRow.grantee,
+          recording_date:  deedRow.recording_date,
+          consideration:   deedRow.consideration,
+        });
+      }
+    }
   }
   return count;
 }
@@ -3750,7 +3834,7 @@ function mapLoanType(rawType) {
  * Upsert loan records in the domain database.
  * Created from sales_history entries that have lender/loan_amount data.
  */
-async function upsertDomainLoans(domain, propertyId, metadata) {
+async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
@@ -3858,9 +3942,16 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
         { ...loanData, updated_at: nowIso },
         'upsertDomainLoans'
       );
+      pushProvenance(provCollect, 'loans', matchedLoanId, loanData);
     } else {
       const result = await domainQuery(domain, 'POST', 'loans', loanData);
-      if (result.ok) count++;
+      if (result.ok) {
+        count++;
+        const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
+        if (inserted?.loan_id) {
+          pushProvenance(provCollect, 'loans', inserted.loan_id, loanData);
+        }
+      }
     }
   }
 
@@ -3943,6 +4034,10 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
         count++;
         console.log(`[upsertDomainLoans] fallback wrote loan for lender="${lender.name}" ` +
           `amount=$${fallbackAmount} property=${propertyId}`);
+        const inserted = Array.isArray(result.data) ? result.data[0] : result.data;
+        if (inserted?.loan_id) {
+          pushProvenance(provCollect, 'loans', inserted.loan_id, loanData);
+        }
       }
     }
   }
@@ -3954,7 +4049,7 @@ async function upsertDomainLoans(domain, propertyId, metadata) {
  * Upsert recorded owners and build ownership history chain.
  * Sources: contacts[] with role=owner, plus buyers/sellers from sales_history[].
  */
-async function upsertDomainOwners(domain, propertyId, entity, metadata) {
+async function upsertDomainOwners(domain, propertyId, entity, metadata, provCollect) {
   const results = { owners: 0, history: 0 };
   const ownerIds = new Map(); // name → recorded_owner_id
   const nameCol = domain === 'government' ? 'canonical_name' : 'normalized_name';
@@ -4065,6 +4160,14 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
       if (id) {
         ownerIds.set(normalizedName, id);
         results.owners++;
+        // Phase 2.2.c: provenance for new recorded_owner row
+        pushProvenance(provCollect, 'recorded_owners', id, {
+          name: name.trim(),
+          [nameCol]: normalizedName,
+          ...(addrFields.address ? { address: addrFields.address } : {}),
+          ...(addrFields.city ? { city: addrFields.city } : {}),
+          ...(addrFields.state ? { state: addrFields.state } : {}),
+        });
       }
       return id;
     }
@@ -4194,7 +4297,13 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata) {
 
       if (!ohLookup.ok || !ohLookup.data?.length) {
         const result = await domainQuery(domain, 'POST', 'ownership_history', ohData);
-        if (result.ok) results.history++;
+        if (result.ok) {
+          results.history++;
+          const ohRow = Array.isArray(result.data) ? result.data[0] : result.data;
+          if (ohRow?.ownership_id) {
+            pushProvenance(provCollect, 'ownership_history', ohRow.ownership_id, ohData);
+          }
+        }
       } else if (matchedSaleId) {
         // Existing row — ensure sale_id is linked
         const existingOhId = ohLookup.data[0].ownership_id;
@@ -5972,7 +6081,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
  */
 export function hasSidebarData(metadata) {
   if (!metadata) return false;
-  if (metadata._pipeline_processed_at && metadata._pipeline_status !== 'failed') return false; // Already processed (failed runs are retryable)
+  if (metadata._pipeline_processed_at && metadata._pipeline_status !== 'failed') return false;
   return !!(
     metadata.contacts?.length ||
     metadata.sales_history?.length ||

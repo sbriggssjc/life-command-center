@@ -188,6 +188,52 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       });
     }
 
+    // Phase 3 — surface field_provenance skips/conflicts where the rule is
+    // in warn/strict mode. Drives the LCC Data Quality UI's
+    // "Provenance conflicts" panel. Workspace-scoped via the recorded_by
+    // user's primary workspace; the view itself doesn't carry workspace_id
+    // because field_provenance is global to the OPS DB.
+    if (action === 'quality_provenance') {
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+      const [actionable, summary] = await Promise.all([
+        opsQuery('GET',
+          `v_field_provenance_actionable?` +
+          `select=provenance_id,recorded_at,target_database,target_table,record_pk_value,` +
+          `field_name,attempted_value,attempted_source,attempted_priority,enforce_mode,` +
+          `decision,decision_reason,current_source,current_value` +
+          `&order=recorded_at.desc&limit=${limit}`
+        ),
+        // Summary: by target_table+field, how many would-have-blocked rows
+        // in the last 7 days. We can't GROUP BY in PostgREST — fold in JS
+        // after fetching the raw set with a higher cap (cheap, < 5k rows
+        // expected even at peak).
+        opsQuery('GET',
+          `v_field_provenance_actionable?` +
+          `select=target_table,field_name,enforce_mode,decision` +
+          `&recorded_at=gte.${encodeURIComponent(new Date(Date.now() - 7 * 86400000).toISOString())}` +
+          `&limit=5000`
+        )
+      ]);
+
+      // Build the summary aggregate
+      const summaryMap = new Map();
+      for (const r of (summary.data || [])) {
+        const key = `${r.target_table}|${r.field_name}|${r.enforce_mode}|${r.decision}`;
+        summaryMap.set(key, (summaryMap.get(key) || 0) + 1);
+      }
+      const summaryRows = [...summaryMap.entries()]
+        .map(([key, count]) => {
+          const [target_table, field_name, enforce_mode, decision] = key.split('|');
+          return { target_table, field_name, enforce_mode, decision, count };
+        })
+        .sort((a, b) => b.count - a.count);
+
+      return res.status(200).json({
+        actionable: actionable.data || [],
+        summary_7d: summaryRows,
+      });
+    }
+
     // Search by name
     if (action === 'search' && q) {
       const searchTerm = q.replace(/[%_]/g, '').trim();

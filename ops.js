@@ -974,6 +974,11 @@ async function renderDataQualityPage() {
   // dialysis.js as a global).
   html += '<div id="diaDataQualityWidgets"><div class="widget"><div class="widget-title">Domain Data Quality (dialysis)</div><div class="loading"><span class="spinner"></span></div></div></div>';
 
+  // ── Provenance conflicts (Phase 3 enforce-mode panel) ────────────────────
+  // Hits /api/entities?action=quality_provenance which surfaces
+  // v_field_provenance_actionable. Also lazy-loaded.
+  html += '<div id="provenanceConflictWidgets"><div class="widget"><div class="widget-title">Provenance Conflicts</div><div class="loading"><span class="spinner"></span></div></div></div>';
+
   el.innerHTML = html;
   perf.end();
 
@@ -983,6 +988,106 @@ async function renderDataQualityPage() {
       console.error('[renderDiaDataQualityWidgets] failed:', err);
     });
   }
+  // Hydrate the provenance conflicts widget too.
+  if (typeof renderProvenanceConflictWidgets === 'function') {
+    renderProvenanceConflictWidgets().catch(err => {
+      console.error('[renderProvenanceConflictWidgets] failed:', err);
+    });
+  }
+}
+
+// ─── Provenance conflicts panel (Phase 3) ────────────────────────────────
+// Surfaces field_provenance rows where a write was skipped or conflicted
+// AND the rule is in warn or strict enforce_mode. Useful before flipping
+// rules to strict — see exactly which fields are being attempted-to-be-
+// overwritten by lower-priority sources.
+let _provFilter = 'all'; // 'all' | 'skip' | 'conflict'
+async function renderProvenanceConflictWidgets() {
+  const host = document.getElementById('provenanceConflictWidgets');
+  if (!host) return;
+
+  const res = await opsApi('/api/entities?action=quality_provenance&limit=200');
+  if (!res.ok) {
+    host.innerHTML = `<div class="widget"><div class="widget-title">Provenance Conflicts</div><div class="ops-empty">Could not load provenance data.<br><small>${esc(res.error)}</small></div></div>`;
+    return;
+  }
+  const data = res.data || {};
+  const rows    = data.actionable || [];
+  const summary = data.summary_7d || [];
+
+  let html = '<div class="widget"><div class="widget-title">Provenance Conflicts ' +
+    '<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">' +
+    'Writes blocked or flagged by enforce_mode (warn / strict). Phase 3 of the data quality loop.</span></div>';
+
+  if (summary.length === 0 && rows.length === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">No skips or conflicts in the last 7 days under warn/strict rules.</div>';
+    html += '</div>';
+    host.innerHTML = html;
+    return;
+  }
+
+  // Top-N summary by table.field
+  if (summary.length > 0) {
+    html += '<div style="margin-bottom:12px;font-size:13px;color:var(--text2)">Top fields by attempted-overwrite count (last 7 days):</div>';
+    html += '<div class="metrics-grid" style="margin-bottom:12px">';
+    for (const s of summary.slice(0, 6)) {
+      const tone = s.decision === 'conflict' ? 'red' : (s.enforce_mode === 'strict' ? 'red' : 'yellow');
+      html += metricCardHTML(
+        `${s.target_table}.${s.field_name}`,
+        s.count,
+        `${s.decision} · ${s.enforce_mode}`,
+        tone
+      );
+    }
+    html += '</div>';
+  }
+
+  // Filter buttons
+  html += '<div class="ops-filters" style="margin-bottom:12px">';
+  html += `<button class="ops-filter ${_provFilter === 'all' ? 'active' : ''}" onclick="_provFilter='all';renderProvenanceConflictWidgets()">All decisions</button>`;
+  html += `<button class="ops-filter ${_provFilter === 'skip' ? 'active' : ''}" onclick="_provFilter='skip';renderProvenanceConflictWidgets()">Skips only</button>`;
+  html += `<button class="ops-filter ${_provFilter === 'conflict' ? 'active' : ''}" onclick="_provFilter='conflict';renderProvenanceConflictWidgets()">Conflicts only</button>`;
+  html += '</div>';
+
+  const filtered = _provFilter === 'all'
+    ? rows
+    : rows.filter(r => r.decision === _provFilter);
+
+  if (filtered.length === 0) {
+    html += '<div class="ops-empty">No rows for this filter.</div>';
+  } else {
+    for (const r of filtered.slice(0, 50)) {
+      const ago = freshnessHTML(r.recorded_at);
+      const decisionBadge = r.decision === 'conflict' ? 'pri-high' : (r.enforce_mode === 'strict' ? 'pri-high' : 'pri-med');
+      const truncate = (v) => {
+        if (v == null) return '—';
+        const s = typeof v === 'string' ? v : JSON.stringify(v);
+        return s.length > 80 ? s.slice(0, 77) + '…' : s;
+      };
+      html += `<div class="q-item">
+        <div class="q-item-header">
+          <span class="q-item-title">${esc(r.target_table)}.${esc(r.field_name)}</span>
+          <div class="q-item-badges">
+            <span class="q-badge ${decisionBadge}">${esc(r.decision)}</span>
+            <span class="q-badge">${esc(r.enforce_mode)}</span>
+            <span class="q-badge">record ${esc(r.record_pk_value)}</span>
+          </div>
+        </div>
+        <div class="q-item-meta">
+          <span><b>incoming:</b> ${esc(r.attempted_source)} (priority ${esc(String(r.attempted_priority))}) → ${esc(truncate(r.attempted_value))}</span>
+          ${r.current_source ? `<span><b>current:</b> ${esc(r.current_source)} → ${esc(truncate(r.current_value))}</span>` : ''}
+          <span style="color:var(--text2);font-style:italic">${esc(r.decision_reason || '')}</span>
+          ${ago}
+        </div>
+      </div>`;
+    }
+    if (filtered.length > 50) {
+      html += `<div class="q-item-meta" style="padding:8px 12px">Showing first 50 of ${filtered.length}.</div>`;
+    }
+  }
+
+  html += '</div>';
+  host.innerHTML = html;
 }
 
 // ─── Domain (dialysis) data quality — pulls v_data_quality_summary +
