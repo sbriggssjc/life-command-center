@@ -1254,7 +1254,14 @@ async function handleIntakeQueue(req, res) {
 
   const result = await opsQuery('GET', path);
   if (!result.ok) {
-    return res.status(result.status || 500).json({ error: 'Failed to fetch intake queue' });
+    // Return PostgREST detail + a build marker so smoke tests can confirm
+    // which deploy is running (Bug Z follow-up, 2026-04-27).
+    return res.status(result.status || 500).json({
+      error:        'Failed to fetch intake queue',
+      build_marker: 'intake-handler-2026-04-27-r2',
+      pg_status:    result.status,
+      pg_detail:    result.data,
+    });
   }
 
   const rows = (result.data || []).map(row => {
