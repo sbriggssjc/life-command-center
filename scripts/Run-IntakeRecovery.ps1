@@ -71,16 +71,26 @@ Write-Host ""
 
 switch ($Mode) {
   'SmokeSafe' {
+    Remove-Item Env:LIMIT -ErrorAction SilentlyContinue
+    Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue
+    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
     $env:SAFE = '1'
     node scripts/smoke-test-promote.mjs
   }
   'Smoke' {
-    $env:SAFE = $null
+    Remove-Item Env:LIMIT -ErrorAction SilentlyContinue
+    Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue
+    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
+    Remove-Item Env:SAFE -ErrorAction SilentlyContinue
     node scripts/smoke-test-promote.mjs
   }
   'Recover' {
-    if ($Limit -gt 0)      { $env:LIMIT       = "$Limit" }
-    if ($ThrottleMs -gt 0) { $env:THROTTLE_MS = "$ThrottleMs" }
+    # Always reset these so a previous invocation's values don't leak in
+    # (PowerShell process env vars persist across `node` calls in the same
+    # session). Set them only when the user explicitly passes the flag.
+    if ($Limit -gt 0)      { $env:LIMIT       = "$Limit" }       else { Remove-Item Env:LIMIT       -ErrorAction SilentlyContinue }
+    if ($ThrottleMs -gt 0) { $env:THROTTLE_MS = "$ThrottleMs" }  else { Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue }
+    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
     node scripts/recover-stalled-intakes.mjs
   }
 }
