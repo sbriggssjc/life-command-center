@@ -1759,6 +1759,26 @@ async function upsertDomainProperty(domain, entity, metadata) {
 
   let lookup = await domainQuery(domain, 'GET', lookupPath);
 
+  // Fallback 0: if normalized-address ilike missed, retry with the RAW
+  // address. Older sidebar-pipeline writes stored the un-normalized form
+  // (e.g. "599 Court Street") so a normAddr ilike of "599 ct st" without
+  // wildcards never matches them — ilike-without-wildcards is exact-match.
+  // Without this, every re-promote of an OM whose address has expandable
+  // suffixes (Street/Avenue/Boulevard/etc.) creates a new duplicate
+  // property row. Net: ~107 duplicate_property_address issues across the
+  // dia DB pre-fix (audit 2026-04-27).
+  if (!lookup.data?.length && address && address !== normAddr) {
+    let rawLookupPath = `properties?address=ilike.${encodeURIComponent(address)}` +
+      `&select=property_id,${sizeCol}&limit=1`;
+    if (entity.state) rawLookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
+    if (entity.city)  rawLookupPath += `&city=ilike.${encodeURIComponent(entity.city)}`;
+    const rawLookup = await domainQuery(domain, 'GET', rawLookupPath);
+    if (rawLookup.ok && rawLookup.data?.length) {
+      console.log(`[upsertDomainProperty] Raw-address fallback matched: "${address}" (normAddr "${normAddr}" missed)`);
+      lookup = rawLookup;
+    }
+  }
+
   // Fallback 1: if city filter yielded no results, retry without city in case of
   // city-name variant mismatch ("MEMPHIS" vs "Memphis" vs "memphis" in DB).
   if (!lookup.data?.length && entity.city && entity.state) {
@@ -1818,7 +1838,12 @@ async function upsertDomainProperty(domain, entity, metadata) {
     if (parsedSF) console.log(`[upsertDomainProperty] building_size derived from sf_leased: ${parsedSF}`);
   }
   const propertyData = stripNulls({
-    address,
+    // Store the NORMALIZED address (e.g. "599 ct st") so the address=ilike.<normAddr>
+    // lookup at the top of this function can find this row on the next promote.
+    // Storing the raw form ("599 Court Street") leaves the next lookup unable to
+    // match it because PostgREST ilike-without-wildcards is exact case-insensitive
+    // match, not abbreviation-expanding fuzzy match. Bug Z follow-up #10, 2026-04-27.
+    address: normAddr,
     city: entity.city || null,
     state: entity.state || null,
     zip_code: entity.zip || null,
