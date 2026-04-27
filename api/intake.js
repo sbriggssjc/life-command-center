@@ -1241,15 +1241,19 @@ async function handleIntakeQueue(req, res) {
   // Bug Z follow-up (2026-04-27): subject/sender don't exist as columns —
   // they live inside raw_payload.seed_data. Querying them caused PostgREST
   // to 400 and the caller saw "Failed to fetch intake queue".
+  // Bug Z follow-up #2 (same date): staged_intake_matches is a phantom
+  // table that was never created — match info lives inside
+  // raw_payload.extraction_result. Drop the embed; pull match fields out
+  // of raw_payload below.
   path += `&select=intake_id,status,raw_payload,created_at,`
-    + `staged_intake_extractions(extraction_snapshot),`
-    + `staged_intake_matches(match_result,confidence,matched_property_id,matched_domain,property_id,domain,decision,reason)`
+    + `staged_intake_extractions(extraction_snapshot)`
     + `&order=created_at.desc&limit=${singleIntakeId ? 1 : limit}`;
 
-  // If domain filter requested, only show items whose match or extraction indicates that domain
+  // If domain filter requested, match against the extraction_result domain
+  // we already store inline. (Old version filtered through the phantom
+  // staged_intake_matches table.)
   if (domain && !singleIntakeId) {
-    path += `&or=(staged_intake_matches.matched_domain.eq.${encodeURIComponent(domain)},`
-      + `raw_payload->>domain.eq.${encodeURIComponent(domain)})`;
+    path += `&raw_payload->extraction_result->>match_domain=eq.${encodeURIComponent(domain)}`;
   }
 
   const result = await opsQuery('GET', path);
@@ -1266,7 +1270,10 @@ async function handleIntakeQueue(req, res) {
 
   const rows = (result.data || []).map(row => {
     const extraction = row.staged_intake_extractions?.[0]?.extraction_snapshot || null;
-    const match = row.staged_intake_matches?.[0] || null;
+    // Match info lives inline in raw_payload.extraction_result (no separate
+    // staged_intake_matches table). The same fields the matcher writes there
+    // are the ones consumers need.
+    const matchData = row.raw_payload?.extraction_result || {};
     return {
       intake_id: row.intake_id,
       status: row.status,
@@ -1279,22 +1286,24 @@ async function handleIntakeQueue(req, res) {
                           || row.raw_payload?.from
                           || 'Unknown',
       created_at: row.created_at,
-      document_type: extraction?.document_type || 'unknown',
+      document_type: extraction?.document_type || matchData.document_type || 'unknown',
       address: extraction?.address || null,
       city: extraction?.city || null,
       state: extraction?.state || null,
-      tenant_name: extraction?.tenant_name || null,
-      cap_rate: extraction?.cap_rate || null,
+      tenant_name: extraction?.tenant_name || matchData.tenant_name || null,
+      cap_rate: extraction?.cap_rate || matchData.cap_rate || null,
       noi: extraction?.noi || null,
-      asking_price: extraction?.asking_price || null,
+      asking_price: extraction?.asking_price || matchData.asking_price || null,
       annual_rent: extraction?.annual_rent || null,
       building_sf: extraction?.building_sf || null,
-      match_status: match?.match_result?.status || 'no_match',
-      match_reason: match?.match_result?.reason || null,
-      match_property_id: match?.matched_property_id || match?.match_result?.property_id || null,
-      match_domain: match?.matched_domain || match?.match_result?.domain || null,
-      match_candidates: match?.match_result?.candidates || [],
-      confidence: match?.confidence ?? null,
+      match_status: matchData.match_status || 'no_match',
+      match_reason: matchData.match_reason || null,
+      match_property_id: matchData.match_property_id || null,
+      match_domain: matchData.match_domain || null,
+      match_candidates: matchData.match_candidates || [],
+      confidence: matchData.match_confidence ?? null,
+      promotion_ok: matchData.promotion_ok ?? null,
+      promotion_listing_id: matchData.promotion_listing_id ?? null,
       extraction_snapshot: extraction,
     };
   });
