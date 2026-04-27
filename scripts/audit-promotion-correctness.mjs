@@ -176,9 +176,12 @@ async function main() {
     const ids = [...govIds];
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100).join(',');
+      // gov.properties has no tenant/tenant_agency column — agencies live
+      // in a property_agencies junction table. Skip the tenant fetch and
+      // leave _tenant null; the audit compares on address anyway.
       const rows = await pgrestJson(GOV_URL, GOV_KEY,
-        `properties?property_id=in.(${chunk})&select=property_id,address,city,state,tenant_agency`);
-      for (const r of rows) govProps[r.property_id] = { ...r, _tenant: r.tenant_agency };
+        `properties?property_id=in.(${chunk})&select=property_id,address,city,state`);
+      for (const r of rows) govProps[r.property_id] = { ...r, _tenant: null };
     }
   }
   console.log(`   Fetched ${Object.keys(diaProps).length} dia + ${Object.keys(govProps).length} gov properties.`);
