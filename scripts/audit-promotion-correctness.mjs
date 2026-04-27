@@ -143,7 +143,7 @@ async function main() {
       OPS_URL, OPS_KEY,
       `staged_intake_items?intake_id=in.(${inList})` +
       `&workspace_id=eq.${WORKSPACE_ID}` +
-      `&select=intake_id,raw_payload`
+      `&select=intake_id,raw_payload,staged_intake_extractions(extraction_snapshot)`
     );
     for (const r of rows) items[r.intake_id] = r;
   }
@@ -210,7 +210,13 @@ async function main() {
   for (const p of promotions) {
     stats.total++;
     const item     = items[p.intake_id] || {};
-    const snapshot = item.raw_payload?.extraction_snapshot
+    // Snapshot lives in staged_intake_extractions.extraction_snapshot
+    // (joined via FK on intake_id). raw_payload is the inbound email
+    // metadata; raw_payload.extraction_result is just the matcher's output,
+    // not the extractor's. The handleIntakePromote endpoint reads from
+    // staged_intake_extractions, so the audit must too.
+    const snapshot = item.staged_intake_extractions?.[0]?.extraction_snapshot
+                  || item.raw_payload?.extraction_snapshot
                   || item.raw_payload?.seed_data?.extraction_snapshot
                   || {};
     const exAddr  = snapshot.address  || null;
