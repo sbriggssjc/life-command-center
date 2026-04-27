@@ -1427,8 +1427,27 @@ async function handleIntakePromote(req, res) {
   //     property <uuid>" and can't link to the right dia/gov property
   //     (Bug Z follow-up #5, 2026-04-27).
   const matchInfo  = item.raw_payload?.extraction_result || {};
-  const matchPid   = matchInfo.match_property_id;
-  const matchDomain = matchInfo.match_domain;
+  let   matchPid   = matchInfo.match_property_id;
+  let   matchDomain = matchInfo.match_domain;
+
+  // If the matcher landed on an LCC entity UUID (match_domain='lcc'),
+  // unwrap it to the underlying dia/gov property via external_identities.
+  if (matchPid && matchDomain === 'lcc' && /^[0-9a-fA-F-]{36}$/.test(String(matchPid))) {
+    try {
+      const idLookup = await opsQuery('GET',
+        `external_identities?entity_id=eq.${encodeURIComponent(matchPid)}` +
+        `&source_system=in.(gov_db,dia_db)&select=source_system,external_id&limit=1`
+      );
+      if (idLookup.ok && idLookup.data?.[0]) {
+        const r = idLookup.data[0];
+        matchPid    = r.external_id;
+        matchDomain = r.source_system === 'gov_db' ? 'government' : 'dialysis';
+      }
+    } catch (err) {
+      console.warn('[intake-promote] lcc-bridge unwrap failed (non-fatal):', err?.message);
+    }
+  }
+
   if (matchPid && (matchDomain === 'dialysis' || matchDomain === 'government') && !metadata.address) {
     const numericPid = Number(matchPid);
     if (Number.isFinite(numericPid) && numericPid > 0) {
@@ -1496,24 +1515,38 @@ async function handleIntakePromote(req, res) {
     return res.status(500).json({ error: 'Failed to create/link entity' });
   }
 
-  // 3b. PATCH the entity's own metadata column so processSidebarExtraction
-  //     can read it. ensureEntityLink stores metadata on
-  //     external_identities, but the sidebar pipeline reads
-  //     entities.metadata. Without this, the pipeline sees empty metadata
-  //     and short-circuits with "No actionable sidebar data" (Bug Z
-  //     follow-up #4, 2026-04-27). Merge with any existing metadata so we
-  //     don't clobber data added by other sources.
+  // 3b. PATCH the entity's own metadata + domain columns so
+  //     processSidebarExtraction can read them. ensureEntityLink stores
+  //     metadata on external_identities, but the sidebar pipeline reads
+  //     entities.metadata + entities.domain. Without this, the pipeline
+  //     short-circuits with "No actionable sidebar data" or fails to
+  //     classify (Bug Z follow-up #4-#6, 2026-04-27).
+  //     - Merge metadata so we don't clobber other sources.
+  //     - Set entity.domain to the matcher's resolved domain so
+  //       classifyAndUpdateDomain's fallback path picks it up even when
+  //       the classifier's tenant patterns don't match (e.g. Centria
+  //       Healthcare doesn't match the dialysis regex but the matcher
+  //       knows it's a dia property because it linked to dia 35385).
   try {
     const existing = await opsQuery('GET',
-      `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}&select=metadata&limit=1`
+      `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}&select=metadata,domain&limit=1`
     );
-    const existingMetadata = existing.ok && existing.data?.[0]?.metadata
-      ? existing.data[0].metadata
-      : {};
-    const mergedMetadata = { ...existingMetadata, ...metadata };
+    const existingRow      = existing.ok && existing.data?.[0] ? existing.data[0] : {};
+    const existingMetadata = existingRow.metadata || {};
+    const mergedMetadata   = { ...existingMetadata, ...metadata };
+
+    const patchPayload = { metadata: mergedMetadata, updated_at: new Date().toISOString() };
+    // Set domain column when the matcher resolved one and the entity
+    // doesn't already have a curated domain.
+    if (matchDomain
+        && (matchDomain === 'dialysis' || matchDomain === 'government')
+        && !existingRow.domain) {
+      patchPayload.domain = matchDomain;
+    }
+
     await opsQuery('PATCH',
       `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
-      { metadata: mergedMetadata, updated_at: new Date().toISOString() }
+      patchPayload
     );
   } catch (err) {
     console.warn('[intake-promote] entity metadata patch failed (non-fatal):', err?.message);
