@@ -1543,6 +1543,16 @@ async function handleIntakePromote(req, res) {
         && !existingRow.domain) {
       patchPayload.domain = matchDomain;
     }
+    // Promote the structured address/city/state from metadata up to the
+    // entity columns. Without this, the sidebar pipeline's
+    // upsertDomainProperty looks at entity.address (NULL) instead of
+    // metadata.address and fails to resolve/create the dia/gov property
+    // (Bug Z follow-up #7, 2026-04-27 — accounts for the last 4 of 230
+    // bulk-recovery failures, all multi-tenant medical OMs whose tenant
+    // is a JSON-array string but whose address is clean).
+    if (metadata.address) patchPayload.address = metadata.address;
+    if (metadata.city)    patchPayload.city    = metadata.city;
+    if (metadata.state)   patchPayload.state   = metadata.state;
 
     await opsQuery('PATCH',
       `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
