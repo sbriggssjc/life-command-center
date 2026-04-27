@@ -32,6 +32,7 @@ import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.j
 import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
 import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
 import { stageOmIntake } from './_shared/intake-om-pipeline.js';
+import { domainQuery } from './_shared/domain-db.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -1416,6 +1417,43 @@ async function handleIntakePromote(req, res) {
     _intake_id: intake_id,
     _intake_source: itemSubject || 'email-intake',
   };
+
+  // 2b. If the matcher already resolved a domain property_id but the
+  //     extraction snapshot is missing address/city/state (common with
+  //     body-only emails where the AI couldn't find a clean address but
+  //     the address-bridge resolution found the right property), look up
+  //     the property's address from the domain DB and inject it. Without
+  //     this, the sidebar pipeline's classifier sees only "tenant_name +
+  //     property <uuid>" and can't link to the right dia/gov property
+  //     (Bug Z follow-up #5, 2026-04-27).
+  const matchInfo  = item.raw_payload?.extraction_result || {};
+  const matchPid   = matchInfo.match_property_id;
+  const matchDomain = matchInfo.match_domain;
+  if (matchPid && (matchDomain === 'dialysis' || matchDomain === 'government') && !metadata.address) {
+    const numericPid = Number(matchPid);
+    if (Number.isFinite(numericPid) && numericPid > 0) {
+      try {
+        const propRes = await domainQuery(matchDomain, 'GET',
+          `properties?property_id=eq.${numericPid}&select=address,city,state,zip_code,tenant&limit=1`
+        );
+        if (propRes.ok && propRes.data?.[0]) {
+          const p = propRes.data[0];
+          if (!metadata.address && p.address)   metadata.address   = p.address;
+          if (!metadata.city    && p.city)      metadata.city      = p.city;
+          if (!metadata.state   && p.state)     metadata.state     = p.state;
+          if (!metadata.zip_code && p.zip_code) metadata.zip_code  = p.zip_code;
+          if (!metadata.tenant_name && p.tenant) metadata.tenant_name = p.tenant;
+          // Stamp the resolved domain + property_id so the sidebar pipeline
+          // skips its own classifier and writes directly to the right row.
+          metadata.domain                = matchDomain;
+          metadata.matcher_property_id   = numericPid;
+          metadata._intake_resolved_via  = 'matcher_address_lookup';
+        }
+      } catch (err) {
+        console.warn('[intake-promote] matcher property address lookup failed (non-fatal):', err?.message);
+      }
+    }
+  }
 
   // Build contacts array from extraction for sidebar pipeline
   if (extraction.listing_broker) {
