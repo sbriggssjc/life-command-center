@@ -7,9 +7,8 @@
 //
 // Reads:
 //   - LCC Opps Supabase: staged_intake_promotions JOIN staged_intake_items
-//     (snapshot + resolved property_id + domain)
-//   - Dialysis Supabase: dia.properties (address, city, state, tenant)
-//   - Government Supabase: gov.properties (same)
+//   - Dialysis Supabase: dia.properties (uses `tenant` column)
+//   - Government Supabase: gov.properties (uses `tenant_agency` column)
 //
 // Output: writes a CSV next to this script with one row per promoted intake,
 // each tagged with mismatch_kind:
@@ -27,9 +26,6 @@
 //
 // Usage (from PowerShell wrapper):
 //   .\scripts\Run-IntakeRecovery.ps1 -Mode AuditCorrectness
-//
-// Or directly:
-//   node scripts/audit-promotion-correctness.mjs
 // ============================================================================
 
 import fs from 'node:fs';
@@ -38,8 +34,6 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-
-// ─── Config ─────────────────────────────────────────────────────────────────
 
 const OPS_URL = process.env.OPS_SUPABASE_URL;
 const OPS_KEY = process.env.OPS_SUPABASE_KEY;
@@ -58,8 +52,6 @@ for (const [k, v] of Object.entries(required)) {
 }
 
 const OUT_PATH = path.join(__dirname, 'audit-promotion-correctness-output.csv');
-
-// ─── Supabase REST helpers ──────────────────────────────────────────────────
 
 function pgrest(baseUrl, key, route, opts = {}) {
   const url = baseUrl.replace(/\/+$/, '') + '/rest/v1/' + route.replace(/^\/+/, '');
@@ -80,8 +72,6 @@ async function pgrestJson(baseUrl, key, route) {
   catch { throw new Error(`PostgREST non-JSON for ${route}: ${text.slice(0, 200)}`); }
 }
 
-// ─── Address normalization for fuzzy comparison ─────────────────────────────
-
 function normAddress(s) {
   if (!s) return '';
   return String(s)
@@ -97,7 +87,6 @@ function addressSimilarity(a, b) {
   const nb = normAddress(b);
   if (!na || !nb) return 0;
   if (na === nb) return 1.0;
-  // Token-set Jaccard
   const ta = new Set(na.split(' ').filter(t => t.length > 1));
   const tb = new Set(nb.split(' ').filter(t => t.length > 1));
   if (ta.size === 0 || tb.size === 0) return 0;
@@ -114,35 +103,38 @@ function classifyMatch(extractionAddr, propertyAddr) {
   return 'MISMATCH';
 }
 
-// ─── Main ───────────────────────────────────────────────────────────────────
-
 async function main() {
   const since = new Date(Date.now() - LOOKBACK_HOURS * 3600 * 1000).toISOString();
   console.log(`Audit window: promoted_at >= ${since}`);
   console.log(`Workspace:    ${WORKSPACE_ID}`);
 
-  // 1. Pull recent promotions with their snapshot from LCC Opps.
-  //    staged_intake_promotions has the pipeline_result; staged_intake_items
-  //    has the raw_payload with extraction_snapshot. We embed them via a
-  //    relationship-style query if there's a FK; otherwise, two queries.
   console.log('\n[1/4] Fetching recent promotions from LCC Opps...');
-  const promotions = await pgrestJson(
+  const promotionsRaw = await pgrestJson(
     OPS_URL, OPS_KEY,
     `staged_intake_promotions?workspace_id=eq.${WORKSPACE_ID}` +
     `&promoted_at=gte.${encodeURIComponent(since)}` +
-    `&select=intake_id,promoted_at,pipeline_result&order=promoted_at.desc&limit=500`
+    `&select=intake_id,promoted_at,pipeline_result&order=promoted_at.desc&limit=2000`
   );
-  console.log(`   ${promotions.length} promotions in window.`);
+  // Dedupe by intake_id, keeping the most recent promotion (results are
+  // already sorted desc by promoted_at). Multiple bulk runs and re-promotes
+  // produce many staged_intake_promotions rows per intake; for the audit we
+  // only want the *current* resolved property.
+  const seen = new Set();
+  const promotions = [];
+  for (const p of promotionsRaw) {
+    if (seen.has(p.intake_id)) continue;
+    seen.add(p.intake_id);
+    promotions.push(p);
+  }
+  console.log(`   ${promotionsRaw.length} promotion rows (${promotions.length} distinct intake_ids after dedup).`);
 
   if (promotions.length === 0) {
     console.log('Nothing to audit. Exiting.');
     return;
   }
 
-  // 2. For each, pull the staged_intake_items row to get extraction_snapshot.
   console.log('\n[2/4] Fetching extraction snapshots for those intake_ids...');
   const intakeIds = promotions.map(p => p.intake_id);
-  // Chunk into groups of 50 to avoid URL length limits.
   const items = {};
   for (let i = 0; i < intakeIds.length; i += 50) {
     const chunk = intakeIds.slice(i, i + 50);
@@ -157,7 +149,6 @@ async function main() {
   }
   console.log(`   Fetched ${Object.keys(items).length} item rows.`);
 
-  // 3. Group resolved property_ids by domain, fetch each property in batch.
   console.log('\n[3/4] Fetching resolved properties from dia/gov DBs...');
   const diaIds = new Set();
   const govIds = new Set();
@@ -168,6 +159,8 @@ async function main() {
     if (dom === 'dialysis')        diaIds.add(pid);
     else if (dom === 'government') govIds.add(pid);
   }
+  // dia.properties has `tenant`; gov.properties uses `tenant_agency`.
+  // Normalize into a shared `_tenant` field on each row.
   const diaProps = {};
   if (diaIds.size > 0) {
     const ids = [...diaIds];
@@ -175,7 +168,7 @@ async function main() {
       const chunk = ids.slice(i, i + 100).join(',');
       const rows = await pgrestJson(DIA_URL, DIA_KEY,
         `properties?property_id=in.(${chunk})&select=property_id,address,city,state,tenant`);
-      for (const r of rows) diaProps[r.property_id] = r;
+      for (const r of rows) diaProps[r.property_id] = { ...r, _tenant: r.tenant };
     }
   }
   const govProps = {};
@@ -184,15 +177,14 @@ async function main() {
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100).join(',');
       const rows = await pgrestJson(GOV_URL, GOV_KEY,
-        `properties?property_id=in.(${chunk})&select=property_id,address,city,state,tenant`);
-      for (const r of rows) govProps[r.property_id] = r;
+        `properties?property_id=in.(${chunk})&select=property_id,address,city,state,tenant_agency`);
+      for (const r of rows) govProps[r.property_id] = { ...r, _tenant: r.tenant_agency };
     }
   }
   console.log(`   Fetched ${Object.keys(diaProps).length} dia + ${Object.keys(govProps).length} gov properties.`);
 
-  // 4. Build report rows + tally repeat-frequency.
   console.log('\n[4/4] Classifying matches + writing CSV...');
-  const propCounts = {}; // key = `${domain}:${pid}` -> count
+  const propCounts = {};
   for (const p of promotions) {
     const pid = Number(p.pipeline_result?.domain_property_id);
     const dom = p.pipeline_result?.domain;
@@ -250,7 +242,7 @@ async function main() {
     out.push([
       p.intake_id, p.promoted_at, dom, pid,
       csvSafe(exAddr), csvSafe(exCity), csvSafe(exState), csvSafe(exTen),
-      csvSafe(propRow.address), csvSafe(propRow.city), csvSafe(propRow.state), csvSafe(propRow.tenant),
+      csvSafe(propRow.address), csvSafe(propRow.city), csvSafe(propRow.state), csvSafe(propRow._tenant),
       sim.toFixed(2), kind, repeats >= 3 ? `REPEAT_${repeats}` : repeats,
       csvSafe(subject),
     ].join(','));
@@ -258,13 +250,12 @@ async function main() {
 
   fs.writeFileSync(OUT_PATH, out.join('\n'), 'utf8');
 
-  // Top repeat properties
   const topRepeats = Object.entries(propCounts)
     .filter(([_, n]) => n >= 3)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 20);
 
-  console.log('\n─── Summary ───');
+  console.log('\n--- Summary ---');
   console.log(`Total promotions audited:  ${stats.total}`);
   console.log(`  OK_EXACT (sim>=0.8):     ${stats.OK_EXACT}`);
   console.log(`  OK_PARTIAL (sim>=0.5):   ${stats.OK_PARTIAL}`);
@@ -273,7 +264,7 @@ async function main() {
   console.log(`  NO_PROPERTY (failed):    ${stats.NO_PROPERTY}`);
   console.log(`\nTop repeat property_ids (>=3 promotions to same property):`);
   for (const [key, n] of topRepeats) console.log(`  ${key}: ${n} intakes`);
-  console.log(`\nWrote CSV → ${OUT_PATH}`);
+  console.log(`\nWrote CSV -> ${OUT_PATH}`);
 }
 
 function csvSafe(v) {
