@@ -75,4 +75,33 @@ Write-Host ""
 switch ($Mode) {
   'SmokeSafe' {
     Remove-Item Env:LIMIT -ErrorAction SilentlyContinue
-    Remove-Item Env:THROTTLE_MS -ErrorAction Silent
+    Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue
+    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
+    $env:SAFE = '1'
+    node scripts/smoke-test-promote.mjs
+  }
+  'Smoke' {
+    Remove-Item Env:LIMIT -ErrorAction SilentlyContinue
+    Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue
+    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
+    Remove-Item Env:SAFE -ErrorAction SilentlyContinue
+    node scripts/smoke-test-promote.mjs
+  }
+  'Recover' {
+    # Always reset these so a previous invocation's values don't leak in
+    # (PowerShell process env vars persist across `node` calls in the same
+    # session). Set them only when the user explicitly passes the flag.
+    if ($Limit -gt 0)      { $env:LIMIT       = "$Limit" }       else { Remove-Item Env:LIMIT       -ErrorAction SilentlyContinue }
+    if ($ThrottleMs -gt 0) { $env:THROTTLE_MS = "$ThrottleMs" }  else { Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue }
+    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
+    node scripts/recover-stalled-intakes.mjs
+  }
+  'AuditCorrectness' {
+    # Cross-check each recently-promoted intake's extraction snapshot
+    # against the resolved domain property. Writes a CSV next to the script.
+    if ($LookbackHours -gt 0) { $env:LOOKBACK_HOURS = "$LookbackHours" } else { Remove-Item Env:LOOKBACK_HOURS -ErrorAction SilentlyContinue }
+    node scripts/audit-promotion-correctness.mjs
+  }
+}
+
+exit $LASTEXITCODE
