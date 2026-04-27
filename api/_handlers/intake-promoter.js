@@ -143,6 +143,76 @@ const LISTING_DOCUMENT_TYPES = new Set([
   'marketing_brochure',
 ]);
 
+// ── Doctype normalization (Bug Z fix, 2026-04-27) ────────────────────────
+// The extractor returns document_type values that vary across AI providers
+// and prompt versions: 'om', 'OM', 'offering_memorandum', 'offering memorandum',
+// 'broker package', 'broker_package', 'flyer', 'marketing_flyer', etc.
+// The promoter's LISTING_DOCUMENT_TYPES set only had the 3 canonical short
+// forms, so 25 of 30 OMs in the 24-48h audit window were rejected at the
+// `not_a_listing_doc` guard. Normalize at the boundary so any variant of
+// "OM" maps back to 'om', etc.
+const DOCTYPE_ALIASES = {
+  // OM variants
+  'om':                    'om',
+  'offering_memorandum':   'om',
+  'offering memorandum':   'om',
+  'offering-memorandum':   'om',
+  'offering':              'om',
+  'broker_package':        'om',
+  'broker package':        'om',
+  'investment_memorandum': 'om',
+  'investment memorandum': 'om',
+  // Flyer variants
+  'flyer':                 'flyer',
+  'broker_flyer':          'flyer',
+  'broker flyer':          'flyer',
+  'marketing_flyer':       'flyer',
+  'marketing flyer':       'flyer',
+  'one_pager':             'flyer',
+  'one pager':             'flyer',
+  'one-pager':             'flyer',
+  // Brochure variants
+  'marketing_brochure':    'marketing_brochure',
+  'marketing brochure':    'marketing_brochure',
+  'brochure':              'marketing_brochure',
+};
+
+/**
+ * Normalize a document_type string to its canonical short form.
+ * Returns the input unchanged if no alias matches (so non-listing types
+ * like 'lease_abstract', 'rent_roll', 'unknown', etc. flow through and
+ * get rejected by the LISTING_DOCUMENT_TYPES guard normally).
+ */
+function normalizeDocType(dt) {
+  if (!dt || typeof dt !== 'string') return dt;
+  const key = dt.toLowerCase().trim();
+  // Tolerate common typos / extra punctuation
+  const dedup = key.replace(/r{2,}/g, 'r').replace(/[.,]/g, '');
+  return DOCTYPE_ALIASES[key] || DOCTYPE_ALIASES[dedup] || key;
+}
+
+/**
+ * Heuristic: classify an extraction snapshot as listing-grade when
+ * `document_type` is null/unknown but the snapshot carries the signals
+ * a listing usually has (asking price + tenant + at least one of cap
+ * rate / building SF / lease term). Used as a fallback in
+ * promoteIntakeToDomainListing so that low-quality classification doesn't
+ * block obviously-promotable deals (Bug Z follow-up, 2026-04-27).
+ */
+function snapshotLooksLikeListing(snapshot) {
+  if (!snapshot) return false;
+  const hasPrice  = Number(snapshot.asking_price) > 0;
+  const hasTenant = !!(snapshot.tenant_name || snapshot.primary_tenant);
+  const supportingFields = [
+    snapshot.cap_rate,
+    snapshot.building_sf,
+    snapshot.lease_term_years,
+    snapshot.lease_expiration,
+    snapshot.noi,
+  ].filter(v => v != null && v !== '').length;
+  return hasPrice && hasTenant && supportingFields >= 1;
+}
+
 // ============================================================================
 // 1. AVAILABLE_LISTINGS MAPPERS (per domain)
 // ============================================================================
@@ -506,13 +576,24 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     'dialysis',
     'GET',
     `properties?property_id=eq.${Number(propertyId)}` +
-    `&select=year_built,lot_sf,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
+    `&select=tenant,year_built,lot_sf,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
   );
   if (!existing.ok || !Array.isArray(existing.data) || !existing.data.length) {
     return { ok: false, skipped: 'property_not_found', property_id: propertyId };
   }
   const current = existing.data[0];
   const patch = {};
+
+  // tenant — only fill if NULL/empty. Properties imported from CSV often
+  // had tenant left blank; the OM extraction is the first authoritative
+  // source for the operator name. Bug Z follow-up (2026-04-27): the audit
+  // surfaced 35389 (Vital Smiles) and 35380 (DB Biologics) with tenant=NULL
+  // despite their OMs clearly stating the tenant — promoteDiaPropertyFromOm
+  // never patched the column.
+  const tenantStr = (snapshot.tenant_name || snapshot.primary_tenant || '').trim();
+  if ((current.tenant == null || current.tenant === '') && tenantStr.length >= 2 && tenantStr.length < 200) {
+    patch.tenant = tenantStr;
+  }
 
   // year_built — only fill if NULL, range-validate
   const yb = parseInt(snapshot.year_built, 10);
@@ -1586,9 +1667,29 @@ async function promoteActivityEvent(intakeId, workspaceId, actorId, snapshot, ma
 
 export async function promoteIntakeToDomainListing(intakeId, snapshot, match, context = {}) {
   // Guard: must be a listing-grade document (OM, flyer, or marketing brochure)
-  const docType = snapshot?.document_type || null;
+  // Normalize first — extractor may emit 'offering_memorandum',
+  // 'offering memorandum', 'OFFERRING MEMORANDUM' (typo), etc. instead of
+  // canonical 'om' (Bug Z, 2026-04-27).
+  const rawDocType = snapshot?.document_type || null;
+  let   docType    = normalizeDocType(rawDocType);
+
+  // Fallback: when the extractor returned null/unknown but the snapshot
+  // looks like a listing (asking price + tenant + cap rate / SF / term),
+  // promote anyway and tag the doctype as 'om' inferred. This recovers
+  // intakes whose AI classification step under-classified.
+  let inferredFromSnapshot = false;
+  if (!LISTING_DOCUMENT_TYPES.has(docType) && snapshotLooksLikeListing(snapshot)) {
+    docType = 'om';
+    inferredFromSnapshot = true;
+  }
+
   if (!LISTING_DOCUMENT_TYPES.has(docType)) {
-    return { ok: false, skipped: 'not_a_listing_doc', document_type: docType };
+    return {
+      ok: false,
+      skipped: 'not_a_listing_doc',
+      document_type: rawDocType,
+      normalized_document_type: docType,
+    };
   }
 
   // Guard: must be a matched record with enough confidence
