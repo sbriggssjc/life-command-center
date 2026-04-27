@@ -1458,8 +1458,35 @@ async function handleIntakePromote(req, res) {
     return res.status(500).json({ error: 'Failed to create/link entity' });
   }
 
-  // 4. Run sidebar extraction pipeline (classify domain, propagate to DB)
-  const pipelineResult = await processSidebarExtraction(entityId, workspaceId, user.user_id);
+  // 3b. PATCH the entity's own metadata column so processSidebarExtraction
+  //     can read it. ensureEntityLink stores metadata on
+  //     external_identities, but the sidebar pipeline reads
+  //     entities.metadata. Without this, the pipeline sees empty metadata
+  //     and short-circuits with "No actionable sidebar data" (Bug Z
+  //     follow-up #4, 2026-04-27). Merge with any existing metadata so we
+  //     don't clobber data added by other sources.
+  try {
+    const existing = await opsQuery('GET',
+      `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}&select=metadata&limit=1`
+    );
+    const existingMetadata = existing.ok && existing.data?.[0]?.metadata
+      ? existing.data[0].metadata
+      : {};
+    const mergedMetadata = { ...existingMetadata, ...metadata };
+    await opsQuery('PATCH',
+      `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
+      { metadata: mergedMetadata, updated_at: new Date().toISOString() }
+    );
+  } catch (err) {
+    console.warn('[intake-promote] entity metadata patch failed (non-fatal):', err?.message);
+  }
+
+  // 4. Run sidebar extraction pipeline (classify domain, propagate to DB).
+  //    force:true ensures we re-process even if the entity has stale
+  //    _pipeline_processed_at from a prior aborted run.
+  const pipelineResult = await processSidebarExtraction(
+    entityId, workspaceId, user.user_id, { force: true }
+  );
 
   // 5. Record promotion result
   await opsQuery('POST', 'staged_intake_promotions', {
