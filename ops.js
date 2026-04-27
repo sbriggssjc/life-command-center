@@ -746,6 +746,12 @@ function inboxItemHTML(item, idx) {
     html += `<span style="color:#34d399;font-weight:600">⚙ Staged</span>`;
     html += `<span style="color:var(--text3)">intake ${esc(intakeShort)}…</span>`;
     html += `<button class="q-link" onclick="event.stopPropagation();(window.openIntakeFromInbox ? window.openIntakeFromInbox(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}')) : (location.hash='#intake/' + encodeURIComponent(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}'))))" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0">View match →</button>`;
+    // Re-promote button (Bug Z follow-up, 2026-04-27): re-runs the
+    // promotion step from the existing extraction snapshot. No new AI
+    // call, no new PDF parsing — just replays the propagation pipeline.
+    // Useful after a promoter bug fix to clear stalled review_required
+    // intakes without re-flagging the email in Outlook.
+    html += `<button class="q-link" title="Re-run promotion from existing extraction" onclick="event.stopPropagation();repromoteIntake(decodeURIComponent('${encodeURIComponent(bridgedIntakeId)}'), this)" style="background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;margin-left:4px">Re-promote ↻</button>`;
     html += `</div>`;
   }
 
@@ -845,6 +851,34 @@ async function dismissSingle(id) {
   if (res.ok) showToast('Dismissed', 'success');
   else showToast(res.error || 'Dismiss failed', 'error');
   renderInboxTriage();
+}
+
+// Re-run promotion for a staged-intake row using its existing extraction
+// snapshot. Calls /api/intake?_route=promote which pulls from
+// staged_intake_extractions + staged_intake_items.raw_payload, builds the
+// metadata, and re-runs the sidebar pipeline. Free in API tokens (no new
+// AI calls, no PDF re-parse). Used to clear stalled review_required
+// intakes after a promoter-side bug fix.
+async function repromoteIntake(intakeId, btn) {
+  if (!intakeId) return;
+  const origText = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'Re-promoting…'; }
+  try {
+    const res = await opsPost('/api/intake?_route=promote', { intake_id: intakeId });
+    if (res.ok && res.data?.propagated !== false) {
+      const dom = res.data?.domain || '?';
+      const pid = res.data?.domain_property_id || '?';
+      showToast(`Re-promoted (${dom} property ${pid})`, 'success');
+      renderInboxTriage();
+    } else {
+      const why = res.error || res.data?.pipeline_summary?.reason || 'Re-promote failed';
+      showToast(why, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = origText || 'Re-promote ↻'; }
+    }
+  } catch (err) {
+    showToast('Re-promote error: ' + (err?.message || err), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Re-promote ↻'; }
+  }
 }
 
 // ============================================================================
