@@ -1064,6 +1064,17 @@
 
   // CoStar UI elements that appear in tenant sections but are NOT tenant names
   const COSTAR_UI_REJECT = /^(name|source:.*|costar.*research|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed)$/i;
+  // OM-style table-of-contents section headers that CoStar sometimes renders
+  // adjacent to the Tenants list. Without this, repeating the issue from
+  // 2026-04-25 (Bug M) at the extension layer: "Loan", "Financials",
+  // "Changes" leak through as tenant names. Extending here mirrors the
+  // server-side OM_SECTION_RE in api/_handlers/sidebar-pipeline.js.
+  const OM_SECTION_REJECT = /^(loan|loans|financial|financials|changes|recent\s+changes|investment\s+highlights|property\s+(overview|highlights|summary|info|description)|location\s+overview|tenant\s+(overview|details?|info)|lease\s+abstract|rent\s+roll|operating\s+statement|comparable\s+sales|sales\s+comps|lease\s+comps|disclaimer|confidentiality|table\s+of\s+contents|appendix|exhibits?|executive\s+summary)\s*$/i;
+  // Compound CoStar metadata strings smashed onto one line, recognized by
+  // either the middle-dot delimiter OR the simultaneous presence of a
+  // colon-separated key and a /SF token (e.g.
+  // "Tenancy: Summary \u00b7 Owner Occupied: No \u00b7 Est. Rent: $14 - 17/SF (Retail)").
+  const COMPOUND_METADATA_REJECT = /(\u00b7|\u2022)|(:[^,]*\b(\d|\$)[^,]*\/sf\b)/i;
 
   function extractTenants(lines) {
     const tenants = [];
@@ -1133,8 +1144,10 @@
       // "Drive …", and CoStar-branded footers as if they were tenants.
       if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|sale\s+notes|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
 
-      // Skip CoStar UI elements
+      // Skip CoStar UI elements + OM section headers + compound metadata strings
       if (COSTAR_UI_REJECT.test(line)) continue;
+      if (OM_SECTION_REJECT.test(line)) continue;
+      if (COMPOUND_METADATA_REJECT.test(line)) continue;
 
       // Skip lines that are just dates (month/year) — these are column values, not names
       if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(line)) continue;
