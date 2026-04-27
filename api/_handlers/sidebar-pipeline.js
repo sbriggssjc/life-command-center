@@ -557,6 +557,11 @@ function classifyDomain(metadata, entityFields) {
     metadata.building_name,
     entityFields.description,
     entityFields.name,
+    // Also read entity.tenant column. The propagation step backfills it
+    // from the cleaned tenant value, so even if metadata.tenant_name is
+    // junky ("Show" / "Tenancy: Summary - ..."), entity.tenant has
+    // the real tenant. Round 76r 2026-04-27.
+    entityFields.tenant,
     metadata.asset_type,
     metadata.property_type,
     metadata.property_subtype,
@@ -635,6 +640,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
   // Build diagnostic snapshot
   const textParts = [
     metadata.tenant_name, metadata.primary_tenant, metadata.building_name,
+    entityFields.tenant,
     entityFields.description, entityFields.name, metadata.asset_type,
     metadata.property_type, metadata.property_subtype, metadata.occupancy_details,
     metadata.sale_notes_raw, metadata.tenants_raw, metadata.tenancy_block,
