@@ -17,8 +17,8 @@ $env:LCC_WORKSPACE  = 'a0000000-0000-0000-0000-000000000001'
 
 $ids = @(
   '2df833c4-83ae-436f-9287-e1088912a3a6',  # 250 Pettit Ave Bellmore NY (Fresenius multi-tenant)
-  'bb041bc0-e850-455b-8078-a6323a61e5b2',  # 24931 Kelly Rd Eastpointe MI (Nephrology Center)
-  '14ad93c9-765f-475f-9781-718e0212b788',  # 2701 Francis Lewis Blvd Flushing NY (US Renal Care)
+  '78020de5-02cb-4607-b46d-6233b0bf1f57',  # 200 E North Ave Villa Park IL (U.S. Renal Care)
+  '14ad93c9-765f-475f-9781-718e0212b788',  # 2701-2707 Francis Lewis Blvd Flushing NY (US Renal Care multi-tenant)
   'b9018b18-43c1-48ff-98cc-97b38102a21e'   # 671 HIOAKS RD Richmond VA (DaVita + Richmond Nephrology)
 )
 
@@ -42,6 +42,4 @@ foreach ($id in $ids) {
       $r.pipeline_summary | ConvertTo-Json -Compress
     }
   } catch {
-    Write-Host "ERROR $($_.Exception.Message)" -ForegroundColor Red
-  }
-}
+    Write-Host "ERROR $($_.Exception.Message)" -Foregroun
