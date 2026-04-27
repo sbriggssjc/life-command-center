@@ -1,0 +1,2 @@
+-- Round 76ab: applied via Supabase MCP on LCC Opps. Adds v_field_provenance_would_block view
+-- for Phase 5 strict-mode dry-run analysis. See pg_get_viewdef('public.v_field_provenance_would_block', true).

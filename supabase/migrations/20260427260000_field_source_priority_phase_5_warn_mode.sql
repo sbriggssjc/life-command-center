@@ -1,0 +1,3 @@
+-- Round 76aa: applied via Supabase MCP on LCC Opps. Flips 30 rules from
+-- record_only to warn for the OM-vs-CoStar trust gap (lease terms, property
+-- core fields, listing prices, contact info). 24 -> 54 rules in warn mode.

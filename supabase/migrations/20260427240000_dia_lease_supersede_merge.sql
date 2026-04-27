@@ -1,0 +1,3 @@
+-- Round 76z: applied via Supabase MCP. Modifies auto_supersede_expired_leases
+-- trigger so that before marking lease A superseded by lease B, copy A's
+-- non-null fields into B's nulls. See pg_get_functiondef('public.auto_supersede_expired_leases'::regproc).

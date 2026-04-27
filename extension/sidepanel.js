@@ -1314,9 +1314,25 @@ function renderIngestDiff(ctx, lccEntity) {
     { label: 'Owner',
       costar: (ctx.contacts||[]).find(c=>c.role==='owner')?.name,
       db: meta.contacts ? meta.contacts.find(c=>c.role==='owner')?.name : null },
-    { label: 'Sales in History',
-      costar: (ctx.sales_history||[]).length + ' records',
-      db: meta.sales_history ? meta.sales_history.length + ' records' : '0' },
+    (() => {
+      // Round 76ac (2026-04-27): save is upsert by recordation_date and
+      // never deletes — a smaller CoStar count doesn't reduce the DB.
+      // Show that explicitly so users don't fear losing the older sale.
+      const cstarN = (ctx.sales_history||[]).length;
+      const dbN    = meta.sales_history ? meta.sales_history.length : 0;
+      let costarStr = cstarN + ' records';
+      let hint = null;
+      if (cstarN < dbN) {
+        costarStr = cstarN + ' new (preserves ' + dbN + ')';
+        hint = 'Save is additive \u2014 existing sales are preserved';
+      } else if (cstarN > dbN) {
+        costarStr = cstarN + ' records (will add ' + (cstarN - dbN) + ')';
+      }
+      return { label: 'Sales in History',
+        costar: costarStr,
+        db: dbN + ' records',
+        hint };
+    })(),
   ];
 
   let html = '<div class="section-label">Comparison: CoStar vs LCC</div>';
