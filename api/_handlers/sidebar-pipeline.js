@@ -550,10 +550,23 @@ function contactSeedFields(contact, entityType) {
  * properties with "Medical Office" subtypes as government.
  * Returns 'dialysis', 'government', or null.
  */
+// Round 76t (2026-04-27): junk values the classifier should drop before
+// building searchText. Older extension versions captured 'Show' (CoStar
+// expand button) and compound metadata strings ('Tenancy: Summary - ...')
+// as tenant names, and they overwrite cleaner values on subsequent saves.
+const CLASSIFIER_TENANT_JUNK_RE = /^(show|hide|expand|collapse|view|see\s+(all|more|details)|loan|loans|financial|financials|changes|recent\s+changes|investment\s+highlights|table\s+of\s+contents|appendix|exhibits?|executive\s+summary|name|industry|sector|tenant|tenancy|owner\s+occupied|est\.?\s*rent|directory|stacking\s+plan|public\s+record|building|land|market|sources)\s*$/i;
+const CLASSIFIER_COMPOUND_RE = /(\u00b7|\u2022)|(:[^,\n]*\b(\d|\$)[^,\n]*\/(sf|fs|mg|ig|nnn|gross|net)\b)/i;
+function dropTenantJunk(val) {
+  if (!val) return val;
+  const s = String(val).trim();
+  if (CLASSIFIER_TENANT_JUNK_RE.test(s) || CLASSIFIER_COMPOUND_RE.test(s)) return null;
+  return val;
+}
+
 function classifyDomain(metadata, entityFields) {
   const textParts = [
-    metadata.tenant_name,
-    metadata.primary_tenant,
+    dropTenantJunk(metadata.tenant_name),
+    dropTenantJunk(metadata.primary_tenant),
     metadata.building_name,
     entityFields.description,
     entityFields.name,
@@ -561,7 +574,7 @@ function classifyDomain(metadata, entityFields) {
     // from the cleaned tenant value, so even if metadata.tenant_name is
     // junky ("Show" / "Tenancy: Summary - ..."), entity.tenant has
     // the real tenant. Round 76r 2026-04-27.
-    entityFields.tenant,
+    dropTenantJunk(entityFields.tenant),
     metadata.asset_type,
     metadata.property_type,
     metadata.property_subtype,
@@ -575,10 +588,13 @@ function classifyDomain(metadata, entityFields) {
     metadata.investment_highlights,
   ];
 
-  // Include tenant names from tenants[] array
+  // Include tenant names from tenants[] array (filtered through dropTenantJunk
+  // so a stale extension that captured 'Show' or 'Tenancy: Summary - ...' as
+  // an entry can't poison the classifier — Round 76t 2026-04-27).
   if (Array.isArray(metadata.tenants)) {
     for (const t of metadata.tenants) {
-      if (t.name) textParts.push(t.name);
+      const cleaned = dropTenantJunk(t.name);
+      if (cleaned) textParts.push(cleaned);
     }
   }
 

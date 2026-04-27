@@ -35,6 +35,7 @@ import { domainQuery } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
+import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -228,6 +229,15 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     ? Number(snapshot.cap_rate) / 100
     : null;
 
+  // Round 76u (2026-04-27): infer OM date from lease metadata when the OM
+  // doesn't have its own date. close_listing_on_sale uses listing_date <=
+  // sale_date as a guard; using today() instead of the inferred date
+  // accidentally protects OM listings from being closed by older sales.
+  const omEst = estimateOmCreatedDate(snapshot);
+  const listingDate = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+    ? omEst.om_created_estimate
+    : new Date().toISOString().slice(0, 10);
+
   return {
     property_id:        Number(match.property_id),
     listing_source:     'lcc_intake_om',
@@ -249,7 +259,7 @@ function buildGovListingRow(intakeId, snapshot, match, artifact) {
     broker_email:       snapshot.listing_broker_email || null,
     is_northmarq:       isNorthmarq,
     listing_status:     'active',
-    listing_date:       new Date().toISOString().slice(0, 10),
+    listing_date:       listingDate,
     first_seen_at:      new Date().toISOString(),
     last_seen_at:       new Date().toISOString(),
     // Link back to the Supabase Storage object that seeded this listing
@@ -269,6 +279,12 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
   const capRateDecimal = snapshot.cap_rate != null
     ? Number(snapshot.cap_rate) / 100
     : null;
+
+  // Round 76u (2026-04-27): infer OM date from lease metadata. Same as gov.
+  const omEst = estimateOmCreatedDate(snapshot);
+  const listingDate = (omEst.confidence !== 'unknown' && omEst.om_created_estimate)
+    ? omEst.om_created_estimate
+    : new Date().toISOString().slice(0, 10);
 
   // Bug G fix (2026-04-25): denormalize price_per_sf onto the listing row
   // so the Sales/Available table's Price/SF column populates without a
@@ -296,7 +312,7 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact) {
     current_cap_rate:   capRateDecimal,
     initial_cap_rate:   capRateDecimal,
     status:             'active',
-    listing_date:       new Date().toISOString().slice(0, 10),
+    listing_date:       listingDate,
     last_seen:          new Date().toISOString().slice(0, 10),
     is_active:          true,
     seller_name:        snapshot.seller_name || null,
