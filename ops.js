@@ -1012,8 +1012,9 @@ async function renderProvenanceConflictWidgets() {
     return;
   }
   const data = res.data || {};
-  const rows    = data.actionable || [];
-  const summary = data.summary_7d || [];
+  const rows     = data.actionable || [];
+  const summary  = data.summary_7d || [];
+  const unranked = data.unranked || [];
 
   let html = '<div class="widget"><div class="widget-title">Provenance Conflicts ' +
     '<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">' +
@@ -1087,6 +1088,42 @@ async function renderProvenanceConflictWidgets() {
   }
 
   html += '</div>';
+
+  // ── Phase 4: Unranked fields (schema-drift detector) ──────────────────
+  html += '<div class="widget"><div class="widget-title">Unranked Fields ' +
+    '<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">' +
+    'Field writes seen in the last 30 days that have no priority rule. Add one to govern future writes.</span></div>';
+
+  if (unranked.length === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">All field writes are governed by priority rules. No drift detected.</div>';
+  } else {
+    html += `<div style="margin-bottom:12px;font-size:13px;color:var(--text2)">${unranked.length} unranked (table.field, source) triple${unranked.length === 1 ? '' : 's'} seen in the last 30 days:</div>`;
+    for (const u of unranked.slice(0, 30)) {
+      const conflictBadge = u.distinct_sources_seen > 1 ? '<span class="q-badge pri-high">multi-source</span>' : '';
+      html += `<div class="q-item">
+        <div class="q-item-header">
+          <span class="q-item-title">${esc(u.target_table)}.${esc(u.field_name)}</span>
+          <div class="q-item-badges">
+            <span class="q-badge">${esc(u.source)}</span>
+            <span class="q-badge">${u.writes_30d} writes</span>
+            <span class="q-badge">${u.distinct_records} records</span>
+            ${conflictBadge}
+          </div>
+        </div>
+        <div class="q-item-meta">
+          <span><b>writes:</b> ${u.writes_succeeded || 0} ok / ${u.writes_skipped || 0} skipped / ${u.writes_conflicted || 0} conflicts</span>
+          <span><b>first seen:</b> ${freshnessHTML(u.first_seen)}</span>
+          <span><b>last seen:</b> ${freshnessHTML(u.last_seen)}</span>
+          <span style="color:var(--text2);font-style:italic">→ Add a priority rule via INSERT INTO field_source_priority</span>
+        </div>
+      </div>`;
+    }
+    if (unranked.length > 30) {
+      html += `<div class="q-item-meta" style="padding:8px 12px">Showing first 30 of ${unranked.length}.</div>`;
+    }
+  }
+  html += '</div>';
+
   host.innerHTML = html;
 }
 

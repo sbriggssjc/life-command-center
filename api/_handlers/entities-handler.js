@@ -188,14 +188,14 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       });
     }
 
-    // Phase 3 — surface field_provenance skips/conflicts where the rule is
-    // in warn/strict mode. Drives the LCC Data Quality UI's
-    // "Provenance conflicts" panel. Workspace-scoped via the recorded_by
-    // user's primary workspace; the view itself doesn't carry workspace_id
-    // because field_provenance is global to the OPS DB.
+    // Phase 3 + 4 — surface field_provenance skips/conflicts where the rule
+    // is in warn/strict mode AND any (target_table,field_name,source) triple
+    // that's been writing to field_provenance but isn't in
+    // field_source_priority (schema drift). Drives the LCC Data Quality
+    // UI's "Provenance conflicts" + "Unranked fields" panels.
     if (action === 'quality_provenance') {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
-      const [actionable, summary] = await Promise.all([
+      const [actionable, summary, unranked] = await Promise.all([
         opsQuery('GET',
           `v_field_provenance_actionable?` +
           `select=provenance_id,recorded_at,target_database,target_table,record_pk_value,` +
@@ -212,6 +212,15 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
           `select=target_table,field_name,enforce_mode,decision` +
           `&recorded_at=gte.${encodeURIComponent(new Date(Date.now() - 7 * 86400000).toISOString())}` +
           `&limit=5000`
+        ),
+        // Phase 4 — schema-drift detector. Unranked field writes from the
+        // last 30 days (any source).
+        opsQuery('GET',
+          `v_field_provenance_unranked?` +
+          `select=target_table,field_name,source,writes_30d,writes_succeeded,` +
+          `writes_skipped,writes_conflicted,first_seen,last_seen,distinct_records,` +
+          `distinct_sources_seen` +
+          `&order=writes_30d.desc&limit=100`
         )
       ]);
 
@@ -231,6 +240,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(200).json({
         actionable: actionable.data || [],
         summary_7d: summaryRows,
+        unranked:   unranked.data || [],
       });
     }
 
