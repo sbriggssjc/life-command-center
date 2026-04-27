@@ -25,7 +25,10 @@
 //   SAFE=1 node scripts/smoke-test-promote.mjs
 // ============================================================================
 
-const TEST_INTAKE_ID = '98cd52ce-c64f-4c82-934c-c41ba032577a'; // 2025 Briggs CRE intake
+// Smoke-test target: a real OM with full listing-grade fields and a known
+// dia property bridge. 209 Highland Ave / DaVita Waterbury / $2.79M / 6.65% cap →
+// LCC entity d99d8080... → dia_db property_id 24526.
+const TEST_INTAKE_ID = 'aa2403e9-4d06-4a7f-ac1c-6560777a0143';
 
 // ── Config from env ─────────────────────────────────────────────────────────
 const API_KEY     = process.env.LCC_API_KEY;
@@ -124,6 +127,6 @@ if (fail > 0) {
   process.exit(1);
 } else {
   console.log('\n' + GREEN('✓ Deploy is healthy.') + ' Safe to run:');
-  console.log('  set -a && source .env.local && set +a && node scripts/recover-stalled-intakes.mjs');
+  console.log('  .\\\\scripts\\\\Run-IntakeRecovery.ps1 -Mode Recover');
   process.exit(0);
 }

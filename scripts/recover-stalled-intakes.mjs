@@ -223,13 +223,3 @@ if (failures.length) {
   failures.slice(0, 10).forEach(f => console.log('  ' + JSON.stringify(f)));
 }
 process.exit(fail === 0 ? 0 : 1);
-(f => console.log('  ' + JSON.stringify(f)));
-}
-process.exit(fail === 0 ? 0 : 1);
-ailed:   ${fail}`);
-console.log(`Skipped:  ${skipped}`);
-if (failures.length) {
-  console.log('\nFirst 10 failures:');
-  failures.slice(0, 10).forEach(f => console.log('  ' + JSON.stringify(f)));
-}
-process.exit(fail === 0 ? 0 : 1);
