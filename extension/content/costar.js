@@ -115,8 +115,13 @@
     // ── Extract "Documents" section links (deeds, OMs, brochures) ─────
     data.document_links = extractDocumentLinks();
 
-    // Derive tenant_name from tenants array if not already captured
-    if (!data.tenant_name && tenants.length > 0 && tenants[0].name) {
+    // Derive tenant_name from the tenants array. Prefer it over any
+    // standalone-label-finder result, since the array goes through the
+    // full reject filter chain (OM section headers, NAICS sectors,
+    // compound metadata, low-SF plausibility guard) — Bug 76s 2026-04-27.
+    // Without this, a 'Tenant\nShow' label/value pair earlier in the page
+    // sets tenant_name='Show' and the cleaner array value never wins.
+    if (tenants.length > 0 && tenants[0].name) {
       data.tenant_name = tenants[0].name;
     }
 
@@ -842,11 +847,20 @@
       // "Tenancy: Single · Owner Occupied: No · Est. Rent: $6 - 7/SF (Industrial)";
       // skip past up to 2 summary-bar / SF-only lines to find the real tenant name.
       if (!data.tenant_name && /^tenants?$/i.test(line)) {
+        // Bug 76s (2026-04-27): this path also needs the Round 76q rejects
+        // (OM section headers, NAICS sectors, compound metadata, plain
+        // 'show'/'hide' button text) — without them, when a Tenants table
+        // is followed by 'Show' (CoStar's expand button), tenant_name gets
+        // set to 'Show'. Then line ~120's '!data.tenant_name'-gated
+        // tenants[0].name fallback never fires because tenant_name is
+        // already set. Result: classifier sees 'show' and returns null.
         const TENANT_SUMMARY_BAR = /^(tenancy[:\s]|single\s+tenant|multi.tenant|owner\s+occupied|est\.?\s*rent|net\s+lease|gross\s+lease|\$?\d)/i;
         const SF_ONLY_LINE = /^[\d,]+\s*sf\s*$/i;
+        const BUTTON_TEXT_REJECT = /^(show|hide|expand|collapse|view|see\s+(all|more|details))$/i;
+        const COMPOUND_OR_NAICS_REJECT = /(\u00b7|\u2022)|(:[^,\n]*\b(\d|\$)[^,\n]*\/(sf|fs|mg|ig|nnn|gross|net)\b)|^(health\s+care(\s+and\s+social\s+assistance)?|finance\s+and\s+insurance|retail\s+trade|wholesale\s+trade|public\s+administration)\s*$/i;
         let cand = next;
         let k = i + 1;
-        for (let s = 0; s < 3 && cand && (TENANT_SUMMARY_BAR.test(cand) || SF_ONLY_LINE.test(cand)); s++) {
+        for (let s = 0; s < 3 && cand && (TENANT_SUMMARY_BAR.test(cand) || SF_ONLY_LINE.test(cand) || BUTTON_TEXT_REJECT.test(cand) || COMPOUND_OR_NAICS_REJECT.test(cand)); s++) {
           k++;
           cand = lines[k];
         }
@@ -856,6 +870,8 @@
             && !TENANT_REJECT.test(cand)
             && !TENANT_SUMMARY_BAR.test(cand)
             && !SF_ONLY_LINE.test(cand)
+            && !BUTTON_TEXT_REJECT.test(cand)
+            && !COMPOUND_OR_NAICS_REJECT.test(cand)
             && !/^(at\s+sale|detail|directory|stacking)/i.test(cand)) {
           data.tenant_name = cand;
         }
@@ -2221,18 +2237,4 @@
       fontSize: '12px',
       fontWeight: '600',
       color: '#1F3864',
-      background: '#EBF0FA',
-      border: '1px solid #B8C9E8',
-      borderRadius: '4px',
-      cursor: 'pointer',
-      verticalAlign: 'middle',
-    });
-
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' });
-    });
-
-    headingEl.parentElement?.appendChild(btn);
-  }
-})();
+      backgro

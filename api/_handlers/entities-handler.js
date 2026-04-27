@@ -543,18 +543,36 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     const pickedFields = pickEntityFields(entity_type, fields);
     if (entity_type === 'asset' && pickedFields.address && pickedFields.city) {
       const normAddr = normalizeAddress(pickedFields.address);
+      const rawAddr  = pickedFields.address.trim();
       const city = pickedFields.city.trim();
       const state = pickedFields.state;
-      // Prefer entities with a known domain, then most recently updated
+      // Round 76s (2026-04-27): ilike on state matches 'SC' to stored
+      // 'South Carolina' (and vice versa) — eq missed across format split.
+      const stateClause = state ? `&state=ilike.${encodeURIComponent(state)}` : '';
       const dedupPath = `entities?entity_type=eq.asset` +
         `&address=ilike.${encodeURIComponent(normAddr)}` +
         `&city=ilike.${encodeURIComponent(city)}` +
-        (state ? `&state=eq.${encodeURIComponent(state)}` : '') +
+        stateClause +
         `&workspace_id=eq.${workspaceId}` +
         `&select=id,domain,metadata` +
         `&order=domain.nullslast,updated_at.desc` +
         `&limit=5`;
-      const dupCheck = await opsQuery('GET', dedupPath);
+      let dupCheck = await opsQuery('GET', dedupPath);
+      // Round 76s: Fallback when normAddr ilike misses — try RAW address.
+      // Same Round 76m bug pattern: ilike-without-wildcards is exact match,
+      // so '3919 mayfair st' lookup misses '3919 Mayfair Street' stored.
+      if ((!dupCheck.ok || !dupCheck.data?.length) && rawAddr && rawAddr !== normAddr) {
+        const rawDedupPath = `entities?entity_type=eq.asset` +
+          `&address=ilike.${encodeURIComponent(rawAddr)}` +
+          `&city=ilike.${encodeURIComponent(city)}` +
+          stateClause +
+          `&workspace_id=eq.${workspaceId}` +
+          `&select=id,domain,metadata` +
+          `&order=domain.nullslast,updated_at.desc` +
+          `&limit=5`;
+        const rawDupCheck = await opsQuery('GET', rawDedupPath);
+        if (rawDupCheck.ok && rawDupCheck.data?.length) dupCheck = rawDupCheck;
+      }
       if (dupCheck.ok && dupCheck.data?.length) {
         // Among matches, prefer the one with domain + domain_property_id set
         const candidates = dupCheck.data;
