@@ -224,7 +224,14 @@ function parseDate(dateStr) {
  * "$3,390,952" → 3390952,  "Not Disclosed" → null
  */
 function parseCurrency(val) {
-  if (!val || typeof val !== 'string') return null;
+  if (val == null || val === '') return null;
+  // Accept numbers directly (OM extraction stores asking_price as a number;
+  // sidebar pipeline used to only handle CoStar's stringified "$2,792,962"
+  // form, so numeric inputs from OM intake fell through to null and the
+  // upsertDialysisListings early-exit guard silently dropped the listing
+  // — Bug Z follow-up #8, 2026-04-27).
+  if (typeof val === 'number') return Number.isFinite(val) ? val : null;
+  if (typeof val !== 'string') return null;
   const cleaned = val.replace(/[$,\s]/g, '');
   const num = parseFloat(cleaned);
   return isNaN(num) ? null : num;
