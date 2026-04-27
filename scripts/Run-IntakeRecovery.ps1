@@ -5,23 +5,26 @@
 # sets them as process-level env vars, then runs the requested mode.
 #
 # Usage:
-#   .\scripts\Run-IntakeRecovery.ps1 -Mode SmokeSafe   # read-only smoke test
-#   .\scripts\Run-IntakeRecovery.ps1 -Mode Smoke       # smoke test (writes 1)
-#   .\scripts\Run-IntakeRecovery.ps1 -Mode Recover     # bulk recovery (writes ~230)
+#   .\scripts\Run-IntakeRecovery.ps1 -Mode SmokeSafe         # read-only smoke test
+#   .\scripts\Run-IntakeRecovery.ps1 -Mode Smoke             # smoke test (writes 1)
+#   .\scripts\Run-IntakeRecovery.ps1 -Mode Recover           # bulk recovery (writes ~230)
+#   .\scripts\Run-IntakeRecovery.ps1 -Mode AuditCorrectness  # cross-check 24h promotions
 #
 # Optional flags:
-#   -Limit 5            # only process first N intakes (Recover mode)
-#   -ThrottleMs 500     # ms between requests (Recover mode)
-#   -EnvFile path       # use a different env file (default: .env.local)
+#   -Limit 5             # only process first N intakes (Recover mode)
+#   -ThrottleMs 500      # ms between requests (Recover mode)
+#   -LookbackHours 48    # how far back to audit (AuditCorrectness mode, default 24)
+#   -EnvFile path        # use a different env file (default: .env.local)
 # ============================================================================
 
 [CmdletBinding()]
 param(
   [Parameter(Mandatory=$true)]
-  [ValidateSet('SmokeSafe','Smoke','Recover')]
+  [ValidateSet('SmokeSafe','Smoke','Recover','AuditCorrectness')]
   [string]$Mode,
   [int]$Limit = 0,
   [int]$ThrottleMs = 250,
+  [int]$LookbackHours = 24,
   [string]$EnvFile = '.env.local'
 )
 
@@ -72,27 +75,4 @@ Write-Host ""
 switch ($Mode) {
   'SmokeSafe' {
     Remove-Item Env:LIMIT -ErrorAction SilentlyContinue
-    Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue
-    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
-    $env:SAFE = '1'
-    node scripts/smoke-test-promote.mjs
-  }
-  'Smoke' {
-    Remove-Item Env:LIMIT -ErrorAction SilentlyContinue
-    Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue
-    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
-    Remove-Item Env:SAFE -ErrorAction SilentlyContinue
-    node scripts/smoke-test-promote.mjs
-  }
-  'Recover' {
-    # Always reset these so a previous invocation's values don't leak in
-    # (PowerShell process env vars persist across `node` calls in the same
-    # session). Set them only when the user explicitly passes the flag.
-    if ($Limit -gt 0)      { $env:LIMIT       = "$Limit" }       else { Remove-Item Env:LIMIT       -ErrorAction SilentlyContinue }
-    if ($ThrottleMs -gt 0) { $env:THROTTLE_MS = "$ThrottleMs" }  else { Remove-Item Env:THROTTLE_MS -ErrorAction SilentlyContinue }
-    Remove-Item Env:DRY_RUN -ErrorAction SilentlyContinue
-    node scripts/recover-stalled-intakes.mjs
-  }
-}
-
-exit $LASTEXITCODE
+    Remove-Item Env:THROTTLE_MS -ErrorAction Silent
