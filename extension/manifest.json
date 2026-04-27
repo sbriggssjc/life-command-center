@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LCC Assistant",
   "version": "1.0.0",
-  "description": "Life Command Center context panel — Team Briggs CRE intelligence",
+  "description": "Life Command Center context panel \u2014 Team Briggs CRE intelligence",
   "permissions": [
     "storage",
     "activeTab",
@@ -21,7 +21,9 @@
     "https://*.salesforce.com/*",
     "https://*.crexi.com/*",
     "https://loopnet.com/*",
-    "https://*.loopnet.com/*"
+    "https://*.loopnet.com/*",
+    "https://app.rcanalytics.com/*",
+    "https://app2.rcanalytics.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -36,18 +38,29 @@
         "https://outlook.office.com/*",
         "https://outlook.office365.com/*"
       ],
-      "js": ["content/outlook.js"],
+      "js": [
+        "content/outlook.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://*.costar.com/*"],
-      "js": ["content/_sale-merge.js", "content/costar.js"],
+      "matches": [
+        "https://*.costar.com/*"
+      ],
+      "js": [
+        "content/_sale-merge.js",
+        "content/costar.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["https://*.salesforce.com/*"],
-      "js": ["content/salesforce.js"],
+      "matches": [
+        "https://*.salesforce.com/*"
+      ],
+      "js": [
+        "content/salesforce.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -55,12 +68,28 @@
         "https://loopnet.com/*",
         "https://*.loopnet.com/*"
       ],
-      "js": ["content/loopnet.js"],
+      "js": [
+        "content/loopnet.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://*.crexi.com/*"],
-      "js": ["content/crexi.js"],
+      "matches": [
+        "https://*.crexi.com/*"
+      ],
+      "js": [
+        "content/crexi.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://app.rcanalytics.com/*",
+        "https://app2.rcanalytics.com/*"
+      ],
+      "js": [
+        "content/rca.js"
+      ],
       "run_at": "document_idle"
     }
   ],
