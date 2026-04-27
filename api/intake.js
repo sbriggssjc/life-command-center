@@ -1236,7 +1236,12 @@ async function handleIntakeQueue(req, res) {
   if (singleIntakeId) {
     path += `&intake_id=eq.${encodeURIComponent(singleIntakeId)}`;
   } else {
-    path += `&status=in.(extracted,matched,review_needed)`;
+    // Status enum drifted at some point: the old code filtered for
+    // 'extracted,matched,review_needed' (none of which exist anymore).
+    // Actual statuses are review_required / queued / failed / finalized /
+    // discarded. Show items still needing attention; exclude finalized +
+    // discarded (Bug Z follow-up #3, 2026-04-27).
+    path += `&status=in.(review_required,queued,failed)`;
   }
   // Bug Z follow-up (2026-04-27): subject/sender don't exist as columns —
   // they live inside raw_payload.seed_data. Querying them caused PostgREST
