@@ -155,7 +155,11 @@ const STALLED_INTAKE_IDS = [
 
 // ── Config from env ─────────────────────────────────────────────────────────
 const API_KEY     = process.env.LCC_API_KEY;
-const BASE_URL    = (process.env.LCC_BASE_URL || '').replace(/\/+$/, '');
+let   BASE_URL    = (process.env.LCC_BASE_URL || '').replace(/\/+$/, '');
+if (BASE_URL && !/^https?:\/\//.test(BASE_URL)) BASE_URL = 'https://' + BASE_URL;
+const WORKSPACE_ID = process.env.LCC_WORKSPACE_ID
+                   || process.env.LCC_DEFAULT_WORKSPACE_ID
+                   || 'a0000000-0000-0000-0000-000000000001'; // Briggs CRE
 const DRY_RUN     = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
 const THROTTLE_MS = Number(process.env.THROTTLE_MS || 250);
 const LIMIT       = Number(process.env.LIMIT || 0);
@@ -182,8 +186,9 @@ for (let i = 0; i < ids.length; i++) {
     const res = await fetch(`${BASE_URL}/api/intake?_route=promote`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'X-LCC-Key':    API_KEY,
+        'Content-Type':    'application/json',
+        'X-LCC-Key':       API_KEY,
+        'X-LCC-Workspace': WORKSPACE_ID,
       },
       body: JSON.stringify({ intake_id: id }),
     });
@@ -212,6 +217,16 @@ for (let i = 0; i < ids.length; i++) {
 console.log('\n─── Summary ───');
 console.log(`Promoted: ${ok}`);
 console.log(`Failed:   ${fail}`);
+console.log(`Skipped:  ${skipped}`);
+if (failures.length) {
+  console.log('\nFirst 10 failures:');
+  failures.slice(0, 10).forEach(f => console.log('  ' + JSON.stringify(f)));
+}
+process.exit(fail === 0 ? 0 : 1);
+(f => console.log('  ' + JSON.stringify(f)));
+}
+process.exit(fail === 0 ? 0 : 1);
+ailed:   ${fail}`);
 console.log(`Skipped:  ${skipped}`);
 if (failures.length) {
   console.log('\nFirst 10 failures:');

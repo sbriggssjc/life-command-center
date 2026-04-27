@@ -1238,7 +1238,10 @@ async function handleIntakeQueue(req, res) {
   } else {
     path += `&status=in.(extracted,matched,review_needed)`;
   }
-  path += `&select=intake_id,status,raw_payload,source_email_subject,source_email_sender,created_at,`
+  // Bug Z follow-up (2026-04-27): subject/sender don't exist as columns —
+  // they live inside raw_payload.seed_data. Querying them caused PostgREST
+  // to 400 and the caller saw "Failed to fetch intake queue".
+  path += `&select=intake_id,status,raw_payload,created_at,`
     + `staged_intake_extractions(extraction_snapshot),`
     + `staged_intake_matches(match_result,confidence,matched_property_id,matched_domain,property_id,domain,decision,reason)`
     + `&order=created_at.desc&limit=${singleIntakeId ? 1 : limit}`;
@@ -1260,8 +1263,14 @@ async function handleIntakeQueue(req, res) {
     return {
       intake_id: row.intake_id,
       status: row.status,
-      source_email_subject: row.source_email_subject || row.raw_payload?.subject || '(No subject)',
-      source_email_sender: row.source_email_sender || row.raw_payload?.sender?.email || row.raw_payload?.from || 'Unknown',
+      source_email_subject: row.raw_payload?.seed_data?.subject
+                          || row.raw_payload?.subject
+                          || row.raw_payload?.file_name
+                          || '(No subject)',
+      source_email_sender:  row.raw_payload?.seed_data?.sender
+                          || row.raw_payload?.sender?.email
+                          || row.raw_payload?.from
+                          || 'Unknown',
       created_at: row.created_at,
       document_type: extraction?.document_type || 'unknown',
       address: extraction?.address || null,
@@ -1316,16 +1325,29 @@ async function handleIntakePromote(req, res) {
   const { intake_id, property_id } = req.body || {};
   if (!intake_id) return res.status(400).json({ error: 'intake_id required' });
 
-  // 1. Fetch the staged item + extraction
+  // 1. Fetch the staged item + extraction. Note: subject/sender live inside
+  // raw_payload (under seed_data.subject / seed_data.sender) — they're NOT
+  // their own columns. The earlier code referenced source_email_subject /
+  // source_email_sender which don't exist; the query 400'd and the caller
+  // got back a misleading 404 "Intake item not found" (Bug Z follow-up,
+  // 2026-04-27).
   const itemResult = await opsQuery('GET',
     `staged_intake_items?intake_id=eq.${encodeURIComponent(intake_id)}`
     + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
-    + `&select=intake_id,status,raw_payload,source_email_subject,source_email_sender`
+    + `&select=intake_id,status,raw_payload,source_type`
   );
   if (!itemResult.ok || !itemResult.data?.length) {
-    return res.status(404).json({ error: 'Intake item not found' });
+    return res.status(404).json({ error: 'Intake item not found', detail: itemResult.data });
   }
   const item = itemResult.data[0];
+  // Pull the email subject/sender out of raw_payload for downstream use
+  const itemSubject = item.raw_payload?.seed_data?.subject
+                   || item.raw_payload?.subject
+                   || item.raw_payload?.file_name
+                   || null;
+  const itemSender  = item.raw_payload?.seed_data?.sender
+                   || item.raw_payload?.sender
+                   || null;
 
   const extResult = await opsQuery('GET',
     `staged_intake_extractions?intake_id=eq.${encodeURIComponent(intake_id)}&select=extraction_snapshot&limit=1`
@@ -1371,7 +1393,7 @@ async function handleIntakePromote(req, res) {
     contacts: [],
     _intake_promoted: true,
     _intake_id: intake_id,
-    _intake_source: item.source_email_subject || 'email-intake',
+    _intake_source: itemSubject || 'email-intake',
   };
 
   // Build contacts array from extraction for sidebar pipeline
@@ -1393,7 +1415,7 @@ async function handleIntakePromote(req, res) {
   // 3. Create or link entity
   const entityName = extraction.address
     ? `${extraction.address}${extraction.city ? ', ' + extraction.city : ''}${extraction.state ? ', ' + extraction.state : ''}`
-    : item.source_email_subject || 'Intake Property';
+    : itemSubject || 'Intake Property';
 
   const linkResult = await ensureEntityLink({
     workspaceId,
