@@ -42,4 +42,6 @@ foreach ($id in $ids) {
       $r.pipeline_summary | ConvertTo-Json -Compress
     }
   } catch {
-    Write-Host "ERROR $($_.Exception.Message)" -Foregroun
+    Write-Host "ERROR $($_.Exception.Message)" -ForegroundColor Red
+  }
+}
