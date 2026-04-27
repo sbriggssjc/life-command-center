@@ -17,6 +17,31 @@
 | 8 | 76h   | When `match_domain='lcc'`, the matcher's `match_property_id` is an LCC entity UUID (not a numeric dia/gov property_id). The address-lookup path skipped these because it expected a numeric id. | Unwrap LCC entity UUIDs via `external_identities` to find the underlying dia/gov property_id, then resolve the address from there. |
 | 9 | 76i   | Sidebar's `upsertDomainProperty` reads `entity.address/city/state` columns when looking up the dia property, not `metadata.address`. Multi-tenant medical OMs with JSON-array `tenant_name` had clean addresses but those weren't promoted to the entity columns. | After ensureEntityLink, PATCH `entity.address/city/state` from the metadata along with `entity.domain`. |
 | 10 | 76j  | `parseCurrency` only accepted strings (CoStar's `"$2,792,962"` form). OM extraction stores `asking_price` as a number. `parseCurrency(2792962)` → `null` → `upsertDialysisListings` early-exit guard fired → **listings silently not created** even when everything else worked. | Make `parseCurrency` tolerant of numbers. |
+| 11 | 76k  | Audit follow-up: `parseDate(2030)` interprets number as ms-since-epoch and returns "1970-01-01T00:00:02.030Z". AI prompt says strings only, but a year-only leak would silently write 1970 dates. | Type-guard `parseDate` against numeric inputs. |
+
+## Sibling-helper audit (Round 76 follow-up, 2026-04-27)
+
+Triggered by Bug #10 (parseCurrency). Audited every `parse*` helper in
+`api/_handlers/sidebar-pipeline.js` against AI-extracted (numeric) input.
+
+| Helper | Number-tolerant? | Source of safety |
+|---|---|---|
+| `parseCurrency` | yes | Bug #10 fix — explicit `typeof val === 'number'` guard. |
+| `parseSF` | yes | Pre-existing `if (typeof val === 'number') return val`. |
+| `parsePercent` | yes | Pre-existing `if (typeof val === 'number') return val`. |
+| `parseCapRateDecimal` | yes | Delegates to `parsePercent`. |
+| `parseAcres` | yes | Pre-existing `if (typeof val === 'number') return val`. |
+| `parseLotSF` | yes | Falls through to `parseSF` for non-AC inputs. |
+| `parseParkingRatio` | yes | `String(num).match(/[\d.]+/)` finds digits. |
+| `parseIntSafe` | yes | `parseInt(String(2019), 10)` works. |
+| `parseYearSafe` | yes | Same as `parseIntSafe` plus range guard. |
+| `parseCoord` | yes | Explicit `typeof val === 'number'` branch. |
+| `parseDate` | **yes** (after Bug #11 fix) | Was silently coercing numbers via `new Date(num)`. |
+
+All helper callers in `sidebar-pipeline.js` are co-located, so the helper-level
+fix covers every consumer. `intake-promoter.js` doesn't use these helpers — it
+uses direct `Number(snapshot.foo)` conversions which already accept both
+strings and numbers.
 
 ## What this surfaced about the architecture
 

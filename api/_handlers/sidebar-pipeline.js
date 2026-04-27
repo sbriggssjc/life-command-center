@@ -215,6 +215,14 @@ const LENDER_PATTERN = /\b(bank|bancorp|bankcentre|bancshares|credit\s*union|mor
  */
 function parseDate(dateStr) {
   if (!dateStr) return null;
+  // Bug Z follow-up #9, 2026-04-27 — guard against numeric inputs.
+  // `new Date(2030)` returns "1970-01-01T00:00:02.030Z" (interprets the
+  // number as ms-since-epoch), which would silently write a 1970 date to
+  // date columns if AI extraction ever returned a year-only field as a
+  // number. The AI prompt does say "For dates, return YYYY-MM-DD", but
+  // numbers slip through the prompt occasionally — defensive type guard.
+  if (typeof dateStr === 'number') return null;
+  if (typeof dateStr !== 'string' && !(dateStr instanceof Date)) return null;
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
@@ -6085,6 +6093,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
 
 /**
  * Check if an entity's metadata has sidebar extraction data that needs processing.
+ * Used by entities-handler.js to gate the pipeline on inserts/updates.
  */
 export function hasSidebarData(metadata) {
   if (!metadata) return false;
