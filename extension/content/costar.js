@@ -1074,7 +1074,22 @@
   // either the middle-dot delimiter OR the simultaneous presence of a
   // colon-separated key and a /SF token (e.g.
   // "Tenancy: Summary \u00b7 Owner Occupied: No \u00b7 Est. Rent: $14 - 17/SF (Retail)").
-  const COMPOUND_METADATA_REJECT = /(\u00b7|\u2022)|(:[^,]*\b(\d|\$)[^,]*\/sf\b)/i;
+  // Broadened 2026-04-27 (Round 76q): also match /FS /MG /IG /NNN lease-type
+  // suffixes ('Est. Rent: $22 - 27/FS (Office)') plus a more liberal compound
+  // detector — lines containing TWO or more 'Key: Value' pairs separated by
+  // ANY delimiter ('Tenancy: Summary - Owner Occupied: No - Est. Rent: ...').
+  const COMPOUND_METADATA_REJECT = /(\u00b7|\u2022)|(:[^,\n]*\b(\d|\$)[^,\n]*\/(sf|fs|mg|ig|nnn|gross|net)\b)|((?:[a-z][a-z\s]*:[^,:\n]+){2,})/i;
+  // NAICS sector classifications that CoStar surfaces near the tenant list.
+  // Mirrors server-side NAICS_SECTOR_RE in api/_handlers/sidebar-pipeline.js.
+  // Without this, 'Health Care and Social Assistance' (the NAICS sector for
+  // dialysis operators) leaks through as a tenant name with an absurd 15 SF
+  // value attached — observed 2026-04-27 from a CoStar Tenants horizontal
+  // table layout.
+  const NAICS_SECTOR_REJECT = /^(agriculture|mining|utilities|construction|manufacturing|wholesale\s+trade|retail\s+trade|transportation\s+and\s+warehousing|information|finance\s+and\s+insurance|real\s+estate(\s+and\s+rental(\s+and\s+leasing)?)?|professional(,?\s+scientific(,?\s+and\s+technical\s+services)?)?|management\s+of\s+companies|administrative(\s+and\s+support)?|educational\s+services|health\s+care(\s+and\s+social\s+assistance)?|arts(,?\s+entertainment(,?\s+and\s+recreation)?)?|accommodation(\s+and\s+food\s+services)?|other\s+services|public\s+administration)\s*$/i;
+  // Building-size sanity guard: any tenant entry with leased SF below this
+  // threshold is almost certainly a NAICS-percentage or footer-stat artifact,
+  // not a real tenant. Real commercial tenants don't lease 15 SF.
+  const MIN_PLAUSIBLE_TENANT_SF = 100;
 
   function extractTenants(lines) {
     const tenants = [];
@@ -1144,10 +1159,11 @@
       // "Drive …", and CoStar-branded footers as if they were tenants.
       if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|sale\s+notes|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
 
-      // Skip CoStar UI elements + OM section headers + compound metadata strings
+      // Skip CoStar UI elements + OM section headers + compound metadata strings + NAICS sectors
       if (COSTAR_UI_REJECT.test(line)) continue;
       if (OM_SECTION_REJECT.test(line)) continue;
       if (COMPOUND_METADATA_REJECT.test(line)) continue;
+      if (NAICS_SECTOR_REJECT.test(line)) continue;
 
       // Skip lines that are just dates (month/year) — these are column values, not names
       if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(line)) continue;
@@ -1192,18 +1208,37 @@
           !TENANT_SECTION_REJECT.test(line) &&
           !TENANT_STREET_JUNK.test(line) &&
           !TENANT_JUNK_PATTERN.test(line)) {
-        // Push previous tenant
-        if (current && current.name) {
-          if (!tenants.some((t) => t.name === current.name)) tenants.push(current);
-        }
+        // Push previous tenant via the plausibility-checked helper.
+        pushTenantIfPlausible(current, tenants);
         current = { name: line };
         continue;
       }
     }
 
-    if (current && current.name) {
-      if (!tenants.some((t) => t.name === current.name)) tenants.push(current);
+    pushTenantIfPlausible(current, tenants);
+  }
+
+  // Plausibility-checked tenant insert. Drops dupes by name. Drops tenants
+  // whose attached SF is < MIN_PLAUSIBLE_TENANT_SF (Round 76q) — those are
+  // almost always NAICS percentages or other CoStar UI artifacts that the
+  // upstream regex filters didn't catch.
+  function pushTenantIfPlausible(t, list) {
+    if (!t || !t.name) return;
+    if (list.some((existing) => existing.name === t.name)) return;
+    if (t.sf) {
+      const sfNum = parseInt(String(t.sf).replace(/[^\d]/g, ''), 10);
+      if (Number.isFinite(sfNum) && sfNum > 0 && sfNum < MIN_PLAUSIBLE_TENANT_SF) {
+        // Suppress noisy log spam — only log first few drops per session
+        if (typeof window !== 'undefined') {
+          window.__lcc_tenant_drops = (window.__lcc_tenant_drops || 0) + 1;
+          if (window.__lcc_tenant_drops < 5) {
+            console.log('[lcc-extension] dropped tenant with implausible SF:', t.name, t.sf);
+          }
+        }
+        return;
+      }
     }
+    list.push(t);
   }
 
   // ── Contact extraction ────────────────────────────────────────────────
