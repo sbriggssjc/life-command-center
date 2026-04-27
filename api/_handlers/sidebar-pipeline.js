@@ -1768,18 +1768,49 @@ async function upsertDomainProperty(domain, entity, metadata) {
   const address = entity.address || metadata.address;
   if (!address) return null;
 
+  // Round 76y (2026-04-27): trust the matcher's authoritative property_id
+  // when present. handleIntakePromote stamps metadata.matcher_property_id
+  // after intake-matcher resolves a numeric dia/gov property_id with
+  // confidence. Without this trust path, upsertDomainProperty re-derives
+  // the property via an address ilike — and the lookup can MISS the
+  // already-resolved property when (a) the address format drifted between
+  // matcher time and promote time, (b) ilike fails because of state-format
+  // split (SC vs South Carolina), or (c) the CoStar sidebar later
+  // overwrote entity.address with a slightly different spelling. Confirmed
+  // root cause for property 37565 / Mayfair St duplicate: all three
+  // promote runs of intake 73046be2 had matcher_pid=35423 but only the
+  // first honored it. The 2nd and 3rd promotes' address ilike missed and
+  // they CREATED 37565 + reused 37565 instead of finding 35423.
+  // Strategy: short-circuit the lookup chain by pre-populating `lookup`
+  // with the matcher's pid. The existing UPDATE flow further down then
+  // applies snapshot fields to that property normally.
+  const sizeCol = domain === 'government' ? 'rba' : 'building_size';
+  const matcherPid = Number(metadata.matcher_property_id);
+  let lookup;
+  if (Number.isFinite(matcherPid) && matcherPid > 0) {
+    const trustLookup = await domainQuery(domain, 'GET',
+      `properties?property_id=eq.${matcherPid}&select=property_id,${sizeCol}&limit=1`);
+    if (trustLookup.ok && trustLookup.data?.length) {
+      console.log(`[upsertDomainProperty] Trusting matcher_property_id=${matcherPid} (skipping address lookup, ${domain})`);
+      lookup = trustLookup;
+    } else {
+      console.warn(`[upsertDomainProperty] matcher_property_id=${matcherPid} not in ${domain} DB; falling back to address lookup`);
+    }
+  }
+
   // Try to find existing property by address. Normalize first so abbreviation
   // variants ("Street" vs "St", "Road" vs "Rd") resolve to the same record
   // instead of creating a duplicate every time CoStar spells it differently.
   const normAddr = normalizeAddress(address);
-  // Select building size columns so we can guard against overwriting with lower-confidence data
-  const sizeCol = domain === 'government' ? 'rba' : 'building_size';
-  let lookupPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
-    `&select=property_id,${sizeCol}&limit=1`;
-  if (entity.state) lookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
-  if (entity.city)  lookupPath += `&city=ilike.${encodeURIComponent(entity.city)}`;
-
-  let lookup = await domainQuery(domain, 'GET', lookupPath);
+  // Skip address-based lookup if the matcher trust path above already
+  // populated `lookup`.
+  if (!lookup) {
+    let lookupPath = `properties?address=ilike.${encodeURIComponent(normAddr)}` +
+      `&select=property_id,${sizeCol}&limit=1`;
+    if (entity.state) lookupPath += `&state=eq.${encodeURIComponent(entity.state)}`;
+    if (entity.city)  lookupPath += `&city=ilike.${encodeURIComponent(entity.city)}`;
+    lookup = await domainQuery(domain, 'GET', lookupPath);
+  }
 
   // Fallback 0: if normalized-address ilike missed, retry with the RAW
   // address. Older sidebar-pipeline writes stored the un-normalized form

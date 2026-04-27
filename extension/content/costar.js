@@ -834,9 +834,17 @@
       // Reject CoStar section header labels that follow a "Tenant" label in page text.
       const TENANT_REJECT = /^(public\s+record|building|building\s+info|land|market|market\s+data|submarket|sources|my\s+notes|contacts|sale|transaction|assessment|investment|research|verified|confirmed|not\s+disclosed|no\s+tenant|owner.occupied|vacant|available|none|name|sf\s+occupied|sf|source|floor|move\s+date|exp\s+date|lease\s+type|lease\s+term|lease\s+start|lease\s+expir.*|rent\/?sf|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score|industry|sector|property\s+type|property\s+subtype|secondary\s+type|building\s+class|construction|year\s+built|year\s+renovated|lot\s+size|zoning|parking|stories|floors|typical\s+floor|ceiling\s+height|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
 
+      // Bug 76w (2026-04-27): TENANT_REJECT has 'data' alone but not 'my data'.
+      // Without TENANT_LABEL_BUTTON_REJECT, a 'Tenant\nMy Data' (CoStar
+      // toggle button text) sets tenant_name='My Data' and the classifier
+      // sees junk. Mirrors path 2's Round 76s filter.
+      const TENANT_LABEL_BUTTON_REJECT = /^(my\s+data|shared\s+data|show|hide|expand|collapse|view|see\s+(all|more|details))$/i;
+      const TENANT_LABEL_COMPOUND_REJECT = /(\u00b7|\u2022)|(:[^,\n]*\b(\d|\$)[^,\n]*\/(sf|fs|mg|ig|nnn|gross|net)\b)/i;
       if (!data.tenant_name && /^tenant\s*name?$/i.test(line) && next
           && next.length > 2 && next.length < 80
           && !TENANT_REJECT.test(next)
+          && !TENANT_LABEL_BUTTON_REJECT.test(next)
+          && !TENANT_LABEL_COMPOUND_REJECT.test(next)
           && !/^(tenancy|type|sf|detail|info)/i.test(next)) {
         data.tenant_name = next;
       }
@@ -2237,4 +2245,14 @@
       fontSize: '12px',
       fontWeight: '600',
       color: '#1F3864',
-      backgro
+      backgroundColor: '#FFFFFF',
+      border: '1.5px solid #1F3864',
+      borderRadius: '4px',
+      cursor: 'pointer',
+    });
+    btn.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' });
+    });
+    headingEl.parentElement?.appendChild(btn);
+  }
+})();

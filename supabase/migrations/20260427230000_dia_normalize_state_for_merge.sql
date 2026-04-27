@@ -1,0 +1,15 @@
+-- Round 76x (2026-04-27): state normalization for property dedup.
+-- Same Round 76m bug pattern, applied to the state column. The dedup
+-- view + auto-merge cron currently group by raw state value, so a
+-- property stored as state='South Carolina' never groups with one
+-- stored as state='SC'. Found a Mayfair St orphan listing (37565) that
+-- should have merged with 35423. 58 additional dup groups become
+-- visible under state-normalized grouping.
+--
+-- Applied 2026-04-27 via Supabase MCP. This file is for audit + future
+-- reference; the migration itself was registered in the migrations
+-- registry as 'dia_normalize_state_for_merge_v2'.
+
+-- Function defined in registered migration; see the actual deployed
+-- definition via:
+--   SELECT pg_get_functiondef('public.dia_normalize_state'::regproc);
