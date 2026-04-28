@@ -58,13 +58,16 @@
     try {
       chrome.runtime.sendMessage(payload, () => {
         // Drain lastError so Chrome doesn't surface "Unchecked runtime.lastError"
-        const err = chrome.runtime && chrome.runtime.lastError;
-        if (err && /context invalidated|message port closed|receiving end/i.test(err.message || '')) {
-          noteContextInvalidated();
-        }
+        // in the console. We INTENTIONALLY do NOT treat "message port closed"
+        // or "receiving end does not exist" as context invalidation — those
+        // fire on every async listener that doesn't return true (i.e. the
+        // entire CONTEXT_DETECTED path), and the message has already been
+        // delivered. Only a synchronous throw with "Extension context
+        // invalidated" (caught below) is a real invalidation signal.
+        void (chrome.runtime && chrome.runtime.lastError);
       });
     } catch (err) {
-      if (/context invalidated|Extension context/i.test(err && err.message || '')) {
+      if (/Extension context invalidated/i.test(err && err.message || '')) {
         noteContextInvalidated();
       } else {
         console.error('[LCC CoStar] sendMessage failed:', err);
