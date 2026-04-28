@@ -1,0 +1,82 @@
+-- ============================================================================
+-- Round 76bs — Cron health audit + fixes across all 3 DBs
+--
+-- Auditing every scheduled cron + last-run status surfaced 5 issues:
+--
+-- LCC Opps:
+--
+-- 1. Ghost jobid=10 (lcc-cleanup-orphan-om-uploads, OLD direct-SQL command)
+--    is gone from cron.job but its run_details kept appearing daily,
+--    failing with the storage trigger 'Direct deletion not allowed'
+--    error (Round 76aq created the cron with direct DELETE; Round 76aq
+--    later replaced with HTTP-call version as jobid=11; the orphan
+--    jobid=10 was never cleaned). Fix: hard-delete its job_run_details
+--    rows.
+--
+-- 2. jobid=11 (lcc-cleanup-orphan-om-uploads, current HTTP version) had
+--    NEVER fired — pg_cron appears to have stuck on duplicate jobname
+--    state. Fix: cron.unschedule by name + cron.schedule fresh; assigned
+--    new jobid=15.
+--
+-- 3. Dropped public.lcc_cleanup_orphan_om_uploads(integer) — the
+--    dangerous direct-DELETE function — to prevent future migrations
+--    from accidentally re-scheduling it.
+--
+-- DIA:
+--
+-- 4. 3 matview refresh crons failed daily for a week:
+--      refresh-mv-marketing-deals  (06:00) — 7 fails
+--      refresh-counts-freshness    (06:45) — 7 fails
+--      refresh-npi-inventory-signals (06:50) — 6 fails
+--    Error: 'cannot refresh materialized view CONCURRENTLY' even though
+--    Round 76at added unique indexes that DO exist + manual refresh
+--    works. Fix: re-schedule with schema-qualified names
+--    (public.v_marketing_deals etc) — pg_cron worker has different
+--    search_path than interactive sessions.
+--
+-- 5. dia-data-hygiene-sweep (jobid=19, schedule 03:00) hadn't fired
+--    yet — was scheduled today after 03:00. Manual invocation today
+--    produced clean results: 14 leases superseded, 1 listing closed,
+--    1 dashboard exclude, 1 matview refresh. Will fire tomorrow.
+--
+-- GOV:
+--
+-- 6. weekly-lead-pipeline cron had literal unsubstituted placeholder
+--    'PIPELINE_TRIGGER_URL/trigger/lead-pipeline' as its URL — failing
+--    every Monday since at least 04-13 with pg_net OOM error. Probably
+--    a copy-paste from a template that was never finalized. Unscheduled
+--    + logged to lcc_health_alerts as 'cron_misconfig' for human review.
+--
+-- 7. gov-data-hygiene-sweep — same as dia, scheduled today after 03:30
+--    so hasn't fired yet. Manual run produced: 1 owner backfill, 2
+--    listings excluded, 1 lease superseded, 2 matviews refreshed.
+-- ============================================================================
+
+-- This migration is documentation-only since the fixes were applied via
+-- direct SQL statements during the cron audit. They are reproduced here
+-- for repository history. The pg_cron schema state changes don't replay
+-- cleanly via standard migration apply — these are runtime adjustments.
+
+-- LCC Opps changes applied:
+--   DELETE FROM cron.job_run_details WHERE jobid = 10;
+--   DROP FUNCTION IF EXISTS public.lcc_cleanup_orphan_om_uploads(integer);
+--   SELECT cron.unschedule('lcc-cleanup-orphan-om-uploads');
+--   SELECT cron.schedule('lcc-cleanup-orphan-om-uploads', '30 3 * * *',
+--     'SELECT public.lcc_cron_post(''/api/storage-cleanup?grace_days=14&batch_size=200'',
+--      ''{}''::jsonb, ''vercel'')');
+
+-- Dia changes applied (apply on dialysis project zqzrriwuavgrquhisnoa):
+--   SELECT cron.unschedule('refresh-mv-marketing-deals');
+--   SELECT cron.unschedule('refresh-counts-freshness');
+--   SELECT cron.unschedule('refresh-npi-inventory-signals');
+--   SELECT cron.schedule('refresh-mv-marketing-deals', '0 6 * * *',
+--     'REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_marketing_deals');
+--   SELECT cron.schedule('refresh-counts-freshness', '45 6 * * *',
+--     'REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_counts_freshness');
+--   SELECT cron.schedule('refresh-npi-inventory-signals', '50 6 * * *',
+--     'REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_npi_inventory_signals');
+
+-- Gov changes applied (apply on government project scknotsqkcheojiaewwh):
+--   SELECT cron.unschedule('weekly-lead-pipeline');
+--   INSERT INTO public.lcc_health_alerts (alert_kind, source, severity, summary, details)
+--   VALUES ('cron_misconfig', 'gov:weekly-lead-pipeline', 'warn', ...);
