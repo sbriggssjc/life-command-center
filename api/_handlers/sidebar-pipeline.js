@@ -133,6 +133,9 @@ function pushProvenance(provCollect, table, recordPk, fields, confidence) {
 
 async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence = {}) {
   if (!ctx?.targetTable || !ctx?.recordPk) return;
+  // Round 76af 2026-04-28: respect ctx.sourceTag so RCA captures land as
+  // source='rca_sidebar' instead of being mis-tagged as costar_sidebar.
+  const sourceTag = ctx.sourceTag || 'costar_sidebar';
   const promises = [];
   for (const [fieldName, value] of Object.entries(fieldValues)) {
     if (value === undefined || value === null) continue;
@@ -143,7 +146,7 @@ async function recordCoStarFieldsProvenance(ctx, fieldValues, perFieldConfidence
       recordPk:       ctx.recordPk,
       fieldName,
       value,
-      source:         'costar_sidebar',
+      source:         sourceTag,
       sourceRunId:    ctx.sidebarRunId,
       confidence:     perFieldConfidence[fieldName] ?? COSTAR_DEFAULT_CONFIDENCE,
       recordedBy:     ctx.actorId,
@@ -1629,11 +1632,18 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
   try {
     const targetDb = domain === 'dialysis' ? 'dia_db' : 'gov_db';
     const tablePrefix = domain === 'dialysis' ? 'dia' : 'gov';
+    // Round 76af 2026-04-28: derive provenance source tag from sidebar source.
+    // RCA captures (metadata.source='rca' from extension/content/rca.js) carry
+    // their own trust profile and should appear as 'rca_sidebar' in provenance.
+    const sidebarSource = (metadata?.source || metadata?._source || '').toLowerCase();
+    const sourceTag = sidebarSource === 'rca' ? 'rca_sidebar' : 'costar_sidebar';
+    const runIdPrefix = sourceTag === 'rca_sidebar' ? 'rca' : 'costar';
     const provCtx = {
       targetDatabase: targetDb,
-      sidebarRunId:   entity?.id ? `costar:${entity.id}` : null,
+      sidebarRunId:   entity?.id ? `${runIdPrefix}:${entity.id}` : null,
       workspaceId:    entity?.workspace_id || null,
       actorId:        entity?.created_by || null,
+      sourceTag,
     };
 
     // 1. Property fields — direct from entity + metadata (what CoStar

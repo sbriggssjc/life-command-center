@@ -103,40 +103,66 @@ async function getLCCConfig() {
 }
 
 async function pollPipelineStatus(entityId, container) {
-  try {
-    await new Promise((r) => setTimeout(r, 3500));
-    const config = await getLCCConfig();
-    const baseUrl = config.LCC_RAILWAY_URL;
-    if (!baseUrl) return;
-    const url = `${baseUrl.replace(/\/+$/, '')}/api/entities?id=${entityId}&fields=metadata`;
-    const headers = {};
-    if (config.LCC_API_KEY) headers['X-LCC-Key'] = config.LCC_API_KEY;
-    const res = await fetch(url, { method: 'GET', headers });
-    if (!res.ok) return;
-    const data = await res.json().catch(() => null);
-    const meta = data?.entity?.metadata || data?.metadata || {};
-    const summary = meta._pipeline_summary;
-    const status = meta._pipeline_status;
-    const lastError = meta._pipeline_last_error;
+  // Round 76af 2026-04-28: poll up to 4 times (3.5s, 6s, 10s, 16s) before
+  // giving up. The previous single-poll-at-3.5s would frequently render
+  // 'Domain: not matched' just because the server pipeline wasn't done yet,
+  // even on captures that classified perfectly. Now we only show 'no domain'
+  // after every poll missed — and even then we say 'still processing' rather
+  // than the misleading 'not matched' diagnostic.
+  const POLL_WAITS_MS = [3500, 6000, 10000, 16000];
 
-    const line = document.createElement('div');
-    if (status === 'failed') {
-      line.className = 'update-toast';
-      line.textContent = `→ Pipeline error: ${toErrorMessage(lastError) || 'unknown'}`;
-    } else if (summary) {
-      line.className = 'update-toast updated';
-      line.textContent = formatPipelineSummary(summary);
-    } else {
-      line.className = 'update-toast';
-      line.style.background = '#F3F4F6';
-      line.style.color = '#6B7280';
-      line.style.borderColor = '#D1D5DB';
-      line.textContent = '→ Domain: not matched (dialysis/government keywords not found)';
+  const config = await getLCCConfig();
+  const baseUrl = config.LCC_RAILWAY_URL;
+  if (!baseUrl) return;
+  const url = `${baseUrl.replace(/\/+$/, '')}/api/entities?id=${entityId}&fields=metadata`;
+  const headers = {};
+  if (config.LCC_API_KEY) headers['X-LCC-Key'] = config.LCC_API_KEY;
+
+  let lastMeta = null;
+  for (const waitMs of POLL_WAITS_MS) {
+    try {
+      await new Promise((r) => setTimeout(r, waitMs));
+      const res = await fetch(url, { method: 'GET', headers });
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null);
+      const meta = data?.entity?.metadata || data?.metadata || {};
+      lastMeta = meta;
+
+      const summary = meta._pipeline_summary;
+      const status  = meta._pipeline_status;
+      const lastError = meta._pipeline_last_error;
+
+      // Terminal states — render and stop polling.
+      if (status === 'failed') {
+        const line = document.createElement('div');
+        line.className = 'update-toast';
+        line.textContent = `→ Pipeline error: ${toErrorMessage(lastError) || 'unknown'}`;
+        container.prepend(line);
+        return;
+      }
+      if (summary) {
+        const line = document.createElement('div');
+        line.className = 'update-toast updated';
+        line.textContent = formatPipelineSummary(summary);
+        container.prepend(line);
+        return;
+      }
+      // No summary yet — keep polling.
+    } catch (_) {
+      // best-effort — keep polling on transient errors
     }
-    container.prepend(line);
-  } catch (_) {
-    // best-effort — silently skip on failure
   }
+
+  // All polls exhausted without a summary. Render a neutral "still processing"
+  // message — NOT 'Domain: not matched' (which was misleading; the classifier
+  // ran fine, the pipeline summary just hadn't landed yet on slow runs).
+  const line = document.createElement('div');
+  line.className = 'update-toast';
+  line.style.background = '#FEF3C7';
+  line.style.color = '#92400E';
+  line.style.borderColor = '#FCD34D';
+  line.textContent = '→ Pipeline still processing — refresh in a moment';
+  container.prepend(line);
 }
 
 async function apiCall(endpoint, body, method = 'POST') {

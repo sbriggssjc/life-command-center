@@ -153,6 +153,39 @@ export async function stageOmIntake(input, auth, workspaceId) {
     }
   }
 
+  // ---- 0e. Reject deed / loan / mortgage PDFs BEFORE staging.
+  //
+  // Round 76af 2026-04-28: 31 deed PDFs and 8 loan PDFs in a 6h sample all
+  // stalled in review_required because the OM extractor (built for marketing
+  // brochures) returns null for legal-document text. Rather than waste tokens
+  // and clutter the inbox with stuck rows, recognize them by filename at the
+  // sidebar capture point and skip with a friendly notice.
+  //
+  // The structured deed data we WANT comes from the CoStar Sale History tab
+  // (parsed by costar.js → upsertDialysisDeedRecords with property_id) — not
+  // from the deed PDF itself. So the user shouldn't be uploading deed PDFs
+  // anyway; this filter just keeps the inbox clean if they accidentally do.
+  {
+    const fileName = String(input.file_name || '').trim();
+    const isDeedDoc =
+      /^(deed|transfer\s*tax|mortgage|loan|1st\s*loan|2nd\s*loan|deed\s*of\s*trust)\b/i.test(fileName) ||
+      /^(deed|transfer\s*tax|mortgage|loan)\s*[-_~/]/i.test(fileName);
+    if (isDeedDoc) {
+      return {
+        status: 200,
+        body: {
+          ok: false,
+          skipped: 'deed_or_loan_pdf',
+          detail: `Skipped ${fileName} — deed/loan PDFs aren't extracted as OMs. ` +
+                  `Capture the property from CoStar's Sale History tab instead; ` +
+                  `the sidebar will pull document_number, grantor, grantee, and ` +
+                  `recording_date directly into deed_records linked to the property.`,
+          channel: input.channel,
+        },
+      };
+    }
+  }
+
   const bytesLen = hasStoragePath
     ? (input.size_bytes || 0)
     : Math.ceil((input.bytes_base64.length * 3) / 4);
