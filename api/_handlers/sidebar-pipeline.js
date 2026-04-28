@@ -554,7 +554,7 @@ function contactSeedFields(contact, entityType) {
 // building searchText. Older extension versions captured 'Show' (CoStar
 // expand button) and compound metadata strings ('Tenancy: Summary - ...')
 // as tenant names, and they overwrite cleaner values on subsequent saves.
-const CLASSIFIER_TENANT_JUNK_RE = /^(show|hide|expand|collapse|view|see\s+(all|more|details)|loan|loans|financial|financials|changes|recent\s+changes|investment\s+highlights|table\s+of\s+contents|appendix|exhibits?|executive\s+summary|name|industry|sector|tenant|tenancy|owner\s+occupied|est\.?\s*rent|directory|stacking\s+plan|public\s+record|building|land|market|sources)\s*$/i;
+const CLASSIFIER_TENANT_JUNK_RE = /^(show|hide|expand|collapse|view|see\s+(all|more|details)|my\s+data|shared\s+data|loan|loans|financial|financials|changes|recent\s+changes|sale\s+highlights|investment\s+highlights|property\s+highlights|key\s+highlights|table\s+of\s+contents|appendix|exhibits?|executive\s+summary|name|industry|sector|tenant|tenancy|owner\s+occupied|est\.?\s*rent|directory|stacking\s+plan|public\s+record|building|land|market|sources|md\/dds|md\/dental|medical\/office|office\/medical|retail|industrial|office|medical|warehouse|flex|sale\s+notes|owner\s+address|recorded\s+owner|tax\s+amount|moving\s+(in|out))\s*$/i;
 const CLASSIFIER_COMPOUND_RE = /(\u00b7|\u2022)|(:[^,\n]*\b(\d|\$)[^,\n]*\/(sf|fs|mg|ig|nnn|gross|net)\b)/i;
 function dropTenantJunk(val) {
   if (!val) return val;

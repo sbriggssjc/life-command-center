@@ -1093,7 +1093,7 @@
   // 2026-04-25 (Bug M) at the extension layer: "Loan", "Financials",
   // "Changes" leak through as tenant names. Extending here mirrors the
   // server-side OM_SECTION_RE in api/_handlers/sidebar-pipeline.js.
-  const OM_SECTION_REJECT = /^(loan|loans|financial|financials|changes|recent\s+changes|investment\s+highlights|property\s+(overview|highlights|summary|info|description)|location\s+overview|tenant\s+(overview|details?|info)|lease\s+abstract|rent\s+roll|operating\s+statement|comparable\s+sales|sales\s+comps|lease\s+comps|disclaimer|confidentiality|table\s+of\s+contents|appendix|exhibits?|executive\s+summary)\s*$/i;
+  const OM_SECTION_REJECT = /^(loan|loans|financial|financials|changes|recent\s+changes|sale\s+highlights|investment\s+highlights|key\s+highlights|property\s+(overview|highlights|summary|info|description)|location\s+overview|tenant\s+(overview|details?|info)|lease\s+abstract|rent\s+roll|operating\s+statement|comparable\s+sales|sales\s+comps|lease\s+comps|disclaimer|confidentiality|table\s+of\s+contents|appendix|exhibits?|executive\s+summary|sale\s+notes|md\/dds|md\/dental|medical\/office|office\/medical)\s*$/i;
   // Compound CoStar metadata strings smashed onto one line, recognized by
   // either the middle-dot delimiter OR the simultaneous presence of a
   // colon-separated key and a /SF token (e.g.
