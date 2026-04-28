@@ -79,10 +79,71 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ownership-reconcile': return handleOwnershipReconcile(req, res);
     case 'sf-sync-queue':       return handleSfSyncQueue(req, res);
     case 'storage-cleanup':     return handleStorageCleanup(req, res);
+    case 'consolidate-property': return handleConsolidateProperty(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// CONSOLIDATE PROPERTY (Round 76be, 2026-04-28)
+// ============================================================================
+//
+// GET  /api/admin?_route=consolidate-property&domain=dia&property_id=24609
+//   Returns find_property_consolidation_candidates() output: same-address dups,
+//   same-tenant-in-city candidates, chain summary.
+//
+// POST /api/admin?_route=consolidate-property&domain=dia
+//   Body: { keep_id, drop_id }
+//   Calls dia_merge_property() (or gov equivalent) to consolidate.
+//
+async function handleConsolidateProperty(req, res) {
+  const domain = (req.query.domain || '').toLowerCase();
+  if (!['dia', 'gov'].includes(domain)) {
+    return res.status(400).json({ error: 'domain must be dia or gov' });
+  }
+
+  if (req.method === 'GET') {
+    const propertyId = parseInt(req.query.property_id, 10);
+    if (!Number.isFinite(propertyId)) {
+      return res.status(400).json({ error: 'property_id required' });
+    }
+    try {
+      const { domainQuery } = await import('./_shared/domain-db.js');
+      const dom = domain === 'dia' ? 'dialysis' : 'government';
+      const r = await domainQuery(dom, 'POST', 'rpc/find_property_consolidation_candidates', {
+        p_property_id: propertyId
+      });
+      if (!r.ok) return res.status(500).json({ error: 'rpc_failed', detail: r.data });
+      return res.status(200).json(r.data);
+    } catch (err) {
+      return res.status(500).json({ error: 'consolidate_lookup_failed', message: err?.message });
+    }
+  }
+
+  if (req.method === 'POST') {
+    const { keep_id, drop_id } = req.body || {};
+    const keepId = parseInt(keep_id, 10);
+    const dropId = parseInt(drop_id, 10);
+    if (!Number.isFinite(keepId) || !Number.isFinite(dropId) || keepId === dropId) {
+      return res.status(400).json({ error: 'keep_id and drop_id required and must differ' });
+    }
+    try {
+      const { domainQuery } = await import('./_shared/domain-db.js');
+      const dom = domain === 'dia' ? 'dialysis' : 'government';
+      const fnName = domain === 'dia' ? 'dia_merge_property' : 'gov_merge_property';
+      const r = await domainQuery(dom, 'POST', `rpc/${fnName}`, {
+        p_keep_id: keepId, p_drop_id: dropId
+      });
+      if (!r.ok) return res.status(500).json({ error: 'merge_failed', detail: r.data });
+      return res.status(200).json({ ok: true, keep_id: keepId, drop_id: dropId });
+    } catch (err) {
+      return res.status(500).json({ error: 'merge_failed', message: err?.message });
+    }
+  }
+
+  return res.status(405).json({ error: 'method_not_allowed' });
+}
 
 // ============================================================================
 // SF SYNC QUEUE

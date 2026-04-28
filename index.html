@@ -566,4 +566,140 @@
     }
     return html;
 
-    function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({
+    function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+  }
+})();
+</script>
+
+<!-- Log & Reschedule Modal -->
+<div class="modal-overlay" id="logRescheduleModal" role="dialog" aria-label="Log and Reschedule" onclick="if(event.target===this)closeLogReschedule()">
+  <div class="modal">
+    <div class="modal-head"><h3>Log Touchpoint &amp; Reschedule</h3><button class="modal-close" onclick="closeLogReschedule()" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div id="lrContext" style="font-size:13px;color:var(--text2);margin-bottom:8px"></div>
+      <div id="lrTaskInfo" style="font-size:12px;color:var(--text3);margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px"></div>
+      <label for="lrType">Activity Type</label>
+      <select id="lrType">
+        <option value="Client Outreach">Client Outreach</option>
+        <option value="Follow-up" selected>Follow-up</option>
+        <option value="Introduction Call">Introduction Call</option>
+        <option value="Property Discussion">Property Discussion</option>
+        <option value="Email Correspondence">Email Correspondence</option>
+        <option value="Market Update">Market Update</option>
+      </select>
+      <label for="lrNotes">Notes <span style="font-weight:400;color:var(--text3)">(what happened today)</span></label>
+      <textarea id="lrNotes" rows="2" placeholder="Call notes, discussion topics..." style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
+      <label for="lrNextDate">Next Touchpoint Date</label>
+      <input type="date" id="lrNextDate">
+      <div id="lrDateReason" style="display:none;font-size:12px;color:var(--text3);margin-top:4px;padding:4px 0"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeLogReschedule()">Cancel</button>
+      <button class="btn-submit" id="lrSubmit" onclick="submitLogReschedule()">Log &amp; Reschedule</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ops assignment modal -->
+<div class="modal-overlay" id="assignModal" role="dialog" aria-label="Assign Work" onclick="if(event.target===this)closeAssignModal()">
+  <div class="modal">
+    <div class="modal-head"><h3>Assign Work</h3><button class="modal-close" onclick="closeAssignModal()" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div id="assignContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <label for="assignUserSelect">Assignee</label>
+      <select id="assignUserSelect"></select>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeAssignModal()">Cancel</button>
+      <button class="btn-submit" id="assignSubmit" onclick="submitAssignModal()">Assign</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ops escalation modal -->
+<div class="modal-overlay" id="escalateModal" role="dialog" aria-label="Escalate Work" onclick="if(event.target===this)closeEscalateModal()">
+  <div class="modal">
+    <div class="modal-head"><h3>Escalate Work</h3><button class="modal-close" onclick="closeEscalateModal()" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div id="escalateContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <label for="escalateUserSelect">Escalate To</label>
+      <select id="escalateUserSelect"></select>
+      <label for="escalateReason">Reason</label>
+      <textarea id="escalateReason" rows="3" placeholder="Why does this need escalation?" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeEscalateModal()">Cancel</button>
+      <button class="btn-submit" id="escalateSubmit" onclick="submitEscalateModal()">Escalate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Research follow-up modal -->
+<div class="modal-overlay" id="followupModal" role="dialog" aria-label="Create Follow-Up" onclick="if(event.target===this)closeFollowupModal()">
+  <div class="modal">
+    <div class="modal-head"><h3>Create Follow-Up</h3><button class="modal-close" onclick="closeFollowupModal()" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div id="followupContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <label for="followupTitleInput">Title</label>
+      <input type="text" id="followupTitleInput" placeholder="Follow-up action title">
+      <label for="followupUserSelect">Assignee</label>
+      <select id="followupUserSelect"></select>
+      <label for="followupDueInput">Due Date</label>
+      <input type="date" id="followupDueInput">
+      <label for="followupNotesInput">Notes</label>
+      <textarea id="followupNotesInput" rows="4" placeholder="Optional follow-up notes" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="closeFollowupModal()">Cancel</button>
+      <button class="btn-submit" id="followupSubmit" onclick="submitFollowupModal()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Custom Modal (replaces native confirm/prompt) -->
+<div id="lcc-modal-overlay" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);align-items:center;justify-content:center;">
+  <div id="lcc-modal" style="background:var(--s2);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+    <div id="lcc-modal-msg" style="font-size:14px;color:var(--text1);margin-bottom:16px;line-height:1.5;white-space:pre-wrap;"></div>
+    <div id="lcc-modal-input-wrap" style="display:none;margin-bottom:16px;">
+      <input id="lcc-modal-input" type="text" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--s3);color:var(--text1);font-size:13px;box-sizing:border-box;" />
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button id="lcc-modal-cancel" style="padding:8px 18px;border:1px solid var(--border);border-radius:6px;background:var(--s3);color:var(--text2);font-size:13px;cursor:pointer;">Cancel</button>
+      <button id="lcc-modal-ok" style="padding:8px 18px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Global error handler — surfaces uncaught errors and unhandled rejections */
+(function() {
+  var errCount = 0, MAX_ERRORS = 20;
+  function report(type, msg, source, line, col) {
+    if (errCount >= MAX_ERRORS) return;
+    errCount++;
+    console.error('[LCC ' + type + '] ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : ''));
+    /* Show brief toast for user-facing awareness (if toast helper exists) */
+    if (typeof showToast === 'function' && errCount <= 7) {
+      showToast('Something went wrong — try refreshing', 'error');
+    }
+  }
+  window.onerror = function(msg, source, line, col) { report('error', msg, source, line, col); };
+  window.addEventListener('unhandledrejection', function(ev) {
+    var reason = ev.reason;
+    var msg = reason && reason.message ? reason.message : String(reason);
+    report('promise', msg, '', 0, 0);
+  });
+})();
+</script>
+<script src="auth.js"></script>
+<script src="app.js"></script>
+<script src="gov.js"></script>
+<script src="dialysis.js"></script>
+<script src="detail.js"></script>
+<script src="contacts-ui.js"></script>
+<script src="ops.js"></script>
+</body>
+</html>

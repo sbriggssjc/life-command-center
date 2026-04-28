@@ -116,6 +116,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         <div class="detail-title">${esc(title)}</div>
         <div class="detail-subtitle">${esc(loc)}</div>
       </div>
+      <button class="detail-action-btn" id="consolidateBtn"
+        title="Find duplicate properties + same-tenant clusters"
+        onclick="openConsolidateModal('${db}', ${ids.property_id || 'null'})"
+        style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
+        ${ids.property_id ? '' : 'disabled'}>
+        🔗 Consolidate
+      </button>
       <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
     </div>
     <button class="detail-close" onclick="closeDetail()">&times;</button>`;
