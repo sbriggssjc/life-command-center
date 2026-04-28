@@ -281,7 +281,11 @@
         domain: 'costar',
         entity_type: 'property',
         _version: 21,
-        address: address || document.title,
+        // Round 76cg: never let raw document.title leak through as the
+        // address. parseAddress(title) will succeed when the title contains
+        // a real address (after stripping 'Properties | ' style prefixes).
+        // If both fail, emit null and let the matcher use other signals.
+        address: address || parseAddress(document.title),
         page_url: url,
         city: accumulated.city,
         state: accumulated.state,
@@ -534,13 +538,22 @@
 
   function parseAddress(raw) {
     if (!raw || raw.length < 3) return null;
-    let addr = raw.split(/\s+[-–—|]\s+/)[0].trim();
-    // Reject pagination patterns like "1 of 2,000 Records"
-    if (/^\d+\s+of\s+[\d,]+/i.test(addr)) return null;
-    // Must start with a number AND contain a street-type word
-    if (/^\d+\s/.test(addr) &&
-      /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|trail)\b/i.test(addr)) {
-      return addr;
+    // Round 76cg: try ALL segments after splitting on pipe/em-dash/en-dash/
+    // hyphen-with-spaces - not just the first. CoStar tab titles are
+    // formatted as 'Properties | 215-225 S Allison Ave' so the first
+    // segment is the section name and the real address is in segment [1].
+    // Also accept number-range addresses (215-225) which were previously
+    // rejected because the regex required digit-then-whitespace.
+    const segments = raw.split(/\s+[-–—|]\s+/).map(s => s.trim()).filter(Boolean);
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|trail)\b/i;
+    for (const seg of segments) {
+      // Reject pagination patterns like "1 of 2,000 Records"
+      if (/^\d+\s+of\s+[\d,]+/i.test(seg)) continue;
+      // Must start with a number (or number range like 215-225) AND
+      // contain a street-type word
+      if (/^\d+(?:-\d+)?\s/.test(seg) && STREET_RE.test(seg)) {
+        return seg;
+      }
     }
     return null;
   }
