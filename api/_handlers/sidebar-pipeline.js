@@ -3853,6 +3853,18 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata, provColle
   for (const sale of sales) {
     if (!sale.document_number) continue;
 
+    // Round 76cp: skip mortgage/loan entries - they belong in the `loans`
+    // table (handled by upsertDomainLoans), not deed_records. CoStar's
+    // Sale History tab includes both deed and mortgage records mixed
+    // together; the deed_type/transaction_type field distinguishes them.
+    const txnType = String(sale.transaction_type || sale.deed_type || '').toLowerCase();
+    const looksLikeLoan = txnType.includes('mortgage')
+                       || txnType.includes('loan')
+                       || txnType.includes('lien')
+                       || sale.lender
+                       || sale.loan_amount;
+    if (looksLikeLoan) continue;
+
     const datePart = parseDate(sale.recordation_date)?.split('T')[0] || null;
 
     // Build deterministic dedup hash: document_number|state|recording_date
