@@ -220,12 +220,31 @@
         evt.entities_text = entitiesText;
 
         // 'X from Y' splits buyer (left of 'from') from seller (right).
-        // Lender follows after a separator (↔, with, ↣) when present.
+        // Lender follows after a separator (↔, with, ↣) when present, OR can
+        // appear inline as 'Bank Name ($X.Xm approx)' trailing the seller —
+        // RCA renders it without a separator when the lender icon is shown
+        // adjacent to the seller. Round 76aj 2026-04-28: detect that pattern
+        // and split it out before storing the seller field.
         const fromMatch = entitiesText.match(/^(.+?)\s+from\s+(.+?)(?:\s+(?:↔|↣|with|by)\s+(.+))?$/i);
         if (fromMatch) {
           evt.buyer  = (fromMatch[1] || '').trim() || null;
-          evt.seller = (fromMatch[2] || '').trim() || null;
-          if (fromMatch[3]) evt.lender = fromMatch[3].trim();
+          let sellerRaw = (fromMatch[2] || '').trim();
+          let lenderRaw = (fromMatch[3] || '').trim();
+
+          // Strip a trailing lender chunk from the seller text. Pattern:
+          //   '...Trust 2016 First Citizens ($3.4m approx)'
+          // We split on 2+ space run, '$N.Nm' suffix, or known lender/bank
+          // sentinels. Conservative — only fires when '$N.Nm approx' is
+          // present at the end of the string.
+          const trailingLender = sellerRaw.match(/^(.+?)\s+([A-Z][A-Za-z0-9 &'\-]+?)\s*\(\s*\$[\d.,]+\s*[mk]?\s*(?:approx)?\s*\)\s*$/);
+          if (trailingLender) {
+            sellerRaw = trailingLender[1].trim();
+            const lenderText = `${trailingLender[2].trim()} (${entitiesText.match(/\$[\d.,]+\s*[mk]?\s*(?:approx)?/i)?.[0] || ''})`.trim();
+            if (!lenderRaw) lenderRaw = lenderText;
+          }
+
+          evt.seller = sellerRaw || null;
+          if (lenderRaw) evt.lender = lenderRaw;
         } else {
           // Refinance / standalone-mortgage: 'Borrower ↔ Lender' or 'Borrower with Lender'
           const refiMatch = entitiesText.match(/^(.+?)\s+(?:↔|↣|with|by)\s+(.+)$/);
