@@ -3780,6 +3780,14 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata, provColle
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
+  // Round 76ae 2026-04-28: only write deed_records when we have a propertyId.
+  // Orphan deeds (no property linkage) provide no analytic value and clutter
+  // the table — we'd rather skip than insert untraceable rows.
+  if (!propertyId) {
+    console.warn(`[upsertDialysisDeedRecords] no propertyId — skipping ${sales.length} sale-history entries (would have created orphans)`);
+    return 0;
+  }
+
   let inserted = 0;
 
   for (const sale of sales) {
@@ -3791,13 +3799,26 @@ async function upsertDialysisDeedRecords(propertyId, entity, metadata, provColle
     const hashSource = `${sale.document_number}|${entity.state || ''}|${datePart || ''}`;
     const dataHash = Buffer.from(hashSource).toString('base64');
 
-    // Check if a deed_record with this hash already exists — skip if so (immutable)
+    // Check if a deed_record with this hash already exists — skip if so (immutable).
+    // If it exists but is orphaned (property_id NULL), patch it now that we
+    // know the linkage. This is the recovery path for the 24+ rows already
+    // inserted from CoStar Sale History before this writer wrote property_id.
     const lookup = await domainQuery('dialysis', 'GET',
-      `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=id&limit=1`
+      `deed_records?data_hash=eq.${encodeURIComponent(dataHash)}&select=id,property_id&limit=1`
     );
-    if (lookup.ok && lookup.data?.length) continue;
+    if (lookup.ok && lookup.data?.length) {
+      const existing = lookup.data[0];
+      if (existing.property_id == null && propertyId) {
+        await domainQuery('dialysis', 'PATCH',
+          `deed_records?id=eq.${encodeURIComponent(existing.id)}`,
+          { property_id: propertyId }
+        );
+      }
+      continue;
+    }
 
     const deedRecord = stripNulls({
+      property_id: propertyId,                    // Round 76ae: linked!
       county: entity.county || metadata.county || null,
       state: entity.state || null,
       recording_date: datePart,
