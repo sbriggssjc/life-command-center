@@ -523,7 +523,15 @@ async function ingestEmails(req, res, user, workspaceId) {
       if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
       const data = await edgeRes.json();
-      const pageEmails = data.emails || [];
+      // Round 76bi (2026-04-28): defensive — if edge function returns a
+      // non-array truthy `emails` (e.g. {emails: {error: '...'}} or a stub
+      // object), `.push(...)` throws "object is not iterable". 6+ Outlook
+      // sync jobs failed with that exact error since 2026-04-09. Use
+      // Array.isArray() to fall back to [] in any non-array case.
+      const pageEmails = Array.isArray(data?.emails) ? data.emails : [];
+      if (pageEmails.length === 0 && data && typeof data === 'object' && data.emails && !Array.isArray(data.emails)) {
+        console.warn('[ingestEmails] edge function returned non-array emails:', JSON.stringify(data.emails).slice(0, 200));
+      }
       emailList.push(...pageEmails);
 
       // Stop if this page returned fewer than requested (no more data)
@@ -706,7 +714,7 @@ async function ingestCalendar(req, res, user, workspaceId) {
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
-    const events = data.events || [];
+    const events = Array.isArray(data?.events) ? data.events : [];  // Round 76bi: defensive (avoid Symbol.iterator crash on non-array)
 
     for (const event of events) {
       try {
@@ -780,7 +788,7 @@ async function ingestSfActivities(req, res, user, workspaceId) {
     if (!edgeRes.ok) throw new Error(`Edge function returned ${edgeRes.status}`);
 
     const data = await edgeRes.json();
-    const activities = data.activities || [];
+    const activities = Array.isArray(data?.activities) ? data.activities : [];  // Round 76bi: defensive
 
     // Deduplicate by ID (API returns ~2x duplicates)
     const seen = new Set();
