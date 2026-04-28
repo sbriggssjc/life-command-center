@@ -997,9 +997,20 @@ async function handleEdgeBriefingProxy(req, res) {
     url.searchParams.set(key, value);
   }
 
+  // Daily-briefing edge function is strictly GET-only. The pg_cron job
+  // wraps via lcc_cron_post() which uses POST, but the edge function
+  // returns 405 on anything other than GET. If the client (or cron) sent
+  // POST, lift any body params into the query string and force GET.
+  if (req.method !== 'GET' && req.body && typeof req.body === 'object') {
+    for (const [key, value] of Object.entries(req.body)) {
+      if (value == null) continue;
+      url.searchParams.set(key, String(value));
+    }
+  }
+
   try {
     const edgeRes = await fetch(url.toString(), {
-      method: req.method,
+      method: 'GET',
       headers: buildEdgeProxyHeaders(req),
       signal: AbortSignal.timeout(30000),
     });
@@ -1618,105 +1629,4 @@ async function handleStorageCleanup(req, res) {
     return res.status(500).json({ error: 'ops_credentials_missing' });
   }
 
-  // Use the dedicated SQL function if it exists, else inline query.
-  // For now, do the lookup via PostgREST RPC against a helper view.
-  // Simpler: use SQL via opsQuery — but storage schema isn't exposed
-  // through PostgREST by default. We hit the Storage REST API for
-  // listing AND deletion to keep the contract clean.
-  const cutoffIso = new Date(Date.now() - graceDays * 86400000).toISOString();
-
-  // List candidates from PostgREST (storage tables ARE exposed for
-  // service_role keys via the storage schema). If the project doesn't
-  // expose it, we can fall back to net.http_post inside Postgres.
-  let listResp;
-  try {
-    listResp = await fetch(
-      `${opsUrl}/rest/v1/rpc/lcc_list_orphan_storage_objects`,
-      {
-        method: 'POST',
-        headers: {
-          'apikey':        opsKey,
-          'Authorization': `Bearer ${opsKey}`,
-          'Content-Type':  'application/json',
-        },
-        body: JSON.stringify({
-          _bucket: bucket,
-          _cutoff: cutoffIso,
-          _limit:  batchSize,
-        }),
-      }
-    );
-  } catch (err) {
-    return res.status(502).json({ error: 'storage_list_fetch_failed', detail: err?.message });
-  }
-
-  if (!listResp.ok) {
-    const detail = await listResp.text();
-    return res.status(502).json({
-      error:  'storage_list_rpc_failed',
-      status: listResp.status,
-      detail: detail.slice(0, 400),
-    });
-  }
-
-  const orphans = await listResp.json();
-  if (!Array.isArray(orphans)) {
-    return res.status(502).json({
-      error:  'storage_list_unexpected_shape',
-      detail: JSON.stringify(orphans).slice(0, 400),
-    });
-  }
-
-  if (dryRun) {
-    return res.status(200).json({
-      mode:        'dry_run',
-      bucket,
-      grace_days:  graceDays,
-      batch_size:  batchSize,
-      orphan_count: orphans.length,
-      sample_names: orphans.slice(0, 10).map(o => o.name),
-    });
-  }
-
-  // 2. Actually delete via Storage REST API DELETE /object/{bucket}/{name}
-  let deleted = 0;
-  const failures = [];
-  for (const obj of orphans) {
-    try {
-      // Storage REST API expects literal '/' in object paths, not %2F.
-      // encodeURIComponent encodes '/' which the API rejects with 400.
-      // Encode each path segment individually so spaces/specials still get
-      // encoded but slashes pass through. Round 76as 2026-04-28.
-      const encodedPath = obj.name.split('/').map(encodeURIComponent).join('/');
-      const delResp = await fetch(
-        `${opsUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'apikey':        opsKey,
-            'Authorization': `Bearer ${opsKey}`,
-          },
-        }
-      );
-      if (delResp.ok || delResp.status === 404) {
-        deleted++;
-      } else {
-        failures.push({ name: obj.name, status: delResp.status });
-      }
-    } catch (err) {
-      failures.push({ name: obj.name, error: err?.message });
-    }
-  }
-
-  return res.status(200).json({
-    mode:         'delete',
-    bucket,
-    grace_days:   graceDays,
-    batch_size:   batchSize,
-    orphan_total: orphans.length,
-    deleted,
-    failures:     failures.slice(0, 20),
-    failure_count: failures.length,
-  });
-}
-
+  // Use the dedicated S
