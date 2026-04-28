@@ -19,64 +19,27 @@
   let paginationInProgress = false;
   let lastPaginatedPage = 0;
 
-  // Round 76dc: context invalidation guard. When the LCC extension is
-  // reloaded (chrome://extensions/ → reload, or auto-update), in-flight
-  // content scripts on already-open tabs lose their connection to the
-  // background service worker. Every chrome.runtime.sendMessage from
-  // them throws "Extension context invalidated". We detect that ONCE,
-  // log a single human-readable instruction, and stop trying to send —
-  // otherwise the console fills with hundreds of identical errors.
-  let contextInvalidated = false;
-
-  function isExtensionContextLive() {
-    if (contextInvalidated) return false;
-    try {
-      // Touching chrome.runtime.id throws if the context is gone.
-      return !!(chrome && chrome.runtime && chrome.runtime.id);
-    } catch (_) {
-      contextInvalidated = true;
-      return false;
-    }
-  }
-
-  function noteContextInvalidated() {
-    if (contextInvalidated) return;
-    contextInvalidated = true;
-    try { observer.disconnect(); } catch (_) {}
-    clearTimeout(extractionTimer);
-    console.warn(
-      '[LCC CoStar] extension was reloaded — this tab is now orphaned. ' +
-      'Reload the CoStar tab (Ctrl+R) to reconnect the LCC sidebar.'
-    );
-  }
-
+  // Round 76de: minimal sendMessage wrapper. Just suppresses console noise
+  // when the extension context is invalidated (extension reload mid-session).
+  // No kill switch — let the content script keep trying; the page reload
+  // is the user's fix path, and we don't want to disable extraction
+  // pre-emptively based on Chrome's normal "message port closed" lastError.
   function safeSendMessage(payload) {
-    if (!isExtensionContextLive()) {
-      noteContextInvalidated();
-      return;
-    }
     try {
       chrome.runtime.sendMessage(payload, () => {
-        // Drain lastError so Chrome doesn't surface "Unchecked runtime.lastError"
-        // in the console. We INTENTIONALLY do NOT treat "message port closed"
-        // or "receiving end does not exist" as context invalidation — those
-        // fire on every async listener that doesn't return true (i.e. the
-        // entire CONTEXT_DETECTED path), and the message has already been
-        // delivered. Only a synchronous throw with "Extension context
-        // invalidated" (caught below) is a real invalidation signal.
+        // Drain lastError so Chrome doesn't surface
+        // "Unchecked runtime.lastError" in the console.
         void (chrome.runtime && chrome.runtime.lastError);
       });
     } catch (err) {
-      if (/Extension context invalidated/i.test(err && err.message || '')) {
-        noteContextInvalidated();
-      } else {
+      // Swallow "Extension context invalidated" silently; surface other errors.
+      if (!/Extension context invalidated/i.test(err && err.message || '')) {
         console.error('[LCC CoStar] sendMessage failed:', err);
       }
     }
   }
 
   const observer = new MutationObserver(() => {
-    if (!isExtensionContextLive()) return;
     clearTimeout(extractionTimer);
     extractionTimer = setTimeout(extract, 500);
   });
@@ -89,7 +52,6 @@
   // ── Main extraction ───────────────────────────────────────────────────
 
   function extract() {
-    if (!isExtensionContextLive()) { noteContextInvalidated(); return; }
     try {
     const url = window.location.href;
 
