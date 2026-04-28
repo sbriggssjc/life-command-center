@@ -19,7 +19,61 @@
   let paginationInProgress = false;
   let lastPaginatedPage = 0;
 
+  // Round 76dc: context invalidation guard. When the LCC extension is
+  // reloaded (chrome://extensions/ → reload, or auto-update), in-flight
+  // content scripts on already-open tabs lose their connection to the
+  // background service worker. Every chrome.runtime.sendMessage from
+  // them throws "Extension context invalidated". We detect that ONCE,
+  // log a single human-readable instruction, and stop trying to send —
+  // otherwise the console fills with hundreds of identical errors.
+  let contextInvalidated = false;
+
+  function isExtensionContextLive() {
+    if (contextInvalidated) return false;
+    try {
+      // Touching chrome.runtime.id throws if the context is gone.
+      return !!(chrome && chrome.runtime && chrome.runtime.id);
+    } catch (_) {
+      contextInvalidated = true;
+      return false;
+    }
+  }
+
+  function noteContextInvalidated() {
+    if (contextInvalidated) return;
+    contextInvalidated = true;
+    try { observer.disconnect(); } catch (_) {}
+    clearTimeout(extractionTimer);
+    console.warn(
+      '[LCC CoStar] extension was reloaded — this tab is now orphaned. ' +
+      'Reload the CoStar tab (Ctrl+R) to reconnect the LCC sidebar.'
+    );
+  }
+
+  function safeSendMessage(payload) {
+    if (!isExtensionContextLive()) {
+      noteContextInvalidated();
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage(payload, () => {
+        // Drain lastError so Chrome doesn't surface "Unchecked runtime.lastError"
+        const err = chrome.runtime && chrome.runtime.lastError;
+        if (err && /context invalidated|message port closed|receiving end/i.test(err.message || '')) {
+          noteContextInvalidated();
+        }
+      });
+    } catch (err) {
+      if (/context invalidated|Extension context/i.test(err && err.message || '')) {
+        noteContextInvalidated();
+      } else {
+        console.error('[LCC CoStar] sendMessage failed:', err);
+      }
+    }
+  }
+
   const observer = new MutationObserver(() => {
+    if (!isExtensionContextLive()) return;
     clearTimeout(extractionTimer);
     extractionTimer = setTimeout(extract, 500);
   });
@@ -32,6 +86,7 @@
   // ── Main extraction ───────────────────────────────────────────────────
 
   function extract() {
+    if (!isExtensionContextLive()) { noteContextInvalidated(); return; }
     try {
     const url = window.location.href;
 
@@ -275,7 +330,7 @@
       }
     }
 
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'CONTEXT_DETECTED',
       data: {
         domain: 'costar',
@@ -2264,7 +2319,7 @@
       cursor: 'pointer',
     });
     btn.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' });
+      safeSendMessage({ type: 'OPEN_SIDE_PANEL' });
     });
     headingEl.parentElement?.appendChild(btn);
   }
