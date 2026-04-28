@@ -65,6 +65,53 @@ import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 
 const COSTAR_DEFAULT_CONFIDENCE = 0.6;
 
+// ============================================================================
+// Pre-ingestion guards for sales-party text fields (Round 76ax, 2026-04-28)
+// ============================================================================
+//
+// Defense-in-depth filter that rejects buyer/seller/recorded_owner names that
+// are obviously brokerage firms ("Cbre", "Marcus & Millichap", "NAI KLNB"),
+// CoStar's "Company 1 X | Company 2 Y" broker-pair format, or test-fixture
+// residue (__TEST_BUYER__ etc).
+//
+// JS-level filter catches at write time so the value never reaches the DB.
+// SQL-level BEFORE INSERT trigger (dia_filter_junk_sales_party,
+// gov_filter_junk_sales_party) catches values that arrive via other paths.
+//
+// Why: the 2026-04-28 audit found "Cbre" / "Marcus & Millichap" populating
+// gov.sales_transactions.buyer in 7 rows and "__TEST_BUYER__" in 1 dia
+// property's recorded_owner_name. Both came from CoStar export columns
+// where the broker-firm field bleeds into the buyer column when the deed
+// hadn't recorded yet at scrape time.
+const SALES_PARTY_JUNK_RE = new RegExp(
+  '^(' +
+    'cbre|marcus & millichap|jll|cushman( & wakefield)?|colliers( international)?|' +
+    'nai( [a-z]+)?|stream realty|kw commercial|newmark|capital pacific|' +
+    'northmarq|berkadia|matthews real estate|matthews|' +
+    'company \\d+ .+|.* \\| company \\d+ .+|' +
+    '__test.*__|test_buyer|test_seller|n/a|none|null|tbd|unknown|placeholder' +
+  ')$',
+  'i'
+);
+
+function isJunkSalesParty(name) {
+  if (name === null || name === undefined) return false;
+  const trimmed = String(name).trim();
+  if (!trimmed) return false;
+  return SALES_PARTY_JUNK_RE.test(trimmed.toLowerCase());
+}
+
+function cleanSalesPartyValue(name) {
+  if (name === null || name === undefined) return null;
+  const trimmed = String(name).trim();
+  if (!trimmed) return null;
+  if (isJunkSalesParty(trimmed)) {
+    console.warn(`[isJunkSalesParty] Stripping junk party name: "${trimmed}"`);
+    return null;
+  }
+  return trimmed;
+}
+
 async function recordFieldProvenance(args) {
   const { workspaceId, targetDatabase, targetTable, recordPk, fieldName,
           value, source, sourceRunId, confidence, recordedBy } = args;
@@ -3058,8 +3105,11 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const contactSeller = (metadata.contacts || [])
       .find(c => c.role === 'seller')?.name || null;
 
-    const buyerVal  = sale.buyer  || (isCurrentSale ? contactBuyer  : null);
-    const sellerVal = sale.seller || (isCurrentSale ? contactSeller : null);
+    // Round 76ax: strip brokerage names + test fixtures from buyer/seller
+    // before they reach the DB. SQL trigger (dia/gov_filter_junk_sales_party)
+    // is the second line of defense; this is the first.
+    const buyerVal  = cleanSalesPartyValue(sale.buyer  || (isCurrentSale ? contactBuyer  : null));
+    const sellerVal = cleanSalesPartyValue(sale.seller || (isCurrentSale ? contactSeller : null));
     const procuringBrokerVal = isCurrentSale ? (buyerBroker?.name || null) : null;
 
     // Cap-rate gating: only the most-recent sale (matching CoStar's Last
@@ -3390,8 +3440,8 @@ async function stageGovCompForSalesforce(propertyId, entity, metadata) {
     sale_date:      saleDate,
     sale_price:     parseCurrency(mostRecentSale.sale_price),
     cap_rate:       parseCapRateDecimal(mostRecentSale.cap_rate),
-    buyer_name:     buyerContact?.name || mostRecentSale.buyer || null,
-    seller_name:    sellerContact?.name || mostRecentSale.seller || null,
+    buyer_name:     cleanSalesPartyValue(buyerContact?.name || mostRecentSale.buyer),
+    seller_name:    cleanSalesPartyValue(sellerContact?.name || mostRecentSale.seller),
     square_feet:    parseSF(metadata.square_footage),
     property_id:    propertyId,
     data_source:    'costar_sidebar',
@@ -5747,7 +5797,7 @@ async function upsertDialysisListings(propertyId, metadata) {
     listing_date: new Date().toISOString().split('T')[0],
     status: 'Active',
     is_active: true,
-    seller_name: sellerContact?.name || null,
+    seller_name: cleanSalesPartyValue(sellerContact?.name),
     listing_broker: primaryBroker?.name || null,
     broker_email: primaryBroker?.email || null,
     price_per_sf: safePricePsf,
@@ -6019,7 +6069,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
     listing_firm: brokerContact?.company || null,
     broker_phone: brokerContact?.phones?.[0] || null,
     broker_email: brokerContact?.email || null,
-    seller_name: sellerContact?.name || null,
+    seller_name: cleanSalesPartyValue(sellerContact?.name),
   });
 
   // Always keep property_id and listing_status even after stripNulls
