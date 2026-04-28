@@ -443,11 +443,38 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   }
 
   if (msg.type === 'SCAN_PAGE') {
-    // Inject the public-records scanner into the active tab on demand
+    // Inject the public-records scanner into the active tab on demand.
+    // Round 76cz: refuse the scan on dedicated-scraper hosts (CoStar,
+    // LoopNet, RCA, Crexi, Salesforce). public-records.js is a heuristic
+    // fallback for unknown county-records sites; running it on a CoStar
+    // page made it hunt for assessor-style label/value pairs in CoStar's
+    // PropertyCharacteristicsTable, found garbage, and emitted
+    // CONTEXT_DETECTED with domain='public-records' that overwrote the
+    // real costar.js context. Symptom: sidebar header showed
+    // 'RBA11,788 SFStories1Typical Floor...' as the address and badge
+    // flipped to 'Public Records (unknown) v21'. These hosts already
+    // have dedicated content scripts auto-injected by the manifest;
+    // SCAN_PAGE is for unknown sites only.
     (async () => {
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) { respond({ ok: false, error: 'No active tab' }); return; }
+        const dedicatedHost = (() => {
+          try {
+            const h = new URL(tab.url).hostname.toLowerCase();
+            return h.includes('costar.com') || h.includes('loopnet.com')
+                || h.includes('rcanalytics.com') || h.includes('crexi.com')
+                || h.includes('salesforce.com');
+          } catch { return false; }
+        })();
+        if (dedicatedHost) {
+          respond({
+            ok: false,
+            error: 'Dedicated scraper already loaded for this site. Reload the page if data is missing.',
+            skipped: 'dedicated_host',
+          });
+          return;
+        }
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           files: ['content/public-records.js'],
