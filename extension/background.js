@@ -102,6 +102,25 @@ function detectDomainHint(url) {
 // ── Badge updates on tab change ─────────────────────────────────────────────
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  // Round 76bz: when the active tab's URL changes to a different property
+  // (different pathname, even if both pages are on the same host), proactively
+  // clear pageContext so the next CONTEXT_DETECTED starts from a clean slate.
+  // Don't wait for the merge logic to detect the property change — by then
+  // partial scrapes may have leaked stale contacts/sales into the new
+  // property's display. Fires on info.url updates (which precede 'complete').
+  if (info.url) {
+    chrome.storage.session.get(['pageContext'], (result) => {
+      const existing = result.pageContext || {};
+      const existingKey = propertyIdentityKey(existing.page_url);
+      const incomingKey = propertyIdentityKey(info.url);
+      if (existingKey && incomingKey && existingKey !== incomingKey) {
+        // Different property: drop the cached context. The content script
+        // will re-emit CONTEXT_DETECTED for the new page when it loads.
+        chrome.storage.session.remove('pageContext');
+      }
+    });
+  }
+
   if (info.status !== 'complete') return;
   const hint = detectDomainHint(tab.url);
   if (hint) {
@@ -189,20 +208,55 @@ async function testConnection() {
 
 // ── Message listener ────────────────────────────────────────────────────────
 
+// Round 76bz: extract a stable property identity from a CoStar (or other
+// source) page URL. CoStar property pages share the same pathname across
+// Summary / Sale / Contacts / Public Records sub-tabs and differ between
+// properties, making pathname a much more reliable invariant than address
+// (which can be empty on early scrapes or differ between header vs detail
+// rendering). Returns null when URL is missing or unparseable.
+function propertyIdentityKey(url) {
+  if (!url || typeof url !== 'string') return null;
+  try {
+    const u = new URL(url);
+    // Strip the fragment + most query params; keep host + pathname only.
+    // CoStar sub-tabs are routed via in-app navigation that doesn't change
+    // the pathname, so this remains stable as the user clicks tabs but
+    // changes when they navigate to a different property.
+    return (u.host + u.pathname).toLowerCase().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg.type === 'CONTEXT_DETECTED') {
     // Merge detected page context with any existing context for the same
     // property, so tenant/sales data captured on one CoStar sub-tab (e.g.
     // main detail) isn't overwritten when the user switches to Contacts or
     // Public Records and that tab emits a fresh CONTEXT_DETECTED.
+    //
+    // Round 76bz: the prior implementation compared addresses, but address
+    // can be missing on early scrapes (header not yet rendered) or differ
+    // between CoStar's header vs detail panels. That caused cross-property
+    // state leaks (Yankee St page showing contacts/sale-notes from the
+    // user's previously-viewed Allison Ave page). Use URL identity as the
+    // primary invariant — same pathname = same property; different
+    // pathname = different property, even if addresses happen to match.
     chrome.storage.session.get(['pageContext'], (result) => {
       const existing = result.pageContext || {};
       const incoming = msg.data || {};
 
-      const sameProperty = existing.address &&
-        incoming.address &&
-        existing.address.toLowerCase().trim() ===
-        incoming.address.toLowerCase().trim();
+      const existingKey = propertyIdentityKey(existing.page_url);
+      const incomingKey = propertyIdentityKey(incoming.page_url);
+
+      // Primary: URL-based identity. Both keys present and equal = same property.
+      // Secondary: when URLs are unavailable (legacy/non-CoStar source), fall
+      // back to address equality so cross-source ingestion still works.
+      const sameProperty = (existingKey && incomingKey)
+        ? existingKey === incomingKey
+        : (existing.address && incoming.address &&
+           existing.address.toLowerCase().trim() ===
+           incoming.address.toLowerCase().trim());
 
       const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner)$/i;
 
@@ -651,87 +705,4 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             detail: flowText.slice(0, 200),
           });
           console.error('[STAGE_PDF_TO_LCC] Flow A returned non-ok', {
-            flowUrl: settings.lccIntakeFlowUrl.replace(/\?.*$/, '?<redacted>'),
-            status: flowRes.status,
-            bodySnippet: flowText.slice(0, 400),
-          });
-        } catch (flowErr) {
-          trail.push({ path: 'power_automate_flow', error: flowErr.message });
-          console.error('[STAGE_PDF_TO_LCC] Flow A fetch threw', flowErr);
-        }
-      }
-
-      // ── Path B: direct inline POST (Vercel ~4.5MB cap) ──────────────────
-      try {
-        const stageUrl = `${host}/api/intake/stage-om`;
-        const postRes = await fetch(stageUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...apiHeaders },
-          body: JSON.stringify({
-            intake_source:  'copilot',
-            intake_channel: 'sidebar',
-            intent,
-            artifacts: {
-              primary_document: {
-                bytes_base64: getBase64(),
-                file_name:    fileName,
-                mime_type:    mimeType,
-              },
-            },
-            seed_data: { tags: seedTags },
-          }),
-        });
-        const rawBody = await postRes.text();
-        let payload = null;
-        let parseErr = null;
-        try { payload = JSON.parse(rawBody); }
-        catch (e) { parseErr = e.message; }
-
-        if (!postRes.ok || parseErr) {
-          console.error('[STAGE_PDF_TO_LCC] Path B non-success', {
-            stageUrl,
-            status: postRes.status,
-            statusText: postRes.statusText,
-            contentType: postRes.headers.get('content-type'),
-            bodySnippet: rawBody.slice(0, 400),
-            parseErr,
-          });
-          trail.push({
-            path:   'inline_post',
-            status: postRes.status,
-            detail: parseErr
-              ? `non-JSON response (first 200b): ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
-              : rawBody.slice(0, 200),
-          });
-        }
-
-        respond({
-          ok:          postRes.ok && (payload?.ok !== false) && !parseErr,
-          status:      postRes.status,
-          statusText:  postRes.statusText,
-          contentType: postRes.headers.get('content-type'),
-          body: payload || {
-            error:  parseErr ? 'non_json_response' : 'all_paths_failed',
-            detail: parseErr
-              ? `Server returned ${postRes.status} ${postRes.statusText}. First 200 bytes: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
-              : rawBody.slice(0, 200),
-            trail,
-          },
-          sizeBytes,
-          fileName,
-          path: 'inline_post',
-        });
-      } catch (err) {
-        respond({
-          ok:    false,
-          error: err.message,
-          body:  { error: 'all_paths_failed', detail: err.message, trail },
-          path:  'inline_post',
-          sizeBytes,
-          fileName,
-        });
-      }
-    })();
-    return true; // async response
-  }
-});
+            flowUrl: settings.lccIntakeFlow
