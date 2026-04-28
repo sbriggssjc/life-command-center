@@ -841,6 +841,14 @@ async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
               document_type:     d.document_type,
               pdf_text_len:      d.pdf_text_len,
               pdf_parse_error:   d.pdf_parse_error,
+              // Round 76bw: persist failure-cause fields so failed intakes
+              // are diagnosable from the SQL audit. Without these, failed
+              // rows show ai_ok=false with no clue why (PDF parse vs AI
+              // throw vs unparseable response). Trim to 240 chars to keep
+              // payload size bounded.
+              ai_error:          d.ai_error    ? String(d.ai_error).slice(0, 240)    : null,
+              error:             d.error       ? String(d.error).slice(0, 240)       : null,
+              fetched:           d.fetched ?? null,
             })),
             downstream_completed_at: new Date().toISOString(),
           },
@@ -891,19 +899,4 @@ export async function handleExtractRoute(req, res) {
     return res.status(400).json({ error: 'intake_id is required' });
   }
 
-  // AI provider key checks are handled by invokeChatProvider — a missing key
-  // returns { ok: false, status: 503 } which processIntakeExtraction surfaces
-  // per-artifact.  No pre-flight env check required.
-  void getAiConfig();
-
-  try {
-    const result = await processIntakeExtraction(intakeId, {
-      workspaceId,
-      actorId: user.id,
-    });
-    return res.status(result.ok ? 200 : 500).json(result);
-  } catch (err) {
-    console.error('[intake-extractor] Manual extraction failed:', err.message);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-}
+  // AI provider ke
