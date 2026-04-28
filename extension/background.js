@@ -705,4 +705,87 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             detail: flowText.slice(0, 200),
           });
           console.error('[STAGE_PDF_TO_LCC] Flow A returned non-ok', {
-            flowUrl: settings.lccIntakeFlow
+            flowUrl: settings.lccIntakeFlowUrl.replace(/\?.*$/, '?<redacted>'),
+            status: flowRes.status,
+            bodySnippet: flowText.slice(0, 400),
+          });
+        } catch (flowErr) {
+          trail.push({ path: 'power_automate_flow', error: flowErr.message });
+          console.error('[STAGE_PDF_TO_LCC] Flow A fetch threw', flowErr);
+        }
+      }
+
+      // ── Path B: direct inline POST (Vercel ~4.5MB cap) ──────────────────
+      try {
+        const stageUrl = `${host}/api/intake/stage-om`;
+        const postRes = await fetch(stageUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify({
+            intake_source:  'copilot',
+            intake_channel: 'sidebar',
+            intent,
+            artifacts: {
+              primary_document: {
+                bytes_base64: getBase64(),
+                file_name:    fileName,
+                mime_type:    mimeType,
+              },
+            },
+            seed_data: { tags: seedTags },
+          }),
+        });
+        const rawBody = await postRes.text();
+        let payload = null;
+        let parseErr = null;
+        try { payload = JSON.parse(rawBody); }
+        catch (e) { parseErr = e.message; }
+
+        if (!postRes.ok || parseErr) {
+          console.error('[STAGE_PDF_TO_LCC] Path B non-success', {
+            stageUrl,
+            status: postRes.status,
+            statusText: postRes.statusText,
+            contentType: postRes.headers.get('content-type'),
+            bodySnippet: rawBody.slice(0, 400),
+            parseErr,
+          });
+          trail.push({
+            path:   'inline_post',
+            status: postRes.status,
+            detail: parseErr
+              ? `non-JSON response (first 200b): ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+              : rawBody.slice(0, 200),
+          });
+        }
+
+        respond({
+          ok:          postRes.ok && (payload?.ok !== false) && !parseErr,
+          status:      postRes.status,
+          statusText:  postRes.statusText,
+          contentType: postRes.headers.get('content-type'),
+          body: payload || {
+            error:  parseErr ? 'non_json_response' : 'all_paths_failed',
+            detail: parseErr
+              ? `Server returned ${postRes.status} ${postRes.statusText}. First 200 bytes: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
+              : rawBody.slice(0, 200),
+            trail,
+          },
+          sizeBytes,
+          fileName,
+          path: 'inline_post',
+        });
+      } catch (err) {
+        respond({
+          ok:    false,
+          error: err.message,
+          body:  { error: 'all_paths_failed', detail: err.message, trail },
+          path:  'inline_post',
+          sizeBytes,
+          fileName,
+        });
+      }
+    })();
+    return true; // async response
+  }
+});
