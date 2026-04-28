@@ -592,7 +592,7 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     'dialysis',
     'GET',
     `properties?property_id=eq.${Number(propertyId)}` +
-    `&select=tenant,year_built,lot_sf,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
+    `&select=tenant,year_built,lot_sf,building_size,land_area,lease_commencement,anchor_rent,anchor_rent_date,anchor_rent_source,parcel_number&limit=1`
   );
   if (!existing.ok || !Array.isArray(existing.data) || !existing.data.length) {
     return { ok: false, skipped: 'property_not_found', property_id: propertyId };
@@ -630,6 +630,33 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
     Number.isFinite(lotSf) && lotSf > 0 && lotSf < 100_000_000
   ) {
     patch.lot_sf = Math.round(lotSf);
+  }
+
+  // building_size (RBA) — Round 76bk (2026-04-28). Previously missing from
+  // the dia property back-write. Audit found 0% propagation for building_sf
+  // despite 34% of recent OM extractions capturing it. Same conservative
+  // rule: only fill when NULL or 0 (matches Round 76ba zero-to-NULL trigger
+  // semantics). Reasonable upper bound 5M sf to reject extraction errors.
+  const buildingSf = snapshot.building_sf != null ? Number(snapshot.building_sf) : null;
+  if (
+    (current.building_size == null || Number(current.building_size) === 0) &&
+    Number.isFinite(buildingSf) && buildingSf > 100 && buildingSf < 5_000_000
+  ) {
+    patch.building_size = Math.round(buildingSf);
+  }
+
+  // land_area (acres) — convert lot_sf to acres if no acres given, fill if NULL
+  const lotAcres = snapshot.land_acres != null ? Number(snapshot.land_acres) : null;
+  if (
+    (current.land_area == null || Number(current.land_area) === 0) &&
+    Number.isFinite(lotAcres) && lotAcres > 0 && lotAcres < 10000
+  ) {
+    patch.land_area = lotAcres;
+  } else if (
+    (current.land_area == null || Number(current.land_area) === 0) &&
+    Number.isFinite(lotSf) && lotSf > 0
+  ) {
+    patch.land_area = Math.round((lotSf / 43560) * 100) / 100;  // sf to acres
   }
 
   // lease_commencement — only fill if NULL
