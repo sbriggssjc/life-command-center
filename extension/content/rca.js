@@ -136,6 +136,19 @@
       if (!label || !value) return;
       mapCharacteristic(data, label, value);
     });
+
+    // Round 76ai 2026-04-28: Derive a more semantic property_type by combining
+    // RCA's separated property_type + features fields. RCA shows "Office" with
+    // features="Medical" for medical office, but the LCC dashboard categorizes
+    // properties as "Medical Office" — keep that intact when re-saving from RCA.
+    const features = (data.features || '').toLowerCase();
+    const baseType = (data.property_type || '').toLowerCase();
+    const subtype  = (data.property_subtype || '').toLowerCase();
+    if (/medical/.test(features) && (baseType === 'office' || subtype.includes('sub'))) {
+      data.property_type = 'Medical Office';
+    } else if (/dialysis|kidney|renal/.test(features)) {
+      data.property_type = 'Medical Office';
+    }
   }
 
   function mapCharacteristic(data, label, value) {
@@ -183,6 +196,7 @@
       const evt = {
         kind: txTypeM[1].toLowerCase(),
         date_label: dateM ? dateM[1] : null,
+        sale_date: rcaParseAbbrevDate(dateM ? dateM[1] : null),
       };
 
       // Price block: '$5,362,000 approx $455 /sf'
@@ -196,9 +210,43 @@
         if (capM) evt.cap_rate = capM[1] + '%';
       }
 
-      // Entities: buyer/seller/lender chain
+      // Entities: buyer/seller/lender chain.
+      // Round 76ai 2026-04-28: parse the structured fields. RCA renders the
+      // entities cell as 'Buyer from Seller ↔ Lender ↔ Broker' with role
+      // icons in front of each entity (B, S, F, L). textContent gives us the
+      // concatenated names; split on the role keywords.
       if (entitiesTd) {
-        evt.entities_text = textOf(entitiesTd);
+        const entitiesText = textOf(entitiesTd);
+        evt.entities_text = entitiesText;
+
+        // 'X from Y' splits buyer (left of 'from') from seller (right).
+        // Lender follows after a separator (↔, with, ↣) when present.
+        const fromMatch = entitiesText.match(/^(.+?)\s+from\s+(.+?)(?:\s+(?:↔|↣|with|by)\s+(.+))?$/i);
+        if (fromMatch) {
+          evt.buyer  = (fromMatch[1] || '').trim() || null;
+          evt.seller = (fromMatch[2] || '').trim() || null;
+          if (fromMatch[3]) evt.lender = fromMatch[3].trim();
+        } else {
+          // Refinance / standalone-mortgage: 'Borrower ↔ Lender' or 'Borrower with Lender'
+          const refiMatch = entitiesText.match(/^(.+?)\s+(?:↔|↣|with|by)\s+(.+)$/);
+          if (refiMatch) {
+            evt.buyer  = (refiMatch[1] || '').trim() || null;
+            evt.lender = (refiMatch[2] || '').trim() || null;
+          }
+        }
+
+        // Also try anchor-text selectors when the role icons leave a usable
+        // prefix in the DOM (RCA sometimes does data-role attrs).
+        const anchors = entitiesTd.querySelectorAll('a, span[data-role]');
+        anchors.forEach((a) => {
+          const role = (a.getAttribute('data-role') || a.className || '').toLowerCase();
+          const txt = textOf(a);
+          if (!txt) return;
+          if (/owner|buyer/.test(role) && !evt.buyer)  evt.buyer  = txt;
+          if (/seller/.test(role)      && !evt.seller) evt.seller = txt;
+          if (/lender|fund/.test(role) && !evt.lender) evt.lender = txt;
+          if (/broker/.test(role)      && !evt.broker) evt.broker = txt;
+        });
       }
 
       // Comments: narrative
@@ -208,6 +256,27 @@
 
       data.sales_history.push(evt);
     });
+  }
+
+  // Convert RCA's abbreviated 'Feb '26' / 'May 16' style to ISO YYYY-MM-01.
+  // Server-side upsertDomainSales calls parseDate which accepts YYYY-MM-DD.
+  function rcaParseAbbrevDate(label) {
+    if (!label) return null;
+    const m = String(label).trim().match(/^([A-Za-z]+)\s+'?(\d{2,4})$/);
+    if (!m) return null;
+    const monthNames = {
+      jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+      jul:'07', aug:'08', sep:'09', sept:'09', oct:'10', nov:'11', dec:'12',
+    };
+    const mo = monthNames[m[1].toLowerCase().slice(0,3)] || monthNames[m[1].toLowerCase()];
+    if (!mo) return null;
+    let yr = m[2];
+    if (yr.length === 2) {
+      const n = parseInt(yr, 10);
+      // 2-digit years: 00-69 -> 2000-2069, 70-99 -> 1970-1999
+      yr = (n <= 69 ? '20' : '19') + yr.padStart(2, '0');
+    }
+    return `${yr}-${mo}-01`;
   }
 
   function extractFinancing(data) {
