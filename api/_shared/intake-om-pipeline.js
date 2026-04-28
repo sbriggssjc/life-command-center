@@ -27,7 +27,23 @@ import { processIntakeExtraction } from '../_handlers/intake-extractor.js';
 
 const BRIGGSLAND_WORKSPACE_ID = 'a0000000-0000-0000-0000-000000000001';
 const OM_INLINE_MAX_BYTES     = 25 * 1024 * 1024; // 25 MB (PVA + Copilot Chat cap)
-const EXTRACT_RACE_MS         = 7000;             // keep under Vercel 10s timeout
+// Round 76cb: env-tunable race timeout. Default 25000ms (25s) lets most OM
+// extractions complete inline (typical pdf-parse + AI takes 15-30s) so the
+// caller gets immediate classification instead of always seeing 'processing'
+// and waiting for the retry cron from Round 76bx to pick it up.
+//
+// Override with EXTRACT_RACE_MS env var. Bound: must be < your Vercel
+// function maxDuration. Hobby plan: 10s function cap -> set to 8000.
+// Pro plan: 60s function cap -> 25000-50000 is comfortable.
+//
+// The retry cron (Round 76bx) catches any stragglers regardless of this
+// value, so getting it slightly wrong is no longer catastrophic - just
+// means more retry traffic than necessary.
+const EXTRACT_RACE_MS = (() => {
+  const raw = parseInt(process.env.EXTRACT_RACE_MS || '', 10);
+  if (Number.isFinite(raw) && raw >= 1000 && raw <= 120000) return raw;
+  return 25000; // sensible default for Vercel Pro
+})();
 
 /**
  * @typedef {object} StageOmInput
