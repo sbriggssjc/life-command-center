@@ -899,4 +899,19 @@ export async function handleExtractRoute(req, res) {
     return res.status(400).json({ error: 'intake_id is required' });
   }
 
-  // AI provider ke
+  // AI provider key checks are handled by invokeChatProvider — a missing key
+  // returns { ok: false, status: 503 } which processIntakeExtraction surfaces
+  // per-artifact.  No pre-flight env check required.
+  void getAiConfig();
+
+  try {
+    const result = await processIntakeExtraction(intakeId, {
+      workspaceId,
+      actorId: user.id,
+    });
+    return res.status(result.ok ? 200 : 500).json(result);
+  } catch (err) {
+    console.error('[intake-extractor] Manual extraction failed:', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
