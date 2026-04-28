@@ -1382,13 +1382,17 @@ function renderIngestDiff(ctx, lccEntity) {
     { label: 'Building Size', costar: ctx.square_footage,
       db: lccEntity.metadata?.square_footage },
     (() => {
-      const INVALID = /^(public\s+record|building|land|market|sources)$/i;
+      // Round 76cl: extended to match the background.js INVALID_TENANT regex.
+      // Keeps the renderIngestDiff display from showing junk values stored in
+      // pre-fix entity metadata (the migration scrubbed the DB; this filter
+      // also guards against any remaining pollution rendering to the UI).
+      const INVALID = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner|my\s+data|news|reports|directory|markets|public\s+records|rent|for\s+lease\s+at\s+sale|smallest\s+space|max\s+contiguous|office\s+avail|retail\s+avail|industrial\s+avail|service\s+type|owner\s+occup(?:ied|ant)?|legal\s+description)$/i;
       const tenantCostar = (() => {
-        const raw = (ctx.tenants||[]).map(t=>t.name).join(', ') || ctx.tenant_name;
+        const raw = (ctx.tenants||[]).map(t=>t.name).filter(n => n && !INVALID.test(n)).join(', ') || ctx.tenant_name;
         return (raw && !INVALID.test(raw)) ? raw : null;
       })();
       const tenantDb = (() => {
-        const raw = meta.tenant_name || (meta.tenants||[]).map(t=>t.name).join(', ');
+        const raw = meta.tenant_name || (meta.tenants||[]).map(t=>t.name).filter(n => n && !INVALID.test(n)).join(', ');
         return (raw && !INVALID.test(raw)) ? raw : null;
       })();
       return { label: 'Tenant', costar: tenantCostar, db: tenantDb,
