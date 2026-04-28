@@ -67,6 +67,8 @@ app.all('/api/treasury', (req, res) => { req.query._route = 'treasury'; adminHan
 app.all('/api/daily-briefing', (req, res) => { req.query._route = 'edge-brief'; req.query.action = 'snapshot'; adminHandler(req, res); });
 app.all('/api/cms-match', (req, res) => { req.query._route = 'cms-match'; adminHandler(req, res); });
 app.all('/api/ownership-reconcile', (req, res) => { req.query._route = 'ownership-reconcile'; adminHandler(req, res); });
+app.all('/api/sf-sync-queue', (req, res) => { req.query._route = 'sf-sync-queue'; adminHandler(req, res); });
+app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-cleanup'; adminHandler(req, res); });
 
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
