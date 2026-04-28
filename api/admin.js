@@ -1622,8 +1622,13 @@ async function handleStorageCleanup(req, res) {
   const failures = [];
   for (const obj of orphans) {
     try {
+      // Storage REST API expects literal '/' in object paths, not %2F.
+      // encodeURIComponent encodes '/' which the API rejects with 400.
+      // Encode each path segment individually so spaces/specials still get
+      // encoded but slashes pass through. Round 76as 2026-04-28.
+      const encodedPath = obj.name.split('/').map(encodeURIComponent).join('/');
       const delResp = await fetch(
-        `${opsUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodeURIComponent(obj.name)}`,
+        `${opsUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`,
         {
           method: 'DELETE',
           headers: {
