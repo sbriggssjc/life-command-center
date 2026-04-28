@@ -1323,3 +1323,125 @@ body.compact .greeting { font-size: 18px; }
   .uc-merge-pair { flex-direction: column; }
   .uc-merge-arrow { transform: rotate(90deg); }
 }
+
+/* ============================================================
+   Round 76bj (2026-04-28) — Mobile UX fixes
+   ============================================================ */
+
+/* (1) Consolidate button must stay visible on mobile.
+   On narrow viewports the .detail-header-info container was wrapping
+   and pushing the inline button + badge out of the visible area. Use
+   flex-shrink:0 so the button can't be squeezed away, and allow the
+   header to wrap onto a second line if needed. */
+.detail-header { flex-wrap: wrap; row-gap: 6px; }
+.detail-header-info { flex-wrap: wrap; row-gap: 6px; }
+.detail-action-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-height: 32px;
+}
+@media (max-width: 480px) {
+  .detail-action-btn { font-size: 11px; padding: 5px 8px; }
+}
+
+/* (2) Chatbot FAB blocking the next-page button on mobile.
+   The .copilot-fab was positioned bottom-right where the pager's Next
+   button lives. Push the FAB further off the bottom on mobile, and
+   auto-hide it whenever a detail panel or modal is open so it never
+   blocks page-level controls. */
+@media (max-width: 700px) {
+  .copilot-fab { bottom: calc(140px + var(--safe-bottom)); right: 12px; width: 44px; height: 44px; font-size: 18px; }
+}
+.detail-panel.open ~ .copilot-fab,
+body:has(.detail-panel.open) .copilot-fab,
+body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
+
+/* (3) Table views constrained by widest sibling element.
+   The dashboard pages had .data-table inside a column-flex parent that
+   inherited a max-width from the surrounding card. Force the wrapper
+   to break out to the full row width and let the inner table scroll
+   horizontally if it overflows. */
+.table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 8px;
+}
+.dashboard-tables-section .table-wrapper,
+.dashboard .table-wrapper {
+  margin-left: -8px;
+  margin-right: -8px;
+  width: calc(100% + 16px);
+}
+.data-table { min-width: 1100px; }
+@media (max-width: 700px) {
+  .data-table { min-width: 900px; font-size: 12px; }
+  .data-table th, .data-table td { padding: 8px 6px; }
+}
+
+/* (4) Search auto-opens on mobile when a table loads. The .search-bar
+   used to render with a focused input on initial load via autofocus on
+   the search input. Suppress autofocus on touch devices via the JS
+   layer (see Round 76bj patch in app.js / detail.js); CSS-only safety
+   is to make the input not auto-zoom on iOS. */
+.search-bar input { font-size: 16px; /* prevents iOS auto-zoom */ }
+@media (max-width: 700px) {
+  /* When a search input has the no-mobile-autofocus class, prevent the
+     visual "focused" state from rendering on initial load until user
+     taps. */
+  .search-bar input.no-mobile-autofocus:not(:focus) {
+    box-shadow: none;
+    border-color: var(--border);
+  }
+}
+
+/* (6) Resolve / Manual Review CTA when an issue is flagged.
+   Standardized button family used throughout problem-surfacing UIs
+   (provenance conflicts, data quality issues, sync errors, etc).
+   Place a .issue-actions row under any flagged-issue card with these
+   buttons. */
+.issue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.issue-resolve-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.issue-resolve-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+.issue-review-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.issue-review-btn:hover { border-color: var(--accent); color: var(--text); }
+.issue-dismiss-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text3);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.issue-dismiss-btn:hover { border-color: var(--red); color: var(--red); }

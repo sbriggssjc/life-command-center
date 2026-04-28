@@ -680,7 +680,14 @@ function _udMapLegacyTab(name) {
     case 'property':         return 'Overview';
     case 'lease':            return 'Rent Roll';
     case 'ownership':        return 'Ownership & CRM';
-    case 'sales':            return 'Deal History';
+    // Round 76bj (2026-04-28): clicking a row in Sales/Avail dashboard tables
+    // used to land on Deal History tab. Scott wants Overview as the default
+    // landing tab regardless of which dashboard table the click came from —
+    // user can switch to Deal History manually. This applies to both
+    // 'sales' and 'available' alias paths.
+    case 'sales':            return 'Overview';
+    case 'available':        return 'Overview';
+    case 'listing':          return 'Overview';
     case 'history':          return 'Activity Log';
     case 'overview':         return 'Overview';
     case 'rent roll':        return 'Rent Roll';
