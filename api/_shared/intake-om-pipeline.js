@@ -24,6 +24,7 @@
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { logCopilotInteraction } from './memory.js';
 import { processIntakeExtraction } from '../_handlers/intake-extractor.js';
+import { ensureEntityLink } from './entity-link.js';
 
 const BRIGGSLAND_WORKSPACE_ID = 'a0000000-0000-0000-0000-000000000001';
 const OM_INLINE_MAX_BYTES     = 25 * 1024 * 1024; // 25 MB (PVA + Copilot Chat cap)
@@ -470,8 +471,39 @@ export async function stageOmIntake(input, auth, workspaceId) {
   const classifiedDomain = snapshot?.domain
     ?? snapshot?.property_type_domain
     ?? null;
-  const matchedEntityId  = snapshot?.matched_entity_id
-    ?? null;
+  // Round 76ce: bridge matcher property_id -> LCC entities.id via the
+  // external_identities table. processIntakeExtraction returns
+  // { extraction_snapshot, match_result } - the snapshot rarely carries
+  // matched_entity_id (it's an AI extraction artifact), but match_result
+  // from intake-matcher.js has { property_id, domain, status, confidence }.
+  // We resolve via ensureEntityLink so that activity_events / Copilot
+  // memory can key on a stable LCC entity_id rather than the dia/gov
+  // property_id (which doesn't exist in the LCC entities table).
+  let matchedEntityId = snapshot?.matched_entity_id ?? null;
+  const matchResult = extractionResult?.match_result;
+  if (!matchedEntityId && matchResult?.property_id && matchResult?.domain) {
+    try {
+      const sourceSystem = matchResult.domain === 'government' ? 'gov_db' : 'dia_db';
+      const linkResult = await ensureEntityLink({
+        workspaceId: wsId,
+        userId: user.id,
+        sourceSystem,
+        sourceType: 'property',
+        externalId: String(matchResult.property_id),
+        domain: matchResult.domain,
+        seedFields: {
+          address: snapshot?.address || null,
+          city:    snapshot?.city || null,
+          state:   snapshot?.state || null,
+        },
+      });
+      if (linkResult?.ok && linkResult.entityId) {
+        matchedEntityId = linkResult.entityId;
+      }
+    } catch (err) {
+      console.warn('[intake-om-pipeline] entity_id bridge failed (non-fatal):', err?.message);
+    }
+  }
 
   // ---- 9. Log activity_event for entity-scoped memory
   try {
