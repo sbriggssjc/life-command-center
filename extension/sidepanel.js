@@ -1052,6 +1052,24 @@ async function loadPropertyTab() {
           btn.style.color = '#fff';
           toast.textContent = `Intake id: ${b.intake_id} — ${b.message || ''}`;
           setTimeout(() => toast.remove(), 8000);
+        } else if (resp?.ok && resp?.body?.skipped) {
+          // Round 76ah 2026-04-28: server intentionally skipped this PDF
+          // (deed/loan, signature image, etc.). Render as a neutral notice,
+          // not a red error. The detail message explains the next step.
+          const b = resp.body;
+          btn.textContent = 'Skipped';
+          btn.style.background = '#FEF3C7';
+          btn.style.color = '#92400E';
+          btn.disabled = false;
+          toast.style.background = '#FEF3C7';
+          toast.style.color = '#92400E';
+          toast.style.borderColor = '#FCD34D';
+          toast.style.maxHeight = '180px';
+          toast.style.overflow = 'auto';
+          toast.style.whiteSpace = 'pre-wrap';
+          toast.style.userSelect = 'text';
+          toast.textContent = b.detail || `Skipped (${b.skipped})`;
+          setTimeout(() => toast.remove(), 20000);
         } else {
           const asString = (v) => {
             if (v == null) return '';
