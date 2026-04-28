@@ -93,14 +93,30 @@
     extractCharacteristics(data);
 
     // Tenants
+    // Round 76ct 2026-04-28: extend to capture sf + lease_expiration columns.
+    // RCA's tenant table renders 3 columns: name | sf | expiration.
     document.querySelectorAll('table.tenants tbody tr').forEach((tr) => {
       const nameTd = tr.querySelector('td.name');
+      const sfTd   = tr.querySelector('td.sf');
+      const expTd  = tr.querySelector('td.expiration');
       if (nameTd) {
         const name = textOf(nameTd);
-        if (name && name.length > 1) data.tenants.push({ name });
+        if (name && name.length > 1) {
+          const tenant = { name };
+          if (sfTd)  tenant.sf = textOf(sfTd);
+          if (expTd) tenant.lease_expiration = textOf(expTd);
+          data.tenants.push(tenant);
+        }
       }
     });
-    if (data.tenants[0] && !data.tenant_name) data.tenant_name = data.tenants[0].name;
+    // Promote first tenant's name + expiration to top-level so writers that
+    // expect scalar tenant_name / lease_expiration find them.
+    if (data.tenants[0]) {
+      if (!data.tenant_name) data.tenant_name = data.tenants[0].name;
+      if (!data.lease_expiration && data.tenants[0].lease_expiration) {
+        data.lease_expiration = data.tenants[0].lease_expiration;
+      }
+    }
 
     // Owners — capture the primary owner as a contact + as recorded_owner_name
     const ownerEl = document.querySelector('#owners .owner .name a, #owners .owner .name');
@@ -271,6 +287,21 @@
       // Comments: narrative
       if (commentsTd) {
         evt.comments = textOf(commentsTd);
+      }
+
+      // Round 76ct: CMBS deal-name detection. Loans securitized into a CMBS
+      // trust appear in RCA's entities/comments cell as the trust name, e.g.
+      // 'CFCRE 2016-C6 ($4.0m)' or 'GSMS 2014-GC22'. Pattern: 2-6 capital
+      // letters + space + 4-digit year + dash + alphanumeric tranche tag.
+      // Captured into evt.cmbs_deal_name so downstream writers can trigger
+      // enrichment against the dia.cmbs_loans table.
+      const cmbsBlob = `${evt.lender || ''} ${evt.entities_text || ''} ${evt.comments || ''}`;
+      const cmbsMatch = cmbsBlob.match(/\b([A-Z]{2,6})\s+(20\d{2})-([A-Z0-9]{1,8})\b/);
+      if (cmbsMatch) {
+        evt.cmbs_deal_name = `${cmbsMatch[1]} ${cmbsMatch[2]}-${cmbsMatch[3]}`;
+        evt.cmbs_sponsor   = cmbsMatch[1];
+        evt.cmbs_vintage   = parseInt(cmbsMatch[2], 10);
+        evt.cmbs_tranche   = cmbsMatch[3];
       }
 
       data.sales_history.push(evt);
