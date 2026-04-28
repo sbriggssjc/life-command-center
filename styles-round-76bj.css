@@ -1,0 +1,109 @@
+/* ============================================================
+   Round 76bj (2026-04-28) — Mobile UX fixes (separate file
+   because the main styles.css has a bash-side truncation issue
+   from Round 76be onward; loading this as an additional <link>
+   from index.html guarantees the styles deploy)
+   ============================================================ */
+
+/* (1) Consolidate button must stay visible on mobile.
+   On narrow viewports the .detail-header-info container wrapped
+   and pushed the inline button + badge out of the visible area. */
+.detail-header { flex-wrap: wrap; row-gap: 6px; }
+.detail-header-info { flex-wrap: wrap; row-gap: 6px; }
+.detail-action-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-height: 32px;
+}
+@media (max-width: 480px) {
+  .detail-action-btn { font-size: 11px; padding: 5px 8px; }
+}
+
+/* (2) Chatbot FAB blocking the next-page button on mobile.
+   Push FAB further from bottom on mobile and auto-hide when
+   detail/modal is open so it never blocks page-level controls. */
+@media (max-width: 700px) {
+  .copilot-fab { bottom: calc(140px + var(--safe-bottom)) !important; right: 12px !important; width: 44px !important; height: 44px !important; font-size: 18px !important; }
+}
+body:has(.detail-panel.open) .copilot-fab,
+body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
+
+/* (3) Table views constrained by widest sibling element.
+   Force the wrapper to break out and let the inner table scroll. */
+.table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.dashboard-tables-section .table-wrapper,
+.dashboard .table-wrapper {
+  margin-left: -8px;
+  margin-right: -8px;
+  width: calc(100% + 16px);
+}
+.data-table { min-width: 1100px; }
+@media (max-width: 700px) {
+  .data-table { min-width: 900px; font-size: 12px; }
+  .data-table th, .data-table td { padding: 8px 6px; }
+}
+
+/* (4) Search auto-opens on mobile.
+   iOS auto-zooms when a search input <16px is focused.
+   font-size:16px prevents zoom; .no-mobile-autofocus class
+   suppresses the visual focus state on initial render. */
+.search-bar input { font-size: 16px; }
+@media (max-width: 700px) {
+  .search-bar input.no-mobile-autofocus:not(:focus) {
+    box-shadow: none;
+    border-color: var(--border);
+  }
+}
+
+/* (6) Resolve / Manual Review CTA buttons. Drop-in family for any
+   flagged-issue card. Place a .issue-actions row under the issue
+   description with 1-3 of these buttons. */
+.issue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.issue-resolve-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.issue-resolve-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+.issue-review-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.issue-review-btn:hover { border-color: var(--accent); color: var(--text); }
+.issue-dismiss-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text3);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.issue-dismiss-btn:hover { border-color: var(--red); color: var(--red); }
