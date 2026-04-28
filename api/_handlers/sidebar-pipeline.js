@@ -2107,7 +2107,40 @@ async function upsertDomainProperty(domain, entity, metadata) {
     return newPropertyId;
   }
 
+  // Round 76cs: write race recovery. When the user captures multiple
+  // documents (deed/brochure/OM) on the same property simultaneously,
+  // multiple sidebar-pipeline invocations all run their lookups before
+  // any of them commit the insert. They all miss, all attempt INSERT,
+  // one wins, the others get a constraint violation and return null.
+  // Symptom: the LCC sidebar shows 'Pipeline error: property_upsert_
+  // failed' twice then 'Pipeline re-ran successfully'.
+  // Recovery: redo the lookup. By now the winning insert has committed;
+  // we should find the row and treat as a regular update path.
+  let retryLookup = await domainQuery(domain, 'GET',
+    `properties?address=ilike.${encodeURIComponent(normAddr)}` +
+    (entity.state ? `&state=eq.${encodeURIComponent(entity.state)}` : '') +
+    (entity.city  ? `&city=ilike.${encodeURIComponent(entity.city)}`  : '') +
+    `&select=property_id,${sizeCol}&limit=1`);
+  if (!retryLookup.data?.length && address && address !== normAddr) {
+    retryLookup = await domainQuery(domain, 'GET',
+      `properties?address=ilike.${encodeURIComponent(address)}` +
+      (entity.state ? `&state=eq.${encodeURIComponent(entity.state)}` : '') +
+      (entity.city  ? `&city=ilike.${encodeURIComponent(entity.city)}`  : '') +
+      `&select=property_id,${sizeCol}&limit=1`);
+  }
+  if (retryLookup.ok && retryLookup.data?.length) {
+    const propertyId = retryLookup.data[0].property_id;
+    console.log(`[upsertDomainProperty] Race recovery: original POST failed (${result.status}); retry-lookup found property_id=${propertyId} -- treating as update.`);
+    await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
+    if (domain === 'government' && metadata.lease_number) {
+      await linkGsaLease(propertyId, metadata.lease_number, metadata);
+    }
+    return propertyId;
+  }
+
   console.error(`[Sidebar pipeline] Failed to create ${domain} property:`, result.status, result.data);
+  console.error(`  Address: "${address}" (normalized: "${normAddr}"), city=${entity.city}, state=${entity.state}`);
+  console.error(`  Retry-lookup also missed; this is not a write race -- likely a real validation failure.`);
   return null;
 }
 
