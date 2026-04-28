@@ -429,135 +429,141 @@
   </div>
 </div>
 
-<!-- Log & Reschedule Modal -->
-<div class="modal-overlay" id="logRescheduleModal" role="dialog" aria-label="Log and Reschedule" onclick="if(event.target===this)closeLogReschedule()">
-  <div class="modal">
-    <div class="modal-head"><h3>Log Touchpoint &amp; Reschedule</h3><button class="modal-close" onclick="closeLogReschedule()" aria-label="Close">&times;</button></div>
-    <div class="modal-body">
-      <div id="lrContext" style="font-size:13px;color:var(--text2);margin-bottom:8px"></div>
-      <div id="lrTaskInfo" style="font-size:12px;color:var(--text3);margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px"></div>
-      <label for="lrType">Activity Type</label>
-      <select id="lrType">
-        <option value="Client Outreach">Client Outreach</option>
-        <option value="Follow-up" selected>Follow-up</option>
-        <option value="Introduction Call">Introduction Call</option>
-        <option value="Property Discussion">Property Discussion</option>
-        <option value="Email Correspondence">Email Correspondence</option>
-        <option value="Market Update">Market Update</option>
-      </select>
-      <label for="lrNotes">Notes <span style="font-weight:400;color:var(--text3)">(what happened today)</span></label>
-      <textarea id="lrNotes" rows="2" placeholder="Call notes, discussion topics..." style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
-      <label for="lrNextDate">Next Touchpoint Date</label>
-      <input type="date" id="lrNextDate">
-      <div id="lrDateReason" style="display:none;font-size:12px;color:var(--text3);margin-top:4px;padding:4px 0"></div>
+<!-- Consolidate Property Modal (Round 76be, 2026-04-28) -->
+<div class="modal-overlay" id="consolidateModal" role="dialog" aria-label="Consolidate property" onclick="if(event.target===this)closeConsolidateModal()">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-head">
+      <h3>🔗 Consolidate Property</h3>
+      <button class="modal-close" onclick="closeConsolidateModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body" id="consolidateBody" style="max-height:60vh;overflow:auto">
+      <div style="text-align:center;padding:24px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Searching duplicates &amp; same-tenant clusters...</p></div>
     </div>
     <div class="modal-foot">
-      <button class="btn-cancel" onclick="closeLogReschedule()">Cancel</button>
-      <button class="btn-submit" id="lrSubmit" onclick="submitLogReschedule()">Log &amp; Reschedule</button>
+      <button class="btn-cancel" onclick="closeConsolidateModal()">Close</button>
     </div>
   </div>
 </div>
-
-<!-- Ops assignment modal -->
-<div class="modal-overlay" id="assignModal" role="dialog" aria-label="Assign Work" onclick="if(event.target===this)closeAssignModal()">
-  <div class="modal">
-    <div class="modal-head"><h3>Assign Work</h3><button class="modal-close" onclick="closeAssignModal()" aria-label="Close">&times;</button></div>
-    <div class="modal-body">
-      <div id="assignContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label for="assignUserSelect">Assignee</label>
-      <select id="assignUserSelect"></select>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-cancel" onclick="closeAssignModal()">Cancel</button>
-      <button class="btn-submit" id="assignSubmit" onclick="submitAssignModal()">Assign</button>
-    </div>
-  </div>
-</div>
-
-<!-- Ops escalation modal -->
-<div class="modal-overlay" id="escalateModal" role="dialog" aria-label="Escalate Work" onclick="if(event.target===this)closeEscalateModal()">
-  <div class="modal">
-    <div class="modal-head"><h3>Escalate Work</h3><button class="modal-close" onclick="closeEscalateModal()" aria-label="Close">&times;</button></div>
-    <div class="modal-body">
-      <div id="escalateContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label for="escalateUserSelect">Escalate To</label>
-      <select id="escalateUserSelect"></select>
-      <label for="escalateReason">Reason</label>
-      <textarea id="escalateReason" rows="3" placeholder="Why does this need escalation?" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-cancel" onclick="closeEscalateModal()">Cancel</button>
-      <button class="btn-submit" id="escalateSubmit" onclick="submitEscalateModal()">Escalate</button>
-    </div>
-  </div>
-</div>
-
-<!-- Research follow-up modal -->
-<div class="modal-overlay" id="followupModal" role="dialog" aria-label="Create Follow-Up" onclick="if(event.target===this)closeFollowupModal()">
-  <div class="modal">
-    <div class="modal-head"><h3>Create Follow-Up</h3><button class="modal-close" onclick="closeFollowupModal()" aria-label="Close">&times;</button></div>
-    <div class="modal-body">
-      <div id="followupContext" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
-      <label for="followupTitleInput">Title</label>
-      <input type="text" id="followupTitleInput" placeholder="Follow-up action title">
-      <label for="followupUserSelect">Assignee</label>
-      <select id="followupUserSelect"></select>
-      <label for="followupDueInput">Due Date</label>
-      <input type="date" id="followupDueInput">
-      <label for="followupNotesInput">Notes</label>
-      <textarea id="followupNotesInput" rows="4" placeholder="Optional follow-up notes" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--s2);color:var(--text);font-size:14px;resize:vertical;font-family:inherit"></textarea>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-cancel" onclick="closeFollowupModal()">Cancel</button>
-      <button class="btn-submit" id="followupSubmit" onclick="submitFollowupModal()">Create</button>
-    </div>
-  </div>
-</div>
-
-<!-- Toast -->
-<div class="toast" id="toast"></div>
-
-<!-- Custom Modal (replaces native confirm/prompt) -->
-<div id="lcc-modal-overlay" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);align-items:center;justify-content:center;">
-  <div id="lcc-modal" style="background:var(--s2);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-    <div id="lcc-modal-msg" style="font-size:14px;color:var(--text1);margin-bottom:16px;line-height:1.5;white-space:pre-wrap;"></div>
-    <div id="lcc-modal-input-wrap" style="display:none;margin-bottom:16px;">
-      <input id="lcc-modal-input" type="text" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--s3);color:var(--text1);font-size:13px;box-sizing:border-box;" />
-    </div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;">
-      <button id="lcc-modal-cancel" style="padding:8px 18px;border:1px solid var(--border);border-radius:6px;background:var(--s3);color:var(--text2);font-size:13px;cursor:pointer;">Cancel</button>
-      <button id="lcc-modal-ok" style="padding:8px 18px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Confirm</button>
-    </div>
-  </div>
-</div>
-
 <script>
-/* Global error handler — surfaces uncaught errors and unhandled rejections */
-(function() {
-  var errCount = 0, MAX_ERRORS = 20;
-  function report(type, msg, source, line, col) {
-    if (errCount >= MAX_ERRORS) return;
-    errCount++;
-    console.error('[LCC ' + type + '] ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : ''));
-    /* Show brief toast for user-facing awareness (if toast helper exists) */
-    if (typeof showToast === 'function' && errCount <= 7) {
-      showToast('Something went wrong — try refreshing', 'error');
+(function(){
+  let _consDb = null;
+  let _consPid = null;
+
+  window.openConsolidateModal = async function(db, propertyId) {
+    if (!propertyId) { alert('No property_id available — cannot search consolidation candidates.'); return; }
+    _consDb = db; _consPid = propertyId;
+    const modal = document.getElementById('consolidateModal');
+    const body = document.getElementById('consolidateBody');
+    if (!modal || !body) return;
+    modal.classList.add('open');
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading...</p></div>';
+    try {
+      const r = await fetch(`/api/consolidate-property?domain=${db}&property_id=${propertyId}`, {
+        method: 'GET', credentials: 'include'
+      });
+      if (!r.ok) {
+        body.innerHTML = `<div style="padding:16px;color:var(--text2)">Failed to load: ${r.status} ${await r.text()}</div>`;
+        return;
+      }
+      const data = await r.json();
+      body.innerHTML = renderConsolidateBody(data);
+    } catch (err) {
+      body.innerHTML = `<div style="padding:16px;color:var(--text2)">Error: ${err?.message || err}</div>`;
     }
-  }
-  window.onerror = function(msg, source, line, col) { report('error', msg, source, line, col); };
-  window.addEventListener('unhandledrejection', function(ev) {
-    var reason = ev.reason;
-    var msg = reason && reason.message ? reason.message : String(reason);
-    report('promise', msg, '', 0, 0);
-  });
-})();
-</script>
-<script src="auth.js"></script>
-<script src="app.js"></script>
-<script src="gov.js"></script>
-<script src="dialysis.js"></script>
-<script src="detail.js"></script>
-<script src="contacts-ui.js"></script>
-<script src="ops.js"></script>
-</body>
-</html>
+  };
+
+  window.closeConsolidateModal = function() {
+    const modal = document.getElementById('consolidateModal');
+    if (modal) modal.classList.remove('open');
+  };
+
+  window.consolidateMerge = async function(keepId, dropId) {
+    if (!confirm(`Merge property ${dropId} INTO ${keepId}? This rewires all FKs and deletes property ${dropId}.`)) return;
+    const btn = document.querySelector(`[data-merge-drop="${dropId}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = 'Merging...'; }
+    try {
+      const r = await fetch(`/api/consolidate-property?domain=${_consDb}`, {
+        method: 'POST', credentials: 'include',
+        headers: {'content-type':'application/json'},
+        body: JSON.stringify({ keep_id: keepId, drop_id: dropId })
+      });
+      if (r.ok) {
+        if (btn) { btn.textContent = '✓ Merged'; btn.style.background = 'var(--success, #10b981)'; }
+        setTimeout(() => openConsolidateModal(_consDb, _consPid), 800); // refresh
+      } else {
+        if (btn) { btn.disabled = false; btn.textContent = 'Merge'; }
+        alert(`Merge failed: ${r.status} ${await r.text()}`);
+      }
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Merge'; }
+      alert(`Merge error: ${err?.message || err}`);
+    }
+  };
+
+  function renderConsolidateBody(data) {
+    if (data.error) return `<div style="padding:16px;color:#dc2626">${data.error}</div>`;
+    const subj = data.subject || {};
+    const exact = data.exact_address_dups || [];
+    const sameChain = data.same_chain_in_city || [];
+    const summary = data.chain_summary || {};
+
+    let html = `<div style="padding:8px 4px">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:4px">Subject</div>
+      <div style="font-weight:600">${esc(subj.address || '—')}, ${esc(subj.city || '')}, ${esc(subj.state || '')}</div>
+      <div style="font-size:13px;color:var(--text2);margin-top:4px">
+        Tenant: <strong>${esc(subj.tenant || subj.agency || '—')}</strong>
+        ${subj.medicare_id ? `· Medicare ID: ${esc(subj.medicare_id)}` : ''}
+        ${subj.lease_number ? `· Lease #: ${esc(subj.lease_number)}` : ''}
+      </div>
+    </div>`;
+
+    // Exact-address duplicates → safe to merge
+    html += `<div style="margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-weight:600;margin-bottom:8px">Same address (${exact.length})
+        ${exact.length ? '<span style="font-weight:400;color:var(--text2);font-size:12px">— high-confidence merge candidates</span>' : ''}
+      </div>`;
+    if (exact.length === 0) {
+      html += '<div style="color:var(--text2);font-size:13px">✓ No duplicate property records at this address.</div>';
+    } else {
+      html += '<table style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text2);border-bottom:1px solid var(--border)"><th style="padding:6px 4px">PID</th><th>Tenant</th><th>SF</th><th>Year</th><th>Sales</th><th>Leases</th><th>Score</th><th></th></tr></thead><tbody>';
+      for (const r of exact) {
+        const matchOK = r.tenant_chain_match !== false;
+        html += `<tr style="border-bottom:1px solid var(--border-soft)"><td style="padding:6px 4px;font-family:ui-monospace,monospace">${r.property_id}</td>
+          <td>${esc(r.tenant || r.agency || '—')}${matchOK?'':'<span style="color:#dc2626;font-size:11px"> ⚠ different chain</span>'}</td>
+          <td>${r.building_size || r.rba || '—'}</td><td>${r.year_built || '—'}</td>
+          <td>${r.n_sales || 0}</td><td>${r.n_leases || 0}</td><td>${r.enrichment_score || 0}</td>
+          <td><button data-merge-drop="${r.property_id}" onclick="consolidateMerge(${subj.property_id}, ${r.property_id})"
+            style="padding:4px 10px;border:1px solid var(--purple);background:var(--purple);color:#fff;border-radius:4px;cursor:pointer;font-size:12px">Merge into ${subj.property_id}</button></td></tr>`;
+      }
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+
+    // Same-chain in city
+    html += `<div style="margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-weight:600;margin-bottom:8px">Same chain in ${esc(subj.city || 'city')} (${sameChain.length})
+        ${sameChain.length ? '<span style="font-weight:400;color:var(--text2);font-size:12px">— review before merging (different addresses)</span>' : ''}
+      </div>`;
+    if (sameChain.length === 0) {
+      html += `<div style="color:var(--text2);font-size:13px">No other ${esc(subj.chain_token || 'chain')} properties in this city.</div>`;
+    } else {
+      html += '<table style="width:100%;font-size:13px"><thead><tr style="text-align:left;color:var(--text2);border-bottom:1px solid var(--border)"><th style="padding:6px 4px">PID</th><th>Address</th><th>Tenant</th><th>Sim</th></tr></thead><tbody>';
+      for (const r of sameChain) {
+        html += `<tr style="border-bottom:1px solid var(--border-soft)"><td style="padding:6px 4px;font-family:ui-monospace,monospace">${r.property_id}</td>
+          <td>${esc(r.address || '—')}</td><td>${esc(r.tenant || r.agency || '—')}</td>
+          <td>${(r.similarity_to_subject*100).toFixed(0)}%</td></tr>`;
+      }
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+
+    // Chain summary
+    if (summary && summary.total_in_state) {
+      html += `<div style="margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="font-weight:600;margin-bottom:8px">${esc(summary.chain_token || '')} portfolio in ${esc(summary.state || '')}</div>
+        <div style="color:var(--text2);font-size:13px">${summary.total_in_state} properties across ${summary.cities_in_state} cities</div>
+      </div>`;
+    }
+    return html;
+
+    function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({

@@ -16,6 +16,7 @@
     { "source": "/api/ownership-reconcile", "destination": "/api/admin?_route=ownership-reconcile" },
     { "source": "/api/sf-sync-queue", "destination": "/api/admin?_route=sf-sync-queue" },
     { "source": "/api/storage-cleanup", "destination": "/api/admin?_route=storage-cleanup" },
+    { "source": "/api/consolidate-property", "destination": "/api/admin?_route=consolidate-property" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
@@ -81,14 +82,4 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
         { "key": "X-XSS-Protection", "value": "0" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=()" }
-      ]
-    },
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
-      ]
-    }
-  ]
-}
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation
