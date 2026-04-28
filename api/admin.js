@@ -78,6 +78,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'cms-match':   return handleCmsMatch(req, res);
     case 'ownership-reconcile': return handleOwnershipReconcile(req, res);
     case 'sf-sync-queue':       return handleSfSyncQueue(req, res);
+    case 'storage-cleanup':     return handleStorageCleanup(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -1512,3 +1513,144 @@ async function handleCmsMatch(req, res) {
 
   return res.status(400).json({ error: 'Unknown action. Use: resolve, search, link' });
 }
+
+// ============================================================================
+// STORAGE CLEANUP — delete orphan PDFs from lcc-om-uploads bucket
+//
+// Round 76aq 2026-04-28: replaces the broken pg_cron-based cleanup that
+// failed every nightly run because Supabase's storage.protect_delete()
+// trigger blocks direct DELETE FROM storage.objects. This Vercel endpoint
+// uses the Supabase Storage REST API DELETE method, which the trigger
+// permits (because it routes through the storage backend, not SQL).
+//
+// Routing: /api/admin?_route=storage-cleanup
+//   GET    : dry-run, returns counts only
+//   POST   : actually deletes (still capped at batch_size objects)
+//
+// Query/body params:
+//   ?bucket=lcc-om-uploads   (default)
+//   ?grace_days=14           (default — only delete orphans older than this)
+//   ?batch_size=200          (default — bound the per-call blast radius)
+//
+// Auth: standard X-LCC-Key + workspace membership.
+// ============================================================================
+
+async function handleStorageCleanup(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST (delete) only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const bucket    = String(req.query.bucket    || 'lcc-om-uploads');
+  const graceDays = Math.max(1, parseInt(req.query.grace_days || '14', 10));
+  const batchSize = Math.min(1000, Math.max(1, parseInt(req.query.batch_size || '200', 10)));
+  const dryRun    = req.method === 'GET';
+
+  // 1. Find orphans via PostgREST: storage.objects rows in this bucket
+  //    older than graceDays whose `name` doesn't appear in any
+  //    staged_intake_artifacts.storage_path.
+  const opsUrl = process.env.OPS_SUPABASE_URL;
+  const opsKey = process.env.OPS_SUPABASE_KEY;
+  if (!opsUrl || !opsKey) {
+    return res.status(500).json({ error: 'ops_credentials_missing' });
+  }
+
+  // Use the dedicated SQL function if it exists, else inline query.
+  // For now, do the lookup via PostgREST RPC against a helper view.
+  // Simpler: use SQL via opsQuery — but storage schema isn't exposed
+  // through PostgREST by default. We hit the Storage REST API for
+  // listing AND deletion to keep the contract clean.
+  const cutoffIso = new Date(Date.now() - graceDays * 86400000).toISOString();
+
+  // List candidates from PostgREST (storage tables ARE exposed for
+  // service_role keys via the storage schema). If the project doesn't
+  // expose it, we can fall back to net.http_post inside Postgres.
+  let listResp;
+  try {
+    listResp = await fetch(
+      `${opsUrl}/rest/v1/rpc/lcc_list_orphan_storage_objects`,
+      {
+        method: 'POST',
+        headers: {
+          'apikey':        opsKey,
+          'Authorization': `Bearer ${opsKey}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({
+          _bucket: bucket,
+          _cutoff: cutoffIso,
+          _limit:  batchSize,
+        }),
+      }
+    );
+  } catch (err) {
+    return res.status(502).json({ error: 'storage_list_fetch_failed', detail: err?.message });
+  }
+
+  if (!listResp.ok) {
+    const detail = await listResp.text();
+    return res.status(502).json({
+      error:  'storage_list_rpc_failed',
+      status: listResp.status,
+      detail: detail.slice(0, 400),
+    });
+  }
+
+  const orphans = await listResp.json();
+  if (!Array.isArray(orphans)) {
+    return res.status(502).json({
+      error:  'storage_list_unexpected_shape',
+      detail: JSON.stringify(orphans).slice(0, 400),
+    });
+  }
+
+  if (dryRun) {
+    return res.status(200).json({
+      mode:        'dry_run',
+      bucket,
+      grace_days:  graceDays,
+      batch_size:  batchSize,
+      orphan_count: orphans.length,
+      sample_names: orphans.slice(0, 10).map(o => o.name),
+    });
+  }
+
+  // 2. Actually delete via Storage REST API DELETE /object/{bucket}/{name}
+  let deleted = 0;
+  const failures = [];
+  for (const obj of orphans) {
+    try {
+      const delResp = await fetch(
+        `${opsUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodeURIComponent(obj.name)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey':        opsKey,
+            'Authorization': `Bearer ${opsKey}`,
+          },
+        }
+      );
+      if (delResp.ok || delResp.status === 404) {
+        deleted++;
+      } else {
+        failures.push({ name: obj.name, status: delResp.status });
+      }
+    } catch (err) {
+      failures.push({ name: obj.name, error: err?.message });
+    }
+  }
+
+  return res.status(200).json({
+    mode:         'delete',
+    bucket,
+    grace_days:   graceDays,
+    batch_size:   batchSize,
+    orphan_total: orphans.length,
+    deleted,
+    failures:     failures.slice(0, 20),
+    failure_count: failures.length,
+  });
+}
+

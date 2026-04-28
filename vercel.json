@@ -15,6 +15,7 @@
     { "source": "/api/cms-match", "destination": "/api/admin?_route=cms-match" },
     { "source": "/api/ownership-reconcile", "destination": "/api/admin?_route=ownership-reconcile" },
     { "source": "/api/sf-sync-queue", "destination": "/api/admin?_route=sf-sync-queue" },
+    { "source": "/api/storage-cleanup", "destination": "/api/admin?_route=storage-cleanup" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },
@@ -86,8 +87,4 @@
     {
       "source": "/api/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
-      ]
-    }
-  ]
-}
+        { "
