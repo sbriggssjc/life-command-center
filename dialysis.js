@@ -1244,8 +1244,31 @@ function renderPatientMetricsInner() {
     infoCard({ title: 'Avg Patients / Clinic', value: fmtN(avg), sub: fmtN(total) + ' annual treated · ~' + fmtN(estConcurrentAvg) + ' concurrent est.', color: 'blue', tab: 'changes' }) +
     infoCard({ title: 'Clinics Reporting', value: fmtN(ptSrc.length), sub: 'from CMS patient counts (deduped)', color: 'green', tab: 'changes' }) +
     infoCard({ title: 'Annual Treated', value: fmtN(total), sub: '~' + fmtN(estConcurrent) + ' est. concurrent (ESRD prev.)', color: 'purple', tab: 'changes' }) +
-    infoCard({ title: 'Top States', value: topStates[0] ? topStates[0][0] : '—', sub: statesSub, color: 'cyan', tab: 'changes' }) +
+    renderTopStatesRankedCard(topStates) +
     '</div>';
+}
+
+function renderTopStatesRankedCard(topStates) {
+  // Round 76cv: ranked-list card matching Top 5 Movers visual treatment.
+  // Avoids the giant-letter hero + comma-separated tail look that felt
+  // visually inconsistent with the rest of the Clinical Metrics row.
+  if (!topStates || topStates.length === 0) {
+    return '<div class="dia-info-card" onclick="goToDiaTab(\'changes\')" style="cursor:pointer;padding:14px 16px;color:var(--text3);font-size:11px">No state data</div>';
+  }
+  const maxCount = topStates[0][1] || 1;
+  let h = '<div class="dia-info-card" onclick="goToDiaTab(\'changes\')" style="cursor:pointer;padding:14px 16px">';
+  h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:10px">Top States</div>';
+  topStates.forEach(([st, cnt], i) => {
+    const barW = Math.round((cnt / maxCount) * 100);
+    h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div style="width:20px;font-size:10px;color:var(--text3);text-align:right">${i+1}</div>
+      <div style="flex:1;font-size:11px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st}</div>
+      <div style="width:80px;flex-shrink:0;height:8px;background:var(--s3);border-radius:4px;overflow:hidden"><div style="width:${barW}%;height:100%;background:#22d3ee;border-radius:4px"></div></div>
+      <div style="width:50px;font-size:10px;color:#22d3ee;text-align:right;font-weight:600">${fmtN(cnt)}</div>
+    </div>`;
+  });
+  h += '</div>';
+  return h;
 }
 
 function renderFinancialMetricsInner() {
