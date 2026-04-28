@@ -208,21 +208,40 @@ async function testConnection() {
 
 // ── Message listener ────────────────────────────────────────────────────────
 
-// Round 76bz: extract a stable property identity from a CoStar (or other
-// source) page URL. CoStar property pages share the same pathname across
-// Summary / Sale / Contacts / Public Records sub-tabs and differ between
-// properties, making pathname a much more reliable invariant than address
-// (which can be empty on early scrapes or differ between header vs detail
-// rendering). Returns null when URL is missing or unparseable.
+// Round 76bz / 76cd: extract a stable property identity from a CoStar
+// (or other source) page URL.
+//
+// Round 76bz used host+pathname, but CoStar property URLs are
+// /detail/lookup/{numeric_id}/{summary|sale|lease|publicrecords|...} -
+// the sub-tab is the LAST path segment, so a switch from Summary to Sale
+// on the same property produced a different key, falsely triggering a
+// state reset between sub-tabs. The merge logic depends on sub-tabs
+// preserving identity so tenant/sale/contact data accumulates across them.
+//
+// Round 76cd: keep only path segments that look like property identifiers
+// (numeric IDs like CoStar 61145, or UUID-shaped tokens for RCA). Drop
+// short alphabetic segments which are typically sub-tab names. Result:
+//   /detail/lookup/61145/sale     -> product.costar.com/61145
+//   /detail/lookup/61145/summary  -> product.costar.com/61145  (same!)
+//   /detail/lookup/12345/sale     -> product.costar.com/12345  (different)
+//   /properties/abc-def-uuid-...  -> rca.../abc-def-uuid-...   (UUID kept)
 function propertyIdentityKey(url) {
   if (!url || typeof url !== 'string') return null;
   try {
     const u = new URL(url);
-    // Strip the fragment + most query params; keep host + pathname only.
-    // CoStar sub-tabs are routed via in-app navigation that doesn't change
-    // the pathname, so this remains stable as the user clicks tabs but
-    // changes when they navigate to a different property.
-    return (u.host + u.pathname).toLowerCase().replace(/\/+$/, '');
+    const segments = u.pathname.split('/').filter(Boolean);
+    // Keep segments containing a digit (numeric IDs) OR longer than 20
+    // chars (UUIDs). Drop short alphabetic words like 'detail', 'lookup',
+    // 'sale', 'summary', 'publicrecords' - they're either route prefixes
+    // or sub-tab names, not property identity.
+    const idSegments = segments.filter(s => /\d/.test(s) || s.length > 20);
+    if (idSegments.length === 0) {
+      // No identifier-shaped segments: fall back to full pathname so we
+      // still distinguish two non-property pages instead of collapsing
+      // everything to host.
+      return (u.host + u.pathname).toLowerCase().replace(/\/+$/, '');
+    }
+    return (u.host + '/' + idSegments.join('/')).toLowerCase();
   } catch {
     return null;
   }
