@@ -1011,12 +1011,53 @@ async function loadPropertyTab() {
       const card = btn.closest('.doc-card');
       if (!url || !card) return;
 
-      btn.disabled = true;
-      btn.textContent = 'Staging…';
+      // Round 76ck: dedupe rapid-fire clicks. Disabled state alone doesn't
+      // catch re-rendered clones of the same card. Use a 3s cooldown stamp.
+      const now = Date.now();
+      const lastClickAt = parseInt(btn.dataset.lastClick || '0', 10);
+      if (now - lastClickAt < 3000) return;
+      btn.dataset.lastClick = String(now);
+
+      // Build the toast container up front so both the skip path and the
+      // staging path can use it.
       const toast = document.createElement('div');
       toast.className = 'update-toast';
-      toast.textContent = 'Posting to LCC intake…';
       card.appendChild(toast);
+
+      // Round 76ck: pre-upload guard for non-OM legal documents. The
+      // server-side extractor rejects deed/loan/mortgage PDFs with a
+      // friendly skip, but by then we've already fetched bytes and uploaded
+      // to storage - leaving an orphan file (storage audit: 114 orphans/day,
+      // almost all deed/loan rejections). Detect by label/filename up
+      // front and short-circuit before any network call.
+      const filenameFromUrl = (() => {
+        try {
+          const u = new URL(url);
+          return decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || '');
+        } catch { return ''; }
+      })();
+      const probe = `${label}|${filenameFromUrl}`;
+      const NON_OM_DOC_RE = /\b(deed|loan|mortgage|promissory|note|assignment\s+of\s+lease|subordination|ucc|lien|recording|satisfaction|release\s+of)\b/i;
+      if (NON_OM_DOC_RE.test(probe)) {
+        btn.textContent = 'Skipped';
+        btn.style.background = '#FEF3C7';
+        btn.style.color = '#92400E';
+        toast.style.background = '#FEF3C7';
+        toast.style.color = '#92400E';
+        toast.style.borderColor = '#FCD34D';
+        toast.style.maxHeight = '180px';
+        toast.style.overflow = 'auto';
+        toast.style.whiteSpace = 'pre-wrap';
+        toast.textContent = `Skipped - "${label || filenameFromUrl}" looks like a deed/loan/mortgage. ` +
+          `The OM extractor doesn't parse legal docs. Capture from CoStar's Sale History tab instead; ` +
+          `the sidebar will pull document_number, grantor, grantee, and recording_date into deed_records.`;
+        setTimeout(() => toast.remove(), 12000);
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Staging…';
+      toast.textContent = 'Posting to LCC intake…';
 
       try {
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
