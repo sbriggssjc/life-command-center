@@ -1,6 +1,25 @@
 // ============================================================================
 // LCC Assistant — Content Script: CREXi
-// Detects property listing pages and extracts CRE data
+// Detects property listing pages and extracts CRE data.
+//
+// Round 76df: rewrote primary extraction strategy. CREXi's React DOM uses
+// Tailwind utility classes (ctw: prefix) and renders each label/value pair
+// as a single flex row:
+//   <div class="ctw:flex ctw:flex-row ctw:items-center ctw:justify-between">
+//     <span class="ctw:text-body ctw:mr-7 ctw:whitespace-nowrap">Label</span>
+//     <span ...>Value</span>
+//   </div>
+// We now build a label→value map from those rows ONCE per extract call,
+// then look up known fields by exact + fuzzy match. The previous heuristic
+// findTextElement() was returning wrong adjacent siblings (e.g. Cap Rate's
+// value picked up the NOI row's text). The map-based approach is precise
+// and orders of magnitude faster.
+//
+// Asking Price is special-cased: it lives in a header banner like
+// "$6,994,109 | 126 days on market | Updated 8 days ago", not in a flex
+// row. We extract it via regex from body innerText.
+//
+// Also captures: linked property-records URLs (Sale Comp / Lease / Record).
 // ============================================================================
 
 (function () {
@@ -32,29 +51,42 @@
 
     const val = (el) => el?.textContent?.trim() || null;
 
+    // ── Strategy 0 (Round 76df): build CREXi flex-row label→value map ────
+    const crexiMap = buildCrexiDataMap();
+    const get = (...keywords) => lookupCrexiField(crexiMap, ...keywords)
+      || val(findTextElement(...keywords));
+
     // Financial
-    const priceEl = findTextElement('Price', 'Asking Price', 'List Price') ||
-      document.querySelector('[data-cy="price"]') ||
-      document.querySelector('.property-price');
-    const capRateEl = findTextElement('Cap Rate');
-    const noiEl = findTextElement('NOI', 'Net Operating Income');
-    const psfEl = findTextElement('Price/SF', 'Price / SF', 'Price Per SF', '$/SF');
+    const askingPrice = get('Asking Price', 'Price', 'List Price') || extractCrexiAskingPrice();
+    const capRate = get('Cap Rate');
+    const noi = get('NOI', 'Net Operating Income');
+    const psf = get('Price per SqFt', 'Price/SF', 'Price / SF', 'Price Per SF', '$/SF');
 
     // Property details
-    const propertyTypeEl = findTextElement('Property Type', 'Type', 'Asset Class');
-    const buildingClassEl = findTextElement('Building Class', 'Class');
-    const yearBuiltEl = findTextElement('Year Built');
-    const sqftEl = findTextElement('Building Size', 'SF', 'Square Feet', 'Total SF', 'GLA', 'Rentable Area');
-    const lotSizeEl = findTextElement('Lot Size', 'Land Area', 'Acres', 'Land SF');
-    const storiesEl = findTextElement('Stories', 'Floors', 'Number of Stories');
-    const unitsEl = findTextElement('Units', 'Total Units', 'Number of Units');
-    const parkingEl = findTextElement('Parking', 'Parking Spaces', 'Parking Ratio');
-    const zoningEl = findTextElement('Zoning', 'Zone');
-    const occupancyEl = findTextElement('Occupancy', 'Leased %', 'Percent Leased');
+    const propertyType = get('Property Type', 'Type', 'Asset Class');
+    const subType = get('Sub Type', 'Subtype');
+    const buildingClass = get('Class', 'Building Class');
+    const yearBuilt = get('Year Built');
+    const sqft = get('Square Footage', 'Building Size', 'SF', 'Square Feet', 'Total SF', 'GLA', 'Rentable Area');
+    const netRentable = get('Net Rentable');
+    const lotSize = get('Lot Size', 'Land Area', 'Acres', 'Land SF');
+    const stories = get('Stories', 'Floors', 'Number of Stories');
+    const buildings = get('Buildings');
+    const units = get('Units', 'Total Units', 'Number of Units');
+    const parking = get('Parking', 'Parking Spaces', 'Parking Ratio');
+    const zoning = get('Zoning', 'Zone');
+    const occupancy = get('Occupancy', 'Leased %', 'Percent Leased');
 
     // Lease
-    const leaseTermEl = findTextElement('Lease Term', 'Lease Type', 'Remaining Term');
-    const tenantEl = findTextElement('Tenant', 'Primary Tenant', 'Tenancy');
+    const leaseType = get('Lease Type');
+    const leaseTerm = get('Lease Term', 'Remaining Term');
+    const tenancy = get('Tenancy');
+    const tenantBrand = get('Brand/Tenant', 'Tenant', 'Primary Tenant');
+
+    // Investment
+    const investmentType = get('Investment Type');
+    const tenantCredit = get('Tenant Credit');
+    const apn = get('APN', 'Parcel Number');
 
     // Broker
     const brokerEl = findTextElement('Listing Agent', 'Broker', 'Listed By', 'Contact');
@@ -82,35 +114,49 @@
     if (!city) city = val(findTextElement('City'));
     if (!state) state = val(findTextElement('State'));
 
+    // Round 76df: capture linked property-records URLs (sale comps / lease
+    // data / public record) so the LCC sidebar can offer one-click follow-ups.
+    const linkedPages = extractCrexiLinkedPages();
+
     chrome.runtime.sendMessage({
       type: 'CONTEXT_DETECTED',
       data: {
         domain: 'crexi',
         entity_type: 'property',
+        _version: 2,
         address,
         page_url: url,
-        asking_price: val(priceEl),
-        cap_rate: val(capRateEl),
-        noi: val(noiEl),
-        price_per_sf: val(psfEl),
-        property_type: val(propertyTypeEl),
-        building_class: val(buildingClassEl),
-        year_built: val(yearBuiltEl),
-        square_footage: val(sqftEl),
-        lot_size: val(lotSizeEl),
-        stories: val(storiesEl),
-        units: val(unitsEl),
-        parking: val(parkingEl),
-        zoning: val(zoningEl),
-        occupancy: val(occupancyEl),
-        lease_term: val(leaseTermEl),
-        tenant_name: val(tenantEl),
+        asking_price: askingPrice,
+        cap_rate: capRate,
+        noi: noi,
+        price_per_sf: psf,
+        property_type: propertyType,
+        sub_type: subType,
+        building_class: buildingClass,
+        year_built: yearBuilt,
+        square_footage: sqft,
+        net_rentable_sf: netRentable,
+        lot_size: lotSize,
+        stories: stories,
+        buildings: buildings,
+        units: units,
+        parking: parking,
+        zoning: zoning,
+        occupancy: occupancy,
+        lease_type: leaseType,
+        lease_term: leaseTerm,
+        tenancy: tenancy,
+        tenant_name: tenantBrand,
+        investment_type: investmentType,
+        tenant_credit: tenantCredit,
+        apn: apn,
         broker_name: val(brokerEl),
         broker_company: val(brokerCoEl),
         sale_price: val(salePriceEl),
         sale_date: val(saleDateEl),
         city,
         state,
+        linked_pages: linkedPages,
       },
     });
 
@@ -118,6 +164,88 @@
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  // ── Round 76df helpers ──────────────────────────────────────────────────
+
+  function buildCrexiDataMap() {
+    // Match by class fragments to avoid coupling to the entire utility-class
+    // soup. CREXi rows always carry these three flex modifiers together.
+    const rows = document.querySelectorAll(
+      'div[class*="ctw:flex"][class*="ctw:flex-row"][class*="ctw:justify-between"]'
+    );
+    const map = new Map();
+    rows.forEach((row) => {
+      const first = row.firstElementChild;
+      const last = row.lastElementChild;
+      if (!first || !last || first === last) return;
+      const label = first.textContent?.trim();
+      const value = last.textContent?.trim();
+      if (!label || !value) return;
+      if (label.length > 80 || value.length > 200) return;
+      // "Lot Size (SqFt)" → "lot size" so labels with parenthetical
+      // unit suffixes are still found by the canonical name.
+      const normalized = label.replace(/\s*\([^)]+\)\s*$/, '').toLowerCase();
+      // Don't overwrite if a row appears twice (e.g. summary + detail card);
+      // the first occurrence is typically the primary detail panel.
+      if (!map.has(normalized)) map.set(normalized, value);
+    });
+    return map;
+  }
+
+  function lookupCrexiField(map, ...keywords) {
+    if (!map || map.size === 0) return null;
+    // Pass 1: exact match (after parenthetical-suffix normalization).
+    for (const kw of keywords) {
+      const v = map.get(kw.toLowerCase());
+      if (v) return v;
+    }
+    // Pass 2: prefix / contains match for legacy or renamed labels.
+    for (const kw of keywords) {
+      const kwLower = kw.toLowerCase();
+      for (const [label, value] of map) {
+        if (label === kwLower || label.startsWith(kwLower)) return value;
+      }
+    }
+    for (const kw of keywords) {
+      const kwLower = kw.toLowerCase();
+      for (const [label, value] of map) {
+        if (label.includes(kwLower)) return value;
+      }
+    }
+    return null;
+  }
+
+  function extractCrexiAskingPrice() {
+    // CREXi shows the asking price in a header banner like
+    // "$6,994,109 | 126 days on market | Updated 8 days ago".
+    // Anchor the regex on the "days on market" text so we don't pick up
+    // tax / NOI / valuation-tool dollar values elsewhere on the page.
+    const text = document.body?.innerText || '';
+    const m = text.match(/\$[\d,]+(?:\.\d+)?(?=\s*\|\s*\d+\s+days?\s+on\s+market)/i);
+    if (m) return m[0];
+    // Fallback: a price-prominent element near the page top.
+    const big = document.querySelector('[data-cy="price"], .property-price, .pdp-price');
+    if (big) {
+      const t = big.textContent?.trim();
+      if (t && /^\$[\d,]+/.test(t)) return t;
+    }
+    return null;
+  }
+
+  function extractCrexiLinkedPages() {
+    const out = {};
+    document.querySelectorAll('a[href*="/property-records/"]').forEach((a) => {
+      const href = a.href;
+      if (!href) return;
+      if (/[?&]tab=sale\b/i.test(href) && !out.sale_comp_url) out.sale_comp_url = href;
+      if (/[?&]tab=lease\b/i.test(href) && !out.lease_data_url) out.lease_data_url = href;
+      if (/[?&]tab=record\b/i.test(href) && !out.record_url) out.record_url = href;
+    });
+    // The /properties/<id>/<slug> URL is the canonical For Sale listing.
+    const listing = document.querySelector('a[href*="/properties/"]');
+    if (listing && listing.href) out.listing_url = listing.href;
+    return Object.keys(out).length ? out : null;
+  }
 
   function findTextElement(...keywords) {
     const kwLower = keywords.map((k) => k.toLowerCase());
