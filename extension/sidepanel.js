@@ -1284,11 +1284,17 @@ async function loadPropertyTab() {
           toast.className = 'update-toast updated';
           const n = result.data.listings_verified || 0;
           const total = result.data.listings_total || 0;
-          toast.textContent = `Verified ${n} of ${total} listing${total === 1 ? '' : 's'} as still available`;
+          const created = result.data.auto_created;
+          if (created) {
+            toast.textContent = `Created listing #${created.listing_id} + verified as still available`;
+          } else {
+            toast.textContent = `Verified ${n} of ${total} listing${total === 1 ? '' : 's'} as still available`;
+          }
         } else {
           toast.className = 'update-toast';
           const errMsg = toErrorMessage(result.data?.error) || toErrorMessage(result.error) || 'Verification failed';
-          toast.textContent = errMsg;
+          const hint = result.data?.hint;
+          toast.textContent = hint ? `${errMsg} — ${hint}` : errMsg;
         }
         actions.prepend(toast);
         verifyBtn.textContent = 'Verify still available';

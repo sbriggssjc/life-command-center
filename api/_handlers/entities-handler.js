@@ -385,9 +385,63 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         if (!listingsRes.ok) {
           return res.status(502).json({ error: 'failed to read available_listings', detail: listingsRes.data });
         }
-        const listings = Array.isArray(listingsRes.data) ? listingsRes.data : [];
+        let listings = Array.isArray(listingsRes.data) ? listingsRes.data : [];
+
+        // Round 76du: auto-create the listing on a sidebar verification when
+        // the property has no active listings on file. The audit on
+        // 5 Route 45 / Mannington NJ found that some sidebar captures miss
+        // creating the available_listings row even when the source page is
+        // an active for-sale listing. Rather than make the user click a
+        // separate "create listing" button, treat a sidebar 'still_available'
+        // verification with an asking_price as the implicit creation signal.
+        let autoCreated = null;
+        if (listings.length === 0
+            && method === 'sidebar_capture'
+            && check_result === 'still_available'
+            && asking_price != null && Number(asking_price) > 0) {
+          const newListing = domain === 'dialysis'
+            ? {
+                property_id: Number(property_id),
+                is_active: true,
+                listing_date: new Date().toISOString().slice(0, 10),
+                last_price: Number(asking_price),
+                current_cap_rate: cap_rate != null ? Number(cap_rate) : null,
+                listing_url: source_url || null,
+                last_seen: new Date().toISOString().slice(0, 10),
+                last_verified_at: new Date().toISOString(),
+                data_source: 'lcc_sidebar_verify',
+              }
+            : {
+                property_id: Number(property_id),
+                listing_status: 'active',
+                listing_date: new Date().toISOString().slice(0, 10),
+                asking_price: Number(asking_price),
+                asking_cap_rate: cap_rate != null ? Number(cap_rate) : null,
+                source_url: source_url || null,
+                first_seen_at: new Date().toISOString(),
+                last_seen_at: new Date().toISOString(),
+                last_verified_at: new Date().toISOString(),
+                data_source: 'lcc_sidebar_verify',
+              };
+          const createRes = await domainQuery(domain, 'POST', 'available_listings', newListing);
+          if (createRes.ok) {
+            const created = Array.isArray(createRes.data) ? createRes.data[0] : createRes.data;
+            if (created?.listing_id) {
+              autoCreated = created;
+              listings = [{ listing_id: created.listing_id }];
+              console.log(`[record_listing_verification] auto-created listing_id=${created.listing_id} for ${domain} property_id=${property_id}`);
+            }
+          } else {
+            console.warn('[record_listing_verification] auto-create failed:', createRes.status, createRes.data);
+          }
+        }
+
         if (listings.length === 0) {
-          return res.status(404).json({ error: 'no active listings on this property', property_id });
+          return res.status(404).json({
+            error: 'no active listings on this property',
+            property_id,
+            hint: asking_price ? 'auto-create attempted but failed' : 'pass asking_price to auto-create on first verify',
+          });
         }
 
         const results = [];
@@ -421,6 +475,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
           check_result,
           listings_verified: okCount,
           listings_total: listings.length,
+          auto_created: autoCreated ? { listing_id: autoCreated.listing_id } : null,
           results,
         });
       } catch (err) {
