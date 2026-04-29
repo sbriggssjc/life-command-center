@@ -666,7 +666,13 @@ const ORG_FIELDS = [
   ['officers', 'Officers / Members'],
 ];
 
-async function loadPropertyTab() {
+// Round 76ek (2026-04-29): accept an optional `prefetchEntityId` to skip
+// the address-based lookup and resolve the LCC entity by id directly.
+// Passed in by the post-save flow so a successful Save immediately flips
+// the action button to "Update" without depending on string equality
+// between the live page address and the saved entity address.
+async function loadPropertyTab(opts) {
+  const prefetchEntityId = opts && opts.prefetchEntityId;
   const header = $('#propertyHeader');
   const body = $('#propertyBody');
   const actions = $('#propertyActions');
@@ -729,17 +735,34 @@ async function loadPropertyTab() {
   actions.innerHTML = '';
 
   // Query LCC to see if this property already exists.
-  // Use the address-based lookup_asset endpoint (purpose-built for dedup
-  // by address + city + state) instead of search_entity_targets, which
-  // matches on entity name and is fragile against address formatting
-  // differences and missing dedup signals.
-  const lookupQuery = new URLSearchParams({ action: 'lookup_asset', address });
+  // Round 76ek: lookup_asset now accepts entity_id, source_url, and
+  // parcel_number in addition to the legacy address+city+state path. Pass
+  // every signal we have — the server tries them in order of precision so
+  // tiny address-spelling drift ("Drive" vs "Dr") no longer hides a saved
+  // entity from the sidebar.
+  const lookupQuery = new URLSearchParams({ action: 'lookup_asset' });
+  if (prefetchEntityId) lookupQuery.set('entity_id', prefetchEntityId);
+  if (source.source_url || source.page_url) {
+    lookupQuery.set('source_url', source.source_url || source.page_url);
+  }
+  if (source.parcel_number) lookupQuery.set('parcel_number', source.parcel_number);
+  if (source.domain_property_id && source.domain) {
+    lookupQuery.set('domain_property_id', source.domain_property_id);
+    lookupQuery.set('domain', source.domain);
+  }
+  if (address) lookupQuery.set('address', address);
   if (city) lookupQuery.set('city', city);
   if (state) lookupQuery.set('state', state);
   const searchResult = await apiCall(`/api/entities?${lookupQuery.toString()}`, null, 'GET');
 
   const lccEntity = searchResult.ok ? (searchResult.data?.entity || null) : null;
   const matched = !!(lccEntity && lccEntity.id);
+  if (matched && searchResult.data?.matched_via) {
+    // Helpful breadcrumb in console — surfaces the identity key that won
+    // (entity_id / source_url / parcel_number / address / address_alias /
+    // address_wildcard) when diagnosing future "lost the match" reports.
+    console.debug('[lookup_asset] matched via', searchResult.data.matched_via, '→', lccEntity.id);
+  }
 
   // If matched, fetch full context for that entity
   let responseData = {};
@@ -1718,7 +1741,12 @@ function wirePropertyActions(ctx, lccEntity) {
         $('#propertyActions').prepend(toast);
         pollPipelineStatus(newEntityId, $('#propertyActions')).then(() => {
           saveBtn.textContent = 'Saved!';
-          setTimeout(() => loadPropertyTab(), 1500);
+          // Round 76ek: hand the just-created entity id to loadPropertyTab so
+          // it doesn't have to guess via a string-match address lookup. This
+          // closes the "Save button reappears after refresh" loop where small
+          // address-spelling differences caused the rehydration to come back
+          // empty and the sidebar to offer Save again (creating duplicates).
+          setTimeout(() => loadPropertyTab({ prefetchEntityId: newEntityId }), 1500);
         });
       } else {
         saveBtn.disabled = false;

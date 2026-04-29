@@ -454,25 +454,47 @@ async function loadDiaData() {
       diaData.reconciliation = recon[0];
     }
 
-    // Enrich movers with facility names (sequential — depends on Batch results)
+    // Enrich movers with facility names.
+    // Round 76eg (2026-04-29): v_facility_patient_counts_mom now inner-joins
+    // medicare_clinics and exposes facility_name + city + state directly, so
+    // the row already carries the name. We keep a secondary lookup as a
+    // belt-and-suspenders fallback in case the view is rolled back, and we
+    // also harvest names from inventoryChanges for any IDs the view missed.
     try {
-      var allMovers = [].concat(moversUpRaw || [], moversDownRaw || []);
-      var moverIds = allMovers.map(function(r) { return r.clinic_id; }).filter(Boolean);
-      // Deduplicate
-      moverIds = moverIds.filter(function(v, i, a) { return a.indexOf(v) === i; });
       var nameMap = {};
-      if (moverIds.length > 0) {
+      // Pre-seed from inventoryChanges (cheap — no extra round trip)
+      (diaData.inventoryChanges || []).forEach(function(r) {
+        if (r.clinic_id && r.facility_name) nameMap[r.clinic_id] = r.facility_name;
+      });
+      var allMovers = [].concat(moversUpRaw || [], moversDownRaw || []);
+      // Take advantage of facility_name now riding along on the mom view rows.
+      allMovers.forEach(function(r) {
+        if (r && r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) {
+          nameMap[r.clinic_id] = r.facility_name;
+        }
+      });
+      // Fallback: only look up the IDs we still don't have a name for.
+      var unresolvedIds = allMovers
+        .map(function(r) { return r && r.clinic_id; })
+        .filter(function(id) { return id && !nameMap[id]; })
+        .filter(function(v, i, a) { return a.indexOf(v) === i; });
+      if (unresolvedIds.length > 0) {
         try {
           var nameRows = await diaQuery('medicare_clinics', 'medicare_id,facility_name', {
-            filter: 'medicare_id=in.(' + moverIds.join(',') + ')', limit: 30
+            filter: 'medicare_id=in.(' + unresolvedIds.join(',') + ')', limit: 50
           });
           (nameRows || []).forEach(function(r) { if (r.medicare_id) nameMap[r.medicare_id] = r.facility_name; });
         } catch (e) { console.warn('name lookup failed', e); }
       }
-      (diaData.inventoryChanges || []).forEach(function(r) {
-        if (r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) nameMap[r.clinic_id] = r.facility_name;
-      });
-      var enrich = function(arr) { return (arr || []).map(function(r) { return Object.assign({}, r, { facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id) }); }); };
+      var enrich = function(arr) {
+        return (arr || []).map(function(r) {
+          // Prefer the name already on the row (new view); fall back to map; only
+          // synthesize "Clinic <id>" as a last resort. Round 76eg's view-side
+          // INNER JOIN should make that fallback unreachable in practice.
+          var name = (r && r.facility_name) || nameMap[r && r.clinic_id] || ('Clinic ' + (r && r.clinic_id));
+          return Object.assign({}, r, { facility_name: name });
+        });
+      };
       diaData.moversUp = enrich(moversUpRaw);
       diaData.moversDown = enrich(moversDownRaw);
     } catch (e) {
