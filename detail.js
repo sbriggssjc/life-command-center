@@ -1387,11 +1387,23 @@ async function _udAdvancePipelineStage(stageKey) {
     if (res.ok) {
       showToast('SF opportunity synced: ' + stage.label, 'success');
     } else if (res.status === 404 || res.status === 400) {
-      // Backend may not yet handle upsert_sf_opportunity — don't alarm the user.
+      // Round 76et-C (2026-04-29): user previously got NO feedback when the
+      // SF backend wasn't handling upsert_sf_opportunity — local pill flipped
+      // but Salesforce never saw the change. Now show a soft warning so the
+      // user knows the local change happened but didn't sync.
       console.warn('SF opportunity upsert returned', res.status, '— backend handler may be pending');
+      showToast(`Stage updated locally. Salesforce sync deferred (handler returned ${res.status}).`, 'warning');
+    } else {
+      // Other non-OK statuses (5xx, 401/403) — surface as an actual error
+      // so the user knows their click didn't fully take effect.
+      console.error('SF opportunity upsert returned', res.status);
+      showToast(`Salesforce sync failed (HTTP ${res.status}). Local stage updated; retry to sync.`, 'error');
     }
   } catch (e) {
-    console.warn('SF opportunity upsert failed', e);
+    // Round 76et-C: catch was previously silent. Network errors / DNS
+    // failures / aborts now surface a clear toast so the user can retry.
+    console.error('SF opportunity upsert failed', e);
+    showToast('Salesforce sync error: ' + (e?.message || 'network error') + '. Local stage updated.', 'error');
   }
 }
 
@@ -3519,13 +3531,22 @@ function _udTabOperations() {
 
   const kpis = [];
 
+  // Round 76et-D (2026-04-29): when a KPI is N/A, the info line now explains
+  // WHY (no CMS link / no cost report / aggregate-only) so the user knows
+  // whether to take action (re-link CMS, wait for next snapshot, etc.) or
+  // accept the gap as legitimate. Previously every N/A looked identical
+  // regardless of the underlying cause.
+  const cmsLinked = !!(r && (r.medicare_id || r.linked_medicare_facility_id || r.ccn));
+
   // Revenue KPI
   const estRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
   kpis.push({
     label: 'Est. Annual Revenue',
     value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'N/A',
     color: estRevenue ? '' : 'var(--text3)',
-    info: 'Revenue estimated using 4-payer treatment model'
+    info: estRevenue
+      ? 'Revenue estimated using 4-payer treatment model'
+      : (cmsLinked ? 'No payer mix / patient counts on file yet' : 'No CMS link — match the property to a Medicare facility to populate')
   });
 
   // Operating Margin KPI
@@ -3534,7 +3555,9 @@ function _udTabOperations() {
     label: 'Operating Margin',
     value: margin != null ? margin.toFixed(1) + '%' : 'N/A',
     color: marginColor,
-    info: margin != null ? (margin > 12 ? 'Healthy' : margin >= 5 ? 'Caution' : 'Below target') : ''
+    info: margin != null
+      ? (margin > 12 ? 'Healthy' : margin >= 5 ? 'Caution' : 'Below target')
+      : (cmsLinked ? 'No CMS cost report on file for this facility' : 'No CMS link')
   });
 
   // Patient Census KPI — use reconciled best count
@@ -3543,7 +3566,9 @@ function _udTabOperations() {
     value: bestPatientCount ? fmtN(bestPatientCount) : 'N/A',
     color: '',
     trend: _trendArrow(r.patient_yoy_pct, 'YoY'),
-    info: latestSnapshotPt > 0 ? 'From latest CMS snapshot' : 'From rankings aggregate'
+    info: bestPatientCount
+      ? (latestSnapshotPt > 0 ? 'From latest CMS snapshot' : 'From rankings aggregate')
+      : (cmsLinked ? 'No CMS snapshot on file yet' : 'No CMS link — match facility to populate')
   });
 
   // Star Rating KPI
@@ -9396,7 +9421,15 @@ async function _intelSavePriorSale(options = {}) {
       source_surface: db === 'gov' ? 'gov_intel_detail' : 'dialysis_intel_detail',
       propagation_scope: 'prior_sale_record'
     });
-    if (!res.ok) { console.error('Sale save error:', res.errors || []); showToast('Error saving sale', 'error'); return; }
+    if (!res.ok) {
+      // Round 76et-A: when called with silent=true (composite Save Reviewed Intel),
+      // we MUST throw so the composite's try/catch knows the sub-save failed.
+      // Previously this returned silently after the error toast, which let the
+      // composite show "Saved reviewed Intel" even when prior-sale save failed.
+      console.error('Sale save error:', res.errors || []);
+      if (!silent) showToast('Error saving sale', 'error');
+      throw new Error('prior sale: ' + (res.errors?.join('; ') || 'save failed'));
+    }
     _udFormDirty = false;
     if (!silent) showToast('Prior sale saved!', 'success');
     canonicalBridge('log_activity', {
@@ -9411,6 +9444,9 @@ async function _intelSavePriorSale(options = {}) {
     if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Prior sale save error:', e);
+    // Round 76et-A: when called silently (composite), rethrow so the caller's
+    // try/catch knows this sub-save failed; otherwise surface the error toast.
+    if (silent) throw e;
     showToast('Error: ' + e.message, 'error');
   }
 }
@@ -9459,7 +9495,12 @@ async function _intelSaveLoan(options = {}) {
       source_surface: db === 'gov' ? 'gov_intel_detail' : 'dialysis_intel_detail',
       propagation_scope: 'loan_record'
     });
-    if (!res.ok) { console.error('Loan save error:', res.errors || []); showToast('Error saving loan', 'error'); return; }
+    if (!res.ok) {
+      // Round 76et-A: bubble error so composite Save Reviewed Intel sees the failure.
+      console.error('Loan save error:', res.errors || []);
+      if (!silent) showToast('Error saving loan', 'error');
+      throw new Error('loan: ' + (res.errors?.join('; ') || 'save failed'));
+    }
     _udFormDirty = false;
     if (!silent) showToast('Loan info saved!', 'success');
     canonicalBridge('log_activity', {
@@ -9474,6 +9515,7 @@ async function _intelSaveLoan(options = {}) {
     if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Loan save error:', e);
+    if (silent) throw e;
     showToast('Error: ' + e.message, 'error');
   }
 }
@@ -9608,12 +9650,17 @@ async function _intelSaveCashFlow(options = {}) {
     }
 
     _udFormDirty = false;
+    // Round 76et-A: when called silently and partial warnings exist, throw so
+    // the composite Save Reviewed Intel sees the partial failure. The non-silent
+    // path keeps the original "saved with issues" toast.
     if (!silent) {
       if (partialWarns.length > 0) {
         showToast('Cash flow saved with issues: ' + partialWarns.join(', '), 'error');
       } else {
         showToast('Cash flow / valuation saved!', 'success');
       }
+    } else if (partialWarns.length > 0) {
+      throw new Error('cash flow: ' + partialWarns.join(', ') + ' failed');
     }
     canonicalBridge('log_activity', {
       title: 'Cash flow estimate saved',
@@ -9627,6 +9674,7 @@ async function _intelSaveCashFlow(options = {}) {
     if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Cash flow save error:', e);
+    if (silent) throw e;
     showToast('Error: ' + e.message, 'error');
   }
 }
@@ -9669,7 +9717,12 @@ async function _intelSaveNotes(options = {}) {
       source_surface: db === 'gov' ? 'gov_intel_detail' : 'dialysis_intel_detail',
       propagation_scope: 'research_queue_outcome'
     });
-    if (!res.ok) { console.error('Notes save error:', res.errors || []); showToast('Error saving notes', 'error'); return; }
+    if (!res.ok) {
+      // Round 76et-A: bubble error so composite Save Reviewed Intel sees it.
+      console.error('Notes save error:', res.errors || []);
+      if (!silent) showToast('Error saving notes', 'error');
+      throw new Error('notes: ' + (res.errors?.join('; ') || 'save failed'));
+    }
     _udFormDirty = false;
     if (!silent) showToast('Research notes saved!', 'success');
     canonicalBridge('log_activity', {
@@ -9684,6 +9737,7 @@ async function _intelSaveNotes(options = {}) {
     if (refresh) refreshDetailPanel();
   } catch (e) {
     console.error('Notes save error:', e);
+    if (silent) throw e;
     showToast('Error: ' + e.message, 'error');
   }
 }

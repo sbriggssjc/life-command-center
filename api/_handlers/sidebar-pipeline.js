@@ -576,21 +576,48 @@ const MEDICAL_TENANT_PRIORITY = /fresenius|davita|dialysis|fmc|dci\b|kidney|rena
 
 const GOV_TENANT_PRIORITY = /\bgsa\b|general services administration|veterans affairs|\bva\b|social security|\bssa\b|\birs\b|internal revenue|\bfbi\b|\bdea\b|\bice\b|\buscis\b|\bfema\b|\busda\b|\bhud\b|department of|bureau of|\bfederal\b|state of|county of|city of|\busps\b|postal service|army corps|coast guard|customs|\bcbp\b|\btsa\b|government/i;
 
+// Round 76eq (2026-04-29): defensive parser for stringified-array tenant
+// values. The OM extractor's AI sometimes returns tenant_name as a JSON-
+// stringified array (e.g. '["FMC", "Prine Health"]') instead of a flat
+// string. Downstream writers crashed with type errors. This helper
+// detects the pattern and returns the first parseable tenant; if the
+// value isn't an array string, it's returned unchanged.
+function unwrapTenantValue(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== 'string') return raw;
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('[')) return trimmed;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const first = parsed.find(v => typeof v === 'string' && v.trim());
+      return first ? first.trim() : null;
+    }
+  } catch {
+    // Not valid JSON — fall through to return original
+  }
+  return trimmed;
+}
+
 /**
  * Select the most domain-relevant tenant from metadata.tenants[].
  * Falls back to metadata.tenant_name / metadata.primary_tenant when no
  * tenants array is present, and to tenants[0] when no priority match.
+ * Round 76eq: every fallback path goes through unwrapTenantValue() to
+ * defend against AI-stringified-array input.
  */
 function selectPrimaryTenant(metadata, domain) {
   const tenants = metadata.tenants || [];
   if (tenants.length === 0) {
-    return metadata.tenant_name || metadata.primary_tenant || null;
+    return unwrapTenantValue(metadata.tenant_name)
+      || unwrapTenantValue(metadata.primary_tenant)
+      || null;
   }
   const priorityRe = domain === 'government' ? GOV_TENANT_PRIORITY : MEDICAL_TENANT_PRIORITY;
   const match = tenants.find(t => t.name && priorityRe.test(t.name));
   if (match) return match.name;
   // Fall back to first (largest by SF) tenant
-  return tenants[0]?.name || metadata.tenant_name || null;
+  return tenants[0]?.name || unwrapTenantValue(metadata.tenant_name) || null;
 }
 
 /**
@@ -6746,10 +6773,27 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
   // Mark metadata as processed so we don't re-process
   // Only write _pipeline_processed_at when propagation succeeded — failed runs
   // remain retryable (hasSidebarData() will return true on the next save).
+  // Round 76eo-B (2026-04-29): also lift propagation.property_id up to the
+  // top-level metadata.domain_property_id slot. The 30-day audit found 76
+  // entities where _pipeline_summary.domain_property_id was correctly set
+  // but the top-level field stayed null, breaking downstream consumers
+  // (lookup_asset, merge-log reconciler) that read the top-level field.
+  // Without this lift, propagated entities looked unlinked to the rest of
+  // the system.
   const updatedMeta = {
     ...metadata,
     ...(propagation.propagated
-      ? { _pipeline_processed_at: new Date().toISOString(), _pipeline_status: 'success' }
+      ? {
+          _pipeline_processed_at: new Date().toISOString(),
+          _pipeline_status:       'success',
+          // Round 76eo-B: promote the propagated property_id to the top-level
+          // metadata slot, which downstream lookup paths key on. Cast to
+          // string so the value shape matches what other writers (intake
+          // promoter, sidebar) put there.
+          ...(propagation.property_id != null
+              ? { domain_property_id: String(propagation.property_id) }
+              : {}),
+        }
       : {
           _pipeline_status: 'failed',
           _pipeline_last_error: propagation.reason || 'unknown',

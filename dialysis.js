@@ -2851,7 +2851,15 @@ function renderListingVerificationCard() {
   const value = fmtN(due);
   const sub = `${overdue30} 30d-overdue · ${overdue90} 90d · ${broken} broken-url · ${recent} checks/7d · ${changes7d} status-changes/7d`;
 
-  return `<div class="dia-info-card dia-info-${color}" onclick="showToast('Verification triage queue lands in Round 76cx Phase 3','info')" style="cursor:pointer;padding:14px 16px">
+  // Round 76et-B (2026-04-29): Phase 3 + 3b + 4b all shipped. The card was
+  // pointing users at a "lands later" toast for a feature that already exists.
+  // Now the card surfaces the active verification toolset: open any overdue
+  // listing in the sidebar (CoStar/LoopNet/etc.) and click "Verify still
+  // available" or "Mark off market". The 6h auto-scrape cron handles the
+  // sale-window heuristic automatically; manual review is for everything
+  // it can't decide.
+  const tooltipText = `Open an overdue listing in the sidebar and use Verify still available / Mark off market. The auto-scrape cron handles ${recent} checks/7d automatically.`;
+  return `<div class="dia-info-card dia-info-${color}" onclick="showToast('${escapeHtmlSafe(tooltipText)}','info')" style="cursor:pointer;padding:14px 16px" title="${escapeHtmlSafe(tooltipText)}">
     <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
     <div style="font-size:24px;font-weight:700;color:var(--text1);margin-bottom:4px">${value}</div>
     <div style="font-size:11px;color:var(--text2)">due now · ${escapeHtmlSafe(sub)}</div>

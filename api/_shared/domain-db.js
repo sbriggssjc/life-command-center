@@ -59,7 +59,15 @@ export async function domainQuery(domain, method, path, body, extraHeaders = {})
     opts.body = JSON.stringify(body);
   }
 
-  const res = await fetchWithTimeout(url, opts, 8000);
+  // Round 76ep (2026-04-29): bumped from 8s → 30s after a propagation_error
+  // on 6606 Stadium Dr Zephyrhills (rich capture: 3 sales + 4 brokers + 4 owner
+  // contacts) timed out a domain PATCH at 8s. The error stack traced cleanly
+  // via Round 76ea's diagnostic capture: AbortError → fetchWithTimeout in
+  // domainQuery → domainPatch. 8s was reasonable when these were lightweight
+  // single-row PATCHes; complex multi-record updates need more headroom.
+  // 30s aligns with Round 76cw's pg_net timeout bump and is well under
+  // Vercel's 60s function ceiling, so genuine failures still fail fast.
+  const res = await fetchWithTimeout(url, opts, 30000);
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
