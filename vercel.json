@@ -17,6 +17,7 @@
     { "source": "/api/sf-sync-queue", "destination": "/api/admin?_route=sf-sync-queue" },
     { "source": "/api/storage-cleanup", "destination": "/api/admin?_route=storage-cleanup" },
     { "source": "/api/consolidate-property", "destination": "/api/admin?_route=consolidate-property" },
+    { "source": "/api/npi-lookup", "destination": "/api/admin?_route=npi-lookup" },
     { "source": "/api/merge-log-reconcile", "destination": "/api/admin?_route=merge-log-reconcile" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
