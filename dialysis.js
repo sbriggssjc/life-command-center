@@ -5230,6 +5230,26 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
 
     showToast('Linked to Property #' + propertyId, 'success');
 
+    // Persist the canonical link in properties.medicare_id so the gap view
+    // recognizes the clinic as linked. This is the field
+    // v_clinic_lease_data_gaps joins on; without it the clinic stays in the
+    // queue forever (regardless of medicare_clinics.property_id state).
+    // Best-effort: the outcome row above is the durable user decision; this
+    // patch is a follow-up that lets the queue self-clean.
+    try {
+      await applyChangeWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'properties',
+        idColumn: 'property_id',
+        idValue: propertyId,
+        data: { medicare_id: String(clinicId) },
+        source_surface: 'dialysis_property_review',
+        propagation_scope: 'property_clinic_link'
+      });
+    } catch (linkErr) {
+      console.warn('[propResLinkFromQueue] properties.medicare_id patch failed:', linkErr);
+    }
+
     // Refresh outcomes cache so the queue advances and this row is hidden.
     try {
       const fresh = await diaQuery('research_queue_outcomes', '*', { limit: 500 });
