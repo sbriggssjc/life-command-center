@@ -159,15 +159,16 @@ function scoreItem(item, hotContactMap) {
 // ---------------------------------------------------------------------------
 
 export async function fetchWorkCounts(workspaceId, userId) {
+  // Single-row materialized-view reads — count header is never consumed.
   const [teamMv, userMv] = await Promise.all([
-    opsQuery('GET', `mv_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`),
-    opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`)
+    opsQuery('GET', `mv_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`, undefined, { countMode: 'none' }),
+    opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`, undefined, { countMode: 'none' })
   ]);
 
   let team = teamMv;
   let teamSource = 'mv_work_counts';
   if (!team.ok || !team.data?.length) {
-    team = await opsQuery('GET', `v_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`);
+    team = await opsQuery('GET', `v_work_counts?workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`, undefined, { countMode: 'none' });
     teamSource = 'v_work_counts';
   }
   let t = team.data?.[0] || {};
@@ -248,7 +249,8 @@ export async function fetchMyWork(workspaceId, userId, limit = 15) {
     `&or=(user_id.eq.${encodeURIComponent(userId)},assigned_to.eq.${encodeURIComponent(userId)})` +
     `&limit=${Math.max(1, Math.min(limit, 50))}` +
     `&order=due_date.asc.nullslast,created_at.desc`;
-  const result = await opsQuery('GET', path);
+  // List read — count header unused.
+  const result = await opsQuery('GET', path, undefined, { countMode: 'none' });
   return Array.isArray(result.data) ? result.data : [];
 }
 
@@ -257,8 +259,10 @@ export async function fetchInboxSummary(workspaceId, limit = 10) {
     `v_inbox_triage?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
     `&limit=${Math.max(1, Math.min(limit, 50))}` +
     '&order=received_at.desc';
+  // Items list reads .data only; the two count probes (select=id&limit=0)
+  // intentionally keep count=exact since their whole purpose is counting.
   const [items, newCount, triagedCount] = await Promise.all([
-    opsQuery('GET', path),
+    opsQuery('GET', path, undefined, { countMode: 'none' }),
     opsQuery('GET', `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.new&select=id&limit=0`),
     opsQuery('GET', `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.triaged&select=id&limit=0`)
   ]);
@@ -295,7 +299,7 @@ export async function fetchNewIntakes(workspaceId, hours = 24, limit = 10) {
     `&promoted_at=gte.${encodeURIComponent(sinceIso)}` +
     `&select=id,intake_id,entity_id,pipeline_result,promoted_at,promoted_by` +
     `&order=promoted_at.desc&limit=${Math.max(1, Math.min(limit, 50))}`;
-  const res = await opsQuery('GET', path);
+  const res = await opsQuery('GET', path, undefined, { countMode: 'none' });
   const rawItems = Array.isArray(res.data) ? res.data : [];
   const items = rawItems.map((r) => {
     const pr = r.pipeline_result || {};
@@ -329,23 +333,28 @@ export async function fetchUnassignedWork(workspaceId, limit = 10) {
     `v_unassigned_work?workspace_id=eq.${encodeURIComponent(workspaceId)}` +
     `&limit=${Math.max(1, Math.min(limit, 50))}` +
     '&order=created_at.desc';
-  const result = await opsQuery('GET', path);
+  const result = await opsQuery('GET', path, undefined, { countMode: 'none' });
   return Array.isArray(result.data) ? result.data : [];
 }
 
 export async function fetchSyncHealthSnapshot(workspaceId) {
+  // Three reads use only .data; openSfTasks uses .count for queue_drift.
   const [connectors, recentJobs, unresolvedErrors, openSfTasks] = await Promise.all([
     opsQuery('GET',
-      `connector_accounts?workspace_id=eq.${encodeURIComponent(workspaceId)}&select=id,user_id,connector_type,status,last_sync_at,last_error,external_user_id&order=connector_type,display_name`
+      `connector_accounts?workspace_id=eq.${encodeURIComponent(workspaceId)}&select=id,user_id,connector_type,status,last_sync_at,last_error,external_user_id&order=connector_type,display_name`,
+      undefined, { countMode: 'none' }
     ),
     opsQuery('GET',
-      `sync_jobs?workspace_id=eq.${encodeURIComponent(workspaceId)}&created_at=gte.${encodeURIComponent(new Date(Date.now() - 86400000).toISOString())}&select=id,status,direction,entity_type,records_processed,records_failed,completed_at&order=created_at.desc&limit=50`
+      `sync_jobs?workspace_id=eq.${encodeURIComponent(workspaceId)}&created_at=gte.${encodeURIComponent(new Date(Date.now() - 86400000).toISOString())}&select=id,status,direction,entity_type,records_processed,records_failed,completed_at&order=created_at.desc&limit=50`,
+      undefined, { countMode: 'none' }
     ),
     opsQuery('GET',
-      `sync_errors?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`
+      `sync_errors?workspace_id=eq.${encodeURIComponent(workspaceId)}&resolved_at=is.null&select=id,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`,
+      undefined, { countMode: 'none' }
     ),
     opsQuery('GET',
-      `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.sf_task&status=in.(new,triaged)&select=id&limit=1`
+      `inbox_items?workspace_id=eq.${encodeURIComponent(workspaceId)}&source_type=eq.sf_task&status=in.(new,triaged)&select=id&limit=1`,
+      undefined, { countMode: 'exact' }
     )
   ]);
 

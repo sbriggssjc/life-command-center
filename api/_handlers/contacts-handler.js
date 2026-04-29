@@ -544,7 +544,8 @@ async function computeContactTouchpoints(contact, workspaceId) {
     `&select=id,received_at&order=received_at.desc&limit=500`;
 
   try {
-    const result = await opsQuery('GET', path);
+    // Touchpoint lookup reads only result.data — count header is unused.
+    const result = await opsQuery('GET', path, undefined, { countMode: 'none' });
     if (!result.ok) {
       console.warn('[contacts] touchpoint query failed:', result.status, result.data);
       return empty;
@@ -1575,9 +1576,11 @@ async function ingestWebexCalls(req, res, user) {
 async function ingestCalendarContacts(req, res, user, workspaceId) {
   const { days_back = 90, limit: maxEvents = 500 } = req.body || {};
 
-  // Pull calendar events from OPS Supabase (already synced by /api/sync?action=ingest_calendar)
+  // Pull calendar events from OPS Supabase (already synced by /api/sync?action=ingest_calendar).
+  // Reads result.data only — count header is unused.
   const eventsResult = await opsQuery('GET',
-    `activity_events?category=eq.meeting&source_type=eq.outlook&workspace_id=eq.${workspaceId}&order=occurred_at.desc&limit=${maxEvents}&select=metadata,occurred_at`
+    `activity_events?category=eq.meeting&source_type=eq.outlook&workspace_id=eq.${workspaceId}&order=occurred_at.desc&limit=${maxEvents}&select=metadata,occurred_at`,
+    undefined, { countMode: 'none' }
   );
 
   if (!eventsResult.ok) {

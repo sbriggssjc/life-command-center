@@ -85,7 +85,6 @@ export default withErrorHandler(async function handler(req, res) {
     case 'npi-lookup':           return handleNpiLookupProxy(req, res);
     case 'npi-registry-sync':    return handleNpiRegistrySyncProxy(req, res);
     case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
-    case 'merge-log-reconcile': return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
