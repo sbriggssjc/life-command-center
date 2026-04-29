@@ -399,6 +399,11 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
             && method === 'sidebar_capture'
             && check_result === 'still_available'
             && asking_price != null && Number(asking_price) > 0) {
+          // Round 76dy: dia.available_listings has no data_source column (only
+          // notes); gov uses listing_source not data_source. The prior
+          // payload tried to insert data_source on both, which crashed dia
+          // INSERTs with "column does not exist" → the verify button toast
+          // showed "auto-create attempted but failed" on every click.
           const newListing = domain === 'dialysis'
             ? {
                 property_id: Number(property_id),
@@ -409,7 +414,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 listing_url: source_url || null,
                 last_seen: new Date().toISOString().slice(0, 10),
                 last_verified_at: new Date().toISOString(),
-                data_source: 'lcc_sidebar_verify',
+                notes: 'auto-created by LCC sidebar verify-still-available',
               }
             : {
                 property_id: Number(property_id),
@@ -421,7 +426,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
                 first_seen_at: new Date().toISOString(),
                 last_seen_at: new Date().toISOString(),
                 last_verified_at: new Date().toISOString(),
-                data_source: 'lcc_sidebar_verify',
+                listing_source: 'lcc_sidebar_verify',
               };
           const createRes = await domainQuery(domain, 'POST', 'available_listings', newListing);
           if (createRes.ok) {
