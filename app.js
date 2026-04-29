@@ -996,6 +996,8 @@ function _showModal(msg, inputMode, defaultVal, okLabel) {
     if (!overlay) { resolve(inputMode ? null : false); return; }
     msgEl.textContent = msg;
     okBtn.textContent = okLabel || 'Confirm';
+    // Defensive: re-enable in case a caller mistakenly disabled the button.
+    okBtn.disabled = false;
     if (inputMode) {
       inputWrap.style.display = 'block';
       inputEl.value = defaultVal || '';

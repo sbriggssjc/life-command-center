@@ -5166,13 +5166,17 @@ function renderSuggestedCandidates(item, suggested) {
   return html;
 }
 
+var _propResLinkInFlight = false;
 window.propResLinkFromQueue = async function(clinicId, propertyId) {
+  // Module-level lock prevents double-saves while the request is in flight.
+  // (Earlier versions disabled `event.target` after `await lccConfirm`, but
+  // the post-await `event` global resolved to the *modal*'s OK button,
+  // which left it permanently disabled and broke subsequent links.)
+  if (_propResLinkInFlight) return;
+
   if (!(await lccConfirm('Link clinic ' + clinicId + ' to Property #' + propertyId + '?', 'Link'))) return;
 
-  // Disable the clicked chip while the request is in flight to prevent
-  // double-saves.
-  const btnEl = (typeof event !== 'undefined' && event && event.target) ? event.target : null;
-  if (btnEl && btnEl.tagName === 'BUTTON') { btnEl.disabled = true; btnEl.textContent = 'Saving…'; }
+  _propResLinkInFlight = true;
 
   try {
     // research_queue_outcomes has a UNIQUE(queue_type, clinic_id) constraint,
@@ -5221,7 +5225,6 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
     if (!result || !result.ok) {
       const msg = (result && result.errors && result.errors.join('; ')) || 'unknown error';
       showToast('Failed to save link: ' + msg, 'error');
-      if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Link'; }
       return;
     }
 
@@ -5268,7 +5271,8 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
   } catch (err) {
     console.error('propResLinkFromQueue error:', err);
     showToast('Failed to save link: ' + (err.message || 'unknown error'), 'error');
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Link'; }
+  } finally {
+    _propResLinkInFlight = false;
   }
 };
 
