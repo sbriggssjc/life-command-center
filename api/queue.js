@@ -18,7 +18,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler, isOpsConfigured } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import {
   canTransitionInbox, inboxTransitionEffects, buildTransitionActivity,
@@ -28,6 +28,14 @@ import { writeTriageSignal, writePromotionSignal } from './_shared/signals.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
+
+  // Anonymous _perf beacon — must run BEFORE authenticate() because
+  // navigator.sendBeacon cannot attach the Authorization / X-LCC-Key headers
+  // the rest of the API requires. Persist a sanitized perf_metrics row.
+  if (req.method === 'POST' && req.query?.view === '_perf') {
+    return recordClientPerf(req, res);
+  }
+
   if (requireOps(res)) return;
 
   const user = await authenticate(req, res);
@@ -42,11 +50,6 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to inbox handler if routed via _route=inbox
   if (req.query._route === 'inbox') {
     return handleInbox(req, res, user, workspaceId);
-  }
-
-  // Allow POST for _perf beacon (performance telemetry from navigator.sendBeacon)
-  if (req.method === 'POST' && req.query?.view === '_perf') {
-    return res.status(204).end();
   }
 
   if (req.method !== 'GET') {
@@ -632,6 +635,73 @@ async function logPerfMetric(workspaceId, userId, metricType, endpoint, duration
   } catch {
     // Fire-and-forget
   }
+}
+
+// ---- CLIENT PERF BEACON (navigator.sendBeacon) ----
+//
+// Anonymous ingest: the beacon can't carry auth headers, so we validate the
+// body conservatively (UUID format, allowlist of metric_type, capped strings,
+// duration clamp) and persist directly. Returns 204 in all cases — beacons
+// don't surface errors to the user.
+const PERF_METRIC_TYPES = new Set(['page_load', 'api_latency', 'client_render', 'query_time']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseBeaconBody(req) {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return null; }
+  }
+  return (body && typeof body === 'object' && !Array.isArray(body)) ? body : null;
+}
+
+function sanitizeMetadata(meta) {
+  if (!meta || typeof meta !== 'object') return {};
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(meta)) {
+    if (n >= 10) break;
+    const key = String(k).slice(0, 40);
+    let val;
+    if (v === null || typeof v === 'boolean' || typeof v === 'number') val = v;
+    else if (typeof v === 'string') val = v.slice(0, 200);
+    else { try { val = JSON.stringify(v).slice(0, 200); } catch { continue; } }
+    out[key] = val;
+    n++;
+  }
+  return out;
+}
+
+async function recordClientPerf(req, res) {
+  // Drop silently if ops not configured — the client's beacon doesn't care.
+  if (!isOpsConfigured()) return res.status(204).end();
+
+  const body = parseBeaconBody(req);
+  if (!body) return res.status(204).end();
+
+  if (!PERF_METRIC_TYPES.has(body.metric_type)) return res.status(204).end();
+
+  const endpoint = String(body.endpoint || '').slice(0, 200);
+  if (!endpoint || !/^[\x20-\x7e]+$/.test(endpoint)) return res.status(204).end();
+
+  const duration_ms = Math.max(0, Math.min(60000, Math.round(Number(body.duration_ms) || 0)));
+
+  const workspace_id = UUID_RE.test(String(body.workspace_id || '')) ? body.workspace_id : null;
+  const user_id = UUID_RE.test(String(body.user_id || '')) ? body.user_id : null;
+
+  // Awaited on purpose: the client (sendBeacon) has already disconnected, so
+  // there's no user-perceived latency. Awaiting also avoids the Vercel Node
+  // post-response freeze that drops fire-and-forget I/O.
+  await opsQuery('POST', 'perf_metrics', {
+    workspace_id, user_id,
+    metric_type: body.metric_type,
+    endpoint,
+    duration_ms,
+    metadata: sanitizeMetadata(body.metadata)
+  }).catch(err => {
+    console.warn('[perf-beacon] insert failed:', err?.message || err);
+  });
+
+  return res.status(204).end();
 }
 
 // ============================================================================
