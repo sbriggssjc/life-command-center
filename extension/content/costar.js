@@ -159,6 +159,31 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
 
+    // Round 76dt: client-side mirror of the server RBA inference (Round 76dr).
+    // When the property is single-tenant + 100% leased + RBA known but the
+    // tenant's SF wasn't captured (CoStar's For Sale > Property sub-tab
+    // doesn't always render a Tenants table with SF), infer the tenant's
+    // leased_area = RBA right here in the captured payload. The sidebar
+    // displays straight from this payload before the property is saved
+    // to LCC, so without this fix the sidebar shows "Fresenius Kidney Care"
+    // with no SF at all (5 Route 45 / Mannington NJ capture, 2026-04-29).
+    if (Array.isArray(tenants) && tenants.length === 1 && !tenants[0].sf) {
+      const lower = (document.body.innerText || '').toLowerCase();
+      // Single-tenancy signal: "Tenancy: Single" or "Tenancy Single" in stats
+      const isSingle = /\btenancy[:\s]+single\b/.test(lower);
+      // 100% leased signal: literal "100% Leased" or "Percent Leased ... 100%"
+      const fullyLeased = /\b100%\s*(leased|occupied)\b/.test(lower)
+        || /percent\s+leased[\s\S]{0,40}\b100%/i.test(lower);
+      // Pull RBA from common stat-card patterns
+      const rbaMatch = (document.body.innerText || '').match(/\b([\d,]{3,})\s*SF\s+RBA\b/i)
+        || (document.body.innerText || '').match(/^RBA\s*\n\s*([\d,]+)\s*SF/im);
+      const rba = rbaMatch ? parseInt(rbaMatch[1].replace(/[^\d]/g, ''), 10) : null;
+      if (isSingle && fullyLeased && Number.isFinite(rba) && rba >= 100) {
+        tenants[0].sf = `${rba.toLocaleString()} SF`;
+        console.log(`[LCC CoStar] inferred leased_area=${rba} SF for ${tenants[0].name} (single-tenant + 100% leased + RBA)`);
+      }
+    }
+
     // ── Extract "Sale Notes" narrative section ──────────────────────────
     const saleNotesIdx = lines.findIndex(l => /^sale\s+notes$/i.test(l.trim()));
     if (saleNotesIdx > -1) {
