@@ -1957,16 +1957,43 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
           ? listingLookup.data[0]
           : null;
         if (latestListing?.listing_id) {
-          const listingValues = {
-            initial_price:    metadata.list_price || metadata.asking_price || null,
-            last_price:       metadata.list_price || metadata.asking_price || null,
-            current_cap_rate: metadata.cap_rate != null ? Number(metadata.cap_rate) / 100 : null,
-            initial_cap_rate: metadata.cap_rate != null ? Number(metadata.cap_rate) / 100 : null,
-            listing_broker:   metadata.listing_broker || null,
-            broker_email:     metadata.listing_broker_email || null,
-            seller_name:      metadata.seller_name || null,
-            listing_date:     metadata.listing_date || null,
-          };
+          // Schema differs by domain — gov.available_listings uses
+          // asking_price / asking_cap_rate / asking_price_psf, dia uses
+          // initial_price / last_price / current_cap_rate / initial_cap_rate
+          // / price_per_sf / seller_name. The actual listing INSERT
+          // (upsertGovListings vs upsertDialysisListings) already branches
+          // correctly; this provenance call has to mirror that or
+          // v_field_provenance_unranked surfaces writes against columns
+          // that don't exist on the target table. Same fix as the OM
+          // promoter side in PR #498.
+          const capRateDecimal = metadata.cap_rate != null ? Number(metadata.cap_rate) / 100 : null;
+          const askPrice = metadata.list_price || metadata.asking_price || null;
+          const sfInt = parseSF(metadata.square_footage);
+          const askPpsf = (askPrice && sfInt)
+            ? Math.round((askPrice / sfInt) * 100) / 100
+            : null;
+
+          const listingValues = domain === 'government'
+            ? {
+                asking_price:     askPrice,
+                asking_cap_rate:  capRateDecimal,
+                asking_price_psf: askPpsf,
+                listing_broker:   metadata.listing_broker || null,
+                broker_email:     metadata.listing_broker_email || null,
+                seller_name:      metadata.seller_name || null,
+                listing_date:     metadata.listing_date || null,
+              }
+            : {
+                initial_price:    askPrice,
+                last_price:       askPrice,
+                current_cap_rate: capRateDecimal,
+                initial_cap_rate: capRateDecimal,
+                listing_broker:   metadata.listing_broker || null,
+                broker_email:     metadata.listing_broker_email || null,
+                seller_name:      metadata.seller_name || null,
+                listing_date:     metadata.listing_date || null,
+              };
+
           await recordCoStarFieldsProvenance(
             { ...provCtx, targetTable: `${tablePrefix}.available_listings`, recordPk: latestListing.listing_id },
             listingValues
