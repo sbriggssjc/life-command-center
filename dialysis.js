@@ -1183,10 +1183,22 @@ function renderNorthmarqInner() {
   const now = new Date();
   const ttmStart = new Date(now); ttmStart.setFullYear(ttmStart.getFullYear() - 1);
   const ttmComps = comps.filter(r => r.sold_date && new Date(r.sold_date) >= ttmStart);
+  // Round 76ej (2026-04-29): tightened the team-member match to require the
+  // FULL "first last" phrase, not any word > 3 chars. The old loose match
+  // turned every "Scott Gould" / "Joseph Martin" deal into a false NM hit
+  // (the dashboard's "5 of 160 TTM" was actually 1 real NM + 4 spurious
+  // matches on third-party brokers named Scott / Martin). Brand strings
+  // ("northmarq", "north marq", "nm capital") still match on their own.
+  // r.broker_name / r.seller_broker / r.buyer_broker are dropped from the
+  // concat — those keys never get set on the normalized row.
   const isNM = r => {
-    var brokers = ((r.listing_broker||'')+(r.procuring_broker||'')+(r.broker_name||'')+(r.seller_broker||'')+(r.buyer_broker||'')+(r.broker_companies||'')).toLowerCase();
+    var brokers = (
+      (r.listing_broker || '') + ' ' +
+      (r.procuring_broker || '') + ' ' +
+      (r.broker_companies || '')
+    ).toLowerCase();
     if (brokers.includes('northmarq') || brokers.includes('north marq') || brokers.includes('nm capital')) return true;
-    return NM_TEAM.some(name => { var parts = name.split(' '); return parts.some(p => p.length > 3 && brokers.includes(p)); });
+    return NM_TEAM.some(function(name) { return brokers.includes(name); });
   };
   const nmComps = ttmComps.filter(isNM);
   const nmWithPrice = nmComps.filter(r => r.price > 0);
@@ -1201,10 +1213,25 @@ function renderNorthmarqInner() {
   const mktCaps = ttmComps.filter(r => { const v = parseFloat(r.cap_rate); return v > 0.01 && v < 0.25; }).map(r => parseFloat(r.cap_rate));
   const nmAvgCap = nmCaps.length > 0 ? (nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length*100).toFixed(2) + '%' : '—';
   const mktAvgCap = mktCaps.length > 0 ? (mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length*100).toFixed(2) + '%' : '—';
-  // Cap rate advantage (lower cap = higher price = better for sellers)
+  // Cap rate advantage (lower cap = higher price = better for sellers).
+  // Positive bps = NM cap tighter than market = better for sellers.
+  // Negative bps = NM cap wider than market = worse for sellers.
+  // Round 76ej: the label used to be a hardcoded "tighter" regardless of
+  // sign — so "-68 bps tighter" rendered for clearly-wider results, which
+  // looked like a math contradiction. Pick "tighter" / "wider" / "even"
+  // dynamically and use Math.abs for the magnitude.
   const capAdv = (nmCaps.length > 0 && mktCaps.length > 0) ?
-    ((mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length - nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length) * 10000).toFixed(0) : null;
-  const capAdvStr = capAdv ? capAdv + ' bps tighter' : '—';
+    Math.round((mktCaps.reduce((s,v)=>s+v,0)/mktCaps.length - nmCaps.reduce((s,v)=>s+v,0)/nmCaps.length) * 10000) : null;
+  let capAdvStr;
+  if (capAdv === null) {
+    capAdvStr = '—';
+  } else if (capAdv === 0) {
+    capAdvStr = 'even with market';
+  } else if (capAdv > 0) {
+    capAdvStr = capAdv + ' bps tighter';
+  } else {
+    capAdvStr = Math.abs(capAdv) + ' bps wider';
+  }
 
   let h = '<div class="dia-grid dia-grid-4">';
   h += infoCard({ title: 'NM TTM Sales', value: fmtN(nmComps.length), sub: '$' + fmtN(Math.round(nmVolume / 1000000)) + 'M volume', color: 'green', tab: 'sales' });
