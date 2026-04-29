@@ -159,28 +159,35 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
 
-    // Round 76dt: client-side mirror of the server RBA inference (Round 76dr).
+    // Round 76dt + 76dz: client-side mirror of the server RBA inference.
     // When the property is single-tenant + 100% leased + RBA known but the
-    // tenant's SF wasn't captured (CoStar's For Sale > Property sub-tab
-    // doesn't always render a Tenants table with SF), infer the tenant's
-    // leased_area = RBA right here in the captured payload. The sidebar
-    // displays straight from this payload before the property is saved
-    // to LCC, so without this fix the sidebar shows "Fresenius Kidney Care"
-    // with no SF at all (5 Route 45 / Mannington NJ capture, 2026-04-29).
+    // tenant's SF wasn't captured, infer leased_area = RBA. Earlier version
+    // re-scanned innerText for "Tenancy: Single" / "100% Leased" but
+    // CoStar's stat-card layout produces innerText like "Tenancy\nSingle"
+    // and "100%\nPercent Leased" (label and value as separate cells),
+    // which the regex didn't match. Round 76dz: read from already-extracted
+    // fields (data.tenancy_type, data.occupancy, data.square_footage) which
+    // extractFields populated above by walking the same lines.
     if (Array.isArray(tenants) && tenants.length === 1 && !tenants[0].sf) {
-      const lower = (document.body.innerText || '').toLowerCase();
-      // Single-tenancy signal: "Tenancy: Single" or "Tenancy Single" in stats
-      const isSingle = /\btenancy[:\s]+single\b/.test(lower);
-      // 100% leased signal: literal "100% Leased" or "Percent Leased ... 100%"
-      const fullyLeased = /\b100%\s*(leased|occupied)\b/.test(lower)
-        || /percent\s+leased[\s\S]{0,40}\b100%/i.test(lower);
-      // Pull RBA from common stat-card patterns
-      const rbaMatch = (document.body.innerText || '').match(/\b([\d,]{3,})\s*SF\s+RBA\b/i)
-        || (document.body.innerText || '').match(/^RBA\s*\n\s*([\d,]+)\s*SF/im);
-      const rba = rbaMatch ? parseInt(rbaMatch[1].replace(/[^\d]/g, ''), 10) : null;
+      // Single-tenancy: extracted into data.tenancy_type or sniffed by line scan
+      const tenancyText = String(data.tenancy_type || '').toLowerCase();
+      const isSingle = /\bsingle\b/.test(tenancyText)
+        || lines.some((l, i) => /^tenancy$/i.test(l.trim()) && /^single$/i.test((lines[i + 1] || '').trim()));
+      // 100% leased: extracted into data.occupancy or sniffed
+      const occText = String(data.occupancy || '').toLowerCase();
+      const fullyLeased = /^100/.test(occText)
+        || lines.some((l, i) => /^percent\s+leased$/i.test(l.trim()) && /^100%?$/.test((lines[i + 1] || '').trim()))
+        || lines.some((l, i) => /^100%$/.test(l.trim()) && /^percent\s+leased$/i.test((lines[i + 1] || '').trim()));
+      // RBA: extracted into data.square_footage by extractFields
+      const rba = parseInt(String(data.square_footage || '').replace(/[^\d]/g, ''), 10);
       if (isSingle && fullyLeased && Number.isFinite(rba) && rba >= 100) {
         tenants[0].sf = `${rba.toLocaleString()} SF`;
         console.log(`[LCC CoStar] inferred leased_area=${rba} SF for ${tenants[0].name} (single-tenant + 100% leased + RBA)`);
+      } else if (!tenants[0].sf) {
+        console.log('[LCC CoStar] leased_area inference skipped:', {
+          isSingle, fullyLeased, rba,
+          tenancy_type: data.tenancy_type, occupancy: data.occupancy, square_footage: data.square_footage,
+        });
       }
     }
 
