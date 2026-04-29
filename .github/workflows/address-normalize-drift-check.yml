@@ -1,0 +1,84 @@
+name: Address Normalizer Drift Check
+
+# Compares the dia.dia_normalize_address and gov.normalize_address_txt
+# function bodies via the get_address_normalize_signature() RPC on each
+# DB. Same MD5 = identical normalization rules; mismatch = silent
+# match-quality regression risk.
+#
+# See docs/architecture/address_normalization_spec.md for the canonical
+# rules. When you intentionally update one normalizer, update both and
+# this check passes again.
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   DIA_SUPABASE_URL  e.g. https://zqzrriwuavgrquhisnoa.supabase.co
+#   DIA_SUPABASE_KEY  anon key (RPC is SECURITY DEFINER, anon is fine)
+#   GOV_SUPABASE_URL  e.g. https://scknotsqkcheojiaewwh.supabase.co
+#   GOV_SUPABASE_KEY  anon key
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 13:00 UTC daily — well after any nightly migration window
+  workflow_dispatch:
+
+concurrency:
+  group: address-normalize-drift-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Compare normalizer signatures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch dia signature
+        id: dia
+        env:
+          URL: ${{ secrets.DIA_SUPABASE_URL }}
+          KEY: ${{ secrets.DIA_SUPABASE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$URL" || -z "$KEY" ]]; then
+            echo "::error::DIA_SUPABASE_URL or DIA_SUPABASE_KEY secret not set"
+            exit 1
+          fi
+          MD5=$(curl -fsS -X POST "$URL/rest/v1/rpc/get_address_normalize_signature" \
+            -H "apikey: $KEY" \
+            -H "Authorization: Bearer $KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}' | tr -d '"')
+          echo "Dia signature: $MD5"
+          echo "md5=$MD5" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch gov signature
+        id: gov
+        env:
+          URL: ${{ secrets.GOV_SUPABASE_URL }}
+          KEY: ${{ secrets.GOV_SUPABASE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$URL" || -z "$KEY" ]]; then
+            echo "::error::GOV_SUPABASE_URL or GOV_SUPABASE_KEY secret not set"
+            exit 1
+          fi
+          MD5=$(curl -fsS -X POST "$URL/rest/v1/rpc/get_address_normalize_signature" \
+            -H "apikey: $KEY" \
+            -H "Authorization: Bearer $KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}' | tr -d '"')
+          echo "Gov signature: $MD5"
+          echo "md5=$MD5" >> "$GITHUB_OUTPUT"
+
+      - name: Compare
+        run: |
+          DIA="${{ steps.dia.outputs.md5 }}"
+          GOV="${{ steps.gov.outputs.md5 }}"
+          echo "Dia: $DIA"
+          echo "Gov: $GOV"
+          if [[ "$DIA" != "$GOV" ]]; then
+            echo "::error::Address normalizer DRIFT detected!"
+            echo "::error::dia.dia_normalize_address       md5=$DIA"
+            echo "::error::gov.normalize_address_txt       md5=$GOV"
+            echo "::error::Fix: align both function bodies. See docs/architecture/address_normalization_spec.md"
+            exit 1
+          fi
+          echo "OK — both DBs report identical normalizer signature ($DIA)."
