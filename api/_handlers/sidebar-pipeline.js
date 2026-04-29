@@ -1363,8 +1363,22 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           if (email) patch[col.email] = email;
           if (phone) patch[col.phone] = phone;
           if (company) patch.company = company;
+          // Round 76co (Phase 3): priority gate on contact updates.
+          // Contacts often have email/phone curated from CRM that should
+          // outrank a CoStar refresh.
+          const filteredPatch = await filterByFieldPriority({
+            targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+            targetTable: domain === 'dialysis' ? 'dia.contacts' : 'gov.contacts',
+            recordPk:    existingId,
+            source:      'costar_sidebar',
+            confidence:  0.5,
+            fields:      patch,
+          }).catch(err => {
+            console.warn('[upsertSidebarContacts] field-priority filter failed:', err?.message);
+            return patch;
+          });
           await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, patch,
+            `contacts?${col.id}=eq.${existingId}`, filteredPatch,
             'upsertSidebarContacts:personUpdate'
           );
           collectContactProv(existingId, {
@@ -3441,8 +3455,25 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       // a no-op PATCH can be a no-op — include an explicit timestamp.
       patchData.updated_at = new Date().toISOString();
 
+      // Round 76co (Phase 3): consult priority registry before sales PATCH.
+      // Sales rows carry buyer/seller/cap_rate/sold_price — fields that
+      // multiple sources (deed records, OM extracts, sidebar) write to.
+      // Strict-mode rules can now block a CoStar overwrite when a
+      // higher-trust source (county deed) already populated the field.
+      const filteredSalesPatch = await filterByFieldPriority({
+        targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+        targetTable: domain === 'dialysis' ? 'dia.sales_transactions' : 'gov.sales_transactions',
+        recordPk:    existing.sale_id,
+        source:      metadata._intake_promoted ? 'om_extraction' : 'costar_sidebar',
+        confidence:  metadata._intake_promoted ? 0.7 : 0.6,
+        fields:      patchData,
+      }).catch(err => {
+        console.warn('[upsertDomainSales] field-priority filter failed (proceeding with full patch):', err?.message);
+        return patchData;
+      });
+
       await domainPatch(domain,
-        `sales_transactions?sale_id=eq.${existing.sale_id}`, patchData, 'upsertDomainSales');
+        `sales_transactions?sale_id=eq.${existing.sale_id}`, filteredSalesPatch, 'upsertDomainSales');
       // Close any still-active listings for this property now that a
       // confirmed sale exists. Fire-and-forget relative to the sale write —
       // failures are logged but do not affect the sales_transactions result.
