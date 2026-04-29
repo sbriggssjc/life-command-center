@@ -5097,9 +5097,71 @@ function renderSuggestedCandidates(item, suggested) {
 
 window.propResLinkFromQueue = async function(clinicId, propertyId) {
   if (!(await lccConfirm('Link clinic ' + clinicId + ' to Property #' + propertyId + '?', 'Link'))) return;
-  // Same outcome path as the manual "Confirm Link" button, just one-click.
-  await saveDiaOutcome('property_review', clinicId, 'approved_link', propertyId,
-    'Linked from suggested candidate', 'manual_verify');
+
+  // Insert a new property_review outcome row. The queue view filters by
+  // outcomes already recorded for this (clinic_id, queue_type), so the row
+  // drops out on next render.
+  try {
+    const payload = {
+      queue_type: 'property_review',
+      clinic_id: String(clinicId),
+      status: 'approved_link',
+      notes: 'Linked from suggested candidate',
+      selected_property_id: propertyId,
+      source_name: 'manual_verify',
+      assigned_at: new Date().toISOString()
+    };
+
+    const result = await applyInsertWithFallback({
+      proxyBase: '/api/dia-query',
+      table: 'research_queue_outcomes',
+      idColumn: 'clinic_id',
+      recordIdentifier: String(clinicId),
+      data: payload,
+      source_surface: 'dialysis_property_review',
+      propagation_scope: 'research_queue_outcome'
+    });
+
+    if (!result || !result.ok) {
+      const msg = (result && result.errors && result.errors.join('; ')) || 'unknown error';
+      showToast('Failed to save link: ' + msg, 'error');
+      return;
+    }
+
+    showToast('Linked to Property #' + propertyId, 'success');
+
+    // Refresh outcomes cache so the queue advances and this row is hidden.
+    try {
+      const fresh = await diaQuery('research_queue_outcomes', '*', { limit: 500 });
+      diaData.researchOutcomes = fresh || [];
+    } catch (_) { /* non-fatal */ }
+
+    canonicalBridge('log_activity', {
+      title: 'Property link approved',
+      domain: 'dialysis',
+      source_system: 'dia_supabase',
+      external_id: String(clinicId),
+      user_name: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'unknown',
+      metadata: { clinic_id: clinicId, property_id: propertyId, source: 'one_click_candidate' }
+    });
+
+    // Advance to next item in the filtered queue.
+    const filtered = diaData.propertyReviewQueue.filter(r =>
+      !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type
+    );
+    const currentIdx = diaPropertyFilter.selectedIdx || 0;
+    if (currentIdx + 1 < filtered.length) {
+      diaPropertyFilter.selectedIdx = currentIdx + 1;
+    } else {
+      diaPropertyFilter.selectedIdx = undefined;
+    }
+
+    await loadDiaData();
+    renderDiaTab();
+  } catch (err) {
+    console.error('propResLinkFromQueue error:', err);
+    showToast('Failed to save link: ' + (err.message || 'unknown error'), 'error');
+  }
 };
 
 function renderPropertyResolution(rec, sourceTable, sourceIdCol) {
