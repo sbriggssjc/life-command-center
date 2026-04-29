@@ -1280,7 +1280,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
           if (!/^[A-Z]/.test(cand)) continue;
           if (/@/.test(cand) || /^https?:/i.test(cand)) continue;
           const sfLine = lines[j + 1];
-          const hasSf = sfLine && /^[\d,]+(\s*sf)?$/i.test(sfLine);
+          // Round 76dr: same placeholder-zero guard as parseTenantSection.
+          let hasSf = false;
+          if (sfLine && /^[\d,]+(\s*sf)?$/i.test(sfLine)) {
+            const sfNum = parseInt(sfLine.replace(/[^\d]/g, ''), 10);
+            const startsWithMultipleZeros = /^0{2,}/.test(sfLine.replace(/[^\d]/g, ''));
+            hasSf = Number.isFinite(sfNum) && sfNum >= 100 && !startsWithMultipleZeros;
+          }
           const entry = { name: cand };
           if (hasSf) entry.sf = sfLine.replace(/\s*sf\s*$/i, '').trim() + ' SF';
           tenants.push(entry);
@@ -1322,9 +1328,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Industrial Sale Comp pages (Tenancy:, Owner Occupied, Est. Rent).
       if (/^(tenancy\s*[:\s]|owner\s+occupied|est\.?\s*rent|net\s+lease|gross\s+lease|nnn|modified\s+gross)/i.test(line)) continue;
 
-      // SF value (often follows tenant name): "8,750" or "8,750 SF"
+      // SF value (often follows tenant name): "8,750" or "8,750 SF".
+      // Round 76dr: reject placeholder values like "0000,000", "0", or any
+      // string with multiple leading zeros — those are CoStar sandbox/test
+      // tenant rows that the prior digit-and-comma matcher accepted as
+      // valid. Real SF values start with 1-9 (commercial buildings of
+      // any meaningful size are >= 100 SF).
       if (/^[\d,]+(\s*sf)?$/i.test(line)) {
-        if (current) current.sf = line.replace(/\s*sf\s*$/i, '').trim() + ' SF';
+        const sfNum = parseInt(line.replace(/[^\d]/g, ''), 10);
+        const startsWithMultipleZeros = /^0{2,}/.test(line.replace(/[^\d]/g, ''));
+        if (Number.isFinite(sfNum) && sfNum >= 100 && !startsWithMultipleZeros) {
+          if (current) current.sf = line.replace(/\s*sf\s*$/i, '').trim() + ' SF';
+        }
         continue;
       }
 

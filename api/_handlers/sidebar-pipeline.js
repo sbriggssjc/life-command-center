@@ -5432,10 +5432,32 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
       // below $100/yr — no real commercial lease has annual rent that low.
       const parsedAnnualRent = parseCurrency(metadata.annual_rent);
       const safeAnnualRent = (parsedAnnualRent && parsedAnnualRent >= 100) ? parsedAnnualRent : derivedAnnualRent;
+      // Round 76dr: leased_area inference. Tenant-level SF can be missing
+      // (single-tenant for-sale pages don't always show a Tenants table)
+      // or reject as a placeholder ("0000,000" in the 5 Route 45 capture).
+      // When the property is single-tenant + 100% leased + RBA known,
+      // infer leased_area = RBA. This matches CoStar's own implicit
+      // statement that a 100%-leased single-tenant building's tenant
+      // occupies the full RBA.
+      let inferredLeasedArea = parseSF(t.sf);
+      if (!inferredLeasedArea) {
+        const isSingleTenant = (metadata.tenancy_type === 'Single')
+          || /single/i.test(metadata.tenancy_type || '')
+          || (Array.isArray(tenants) && tenants.length === 1);
+        const occupancyPct = parsePercent(metadata.occupancy);
+        const fullyLeased = occupancyPct == null || occupancyPct >= 99;
+        const rba = parseSF(metadata.square_footage)
+          || parseSF(metadata.rba)
+          || parseSF(metadata.sf_leased);
+        if (isSingleTenant && fullyLeased && rba && rba >= 100) {
+          inferredLeasedArea = rba;
+          console.log(`[upsertDomainLeases] inferred leased_area=${rba} for ${t.name} (single-tenant + 100% leased + RBA)`);
+        }
+      }
       leaseRecords.push({
         property_id: propertyId,
         tenant: t.name.trim(),
-        leased_area: parseSF(t.sf || metadata.sf_leased),
+        leased_area: inferredLeasedArea,
         lease_start: parseDate(t.lease_start || metadata.lease_commencement),
         lease_expiration: parseDate(t.lease_expiration || metadata.lease_expiration),
         expense_structure: t.lease_type || metadata.expense_structure || metadata.lease_type,
