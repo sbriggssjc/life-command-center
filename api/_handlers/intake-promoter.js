@@ -607,7 +607,7 @@ async function promoteDiaPropertyFromOm(propertyId, snapshot) {
   // surfaced 35389 (Vital Smiles) and 35380 (DB Biologics) with tenant=NULL
   // despite their OMs clearly stating the tenant — promoteDiaPropertyFromOm
   // never patched the column.
-  const tenantStr = (snapshot.tenant_name || snapshot.primary_tenant || '').trim();
+  const tenantStr = canonicalizeTenant((snapshot.tenant_name || snapshot.primary_tenant || '').trim());
   if ((current.tenant == null || current.tenant === '') && tenantStr.length >= 2 && tenantStr.length < 200) {
     patch.tenant = tenantStr;
   }

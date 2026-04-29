@@ -15,6 +15,8 @@ describe('canonicalizeTenant', () => {
       'Davita Healthcare Partners, Inc.',
       'Da Vita',
       'davita inc',
+      'Total Renal Care',           // DaVita's legal entity name
+      'TOTAL RENAL CARE, INC.',
     ]) {
       it(`${variant} → ${expected}`, () => {
         assert.equal(canonicalizeTenant(variant), expected);
