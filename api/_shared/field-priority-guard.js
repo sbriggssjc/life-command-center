@@ -142,6 +142,62 @@ export async function shouldWriteField({
 }
 
 /**
+ * Audit-only provenance recording. Like shouldWriteField but for callers
+ * that have ALREADY written and just want the audit trail. Never blocks,
+ * never logs warnings — just dispatches a fire-and-forget lcc_merge_field
+ * RPC for each field. Used by apply-change.js to record manual_edit
+ * provenance after the bridge mutation succeeds.
+ *
+ * @param {object} args
+ * @param {string} args.targetDb       e.g. 'dia_db' / 'gov_db'
+ * @param {string} args.targetTable    qualified table, e.g. 'dia.properties'
+ * @param {string} args.recordPk       PK value as string
+ * @param {string} args.source         source tag, e.g. 'manual_edit'
+ * @param {string} [args.sourceRunId]  optional run id (e.g. data_correction id)
+ * @param {string} [args.workspaceId]  optional workspace context
+ * @param {number} [args.confidence=1] manual_edit defaults to 1.0
+ * @param {Object} args.fields         { fieldName: value, ... }
+ * @returns {Promise<{ recorded: number, failed: number }>}
+ */
+export async function recordFieldWrites({
+  targetDb,
+  targetTable,
+  recordPk,
+  source,
+  sourceRunId,
+  workspaceId,
+  confidence,
+  fields,
+}) {
+  if (!targetTable || !recordPk || !source || !fields || typeof fields !== 'object') {
+    return { recorded: 0, failed: 0 };
+  }
+  const conf = confidence == null ? 1.0 : Number(confidence);
+  let recorded = 0;
+  let failed = 0;
+  const promises = [];
+  for (const [fieldName, value] of Object.entries(fields)) {
+    if (value === undefined) continue;  // null is a meaningful manual write (clear field)
+    promises.push(
+      opsQuery('POST', 'rpc/lcc_merge_field', {
+        _target_database: targetDb,
+        _target_table:    targetTable,
+        _record_pk_value: String(recordPk),
+        _field_name:      fieldName,
+        _value:           value == null ? null : String(value),
+        _source:          source,
+        _source_run_id:   sourceRunId || null,
+        _confidence:      conf,
+      })
+        .then(res => { res?.ok ? recorded++ : failed++; })
+        .catch(() => { failed++; })
+    );
+  }
+  await Promise.allSettled(promises);
+  return { recorded, failed };
+}
+
+/**
  * Convenience: filter an object of {field: value} to only those fields the
  * writer should UPDATE according to the priority registry. Returns a new
  * object with the disallowed fields stripped out.
