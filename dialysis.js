@@ -6682,31 +6682,55 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source
       metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes, source: source, lease_term: term, annual_rent: rent, rent_per_sf: rentSF }
     });
 
-    // Auto-advance to next item or mark queue as complete
+    // Drop the resolved clinic from the in-memory queue so the next render
+    // skips it. The MV refresh happens on the 1-min cron; in the meantime
+    // the local pop gives an instant queue-advance UX. Avoid loadDiaData() —
+    // that re-runs 10+ Promise.all queries (~20s on slow connections).
+    // (Same pattern as propResLinkFromQueue — see PR #469.)
+    const cidStr = String(clinicId);
     if (queueType === 'property_review') {
-      const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
-      const currentIdx = diaPropertyFilter.selectedIdx || 0;
-      if (currentIdx + 1 < filtered.length) {
-        diaPropertyFilter.selectedIdx = currentIdx + 1;
-        showToast('Outcome saved — advancing to next item', 'success');
-      } else {
+      diaData.propertyReviewQueue = (diaData.propertyReviewQueue || []).filter(function(r) {
+        return String(r.clinic_id) !== cidStr;
+      });
+      const filtered = diaData.propertyReviewQueue.filter(function(r) {
+        return !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type;
+      });
+      if (filtered.length === 0) {
         diaPropertyFilter.selectedIdx = undefined;
         showToast('Outcome saved — queue complete!', 'success');
+      } else {
+        const target = (typeof diaPropertyFilter.selectedIdx === 'number')
+          ? diaPropertyFilter.selectedIdx : 0;
+        diaPropertyFilter.selectedIdx = Math.min(target, filtered.length - 1);
+        showToast('Outcome saved — advancing to next item', 'success');
       }
     } else {
-      const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
-      const currentIdx = diaLeaseFilter.selectedIdx || 0;
-      if (currentIdx + 1 < filtered.length) {
-        diaLeaseFilter.selectedIdx = currentIdx + 1;
-        showToast('Outcome saved — advancing to next item', 'success');
-      } else {
+      diaData.leaseBackfillRows = (diaData.leaseBackfillRows || []).filter(function(r) {
+        return String(r.clinic_id) !== cidStr;
+      });
+      const filtered = diaData.leaseBackfillRows.filter(function(r) {
+        return !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority;
+      });
+      if (filtered.length === 0) {
         diaLeaseFilter.selectedIdx = undefined;
         showToast('Outcome saved — queue complete!', 'success');
+      } else {
+        const target = (typeof diaLeaseFilter.selectedIdx === 'number')
+          ? diaLeaseFilter.selectedIdx : 0;
+        diaLeaseFilter.selectedIdx = Math.min(target, filtered.length - 1);
+        showToast('Outcome saved — advancing to next item', 'success');
       }
     }
 
-    // Reload data and re-render to advance to next record
-    await loadDiaData();
+    // Refresh outcomes cache so the audit panel picks up the new row, then
+    // re-render. Both cheap; no full data reload.
+    try {
+      const fresh = await diaQuery('research_queue_outcomes',
+        'outcome_id,clinic_id,queue_type,status,assigned_to,assigned_at,created_at,source_name,selected_property_id,notes',
+        { limit: 2000 });
+      diaData.researchOutcomes = fresh || [];
+    } catch (_) { /* non-fatal */ }
+
     renderDiaTab();
     return true;
   } catch (err) {
