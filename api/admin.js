@@ -86,6 +86,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'npi-registry-sync':    return handleNpiRegistrySyncProxy(req, res);
     case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
+    case 'dia-link-provenance-replay': return handleDiaLinkProvenanceReplay(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -2135,3 +2136,157 @@ async function handleStorageCleanup(req, res) {
   });
 }
 
+
+// ============================================================================
+// DIA AUTO-LINKER PROVENANCE REPLAY (FU6 — 2026-04-29)
+// ============================================================================
+//
+// The dia auto-linker functions (auto_link_exact_address_singletons,
+// auto_link_high_confidence_property_candidates, etc.) write to
+// dia.public.research_queue_outcomes with `source_name`, `selected_property_id`,
+// and `clinic_id`, then call apply_property_link_outcome() which UPDATEs:
+//   - properties.medicare_id   = clinic_id
+//   - medicare_clinics.property_id = property_id
+//
+// Both UPDATEs happen in the dialysis DB; LCC Opps' field_provenance never
+// observes them. The 13 priority rules registered in PR #484 stay forever
+// scaffolding-without-signal. This handler closes the loop by polling
+// dia.research_queue_outcomes since a watermark and replaying each as
+// lcc_merge_field calls so the audit trail catches up.
+//
+// Source attribution comes verbatim from research_queue_outcomes.source_name
+// (manual_verify, auto_link_high_confidence, auto_link_exact_singleton,
+// auto_link_orphan_property, auto_relink_misrouted_lease, auto_stub_from_clinic).
+// source_run_id maps to the outcome row's source_run_id when present, else
+// falls back to a derived 'replay:<outcome_id>' tag.
+//
+// Idempotent under repeated calls: watermark advances only on success, and
+// lcc_merge_field's append-only append-with-decision semantics tolerate
+// re-replays without corrupting prior history.
+
+async function handleDiaLinkProvenanceReplay(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+
+  // 1. Read watermark.
+  const wmRes = await opsQuery(
+    'GET',
+    'dia_link_provenance_watermark?singleton=eq.true&select=last_outcome_id'
+  );
+  if (!wmRes.ok) {
+    return res.status(500).json({ error: 'watermark fetch failed', detail: wmRes.data });
+  }
+  const lastOutcomeId = Array.isArray(wmRes.data) && wmRes.data.length
+    ? Number(wmRes.data[0].last_outcome_id || 0)
+    : 0;
+
+  // 2. Pull the next batch of outcomes from dia.
+  const outcomeRes = await domainQuery(
+    'dialysis',
+    'GET',
+    `research_queue_outcomes?queue_type=eq.property_review` +
+    `&status=eq.approved_link` +
+    `&id=gt.${lastOutcomeId}` +
+    `&order=id.asc&limit=${limit}` +
+    `&select=id,clinic_id,selected_property_id,source_name,source_run_id,assigned_at`
+  );
+  if (!outcomeRes.ok) {
+    return res.status(502).json({ error: 'dia outcome fetch failed', detail: outcomeRes.data });
+  }
+  const outcomes = Array.isArray(outcomeRes.data) ? outcomeRes.data : [];
+
+  if (outcomes.length === 0) {
+    return res.status(200).json({
+      mode:    dryRun ? 'dry_run' : 'apply',
+      from_id: lastOutcomeId,
+      to_id:   lastOutcomeId,
+      replayed: 0,
+      message: 'no new outcomes since watermark',
+    });
+  }
+
+  // 3. For each outcome, dispatch the lcc_merge_field calls.
+  // Confidence: manual_verify gets 1.0; auto-* gets 0.85 (lower-trust than
+  // a human verify but higher than aggregator-quality).
+  const results = { replayed: 0, failed: 0, by_source: {} };
+  const merges = [];
+  for (const o of outcomes) {
+    if (!o.clinic_id || !o.selected_property_id || !o.source_name) continue;
+    const source     = o.source_name;
+    const confidence = source === 'manual_verify' ? 1.0 : 0.85;
+    const runId      = o.source_run_id ? `${source}:${o.source_run_id}` : `replay:${o.id}`;
+
+    // Two writes per outcome: properties.medicare_id and
+    // medicare_clinics.property_id.
+    merges.push({
+      _target_database: 'dia_db',
+      _target_table:    'dia.properties',
+      _record_pk_value: String(o.selected_property_id),
+      _field_name:      'medicare_id',
+      _value:           String(o.clinic_id),
+      _source:          source,
+      _source_run_id:   runId,
+      _confidence:      confidence,
+    });
+    merges.push({
+      _target_database: 'dia_db',
+      _target_table:    'dia.medicare_clinics',
+      _record_pk_value: String(o.clinic_id),
+      _field_name:      'property_id',
+      _value:           String(o.selected_property_id),
+      _source:          source,
+      _source_run_id:   runId,
+      _confidence:      confidence,
+    });
+    results.by_source[source] = (results.by_source[source] || 0) + 1;
+  }
+
+  if (dryRun) {
+    return res.status(200).json({
+      mode:    'dry_run',
+      from_id: lastOutcomeId,
+      to_id:   outcomes[outcomes.length - 1].id,
+      outcomes: outcomes.length,
+      merge_calls_planned: merges.length,
+      by_source: results.by_source,
+    });
+  }
+
+  // 4. Fire the merges. Best-effort: a single failure doesn't block the
+  // rest of the batch, but we count failures and surface them.
+  for (const args of merges) {
+    try {
+      const r = await opsQuery('POST', 'rpc/lcc_merge_field', args);
+      if (r.ok) results.replayed++;
+      else      results.failed++;
+    } catch {
+      results.failed++;
+    }
+  }
+
+  // 5. Advance watermark only if the entire batch dispatched (replayed +
+  // failed equals merges.length — both are terminal states; failures stay
+  // failed but the watermark moves so we don't replay them forever).
+  const newWatermark = outcomes[outcomes.length - 1].id;
+  await opsQuery(
+    'PATCH',
+    'dia_link_provenance_watermark?singleton=eq.true',
+    { last_outcome_id: newWatermark, last_run_at: new Date().toISOString() }
+  );
+
+  return res.status(200).json({
+    mode:     'apply',
+    from_id:  lastOutcomeId,
+    to_id:    newWatermark,
+    outcomes: outcomes.length,
+    replayed: results.replayed,
+    failed:   results.failed,
+    by_source: results.by_source,
+  });
+}
