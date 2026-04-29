@@ -71,6 +71,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     try {
     const url = window.location.href;
 
+    // Round 76dm: skip frames that aren't actually on a CoStar property
+    // page. The manifest uses all_frames:true so this script injects into
+    // every iframe — including about:blank tracking/ad iframes that CoStar
+    // embeds. Without this gate, a frame with no body fires
+    // CONTEXT_DETECTED with page_url='about:blank' and address=null, which
+    // overwrites the legitimate property context set by the main frame
+    // (last-write-wins in chrome.storage.session.pageContext).
+    if (!url || url === 'about:blank' || url === 'about:srcdoc') return;
+    if (!/^https?:\/\/[^/]*\.costar\.com\//i.test(url)) return;
+
     let address = null;
     let headingEl = null;
 
