@@ -600,6 +600,35 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const parsed = parseAddress(line);
       if (parsed) return parsed;
     }
+    // Round 76dh: CoStar's React DOM splits the address across two non-
+    // adjacent lines on the property summary page — e.g.:
+    //   line N:   "2700 S Central Expy"
+    //   line N+1: "Medical Office - Allen/McKinney Submarket"   ← label
+    //   line N+2: "McKinney, TX 75072"
+    // No single line contains the full address, so the loop above misses
+    // it. Walk the lines: when we find a street-style line (starts with
+    // a number + word), look ahead up to 4 lines for a "City, ST 12345"
+    // line and combine them. Validate via parseAddress so we don't pair
+    // unrelated chunks.
+    return findSplitAddressInLines(lines);
+  }
+
+  function findSplitAddressInLines(lines) {
+    const STREET_RE = /^\d+(?:-\d+)?\s+[A-Za-z][\w&'.\- ]{2,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)\b\.?/i;
+    const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
+    for (let i = 0; i < lines.length; i++) {
+      const street = lines[i];
+      if (!street || street.length > 120) continue;
+      if (!STREET_RE.test(street)) continue;
+      // Look ahead up to 4 lines for a city/state/zip line.
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+        const cityLine = lines[j];
+        if (!cityLine || !CITY_RE.test(cityLine)) continue;
+        const combined = `${street}, ${cityLine}`;
+        const parsed = parseAddress(combined);
+        if (parsed) return parsed;
+      }
+    }
     return null;
   }
 
