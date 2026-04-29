@@ -167,6 +167,46 @@ export default withErrorHandler(async function handler(req, res) {
     return res.status(502).json({ ok: false, errors: ['bridge_unavailable', 'Domain database request failed'], pending_review });
   }
 
+  // 409-conflict fallback: when an INSERT collides with a UNIQUE constraint
+  // (e.g. a parallel writer or auto-link cron got there first), automatically
+  // retry as a PATCH against the same record_identifier. The user's intent
+  // wins regardless of who wrote first. Only triggered when:
+  //   - we tried INSERT
+  //   - server returned 409
+  //   - we have an id_column + record_identifier (i.e. the row is locatable)
+  if (!mutationResponse.ok
+      && mutationResponse.status === 409
+      && mutationMode === 'insert'
+      && col
+      && record_identifier !== undefined
+      && record_identifier !== null) {
+    const patchUrl = `${dbUrl}/rest/v1/${target_table}?${[{ column: col, value: String(record_identifier) }, ...safeExtraFilters]
+      .map(({ column, value }) => `${encodeURIComponent(column)}=eq.${encodeURIComponent(value)}`)
+      .join('&')}`;
+    try {
+      const patchResp = await fetch(patchUrl, {
+        method: 'PATCH',
+        headers: {
+          'apikey': dbKey,
+          'Authorization': `Bearer ${dbKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify(changed_fields)
+      });
+      if (patchResp.ok) {
+        // Replace the response so downstream audit + return-path logic uses the patch result
+        mutationResponse = patchResp;
+        console.warn('[apply-change] INSERT 409 on ' + target_table
+          + ' — auto-retried as PATCH and succeeded (record_identifier='
+          + String(record_identifier) + ')');
+      }
+    } catch (retryErr) {
+      // fall through to the original error path
+      console.warn('[apply-change] 409 retry-as-PATCH failed:', retryErr.message);
+    }
+  }
+
   if (!mutationResponse.ok) {
     const errBody = await mutationResponse.text();
     const pending_review = await createPendingReview('needs_review', {

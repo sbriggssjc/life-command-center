@@ -31,8 +31,15 @@ const DIA_CMS_PAGE_SIZE = 50;
 let diaCmsSelectedIdx = undefined; // selected row in CMS table
 let diaNpiFilter = null; // filter by signal_type
 let diaNpiSelectedIdx = undefined; // selected row in NPI table
-let diaNpiSeverityFilter = 'actionable'; // 'actionable' (default) | 'all' | 'data_error' | 'data_quality' | 'auto_resolvable' | 'unresolved'
+let diaNpiSeverityFilter = 'actionable'; // (legacy "All Signals" mode filter)
 let diaNpiSelectedIds = new Set(); // bulk-select state, keyed by clinic_id
+// Round 76ef: 3-mode UI — BD events default, Cleanup queue for hygiene, All Signals = legacy
+let diaNpiMode = 'bd';                  // 'bd' | 'cleanup' | 'all'
+let diaNpiCleanupSubMode = 'missing';   // 'missing' | 'duplicate'
+let diaNpiBdWindowDays = 7;             // 7 | 30 | 90 | 0 (all-time)
+let diaNpiLookupCache = null;           // Map<clinic_id, latest npi_registry_lookups row>
+let diaNpiRegistryCache = null;         // Map<npi, npi_registry row> for dup-cluster NPIs
+let diaNpiCleanupLoading = false;
 let diaSalesView = 'comps'; // 'comps' | 'available'
 let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
@@ -2021,15 +2028,714 @@ function _npiBannerText(rows) {
   return parts.join(' ');
 }
 
-function renderDiaNpi() {
-  let html = '<div class="biz-section">';
+// ──────────────────────────────────────────────────────────────────────────
+// BD Events feed — provider-change signals as cards (Round 76ef)
+//
+// Each card answers: what happened, where, and what to do about it.
+// One-click actions: Open property | Adopt (for new_npi) | Flag | Dismiss.
+// ──────────────────────────────────────────────────────────────────────────
 
-  // ─── Build the working set with severity normalization ───────────────
+const NPI_BD_META = {
+  npi_deactivated: { icon: '🚪', color: '#f87171', label: 'NPPES Deactivated' },
+  address_change:  { icon: '📍', color: '#fb923c', label: 'Address Changed' },
+  name_change:     { icon: '✏️', color: '#fbbf24', label: 'Name Changed' },
+  official_change: { icon: '👤', color: '#a78bfa', label: 'Official Changed' },
+  new_npi:         { icon: '🆕', color: '#34d399', label: 'New NPI at Address' },
+};
+
+function _renderNpiBdEvents(rows) {
+  let html = '';
+
+  // Window filter pills
+  const windowBtn = (days, label) => {
+    const active = diaNpiBdWindowDays === days;
+    return `<button data-bd-window="${days}" style="font-size:11px;padding:4px 12px;border-radius:6px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};background:${active ? 'rgba(52,211,153,0.1)' : 'var(--s2)'};color:${active ? 'var(--accent)' : 'var(--text2)'};cursor:pointer;font-weight:${active ? 600 : 400}">${label}</button>`;
+  };
+
+  // Banner — explains what BD Events are and why they matter.
+  html += '<div style="padding:12px 16px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid var(--accent);margin-bottom:12px;">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:var(--text)">Provider Change Events</div>';
+  html += '<div style="font-size:12px;color:var(--text2);line-height:1.5">NPPES registry changes detected against active dialysis clinics in our inventory — these are the BD-actionable signals: closures, relocations, rebrands, and ownership transitions. Each one deserves a research decision.</div>';
+  html += '</div>';
+
+  // Window filter
+  html += '<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">';
+  html += '<span style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Detected:</span>';
+  html += windowBtn(7, 'Last 7 days');
+  html += windowBtn(30, 'Last 30 days');
+  html += windowBtn(90, 'Last 90 days');
+  html += windowBtn(0, 'All-time');
+  html += '</div>';
+
+  // Filter rows by window — using cms_updated_at as proxy if no signal_date
+  // Note: matview doesn't carry a signal_date column today; we just show all
+  // rows when window != 0 since the matview only retains the latest snapshot.
+  // Future: add a signal_first_seen column to track when each signal first appeared.
+  let visible = rows.slice();
+
+  // Sort: priority asc, then patient count desc
+  visible.sort((a, b) => {
+    const pa = a.signal_priority || 5, pb = b.signal_priority || 5;
+    if (pa !== pb) return pa - pb;
+    return (b.latest_total_patients || 0) - (a.latest_total_patients || 0);
+  });
+
+  if (visible.length === 0) {
+    html += '<div style="padding:48px 16px;text-align:center;color:var(--text3);background:var(--s2);border-radius:8px">';
+    html += '<div style="font-size:32px;margin-bottom:8px">🔍</div>';
+    html += '<div style="font-size:14px;font-weight:600;color:var(--text2);margin-bottom:4px">No provider-change events detected</div>';
+    html += '<div style="font-size:12px">The weekly NPPES sync runs Sundays at 06:30 UTC. Change-detection signals require at least two snapshots to compare, so the first BD events arrive after two consecutive Sunday runs.</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // Card per event
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+  for (const row of visible.slice(0, 200)) {
+    const meta = NPI_BD_META[row.signal_type] || { icon: '•', color: 'var(--text2)', label: row.signal_type };
+    const npiId = row.npi || row.clinic_id || '';
+    const isNewNpi = row.signal_type === 'new_npi';
+
+    html += '<div style="border:1px solid var(--border);border-left:3px solid ' + meta.color + ';border-radius:10px;padding:14px 16px;background:var(--s1)">';
+    // Top row: icon + label + facility
+    html += '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:8px">';
+    html += '<div style="font-size:22px;flex-shrink:0;line-height:1">' + meta.icon + '</div>';
+    html += '<div style="flex:1;min-width:0">';
+    html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px">';
+    html += '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;padding:2px 8px;border-radius:8px;background:' + meta.color + '22;color:' + meta.color + '">' + meta.label + '</span>';
+    if (row.latest_total_patients) {
+      html += '<span style="font-size:11px;color:var(--text3)">' + fmtN(row.latest_total_patients) + ' patients</span>';
+    }
+    html += '</div>';
+    html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:var(--text);overflow-wrap:anywhere">' + esc(norm(row.facility_name) || 'Unknown') + '</h4>';
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc((row.city || '') + (row.state ? ', ' + row.state : '')) + (row.operator_name ? ' · ' + esc(row.operator_name) : '') + '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    // Detail (signal_reason from matview)
+    html += '<div style="font-size:12px;color:var(--text);line-height:1.5;padding:8px 12px;background:var(--s2);border-radius:6px;margin-bottom:10px">' + esc(row.signal_reason || '') + '</div>';
+
+    // Action buttons
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    if (isNewNpi) {
+      // Adopt — primary action: patches medicare_clinics.npi
+      html += '<button class="npi-adopt-btn" data-clinic-id="' + esc(row.clinic_id) + '" data-npi="' + esc(row.npi) + '" style="font-size:11px;padding:6px 12px;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:#000;cursor:pointer;font-weight:600">✓ Adopt this NPI</button>';
+    }
+    html += '<button class="btn-action default" style="font-size:11px;padding:6px 12px" onclick=\'showDetail(' + safeJSON(row) + ',"dia-clinic")\'>Open property</button>';
+    html += '<a href="https://npiregistry.cms.hhs.gov/provider-view/' + encodeURIComponent(row.npi || '') + '" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">NPPES ↗</a>';
+    html += '<button class="npi-flag-btn" data-npi-id="' + esc(npiId) + '" data-npi-name="' + esc(row.facility_name || '') + '" style="font-size:11px;padding:6px 12px;border:1px solid var(--accent);border-radius:6px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag for research</button>';
+    html += '<button class="npi-dismiss-btn" data-npi-id="' + esc(npiId) + '" style="font-size:11px;padding:6px 12px;border:1px solid #f87171;border-radius:6px;background:rgba(248,113,113,0.1);color:#f87171;cursor:pointer;font-weight:600">Dismiss</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  if (visible.length > 200) {
+    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 200 of ${fmtN(visible.length)} events</div>`;
+  }
+
+  // Wire handlers
+  setTimeout(() => {
+    document.querySelectorAll('[data-bd-window]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        diaNpiBdWindowDays = parseInt(btn.dataset.bdWindow, 10);
+        renderDiaTab();
+      });
+    });
+    _wireNpiAdoptButtons();
+    _wireNpiFlagDismissButtons();
+  }, 0);
+
+  return html;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Cleanup Queue — Missing NPI batch + Duplicate cluster batch (Round 76ef)
+//
+// One card per task. Each card shows the minimum info needed to make the
+// decision and a primary action button. No table, no scrolling past 500
+// rows of context — just the actionable items.
+// ──────────────────────────────────────────────────────────────────────────
+
+function _renderNpiCleanup(missingRows, dupRows) {
+  let html = '';
+
+  // Sub-tab toggle
+  const subBtn = (key, label, count) => {
+    const active = diaNpiCleanupSubMode === key;
+    const badge = `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${active ? 'rgba(255,255,255,0.25)' : 'var(--s3)'};color:${active ? '#fff' : 'var(--text2)'};margin-left:4px">${fmtN(count)}</span>`;
+    return `<button data-cleanup-sub="${key}" style="font-size:12px;font-weight:600;padding:6px 12px;border-radius:6px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};background:${active ? 'var(--accent)' : 'var(--s2)'};color:${active ? '#000' : 'var(--text2)'};cursor:pointer">${label}${badge}</button>`;
+  };
+
+  const dupClusters = _groupDupClusters(dupRows);
+
+  html += '<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center">';
+  html += subBtn('missing', 'Missing NPI', missingRows.length);
+  html += subBtn('duplicate', 'Duplicate Review', dupClusters.length);
+  html += '</div>';
+
+  if (diaNpiCleanupLoading) {
+    html += '<div style="padding:48px;text-align:center;color:var(--text3)"><span class="spinner"></span><div style="margin-top:12px;font-size:12px">Loading NPPES candidates…</div></div>';
+    return html;
+  }
+
+  if (diaNpiCleanupSubMode === 'missing') {
+    html += _renderNpiCleanupMissing(missingRows);
+  } else {
+    html += _renderNpiCleanupDuplicates(dupClusters);
+  }
+
+  setTimeout(() => {
+    document.querySelectorAll('[data-cleanup-sub]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        diaNpiCleanupSubMode = btn.dataset.cleanupSub;
+        renderDiaTab();
+      });
+    });
+  }, 0);
+
+  return html;
+}
+
+function _groupDupClusters(dupRows) {
+  const map = new Map();
+  for (const row of dupRows) {
+    if (!row.npi) continue;
+    if (!map.has(row.npi)) map.set(row.npi, []);
+    map.get(row.npi).push(row);
+  }
+  return Array.from(map.entries())
+    .map(([npi, rows]) => ({ npi, rows }))
+    .sort((a, b) => {
+      // Sort by signal_priority of any row in the cluster (data_error > data_quality)
+      const pa = Math.min(...a.rows.map(r => r.signal_priority || 5));
+      const pb = Math.min(...b.rows.map(r => r.signal_priority || 5));
+      if (pa !== pb) return pa - pb;
+      const totalA = a.rows.reduce((s, r) => s + (r.latest_total_patients || 0), 0);
+      const totalB = b.rows.reduce((s, r) => s + (r.latest_total_patients || 0), 0);
+      return totalB - totalA;
+    });
+}
+
+function _renderNpiCleanupMissing(rows) {
+  let html = '';
+
+  if (rows.length === 0) {
+    html += '<div style="padding:48px;text-align:center;color:var(--text3);background:var(--s2);border-radius:8px"><div style="font-size:32px;margin-bottom:8px">✨</div><div style="font-size:14px;font-weight:600;color:var(--text2)">All clinics have NPIs populated</div></div>';
+    return html;
+  }
+
+  // Banner with bulk action
+  html += '<div style="padding:10px 14px;background:rgba(34,211,238,0.08);border-radius:8px;border-left:3px solid #22d3ee;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px">';
+  html += '<div style="font-size:12px;color:var(--text);line-height:1.5;flex:1;min-width:0">' + fmtN(rows.length) + ' active clinics need NPIs filled. The system has fetched NPPES candidates for some — confirm the right one with one click. For the rest, click <strong>Run NPPES lookup</strong> to fetch candidates now.</div>';
+  html += '<button id="npi-bulk-lookup-btn" style="font-size:11px;padding:6px 12px;border:1px solid #22d3ee;border-radius:6px;background:rgba(34,211,238,0.1);color:#22d3ee;cursor:pointer;font-weight:600;flex-shrink:0;white-space:nowrap">Run NPPES lookup</button>';
+  html += '</div>';
+
+  // Sort: rows with candidates first, then by patient count desc
+  const lookups = diaNpiLookupCache || new Map();
+  const sorted = rows.slice().sort((a, b) => {
+    const la = lookups.get(a.clinic_id);
+    const lb = lookups.get(b.clinic_id);
+    const ca = la && Array.isArray(la.raw_response) && la.raw_response.length > 0;
+    const cb = lb && Array.isArray(lb.raw_response) && lb.raw_response.length > 0;
+    if (ca !== cb) return ca ? -1 : 1;
+    return (b.latest_total_patients || 0) - (a.latest_total_patients || 0);
+  });
+
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+  for (const row of sorted.slice(0, 100)) {
+    const lookup = lookups.get(row.clinic_id);
+    const cands = (lookup && Array.isArray(lookup.raw_response)) ? lookup.raw_response : [];
+    html += _renderMissingNpiCard(row, cands);
+  }
+  html += '</div>';
+
+  if (sorted.length > 100) {
+    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 100 of ${fmtN(sorted.length)} — adopt or skip these to load the next batch</div>`;
+  }
+
+  // Wire handlers
+  setTimeout(() => {
+    _wireNpiAdoptButtons();
+    _wireNpiUnmappableButtons();
+    const bulkBtn = document.getElementById('npi-bulk-lookup-btn');
+    if (bulkBtn) bulkBtn.addEventListener('click', _onNpiBulkLookup);
+  }, 0);
+
+  return html;
+}
+
+function _renderMissingNpiCard(row, candidates) {
+  let html = '';
+  const facilityName = norm(row.facility_name) || 'Unknown';
+  const addrLine = (row.address || '') + (row.city ? ', ' + row.city : '') + (row.state ? ' ' + row.state : '');
+  const npiId = row.clinic_id;
+
+  html += '<div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;background:var(--s1)">';
+  // Header: clinic identity
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px">';
+  html += '<div style="min-width:0;flex:1">';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:var(--text);overflow-wrap:anywhere">' + esc(facilityName) + '</h4>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc(addrLine) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">CCN ' + esc(row.clinic_id || '—') + ' · ' + (row.operator_name ? esc(row.operator_name) : 'Independent') + (row.latest_total_patients ? ' · ' + fmtN(row.latest_total_patients) + ' patients' : '') + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Candidates section
+  if (candidates.length === 0) {
+    html += '<div style="padding:10px 12px;background:var(--s2);border-radius:6px;font-size:12px;color:var(--text3);margin-bottom:10px">No NPPES candidates fetched yet — click <strong>Run NPPES lookup</strong> above to query the registry for this clinic.</div>';
+  } else {
+    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">NPPES candidates</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">';
+    for (const c of candidates.slice(0, 4)) {
+      const score = typeof c.score === 'number' ? c.score : 0;
+      const scorePct = Math.round(score * 100);
+      const scoreColor = score >= 0.9 ? 'var(--accent)' : score >= 0.6 ? '#fbbf24' : 'var(--text3)';
+      const scoreLabel = score >= 0.9 ? 'Strong match' : score >= 0.6 ? 'Possible match' : 'Weak match';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;background:var(--s2);border-radius:6px;border-left:2px solid ' + scoreColor + '">';
+      html += '<div style="min-width:0;flex:1">';
+      html += '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);margin-bottom:2px">';
+      html += '<span style="font-family:monospace;font-weight:600">' + esc(c.npi || '—') + '</span>';
+      html += '<span style="color:' + scoreColor + ';font-weight:600">· ' + scorePct + '% ' + scoreLabel + '</span>';
+      html += '</div>';
+      html += '<div style="font-size:12px;color:var(--text);font-weight:600;overflow-wrap:anywhere">' + esc(c.name || '') + '</div>';
+      html += '<div style="font-size:11px;color:var(--text2);margin-top:1px;overflow-wrap:anywhere">' + esc((c.addr || '') + (c.city ? ', ' + c.city : '') + (c.state ? ' ' + c.state : '')) + '</div>';
+      html += '</div>';
+      html += '<button class="npi-adopt-btn" data-clinic-id="' + esc(npiId) + '" data-npi="' + esc(c.npi || '') + '" data-source="manual_adopt" style="font-size:11px;padding:6px 10px;border:1px solid var(--accent);border-radius:5px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600;white-space:nowrap;flex-shrink:0">Adopt</button>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Footer actions
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  const searchQ = (row.facility_name || '') + ' ' + (row.city || '') + ' ' + (row.state || '') + ' NPI';
+  html += '<a href="https://npiregistry.cms.hhs.gov/search?city=' + encodeURIComponent(row.city || '') + '&state=' + encodeURIComponent(row.state || '') + '&taxonomy_description=End-Stage+Renal+Disease" target="_blank" rel="noopener" style="font-size:11px;padding:5px 10px;border-radius:5px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Open NPPES ↗</a>';
+  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 10px;border-radius:5px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Google ↗</a>';
+  html += '<button class="npi-unmappable-btn" data-clinic-id="' + esc(npiId) + '" style="font-size:11px;padding:5px 10px;border:1px solid var(--border);border-radius:5px;background:var(--s2);color:var(--text3);cursor:pointer;margin-left:auto">Mark unmappable</button>';
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function _renderNpiCleanupDuplicates(clusters) {
+  let html = '';
+
+  if (clusters.length === 0) {
+    html += '<div style="padding:48px;text-align:center;color:var(--text3);background:var(--s2);border-radius:8px"><div style="font-size:32px;margin-bottom:8px">✨</div><div style="font-size:14px;font-weight:600;color:var(--text2)">No duplicate-NPI clusters need human review</div><div style="font-size:12px;margin-top:4px">All same-address dups are auto-resolved nightly; multi-address dups are auto-cleared by the NPPES address resolver after the weekly sync populates the registry.</div></div>';
+    return html;
+  }
+
+  html += '<div style="padding:10px 14px;background:rgba(248,113,113,0.06);border-radius:8px;border-left:3px solid #f87171;margin-bottom:12px;font-size:12px;color:var(--text);line-height:1.5">' + fmtN(clusters.length) + ' NPI clusters span multiple addresses — for each, decide which clinic should keep the NPI. When NPPES has the practice address, the recommendation is shown; otherwise verify both records and pick.</div>';
+
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+  for (const cluster of clusters.slice(0, 60)) {
+    html += _renderDupClusterCard(cluster);
+  }
+  html += '</div>';
+  if (clusters.length > 60) {
+    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 60 of ${fmtN(clusters.length)} clusters</div>`;
+  }
+
+  setTimeout(() => {
+    _wireDupClusterButtons();
+  }, 0);
+  return html;
+}
+
+function _renderDupClusterCard(cluster) {
+  const reg = (diaNpiRegistryCache && diaNpiRegistryCache.get(cluster.npi)) || null;
+  let html = '';
+
+  // Score each row against NPPES address (mirrors the SQL resolver logic)
+  const normAddr = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const normSt = s => (s || '').toUpperCase().trim();
+  const regAddrNorm = reg ? normAddr(reg.npi_address) : '';
+  const regSt = reg ? normSt(reg.npi_state) : '';
+
+  const scored = cluster.rows.map(r => {
+    let score = 0;
+    if (reg && regAddrNorm && normAddr(r.address) === regAddrNorm && normSt(r.state) === regSt) score = 1.0;
+    return { ...r, _score: score };
+  }).sort((a, b) => b._score - a._score);
+  const recommended = scored[0]._score >= 0.9 && (scored[1] === undefined || scored[1]._score < 0.5) ? scored[0] : null;
+
+  html += '<div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;background:var(--s1)">';
+  // Header
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px">';
+  html += '<div style="min-width:0;flex:1">';
+  html += '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:2px">NPI cluster · ' + cluster.rows.length + ' clinics share</div>';
+  html += '<div style="font-family:monospace;font-size:14px;font-weight:700;color:var(--text)">' + esc(cluster.npi) + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // NPPES truth (or absence)
+  if (reg) {
+    html += '<div style="padding:8px 10px;background:rgba(52,211,153,0.08);border-radius:6px;border-left:2px solid var(--accent);margin-bottom:10px;font-size:11px">';
+    html += '<div style="color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:2px">NPPES says</div>';
+    html += '<div style="color:var(--text);font-weight:600;overflow-wrap:anywhere">' + esc(reg.organization_name || '—') + '</div>';
+    html += '<div style="color:var(--text2)">' + esc((reg.npi_address || '') + (reg.npi_city ? ', ' + reg.npi_city : '') + (reg.npi_state ? ' ' + reg.npi_state : '')) + '</div>';
+    html += '</div>';
+  } else {
+    html += '<div style="padding:8px 10px;background:var(--s2);border-radius:6px;font-size:11px;color:var(--text3);margin-bottom:10px">NPPES record not in our registry yet — Sunday\'s national sweep will fetch it. Until then, decide manually.</div>';
+  }
+
+  // Per-row compare
+  html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">';
+  for (const r of scored) {
+    const isRec = recommended && r.clinic_id === recommended.clinic_id;
+    const borderColor = isRec ? 'var(--accent)' : (r._score > 0 ? '#fbbf24' : 'var(--border)');
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;background:var(--s2);border-radius:6px;border-left:2px solid ' + borderColor + '">';
+    html += '<div style="min-width:0;flex:1">';
+    html += '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-bottom:2px">';
+    html += '<span style="font-family:monospace;font-weight:600">CCN ' + esc(r.clinic_id) + '</span>';
+    if (isRec) html += '<span style="color:var(--accent);font-weight:700">· Recommended</span>';
+    if (r.latest_total_patients) html += '<span>· ' + fmtN(r.latest_total_patients) + ' patients</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:var(--text);font-weight:600;overflow-wrap:anywhere">' + esc(norm(r.facility_name) || 'Unknown') + '</div>';
+    html += '<div style="font-size:11px;color:var(--text2);margin-top:1px;overflow-wrap:anywhere">' + esc((r.address || '') + (r.city ? ', ' + r.city : '') + (r.state ? ' ' + r.state : '')) + '</div>';
+    html += '</div>';
+    html += '<button class="dup-keep-btn" data-keep-id="' + esc(r.clinic_id) + '" data-npi="' + esc(cluster.npi) + '" style="font-size:11px;padding:6px 10px;border:1px solid ' + (isRec ? 'var(--accent)' : 'var(--border)') + ';border-radius:5px;background:' + (isRec ? 'var(--accent)' : 'var(--s2)') + ';color:' + (isRec ? '#000' : 'var(--text2)') + ';cursor:pointer;font-weight:600;white-space:nowrap;flex-shrink:0">Keep NPI here</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Footer
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  html += '<a href="https://npiregistry.cms.hhs.gov/provider-view/' + encodeURIComponent(cluster.npi) + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 10px;border-radius:5px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Open NPPES ↗</a>';
+  html += '<button class="dup-skip-btn" data-npi="' + esc(cluster.npi) + '" style="font-size:11px;padding:5px 10px;border:1px solid var(--border);border-radius:5px;background:var(--s2);color:var(--text3);cursor:pointer;margin-left:auto">Skip (review later)</button>';
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Action wirers — Adopt, Flag, Dismiss, Unmappable, Dup Keep
+// ──────────────────────────────────────────────────────────────────────────
+
+async function _onNpiBulkLookup() {
+  const btn = document.getElementById('npi-bulk-lookup-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Querying NPPES…';
+  try {
+    const res = await fetch('/api/npi-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true, max: 700 })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.detail || ('HTTP ' + res.status));
+    showToast(`Scanned ${data.scanned}: ${data.auto_applied} auto-applied, ${data.too_ambiguous + data.low_confidence} ready for human review`, data.auto_applied > 0 ? 'success' : 'warn');
+    diaNpiLookupCache = null;
+    await loadDiaData();
+    await loadNpiCleanupData();
+    renderDiaTab();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Run NPPES lookup';
+    showToast('Lookup failed: ' + e.message, 'error');
+  }
+}
+
+function _wireNpiAdoptButtons() {
+  document.querySelectorAll('.npi-adopt-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const clinicId = btn.dataset.clinicId;
+      const npi = btn.dataset.npi;
+      if (!clinicId || !npi) return;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = '…';
+      try {
+        await applyManualChange({
+          actor: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'lcc_analyst',
+          source_surface: 'dia_npi_adopt',
+          target_table: 'medicare_clinics',
+          target_source: 'dia',
+          mutation_mode: 'update',
+          record_identifier: clinicId,
+          id_column: 'medicare_id',
+          changed_fields: { npi: npi, updated_at: new Date().toISOString() },
+          notes: 'NPI adopted from NPPES match via NPI Intel UI'
+        });
+        // Audit row in npi_registry_lookups
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'npi_registry_lookups',
+          data: {
+            clinic_id: clinicId,
+            best_match_npi: npi,
+            applied: true,
+            apply_decision: 'manual_adopted',
+            notes: 'User-confirmed NPPES match via NPI Intel UI'
+          },
+          source_surface: 'dia_npi_adopt'
+        });
+        // Local state: drop this missing-NPI signal, drop any new_npi signal pointing at it
+        diaData.npiSignals = (diaData.npiSignals || []).filter(s =>
+          !(s.signal_type === 'missing_inventory_npi' && s.clinic_id === clinicId) &&
+          !(s.signal_type === 'new_npi' && s.clinic_id === clinicId)
+        );
+        showToast('NPI ' + npi + ' adopted', 'success');
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        showToast('Adopt failed: ' + e.message, 'error');
+      }
+    });
+  });
+}
+
+function _wireNpiUnmappableButtons() {
+  document.querySelectorAll('.npi-unmappable-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const clinicId = btn.dataset.clinicId;
+      if (!clinicId) return;
+      if (!confirm('Mark this clinic as unmappable to NPPES? It will be hidden from the Missing NPI queue.')) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'npi_registry_lookups',
+          data: {
+            clinic_id: clinicId,
+            applied: false,
+            apply_decision: 'manual_unmappable',
+            notes: 'User marked unmappable from NPI Intel UI'
+          },
+          source_surface: 'dia_npi_unmappable'
+        });
+        diaData.npiSignals = (diaData.npiSignals || []).filter(s =>
+          !(s.signal_type === 'missing_inventory_npi' && s.clinic_id === clinicId)
+        );
+        showToast('Marked unmappable', 'success');
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Mark unmappable';
+        showToast('Failed: ' + e.message, 'error');
+      }
+    });
+  });
+}
+
+function _wireDupClusterButtons() {
+  // "Keep NPI here" — apply Phase 3 logic: keep NPI on chosen, clear on others in cluster
+  document.querySelectorAll('.dup-keep-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const keepId = btn.dataset.keepId;
+      const npi = btn.dataset.npi;
+      if (!keepId || !npi) return;
+      const cluster = (diaData.npiSignals || []).filter(r => r.signal_type === 'duplicate_inventory_npi' && r.npi === npi);
+      const losers = cluster.filter(r => r.clinic_id !== keepId).map(r => r.clinic_id);
+      if (losers.length === 0) return;
+      if (!confirm(`Keep NPI ${npi} on CCN ${keepId} and clear from ${losers.length} other clinic${losers.length > 1 ? 's' : ''}?`)) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        // Clear NPI on each loser
+        for (const loser of losers) {
+          await applyManualChange({
+            actor: (typeof LCC_USER !== 'undefined' && LCC_USER.display_name) || 'lcc_analyst',
+            source_surface: 'dia_npi_dup_resolve',
+            target_table: 'medicare_clinics',
+            target_source: 'dia',
+            mutation_mode: 'update',
+            record_identifier: loser,
+            id_column: 'medicare_id',
+            changed_fields: { npi: null, updated_at: new Date().toISOString() },
+            notes: 'NPI duplicate-cluster resolution: kept on ' + keepId + ', cleared here'
+          });
+        }
+        // Drop cluster from in-memory signals
+        diaData.npiSignals = (diaData.npiSignals || []).filter(r =>
+          !(r.signal_type === 'duplicate_inventory_npi' && r.npi === npi)
+        );
+        showToast(`Resolved ${losers.length + 1}-clinic cluster`, 'success');
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Keep NPI here';
+        showToast('Failed: ' + e.message, 'error');
+      }
+    });
+  });
+  // Skip — just hide for this session
+  document.querySelectorAll('.dup-skip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const npi = btn.dataset.npi;
+      diaData.npiSignals = (diaData.npiSignals || []).filter(r =>
+        !(r.signal_type === 'duplicate_inventory_npi' && r.npi === npi)
+      );
+      renderDiaTab();
+    });
+  });
+}
+
+function _wireNpiFlagDismissButtons() {
+  document.querySelectorAll('.npi-flag-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const npiId = btn.dataset.npiId;
+      const npiName = btn.dataset.npiName;
+      if (!npiId) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'research_queue_outcomes',
+          data: { medicare_id: npiId, outcome: 'flagged_for_review', notes: 'Flagged from NPI Intel BD events', created_at: new Date().toISOString() },
+          source_surface: 'dia_npi_flag'
+        });
+        showToast('Flagged ' + (npiName || npiId), 'success');
+        // Remove from local list so card disappears
+        diaData.npiSignals = (diaData.npiSignals || []).filter(s =>
+          !((s.npi || s.clinic_id || '') === npiId && NPI_PROVIDER_CHANGE_TYPES.has(s.signal_type))
+        );
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Flag for research';
+        showToast('Flag failed: ' + e.message, 'error');
+      }
+    });
+  });
+  document.querySelectorAll('.npi-dismiss-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const npiId = btn.dataset.npiId;
+      if (!npiId) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'research_queue_outcomes',
+          data: { medicare_id: npiId, outcome: 'dismissed', notes: 'Dismissed from NPI Intel BD events', created_at: new Date().toISOString() },
+          source_surface: 'dia_npi_dismiss'
+        });
+        diaData.npiSignals = (diaData.npiSignals || []).filter(s =>
+          !((s.npi || s.clinic_id || '') === npiId && NPI_PROVIDER_CHANGE_TYPES.has(s.signal_type))
+        );
+        showToast('Dismissed', 'success');
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Dismiss';
+        showToast('Dismiss failed: ' + e.message, 'error');
+      }
+    });
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// NPI Intel — 3-mode dispatcher (Round 76ef)
+//
+// "BD Events"     — provider-change cards: closures, relocations, rebrand,
+//                   official changes, new NPIs at known clinic addresses.
+//                   This is what the user actually wants to see.
+// "Cleanup"       — focused review of the residual data-hygiene tasks the
+//                   auto-resolvers couldn't finish:
+//                     - Missing NPI: clinic + NPPES candidates inline
+//                     - Duplicate cluster: side-by-side compare vs NPPES truth
+// "All Signals"   — legacy table view of the full matview output. Power-user.
+// ──────────────────────────────────────────────────────────────────────────
+
+function renderDiaNpi() {
   const allSignals = (diaData.npiSignals || []).map(r => ({
     ...r,
     _sev: _npiSeverityKey(r),
     _key: _npiRowKey(r)
   }));
+
+  let html = '<div class="biz-section">';
+
+  // ─── Mode segmented control ──────────────────────────────────────────
+  const bdRows      = allSignals.filter(r => NPI_PROVIDER_CHANGE_TYPES.has(r.signal_type));
+  const missingRows = allSignals.filter(r => r.signal_type === 'missing_inventory_npi');
+  const dupRows     = allSignals.filter(r => r.signal_type === 'duplicate_inventory_npi' && r._sev !== 'auto_resolvable');
+  const dupClusterCount = new Set(dupRows.map(r => r.npi)).size;
+
+  const modeBtn = (key, label, count) => {
+    const active = diaNpiMode === key;
+    const countBadge = count > 0 ? ` <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${active ? 'rgba(255,255,255,0.25)' : 'var(--s3)'};color:${active ? '#fff' : 'var(--text2)'};margin-left:4px">${fmtN(count)}</span>` : '';
+    return `<button data-npi-mode="${key}" style="font-size:13px;font-weight:600;padding:8px 16px;border:none;border-bottom:2px solid ${active ? 'var(--accent)' : 'transparent'};background:transparent;color:${active ? 'var(--text)' : 'var(--text2)'};cursor:pointer">${label}${countBadge}</button>`;
+  };
+  html += '<div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px">';
+  html += modeBtn('bd', 'BD Events', bdRows.length);
+  html += modeBtn('cleanup', 'Cleanup Queue', missingRows.length + dupClusterCount);
+  html += modeBtn('all', 'All Signals', allSignals.length);
+  html += '</div>';
+
+  // ─── Mode body ───────────────────────────────────────────────────────
+  if (diaNpiMode === 'bd') {
+    html += _renderNpiBdEvents(bdRows);
+  } else if (diaNpiMode === 'cleanup') {
+    html += _renderNpiCleanup(missingRows, dupRows);
+  } else {
+    html += _renderNpiAllSignals(allSignals);
+  }
+
+  html += '</div>';
+
+  // Mode switcher
+  setTimeout(() => {
+    document.querySelectorAll('[data-npi-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        diaNpiMode = btn.dataset.npiMode;
+        diaNpiSelectedIdx = undefined;
+        renderDiaTab();
+        // Lazy-load cleanup data on first entry
+        if (diaNpiMode === 'cleanup' && !diaNpiCleanupLoading && (!diaNpiLookupCache || !diaNpiRegistryCache)) {
+          loadNpiCleanupData().then(() => renderDiaTab());
+        }
+      });
+    });
+  }, 0);
+
+  return html;
+}
+
+// Lazy-loader for Cleanup mode data — fetches latest NPPES lookup candidates
+// per clinic and the npi_registry rows for any NPIs in dup clusters.
+async function loadNpiCleanupData() {
+  diaNpiCleanupLoading = true;
+  try {
+    // 1. Latest lookup per clinic (with raw_response candidates)
+    const lookups = await diaQuery('npi_registry_lookups',
+      'clinic_id,queried_at,result_count,best_match_npi,best_match_score,best_match_org,applied,apply_decision,raw_response,query_org_name,query_city,query_state',
+      { order: 'queried_at.desc', limit: 2000 }
+    ).catch(() => []);
+    const lookupMap = new Map();
+    for (const l of lookups) {
+      // Keep only latest per clinic (rows already ordered by queried_at desc)
+      if (!lookupMap.has(l.clinic_id)) lookupMap.set(l.clinic_id, l);
+    }
+    diaNpiLookupCache = lookupMap;
+
+    // 2. NPPES registry rows for NPIs in current dup clusters
+    const dupNpis = Array.from(new Set(
+      (diaData.npiSignals || [])
+        .filter(r => r.signal_type === 'duplicate_inventory_npi' && r.npi)
+        .map(r => r.npi)
+    ));
+    if (dupNpis.length > 0) {
+      // PostgREST IN list — chunk if very large
+      const regCache = new Map();
+      for (let i = 0; i < dupNpis.length; i += 200) {
+        const chunk = dupNpis.slice(i, i + 200);
+        const rows = await diaQuery('npi_registry',
+          'npi,organization_name,npi_status,npi_address,npi_city,npi_state,npi_zip,is_esrd_taxonomy,authorized_official,updated_at',
+          { filter: 'npi=in.(' + chunk.join(',') + ')', limit: 1000 }
+        ).catch(() => []);
+        for (const r of rows) regCache.set(r.npi, r);
+      }
+      diaNpiRegistryCache = regCache;
+    } else {
+      diaNpiRegistryCache = new Map();
+    }
+  } finally {
+    diaNpiCleanupLoading = false;
+  }
+}
+
+// Legacy all-signals view body — extracted from the original renderDiaNpi
+// so the new mode dispatcher can call it. Same UX as before.
+function _renderNpiAllSignals(allSignals) {
+  let html = '';
 
   // Filter by severity bucket (default 'actionable' = everything except auto_resolvable)
   let visible = allSignals;
@@ -2206,8 +2912,7 @@ function renderDiaNpi() {
     html += '</div>';
   }
 
-  html += '</div>';  // end grid
-  html += '</div>';  // end biz-section
+  html += '</div>';  // end grid (biz-section close handled by dispatcher)
 
   // ─── Event handlers ─────────────────────────────────────────────────
   setTimeout(() => {
@@ -5897,29 +6602,71 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
  */
 async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source, term, rent, rentSF) {
   try {
+    // research_queue_outcomes only has these columns:
+    //   queue_type, clinic_id, status, notes, selected_property_id,
+    //   selected_candidate_property_ids, source_bucket, source_name,
+    //   assigned_to, assigned_at, root_cause, confidence_*, etc.
+    //
+    // Earlier versions of this function included lease_term, annual_rent,
+    // rent_per_sf, and verification_source — none of which exist on this
+    // table. PostgREST rejected the writes with http_400 ("Could not find
+    // column 'lease_term' on table 'research_queue_outcomes'"). The
+    // Confirm Link path now uses propResLinkFromQueue which builds its
+    // own clean payload, but the Reject path still hit this bug.
+    //
+    // Stripped to the columns that actually exist. Lease-specific fields
+    // (term, rent, rentSF) are still captured — they just go into the
+    // notes field as a structured suffix so we don't lose the info.
     const payload = {
       queue_type: queueType,
-      clinic_id: clinicId,
+      clinic_id: String(clinicId),
       status: status,
-      notes: notes,
-      selected_property_id: propId || null,
-      assigned_at: new Date().toISOString(),
-      verification_source: source || null,
-      lease_term: term || null,
-      annual_rent: rent ? parseFloat(rent) : null,
-      rent_per_sf: rentSF ? parseFloat(rentSF) : null
+      notes: notes || null,
+      selected_property_id: propId ? Number(propId) : null,
+      source_name: source || null,
+      assigned_at: new Date().toISOString()
     };
 
-    const result = await applyChangeWithFallback({
-      proxyBase: '/api/dia-query',
-      table: 'research_queue_outcomes',
-      idColumn: 'clinic_id',
-      idValue: clinicId,
-      matchFilters: [{ column: 'queue_type', value: queueType }],
-      data: payload,
-      source_surface: 'dialysis_research_outcome',
-      propagation_scope: 'research_queue_outcome'
+    // Append lease-specific values into notes if provided (they have no
+    // home on research_queue_outcomes itself).
+    const leaseSuffix = [];
+    if (term) leaseSuffix.push('term: ' + term);
+    if (rent) leaseSuffix.push('annual_rent: ' + rent);
+    if (rentSF) leaseSuffix.push('rent_per_sf: ' + rentSF);
+    if (leaseSuffix.length > 0) {
+      payload.notes = (payload.notes ? payload.notes + ' | ' : '') + leaseSuffix.join(', ');
+    }
+
+    // Try PATCH (existing row) first; fall back to INSERT if no row matched.
+    // research_queue_outcomes has UNIQUE(queue_type, clinic_id) so we can't
+    // double-insert; the bridge's 409 fallback (PR #480) catches the race.
+    const existing = (diaData.researchOutcomes || []).find(function(o) {
+      return o && o.queue_type === queueType && String(o.clinic_id) === String(clinicId);
     });
+
+    let result;
+    if (existing) {
+      result = await applyChangeWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        idValue: String(clinicId),
+        matchFilters: [{ column: 'queue_type', value: queueType }],
+        data: payload,
+        source_surface: 'dialysis_research_outcome',
+        propagation_scope: 'research_queue_outcome'
+      });
+    } else {
+      result = await applyInsertWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        recordIdentifier: String(clinicId),
+        data: payload,
+        source_surface: 'dialysis_research_outcome',
+        propagation_scope: 'research_queue_outcome'
+      });
+    }
 
     if (!result.ok) {
       throw new Error('Failed to save outcome: ' + (result.errors || []).join('; '));
