@@ -417,10 +417,17 @@ async function handleAutoScrapeListings(req, res) {
       continue;
     }
 
-    // 2. Per-listing sale-window check. Reasonable property-level filter:
-    //    one sales_transactions GET per listing. Fewer round trips than a
-    //    bulk-and-merge query, and lets us treat each listing's outcome
-    //    independently if a sale only matches one of multiple listings.
+    // 2. Per-listing sale-window check. One sales_transactions GET per
+    //    listing — fewer round trips than a bulk-and-merge, and lets us
+    //    treat each listing's outcome independently if a sale only matches
+    //    one of multiple listings.
+    //
+    //    Window matches the JS sidebar path's pickClosestListing logic
+    //    (±~3 years around listing_date, closest in time wins, prefer
+    //    sale_date >= listing_date). Both paths converge on the same
+    //    listing→sale pairing, just from different directions: the JS path
+    //    fires when a new sale lands, the cron fires when a stale Active
+    //    listing comes due for verification.
     for (const l of listings) {
       try {
         let checkResult = 'still_available';
@@ -428,16 +435,46 @@ async function handleAutoScrapeListings(req, res) {
         let notes = 'auto-scrape: no recent sale, deferred';
 
         if (l.property_id && l[dateCol]) {
-          const salePath =
-            `sales_transactions?property_id=eq.${Number(l.property_id)}` +
-            `&sale_date=gte.${encodeURIComponent(l[dateCol])}` +
-            `&select=sale_id,sale_date,sold_price&limit=1`;
-          const saleRes = await domainQuery(dom, 'GET', salePath);
-          if (saleRes.ok && Array.isArray(saleRes.data) && saleRes.data.length > 0) {
-            const sale = saleRes.data[0];
-            checkResult = 'sold';
-            offMarketReason = 'sold';
-            notes = `auto-scrape: matched sales_transactions sale_id=${sale.sale_id} on ${sale.sale_date}`;
+          const listingMs = Date.parse(l[dateCol]);
+          if (Number.isFinite(listingMs)) {
+            const windowDays = 3 * 365 + 1;
+            const lower = new Date(listingMs - windowDays * 86400000).toISOString().slice(0, 10);
+            const upper = new Date(listingMs + windowDays * 86400000).toISOString().slice(0, 10);
+
+            // Pull all candidate sales in the window and pick the best in JS
+            // — limit=10 is enough headroom for any realistic property
+            // history. Order ascending so a primary-key tiebreak after the
+            // distance comparison stays deterministic across runs.
+            const salePath =
+              `sales_transactions?property_id=eq.${Number(l.property_id)}` +
+              `&sale_date=gte.${encodeURIComponent(lower)}` +
+              `&sale_date=lte.${encodeURIComponent(upper)}` +
+              `&select=sale_id,sale_date,sold_price&order=sale_date.asc&limit=10`;
+            const saleRes = await domainQuery(dom, 'GET', salePath);
+            if (saleRes.ok && Array.isArray(saleRes.data) && saleRes.data.length > 0) {
+              // Inverse of pickClosestListing: pick the sale whose sale_date
+              // is closest to listing_date, tiebreak prefer sale on-or-after
+              // listing_date (the closing sale, not a phantom earlier one).
+              let best = null;
+              let bestDist = Infinity;
+              let bestSign = 1;
+              for (const sale of saleRes.data) {
+                const saleMs = Date.parse(sale.sale_date);
+                if (!Number.isFinite(saleMs)) continue;
+                const dist = Math.abs(saleMs - listingMs);
+                const sign = saleMs >= listingMs ? -1 : 1; // -1 wins
+                if (dist < bestDist || (dist === bestDist && sign < bestSign)) {
+                  best = sale;
+                  bestDist = dist;
+                  bestSign = sign;
+                }
+              }
+              if (best) {
+                checkResult = 'sold';
+                offMarketReason = 'sold';
+                notes = `auto-scrape: matched sales_transactions sale_id=${best.sale_id} on ${best.sale_date}`;
+              }
+            }
           }
         }
 
