@@ -1336,6 +1336,78 @@ async function loadPropertyTab(opts) {
         verifyBtn.textContent = 'Verify still available';
         verifyBtn.disabled = false;
       });
+
+      // Round 76cx Phase 3b (2026-04-29): "Mark as off market" button.
+      // Counterpart to "Verify still available" — when the user knows the
+      // listing is no longer for sale (closed sale, taken down, expired
+      // contract, etc.) they can flag every active listing on this property
+      // as off_market in one click. Server side uses the same
+      // record_listing_verification endpoint with check_result='off_market'
+      // and method='manual_user'. Reasons are picked from a small native
+      // dropdown so we capture WHY without a full modal — the value lands in
+      // listing_verification_history.notes for downstream audit.
+      const offMarketBtn = document.createElement('button');
+      offMarketBtn.className = 'btn btn-sm btn-secondary';
+      offMarketBtn.id = 'markOffMarketBtn';
+      offMarketBtn.textContent = 'Mark off market';
+      offMarketBtn.style.marginLeft = '6px';
+      actions.appendChild(offMarketBtn);
+
+      offMarketBtn.addEventListener('click', async () => {
+        // Round 76cx Phase 3b: light-weight reason picker via window.prompt.
+        // A custom dropdown is overkill given how rarely this button is used;
+        // the prompt's free-text fallback also captures one-off reasons we
+        // wouldn't have anticipated. Suggested values map cleanly to the
+        // off_market_reason column on listing_status_history.
+        const reasonInput = window.prompt(
+          'Why is this listing off market?\n\n' +
+          '  - sold (recorded sale)\n' +
+          '  - withdrawn (seller pulled it)\n' +
+          '  - expired (contract lapsed)\n' +
+          '  - under_contract\n' +
+          '  - leased\n' +
+          '  - or type your own reason',
+          'withdrawn'
+        );
+        if (reasonInput === null) return; // user cancelled
+        const reason = String(reasonInput).trim().toLowerCase().replace(/\s+/g, '_');
+        if (!reason) return;
+        // The server endpoint accepts check_result='sold' as a separate
+        // terminal state — route there if the user picked sold so the
+        // downstream listing transition is correct.
+        const checkResult = reason === 'sold' ? 'sold' : 'off_market';
+
+        offMarketBtn.disabled = true;
+        offMarketBtn.textContent = 'Marking…';
+
+        const liveCtx = (await getPageContext()) || ctx || {};
+        const result = await apiCall('/api/entities?action=record_listing_verification', {
+          domain:           verifyDomain,
+          property_id:      verifyPropertyId,
+          method:           'manual_user',
+          check_result:     checkResult,
+          source_url:       liveCtx.page_url || window.location?.href || null,
+          off_market_reason: reason,
+          notes:            `marked off market via LCC sidebar (${reason})`,
+        });
+
+        const toast = document.createElement('div');
+        if (result.ok && result.data?.ok) {
+          toast.className = 'update-toast updated';
+          const n = result.data.listings_verified ?? result.data.listings_total ?? 0;
+          toast.textContent = checkResult === 'sold'
+            ? `Marked ${n} listing${n === 1 ? '' : 's'} as Sold (${reason})`
+            : `Marked ${n} listing${n === 1 ? '' : 's'} off market (${reason})`;
+        } else {
+          toast.className = 'update-toast';
+          const errMsg = toErrorMessage(result.data?.error) || toErrorMessage(result.error) || 'Mark off market failed';
+          const hint = result.data?.hint;
+          toast.textContent = hint ? `${errMsg} — ${hint}` : errMsg;
+        }
+        actions.prepend(toast);
+        offMarketBtn.textContent = 'Mark off market';
+        offMarketBtn.disabled = false;
+      });
     }
   }
 
