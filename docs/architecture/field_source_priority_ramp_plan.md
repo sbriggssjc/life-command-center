@@ -124,8 +124,21 @@ SELECT * FROM v_field_provenance_unranked;
 SELECT enforce_mode, count(*)
 FROM field_source_priority
 GROUP BY enforce_mode;
--- record_only: 462+13=475 / warn: 24 / strict: 0  (as of 2026-04-29)
+-- record_only: 649 / warn: 46 / strict: 6  (as of 2026-04-29 EOD)
 ```
+
+### Active strict rules (as of 2026-04-29)
+
+| target_table | field | source | observed behavior |
+|---|---|---|---|
+| `dia.contacts` | `contact_email` | `costar_sidebar` | 205 skips, 17 conflicts blocked over 2 days |
+| `dia.leases` | `expense_structure` | `costar_sidebar` | 66 skips, 8 conflicts blocked |
+| `dia.leases` | `lease_expiration` | `costar_sidebar` | 69 skips, 0 conflicts |
+| `dia.leases` | `lease_start` | `costar_sidebar` | 61 skips, 3 conflicts blocked |
+| `dia.leases` | `leased_area` | `costar_sidebar` | (active) |
+| `dia.leases` | `rent_per_sf` | `costar_sidebar` | (active) |
+
+The 28 conflicts blocked across these 6 rules in 2 days is real data-loss prevention — without strict mode, costar_sidebar would have overwritten higher-trust values from OM extraction or manual edits.
 
 ## Logical gap captured
 
@@ -160,6 +173,61 @@ For new fields added to a writer, check the corresponding
 provenance loop. If you're patching a column the writer didn't
 patch before, you need a branch in the provenance call too.
 
+### Warn-mode triage (2026-04-29 EOD)
+
+After ~48h of warn-mode observation across 46 rules, three groups
+emerged:
+
+#### Safe ramp candidates (warn → strict)
+
+These have produced **zero conflicts** across 80-125 writes each over
+~46h. The costar_sidebar values match what was already there, so
+strict mode would be a no-op except as a guardrail against future
+regressions:
+
+| target_table | field | writes | conflicts |
+|---|---|---|---|
+| `dia.deed_records` | `recording_date` | 111 | 0 |
+| `dia.deed_records` | `deed_type` | 110 | 0 |
+| `dia.deed_records` | `grantee` | 125 | 0 |
+| `dia.deed_records` | `grantor` | 102 | 0 |
+| `dia.deed_records` | `consideration` | 82 | 0 |
+| `dia.deed_records` | `document_number` | 125 | 0 |
+| `dia.tax_records` | `tax_year` | 97 | 0 |
+| `dia.parcel_records` | `county` | 98 | 0 |
+| `dia.parcel_records` | `apn` | 110 | 0 |
+
+Recommend ramping to strict after one more week of zero conflicts.
+
+#### Investigate-before-ramping (high-volume conflicts)
+
+These produced **20+ conflicts** in 2 days. Either the priority is
+wrong (costar should win), or the writers are racing on legitimately
+distinct values, or strict-mode would block real data updates:
+
+| target_table | field | source | writes | skips | conflicts |
+|---|---|---|---|---|---|
+| `dia.contacts` | `contact_name` | `costar_sidebar` | 547 | 208 | **213** |
+| `dia.contacts` | `company` | `costar_sidebar` | 221 | 179 | 74 |
+| `dia.leases` | `tenant` | `costar_sidebar` | 477 | 92 | 70 |
+| `dia.available_listings` | `last_price` | `costar_sidebar` | 162 | 67 | 57 |
+| `dia.available_listings` | `initial_price` | `costar_sidebar` | 162 | 67 | 57 |
+| `dia.properties` | `year_built` | `costar_sidebar` | 217 | 110 | 53 |
+| `dia.available_listings` | `current_cap_rate` | `costar_sidebar` | 155 | 66 | 47 |
+| `dia.available_listings` | `initial_cap_rate` | `costar_sidebar` | 155 | 66 | 47 |
+| `dia.properties` | `lot_sf` | `costar_sidebar` | 135 | 88 | 49 |
+
+Spot-check 10-20 conflict rows from each before deciding. The
+`v_field_provenance_actionable` view exposes both the attempted and
+current values, which is the relevant comparison.
+
+#### Don't ramp (legitimate update paths)
+
+`assessed_value`, `annual_rent`, `parcel_number` produce conflicts
+that look like legitimate annual updates. Strict mode here would
+block real refreshes. Keep as warn (or `record_only`) until a
+different mechanism handles versioned updates.
+
 ### `matched_property_id` is intentional, not a logical gap
 
 `agency_debt_programs.matched_property_id` and
@@ -174,4 +242,6 @@ rename them to `property_id`.
 *Author: Claude Code (claude/field-source-priority-ramp-plan-PGmsy).
 Migration that registered the 13 rules: LCC PR #484. Migration that
 added v_field_source_priority_unobserved: PR #490.
-Audit-pass findings + Phase 2.1 coverage fix: PR #494.*
+Audit-pass findings + Phase 2.1 coverage fix: PR #494.
+Schema-validity check (catches column-name typos automatically): PR #502.
+Warn-mode triage + current-state refresh: this PR.*
