@@ -20,6 +20,7 @@
     { "source": "/api/npi-lookup", "destination": "/api/admin?_route=npi-lookup" },
     { "source": "/api/npi-registry-sync", "destination": "/api/admin?_route=npi-registry-sync" },
     { "source": "/api/merge-log-reconcile", "destination": "/api/admin?_route=merge-log-reconcile" },
+    { "source": "/api/auto-scrape-listings", "destination": "/api/admin?_route=auto-scrape-listings" },
     { "source": "/api/activities", "destination": "/api/actions?_route=activities" },
     { "source": "/api/workspaces", "destination": "/api/admin?_route=workspaces" },
     { "source": "/api/members", "destination": "/api/admin?_route=members" },

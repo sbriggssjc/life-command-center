@@ -2595,13 +2595,29 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
       }
       else console.error(`[PublicRecords] INSERT dialysis parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
     } else {
-      await domainPatch('dialysis',
-        `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
-        { assessed_value: assessed, county },
-        'upsertPublicRecords:dialysis:parcel'
-      );
-      // Ensure join table link exists for existing parcel
+      // Round 76co (Phase 5): consult priority registry before parcel PATCH.
+      // CoStar's parcel data is aggregator-quality; county-records and OM
+      // promoter both outrank it for these fields when they're present.
       const existingParcelId = parcelLookup.data[0]?.id;
+      const filteredParcelPatch = await filterByFieldPriority({
+        targetDb:    'dia_db',
+        targetTable: 'dia.parcel_records',
+        recordPk:    existingParcelId || apn,
+        source:      'costar_sidebar',
+        confidence:  0.6,
+        fields:      { assessed_value: assessed, county },
+      }).catch(err => {
+        console.warn('[upsertPublicRecords:dia:parcel] field-priority filter failed (proceeding with full patch):', err?.message);
+        return { assessed_value: assessed, county };
+      });
+      if (filteredParcelPatch && Object.keys(filteredParcelPatch).length > 0) {
+        await domainPatch('dialysis',
+          `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
+          filteredParcelPatch,
+          'upsertPublicRecords:dialysis:parcel'
+        );
+      }
+      // Ensure join table link exists for existing parcel
       if (existingParcelId) {
         await linkPublicRecord('dialysis', propertyId, 'parcel', existingParcelId);
         pushProvenance(provCollect, 'parcel_records', existingParcelId, {
@@ -2656,18 +2672,32 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
       }
       else console.error(`[PublicRecords] INSERT gov parcel_records FAILED — apn=${apn} status=${r.status}`, r.data);
     } else {
-      await domainPatch('government',
-        `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
-        stripNulls({
-          land_value:           landVal,
-          improvement_value:    impVal,
-          total_assessed_value: assessed,
-          assessment_year:      taxYear,
-        }),
-        'upsertPublicRecords:gov:parcel'
-      );
-      // Ensure join table link exists for existing parcel
+      // Round 76co (Phase 5): same priority filter on the gov parcel path.
       const existingParcelId = parcelLookup.data[0]?.parcel_id;
+      const govParcelPatch = stripNulls({
+        land_value:           landVal,
+        improvement_value:    impVal,
+        total_assessed_value: assessed,
+        assessment_year:      taxYear,
+      });
+      const filteredGovParcelPatch = await filterByFieldPriority({
+        targetDb:    'gov_db',
+        targetTable: 'gov.parcel_records',
+        recordPk:    existingParcelId || apn,
+        source:      'costar_sidebar',
+        confidence:  0.6,
+        fields:      govParcelPatch,
+      }).catch(err => {
+        console.warn('[upsertPublicRecords:gov:parcel] field-priority filter failed (proceeding with full patch):', err?.message);
+        return govParcelPatch;
+      });
+      if (filteredGovParcelPatch && Object.keys(filteredGovParcelPatch).length > 0) {
+        await domainPatch('government',
+          `parcel_records?apn=eq.${encodeURIComponent(apn)}`,
+          filteredGovParcelPatch,
+          'upsertPublicRecords:gov:parcel'
+        );
+      }
       if (existingParcelId) {
         await linkPublicRecord('government', propertyId, 'parcel', existingParcelId);
         pushProvenance(provCollect, 'parcel_records', existingParcelId, {
@@ -2727,13 +2757,26 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         }
         else console.error(`[PublicRecords] INSERT dialysis tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
       } else {
-        await domainPatch('dialysis',
-          `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}`,
-          { assessed_value: ty.assessed },
-          'upsertPublicRecords:dialysis:tax'
-        );
-        // Ensure join table link for existing tax record
+        // Round 76co (Phase 5): priority gate on tax_records updates.
         const existingTaxId = taxLookup.data[0]?.id;
+        const filteredTaxPatch = await filterByFieldPriority({
+          targetDb:    'dia_db',
+          targetTable: 'dia.tax_records',
+          recordPk:    existingTaxId || `${apn}|${ty.year}`,
+          source:      'costar_sidebar',
+          confidence:  0.6,
+          fields:      { assessed_value: ty.assessed },
+        }).catch(err => {
+          console.warn('[upsertPublicRecords:dia:tax] field-priority filter failed (proceeding with full patch):', err?.message);
+          return { assessed_value: ty.assessed };
+        });
+        if (filteredTaxPatch && Object.keys(filteredTaxPatch).length > 0) {
+          await domainPatch('dialysis',
+            `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}`,
+            filteredTaxPatch,
+            'upsertPublicRecords:dialysis:tax'
+          );
+        }
         if (existingTaxId) {
           await linkPublicRecord('dialysis', propertyId, 'tax', existingTaxId);
           pushProvenance(provCollect, 'tax_records', existingTaxId, {
@@ -2784,12 +2827,26 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         }
         else console.error(`[PublicRecords] INSERT gov tax_records FAILED — apn=${apn} year=${ty.year} status=${r.status}`, r.data);
       } else {
-        await domainPatch('government',
-          `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}`,
-          { assessed_value: ty.assessed },
-          'upsertPublicRecords:gov:tax'
-        );
+        // Round 76co (Phase 5): priority gate on gov tax_records updates.
         const existingTaxRecordId = taxLookup.data[0]?.tax_record_id;
+        const filteredGovTaxPatch = await filterByFieldPriority({
+          targetDb:    'gov_db',
+          targetTable: 'gov.tax_records',
+          recordPk:    existingTaxRecordId || `${parcelId}|${ty.year}`,
+          source:      'costar_sidebar',
+          confidence:  0.6,
+          fields:      { assessed_value: ty.assessed },
+        }).catch(err => {
+          console.warn('[upsertPublicRecords:gov:tax] field-priority filter failed (proceeding with full patch):', err?.message);
+          return { assessed_value: ty.assessed };
+        });
+        if (filteredGovTaxPatch && Object.keys(filteredGovTaxPatch).length > 0) {
+          await domainPatch('government',
+            `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}`,
+            filteredGovTaxPatch,
+            'upsertPublicRecords:gov:tax'
+          );
+        }
         if (existingTaxRecordId) {
           pushProvenance(provCollect, 'tax_records', existingTaxRecordId, {
             tax_year: ty.year, assessed_value: ty.assessed,
@@ -4538,11 +4595,28 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
             if (stateZip[0]) addrFields.state = stateZip[0];
           }
           if (Object.keys(addrFields).length) {
-            await domainPatch(domain,
-              `recorded_owners?recorded_owner_id=eq.${id}`,
-              addrFields,
-              'upsertDomainOwners:ensureRecordedOwner'
-            );
+            // Round 76co (Phase 5): priority gate on recorded_owners updates.
+            // Deed records and county-recorder data outrank costar_sidebar
+            // for owner-address fields, since CoStar often shows the listing
+            // contact's mailing address rather than the legal owner's.
+            const filteredOwnerPatch = await filterByFieldPriority({
+              targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+              targetTable: domain === 'dialysis' ? 'dia.recorded_owners' : 'gov.recorded_owners',
+              recordPk:    id,
+              source:      'costar_sidebar',
+              confidence:  0.6,
+              fields:      addrFields,
+            }).catch(err => {
+              console.warn('[upsertDomainOwners:ensureRecordedOwner] field-priority filter failed (proceeding with full patch):', err?.message);
+              return addrFields;
+            });
+            if (filteredOwnerPatch && Object.keys(filteredOwnerPatch).length > 0) {
+              await domainPatch(domain,
+                `recorded_owners?recorded_owner_id=eq.${id}`,
+                filteredOwnerPatch,
+                'upsertDomainOwners:ensureRecordedOwner'
+              );
+            }
           }
         }
       }
