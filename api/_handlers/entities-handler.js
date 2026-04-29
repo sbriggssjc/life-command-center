@@ -22,6 +22,7 @@ import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
+import { domainQuery } from '../_shared/domain-db.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -333,6 +334,98 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       } catch (err) {
         console.error('[Sidebar pipeline error]', err);
         return res.status(500).json({ error: 'Pipeline processing failed', detail: err?.message });
+      }
+    }
+
+    // Round 76cx Phase 3: record a listing verification check
+    // POST /api/entities?action=record_listing_verification
+    // Body: { domain: 'dialysis'|'government', property_id, method, check_result,
+    //         asking_price?, cap_rate?, source_url?, notes?, off_market_reason? }
+    // Looks up active listings on the property and calls
+    // public.lcc_record_listing_check() once per listing. Returns the
+    // per-listing decision (state_transitioned + new_status) so the
+    // sidebar can toast a meaningful summary.
+    if (req.query.action === 'record_listing_verification') {
+      const {
+        domain,
+        property_id,
+        method,
+        check_result,
+        asking_price,
+        cap_rate,
+        source_url,
+        notes,
+        off_market_reason,
+      } = req.body || {};
+
+      if (!domain || !['dialysis', 'government'].includes(domain)) {
+        return res.status(400).json({ error: 'domain must be "dialysis" or "government"' });
+      }
+      if (!property_id || !Number.isFinite(Number(property_id))) {
+        return res.status(400).json({ error: 'property_id (number) is required' });
+      }
+      const validMethods = ['auto_scrape', 'manual_user', 'sidebar_capture', 'sold_imported'];
+      if (!method || !validMethods.includes(method)) {
+        return res.status(400).json({ error: `method must be one of ${validMethods.join(', ')}` });
+      }
+      const validResults = ['still_available', 'price_changed', 'off_market', 'sold', 'unreachable'];
+      if (!check_result || !validResults.includes(check_result)) {
+        return res.status(400).json({ error: `check_result must be one of ${validResults.join(', ')}` });
+      }
+
+      try {
+        // Find active listings on this property in the chosen domain.
+        // dia uses is_active boolean; gov uses listing_status text.
+        const listingFilter = domain === 'dialysis'
+          ? `is_active=eq.true`
+          : `listing_status=eq.active`;
+        const idColumn = 'listing_id';
+        const listingsRes = await domainQuery(domain, 'GET',
+          `available_listings?property_id=eq.${Number(property_id)}&${listingFilter}&select=${idColumn}&limit=20`);
+        if (!listingsRes.ok) {
+          return res.status(502).json({ error: 'failed to read available_listings', detail: listingsRes.data });
+        }
+        const listings = Array.isArray(listingsRes.data) ? listingsRes.data : [];
+        if (listings.length === 0) {
+          return res.status(404).json({ error: 'no active listings on this property', property_id });
+        }
+
+        const results = [];
+        for (const l of listings) {
+          const rpcRes = await domainQuery(domain, 'POST', 'rpc/lcc_record_listing_check', {
+            p_listing_id: l.listing_id,
+            p_method: method,
+            p_check_result: check_result,
+            p_asking_price: asking_price != null ? Number(asking_price) : null,
+            p_cap_rate: cap_rate != null ? Number(cap_rate) : null,
+            p_source_url: source_url || null,
+            p_off_market_reason: off_market_reason || null,
+            p_notes: notes || null,
+            p_verified_by: user.id || null,
+          });
+          if (!rpcRes.ok) {
+            results.push({ listing_id: l.listing_id, ok: false, error: rpcRes.data });
+            continue;
+          }
+          // RPC returns a row with verification_id, status_history_id,
+          // state_transitioned, new_status.
+          const decision = Array.isArray(rpcRes.data) ? rpcRes.data[0] : rpcRes.data;
+          results.push({ listing_id: l.listing_id, ok: true, ...decision });
+        }
+        const okCount = results.filter(r => r.ok).length;
+        return res.status(200).json({
+          ok: okCount > 0,
+          property_id,
+          domain,
+          method,
+          check_result,
+          listings_verified: okCount,
+          listings_total: listings.length,
+          results,
+        });
+      } catch (err) {
+        console.error('[record_listing_verification error]', err);
+        return res.status(500).json({ error: 'Verification failed', detail: err?.message });
       }
     }
 

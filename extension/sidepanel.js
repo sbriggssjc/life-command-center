@@ -1227,6 +1227,74 @@ async function loadPropertyTab() {
         rerunBtn.disabled = false;
       }
     });
+
+    // Round 76cx Phase 3: "Verify still available" button. Only shown when
+    // the property is matched in LCC and resolves to a dialysis/government
+    // property_id (the listings live in those domain DBs). One click records
+    // a sidebar_capture verification check via lcc_record_listing_check on
+    // every active listing for that property — refreshes verification_due_at,
+    // resets consecutive_check_failures, and updates the price/cap if the
+    // page has fresh values.
+    const pipelineSummary = lccEntity?.metadata?._pipeline_summary || null;
+    const verifyDomain = pipelineSummary?.domain || null;
+    const verifyPropertyId = pipelineSummary?.domain_property_id || null;
+    if (verifyDomain && verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
+      const verifyBtn = document.createElement('button');
+      verifyBtn.className = 'btn btn-sm btn-secondary';
+      verifyBtn.id = 'verifyListingBtn';
+      verifyBtn.textContent = 'Verify still available';
+      verifyBtn.style.marginLeft = '6px';
+      actions.appendChild(verifyBtn);
+
+      verifyBtn.addEventListener('click', async () => {
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = 'Verifying…';
+        // Pull the latest captured price + cap rate from the live page
+        // context so the verification both confirms availability AND
+        // refreshes the asking_price / cap_rate on the listing if they
+        // changed since last capture.
+        const liveCtx = (await getPageContext()) || ctx || {};
+        const cleanPrice = (() => {
+          const raw = liveCtx.asking_price ?? liveCtx.list_price ?? liveCtx.price;
+          if (!raw) return null;
+          const n = parseFloat(String(raw).replace(/[$,]/g, ''));
+          return Number.isFinite(n) && n > 0 ? n : null;
+        })();
+        const cleanCap = (() => {
+          const raw = liveCtx.cap_rate ?? liveCtx.asking_cap_rate;
+          if (!raw) return null;
+          const n = parseFloat(String(raw).replace(/[%]/g, ''));
+          // Send as decimal (0.0526) per dia.available_listings convention.
+          return Number.isFinite(n) && n > 0 ? (n > 1 ? n / 100 : n) : null;
+        })();
+
+        const result = await apiCall('/api/entities?action=record_listing_verification', {
+          domain:        verifyDomain,
+          property_id:   verifyPropertyId,
+          method:        'sidebar_capture',
+          check_result:  'still_available',
+          asking_price:  cleanPrice,
+          cap_rate:      cleanCap,
+          source_url:    liveCtx.page_url || window.location?.href || null,
+          notes:         'verified via LCC sidebar',
+        });
+
+        const toast = document.createElement('div');
+        if (result.ok && result.data?.ok) {
+          toast.className = 'update-toast updated';
+          const n = result.data.listings_verified || 0;
+          const total = result.data.listings_total || 0;
+          toast.textContent = `Verified ${n} of ${total} listing${total === 1 ? '' : 's'} as still available`;
+        } else {
+          toast.className = 'update-toast';
+          const errMsg = toErrorMessage(result.data?.error) || toErrorMessage(result.error) || 'Verification failed';
+          toast.textContent = errMsg;
+        }
+        actions.prepend(toast);
+        verifyBtn.textContent = 'Verify still available';
+        verifyBtn.disabled = false;
+      });
+    }
   }
 
   $('#lastUpdated').textContent = `Property: ${new Date().toLocaleTimeString()}`;
