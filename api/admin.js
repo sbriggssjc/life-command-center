@@ -1190,11 +1190,17 @@ async function fetchXmlYear(year) {
     const r = await fetch(url, {
       headers: { 'Accept': 'application/xml', 'User-Agent': 'Mozilla/5.0 (compatible; LCC/1.0)' }
     });
-    if (!r.ok) return [];
+    if (!r.ok) {
+      console.warn(`[treasury/xml] non-OK status ${r.status} fetching ${url}`);
+      return [];
+    }
     const text = await r.text();
     const entries = text.split('<m:properties>').slice(1);
     return entries.map(parseXmlEntry).filter(e => e.date && e.ten_yr !== null);
-  } catch {
+  } catch (err) {
+    // Network or parse failure — treasury source is occasionally unavailable.
+    // Log so we can spot a sustained outage instead of silently returning [].
+    console.warn('[treasury/xml] fetch failed:', err?.message || err);
     return [];
   }
 }
@@ -1223,7 +1229,8 @@ async function fetchCsvYear(year) {
         : cols[0];
       return { date: isoDate, ten_yr: tenVal, thirty_yr: thirtyIdx >= 0 ? (parseFloat(cols[thirtyIdx]) || null) : null };
     }).filter(Boolean);
-  } catch {
+  } catch (err) {
+    console.warn(`[treasury/csv] fetch failed for year ${year}:`, err?.message || err);
     return [];
   }
 }

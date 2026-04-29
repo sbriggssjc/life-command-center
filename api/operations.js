@@ -1575,9 +1575,12 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
     }
   }
 
-  // Log activity
+  // Log activity. Awaited because Vercel Node freezes pending I/O after
+  // the response returns; the previous fire-and-forget pattern silently
+  // dropped a fraction of audit rows. Cost is one extra round-trip
+  // (~5-15ms) on a handler that already did an LLM call — negligible.
   if (workspaceId) {
-    opsQuery('POST', 'activity_events', {
+    await opsQuery('POST', 'activity_events', {
       workspace_id: workspaceId,
       user_id: user?.id,
       event_type: 'document_generated',
@@ -1585,7 +1588,7 @@ ${content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/^### (.+)$/g
       title: `Generated ${resolvedDocType}: ${entityLabel}`,
       entity_id: entityData?.id || null,
       metadata: { doc_type: resolvedDocType, saved_to_onedrive: !!savedFile, file_name: savedFile?.name }
-    }).catch(() => {});
+    }).catch(err => console.warn('[doc-assembly] activity_events write failed:', err?.message || err));
   }
 
   return {
@@ -3020,9 +3023,10 @@ async function handleChatRoute(req, res) {
     // Resolve surface (which Microsoft entry point is calling)
     const resolvedSurface = surface || 'copilot_chat';
 
-    // Log activity for all non-confirmation dispatches
+    // Log activity for all non-confirmation dispatches. Awaited — see
+    // doc-assembly note above. Same Vercel-freeze concern.
     if (workspaceId && !result.requires_confirmation) {
-      opsQuery('POST', 'activity_events', {
+      await opsQuery('POST', 'activity_events', {
         workspace_id: workspaceId,
         user_id: user?.id,
         event_type: 'copilot_action',
@@ -3038,7 +3042,7 @@ async function handleChatRoute(req, res) {
           surface: resolvedSurface,
           session_id: copilotSessionId || null
         }
-      }).catch(() => {}); // fire-and-forget
+      }).catch(err => console.warn('[copilot-action] activity_events write failed:', err?.message || err));
     }
 
     // Write copilot invocation signal for the learning loop
