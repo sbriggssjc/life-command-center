@@ -732,14 +732,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Sale price: prefer stat card value (appears first, is most recent sale)
       // but skip "Not Disclosed" — grab actual dollar amounts.
       // Guard: a real sale price is at least $1,000 (reject price/SF values like $198.63)
+      // Round 76dn: tightened the non-numeric fallback. Previously accepted
+      // any next-line text < 60 chars, which let CoStar column headers
+      // ("Price/SF", "Cap Rate", etc.) leak in as the sale_price value
+      // when the Sale Price column had no data on a row.
       if (/^sale\s+price$/i.test(line)) {
         if (next && /^\$[\d,]+/.test(next)) {
           const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
           if (numericVal >= 1000) {
             if (!data.sale_price || !/^\$/.test(data.sale_price)) data.sale_price = next;
           }
-        } else if (!data.sale_price && next && next.length < 60) {
-          data.sale_price = next; // "Not Disclosed" as fallback
+        } else if (!data.sale_price && next && /^(not\s+disclosed|confidential|n\/?a|—|-|undisclosed|withheld)$/i.test(next.trim())) {
+          data.sale_price = next; // known sentinel values only
         }
       }
 
@@ -1289,7 +1293,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // these stops, extractTenants bleeds past the real Tenants block and
       // picks up lines like "About the Owner", "Amenities", "Airport X.XX mi",
       // "Drive …", and CoStar-branded footers as if they were tenants.
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|sale\s+notes|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
+      // Round 76dn: added public\s+transportation. Without it, "Public
+      // Transportation" (CoStar's airports/drive-times section header on
+      // the property summary page) was being parsed as a tenant name.
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|sale\s+notes|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
 
       // Skip CoStar UI elements + OM section headers + compound metadata strings + NAICS sectors
       if (COSTAR_UI_REJECT.test(line)) continue;
