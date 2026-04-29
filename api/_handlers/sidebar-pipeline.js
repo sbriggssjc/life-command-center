@@ -1192,8 +1192,20 @@ async function propagateToDomainDb(entity, metadata, domain) {
     }
     return { propagated: false, reason: 'unknown_domain' };
   } catch (err) {
-    console.error(`[Sidebar pipeline] Domain propagation error (${domain}):`, err?.message || err);
-    return { propagated: false, reason: 'propagation_error', error: err?.message };
+    // Round 76ea: surface the actual error message + stack into the response
+    // so pipeline failures are diagnosable from the entity metadata without
+    // pulling Vercel logs. The prior catch swallowed err.stack which made
+    // every "propagation_error" indistinguishable from every other.
+    const errMsg = err?.message || String(err);
+    const errStack = err?.stack ? String(err.stack).split('\n').slice(0, 5).join(' | ') : null;
+    console.error(`[Sidebar pipeline] Domain propagation error (${domain}):`, errMsg, errStack);
+    return {
+      propagated: false,
+      reason: 'propagation_error',
+      error: errMsg,
+      error_stack: errStack,
+      entity_address: entity?.address || null,
+    };
   }
 }
 
@@ -6519,7 +6531,12 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     ...metadata,
     ...(propagation.propagated
       ? { _pipeline_processed_at: new Date().toISOString(), _pipeline_status: 'success' }
-      : { _pipeline_status: 'failed', _pipeline_last_error: propagation.reason || 'unknown' }),
+      : {
+          _pipeline_status: 'failed',
+          _pipeline_last_error: propagation.reason || 'unknown',
+          _pipeline_last_error_detail: propagation.error || null,
+          _pipeline_last_error_stack:  propagation.error_stack || null,
+        }),
     _pipeline_summary: {
       contacts_created: contactCount,
       tenant_created: tenantCount,
