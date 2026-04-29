@@ -2028,11 +2028,21 @@ function renderDiaNpi() {
     return (b.latest_total_patients || 0) - (a.latest_total_patients || 0);
   });
 
-  // ─── Severity-aware action banner ────────────────────────────────────
+  // ─── Severity-aware action banner + NPPES auto-fill action ──────────
+  // Count missing-NPI rows from the loaded summary so the auto-fill button
+  // shows an accurate target count even when the user has filtered to a
+  // different severity bucket.
+  const missingNpiCount = ((diaData.npiSummary || {}).missing_inventory_npi || {}).signal_count || 0;
   html += '<div style="padding:12px 16px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">';
+  html += '<div style="flex:1;min-width:0">';
   html += '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:var(--text)">NPI Intelligence Signals</div>';
   html += '<div style="font-size:12px;color:var(--text2);line-height:1.5">' + _npiBannerText(visible) + '</div>';
   html += '</div>';
+  if (missingNpiCount > 0) {
+    html += '<button id="npi-autofill-btn" style="font-size:11px;padding:6px 12px;border:1px solid #22d3ee;border-radius:6px;background:rgba(34,211,238,0.1);color:#22d3ee;cursor:pointer;font-weight:600;flex-shrink:0;white-space:nowrap" title="Query NPPES live API for the ' + fmtN(missingNpiCount) + ' active clinics with no NPI; auto-write high-confidence matches.">Auto-fill ' + fmtN(missingNpiCount) + ' missing NPIs</button>';
+  }
+  html += '</div></div>';
 
   // ─── Severity-bucket counts (from matview summary view) ──────────────
   const summary = diaData.npiSummary || {};
@@ -2186,6 +2196,36 @@ function renderDiaNpi() {
         renderDiaTab();
       });
     });
+    // Auto-fill missing NPIs via NPPES live API
+    const autofillBtn = document.getElementById('npi-autofill-btn');
+    if (autofillBtn) {
+      autofillBtn.addEventListener('click', async () => {
+        if (!confirm('Query the NPPES registry for ' + fmtN(missingNpiCount) + ' clinics?\n\nHigh-confidence matches (≥0.9) will be auto-written. Medium-confidence matches (0.6–0.9) will be queued for human review. May take 30–90 seconds.')) return;
+        autofillBtn.disabled = true;
+        const originalText = autofillBtn.textContent;
+        autofillBtn.textContent = 'Querying NPPES…';
+        try {
+          const res = await fetch('/api/npi-lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ all: true, max: 700 })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.error || data.detail || ('HTTP ' + res.status));
+          }
+          const msg = `Scanned ${data.scanned}: ${data.auto_applied} auto-applied, ${data.too_ambiguous + data.low_confidence} queued for review, ${data.no_match} no match` + (data.errors ? `, ${data.errors} errors` : '');
+          showToast(msg, data.auto_applied > 0 ? 'success' : 'warn');
+          // Reload NPI summary + signals so the screen reflects new state
+          await loadDiaData();
+          renderDiaTab();
+        } catch(e) {
+          showToast('Auto-fill failed: ' + e.message, 'error');
+          autofillBtn.disabled = false;
+          autofillBtn.textContent = originalText;
+        }
+      });
+    }
     // Row click → drawer
     document.querySelectorAll('[data-npi-row-idx]').forEach(el => {
       el.addEventListener('click', () => {
