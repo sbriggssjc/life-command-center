@@ -5,8 +5,24 @@
 // deeply nested for reliable sibling/parent traversal.
 // ============================================================================
 
+// Round 76dg diagnostic: log at module load. If this line never appears in
+// the page console, the content script isn't being injected (manifest /
+// permission / CSP issue). If it appears, the script loaded fine and any
+// downstream issue is in extract().
+console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), 'on', window.location.href);
+
 (function () {
   'use strict';
+
+  // Round 76dg: idempotency guard. The background service worker injects
+  // this script programmatically as a backstop when the manifest's static
+  // content_scripts entry doesn't fire (an MV3 quirk on SPA routes — Edge
+  // and Chrome both skip injection when the page navigates via History
+  // API rather than full page load). If the manifest entry already loaded
+  // us, this guard prevents a second IIFE from installing duplicate
+  // MutationObservers and doubling all extraction work.
+  if (window.__lccCoStarLoaded) return;
+  window.__lccCoStarLoaded = true;
 
   let lastDetectedId = null;
   let lastContentLen = 0;

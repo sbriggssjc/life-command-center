@@ -129,7 +129,63 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   } else {
     chrome.action.setBadgeText({ text: '', tabId }).catch(() => {});
   }
+
+  // Round 76dg: programmatic content-script injection backstop.
+  // Edge / Chrome MV3 sometimes skip the manifest's static content_scripts
+  // entry on SPA route changes that go through the History API rather than
+  // a full page navigation (CoStar's React app does this between sub-tabs).
+  // We re-inject programmatically on every 'complete'. The content scripts
+  // have idempotency guards (window.__lcc<Domain>Loaded) so a second run
+  // is a no-op when the manifest entry already fired.
+  ensureContentScriptInjected(tabId, tab.url).catch(() => {});
 });
+
+const SCRAPER_INJECTIONS = [
+  {
+    match: /^https:\/\/[^/]*\.costar\.com\//i,
+    files: ['content/_sale-merge.js', 'content/costar.js'],
+    allFrames: true,
+  },
+  {
+    match: /^https:\/\/[^/]*\.crexi\.com\//i,
+    files: ['content/crexi.js'],
+    allFrames: false,
+  },
+  {
+    match: /^https:\/\/(?:www\.)?loopnet\.com\//i,
+    files: ['content/loopnet.js'],
+    allFrames: false,
+  },
+  {
+    match: /^https:\/\/app2?\.rcanalytics\.com\//i,
+    files: ['content/rca.js'],
+    allFrames: false,
+  },
+  {
+    match: /^https:\/\/[^/]*\.salesforce\.com\//i,
+    files: ['content/salesforce.js'],
+    allFrames: false,
+  },
+];
+
+async function ensureContentScriptInjected(tabId, url) {
+  if (!url || !tabId) return;
+  for (const entry of SCRAPER_INJECTIONS) {
+    if (!entry.match.test(url)) continue;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, allFrames: !!entry.allFrames },
+        files: entry.files,
+      });
+    } catch (err) {
+      const msg = err && err.message || '';
+      // Silently swallow expected non-injectable cases.
+      if (/Cannot access|not allowed|frame is removed|No tab with id|chrome:\/\//i.test(msg)) return;
+      console.warn('[LCC] inject failed for', url, msg);
+    }
+    return;
+  }
+}
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {

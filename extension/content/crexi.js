@@ -25,6 +25,10 @@
 (function () {
   'use strict';
 
+  // Round 76dg: idempotency guard — see costar.js for rationale.
+  if (window.__lccCrexiLoaded) return;
+  window.__lccCrexiLoaded = true;
+
   let lastDetectedAddress = null;
 
   const observer = new MutationObserver(() => {
