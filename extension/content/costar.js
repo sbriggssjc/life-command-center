@@ -159,6 +159,52 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
 
+    // Round 76ex (2026-04-29): historical-asking-price guard, hoisted from
+    // extractFields() where it never fired (data.sales_history was always
+    // undefined inside that scope). If data.asking_price matches the
+    // sale_price of any salesHistory entry that's ≥2 years old (within 2%),
+    // null the asking_price — it almost certainly leaked from a historical
+    // sale row in /public-record, not a real current-listing price.
+    //
+    // 5 Route 45 Mannington (2026-04-29): page header showed $4.5M (correct
+    // asking) but the parser captured $18,500 from the 1997 DOT easement
+    // row. Round 76ew-B's guard was supposed to clear it but ran in the
+    // wrong scope. This is the working version.
+    try {
+      const askingRaw = data && data.asking_price;
+      const parsedAsking = (function () {
+        if (!askingRaw) return null;
+        const n = parseFloat(String(askingRaw).replace(/[$,]/g, ''));
+        return Number.isFinite(n) && n >= 1000 ? n : null;
+      })();
+      if (parsedAsking && Array.isArray(salesHistory) && salesHistory.length > 0) {
+        const twoYearsAgoMs = Date.now() - 2 * 365 * 86400 * 1000;
+        const matchedOldSale = salesHistory.find(function (s) {
+          if (!s) return false;
+          const sp = parseFloat(String(s.sale_price || '').replace(/[$,]/g, ''));
+          if (!Number.isFinite(sp) || sp <= 0) return false;
+          if (Math.abs(sp - parsedAsking) / Math.max(sp, parsedAsking) > 0.02) return false;
+          const sd = s.sale_date ? Date.parse(s.sale_date) : null;
+          return Number.isFinite(sd) && sd <= twoYearsAgoMs;
+        });
+        if (matchedOldSale) {
+          console.warn('[costar] Round 76ex: clearing asking_price — exact match (≤2%) to a sale ≥2 years old', {
+            cleared_asking_price: data.asking_price,
+            matched_sale_date:    matchedOldSale.sale_date,
+            matched_sale_price:   matchedOldSale.sale_price,
+            page_url:             url,
+          });
+          data.asking_price = null;
+          // Also clear the implied price/SF since it derives from asking_price.
+          if (data.price_per_sf && /^\$/.test(String(data.price_per_sf))) {
+            data.price_per_sf = null;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[costar] Round 76ex historical-asking guard failed (non-fatal):', e && e.message);
+    }
+
     // Round 76dt + 76dz: client-side mirror of the server RBA inference.
     // When the property is single-tenant + 100% leased + RBA known but the
     // tenant's SF wasn't captured, infer leased_area = RBA. Earlier version
@@ -752,8 +798,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const prev = i > 0 ? lines[i - 1] : '';
       const next = i < lines.length - 1 ? lines[i + 1] : '';
 
-      // Detect sales history sections (on Summary and Sale tabs)
-      if (/^(sales?\s+history|prior\s+sales?|transaction\s+history|transaction\s+details)$/i.test(line)) {
+      // Detect sales history sections (on Summary and Sale tabs).
+      // Round 76ex (2026-04-29): added "Last Sale", "Last Loan",
+      // "Sale/Loan History", "Sale Loan History" — these are the section
+      // headings used on /public-record sub-tabs. Without these, the
+      // historical $18,500 from 1997 (5 Route 45 Mannington DOT easement)
+      // landed as data.asking_price because the askingLabelRe ate "Sale Price"
+      // labels inside the public-record body.
+      if (/^(sales?\s+history|prior\s+sales?|transaction\s+history|transaction\s+details|last\s+sale|last\s+loan|sale[\s\/]*loan\s+history)$/i.test(line)) {
         inSalesHistorySection = true;
       }
 
@@ -794,8 +846,15 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Round 76dx: this function takes pageUrl, not url — referencing
       // the wrong identifier threw ReferenceError, killing extractFields()
       // and leaving the sidebar in empty state on /for-sale/ pages.
+      // Round 76ex (2026-04-29): on /public-record sub-tabs, the page is
+      // dominated by historical sale data (Last Sale, Sale/Loan History,
+      // assessment/loan rows). Even though the URL is /detail/for-sale/...,
+      // the body content has "Sale Price" labels for every historical sale.
+      // Restrict to exact "Asking Price" so the 1997 DOT easement at $18,500
+      // can't masquerade as a current-listing asking price.
       const isForSaleUrl = /\/detail\/for-sale\//i.test(pageUrl || '');
-      const askingLabelRe = isForSaleUrl
+      const isPublicRecordTab = /\/public-record(?:\b|\/|$)/i.test(pageUrl || '');
+      const askingLabelRe = (isForSaleUrl && !isPublicRecordTab)
         ? /^(asking\s+price|for\s+sale|sale\s+price|price)$/i
         : /^asking\s+price$/i;
       if (!inSalesHistorySection && !data.asking_price && askingLabelRe.test(line)) {
@@ -1205,52 +1264,12 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // ── Parse market data sections separately ───────────────────
     parseMarketData(lines, data);
 
-    // Round 76ew-B (2026-04-29): client-side mirror of the server-side Round
-    // 76eu-D Path B guard. If data.asking_price ended up matching a value
-    // visible in data.sales_history (within 2%) AND that sale is ≥2 years
-    // old, NULL the asking_price — it almost certainly leaked from the
-    // historical sale row, not from a real "for sale" listing.
-    //
-    // 5 Route 45 Mannington surfaced this: even after the server guard
-    // suppresses the bad write, the sidebar comparison panel renders the
-    // extracted ctx.asking_price unchanged, so the user STILL sees the
-    // wrong value proposed (which looks like it'll overwrite the existing
-    // listing if they click Update). Fixing at extraction means the panel
-    // matches reality and the writer's guard becomes a backstop, not the
-    // primary defense.
-    try {
-      const parsedAsking = (function () {
-        if (!data.asking_price) return null;
-        const n = parseFloat(String(data.asking_price).replace(/[$,]/g, ''));
-        return Number.isFinite(n) && n >= 1000 ? n : null;
-      })();
-      if (parsedAsking && Array.isArray(data.sales_history) && data.sales_history.length > 0) {
-        const twoYearsAgoMs = Date.now() - 2 * 365 * 86400 * 1000;
-        const matchedOldSale = data.sales_history.find(function (s) {
-          if (!s) return false;
-          const sp = parseFloat(String(s.sale_price || '').replace(/[$,]/g, ''));
-          if (!Number.isFinite(sp) || sp <= 0) return false;
-          if (Math.abs(sp - parsedAsking) / sp > 0.02) return false;
-          const sd = s.sale_date ? Date.parse(s.sale_date) : null;
-          return Number.isFinite(sd) && sd <= twoYearsAgoMs;
-        });
-        if (matchedOldSale) {
-          console.warn('[costar] Round 76ew-B: clearing asking_price — exact match (≤2%) to a sale ≥2 years old', {
-            cleared_asking_price: data.asking_price,
-            matched_sale_date:    matchedOldSale.sale_date,
-            matched_sale_price:   matchedOldSale.sale_price,
-          });
-          data.asking_price = null;
-          // Also clear the implied price/SF since it derives from asking_price.
-          if (data.price_per_sf && /^\$/.test(String(data.price_per_sf))) {
-            data.price_per_sf = null;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[costar] Round 76ew-B historical-asking guard failed (non-fatal):', e && e.message);
-    }
-
+    // Round 76ex (2026-04-29): the historical-asking-price guard previously
+    // lived here, but this scope's `data` object never contains sales_history
+    // (sales_history is built separately by extractSalesHistory() and merged
+    // into accumulated.sales_history in the outer scope). The guard never
+    // fired. It's now hoisted into extract() AFTER both data and salesHistory
+    // are computed — see the call site near `const salesHistory = ...`.
     return data;
   }
 
