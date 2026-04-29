@@ -1,4 +1,3 @@
-const CACHE_NAME = 'lcc-v280';
 const CACHE_NAME = 'lcc-v281';
 const STATIC_ASSETS = [
   './',
