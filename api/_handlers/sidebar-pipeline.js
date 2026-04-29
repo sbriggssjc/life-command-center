@@ -2296,11 +2296,18 @@ async function upsertDomainProperty(domain, entity, metadata) {
     }
   }
 
-  const INVALID_TENANT_VALUES = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score)$/i;
+  // Anchored ^...$ regex of values that are CoStar UI text or section
+  // labels we never want as a property tenant. Audit 2026-04-29 added
+  // "my data" (8 conflicts/7d), "show" (4), "more", "less" — all
+  // captured from CoStar collapse-toggle UI when extraction misfires.
+  const INVALID_TENANT_VALUES = /^(public\s+record|building|building\s+info|land|market|market\s+data|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|buyer|seller|contacts|name|sf\s+occupied|analytics|reports|data|directory|stacking\s+plan|leasing|for\s+lease|for\s+sale|property\s+info|demographics|transit|walk\s+score|my\s+data|show|hide|view\s+more|view\s+less|more|less|expand|collapse)$/i;
 
   const rawTenant = selectPrimaryTenant(metadata, domain);
+  // canonicalizeTenant collapses brand variants (DaVita, Fresenius,
+  // Total Renal Care → DaVita Kidney Care) so the property's tenant
+  // column is stable across captures. See _shared/tenant-canonical.js.
   const primaryTenant = (rawTenant && rawTenant.length > 2 && !INVALID_TENANT_VALUES.test(rawTenant))
-    ? cleanTenantValue(rawTenant)
+    ? canonicalizeTenant(cleanTenantValue(rawTenant))
     : null;
   const ownerContact = (metadata.contacts || []).find(c => c.role === 'owner');
 

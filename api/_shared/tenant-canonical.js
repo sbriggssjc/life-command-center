@@ -29,6 +29,10 @@ const CANONICAL_TENANTS = [
   // operating brand the company itself uses on signage).
   { pattern: /^da\s*vita\b/i, canonical: 'DaVita Kidney Care' },
 
+  // Total Renal Care — DaVita's legal entity name (pre-rename), still used
+  // on county / deed records. Same operator, same canonical form.
+  { pattern: /^total\s+renal\s+care\b/i, canonical: 'DaVita Kidney Care' },
+
   // Fresenius — anchor `^fresenius\b`. Matches "Fresenius", "Fresenius
   // Medical Care", "Fresenius Kidney Care", "Fresenius Health Partners".
   { pattern: /^fresenius\b/i, canonical: 'Fresenius Medical Care' },
