@@ -37,6 +37,29 @@
  *   - confidence: 'derived' | 'estimated' | 'unknown'
  *   - source: short tag describing which inputs were used
  */
+// Sanity bounds: an OM is rarely shopped if it's older than ~24 months
+// or somehow dated in the future. Audit on 2026-04-29 found a real
+// listing (id 12186) where the extractor confused lease_term_years
+// (total) with lease_term_remaining_years (remaining), producing
+// `expiration_minus_remaining = 2012-06-21` for an OM staged in
+// 2026. The 2012 date then propagated to listing_date and caused a
+// spurious listing_after_sale flag in v_data_quality_issues.
+//
+// Guard: any inferred date older than 24 months in the past or
+// >30 days in the future is rejected — the caller falls back to
+// today's date instead of trusting bad inference.
+const MAX_AGE_MONTHS = 24;
+const MAX_FUTURE_DAYS = 30;
+
+function isWithinSanityBounds(estDate) {
+  if (!estDate || isNaN(estDate.getTime())) return false;
+  const now = Date.now();
+  const ageMs = now - estDate.getTime();
+  const maxAgeMs = MAX_AGE_MONTHS * 30.4375 * 24 * 60 * 60 * 1000;
+  const maxFutureMs = MAX_FUTURE_DAYS * 24 * 60 * 60 * 1000;
+  return ageMs <= maxAgeMs && ageMs >= -maxFutureMs;
+}
+
 export function estimateOmCreatedDate(snapshot) {
   if (!snapshot) {
     return { om_created_estimate: null, confidence: 'unknown', source: 'no_snapshot' };
@@ -51,11 +74,15 @@ export function estimateOmCreatedDate(snapshot) {
   // om_created ≈ lease_expiration - remaining_years.
   if (expiration && remainingYears != null && remainingYears >= 0) {
     const est = subtractYears(expiration, remainingYears);
-    return {
-      om_created_estimate: toIsoDate(est),
-      confidence: 'derived',
-      source: 'expiration_minus_remaining',
-    };
+    if (isWithinSanityBounds(est)) {
+      return {
+        om_created_estimate: toIsoDate(est),
+        confidence: 'derived',
+        source: 'expiration_minus_remaining',
+      };
+    }
+    // Fall through — the extractor likely confused term_years with
+    // remaining_years; let later branches try.
   }
 
   // Try parsing the free-form 'remaining_term' field: "8 years remaining",
@@ -65,11 +92,13 @@ export function estimateOmCreatedDate(snapshot) {
     const parsed = parseRemainingTermString(snapshot.remaining_term);
     if (parsed != null) {
       const est = subtractYears(expiration, parsed);
-      return {
-        om_created_estimate: toIsoDate(est),
-        confidence: 'derived',
-        source: 'expiration_minus_remaining_term_str',
-      };
+      if (isWithinSanityBounds(est)) {
+        return {
+          om_created_estimate: toIsoDate(est),
+          confidence: 'derived',
+          source: 'expiration_minus_remaining_term_str',
+        };
+      }
     }
   }
 
@@ -80,14 +109,16 @@ export function estimateOmCreatedDate(snapshot) {
   if (commencement && termYears && termYears > 0) {
     const halfLife = Math.min(termYears * 0.5, 8);
     const est = addYears(commencement, halfLife);
-    return {
-      om_created_estimate: toIsoDate(est),
-      confidence: 'estimated',
-      source: 'commencement_plus_halflife',
-    };
+    if (isWithinSanityBounds(est)) {
+      return {
+        om_created_estimate: toIsoDate(est),
+        confidence: 'estimated',
+        source: 'commencement_plus_halflife',
+      };
+    }
   }
 
-  // Fallback: no signal.
+  // Fallback: no signal (or all estimates failed sanity bounds).
   return { om_created_estimate: null, confidence: 'unknown', source: 'no_signal' };
 }
 
