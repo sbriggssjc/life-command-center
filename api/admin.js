@@ -83,6 +83,8 @@ export default withErrorHandler(async function handler(req, res) {
     case 'storage-cleanup':     return handleStorageCleanup(req, res);
     case 'consolidate-property': return handleConsolidateProperty(req, res);
     case 'npi-lookup':           return handleNpiLookupProxy(req, res);
+    case 'npi-registry-sync':    return handleNpiRegistrySyncProxy(req, res);
+    case 'merge-log-reconcile':  return handleMergeLogReconcile(req, res);
     case 'merge-log-reconcile': return handleMergeLogReconcile(req, res);
     case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     default:
@@ -1295,6 +1297,7 @@ async function handleTreasury(req, res) {
 const DATA_QUERY_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/data-query';
 const DAILY_BRIEFING_EDGE_URL_ADMIN = 'https://xengecqvemvfknjvbvrq.supabase.co/functions/v1/daily-briefing';
 const NPI_LOOKUP_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/npi-lookup';
+const NPI_REGISTRY_SYNC_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/npi-registry-sync';
 
 function buildEdgeProxyHeaders(req) {
   const hdrs = { 'Content-Type': 'application/json' };
@@ -1355,6 +1358,32 @@ async function handleNpiLookupProxy(req, res) {
   } catch (err) {
     console.error('[admin/npi-lookup] proxy failed:', err.message);
     return res.status(502).json({ error: 'NPI lookup edge function unavailable', detail: err.message });
+  }
+}
+
+// Proxies POST /api/npi-registry-sync to the npi-registry-sync edge function
+// on the dialysis project. Used by the weekly pg_cron job that walks the
+// NPPES registry per state and snapshots into clinic_npi_registry_history.
+async function handleNpiRegistrySyncProxy(req, res) {
+  const url = new URL(NPI_REGISTRY_SYNC_EDGE_URL);
+  for (const [key, value] of Object.entries(req.query || {})) {
+    if (key === '_route') continue;
+    url.searchParams.set(key, value);
+  }
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers: buildEdgeProxyHeaders(req),
+      body: req.method !== 'GET' ? JSON.stringify(req.body || {}) : undefined,
+      // Full national sweep can take ~2 minutes (50 states × ~80ms throttle
+      // + per-state subdivision for big states). Give plenty of headroom.
+      signal: AbortSignal.timeout(180000),
+    });
+    const data = await edgeRes.json().catch(() => ({}));
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error('[admin/npi-registry-sync] proxy failed:', err.message);
+    return res.status(502).json({ error: 'NPI registry sync edge function unavailable', detail: err.message });
   }
 }
 
