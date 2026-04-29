@@ -1205,6 +1205,52 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // ── Parse market data sections separately ───────────────────
     parseMarketData(lines, data);
 
+    // Round 76ew-B (2026-04-29): client-side mirror of the server-side Round
+    // 76eu-D Path B guard. If data.asking_price ended up matching a value
+    // visible in data.sales_history (within 2%) AND that sale is ≥2 years
+    // old, NULL the asking_price — it almost certainly leaked from the
+    // historical sale row, not from a real "for sale" listing.
+    //
+    // 5 Route 45 Mannington surfaced this: even after the server guard
+    // suppresses the bad write, the sidebar comparison panel renders the
+    // extracted ctx.asking_price unchanged, so the user STILL sees the
+    // wrong value proposed (which looks like it'll overwrite the existing
+    // listing if they click Update). Fixing at extraction means the panel
+    // matches reality and the writer's guard becomes a backstop, not the
+    // primary defense.
+    try {
+      const parsedAsking = (function () {
+        if (!data.asking_price) return null;
+        const n = parseFloat(String(data.asking_price).replace(/[$,]/g, ''));
+        return Number.isFinite(n) && n >= 1000 ? n : null;
+      })();
+      if (parsedAsking && Array.isArray(data.sales_history) && data.sales_history.length > 0) {
+        const twoYearsAgoMs = Date.now() - 2 * 365 * 86400 * 1000;
+        const matchedOldSale = data.sales_history.find(function (s) {
+          if (!s) return false;
+          const sp = parseFloat(String(s.sale_price || '').replace(/[$,]/g, ''));
+          if (!Number.isFinite(sp) || sp <= 0) return false;
+          if (Math.abs(sp - parsedAsking) / sp > 0.02) return false;
+          const sd = s.sale_date ? Date.parse(s.sale_date) : null;
+          return Number.isFinite(sd) && sd <= twoYearsAgoMs;
+        });
+        if (matchedOldSale) {
+          console.warn('[costar] Round 76ew-B: clearing asking_price — exact match (≤2%) to a sale ≥2 years old', {
+            cleared_asking_price: data.asking_price,
+            matched_sale_date:    matchedOldSale.sale_date,
+            matched_sale_price:   matchedOldSale.sale_price,
+          });
+          data.asking_price = null;
+          // Also clear the implied price/SF since it derives from asking_price.
+          if (data.price_per_sf && /^\$/.test(String(data.price_per_sf))) {
+            data.price_per_sf = null;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[costar] Round 76ew-B historical-asking guard failed (non-fatal):', e && e.message);
+    }
+
     return data;
   }
 
