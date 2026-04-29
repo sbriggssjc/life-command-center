@@ -89,22 +89,85 @@ const COSTAR_DEFAULT_CONFIDENCE = 0.6;
 // property's recorded_owner_name. Both came from CoStar export columns
 // where the broker-firm field bleeds into the buyer column when the deed
 // hadn't recorded yet at scrape time.
+//
+// Round 76ax-D (2026-04-29): extended pre-ingestion guards. New patterns
+// added based on bug-class samples surfaced through prior rounds:
+//   - section-label residue ("buyer contacts", "seller contacts", "sale
+//     notes" — CoStar UI labels concatenated with the actual contact name)
+//   - asset-type words misread as party names ("medical office",
+//     "industrial", "warehouse")
+//   - bare digits / phone-shaped values / dollar amounts / date strings
+//   - buyer/seller/owner role words alone
 const SALES_PARTY_JUNK_RE = new RegExp(
   '^(' +
+    // Brokerage firms (Round 76ax)
     'cbre|marcus & millichap|jll|cushman( & wakefield)?|colliers( international)?|' +
     'nai( [a-z]+)?|stream realty|kw commercial|newmark|capital pacific|' +
     'northmarq|berkadia|matthews real estate|matthews|' +
     'company \\d+ .+|.* \\| company \\d+ .+|' +
-    '__test.*__|test_buyer|test_seller|n/a|none|null|tbd|unknown|placeholder' +
+    // Test fixtures + sentinel placeholders
+    '__test.*__|test_buyer|test_seller|n/a|none|null|tbd|unknown|placeholder|' +
+    // Round 76ax-D: section-label residue from CoStar contact panels
+    'buyer contacts?|seller contacts?|sale contacts?|sales contacts?|' +
+    'sale notes?|sale highlights?|tenant highlights?|' +
+    'owner contacts?|recorded owners?|true owners?|' +
+    // Round 76ax-D: asset-type words alone
+    'medical( office| building)?|office( building)?|retail|industrial|warehouse|' +
+    'flex|land|self storage|self-storage|multifamily|hotel|motel|' +
+    // Round 76ax-D: role words alone
+    'buyer|seller|owner|borrower|lender|grantor|grantee|tenant|landlord' +
   ')$',
   'i'
 );
+
+// Round 76ax-D: numeric / phone / currency / date residue. Easier to detect
+// with shape than a single big regex.
+const PHONE_RE      = /^[+()\d\s\-.x]+$/;          // phone-shaped (only digits + punct)
+const CURRENCY_RE   = /^\$?[\d,]+(\.\d+)?\s*[KMB]?$/i; // dollar amount alone
+const DATE_RE       = /^(?:\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|[a-z]{3,9}\s+\d{1,2},?\s+\d{4})$/i;
+const ZIP_ONLY_RE   = /^\d{5}(-\d{4})?$/;          // bare zip code
+const ROUTE_NUM_RE  = /^(?:rt|route|hwy|highway|us|sr|i)\s*\d+\s*$/i; // bare route number
+
+// Round 76el (2026-04-29): cheap live-state counters for property-linked tables.
+// Populated into _pipeline_summary.domain_records_current at the end of every
+// pipeline run so consumers have a clear "current DB state" signal rather than
+// inferring it from the always-snapshot domain_records (per-run writes only).
+// Selects only the property_id column up to PostgREST's default page (1000) and
+// counts the returned array — properties with >1000 of any one type are vanishingly
+// rare here, and the counter underreporting at that ceiling is acceptable.
+async function fetchDomainRecordsCurrent(domain, propertyId) {
+  if (!domain || !propertyId) return null;
+  if (domain !== 'dialysis' && domain !== 'government') return null;
+  const tables = ['available_listings', 'leases', 'sales_transactions', 'ownership_history'];
+  const out = {};
+  for (const table of tables) {
+    try {
+      const r = await domainQuery(domain, 'GET',
+        `${table}?property_id=eq.${Number(propertyId)}&select=property_id&limit=1000`
+      );
+      out[table] = r && r.ok && Array.isArray(r.data) ? r.data.length : null;
+    } catch {
+      out[table] = null;
+    }
+  }
+  return out;
+}
 
 function isJunkSalesParty(name) {
   if (name === null || name === undefined) return false;
   const trimmed = String(name).trim();
   if (!trimmed) return false;
-  return SALES_PARTY_JUNK_RE.test(trimmed.toLowerCase());
+  if (SALES_PARTY_JUNK_RE.test(trimmed.toLowerCase())) return true;
+  // Round 76ax-D: shape-based junk detectors. Each guards a class the
+  // alternation regex can't easily cover without false-positives on real
+  // names that happen to contain digits or punctuation.
+  if (trimmed.length < 2) return true;            // single char
+  if (PHONE_RE.test(trimmed) && /\d{6,}/.test(trimmed)) return true;
+  if (CURRENCY_RE.test(trimmed)) return true;
+  if (DATE_RE.test(trimmed)) return true;
+  if (ZIP_ONLY_RE.test(trimmed)) return true;
+  if (ROUTE_NUM_RE.test(trimmed)) return true;
+  return false;
 }
 
 function cleanSalesPartyValue(name) {
@@ -6177,10 +6240,44 @@ async function upsertDialysisListings(propertyId, metadata) {
   // unambiguous in code review.
   const listingCapRate = parseCapRateDecimal(metadata.cap_rate);
 
+  // Round 76cw+ Phase 2 / Round 76en INSERT-side mirror (2026-04-29):
+  // when there's no existing listing to compare against, we can't use
+  // the existing-vs-new check from the PATCH path. Instead, run a
+  // first-pass historical-sale check on the new value alone: if the
+  // proposed asking_price matches any sales_history price within 5% AND
+  // sales_history shows a sale that is at least 5 years old, treat the
+  // captured price as suspect and INSERT without it. The listing row
+  // still gets created with cap rate / broker / SF — the user can fix
+  // the price via the sidebar Update flow once they verify.
+  // Tunable: 5% match window + 5-year-old sale threshold. Stricter than
+  // the PATCH-side check because we have less context to lean on.
+  const newInsertAsking = parseCurrency(metadata.asking_price);
+  let insertAskingSuppressed = false;
+  if (newInsertAsking) {
+    const histSales = Array.isArray(metadata.sales_history) ? metadata.sales_history : [];
+    const fiveYearsAgo = Date.now() - 5 * 365 * 86400 * 1000;
+    const matchedOldSale = histSales.find(s => {
+      const sp = parseCurrency(s && s.sale_price);
+      if (!sp || sp <= 0) return false;
+      if (Math.abs(sp - newInsertAsking) / sp > 0.05) return false;
+      const sd = s && s.sale_date ? Date.parse(s.sale_date) : null;
+      return Number.isFinite(sd) && sd <= fiveYearsAgo;
+    });
+    if (matchedOldSale) {
+      insertAskingSuppressed = true;
+      console.warn('[upsertDialysisListings] Round 76cw+ Phase 2: suppressed INSERT asking_price — value matches a sale older than 5 years within 5%', {
+        property_id: propertyIdInt,
+        rejected_asking_price: newInsertAsking,
+        matched_sale_date: matchedOldSale.sale_date,
+        matched_sale_price: matchedOldSale.sale_price,
+      });
+    }
+  }
+
   const record = stripNulls({
     property_id: propertyIdInt,
-    initial_price: parseCurrency(metadata.asking_price),
-    last_price: parseCurrency(metadata.asking_price),
+    initial_price: insertAskingSuppressed ? null : newInsertAsking,
+    last_price:    insertAskingSuppressed ? null : newInsertAsking,
     current_cap_rate: listingCapRate,
     cap_rate: listingCapRate,
     listing_date: new Date().toISOString().split('T')[0],
@@ -6189,7 +6286,7 @@ async function upsertDialysisListings(propertyId, metadata) {
     seller_name: cleanSalesPartyValue(sellerContact?.name),
     listing_broker: primaryBroker?.name || null,
     broker_email: primaryBroker?.email || null,
-    price_per_sf: safePricePsf,
+    price_per_sf: insertAskingSuppressed ? null : safePricePsf,
   });
 
   console.log('[upsertDialysisListings] building record:', {
@@ -6666,7 +6763,17 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       domain,
       domain_propagated: propagation.propagated || false,
       domain_property_id: propagation.property_id || null,
+      // Round 76el (2026-04-29): clarified semantics of the per-run write
+      // counters. These reflect ONLY what THIS pipeline run wrote to the
+      // domain DB. Listings created later by verify-still-available
+      // (Round 76du), the auto-scrape cron (76cx Phase 4b), or subsequent
+      // pipeline runs are NOT reflected here. For "how many listings does
+      // this property currently have" use a fresh DB count via the
+      // domain DB instead — domain_records_current is populated below
+      // when domain_property_id is known.
       domain_records: propagation.records || null,
+      domain_records_note: 'writes_this_run_only — see domain_records_current for live DB state',
+      domain_records_current: await fetchDomainRecordsCurrent(domain, propagation.property_id).catch(() => null),
       _classifier_diag: _lastClassifierDiag,
     },
   };
