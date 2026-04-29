@@ -1687,6 +1687,19 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     console.error(`[Sidebar pipeline] ${domain} property upsert failed for:`, entity.address);
     return { propagated: false, reason: 'property_upsert_failed', ...results };
   }
+
+  // Step 5a.5 (dialysis only): if a CMS clinic exists at this normalized
+  // address, set properties.medicare_id (only when currently NULL — never
+  // overwrite a confirmed link). Closes a propagation gap where every
+  // CoStar sidebar capture that landed on a CMS-known address missed the
+  // chance to link, leaving the orphan auto-linker cron to clean up later.
+  if (domain === 'dialysis' && entity.address && entity.city && entity.state) {
+    try {
+      await linkDialysisMedicareIdInline(propertyId, entity);
+    } catch (linkErr) {
+      console.warn('[Sidebar pipeline] medicare_id auto-link failed (non-fatal):', linkErr?.message);
+    }
+  }
   results.property_id = propertyId;
 
   // Step 5a1: Link property to government agency tenant (gov only)
@@ -1988,6 +2001,56 @@ async function autoEnqueueOwnerResearch(propertyId, entity, metadata) {
  * Matches by address + state for deduplication.
  * Returns the property_id (UUID) or null on failure.
  */
+// Auto-link a freshly-upserted dialysis property to a CMS clinic by
+// normalized address+city+state. Only sets medicare_id when:
+//   - properties.medicare_id is currently NULL (never clobbers an existing
+//     confirmed link)
+//   - exactly one medicare_clinic matches the address (no ambiguity)
+// Calls the dia.apply_property_link_outcome RPC so both sides
+// (properties.medicare_id and medicare_clinics.property_id) get set
+// atomically and the audit trail matches the auto-linker cron.
+async function linkDialysisMedicareIdInline(propertyId, entity) {
+  // Quick existing-link check
+  const existingProp = await domainQuery(
+    'dialysis', 'GET',
+    `properties?property_id=eq.${Number(propertyId)}&select=medicare_id&limit=1`
+  );
+  if (existingProp.ok && Array.isArray(existingProp.data) && existingProp.data.length
+      && existingProp.data[0].medicare_id) {
+    return; // already linked
+  }
+
+  // Look up clinic by normalized address+city+state. The Dialysis DB has
+  // dia_normalize_address available, so we ask Postgres to do the matching.
+  const params = new URLSearchParams({
+    p_address: entity.address,
+    p_city:    entity.city,
+    p_state:   entity.state,
+  });
+  const candidates = await domainQuery(
+    'dialysis', 'POST',
+    'rpc/dia_find_clinic_by_address',
+    { p_address: entity.address, p_city: entity.city, p_state: entity.state }
+  );
+  if (!candidates.ok || !Array.isArray(candidates.data) || candidates.data.length !== 1) {
+    return; // 0 or 2+ candidates — let the orphan auto-linker handle it (or stay manual)
+  }
+
+  const clinicId = candidates.data[0]?.medicare_id;
+  if (!clinicId) return;
+
+  // Apply the canonical link via the RPC (writes both sides + audit-friendly)
+  const linkRes = await domainQuery(
+    'dialysis', 'POST',
+    'rpc/apply_property_link_outcome',
+    { p_clinic_id: String(clinicId), p_property_id: Number(propertyId) }
+  );
+  if (linkRes.ok) {
+    console.log('[Sidebar pipeline] auto-linked property #' + propertyId
+      + ' to clinic ' + clinicId + ' via address match');
+  }
+}
+
 async function upsertDomainProperty(domain, entity, metadata) {
   const address = entity.address || metadata.address;
   if (!address) return null;
