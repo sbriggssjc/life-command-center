@@ -12,7 +12,7 @@ let diaCharts = {};
 let diaResearchMode = 'quarantine'; // pipeline order: quarantine → unmatched → clarification → property → lease → clinic_leads → staleness → run_health
 let diaResearchIdx = 0;
 let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
-let diaLeaseFilter = { priority: null, selectedIdx: undefined };
+let diaLeaseFilter = { priority: null, selectedIdx: undefined, parentOrg: null, hideReviewed: false, viewMode: 'portfolio' };
 let diaLeaseBackfillStep = 0; // step counter for 5-step lease backfill workflow
 let diaClinicLeadFilter = { category: null, tier: null, state: null, selectedIdx: undefined, hideResolved: true };
 let diaClinicLeadStep = 0; // step counter for 5-step clinic lead workflow
@@ -5227,28 +5227,162 @@ function renderDiaPropertyCard(item) {
 }
 
 
+// ──────────────────────────────────────────────────────────────────────────
+// Lease Backfill — Portfolio Overview (Round 76eh)
+//
+// Buckets the 4,381-row backfill queue by parent_organization. Each card
+// shows the operator's totals (clinics, patients, high-risk, large clinics)
+// and one click drills into the per-clinic queue scoped to that operator.
+// Drains 64% of the queue into 4 named institutional cards (Fresenius,
+// DaVita, USRC, DCI) so the user is no longer scrolling 4K rows.
+// ──────────────────────────────────────────────────────────────────────────
+function renderDiaLeasePortfolioOverview() {
+  const all = diaData.leaseBackfillRows || [];
+  const reviewedIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').map(o => o.clinic_id));
+
+  // Group by parent_organization (treating null/empty as 'Independent')
+  const groups = new Map();
+  for (const row of all) {
+    const key = row.parent_organization && row.parent_organization.trim() !== '' ? row.parent_organization : 'Independent';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  // Sort groups by row count desc; surface portfolios with most volume first
+  const sortedGroups = Array.from(groups.entries())
+    .map(([name, rows]) => {
+      const pending = rows.filter(r => !reviewedIds.has(r.clinic_id));
+      return {
+        name,
+        total: rows.length,
+        pending: pending.length,
+        verified: rows.length - pending.length,
+        highRisk: rows.filter(r => r.closure_watch_level === 'high').length,
+        largeClinic: rows.filter(r => r.total_patients > 100).length,
+        totalPatients: rows.reduce((s, r) => s + (r.total_patients || 0), 0),
+        states: new Set(rows.map(r => r.state).filter(Boolean)).size,
+      };
+    })
+    .sort((a, b) => b.pending - a.pending);
+
+  let html = '';
+
+  // Banner — explain the operator-portfolio framing
+  html += '<div style="padding:12px 16px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:14px;">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:var(--text)">Lease Backfill by Operator Portfolio</div>';
+  html += '<div style="font-size:12px;color:var(--text2);line-height:1.5">' + fmtN(all.length) + ' clinics with linked properties but no lease record. Most are clustered in 4-5 institutional operators — drain them one portfolio at a time. Click any operator to scope the per-clinic research queue to just that portfolio.</div>';
+  html += '</div>';
+
+  // Portfolio cards
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">';
+  for (const g of sortedGroups) {
+    const isInstitutional = g.total >= 100;
+    const isIndependent = g.name === 'Independent';
+    html += '<div style="border:1px solid var(--border);border-left:3px solid ' + (isInstitutional ? '#60a5fa' : isIndependent ? '#a78bfa' : '#fbbf24') + ';border-radius:10px;padding:14px 16px;background:var(--s1);cursor:pointer" data-lease-portfolio="' + esc(g.name) + '">';
+    // Header
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">';
+    html += '<div style="min-width:0;flex:1">';
+    html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:var(--text);overflow-wrap:anywhere">' + esc(g.name) + '</h4>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + fmtN(g.states) + ' states · ' + fmtN(g.totalPatients) + ' total patients</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;flex-shrink:0">';
+    html += '<div style="font-size:22px;font-weight:800;color:var(--text);line-height:1">' + fmtN(g.pending) + '</div>';
+    html += '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">pending</div>';
+    html += '</div>';
+    html += '</div>';
+
+    // Mini stats
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;margin-bottom:10px">';
+    const _stat = (lbl, val, color) => '<div style="background:var(--s2);padding:6px 8px;border-radius:5px"><div style="color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:0.5px">' + lbl + '</div><div style="font-weight:700;color:' + (color || 'var(--text)') + ';font-size:13px;margin-top:1px">' + val + '</div></div>';
+    html += _stat('High risk', fmtN(g.highRisk), g.highRisk > 0 ? '#f87171' : 'var(--text2)');
+    html += _stat('100+ pts', fmtN(g.largeClinic), g.largeClinic > 0 ? '#fbbf24' : 'var(--text2)');
+    html += _stat('Verified', fmtN(g.verified), g.verified > 0 ? 'var(--accent)' : 'var(--text2)');
+    html += '</div>';
+
+    // CTA
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text2)">';
+    html += '<span>Click to research →</span>';
+    html += '<span style="color:var(--text3)">' + (isInstitutional ? 'Institutional operator' : isIndependent ? 'Multiple independent operators' : 'Mid-sized operator') + '</span>';
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  return html;
+}
+
 function renderDiaLeaseResearch() {
-  let html = '<div class="research-progress" style="margin-bottom: 30px;">';
-  
-  const total = diaData.leaseBackfillRows.length;
+  let html = '';
+
+  // Round 76eh: Portfolio-first view. The 4,381-row queue is mostly clustered
+  // in 4 institutional operators (Fresenius/DaVita/USRC/DCI = 64% of rows).
+  // Default landing is a per-operator overview so the user can drain one
+  // portfolio at a time instead of scrolling a single 4K-row list.
+  // Toggle to Per-Clinic mode preserves the existing one-at-a-time workflow.
+
+  // View-mode toggle
+  const modeBtn = (key, label) => {
+    const active = (diaLeaseFilter.viewMode || 'portfolio') === key;
+    return `<button data-lease-view="${key}" style="font-size:12px;font-weight:600;padding:6px 14px;border-radius:6px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};background:${active ? 'var(--accent)' : 'var(--s2)'};color:${active ? '#000' : 'var(--text2)'};cursor:pointer">${label}</button>`;
+  };
+  html += '<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center;justify-content:space-between">';
+  html += '<div style="display:flex;gap:6px">';
+  html += modeBtn('portfolio', 'Portfolio overview');
+  html += modeBtn('clinic', 'Per-clinic queue');
+  html += '</div>';
+  if (diaLeaseFilter.parentOrg) {
+    html += '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)">';
+    html += '<span>Filtered to: <strong style="color:var(--text)">' + esc(diaLeaseFilter.parentOrg) + '</strong></span>';
+    html += '<button onclick="diaLeaseFilter.parentOrg=null;diaLeaseFilter.selectedIdx=undefined;renderDiaTab()" style="font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s2);color:var(--text2);cursor:pointer">Clear filter</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Portfolio mode renders + early-returns
+  if ((diaLeaseFilter.viewMode || 'portfolio') === 'portfolio' && !diaLeaseFilter.parentOrg) {
+    html += renderDiaLeasePortfolioOverview();
+    setTimeout(() => {
+      document.querySelectorAll('[data-lease-view]').forEach(btn => {
+        btn.addEventListener('click', () => { diaLeaseFilter.viewMode = btn.dataset.leaseView; diaLeaseFilter.selectedIdx = undefined; renderDiaTab(); });
+      });
+      document.querySelectorAll('[data-lease-portfolio]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          diaLeaseFilter.parentOrg = btn.dataset.leasePortfolio === '__null__' ? null : btn.dataset.leasePortfolio;
+          diaLeaseFilter.viewMode = 'clinic';
+          diaLeaseFilter.selectedIdx = undefined;
+          renderDiaTab();
+        });
+      });
+    }, 0);
+    return html;
+  }
+
+  // Per-clinic mode (existing workflow) — wrap with research-progress
+  html += '<div class="research-progress" style="margin-bottom: 30px;">';
+
+  // Apply parentOrg filter to the metric counts as well
+  const scopedRows = diaLeaseFilter.parentOrg
+    ? diaData.leaseBackfillRows.filter(r => (r.parent_organization || 'Independent') === diaLeaseFilter.parentOrg)
+    : diaData.leaseBackfillRows;
+
+  const total = scopedRows.length;
   const verified = diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill' && o.status === 'verified_lease').length;
   const pct = total > 0 ? Math.round((verified / total) * 100) : 0;
-  
+
   html += `<div class="progress-text">${verified} of ${total} verified (${pct}%)</div>`;
   html += `<div class="progress-bar"><div style="width: ${pct}%; background: #34d399;"></div></div>`;
   html += '</div>';
   
-  // Summary metrics
+  // Summary metrics — scoped to current parentOrg filter when active
   html += '<div class="gov-metrics" style="margin-bottom: 30px;">';
-  
-  const pending = diaData.leaseBackfillRows.length;
-  const highRisk = diaData.leaseBackfillRows.filter(r => r.closure_watch_level === 'high').length;
-  const largeClinic = diaData.leaseBackfillRows.filter(r => r.total_patients > 100).length;
-  
+
+  const pending = scopedRows.length;
+  const highRisk = scopedRows.filter(r => r.closure_watch_level === 'high').length;
+  const largeClinic = scopedRows.filter(r => r.total_patients > 100).length;
+
   html += metricHTML('Pending Backfill', fmtN(pending), 'lease candidates', '');
   html += metricHTML('High Risk', fmtN(highRisk), 'closure watch', '');
   html += metricHTML('Large Clinics', fmtN(largeClinic), '100+ patients', '');
-  html += metricHTML('Avg Patients', fmtN(Math.round(diaData.leaseBackfillRows.reduce((s, r) => s + (r.total_patients || 0), 0) / Math.max(pending, 1))), 'per clinic', '');
+  html += metricHTML('Avg Patients', fmtN(Math.round(scopedRows.reduce((s, r) => s + (r.total_patients || 0), 0) / Math.max(pending, 1))), 'per clinic', '');
 
   html += '</div>';
 
@@ -5280,7 +5414,7 @@ function renderDiaLeaseResearch() {
   html += '<div class="table-wrapper" style="margin-bottom: 20px;">';
   html += '<div class="data-table">';
 
-  let filtered = diaData.leaseBackfillRows;
+  let filtered = scopedRows;
   if (diaLeaseFilter.hideReviewed) {
     const reviewedLeaseIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').map(o => o.clinic_id));
     filtered = filtered.filter(r => !reviewedLeaseIds.has(r.clinic_id));
@@ -5344,6 +5478,13 @@ function renderDiaLeaseResearch() {
 
   // Attach handlers
   setTimeout(() => {
+    document.querySelectorAll('[data-lease-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        diaLeaseFilter.viewMode = btn.dataset.leaseView;
+        diaLeaseFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    });
     document.querySelectorAll('[data-filter-priority]').forEach(btn => {
       btn.addEventListener('click', e => {
         diaLeaseFilter.priority = e.target.dataset.filterPriority === 'all' ? null : e.target.dataset.filterPriority;
