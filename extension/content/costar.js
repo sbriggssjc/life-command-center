@@ -1278,8 +1278,14 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   //   "Tenants" / "Tenant Detail" tabs: more detailed lease info
   //   "Stacking Plan" tabs: floor-by-floor tenant breakdown
 
-  // CoStar UI elements that appear in tenant sections but are NOT tenant names
-  const COSTAR_UI_REJECT = /^(name|source:.*|costar.*research|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed)$/i;
+  // CoStar UI elements that appear in tenant sections but are NOT tenant names.
+  // Round 76eu-E (2026-04-29): added For-Lease-at-Sale panel labels +
+  // "Withheld" sentinel after 5 Route 45 Mannington showed Withheld
+  // landing in ctx.tenants[]. The server-side filter caught it on write,
+  // but the comparison panel in the sidebar UI shows the unfiltered
+  // ctx.tenants[] so the user saw "Withheld" listed as a proposed tenant
+  // change. Filter at extraction so junk never reaches the UI.
+  const COSTAR_UI_REJECT = /^(name|source:.*|costar.*research|directory|stacking\s+plan|available|moving\s+(out|in)|show|both|tenant|industry|floor|sf\s+occupied|move\s+date|exp\s+date|lease\s+(start|type|term)|rent\/?sf|my\s+data|shared\s+data|direct|office|retail|industrial|sublease|status|vacant|occupied|renewal|expiring|current|historical|all|none|sort|filter|search|export|print|map|list|grid|table|view|collapse|expand|details|summary|overview|edit|add|remove|save|cancel|close|back|next|prev|more|less|total|subtotal|avg|min|max|moved\s+out|confirmed|withheld|for\s+lease\s+at\s+sale|smallest\s+space|max\s+contiguous|total\s+(available|vacant)|direct\s+vacant|sublet\s+(available|space)?|office\s+avail(?:able)?|retail\s+avail(?:able)?|industrial\s+avail(?:able)?|flex\s+avail(?:able)?|warehouse\s+avail(?:able)?|medical\s+avail(?:able)?|asking\s+rent|rent|service\s+type|tenancy|owner\s+occupied)$/i;
   // OM-style table-of-contents section headers that CoStar sometimes renders
   // adjacent to the Tenants list. Without this, repeating the issue from
   // 2026-04-25 (Bug M) at the extension layer: "Loan", "Financials",

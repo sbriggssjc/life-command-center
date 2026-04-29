@@ -6374,42 +6374,76 @@ async function upsertDialysisListings(propertyId, metadata) {
     // the page's Sales History block, suggesting the parser grabbed a
     // historical price value into the asking-price slot.
     //
-    // Defense: when we have a known-good existing last_price > 0 and the
-    // new asking_price is BOTH (a) substantially below it (< 60%) AND (b)
-    // within 5% of any historical sale price the metadata already shows,
-    // refuse to overwrite the price field. We still PATCH the other
-    // listing fields (cap rate, broker, etc.) — only price is suppressed.
-    // Records the suppression in the entity metadata via console.warn so
-    // the diagnostic shows up in Vercel logs without needing a DB write.
+    // Defense: refuse to overwrite the price field when the new asking
+    // price looks like a historical sale price that's leaking into the
+    // current-listing slot. Two trip-wires fire INDEPENDENTLY (Round 76eu-D,
+    // 2026-04-29):
+    //
+    // Path A — order-of-magnitude drop (Round 76en original):
+    //   new < 75% of existing AND within 5% of any historical sale.
+    //   Catches the obvious cases like 6606 Stadium Dr where $445K (14% of
+    //   $3.2M) matched a 2014 sale of $450K. Threshold loosened from 60% to
+    //   75% after 5 Route 45 case where 61.1% just barely escaped.
+    //
+    // Path B — exact match to OLD sale (Round 76eu-D new):
+    //   new is within 2% of any sales_history entry that is ≥2 years old,
+    //   regardless of price-drop ratio. Catches cases like 5 Route 45 where
+    //   a 2018 sale of exactly $2,750,000 was overwriting a current
+    //   $4,500,000 listing — drop ratio was 61% (above Path A's threshold)
+    //   but the exact-match-to-old-sale signal is independently strong.
+    //
+    // Either path triggers suppression. We still PATCH cap_rate, broker,
+    // etc. — only the suspicious price is held back.
     let askingPriceSuppressed = false;
+    let suppressionReason = null;
     const newAskingPrice = parseCurrency(metadata.asking_price);
     const existingLastPrice = (() => {
       const raw = lookup.data[0].last_price;
       const n = raw == null ? null : Number(raw);
       return Number.isFinite(n) && n > 0 ? n : null;
     })();
-    if (newAskingPrice && existingLastPrice
-        && newAskingPrice < existingLastPrice * 0.6) {
-      const histSales = Array.isArray(metadata.sales_history) ? metadata.sales_history : [];
+    const histSales = Array.isArray(metadata.sales_history) ? metadata.sales_history : [];
+
+    // Path A — substantial drop AND historical-match (any age)
+    if (!askingPriceSuppressed && newAskingPrice && existingLastPrice
+        && newAskingPrice < existingLastPrice * 0.75) {
       const matchedHistorical = histSales.some(s => {
         const sp = parseCurrency(s && s.sale_price);
         if (!sp || sp <= 0) return false;
-        // Within 5% (covers $450K vs $445K = 1.1%, $1.05M vs $1M = 5%)
         return Math.abs(sp - newAskingPrice) / sp <= 0.05;
       });
       if (matchedHistorical) {
         askingPriceSuppressed = true;
-        console.warn('[upsertDialysisListings] Round 76en: suppressed asking_price overwrite — new value matches historical sale within 5%', {
-          listing_id: currentListingId,
-          property_id: propertyIdInt,
-          existing_last_price: existingLastPrice,
-          rejected_asking_price: newAskingPrice,
-          matched_historical_sales: histSales
-            .map(s => parseCurrency(s && s.sale_price))
-            .filter(n => n > 0)
-            .filter(sp => Math.abs(sp - newAskingPrice) / sp <= 0.05),
-        });
+        suppressionReason = 'price_drop_with_historical_match';
       }
+    }
+
+    // Path B — exact match to a sale ≥2 years old (regardless of drop ratio)
+    if (!askingPriceSuppressed && newAskingPrice) {
+      const twoYearsAgo = Date.now() - 2 * 365 * 86400 * 1000;
+      const matchedOldSale = histSales.find(s => {
+        const sp = parseCurrency(s && s.sale_price);
+        if (!sp || sp <= 0) return false;
+        if (Math.abs(sp - newAskingPrice) / sp > 0.02) return false;
+        const sd = s && s.sale_date ? Date.parse(s.sale_date) : null;
+        return Number.isFinite(sd) && sd <= twoYearsAgo;
+      });
+      if (matchedOldSale) {
+        askingPriceSuppressed = true;
+        suppressionReason = 'exact_match_to_old_sale';
+      }
+    }
+
+    if (askingPriceSuppressed) {
+      console.warn(`[upsertDialysisListings] Round 76eu-D: suppressed asking_price overwrite — ${suppressionReason}`, {
+        listing_id: currentListingId,
+        property_id: propertyIdInt,
+        existing_last_price: existingLastPrice,
+        rejected_asking_price: newAskingPrice,
+        sales_history_prices: histSales
+          .map(s => ({ price: parseCurrency(s && s.sale_price), date: s && s.sale_date }))
+          .filter(s => s.price > 0),
+      });
     }
 
     const patchData = stripNulls({
