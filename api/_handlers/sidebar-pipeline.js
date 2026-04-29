@@ -21,6 +21,12 @@ import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
+// Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
+// fields whose strict-mode rules block this source from updating; the
+// existing after-the-fact provenance recorder (recordCoStarFieldsProvenance)
+// remains in place so the registry still observes every attempted write,
+// but actual UPDATEs are now narrowed to fields the registry approves.
+import { filterByFieldPriority } from '../_shared/field-priority-guard.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -5592,8 +5598,27 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
             delete patchData.rent_per_sf;
           }
         }
+        // Round 76co: consult the priority registry BEFORE the PATCH.
+        // filterByFieldPriority drops any column whose strict-mode rule
+        // blocks this source. Result: the registry's strict rules now
+        // actually prevent writes (they were record-only before), and
+        // warn-mode rules still log but proceed. Non-fatal: registry RPC
+        // errors fail open so existing behavior continues.
+        const filteredPatch = await filterByFieldPriority({
+          targetDb:    'dia_db',
+          targetTable: 'dia.leases',
+          recordPk:    matchedLease.lease_id,
+          source:      leaseDataSource,
+          confidence:  leaseConfidence === 'documented' ? 0.9
+                       : leaseConfidence === 'inferred' ? 0.6
+                       : 0.4,
+          fields:      patchData,
+        }).catch(err => {
+          console.warn('[upsertDomainLeases] field-priority filter failed (proceeding with full patch):', err?.message);
+          return patchData;
+        });
         await domainPatch(domain,
-          `leases?lease_id=eq.${matchedLease.lease_id}`, patchData, 'upsertDomainLeases');
+          `leases?lease_id=eq.${matchedLease.lease_id}`, filteredPatch, 'upsertDomainLeases');
         leaseId = matchedLease.lease_id;
         // Phase 2.2.b: provenance for the patched lease (only fields that
         // actually went in via patchData — preserves the per-field skip
