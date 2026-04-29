@@ -372,11 +372,22 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   function autoPageSaleLoanHistory() {
     if (paginationInProgress) return;
 
-    // Find the pagination indicator text: "X of Y Historic Sale Loan Records"
-    // or "X of Y Records" inside the Public Record panel
+    // Round 76dq: restrict auto-pagination to property-detail URLs.
+    // On saved-search result pages (/detail/for-sale/..., /detail/for-lease/...)
+    // CoStar shows "1 of 40 Records" in the page header — the prior
+    // fallback regex matched that text and auto-clicked the next-record
+    // arrow, cycling through the user's saved search without their
+    // input. Only run pagination on the property summary detail URL,
+    // and only when the matching text is the Sale/Loan history sub-panel
+    // (anchored by "Historic Sale" / "Sale/Loan" keywords).
+    const url = window.location.href;
+    if (!/\/detail\/lookup\/\d+\/summary/i.test(url)) return;
+
+    // Find the pagination indicator text. Only the explicit phrasing
+    // "Historic Sale Loan Records" / "Sale/Loan Records" qualifies — the
+    // bare "X of Y Records" fallback was too greedy.
     const allText = document.body.innerText;
-    const paginationMatch = allText.match(/(\d+)\s+of\s+(\d+)\s+(?:historic\s+)?sale\s*\/?loan\s+records/i)
-      || allText.match(/(\d+)\s+of\s+(\d+)\s+records/i);
+    const paginationMatch = allText.match(/(\d+)\s+of\s+(\d+)\s+(?:historic\s+)?sale\s*\/?loan\s+records/i);
 
     if (!paginationMatch) return;
 
@@ -1342,11 +1353,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // product attribution, growth projections, and store-type labels
       const TENANT_STREET_JUNK = /\b(ave|st|blvd|rd|dr|pkwy|pl|ct|ln|way|hwy)\s*(n|s|e|w|ne|nw|se|sw)?$/i;
       const TENANT_JUNK_PATTERN = /^(made\s+with\s+|.*trafficmetrix|.*growth\s+'\d|store\s+type)/i;
+      // Round 76dq: catch CoStar placeholder/sandbox tenant entries seen on
+      // 5 Route 45 Mannington — "xxx", "Abc 9999", and similar all-x or
+      // alphabet+digit nonsense names that aren't real tenants.
+      // Also reject obviously placeholder SF rows like "0000,000".
+      const TENANT_PLACEHOLDER = /^(x{2,}|y{2,}|z{2,}|abc\b|xyz\b|test\b|sample\b|placeholder\b|tbd\b|t\.b\.d\.?|n\/?a)\b/i;
+      const TENANT_ALPHA_THEN_DIGITS_ONLY = /^[A-Za-z]{1,4}\s*\d{2,}$/;
       if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
           !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
           !TENANT_SECTION_REJECT.test(line) &&
           !TENANT_STREET_JUNK.test(line) &&
-          !TENANT_JUNK_PATTERN.test(line)) {
+          !TENANT_JUNK_PATTERN.test(line) &&
+          !TENANT_PLACEHOLDER.test(line) &&
+          !TENANT_ALPHA_THEN_DIGITS_ONLY.test(line)) {
         // Push previous tenant via the plausibility-checked helper.
         pushTenantIfPlausible(current, tenants);
         current = { name: line };
