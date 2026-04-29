@@ -766,6 +766,24 @@ async function loadPropertyTab() {
     </div>`;
   }
 
+  // Round 76cr-Phase 2 UI: domain-mismatch warning banner. The sidebar
+  // pipeline records mismatchWarning in entity.metadata._classifier_diag
+  // when the classifier picks one domain but the PRIMARY tenant slot
+  // looks like the other (e.g. classified as dialysis but primary tenant
+  // is "VA Medical Center"). Surface as an actionable banner.
+  const mismatch = lccEntity?.metadata?._classifier_diag?.mismatchWarning
+    || lccEntity?.metadata?.domain_mismatch_warning
+    || null;
+  if (mismatch && mismatch.suggested_domain) {
+    const sugLabel = DOMAIN_LABELS[mismatch.suggested_domain] || mismatch.suggested_domain;
+    const curLabel = DOMAIN_LABELS[lccEntity?.domain] || lccEntity?.domain || 'current domain';
+    html += `<div class="domain-mismatch-banner" style="background:#FFF7E6;border:1px solid #F5A623;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px;color:#7A4F01;">
+      <div style="font-weight:700;margin-bottom:4px;">⚠ Possible domain misclassification</div>
+      <div>Routed to <strong>${escapeHtml(curLabel)}</strong>, but the primary tenant looks like <strong>${escapeHtml(sugLabel)}</strong>.</div>
+      <div style="margin-top:4px;font-style:italic;color:#9C6500;">Primary tenant signal: "${escapeHtml((mismatch.primary_tenant_text || '').substring(0, 80))}"</div>
+    </div>`;
+  }
+
   // ── SECTION 1: Existing LCC data (shown first when matched) ───────
   if (matched) {
     html += '<div class="lcc-section">';
@@ -1229,10 +1247,41 @@ function renderDetectedFields(ctx, sourceLabel) {
 }
 
 function renderCompareTable(ctx, lccEntity, sourceLabel) {
+  // Round 76dp: read LCC values from BOTH the entity row AND its metadata
+  // blob. Most CRE fields (building_class, year_built, square_footage,
+  // tenant_name, etc.) live in entity.metadata.* — the entities table
+  // only has top-level columns for address/city/state/asset_type, so the
+  // previous lccEntity[lccKey]-only read was producing all-em-dash CURRENT
+  // LCC columns even when the property was matched and the data existed
+  // in metadata. Some dia/gov DBs use slightly different column names
+  // (square_footage → building_size, etc.); also try those.
+  const FIELD_ALIASES = {
+    square_footage: ['square_footage', 'building_size', 'sf', 'rba'],
+    year_built: ['year_built'],
+    building_class: ['building_class', 'class'],
+    lot_size: ['lot_size', 'land_acres', 'land_sf'],
+    asset_type: ['asset_type', 'property_type'],
+    sale_price: ['sale_price', 'last_sale_price'],
+    sale_date: ['sale_date', 'last_sale_date'],
+    cap_rate: ['cap_rate'],
+    asking_price: ['asking_price', 'list_price'],
+    noi: ['noi', 'net_operating_income'],
+    tenant_name: ['tenant_name', 'tenant', 'primary_tenant'],
+    owner_name: ['owner_name', 'owner', 'recorded_owner'],
+  };
+  function readLcc(lccKey) {
+    const candidates = FIELD_ALIASES[lccKey] || [lccKey];
+    for (const k of candidates) {
+      const v = lccEntity[k] ?? lccEntity?.metadata?.[k];
+      if (v != null && v !== '') return v;
+    }
+    return null;
+  }
+
   // Only show fields where source has data that's new or different from LCC
   const rows = PROPERTY_FIELDS.filter(([srcKey, , lccKey]) => {
     const srcStr = toDisplayString(ctx[srcKey]);
-    const lccStr = toDisplayString(lccEntity[lccKey]);
+    const lccStr = toDisplayString(readLcc(lccKey));
     return srcStr && (!lccStr || srcStr !== lccStr);
   });
 
@@ -1244,7 +1293,7 @@ function renderCompareTable(ctx, lccEntity, sourceLabel) {
 
   for (const [srcKey, label, lccKey] of rows) {
     const srcVal = toDisplayString(ctx[srcKey]);
-    const lccVal = toDisplayString(lccEntity[lccKey]);
+    const lccVal = toDisplayString(readLcc(lccKey));
     const srcDisplay = srcVal || '—';
     const lccDisplay = lccVal || '—';
 

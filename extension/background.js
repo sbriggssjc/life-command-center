@@ -291,13 +291,44 @@ function propertyIdentityKey(url) {
     // 'sale', 'summary', 'publicrecords' - they're either route prefixes
     // or sub-tab names, not property identity.
     const idSegments = segments.filter(s => /\d/.test(s) || s.length > 20);
-    if (idSegments.length === 0) {
-      // No identifier-shaped segments: fall back to full pathname so we
-      // still distinguish two non-property pages instead of collapsing
-      // everything to host.
+
+    // Round 76dc: also harvest id-shaped query parameters. Some RCA URLs
+    // (e.g. listings/transactions/portfolio routes) carry property identity
+    // in the query string instead of the path, so two different RCA
+    // properties were collapsing to the same key. Match params named
+    // *id (case-insensitive) whose value is numeric or UUID-shaped.
+    // Sort to keep the key stable regardless of URL parameter order.
+    const idQueryParts = [];
+    for (const [key, value] of u.searchParams) {
+      if (!value) continue;
+      if (!/(^|[^a-z])id$/i.test(key)) continue;
+      if (!/^[\w-]+$/.test(value)) continue;
+      if (!/\d/.test(value) && value.length < 20) continue;
+      idQueryParts.push(`${key.toLowerCase()}=${value.toLowerCase()}`);
+    }
+    idQueryParts.sort();
+
+    // Round 76dc: hash-fragment routes (Angular SPAs like RCA: /#/property/12345)
+    // should also contribute to identity. Parse the hash as a pathname-ish
+    // string and pick out id-shaped segments.
+    const hashIdSegments = [];
+    if (u.hash && u.hash.length > 1) {
+      const hashPath = u.hash.replace(/^#\/?/, '').split(/[?#]/)[0];
+      hashPath.split('/').filter(Boolean).forEach(s => {
+        if (/\d/.test(s) || s.length > 20) hashIdSegments.push(s);
+      });
+    }
+
+    const allIds = [...idSegments, ...hashIdSegments];
+    if (allIds.length === 0 && idQueryParts.length === 0) {
+      // No identifier-shaped path/hash/query: fall back to full pathname
+      // so we still distinguish two non-property pages instead of
+      // collapsing everything to host.
       return (u.host + u.pathname).toLowerCase().replace(/\/+$/, '');
     }
-    return (u.host + '/' + idSegments.join('/')).toLowerCase();
+    const pathPart = allIds.length ? '/' + allIds.join('/') : '';
+    const queryPart = idQueryParts.length ? '?' + idQueryParts.join('&') : '';
+    return (u.host + pathPart + queryPart).toLowerCase();
   } catch {
     return null;
   }

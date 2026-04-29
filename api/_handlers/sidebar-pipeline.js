@@ -699,6 +699,68 @@ function classifyDomain(metadata, entityFields) {
   return null;
 }
 
+// ── Round 76cr-Phase 2: forward-routing mismatch detector ──────────────
+// Flag captures where the classifier picks one domain but the PRIMARY
+// tenant slot screams the other. Two real cases motivated this:
+//   (a) Pure VA Medical Center (no dialysis) classified to 'dialysis'
+//       because its name contains "Medical" and CoStar's metadata had
+//       residual dialysis text from a sub-tenant. Phase 1 found 2 such
+//       records already in the dia DB and flagged them via
+//       domain_classification_flag='misclassified_gov'. Phase 2 prevents
+//       new ones from landing wrong.
+//   (b) Hybrid (DaVita primary + VA secondary) — these stay as dialysis;
+//       the primary-tenant check is what keeps this from false-firing.
+function detectDomainMismatch(domain, metadata, entityFields) {
+  const primaryTenantParts = [
+    dropTenantJunk(metadata && metadata.tenant_name),
+    dropTenantJunk(metadata && metadata.primary_tenant),
+    dropTenantJunk(entityFields && entityFields.tenant),
+    metadata && metadata.building_name,
+  ];
+  // Also pull the first entry of the tenants array — that's the primary
+  // tenant on multi-tenant captures.
+  if (metadata && Array.isArray(metadata.tenants) && metadata.tenants.length) {
+    primaryTenantParts.push(dropTenantJunk(metadata.tenants[0] && metadata.tenants[0].name));
+  }
+  const primaryText = primaryTenantParts.filter(Boolean).join(' ').toLowerCase();
+  if (!primaryText) return null;
+
+  // domain='dialysis' but primary tenant is government → likely misroute
+  if (domain === 'dialysis') {
+    for (const rx of GOV_TENANT_PATTERNS) {
+      if (rx.test(primaryText)) {
+        // Suppress when the dialysis signal is ALSO in the primary tenant
+        // (hybrid like "DaVita Dialysis | VA Clinic"). Only warn when no
+        // dialysis pattern matches the primary slot — that's the "pure
+        // government" case.
+        const hasDialysisSignal = DIALYSIS_TENANT_PATTERNS.some(d => d.test(primaryText));
+        if (hasDialysisSignal) return null;
+        return {
+          warning: 'primary_tenant_looks_government',
+          suggested_domain: 'government',
+          matched: String(rx),
+          primary_tenant_text: primaryText.substring(0, 120),
+        };
+      }
+    }
+  }
+
+  // domain='government' but primary tenant is a dialysis operator → misroute
+  if (domain === 'government') {
+    for (const rx of DIALYSIS_TENANT_PATTERNS) {
+      if (rx.test(primaryText)) {
+        return {
+          warning: 'primary_tenant_looks_dialysis',
+          suggested_domain: 'dialysis',
+          matched: String(rx),
+          primary_tenant_text: primaryText.substring(0, 120),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 // Expose last classifier diagnostic for pipeline summary (debugging)
 let _lastClassifierDiag = null;
 function classifyDomainWithDiag(metadata, entityFields) {
@@ -723,6 +785,15 @@ function classifyDomainWithDiag(metadata, entityFields) {
   if (!matchedPattern && entityFields.asset_type === 'government_leased') matchedPattern = 'asset_type=government_leased';
   if (!matchedPattern) { for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `GOV:${rx}`; break; } } }
 
+  // Round 76cr-Phase 2: detect and log primary-tenant/domain mismatches.
+  // Surfaced into the response via _lastClassifierDiag.mismatchWarning so
+  // the sidebar UI can show a "this looks like a government property —
+  // route to gov DB instead?" banner.
+  const mismatch = detectDomainMismatch(result, metadata, entityFields);
+  if (mismatch) {
+    console.warn(`[classifyDomain] DOMAIN MISMATCH WARNING: classified=${result}, suggested=${mismatch.suggested_domain}, matched=${mismatch.matched}, primary="${mismatch.primary_tenant_text}"`);
+  }
+
   _lastClassifierDiag = {
     result,
     matchedPattern: matchedPattern || 'none',
@@ -731,6 +802,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
     hasSaleNotes: !!metadata.sale_notes_raw,
     hasPdfTexts: Array.isArray(metadata.pdf_extracted_texts) && metadata.pdf_extracted_texts.length > 0,
     fieldSources: textParts.filter(Boolean).map((v, i) => `[${i}]${String(v).substring(0, 40)}`),
+    mismatchWarning: mismatch,
   };
   return result;
 }
@@ -1947,6 +2019,27 @@ async function upsertDomainProperty(domain, entity, metadata) {
     parsedSF = parseSF(metadata.sf_leased);
     if (parsedSF) console.log(`[upsertDomainProperty] building_size derived from sf_leased: ${parsedSF}`);
   }
+  // Round 76cw: detect captures from a historical CoStar sale comp page
+  // (URL form /Comp/<id>/) or from a /Sale/<id>/ history record. Those
+  // captures reflect the property's STATE AT THE TIME OF THAT SALE — the
+  // tenant, rent, and lease commencement may all be obsolete by the
+  // time the user pulls the comp into LCC. Writing those fields onto
+  // the LIVE property row would silently overwrite curated current
+  // values with stale historical ones (an audit found this caused
+  // anchor_rent regressions where a 2018 sale's rent landed on a
+  // property whose 2024 lease was the right anchor). Suppress the
+  // current-state field writes when the source is a historical sale;
+  // the sales_history block downstream still records the historical
+  // sale row in sales_transactions, where it belongs.
+  const isHistoricalCompCapture = !!(
+    metadata._comp_id
+    || metadata.is_historical_sale
+    || /\/(Comp|Sale)\/\d+/i.test(String(metadata.page_url || metadata.url || ''))
+  );
+  if (isHistoricalCompCapture) {
+    console.log(`[upsertDomainProperty] historical-sale-comp capture detected (comp_id=${metadata._comp_id}); suppressing tenant/rent/lease writes onto property row`);
+  }
+
   const propertyData = stripNulls({
     // Store the NORMALIZED address (e.g. "599 ct st") so the address=ilike.<normAddr>
     // lookup at the top of this function can find this row on the next promote.
@@ -1962,7 +2055,8 @@ async function upsertDomainProperty(domain, entity, metadata) {
     year_built: parseYearSafe(metadata.year_built),
     year_renovated: parseYearSafe(metadata.year_renovated),
     building_type: classifyBuildingType(metadata, entity, primaryTenant),
-    tenant: primaryTenant,
+    // Round 76cw: only write tenant on non-historical captures.
+    tenant: isHistoricalCompCapture ? null : primaryTenant,
     zoning: metadata.zoning || null,
     occupancy_percent: parsePercent(metadata.occupancy),
     parking_ratio: parseParkingRatio(metadata.parking),
@@ -1977,12 +2071,13 @@ async function upsertDomainProperty(domain, entity, metadata) {
     longitude: parseCoord(metadata.public_record?.longitude) || parseCoord(metadata.location?.longitude) || parseCoord(metadata.property?.longitude) || parseCoord(metadata.longitude),
     // Rent anchor + lease escalation (dialysis only — gov schema has no
     // anchor_rent columns). Only applied below when domain === 'dialysis'.
-    anchor_rent:            parseCurrency(metadata.anchor_rent),
-    anchor_rent_date:       parseDate(metadata.anchor_rent_date)?.split('T')[0] || null,
-    anchor_rent_source:     metadata.anchor_rent_source || null,
-    lease_commencement:     parseDate(metadata.lease_commencement)?.split('T')[0] || null,
-    lease_bump_pct:         metadata.lease_bump_pct != null ? Number(metadata.lease_bump_pct) : null,
-    lease_bump_interval_mo: parseIntSafe(metadata.lease_bump_interval_mo),
+    // Round 76cw: suppress on historical-comp captures.
+    anchor_rent:            isHistoricalCompCapture ? null : parseCurrency(metadata.anchor_rent),
+    anchor_rent_date:       isHistoricalCompCapture ? null : parseDate(metadata.anchor_rent_date)?.split('T')[0] || null,
+    anchor_rent_source:     isHistoricalCompCapture ? null : metadata.anchor_rent_source || null,
+    lease_commencement:     isHistoricalCompCapture ? null : parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+    lease_bump_pct:         isHistoricalCompCapture ? null : (metadata.lease_bump_pct != null ? Number(metadata.lease_bump_pct) : null),
+    lease_bump_interval_mo: isHistoricalCompCapture ? null : parseIntSafe(metadata.lease_bump_interval_mo),
   });
 
   if (domain === 'government') {
@@ -2031,15 +2126,18 @@ async function upsertDomainProperty(domain, entity, metadata) {
       building_type:     classifyBuildingType(metadata, entity, primaryTenant),
       gov_occupancy_pct: parsePercent(metadata.occupancy),
       assessed_value:    parseCurrency(metadata.assessed_value),
-      gross_rent:        parseCurrency(metadata.annual_rent),
-      gross_rent_psf:    parseCurrency(metadata.rent_per_sf),
-      lease_commencement: parseDate(metadata.lease_commencement)?.split('T')[0] || null,
-      lease_expiration:   parseDate(metadata.lease_expiration)?.split('T')[0] || null,
-      renewal_options:    metadata.renewal_options || null,
-      rent_escalations:   metadata.rent_escalations || null,
-      sf_leased:         parseSF(metadata.sf_leased),
-      agency:            primaryTenant || null,
-      agency_full_name:  primaryTenant || null,
+      // Round 76cw: gov rent + lease fields suppressed on historical-comp
+      // captures. The historical sale's annual_rent/lease_commencement
+      // would otherwise overwrite the property's current GSA lease rent.
+      gross_rent:        isHistoricalCompCapture ? null : parseCurrency(metadata.annual_rent),
+      gross_rent_psf:    isHistoricalCompCapture ? null : parseCurrency(metadata.rent_per_sf),
+      lease_commencement: isHistoricalCompCapture ? null : parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+      lease_expiration:   isHistoricalCompCapture ? null : parseDate(metadata.lease_expiration)?.split('T')[0] || null,
+      renewal_options:    isHistoricalCompCapture ? null : metadata.renewal_options || null,
+      rent_escalations:   isHistoricalCompCapture ? null : metadata.rent_escalations || null,
+      sf_leased:         isHistoricalCompCapture ? null : parseSF(metadata.sf_leased),
+      agency:            isHistoricalCompCapture ? null : (primaryTenant || null),
+      agency_full_name:  isHistoricalCompCapture ? null : (primaryTenant || null),
       // Mirror latest deed / sale from sales_history — these columns live
       // on the gov properties row independently of sales_transactions.
       latest_deed_date:  latestDeedDate,
@@ -6290,6 +6388,10 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     domain_propagated: propagation.propagated || false,
     domain_property_id: propagation.property_id || null,
     domain_records: propagation.records || null,
+    // Round 76cr-Phase 2: surface domain-mismatch warning at top level
+    // so the sidebar UI can show a "looks misclassified — switch DB?"
+    // banner without parsing the nested diagnostic.
+    domain_mismatch_warning: (_lastClassifierDiag && _lastClassifierDiag.mismatchWarning) || null,
     _classifier_diag: _lastClassifierDiag,
     processed_at: new Date().toISOString(),
   };
