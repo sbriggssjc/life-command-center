@@ -38,6 +38,15 @@ let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties 
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
 let diaFinancialEstimates = null; // lazy-loaded from clinic_financial_estimates
 let diaPatientCounts = null; // lazy-loaded from v_facility_patient_counts_latest
+// Round 76eh (2026-04-29): in-flight sentinels prevent duplicate concurrent
+// lazy-loads when renderDiaOverview() is called twice before the first loader
+// resolves (tab switches, post-render re-mounts). Without these, two parallel
+// pagination loops would each call `xxx = all` and trigger their own
+// re-render, causing card values to visibly flicker / bounce.
+let _diaFinancialEstimatesLoading = false;
+let _diaPatientCountsLoading = false;
+let _diaAvailListingsLoading = false;
+let _diaOwnershipCoverageLoading = false;
 let diaSalesLoading = false;
 let diaSalesSearch = '';
 const NM_TEAM = ['kelly largent', 'sarah martin', 'scott briggs', 'nathanael berwaldt'];
@@ -456,25 +465,47 @@ async function loadDiaData() {
       diaData.reconciliation = recon[0];
     }
 
-    // Enrich movers with facility names (sequential — depends on Batch results)
+    // Enrich movers with facility names.
+    // Round 76eg (2026-04-29): v_facility_patient_counts_mom now inner-joins
+    // medicare_clinics and exposes facility_name + city + state directly, so
+    // the row already carries the name. We keep a secondary lookup as a
+    // belt-and-suspenders fallback in case the view is rolled back, and we
+    // also harvest names from inventoryChanges for any IDs the view missed.
     try {
-      var allMovers = [].concat(moversUpRaw || [], moversDownRaw || []);
-      var moverIds = allMovers.map(function(r) { return r.clinic_id; }).filter(Boolean);
-      // Deduplicate
-      moverIds = moverIds.filter(function(v, i, a) { return a.indexOf(v) === i; });
       var nameMap = {};
-      if (moverIds.length > 0) {
+      // Pre-seed from inventoryChanges (cheap — no extra round trip)
+      (diaData.inventoryChanges || []).forEach(function(r) {
+        if (r.clinic_id && r.facility_name) nameMap[r.clinic_id] = r.facility_name;
+      });
+      var allMovers = [].concat(moversUpRaw || [], moversDownRaw || []);
+      // Take advantage of facility_name now riding along on the mom view rows.
+      allMovers.forEach(function(r) {
+        if (r && r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) {
+          nameMap[r.clinic_id] = r.facility_name;
+        }
+      });
+      // Fallback: only look up the IDs we still don't have a name for.
+      var unresolvedIds = allMovers
+        .map(function(r) { return r && r.clinic_id; })
+        .filter(function(id) { return id && !nameMap[id]; })
+        .filter(function(v, i, a) { return a.indexOf(v) === i; });
+      if (unresolvedIds.length > 0) {
         try {
           var nameRows = await diaQuery('medicare_clinics', 'medicare_id,facility_name', {
-            filter: 'medicare_id=in.(' + moverIds.join(',') + ')', limit: 30
+            filter: 'medicare_id=in.(' + unresolvedIds.join(',') + ')', limit: 50
           });
           (nameRows || []).forEach(function(r) { if (r.medicare_id) nameMap[r.medicare_id] = r.facility_name; });
         } catch (e) { console.warn('name lookup failed', e); }
       }
-      (diaData.inventoryChanges || []).forEach(function(r) {
-        if (r.clinic_id && r.facility_name && !nameMap[r.clinic_id]) nameMap[r.clinic_id] = r.facility_name;
-      });
-      var enrich = function(arr) { return (arr || []).map(function(r) { return Object.assign({}, r, { facility_name: nameMap[r.clinic_id] || ('Clinic ' + r.clinic_id) }); }); };
+      var enrich = function(arr) {
+        return (arr || []).map(function(r) {
+          // Prefer the name already on the row (new view); fall back to map; only
+          // synthesize "Clinic <id>" as a last resort. Round 76eg's view-side
+          // INNER JOIN should make that fallback unreachable in practice.
+          var name = (r && r.facility_name) || nameMap[r && r.clinic_id] || ('Clinic ' + (r && r.clinic_id));
+          return Object.assign({}, r, { facility_name: name });
+        });
+      };
       diaData.moversUp = enrich(moversUpRaw);
       diaData.moversDown = enrich(moversDownRaw);
     } catch (e) {
@@ -654,7 +685,8 @@ function renderDiaOverview() {
       if (nmEl) nmEl.innerHTML = renderNorthmarqInner();
     })();
   }
-  if (!diaAvailListings) {
+  if (!diaAvailListings && !_diaAvailListingsLoading) {
+    _diaAvailListingsLoading = true;
     (async () => {
       try {
         // Filter to on-market statuses only: active, Active, Available, For Sale
@@ -678,6 +710,7 @@ function renderDiaOverview() {
         );
         console.debug('Available listings loaded:', diaAvailListings.length, 'of', all.length, 'raw');
       } catch(e) { console.warn('Available listings load failed:', e.message); diaAvailListings = []; }
+      _diaAvailListingsLoading = false;
       const mktEl = document.getElementById('diaOverviewMarket');
       if (mktEl) mktEl.innerHTML = renderOnMarketInner();
     })();
@@ -685,7 +718,8 @@ function renderDiaOverview() {
 
   // Lazy-load clinic financial estimates (paginated — ~20K rows with is_latest)
   // PostgREST max-rows caps at 1000 per request, so paginate at 1000
-  if (!diaFinancialEstimates) {
+  if (!diaFinancialEstimates && !_diaFinancialEstimatesLoading) {
+    _diaFinancialEstimatesLoading = true;
     (async () => {
       try {
         // Load latest primary estimates (highest-confidence per clinic)
@@ -707,6 +741,7 @@ function renderDiaOverview() {
         all.forEach(e => { const s = e.estimate_source || '?'; srcDebug[s] = (srcDebug[s]||0)+1; });
         console.debug('Financial estimates loaded:', all.length, 'rows. By source:', JSON.stringify(srcDebug));
       } catch(e) { console.warn('Financial estimates load failed:', e.message); diaFinancialEstimates = []; }
+      _diaFinancialEstimatesLoading = false;
       const finEl = document.getElementById('diaOverviewFinancials');
       if (finEl) finEl.innerHTML = renderFinancialMetricsInner();
     })();
@@ -714,7 +749,8 @@ function renderDiaOverview() {
 
   // Lazy-load patient counts from v_facility_patient_counts_latest (8K+ clinics)
   // PostgREST max-rows caps at 1000, paginate accordingly
-  if (!diaPatientCounts) {
+  if (!diaPatientCounts && !_diaPatientCountsLoading) {
+    _diaPatientCountsLoading = true;
     (async () => {
       try {
         const PAGE = 1000;
@@ -737,6 +773,7 @@ function renderDiaOverview() {
           return true;
         });
       } catch(e) { diaPatientCounts = []; }
+      _diaPatientCountsLoading = false;
       // Re-render the patient metrics section
       const ptEl = document.getElementById('diaOverviewPatientMetrics');
       if (ptEl) ptEl.innerHTML = renderPatientMetricsInner();
@@ -744,13 +781,23 @@ function renderDiaOverview() {
   }
 
   // Lazy-load ownership coverage metrics (Section 4b)
+  // Round 76eh: gate behind a sentinel + a "rendered once this session" flag so
+  // every renderDiaOverview() call doesn't re-fire the 3 paginated queries
+  // (ownership_history can hit 9.5K rows). The card now loads once and caches
+  // the rendered HTML in DOM until a full reload.
+  if (!_diaOwnershipCoverageLoading && !window._diaOwnershipCoverageRendered) {
+    _diaOwnershipCoverageLoading = true;
   (async () => {
     try {
       // 1. Ownership depth: properties with 3+ ownership records = deep chain (likely traced to developer)
       //    Also count properties with ANY ownership vs total properties with sales
       // Exclude CMS operator rows (notes LIKE 'CMS%') — those are tenant/operator data, not property ownership
-      const ownHistory = await diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null', filter2: 'or=(notes.not.like.CMS*,notes.is.null)' });
-      const ownRows = ownHistory.data || ownHistory || [];
+      // Round 76ei (2026-04-29): the filter2 value used to be 'or=(...)' which failed the
+      // Edge function's compound parser (`startsWith("or(")` — no `=`). That made every
+      // ownership-coverage query 400-error and the dashboard show "0 of 0". Fixed by
+      // dropping the spurious `=` so it routes through the compound branch correctly.
+      const ownHistory = await diaQueryAll('ownership_history', 'property_id', { filter: 'property_id=not.is.null', filter2: 'or(notes.not.like.CMS*,notes.is.null)' });
+      const ownRows = Array.isArray(ownHistory) ? ownHistory : (ownHistory.data || []);
       const depthByProp = {};
       ownRows.forEach(o => {
         if (!o.property_id) return;
@@ -763,7 +810,7 @@ function renderDiaOverview() {
       //    true_owners.salesforce_id is mostly Contact IDs (003*) with some Account IDs (001*)
       //    Join to salesforce_activities via sf_contact_id, sf_company_id, OR true_owner_id
       const owners = await diaQueryAll('true_owners', 'true_owner_id,name,salesforce_id');
-      const ownerRows = owners.data || owners || [];
+      const ownerRows = Array.isArray(owners) ? owners : (owners.data || []);
       const ownersWithSF = ownerRows.filter(o => o.salesforce_id);
       const cutoff180 = new Date(); cutoff180.setDate(cutoff180.getDate() - 180);
       const cutoffStr = cutoff180.toISOString().substring(0, 10);
@@ -771,7 +818,7 @@ function renderDiaOverview() {
       if (ownersWithSF.length > 0) {
         // Pull recent activities with all linkable ID fields
         const recentActs = await diaQueryAll('salesforce_activities', 'sf_contact_id,sf_company_id,true_owner_id,activity_date', { filter: 'activity_date=gte.' + cutoffStr });
-        const actRows = recentActs.data || recentActs || [];
+        const actRows = Array.isArray(recentActs) ? recentActs : (recentActs.data || []);
         // Build sets of active IDs from all three link columns
         const activeSfIds = new Set();
         const activeTrueOwnerIds = new Set();
@@ -813,7 +860,10 @@ function renderDiaOverview() {
       const wrap = document.getElementById('diaOwnershipCoverage');
       if (wrap) wrap.innerHTML = '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Ownership coverage data unavailable</div>';
     }
+    _diaOwnershipCoverageLoading = false;
+    window._diaOwnershipCoverageRendered = true;
   })();
+  } // end ownership-coverage gate (Round 76eh)
 
   let html = '<div style="padding:4px 0">';
 

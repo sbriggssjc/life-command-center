@@ -268,25 +268,138 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     // Lookup a single asset entity by address (+ optional city/state).
     // Used by the property detail panel to surface CoStar-sourced lease
     // estimates from the entity's metadata JSONB.
+    //
+    // Round 76ek (2026-04-29): the address-only path is fragile against
+    // tiny formatting differences ("Dr" vs "Drive" vs "Dr."), which caused
+    // the sidebar to "lose" entities right after a successful save and show
+    // the green Save button again as if nothing happened. We now try
+    // stronger identity signals first when the caller supplies them:
+    //   1) entity_id (exact)
+    //   2) source_url (exact match against metadata->>'source_url')
+    //   3) parcel_number (exact match against metadata->>'parcel_number')
+    //   4) domain_property_id + domain (exact)
+    //   5) address (case-insensitive, with light Drive↔Dr normalization)
+    //   6) address (case-insensitive, exact equality — legacy fallback)
+    // First non-empty result wins. This lets the sidebar identify a
+    // CoStar-saved property from any of source_url/parcel/property_id even
+    // if the address text on the live page has drifted.
     if (action === 'lookup_asset') {
-      const rawAddress = (req.query.address || '').trim();
-      if (rawAddress.length < 3) {
-        return res.status(400).json({ error: 'address query parameter required (min 3 chars)' });
-      }
-      const address = rawAddress.replace(/[%_*]/g, '');
-      let path = `entities?workspace_id=eq.${workspaceId}&entity_type=eq.asset&address=ilike.${encodeURIComponent(address)}&select=id,entity_type,name,address,city,state,asset_type,metadata&limit=1`;
-      if (req.query.city) {
-        const city = req.query.city.trim().replace(/[%_*]/g, '');
-        if (city) path += `&city=ilike.${encodeURIComponent(city)}`;
-      }
-      if (req.query.state) {
-        const state = req.query.state.trim().replace(/[%_*]/g, '');
-        if (state) path += `&state=eq.${encodeURIComponent(state)}`;
+      const select = 'id,entity_type,name,address,city,state,domain,asset_type,metadata';
+      const baseFilter = `workspace_id=eq.${workspaceId}&entity_type=eq.asset`;
+      const sanitize = (s) => String(s || '').trim().replace(/[%_*,()]/g, '');
+
+      const tryQuery = async (extraFilter) => {
+        const path = `entities?${baseFilter}&${extraFilter}&select=${select}&limit=1`;
+        const r = await opsQuery('GET', path);
+        return (r.data && r.data[0]) || null;
+      };
+
+      // 1) entity_id — caller already knows the row (e.g. immediately after save)
+      if (req.query.entity_id) {
+        const id = sanitize(req.query.entity_id);
+        if (id) {
+          const hit = await tryQuery(`id=eq.${encodeURIComponent(id)}`);
+          if (hit) return res.status(200).json({ entity: hit, matched_via: 'entity_id' });
+        }
       }
 
-      const result = await opsQuery('GET', path);
-      const entity = (result.data && result.data[0]) || null;
-      return res.status(200).json({ entity });
+      // 2) source_url — most precise sidebar identity (CoStar listing URL, etc.)
+      if (req.query.source_url) {
+        const u = sanitize(req.query.source_url);
+        if (u && u.length >= 8) {
+          const hit = await tryQuery(`metadata->>source_url=eq.${encodeURIComponent(u)}`);
+          if (hit) return res.status(200).json({ entity: hit, matched_via: 'source_url' });
+        }
+      }
+
+      // 3) parcel_number — survives address re-spellings and re-listings
+      if (req.query.parcel_number) {
+        const parcel = sanitize(req.query.parcel_number);
+        if (parcel && parcel.length >= 3) {
+          const hit = await tryQuery(`metadata->>parcel_number=eq.${encodeURIComponent(parcel)}`);
+          if (hit) return res.status(200).json({ entity: hit, matched_via: 'parcel_number' });
+        }
+      }
+
+      // 4) domain_property_id + domain (only useful if caller already knows
+      //    which dia/gov row this is — e.g. after a save bootstrap)
+      if (req.query.domain_property_id && req.query.domain) {
+        const pid = sanitize(req.query.domain_property_id);
+        const dom = sanitize(req.query.domain);
+        if (pid && dom) {
+          const hit = await tryQuery(
+            `metadata->>domain_property_id=eq.${encodeURIComponent(pid)}` +
+            `&domain=eq.${encodeURIComponent(dom)}`
+          );
+          if (hit) return res.status(200).json({ entity: hit, matched_via: 'domain_property_id' });
+        }
+      }
+
+      // 5) + 6) address fallbacks
+      const rawAddress = (req.query.address || '').trim();
+      if (rawAddress.length < 3) {
+        return res.status(400).json({
+          error: 'address query parameter required (min 3 chars), or supply entity_id/source_url/parcel_number/domain_property_id'
+        });
+      }
+      const address = rawAddress.replace(/[%_*]/g, '');
+      const cityFilter = req.query.city
+        ? `&city=ilike.${encodeURIComponent(sanitize(req.query.city))}`
+        : '';
+      const stateFilter = req.query.state
+        ? `&state=eq.${encodeURIComponent(sanitize(req.query.state))}`
+        : '';
+
+      // 5) address with Drive↔Dr normalization — covers the common drift
+      //    we saw on 1507 Hillview where one row stored "Drive" and another
+      //    stored "Dr". Build a wildcard pattern that matches either form.
+      const STREET_ALIASES = [
+        [/\b(drive)\b/i,    'Dr'],
+        [/\b(dr\.?)\b/i,    'Drive'],
+        [/\b(street)\b/i,   'St'],
+        [/\b(st\.?)\b/i,    'Street'],
+        [/\b(avenue)\b/i,   'Ave'],
+        [/\b(ave\.?)\b/i,   'Avenue'],
+        [/\b(boulevard)\b/i,'Blvd'],
+        [/\b(blvd\.?)\b/i,  'Boulevard'],
+        [/\b(road)\b/i,     'Rd'],
+        [/\b(rd\.?)\b/i,    'Road'],
+        [/\b(highway)\b/i,  'Hwy'],
+        [/\b(hwy\.?)\b/i,   'Highway'],
+        [/\b(parkway)\b/i,  'Pkwy'],
+        [/\b(pkwy\.?)\b/i,  'Parkway'],
+      ];
+      const addressVariants = new Set([address]);
+      for (const [re, alt] of STREET_ALIASES) {
+        if (re.test(address)) {
+          addressVariants.add(address.replace(re, alt));
+        }
+      }
+      // Try each variant exact-equal first (cheap), then fall through to a
+      // pattern match. Stop at the first hit.
+      for (const variant of addressVariants) {
+        const v = variant.replace(/[%_*]/g, '');
+        const hit = await tryQuery(
+          `address=ilike.${encodeURIComponent(v)}${cityFilter}${stateFilter}`
+        );
+        if (hit) {
+          return res.status(200).json({
+            entity: hit,
+            matched_via: variant === address ? 'address' : 'address_alias',
+          });
+        }
+      }
+
+      // 6) Final widest pass — wildcard on the original address. Helps when
+      //    the live-page address has a trailing period or apartment suffix
+      //    the saved row doesn't have. Limited to 1 row so we don't return
+      //    the wrong building for ambiguous fragments.
+      const hit = await tryQuery(
+        `address=ilike.*${encodeURIComponent(address)}*${cityFilter}${stateFilter}`
+      );
+      if (hit) return res.status(200).json({ entity: hit, matched_via: 'address_wildcard' });
+
+      return res.status(200).json({ entity: null, matched_via: null });
     }
 
     // List with filters

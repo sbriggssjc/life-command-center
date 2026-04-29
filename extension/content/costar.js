@@ -1382,7 +1382,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Round 76dn: added public\s+transportation. Without it, "Public
       // Transportation" (CoStar's airports/drive-times section header on
       // the property summary page) was being parsed as a tenant name.
-      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|sale\s+notes|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
+      // Round 76ef: added sale\s+highlights, location\s+highlights,
+      // tenant\s+highlights, conditions, sale\s+contacts, and other
+      // header variants seen on the 1507 Hillview Dr / Hillsboro capture
+      // where Sale Highlights bullet text was being captured as tenants.
+      if (/^(seller|buyer|listing|building|land\b|market|public\s+record|public\s+transportation|my\s+notes|sources|sale\s+comp|sale\s+contacts|©|contacts|demographics|traffic|location|walk\s+score|transit\s+score|transportation|nearby|environmental|flood|tax\s+history|assessment\s+history|about\s+the\s+(owner|seller|buyer|building|tenant|property)|amenities|airport|drive(\s+time|\s+to)?|costar|investment\s+highlights|property\s+highlights|property\s+summary|location\s+highlights|tenant\s+highlights|sale\s+highlights|sale\s+notes|conditions|documents|comparable|expense\s+structure|income\s+(&|and)\s+expenses|rent\s+roll|space\s+available)/i.test(line)) break;
 
       // Skip CoStar UI elements + OM section headers + compound metadata strings + NAICS sectors
       if (COSTAR_UI_REJECT.test(line)) continue;
@@ -1443,13 +1447,26 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Also reject obviously placeholder SF rows like "0000,000".
       const TENANT_PLACEHOLDER = /^(x{2,}|y{2,}|z{2,}|abc\b|xyz\b|test\b|sample\b|placeholder\b|tbd\b|t\.b\.d\.?|n\/?a)\b/i;
       const TENANT_ALPHA_THEN_DIGITS_ONLY = /^[A-Za-z]{1,4}\s*\d{2,}$/;
+      // Round 76ef: sentence-rejection rule. Sale Highlights / Tenant
+      // Highlights bullets bleed into the tenant block when the section-
+      // break regex above misses them; bullet text reads like a sentence
+      // ("Tenant has 20-year operating history at the site"), not a
+      // 1-4 word business name. Reject candidates that:
+      //   (a) have 7+ words (real commercial tenants rarely exceed 6 words
+      //       — e.g. "Federal Reserve Bank of San Francisco" = 6); OR
+      //   (b) contain mid-string lowercase helper verbs / clause-joiners
+      //       that mark sentence prose.
+      const wordCount = line.trim().split(/\s+/).length;
+      const SENTENCE_VERB_RE = /\s+(has|have|is|are|was|were|will|been|calls\s+for|indicates|signed|executed|installed|located|limited\s+to|priced\s+at|ensures?|provides?|offers?|features?|includes?|presents?)\s+/i;
       if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
           !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
           !TENANT_SECTION_REJECT.test(line) &&
           !TENANT_STREET_JUNK.test(line) &&
           !TENANT_JUNK_PATTERN.test(line) &&
           !TENANT_PLACEHOLDER.test(line) &&
-          !TENANT_ALPHA_THEN_DIGITS_ONLY.test(line)) {
+          !TENANT_ALPHA_THEN_DIGITS_ONLY.test(line) &&
+          wordCount <= 6 &&
+          !SENTENCE_VERB_RE.test(line)) {
         // Push previous tenant via the plausibility-checked helper.
         pushTenantIfPlausible(current, tenants);
         current = { name: line };
