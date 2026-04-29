@@ -6,7 +6,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
-import { opsQuery, isOpsConfigured, logPerfMetric, withErrorHandler } from './_shared/ops-db.js';
+import { opsQuery, isOpsConfigured, logPerfMetric, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import {
   GOV_WRITE_TABLES, DIA_WRITE_TABLES, isAllowedTable, safeColumn
 } from './_shared/allowlist.js';
@@ -141,9 +141,13 @@ export default withErrorHandler(async function handler(req, res) {
         .map(({ column, value }) => `${encodeURIComponent(column)}=eq.${encodeURIComponent(value)}`)
         .join('&')}`;
 
+  // 6s timeout: Vercel Hobby has a 10s wall and we still need budget for
+  // pending_review + audit + perf writes after this returns. Without a cap, a
+  // slow gov/dia Supabase consumed the whole function lifetime and produced
+  // the 8.3s mutation_latency outlier seen in the dashboard.
   let mutationResponse;
   try {
-    mutationResponse = await fetch(requestUrl, {
+    mutationResponse = await fetchWithTimeout(requestUrl, {
       method: mutationMode === 'insert' ? 'POST' : 'PATCH',
       headers: {
         'apikey': dbKey,
@@ -154,17 +158,27 @@ export default withErrorHandler(async function handler(req, res) {
           : 'return=representation'
       },
       body: JSON.stringify(changed_fields)
-    });
+    }, 6000);
   } catch (err) {
-    const pending_review = await createPendingReview('needs_review', { stage: 'fetch', message: err.message });
+    const isTimeout = err?.name === 'AbortError';
+    const stage = isTimeout ? 'timeout' : 'fetch';
+    const pending_review = await createPendingReview('needs_review', { stage, message: err.message });
     // Awaited: Vercel Node freezes pending I/O after res.json(), so
     // fire-and-forget perf logs were being silently dropped.
     await logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
-      status: 'fetch_failed',
+      status: isTimeout ? 'timeout' : 'fetch_failed',
       target_table,
       target_source,
       mutation_mode: mutationMode
     }).catch(e => console.warn('[apply-change] Perf metric log failed:', e.message));
+    if (isTimeout) {
+      console.error(`[apply-change] Mutation timed out after 6s on ${target_source}.${target_table}`);
+      return res.status(504).json({
+        ok: false,
+        errors: ['mutation_timeout', 'Domain database did not respond in time'],
+        pending_review
+      });
+    }
     console.error('[apply-change] Fetch failed:', err.message);
     return res.status(502).json({ ok: false, errors: ['bridge_unavailable', 'Domain database request failed'], pending_review });
   }
@@ -186,7 +200,7 @@ export default withErrorHandler(async function handler(req, res) {
       .map(({ column, value }) => `${encodeURIComponent(column)}=eq.${encodeURIComponent(value)}`)
       .join('&')}`;
     try {
-      const patchResp = await fetch(patchUrl, {
+      const patchResp = await fetchWithTimeout(patchUrl, {
         method: 'PATCH',
         headers: {
           'apikey': dbKey,
@@ -195,7 +209,7 @@ export default withErrorHandler(async function handler(req, res) {
           'Prefer': 'return=representation'
         },
         body: JSON.stringify(changed_fields)
-      });
+      }, 6000);
       if (patchResp.ok) {
         // Replace the response so downstream audit + return-path logic uses the patch result
         mutationResponse = patchResp;

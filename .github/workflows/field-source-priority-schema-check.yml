@@ -1,0 +1,162 @@
+name: Field-Source-Priority Schema Validity Check
+
+# Catches a class of bug where field_source_priority rules are
+# registered against (target_table, field_name) tuples whose column
+# doesn't actually exist on the target DB (e.g. dia.contacts.email
+# when the dia column is contact_email).
+#
+# Pipeline:
+#   1. Call list_public_columns() RPC on each domain DB (dia + gov).
+#   2. POST each result to refresh_domain_table_columns() on LCC Opps.
+#   3. Query v_field_source_priority_invalid_columns. Empty = all good.
+#   4. Non-empty = open / update a tracking issue, fail the job.
+#
+# See docs/architecture/field_source_priority_ramp_plan.md for the
+# broader rationale (why we audit field_source_priority at all).
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   DIA_SUPABASE_URL  e.g. https://zqzrriwuavgrquhisnoa.supabase.co
+#   DIA_SUPABASE_KEY  anon key (RPC is SECURITY DEFINER, anon is fine)
+#   GOV_SUPABASE_URL  e.g. https://scknotsqkcheojiaewwh.supabase.co
+#   GOV_SUPABASE_KEY  anon key
+#   LCC_SUPABASE_URL  e.g. https://xengecqvemvfknjvbvrq.supabase.co
+#   LCC_SERVICE_ROLE_KEY  service_role key (refresh RPC is restricted)
+
+on:
+  schedule:
+    - cron: '15 13 * * *'   # 13:15 UTC daily — 15 min after the address-normalize-drift run
+  workflow_dispatch:
+
+concurrency:
+  group: field-source-priority-schema-check
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    name: Refresh column cache + audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refresh dia + gov column caches
+        env:
+          DIA_URL: ${{ secrets.DIA_SUPABASE_URL }}
+          DIA_KEY: ${{ secrets.DIA_SUPABASE_KEY }}
+          GOV_URL: ${{ secrets.GOV_SUPABASE_URL }}
+          GOV_KEY: ${{ secrets.GOV_SUPABASE_KEY }}
+          LCC_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          for v in DIA_URL DIA_KEY GOV_URL GOV_KEY LCC_URL LCC_KEY; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::$v secret not set"
+              exit 1
+            fi
+          done
+
+          refresh_one() {
+            local domain="$1"
+            local src_url="$2"
+            local src_key="$3"
+            echo "Pulling $domain column list..."
+            local cols
+            cols=$(curl -fsS -X POST "$src_url/rest/v1/rpc/list_public_columns" \
+              -H "apikey: $src_key" \
+              -H "Authorization: Bearer $src_key" \
+              -H "Content-Type: application/json" \
+              -d '{}')
+            local cnt
+            cnt=$(echo "$cols" | jq 'length')
+            echo "  → $cnt rows"
+            if (( cnt < 100 )); then
+              echo "::error::$domain returned only $cnt columns — sanity check failed"
+              exit 1
+            fi
+            echo "Pushing $domain to LCC Opps..."
+            local payload
+            payload=$(jq -nc --arg d "$domain" --argjson c "$cols" '{p_domain: $d, p_columns: $c}')
+            local result
+            result=$(curl -fsS -X POST "$LCC_URL/rest/v1/rpc/refresh_domain_table_columns" \
+              -H "apikey: $LCC_KEY" \
+              -H "Authorization: Bearer $LCC_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$payload")
+            echo "  → $result"
+          }
+
+          refresh_one dia "$DIA_URL" "$DIA_KEY"
+          refresh_one gov "$GOV_URL" "$GOV_KEY"
+
+      - name: Audit invalid columns
+        id: audit
+        env:
+          LCC_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          ROWS=$(curl -fsS \
+            "$LCC_URL/rest/v1/v_field_source_priority_invalid_columns?select=target_table,field_name,source,priority,nearby_columns&order=target_table,field_name" \
+            -H "apikey: $LCC_KEY" \
+            -H "Authorization: Bearer $LCC_KEY")
+          COUNT=$(echo "$ROWS" | jq 'length')
+          echo "Invalid rules: $COUNT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if (( COUNT > 0 )); then
+            echo "$ROWS" | jq -r '.[] | "  - \(.target_table).\(.field_name) [src=\(.source)] nearby: \(.nearby_columns // "none")"'
+            # Persist the row dump for the issue body step
+            echo "$ROWS" > /tmp/invalid_rules.json
+          fi
+
+      - name: Open / update tracking issue
+        if: steps.audit.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          DETAILS=$(jq -r '.[] | "- `\(.target_table).\(.field_name)` (source: `\(.source)`, priority: \(.priority))\n  nearby columns: \(.nearby_columns // "_none — name doesn'\''t look like a column on this table_")"' /tmp/invalid_rules.json)
+
+          BODY=$(cat <<EOF
+          The daily field-source-priority schema-validity audit detected
+          rules registered against columns that don't exist on the target
+          domain table.
+
+          $DETAILS
+
+          To resolve: either rename the rule's \`field_name\` to the
+          correct column (see the *nearby columns* hint), or delete the
+          rule if the writer was never going to populate that column.
+
+          Run: $RUN_URL
+          Doc: [\`docs/architecture/field_source_priority_ramp_plan.md\`](../blob/main/docs/architecture/field_source_priority_ramp_plan.md)
+          EOF
+          )
+
+          if ! gh label list --search field-source-priority-schema-drift --json name --jq '.[].name' | grep -qx field-source-priority-schema-drift; then
+            gh label create field-source-priority-schema-drift \
+              --color D93F0B \
+              --description "Auto-opened by field-source-priority schema-check workflow"
+          fi
+
+          EXISTING=$(gh issue list \
+            --label field-source-priority-schema-drift \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "field_source_priority schema drift ($(date -u +%Y-%m-%d))" \
+              --label field-source-priority-schema-drift \
+              --body "$BODY"
+          fi
+
+      - name: Fail job on schema drift
+        if: steps.audit.outputs.count != '0'
+        run: exit 1

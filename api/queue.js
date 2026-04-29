@@ -338,26 +338,20 @@ async function v2GetWorkCounts(req, user, workspaceId) {
   // because we only read result.data[0] — the count header is unused, and
   // computing count=exact on a single-row materialized-view fetch was the
   // dominant overhead pushing this endpoint past its 150ms p95 target.
-  const [result1, userResult1] = await Promise.all([
+  const [result, userResult] = await Promise.all([
     opsQuery('GET', `mv_work_counts?workspace_id=eq.${workspaceId}&limit=1`, undefined, { countMode: 'none' }),
     opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&limit=1`, undefined, { countMode: 'none' })
   ]);
 
-  // Fallback: if materialized views are empty, try regular views
-  let result = result1;
-  if (!result.ok || !result.data?.length) {
-    result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}&limit=1`, undefined, { countMode: 'none' });
-  }
+  // No fallback. mv_work_counts is refreshed every 5 minutes by pg_cron and
+  // covers every workspace. If a row is missing it means either the cron is
+  // catching up on a freshly created workspace (transient, ~5min) or the cron
+  // is broken (which v_mv_freshness will surface). The previous fallback ran
+  // v_work_counts (11 correlated subqueries) and a select=id&limit=0 probe on
+  // every miss, producing the 1438ms client-side outlier and the 914ms slow
+  // alert in the dashboard. Returning zeros keeps the UI honest while the
+  // refresh catches up.
   const counts = result.data?.[0] || {};
-
-  let userResult = userResult1;
-  if (!userResult.ok || !userResult.data?.length) {
-    // This call DOES need count=exact: select=id&limit=0 is a pure count probe.
-    const myActions = await opsQuery('GET',
-      `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
-    );
-    userResult = { data: [{ my_actions: myActions.count || 0, my_inbox: 0 }] };
-  }
   const userCounts = userResult.data?.[0] || {};
 
   return {
