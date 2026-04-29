@@ -3741,8 +3741,11 @@ function renderDiaPropertyCard(item) {
   // Task header with human-readable explanation
   const reviewType = item.review_type || '';
   const taskExplanations = {
-    'multiple_property_candidates': 'This clinic matches multiple properties in our database. Select the correct property or create a new one.',
+    'multiple_property_candidates': 'This clinic matches multiple properties in our database. Pick the correct one below.',
     'no_property_link': 'This clinic has no linked property record. Search for a matching property or create a new one.',
+    'no_exact_property_candidate': 'No exact address match in our property database. Search by name or street, or create a new property.',
+    'fuzzy_property_candidates': 'Likely matches found via fuzzy address similarity. Click to link the right one.',
+    'single_lower_confidence_candidate': 'One candidate found below. Confirm if correct, or search for the right property.',
     'address_mismatch': 'The clinic address doesn\'t match the linked property. Verify the correct address and update.',
     'stale_match': 'This property link hasn\'t been verified recently. Confirm the link is still correct.',
     'ownership_conflict': 'Ownership data conflicts between sources. Review and confirm the correct owner.',
@@ -3779,12 +3782,15 @@ function renderDiaPropertyCard(item) {
     html += '</div>';
   }
 
-  // Review type detail + candidates
-  if (item.candidate_types) {
+  // Review type detail + suggested candidates (one-click chips)
+  const suggested = Array.isArray(item.suggested_candidates) ? item.suggested_candidates : [];
+  if (suggested.length > 0) {
+    html += renderSuggestedCandidates(item, suggested);
+  } else if (item.candidate_types) {
     html += '<div style="background:rgba(251,191,36,0.06);border-radius:8px;padding:14px;margin-bottom:12px;border-left:3px solid #fbbf24;">';
     html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#fbbf24;margin-bottom:6px;">Property Candidates</div>';
     html += '<div style="font-size:12px;color:var(--text);">' + esc(item.candidate_types) + '</div>';
-    if (item.candidate_count) html += '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + item.candidate_count + ' potential matches found</div>';
+    html += '<div style="font-size:11px;color:var(--text2);margin-top:4px;">No address-based suggestions — use Search below.</div>';
     html += '</div>';
   }
 
@@ -5042,6 +5048,60 @@ window.diaClStepNav = function(idx) {
 /**
  * Render property resolution component for research cards lacking property_id
  */
+/**
+ * Render the ranked candidate chips for property-link review.
+ * Each chip links to a property in one click; high-confidence candidates
+ * (score >= 0.92) are highlighted as a primary action.
+ */
+function renderSuggestedCandidates(item, suggested) {
+  const top = suggested.slice(0, 5);
+  const best = top[0];
+  const bestScore = best && typeof best.score === 'number' ? best.score : 0;
+  const isHighConfidence = bestScore >= 0.92;
+  const clinicId = item.clinic_id;
+
+  let html = '<div style="background:rgba(52,211,153,0.06);border-radius:8px;padding:14px;margin-bottom:12px;border-left:3px solid var(--accent);">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+  html += '<div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent);">Suggested Properties (' + top.length + ')</div>';
+  html += '<div style="font-size:11px;color:var(--text2);">Click any to link in one click</div>';
+  html += '</div>';
+
+  top.forEach((c, idx) => {
+    const score = typeof c.score === 'number' ? c.score : 0;
+    const scorePct = Math.round(score * 100);
+    const isExact = c.match_type === 'exact_address_city_state_zip' || c.match_type === 'exact_address_city_state';
+    const isFuzzy = c.match_type === 'fuzzy_address_state';
+    const badgeColor = score >= 0.92 ? '#34d399' : score >= 0.75 ? '#fbbf24' : '#9ca3af';
+    const badgeLabel = isExact ? 'EXACT' : isFuzzy ? 'FUZZY' : 'MATCH';
+    const isPrimary = idx === 0 && isHighConfidence;
+
+    const cityState = (c.city || '') + (c.city && c.state ? ', ' : '') + (c.state || '');
+    const addrLine = (c.address || '—') + (c.zip_code ? ' · ' + c.zip_code : '');
+
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;background:var(--s2);border:1px solid ' + (isPrimary ? 'var(--accent)' : 'var(--border)') + ';border-radius:6px;">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px;">';
+    html += '<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;background:' + badgeColor + ';color:#0a0a0a;">' + badgeLabel + ' ' + scorePct + '%</span>';
+    html += '<span style="font-size:11px;color:var(--text3);">#' + esc(String(c.property_id)) + (c.property_name ? ' · ' + esc(c.property_name) : '') + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:var(--text);font-weight:500;" class="truncate">' + esc(addrLine) + '</div>';
+    if (cityState) html += '<div style="font-size:11px;color:var(--text2);">' + esc(cityState) + '</div>';
+    html += '</div>';
+    html += '<button class="btn-action ' + (isPrimary ? 'primary' : 'default') + '" style="font-size:11px;padding:5px 12px;white-space:nowrap;" onclick="propResLinkFromQueue(' + clinicId + ',' + c.property_id + ')">' + (isPrimary ? '✓ Confirm Link' : 'Link') + '</button>';
+    html += '</div>';
+  });
+
+  html += '</div>';
+  return html;
+}
+
+window.propResLinkFromQueue = async function(clinicId, propertyId) {
+  if (!(await lccConfirm('Link clinic ' + clinicId + ' to Property #' + propertyId + '?', 'Link'))) return;
+  // Same outcome path as the manual "Confirm Link" button, just one-click.
+  await saveDiaOutcome('property_review', clinicId, 'approved_link', propertyId,
+    'Linked from suggested candidate', 'manual_verify');
+};
+
 function renderPropertyResolution(rec, sourceTable, sourceIdCol) {
   if (rec.property_id) {
     return `<div class="prop-linked" style="padding:8px;background:var(--bg2);border-radius:6px;margin:8px 0;">
