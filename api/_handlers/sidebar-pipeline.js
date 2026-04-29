@@ -4338,9 +4338,21 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
       // Always PATCH on re-ingest so loans.updated_at advances (the ops
       // audit signal that CoStar re-touched the row). Explicit
       // updated_at is added on top of the fresh payload.
+      // Round 76co (Phase 4): consult priority registry before loans PATCH.
+      const filteredLoanPatch = await filterByFieldPriority({
+        targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+        targetTable: domain === 'dialysis' ? 'dia.loans' : 'gov.loans',
+        recordPk:    matchedLoanId,
+        source:      'costar_sidebar',
+        confidence:  0.6,
+        fields:      { ...loanData, updated_at: nowIso },
+      }).catch(err => {
+        console.warn('[upsertDomainLoans] field-priority filter failed:', err?.message);
+        return { ...loanData, updated_at: nowIso };
+      });
       await domainPatch(domain,
         `loans?loan_id=eq.${matchedLoanId}`,
-        { ...loanData, updated_at: nowIso },
+        filteredLoanPatch,
         'upsertDomainLoans'
       );
       pushProvenance(provCollect, 'loans', matchedLoanId, loanData);
