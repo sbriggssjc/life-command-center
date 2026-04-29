@@ -2193,7 +2193,19 @@ async function upsertDomainProperty(domain, entity, metadata) {
       }
     }
 
-    await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
+    // Round 76co (Phase 2): consult priority registry BEFORE the property PATCH.
+    const filteredPropertyData = await filterByFieldPriority({
+      targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+      targetTable: domain === 'dialysis' ? 'dia.properties' : 'gov.properties',
+      recordPk:    propertyId,
+      source:      isHistoricalCompCapture ? 'costar_sidebar_historical' : 'costar_sidebar',
+      confidence:  isHistoricalCompCapture ? 0.4 : 0.6,
+      fields:      propertyData,
+    }).catch(err => {
+      console.warn('[upsertDomainProperty] field-priority filter failed (proceeding with full patch):', err?.message);
+      return propertyData;
+    });
+    await domainPatch(domain, `properties?property_id=eq.${propertyId}`, filteredPropertyData, 'upsertDomainProperty');
     if (domain === 'government' && metadata.lease_number) {
       await linkGsaLease(propertyId, metadata.lease_number, metadata);
     }
@@ -2235,7 +2247,19 @@ async function upsertDomainProperty(domain, entity, metadata) {
   if (retryLookup.ok && retryLookup.data?.length) {
     const propertyId = retryLookup.data[0].property_id;
     console.log(`[upsertDomainProperty] Race recovery: original POST failed (${result.status}); retry-lookup found property_id=${propertyId} -- treating as update.`);
-    await domainPatch(domain, `properties?property_id=eq.${propertyId}`, propertyData, 'upsertDomainProperty');
+    // Round 76co (Phase 2): same priority filter on the race-recovery path.
+    const filteredPropertyData = await filterByFieldPriority({
+      targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
+      targetTable: domain === 'dialysis' ? 'dia.properties' : 'gov.properties',
+      recordPk:    propertyId,
+      source:      isHistoricalCompCapture ? 'costar_sidebar_historical' : 'costar_sidebar',
+      confidence:  isHistoricalCompCapture ? 0.4 : 0.6,
+      fields:      propertyData,
+    }).catch(err => {
+      console.warn('[upsertDomainProperty:retry] field-priority filter failed (proceeding with full patch):', err?.message);
+      return propertyData;
+    });
+    await domainPatch(domain, `properties?property_id=eq.${propertyId}`, filteredPropertyData, 'upsertDomainProperty');
     if (domain === 'government' && metadata.lease_number) {
       await linkGsaLease(propertyId, metadata.lease_number, metadata);
     }
