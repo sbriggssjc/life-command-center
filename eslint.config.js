@@ -13,7 +13,11 @@ export default [
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',
-        clearInterval: 'readonly'
+        clearInterval: 'readonly',
+        // Node 18+ globals — present in every Vercel runtime we target.
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
+        Buffer: 'readonly'
       }
     },
     rules: {

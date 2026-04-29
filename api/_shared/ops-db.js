@@ -182,11 +182,17 @@ export function withErrorHandler(handler) {
     try {
       return await handler(req, res);
     } catch (err) {
-      console.error(`[LCC API Error] ${req.method} ${req.url}:`, err.message || err);
+      // Log the stack trace, not just the message — the previous form
+      // collapsed everything to a single line, making intermittent issues
+      // hard to diagnose from Vercel function logs.
+      console.error(
+        `[LCC API Error] ${req.method} ${req.url}:`,
+        err?.stack || err?.message || err
+      );
       if (!res.headersSent) {
         res.status(500).json({
           error: 'Internal server error',
-          message: process.env.LCC_ENV === 'development' ? err.message : undefined
+          message: process.env.LCC_ENV === 'development' ? err?.message : undefined
         });
       }
     }

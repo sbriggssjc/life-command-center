@@ -69,7 +69,9 @@ export default withErrorHandler(async function handler(req, res) {
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'sort_date.asc.nullslast' });
 
-      const result = await opsQuery('GET', path);
+      // countMode='estimated' for parity with v2 — pagination meta only needs
+      // an approximate total; skips the second COUNT(*) on the union view.
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'my_work' });
     }
 
@@ -80,7 +82,7 @@ export default withErrorHandler(async function handler(req, res) {
       if (req.query.status) path += `&status=eq.${pgFilterVal(req.query.status)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'due_date.asc.nullslast,created_at.desc' });
 
-      const result = await opsQuery('GET', path);
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'team' });
     }
 
@@ -91,7 +93,7 @@ export default withErrorHandler(async function handler(req, res) {
       if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'received_at.desc' });
 
-      const result = await opsQuery('GET', path);
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'inbox' });
     }
 
@@ -101,7 +103,7 @@ export default withErrorHandler(async function handler(req, res) {
       if (req.query.is_retryable) path += `&is_retryable=eq.${pgFilterVal(req.query.is_retryable)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'created_at.desc' });
 
-      const result = await opsQuery('GET', path);
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       return res.status(200).json({ items: result.data || [], count: result.count, view: 'sync_exceptions' });
     }
 
@@ -114,7 +116,7 @@ export default withErrorHandler(async function handler(req, res) {
       else if (req.query.status) path += `&status=eq.${pgFilterVal(req.query.status)}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'priority.asc,created_at.asc' });
 
-      const result = await opsQuery('GET', path);
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       if (!result.ok) {
         return res.status(result.status || 500).json({ error: 'Failed to fetch research tasks' });
       }
@@ -135,17 +137,19 @@ export default withErrorHandler(async function handler(req, res) {
       let path = `v_entity_timeline?entity_id=eq.${pgFilterVal(entity_id)}&workspace_id=eq.${workspaceId}`;
       path += paginationParams({ ...req.query, order: req.query.order || 'occurred_at.desc' });
 
-      const result = await opsQuery('GET', path);
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       return res.status(200).json({ events: result.data || [], count: result.count, view: 'entity_timeline' });
     }
 
     case 'counts': {
-      const result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}`);
+      // Single-row MV-style read; .count is never consumed.
+      const result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}`, undefined, { countMode: 'none' });
       const counts = result.data?.[0] || {
         open_actions: 0, new_inbox: 0, triaged_inbox: 0,
         active_research: 0, unresolved_sync_errors: 0, overdue_actions: 0
       };
 
+      // These two ARE pure count probes (select=id&limit=0) — keep count=exact.
       const myActions = await opsQuery('GET',
         `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
       );
@@ -723,8 +727,10 @@ async function handleInbox(req, res, user, workspaceId) {
     const { id, status, source_type, assigned_to, priority, domain } = req.query;
 
     if (id) {
+      // Single-row lookup; .count is never consumed.
       const result = await opsQuery('GET',
-        `inbox_items?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*`
+        `inbox_items?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*`,
+        undefined, { countMode: 'none' }
       );
       if (!result.ok || !result.data?.length) {
         return res.status(404).json({ error: 'Inbox item not found' });
@@ -732,7 +738,7 @@ async function handleInbox(req, res, user, workspaceId) {
       return res.status(200).json({ item: result.data[0] });
     }
 
-    // List with filters — use the triage view for enriched data
+    // List with filters — use the triage view for enriched data.
     let path = `v_inbox_triage?workspace_id=eq.${workspaceId}`;
     if (status) path += `&status=eq.${status}`;
     if (source_type) path += `&source_type=eq.${source_type}`;
@@ -741,7 +747,7 @@ async function handleInbox(req, res, user, workspaceId) {
     if (domain) path += `&domain=eq.${domain}`;
     path += paginationParams({ ...req.query, order: req.query.order || 'received_at.desc' });
 
-    const result = await opsQuery('GET', path);
+    const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
     return res.status(200).json({ items: result.data || [], count: result.count });
   }
 
@@ -795,9 +801,10 @@ async function handleInbox(req, res, user, workspaceId) {
     const { id } = req.query;
     if (!id) return res.status(400).json({ error: 'id query parameter required' });
 
-    // Fetch existing
+    // Fetch existing — single-row lookup; .count is never consumed.
     const existing = await opsQuery('GET',
-      `inbox_items?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*`
+      `inbox_items?id=eq.${id}&workspace_id=eq.${workspaceId}&select=*`,
+      undefined, { countMode: 'none' }
     );
     if (!existing.ok || !existing.data?.length) {
       return res.status(404).json({ error: 'Inbox item not found' });
@@ -874,8 +881,10 @@ async function handleInbox(req, res, user, workspaceId) {
 async function inboxPromoteToAction(req, res, user, workspaceId) {
   const inboxId = req.query.id;
 
+  // Single-row lookup; .count is never consumed.
   const existing = await opsQuery('GET',
-    `inbox_items?id=eq.${inboxId}&workspace_id=eq.${workspaceId}&select=*`
+    `inbox_items?id=eq.${inboxId}&workspace_id=eq.${workspaceId}&select=*`,
+    undefined, { countMode: 'none' }
   );
   if (!existing.ok || !existing.data?.length) {
     return res.status(404).json({ error: 'Inbox item not found' });
