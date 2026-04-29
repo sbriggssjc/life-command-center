@@ -187,6 +187,55 @@ describe('queue/inbox handler verification', () => {
     assert.ok(calls.some((call) => call.url.endsWith('/rest/v1/activity_events') && call.method === 'POST'));
   });
 
+  describe('v2 work_counts — no heavy fallback', () => {
+    it('returns zeros when mv_work_counts has no row, without hitting v_work_counts', async () => {
+      const calls = [];
+      global.fetch = async (url, opts = {}) => {
+        const method = opts.method || 'GET';
+        const target = String(url);
+        calls.push({ url: target, method });
+
+        if (target.includes('/rest/v1/users?')) {
+          return jsonResponse([{
+            id: 'user-1',
+            email: 'dev@example.com',
+            display_name: 'Dev User',
+            workspace_memberships: [{ workspace_id: 'ws-1', role: 'operator', workspaces: { name: 'WS', slug: 'ws' } }]
+          }]);
+        }
+        // Both materialized views return empty (e.g. brand-new workspace mid-cron).
+        if (target.includes('/rest/v1/mv_work_counts')) return jsonResponse([]);
+        if (target.includes('/rest/v1/mv_user_work_counts')) return jsonResponse([]);
+        if (target.includes('/rest/v1/perf_metrics') && method === 'POST') return jsonResponse([{ id: 1 }], true, 201);
+
+        throw new Error(`Unexpected fetch on no-fallback path: ${method} ${target}`);
+      };
+
+      const handler = await loadHandler();
+      const req = {
+        method: 'GET',
+        query: { _version: 'v2', view: 'work_counts' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      };
+      const res = mockRes();
+      await handler(req, res);
+
+      assert.equal(res._status, 200);
+      assert.equal(res._json.view, 'work_counts');
+      // Counts default to 0 across the board.
+      assert.equal(res._json.my_actions, 0);
+      assert.equal(res._json.open_actions, 0);
+      assert.equal(res._json.inbox_new, 0);
+
+      // Critical: no fallback fetch to v_work_counts or the action_items count probe.
+      const calledHeavy = calls.some((c) =>
+        c.url.includes('/rest/v1/v_work_counts')
+        || c.url.includes('/rest/v1/action_items?')
+      );
+      assert.equal(calledHeavy, false, 'heavy fallback path should not fire on MV miss');
+    });
+  });
+
   describe('_perf beacon (anonymous client telemetry)', () => {
     const validWs = '11111111-1111-1111-1111-111111111111';
     const validUser = '22222222-2222-2222-2222-222222222222';
