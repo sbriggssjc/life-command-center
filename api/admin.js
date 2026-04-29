@@ -17,6 +17,7 @@
 //   /api/daily-briefing → /api/admin?_route=edge-brief
 //   /api/cms-match   → /api/admin?_route=cms-match
 //   /api/ownership-reconcile → /api/admin?_route=ownership-reconcile
+//   /api/merge-log-reconcile → /api/admin?_route=merge-log-reconcile  (Round 76ee Phase 2)
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
@@ -80,6 +81,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'sf-sync-queue':       return handleSfSyncQueue(req, res);
     case 'storage-cleanup':     return handleStorageCleanup(req, res);
     case 'consolidate-property': return handleConsolidateProperty(req, res);
+    case 'merge-log-reconcile': return handleMergeLogReconcile(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -143,6 +145,167 @@ async function handleConsolidateProperty(req, res) {
   }
 
   return res.status(405).json({ error: 'method_not_allowed' });
+}
+
+// ============================================================================
+// MERGE-LOG RECONCILE (Round 76ee Phase 2, 2026-04-29)
+// ============================================================================
+//
+// Reads unreconciled rows from dia + gov property_merge_log and patches LCC
+// entity backreferences (metadata.domain_property_id +
+// metadata._pipeline_summary.domain_property_id) so entities pointing at a
+// merged-away property_id are repointed at the canonical keep_id.
+//
+// Without this, Round 76ee Phase 1's audit log stays informational only —
+// future merges would still leave LCC entities pointing at deleted property
+// rows (the orphan problem we hit on 2026-04-29 with 21 dia entities).
+//
+// Routing:
+//   GET  /api/admin?_route=merge-log-reconcile        — dry-run, returns counts only
+//   POST /api/admin?_route=merge-log-reconcile        — actually patches + stamps log
+//
+// Query params:
+//   ?domain=dia|gov|both    (default both)
+//   ?limit=200              (cap unreconciled rows scanned per call)
+//
+// Both methods return shape:
+//   { mode, scanned, patched, by_domain: { dialysis: {scanned,patched,errors:[]}, government: {...} } }
+//
+// Cron: pg_cron job (`lcc-merge-log-reconcile`, every 15 min) POSTs to this
+// endpoint via lcc_cron_post() so freshly merged property_merge_log rows get
+// their LCC backrefs patched within ~15 minutes.
+//
+async function handleMergeLogReconcile(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia','gov','both'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia, gov, or both' });
+  }
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit || '200', 10)));
+  const dryRun = req.method === 'GET';
+
+  const targets = domainParam === 'both' ? ['dia','gov'] : [domainParam];
+
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: 0,
+    patched: 0,
+    by_domain: {},
+  };
+
+  for (const target of targets) {
+    const dom = target === 'dia' ? 'dialysis' : 'government';
+    const summary = { scanned: 0, patched: 0, log_rows_stamped: 0, errors: [] };
+
+    // 1. Pull unreconciled merge-log rows from the domain DB.
+    const listRes = await domainQuery(dom, 'GET',
+      `property_merge_log?reconciled_lcc_at=is.null&select=id,keep_id,drop_id,merged_at,notes&order=merged_at.asc&limit=${limit}`
+    );
+    if (!listRes.ok) {
+      summary.errors.push({ stage: 'list', status: listRes.status, detail: listRes.data });
+      result.by_domain[dom] = summary;
+      continue;
+    }
+    const rows = Array.isArray(listRes.data) ? listRes.data : [];
+    summary.scanned = rows.length;
+    result.scanned += rows.length;
+
+    if (rows.length === 0) {
+      result.by_domain[dom] = summary;
+      continue;
+    }
+
+    // 2. For each row, repoint LCC entities and (on apply) stamp the log row.
+    for (const row of rows) {
+      const keepId = String(row.keep_id);
+      const dropId = String(row.drop_id);
+      let patched = 0;
+
+      // Always do a dry-count first via SELECT — cheap and gives the user
+      // an accurate "would patch N entities" preview in GET mode.
+      const countRes = await opsQuery('GET',
+        `entities?entity_type=eq.asset&domain=eq.${pgFilterVal(dom)}` +
+        `&or=(metadata->>domain_property_id.eq.${pgFilterVal(dropId)},` +
+            `metadata->_pipeline_summary->>domain_property_id.eq.${pgFilterVal(dropId)})` +
+        `&select=id&limit=1000`,
+        null,
+        { 'Prefer': 'count=exact' }
+      );
+      if (!countRes.ok) {
+        summary.errors.push({
+          stage: 'count', merge_log_id: row.id, drop_id: dropId,
+          status: countRes.status, detail: countRes.data,
+        });
+        continue;
+      }
+      const expected = countRes.count ?? (Array.isArray(countRes.data) ? countRes.data.length : 0);
+
+      if (dryRun) {
+        patched = expected;
+      } else if (expected === 0) {
+        // Nothing to patch — but still stamp the log row so we don't
+        // re-scan it on every cron tick.
+        patched = 0;
+      } else {
+        // Call the SQL helper that does atomic JSONB patch on both keys.
+        const rpcRes = await opsQuery('POST', 'rpc/lcc_repoint_entity_property_id', {
+          p_domain:  dom,
+          p_keep_id: keepId,
+          p_drop_id: dropId,
+        });
+        if (!rpcRes.ok) {
+          summary.errors.push({
+            stage: 'repoint', merge_log_id: row.id, drop_id: dropId,
+            status: rpcRes.status, detail: rpcRes.data,
+          });
+          continue;
+        }
+        patched = typeof rpcRes.data === 'number'
+          ? rpcRes.data
+          : (Array.isArray(rpcRes.data) ? rpcRes.data[0] : Number(rpcRes.data || 0));
+      }
+
+      summary.patched += patched;
+      result.patched += patched;
+
+      // 3. Stamp the merge_log row (only on apply).
+      if (!dryRun) {
+        const stampRes = await domainQuery(dom, 'PATCH',
+          `property_merge_log?id=eq.${encodeURIComponent(row.id)}`,
+          {
+            reconciled_lcc_at: new Date().toISOString(),
+            reconciled_lcc_count: patched,
+          }
+        );
+        if (!stampRes.ok) {
+          summary.errors.push({
+            stage: 'stamp', merge_log_id: row.id,
+            status: stampRes.status, detail: stampRes.data,
+          });
+          continue;
+        }
+        summary.log_rows_stamped += 1;
+      }
+    }
+
+    result.by_domain[dom] = summary;
+  }
+
+  const httpStatus = (() => {
+    const totalErrs = Object.values(result.by_domain)
+      .reduce((acc, s) => acc + (s.errors?.length || 0), 0);
+    if (totalErrs > 0 && result.patched === 0) return 502;
+    if (totalErrs > 0) return 207; // Multi-Status — partial success
+    return 200;
+  })();
+
+  return res.status(httpStatus).json(result);
 }
 
 // ============================================================================
