@@ -5962,10 +5962,33 @@ async function upsertDialysisListings(propertyId, metadata) {
   // If metadata.asking_price is undefined (e.g. stripped by buildMetadata),
   // the raw-string guard would silently return 0 even when a current sale
   // exists, so parse first and also evaluate any current sales_history rows.
-  const parsedAskingPrice = parseCurrency(metadata.asking_price);
+  let parsedAskingPrice = parseCurrency(metadata.asking_price);
   const currentListings = Array.isArray(metadata.sales_history)
     ? metadata.sales_history.filter(s => s.is_current === true)
     : [];
+
+  // Round 76dv: when the capture URL is a CoStar /for-sale/ listing page and
+  // metadata.asking_price is empty but metadata.sale_price has a real value,
+  // treat sale_price AS the asking price. The page uses "For Sale" / "Sale
+  // Price" labels instead of "Asking Price" so the extractor's older regex
+  // missed it. Validation: sale_price must be >= $1,000 AND there must NOT
+  // already be a closed sale of that price in sales_history (which would
+  // mean it's a historical sold price, not the current asking).
+  if (!parsedAskingPrice) {
+    const sourceUrl = String(metadata.page_url || metadata.url || '');
+    const onForSaleUrl = /\/detail\/for-sale\//i.test(sourceUrl);
+    const sp = parseCurrency(metadata.sale_price);
+    if (onForSaleUrl && sp && sp >= 1000) {
+      const matchesClosedSale = (metadata.sales_history || []).some(s =>
+        s && parseCurrency(s.sale_price) === sp && s.is_current !== true);
+      if (!matchesClosedSale) {
+        console.log(`[upsertDialysisListings] inferred asking_price=${sp} from sale_price on /for-sale/ URL`);
+        metadata.asking_price = metadata.sale_price;
+        parsedAskingPrice = sp;
+      }
+    }
+  }
+
   if (!parsedAskingPrice && !currentListings.length) {
     console.log('[upsertDialysisListings] early-exit: no asking_price and no current sale', {
       propertyId,

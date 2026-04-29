@@ -778,9 +778,25 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // Asking price: only capture from the stat card area (before sales history
       // section). Historical "Asking Price" fields inside prior sales records
       // belong to those individual sales, not the current listing.
-      if (!inSalesHistorySection && !data.asking_price && /^asking\s+price$/i.test(line)) {
-        if (/^\$[\d,]+/.test(next)) data.asking_price = next;
-        else if (/^\$[\d,]+/.test(prev)) data.asking_price = prev;
+      // Round 76dv: also accept "For Sale" / "Sale Price" / "Price" labels
+      // when the URL is a /for-sale/ listing page. CoStar's For Sale layout
+      // uses those labels instead of "Asking Price" — without this branch,
+      // captures from /detail/for-sale/<id>/property left metadata.asking_price
+      // empty, which made upsertDialysisListings early-exit and never create
+      // an available_listings row (5 Route 45 / Mannington NJ, 2026-04-29).
+      const isForSaleUrl = /\/detail\/for-sale\//i.test(url);
+      const askingLabelRe = isForSaleUrl
+        ? /^(asking\s+price|for\s+sale|sale\s+price|price)$/i
+        : /^asking\s+price$/i;
+      if (!inSalesHistorySection && !data.asking_price && askingLabelRe.test(line)) {
+        // Reject "Price/SF" — it's not an asking price.
+        if (next && /^\$[\d,]+/.test(next) && !/\/sf$/i.test(next)) {
+          const numericVal = parseFloat(next.replace(/[$,]/g, '')) || 0;
+          if (numericVal >= 1000) data.asking_price = next;
+        } else if (prev && /^\$[\d,]+/.test(prev) && !/\/sf$/i.test(prev)) {
+          const numericVal = parseFloat(prev.replace(/[$,]/g, '')) || 0;
+          if (numericVal >= 1000) data.asking_price = prev;
+        }
       }
 
       // Sale price: prefer stat card value (appears first, is most recent sale)
