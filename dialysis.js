@@ -5589,6 +5589,29 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
         source_surface: 'dialysis_property_review',
         propagation_scope: 'research_queue_outcome'
       });
+
+      // Race condition fallback: another writer (the auto-link cron, a parallel
+      // tab, or the user double-clicking past the in-flight guard) may have
+      // inserted an outcome row between our cache check and our request,
+      // causing 409 from the UNIQUE(queue_type, clinic_id) constraint. Treat
+      // that as "someone got there first" and PATCH the existing row to
+      // record the user's intent (which may differ — e.g. they want a
+      // different selected_property_id than the auto-linker chose).
+      const looks_like_409 = !result.ok
+        && Array.isArray(result.errors)
+        && result.errors.some(e => /409/.test(String(e)));
+      if (looks_like_409) {
+        result = await applyChangeWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'research_queue_outcomes',
+          idColumn: 'clinic_id',
+          idValue: String(clinicId),
+          matchFilters: [{ column: 'queue_type', value: 'property_review' }],
+          data: payload,
+          source_surface: 'dialysis_property_review',
+          propagation_scope: 'research_queue_outcome'
+        });
+      }
     }
 
     if (!result || !result.ok) {
