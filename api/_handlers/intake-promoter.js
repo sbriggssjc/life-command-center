@@ -2036,21 +2036,32 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     }
 
     // 3. Property fields backfilled from the OM (only when promoter actually patched them)
+    // Phase 2.1 coverage gap follow-up (2026-04-29): promoteDiaPropertyFromOm
+    // also patches `tenant` (Bug Z, 2026-04-27), `building_size` (Round 76bk,
+    // 2026-04-28), `land_area` (dia column for acres), and refreshes
+    // `anchor_rent_source` alongside anchor_rent. Without branches for those
+    // fields here, the writes happened unaudited — field_provenance had zero
+    // rows for source=om_extraction × those fields despite production traffic.
     const propPatched = financialsResult?.patched_fields || [];
     if (propPatched.length && match.property_id) {
       const propValues = {};
       for (const f of propPatched) {
-        if (f === 'year_built')         propValues.year_built         = snapshot.year_built;
-        else if (f === 'lot_sf')        propValues.lot_sf             = snapshot.lot_sf;
-        else if (f === 'parcel_number') propValues.parcel_number      = snapshot.parcel_number;
-        else if (f === 'lease_commencement') propValues.lease_commencement = snapshot.lease_commencement;
-        else if (f === 'anchor_rent')        propValues.anchor_rent        = snapshot.annual_rent;
-        else if (f === 'anchor_rent_date')   propValues.anchor_rent_date   = snapshot.lease_commencement;
-        else if (f === 'noi')                propValues.noi                = snapshot.noi;
-        else if (f === 'gross_rent')         propValues.gross_rent         = snapshot.annual_rent;
-        else if (f === 'land_acres')         propValues.land_acres         = snapshot.land_acres
-                                                                          ?? (snapshot.lot_sf ? snapshot.lot_sf / 43560 : null);
-        else if (f === 'rba')                propValues.rba                = snapshot.building_sf;
+        if (f === 'year_built')              propValues.year_built          = snapshot.year_built;
+        else if (f === 'tenant')             propValues.tenant              = snapshot.tenant_name || snapshot.primary_tenant || null;
+        else if (f === 'lot_sf')             propValues.lot_sf              = snapshot.lot_sf;
+        else if (f === 'parcel_number')      propValues.parcel_number       = snapshot.parcel_number;
+        else if (f === 'building_size')      propValues.building_size       = snapshot.building_sf;
+        else if (f === 'land_area')          propValues.land_area           = snapshot.land_acres
+                                                                            ?? (snapshot.lot_sf ? snapshot.lot_sf / 43560 : null);
+        else if (f === 'lease_commencement') propValues.lease_commencement  = snapshot.lease_commencement;
+        else if (f === 'anchor_rent')        propValues.anchor_rent         = snapshot.annual_rent;
+        else if (f === 'anchor_rent_date')   propValues.anchor_rent_date    = snapshot.lease_commencement;
+        else if (f === 'anchor_rent_source') propValues.anchor_rent_source  = 'om_confirmed';
+        else if (f === 'noi')                propValues.noi                 = snapshot.noi;
+        else if (f === 'gross_rent')         propValues.gross_rent          = snapshot.annual_rent;
+        else if (f === 'land_acres')         propValues.land_acres          = snapshot.land_acres
+                                                                            ?? (snapshot.lot_sf ? snapshot.lot_sf / 43560 : null);
+        else if (f === 'rba')                propValues.rba                 = snapshot.building_sf;
       }
       await recordOmFieldsProvenance(
         { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: match.property_id },
