@@ -2005,20 +2005,41 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       intakeId,
     };
 
-    // 1. Listing fields
+    // 1. Listing fields — schema differs by domain. Dia uses
+    //    initial_price / last_price / current_cap_rate / initial_cap_rate /
+    //    price_per_sf; gov uses asking_price / asking_cap_rate /
+    //    asking_price_psf. The actual INSERT row built by buildDiaListingRow
+    //    vs buildGovListingRow already uses the right names; this provenance
+    //    call has to mirror them or v_field_provenance_unranked surfaces
+    //    writes against columns that don't exist on the target table.
     if (listingResult?.ok && listingResult.listing_id) {
+      const capRateDecimal = snapshot.cap_rate != null ? snapshot.cap_rate / 100 : null;
+      const askPpsf = (snapshot.asking_price && snapshot.building_sf)
+        ? Math.round((snapshot.asking_price / snapshot.building_sf) * 100) / 100
+        : (snapshot.price_per_sf ?? null);
+
+      const listingValues = match.domain === 'government'
+        ? {
+            asking_price:     snapshot.asking_price ?? null,
+            asking_cap_rate:  capRateDecimal,
+            asking_price_psf: askPpsf,
+            listing_broker:   snapshot.listing_broker || null,
+            broker_email:     snapshot.listing_broker_email || null,
+          }
+        : {
+            initial_price:    snapshot.asking_price ?? null,
+            last_price:       snapshot.asking_price ?? null,
+            current_cap_rate: capRateDecimal,
+            initial_cap_rate: capRateDecimal,
+            listing_broker:   snapshot.listing_broker || null,
+            broker_email:     snapshot.listing_broker_email || null,
+            price_per_sf:     snapshot.price_per_sf ?? null,
+            seller_name:      snapshot.seller_name || null,
+          };
+
       await recordOmFieldsProvenance(
         { ...provCtx, targetTable: `${tablePrefix}.available_listings`, recordPk: listingResult.listing_id },
-        {
-          initial_price:    snapshot.asking_price ?? null,
-          last_price:       snapshot.asking_price ?? null,
-          current_cap_rate: snapshot.cap_rate != null ? snapshot.cap_rate / 100 : null,
-          initial_cap_rate: snapshot.cap_rate != null ? snapshot.cap_rate / 100 : null,
-          listing_broker:   snapshot.listing_broker || null,
-          broker_email:     snapshot.listing_broker_email || null,
-          price_per_sf:     snapshot.price_per_sf ?? null,
-          seller_name:      snapshot.seller_name || null,
-        }
+        listingValues
       );
     }
 
