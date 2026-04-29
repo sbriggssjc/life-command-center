@@ -17,6 +17,7 @@
 //   /api/daily-briefing → /api/admin?_route=edge-brief
 //   /api/cms-match   → /api/admin?_route=cms-match
 //   /api/ownership-reconcile → /api/admin?_route=ownership-reconcile
+//   /api/npi-lookup  → /api/admin?_route=npi-lookup
 // ============================================================================
 
 import { authenticate, requireRole, primaryWorkspace, handleCors } from './_shared/auth.js';
@@ -80,6 +81,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'sf-sync-queue':       return handleSfSyncQueue(req, res);
     case 'storage-cleanup':     return handleStorageCleanup(req, res);
     case 'consolidate-property': return handleConsolidateProperty(req, res);
+    case 'npi-lookup':           return handleNpiLookupProxy(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -952,6 +954,7 @@ async function handleTreasury(req, res) {
 
 const DATA_QUERY_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/data-query';
 const DAILY_BRIEFING_EDGE_URL_ADMIN = 'https://xengecqvemvfknjvbvrq.supabase.co/functions/v1/daily-briefing';
+const NPI_LOOKUP_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/npi-lookup';
 
 function buildEdgeProxyHeaders(req) {
   const hdrs = { 'Content-Type': 'application/json' };
@@ -986,6 +989,32 @@ async function handleEdgeDataProxy(req, res) {
   } catch (err) {
     console.error('[admin/edge-data] Edge proxy failed:', err.message);
     return res.status(502).json({ error: 'Edge function unavailable', detail: err.message });
+  }
+}
+
+// Proxies POST /api/npi-lookup to the npi-lookup edge function on the
+// dialysis Supabase project. Used by the NPI Intel UI button + by the
+// weekly pg_cron job that auto-fills new missing-NPI rows.
+async function handleNpiLookupProxy(req, res) {
+  const url = new URL(NPI_LOOKUP_EDGE_URL);
+  for (const [key, value] of Object.entries(req.query || {})) {
+    if (key === '_route') continue;
+    url.searchParams.set(key, value);
+  }
+  try {
+    const edgeRes = await fetch(url.toString(), {
+      method: req.method,
+      headers: buildEdgeProxyHeaders(req),
+      body: req.method !== 'GET' ? JSON.stringify(req.body || {}) : undefined,
+      // 621 active rows × ~80ms throttle = ~50s in the worst case; give
+      // headroom for slow NPPES responses + DB writes.
+      signal: AbortSignal.timeout(120000),
+    });
+    const data = await edgeRes.json().catch(() => ({}));
+    return res.status(edgeRes.status).json(data);
+  } catch (err) {
+    console.error('[admin/npi-lookup] proxy failed:', err.message);
+    return res.status(502).json({ error: 'NPI lookup edge function unavailable', detail: err.message });
   }
 }
 
