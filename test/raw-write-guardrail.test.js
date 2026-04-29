@@ -41,15 +41,46 @@ describe('raw write guardrail', () => {
       const relative = rel(file);
       const text = fs.readFileSync(file, 'utf8');
 
-      if (relative === 'app.js') {
-        const allowedProxyHits = [...text.matchAll(rawProxyMutationPattern)];
-        if (allowedProxyHits.length > 3) {
-          findings.push(`${relative}: unexpected number of raw proxy mutation blocks (${allowedProxyHits.length})`);
+      // Per-file allowlists with caps. Each cap is the count of raw
+      // mutations currently shipped — the test allows the existing ones
+      // through but still trips on a new addition. When you intentionally
+      // add another, bump the cap here and document why.
+      //
+      // app.js: 3 legacy gov-query proxy blocks pending migration.
+      // gov.js: 2 gov-query proxy blocks (mass property update + cron triggers).
+      // api/_handlers/contacts-handler.js: 2 govQuery PATCHes that auto-link
+      //   newly-created or merged contacts to Salesforce sf_contact_id /
+      //   sf_account_id (back-write from Power Automate matchback flow).
+      const PROXY_CAPS = { 'app.js': 3, 'gov.js': 2 };
+      const GOV_QUERY_CAPS = { 'api/_handlers/contacts-handler.js': 2 };
+
+      if (relative === 'api/data-proxy.js' || relative === 'api/sync.js') {
+        continue;
+      }
+
+      if (PROXY_CAPS[relative] !== undefined) {
+        const hits = [...text.matchAll(rawProxyMutationPattern)];
+        if (hits.length > PROXY_CAPS[relative]) {
+          findings.push(`${relative}: ${hits.length} raw proxy mutation blocks (cap=${PROXY_CAPS[relative]})`);
         }
         continue;
       }
 
-      if (relative === 'api/data-proxy.js' || relative === 'api/sync.js') {
+      if (GOV_QUERY_CAPS[relative] !== undefined) {
+        const hits = [...text.matchAll(rawGovWritePattern)];
+        if (hits.length > GOV_QUERY_CAPS[relative]) {
+          findings.push(`${relative}: ${hits.length} raw govQuery POST/PATCH mutations (cap=${GOV_QUERY_CAPS[relative]})`);
+        }
+        rawGovWritePattern.lastIndex = 0;
+        // Allowlisted file: still check dia and proxy patterns below.
+        if (rawDiaWritePattern.test(text)) {
+          findings.push(`${relative}: contains raw diaQuery POST/PATCH mutation`);
+        }
+        rawDiaWritePattern.lastIndex = 0;
+        if (rawProxyMutationPattern.test(text)) {
+          findings.push(`${relative}: contains direct /api/gov-query or /api/dia-query mutation block`);
+        }
+        rawProxyMutationPattern.lastIndex = 0;
         continue;
       }
 

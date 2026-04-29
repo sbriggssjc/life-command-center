@@ -281,7 +281,11 @@ export async function authenticate(req, res) {
   // 3a. Copilot plugin passthrough — requests from M365 Copilot declarative agent
   //     arrive via vercel.json rewrites with _copilot_path query param. Copilot
   //     authenticates the user at the M365 layer; allow these through with limited scope.
-  if (req.query._copilot_path) {
+  // Defensive ?. — Vercel always populates req.query, but unit-test mocks
+  // sometimes skip it. Without the optional chain a missing query throws
+  // "Cannot read properties of undefined (reading '_copilot_path')" and
+  // makes the test failure look like an auth bug.
+  if (req.query?._copilot_path) {
     res.setHeader('X-LCC-Auth-Warning', 'copilot-plugin-passthrough');
     if (OPS_SUPABASE_URL) {
       const firstOwner = await resolveFirstOwner();

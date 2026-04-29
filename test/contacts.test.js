@@ -44,8 +44,11 @@ function jsonResponse(body, ok = true, status = 200, headers = {}) {
   };
 }
 
+// contacts.js was consolidated into _handlers/contacts-handler.js (routed via
+// entity-hub.js / vercel.json). Import the handler directly so this test
+// stays focused on the unit and not on the routing layer.
 async function loadHandler() {
-  return (await import(`../api/contacts.js?test=${Date.now()}-${Math.random()}`)).default;
+  return (await import(`../api/_handlers/contacts-handler.js?test=${Date.now()}-${Math.random()}`)).contactsHandler;
 }
 
 describe('contacts handler auditing', () => {

@@ -41,7 +41,7 @@ describe('research-loop helper', () => {
       if (u.endsWith('/entities') && opts.method === 'POST') {
         return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
       }
-      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') {
         return jsonResponse([{ id: 'ext-1', entity_id: 'entity-1' }]);
       }
       if (u.includes('/research_tasks?') && opts.method === 'GET') {
@@ -107,7 +107,7 @@ describe('research-loop helper', () => {
       if (u.endsWith('/entities') && opts.method === 'POST') {
         return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
       }
-      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') {
         return jsonResponse({ error: 'identity failure' }, false, 500);
       }
       if (u.includes('/research_tasks?id=eq.')) {
@@ -153,7 +153,7 @@ describe('research-loop helper', () => {
       if (u.endsWith('/entities') && opts.method === 'POST') {
         return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
       }
-      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') {
         return jsonResponse([{ id: 'ext-1', entity_id: 'entity-1' }]);
       }
       if (u.includes('/research_tasks?') && opts.method === 'GET') {

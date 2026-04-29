@@ -48,7 +48,7 @@ describe('entity-link helper', () => {
         const body = JSON.parse(opts.body);
         return jsonResponse([{ id: 'entity-1', ...body }]);
       }
-      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') {
         const body = JSON.parse(opts.body);
         return jsonResponse([{ id: 'ext-1', ...body }]);
       }
@@ -91,7 +91,7 @@ describe('entity-link helper', () => {
       if (u.endsWith('/entities') && opts.method === 'POST') {
         return jsonResponse([{ id: 'entity-1', name: '123 Main St' }]);
       }
-      if (u.endsWith('/external_identities') && opts.method === 'POST') {
+      if (/\/external_identities(\?|$)/.test(u) && opts.method === 'POST') {
         return jsonResponse({ error: 'duplicate conflict' }, false, 409);
       }
       throw new Error(`Unexpected fetch: ${opts.method} ${u}`);
