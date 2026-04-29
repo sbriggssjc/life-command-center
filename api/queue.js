@@ -259,7 +259,10 @@ async function v2GetMyWork(req, user, workspaceId) {
   if (priority) path += `&priority=eq.${pgFilterVal(priority)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
-  const result = await opsQuery('GET', path);
+  // count=estimated: pagination meta only needs an approximate total. Skips
+  // the second COUNT(*) trip on the v_my_work UNION (action_items + inbox +
+  // research_tasks joined to entities/users), which was the dominant cost.
+  const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
   return { view: 'my_work', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
 }
 
@@ -277,7 +280,7 @@ async function v2GetTeamQueue(req, user, workspaceId) {
   else if (assignee) path += `&assigned_to=eq.${pgFilterVal(assignee)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
-  const result = await opsQuery('GET', path);
+  const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
   return { view: 'team_queue', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
 }
 
@@ -294,7 +297,7 @@ async function v2GetInbox(req, user, workspaceId) {
   if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
-  const result = await opsQuery('GET', path);
+  const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
   return { view: 'inbox', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
 }
 
@@ -314,7 +317,7 @@ async function v2GetResearch(req, user, workspaceId) {
   if (research_type) path += `&research_type=eq.${pgFilterVal(research_type)}`;
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
-  const result = await opsQuery('GET', path);
+  const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
   if (!result.ok) {
     return { view: 'research', items: [], error: result.data?.message || 'Failed to fetch research tasks', pagination: v2PaginationMeta(page, perPage, 0) };
   }
@@ -331,21 +334,25 @@ async function v2GetResearch(req, user, workspaceId) {
 // ---- V2 WORK COUNTS ----
 
 async function v2GetWorkCounts(req, user, workspaceId) {
-  // Run both queries in parallel to cut latency in half
+  // Run both queries in parallel to cut latency in half. countMode='none'
+  // because we only read result.data[0] — the count header is unused, and
+  // computing count=exact on a single-row materialized-view fetch was the
+  // dominant overhead pushing this endpoint past its 150ms p95 target.
   const [result1, userResult1] = await Promise.all([
-    opsQuery('GET', `mv_work_counts?workspace_id=eq.${workspaceId}&limit=1`),
-    opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&limit=1`)
+    opsQuery('GET', `mv_work_counts?workspace_id=eq.${workspaceId}&limit=1`, undefined, { countMode: 'none' }),
+    opsQuery('GET', `mv_user_work_counts?workspace_id=eq.${workspaceId}&user_id=eq.${user.id}&limit=1`, undefined, { countMode: 'none' })
   ]);
 
   // Fallback: if materialized views are empty, try regular views
   let result = result1;
   if (!result.ok || !result.data?.length) {
-    result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}&limit=1`);
+    result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}&limit=1`, undefined, { countMode: 'none' });
   }
   const counts = result.data?.[0] || {};
 
   let userResult = userResult1;
   if (!userResult.ok || !userResult.data?.length) {
+    // This call DOES need count=exact: select=id&limit=0 is a pure count probe.
     const myActions = await opsQuery('GET',
       `action_items?workspace_id=eq.${workspaceId}&or=(owner_id.eq.${user.id},assigned_to.eq.${user.id})&status=in.(open,in_progress,waiting)&select=id&limit=0`
     );
@@ -387,7 +394,8 @@ async function v2GetEntityTimeline(req, user, workspaceId) {
   if (cursor) path += `&occurred_at=lt.${cursor}`;
   path += `&limit=${perPage + 1}&order=occurred_at.desc`;
 
-  const result = await opsQuery('GET', path);
+  // Cursor pagination — has_more is derived from item count, count header is unused.
+  const result = await opsQuery('GET', path, undefined, { countMode: 'none' });
   const items = result.data || [];
   const hasMore = items.length > perPage;
   if (hasMore) items.pop();
@@ -409,10 +417,14 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
   const section = req.query.section || 'summary';
 
   if (section === 'summary') {
-    const endpoints = await opsQuery('GET', 'v_perf_endpoint_summary?limit=50');
-    const mvFreshness = await opsQuery('GET', `v_mv_freshness?workspace_id=eq.${workspaceId}&limit=1`);
-    const compliance = await opsQuery('GET', 'v_perf_target_compliance?limit=50');
-    const throughput = await opsQuery('GET', 'v_perf_hourly_throughput?limit=48');
+    // countMode='none': dashboard reads .data only, never .count.
+    // Also parallelize: these four queries are independent.
+    const [endpoints, mvFreshness, compliance, throughput] = await Promise.all([
+      opsQuery('GET', 'v_perf_endpoint_summary?limit=50', undefined, { countMode: 'none' }),
+      opsQuery('GET', `v_mv_freshness?workspace_id=eq.${workspaceId}&limit=1`, undefined, { countMode: 'none' }),
+      opsQuery('GET', 'v_perf_target_compliance?limit=50', undefined, { countMode: 'none' }),
+      opsQuery('GET', 'v_perf_hourly_throughput?limit=48', undefined, { countMode: 'none' })
+    ]);
     return {
       view: '_perf', section: 'summary',
       endpoints: endpoints.data || [], mv_freshness: mvFreshness.data?.[0] || null,
@@ -421,12 +433,12 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
   }
 
   if (section === 'slow') {
-    const slow = await opsQuery('GET', 'v_perf_slow_requests?limit=100');
+    const slow = await opsQuery('GET', 'v_perf_slow_requests?limit=100', undefined, { countMode: 'none' });
     return { view: '_perf', section: 'slow', slow_requests: slow.data || [] };
   }
 
   if (section === 'workspace') {
-    const ws = await opsQuery('GET', `v_perf_workspace_summary?workspace_id=eq.${workspaceId}&limit=1`);
+    const ws = await opsQuery('GET', `v_perf_workspace_summary?workspace_id=eq.${workspaceId}&limit=1`, undefined, { countMode: 'none' });
     return { view: '_perf', section: 'workspace', workspace_perf: ws.data?.[0] || null };
   }
 

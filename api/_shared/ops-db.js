@@ -34,19 +34,48 @@ export function isOpsConfigured() {
   return !!(opsUrl() && opsKey());
 }
 
+const VALID_COUNT_MODES = new Set(['exact', 'estimated', 'planned', 'none']);
+
 /**
  * Execute a query against the ops Supabase database.
+ *
  * @param {string} method - HTTP method (GET, POST, PATCH, DELETE)
  * @param {string} path - PostgREST path (e.g., 'entities?id=eq.xxx')
  * @param {object} [body] - Request body for POST/PATCH
- * @param {object} [extraHeaders] - Additional headers
+ * @param {object} [opts] - Options object:
+ *   - opts.headers: extra HTTP headers (overrides defaults like Prefer)
+ *   - opts.countMode: GET-only — 'exact' | 'estimated' | 'planned' | 'none'
+ *       Default 'exact'. Use 'estimated' for paginated lists where the
+ *       header pager just needs an approximate total. Use 'none' for
+ *       single-row reads where result.count is never consumed (saves the
+ *       second COUNT(*) trip on UNION/joined views).
+ *
+ *   For backward compatibility, a flat headers object (no countMode/headers
+ *   keys) passed as the 4th arg is still treated as headers. New code
+ *   should use the explicit { headers, countMode } shape.
+ *
  * @returns {{ ok: boolean, status: number, data: any, count?: number }}
  */
-export async function opsQuery(method, path, body, extraHeaders = {}) {
+export async function opsQuery(method, path, body, opts = {}) {
   const OPS_URL = opsUrl();
   const OPS_KEY = opsKey();
   if (!OPS_URL || !OPS_KEY) {
     return { ok: false, status: 503, data: { error: 'Ops database not configured' } };
+  }
+
+  // Detect new-style opts (has countMode or headers key) vs legacy headers obj.
+  const isOptsShape = opts && typeof opts === 'object'
+    && (Object.prototype.hasOwnProperty.call(opts, 'countMode')
+      || Object.prototype.hasOwnProperty.call(opts, 'headers'));
+  const extraHeaders = isOptsShape ? (opts.headers || {}) : opts;
+  const rawCountMode = isOptsShape ? opts.countMode : undefined;
+  const countMode = VALID_COUNT_MODES.has(rawCountMode) ? rawCountMode : 'exact';
+
+  let defaultPrefer;
+  if (method === 'GET') {
+    defaultPrefer = countMode === 'none' ? null : `count=${countMode}`;
+  } else {
+    defaultPrefer = 'return=representation';
   }
 
   const url = `${OPS_URL}/rest/v1/${path}`;
@@ -54,16 +83,16 @@ export async function opsQuery(method, path, body, extraHeaders = {}) {
     'apikey': OPS_KEY,
     'Authorization': `Bearer ${OPS_KEY}`,
     'Content-Type': 'application/json',
-    'Prefer': method === 'GET' ? 'count=exact' : 'return=representation',
+    ...(defaultPrefer ? { Prefer: defaultPrefer } : {}),
     ...extraHeaders
   };
 
-  const opts = { method, headers };
+  const fetchOpts = { method, headers };
   if (body && (method === 'POST' || method === 'PATCH')) {
-    opts.body = JSON.stringify(body);
+    fetchOpts.body = JSON.stringify(body);
   }
 
-  const res = await fetchWithTimeout(url, opts, 8000);
+  const res = await fetchWithTimeout(url, fetchOpts, 8000);
   const text = await res.text();
 
   let data = null;
