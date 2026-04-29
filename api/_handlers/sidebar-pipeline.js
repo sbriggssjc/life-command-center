@@ -6240,11 +6240,59 @@ async function upsertDialysisListings(propertyId, metadata) {
     // comes only from metadata.cap_rate (the CoStar listing's asking cap
     // rate); never from a sale-derived calculated/sold cap rate.
     currentListingId = lookup.data[0].listing_id;
+
+    // Round 76en (2026-04-29): historical-sale-price overwrite guard.
+    // 6606 Stadium Dr in Zephyrhills FL surfaced a case where the CoStar
+    // capture extracted $445K as the current asking price for a 7,200 SF
+    // medical office (= $61.80/SF, implausibly cheap). The existing LCC
+    // entity correctly had $3.2M ($444/SF — typical). The $445K was
+    // suspiciously close to a 2014 historical sale of $450K visible in
+    // the page's Sales History block, suggesting the parser grabbed a
+    // historical price value into the asking-price slot.
+    //
+    // Defense: when we have a known-good existing last_price > 0 and the
+    // new asking_price is BOTH (a) substantially below it (< 60%) AND (b)
+    // within 5% of any historical sale price the metadata already shows,
+    // refuse to overwrite the price field. We still PATCH the other
+    // listing fields (cap rate, broker, etc.) — only price is suppressed.
+    // Records the suppression in the entity metadata via console.warn so
+    // the diagnostic shows up in Vercel logs without needing a DB write.
+    let askingPriceSuppressed = false;
+    const newAskingPrice = parseCurrency(metadata.asking_price);
+    const existingLastPrice = (() => {
+      const raw = lookup.data[0].last_price;
+      const n = raw == null ? null : Number(raw);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    })();
+    if (newAskingPrice && existingLastPrice
+        && newAskingPrice < existingLastPrice * 0.6) {
+      const histSales = Array.isArray(metadata.sales_history) ? metadata.sales_history : [];
+      const matchedHistorical = histSales.some(s => {
+        const sp = parseCurrency(s && s.sale_price);
+        if (!sp || sp <= 0) return false;
+        // Within 5% (covers $450K vs $445K = 1.1%, $1.05M vs $1M = 5%)
+        return Math.abs(sp - newAskingPrice) / sp <= 0.05;
+      });
+      if (matchedHistorical) {
+        askingPriceSuppressed = true;
+        console.warn('[upsertDialysisListings] Round 76en: suppressed asking_price overwrite — new value matches historical sale within 5%', {
+          listing_id: currentListingId,
+          property_id: propertyIdInt,
+          existing_last_price: existingLastPrice,
+          rejected_asking_price: newAskingPrice,
+          matched_historical_sales: histSales
+            .map(s => parseCurrency(s && s.sale_price))
+            .filter(n => n > 0)
+            .filter(sp => Math.abs(sp - newAskingPrice) / sp <= 0.05),
+        });
+      }
+    }
+
     const patchData = stripNulls({
-      last_price: parseCurrency(metadata.asking_price),
+      last_price: askingPriceSuppressed ? null : newAskingPrice,
       current_cap_rate: listingCapRate,
       cap_rate: listingCapRate,
-      price_per_sf: safePricePsf,
+      price_per_sf: askingPriceSuppressed ? null : safePricePsf,
     });
     // Also update broker fields if currently empty
     if (primaryBroker?.name)  patchData.listing_broker = primaryBroker.name;
