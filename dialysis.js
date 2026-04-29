@@ -5169,10 +5169,21 @@ function renderSuggestedCandidates(item, suggested) {
 window.propResLinkFromQueue = async function(clinicId, propertyId) {
   if (!(await lccConfirm('Link clinic ' + clinicId + ' to Property #' + propertyId + '?', 'Link'))) return;
 
-  // Insert a new property_review outcome row. The queue view filters by
-  // outcomes already recorded for this (clinic_id, queue_type), so the row
-  // drops out on next render.
+  // Disable the clicked chip while the request is in flight to prevent
+  // double-saves.
+  const btnEl = (typeof event !== 'undefined' && event && event.target) ? event.target : null;
+  if (btnEl && btnEl.tagName === 'BUTTON') { btnEl.disabled = true; btnEl.textContent = 'Saving…'; }
+
   try {
+    // research_queue_outcomes has a UNIQUE(queue_type, clinic_id) constraint,
+    // so an INSERT for an already-reviewed clinic returns 409. Check the
+    // existing outcomes cache and PATCH the row in place if it exists,
+    // otherwise INSERT a new one.
+    const existing = (diaData.researchOutcomes || []).find(function(o) {
+      return o && o.queue_type === 'property_review'
+        && String(o.clinic_id) === String(clinicId);
+    });
+
     const payload = {
       queue_type: 'property_review',
       clinic_id: String(clinicId),
@@ -5183,19 +5194,34 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
       assigned_at: new Date().toISOString()
     };
 
-    const result = await applyInsertWithFallback({
-      proxyBase: '/api/dia-query',
-      table: 'research_queue_outcomes',
-      idColumn: 'clinic_id',
-      recordIdentifier: String(clinicId),
-      data: payload,
-      source_surface: 'dialysis_property_review',
-      propagation_scope: 'research_queue_outcome'
-    });
+    let result;
+    if (existing) {
+      result = await applyChangeWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        idValue: String(clinicId),
+        matchFilters: [{ column: 'queue_type', value: 'property_review' }],
+        data: payload,
+        source_surface: 'dialysis_property_review',
+        propagation_scope: 'research_queue_outcome'
+      });
+    } else {
+      result = await applyInsertWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        recordIdentifier: String(clinicId),
+        data: payload,
+        source_surface: 'dialysis_property_review',
+        propagation_scope: 'research_queue_outcome'
+      });
+    }
 
     if (!result || !result.ok) {
       const msg = (result && result.errors && result.errors.join('; ')) || 'unknown error';
       showToast('Failed to save link: ' + msg, 'error');
+      if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Link'; }
       return;
     }
 
@@ -5217,9 +5243,9 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
     });
 
     // Advance to next item in the filtered queue.
-    const filtered = diaData.propertyReviewQueue.filter(r =>
-      !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type
-    );
+    const filtered = diaData.propertyReviewQueue.filter(function(r) {
+      return !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type;
+    });
     const currentIdx = diaPropertyFilter.selectedIdx || 0;
     if (currentIdx + 1 < filtered.length) {
       diaPropertyFilter.selectedIdx = currentIdx + 1;
@@ -5232,6 +5258,7 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
   } catch (err) {
     console.error('propResLinkFromQueue error:', err);
     showToast('Failed to save link: ' + (err.message || 'unknown error'), 'error');
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Link'; }
   }
 };
 
