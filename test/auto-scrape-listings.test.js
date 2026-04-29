@@ -290,4 +290,114 @@ describe('admin /_route=auto-scrape-listings', () => {
     const rpcCalls = calls.filter((c) => c.url.endsWith('/rest/v1/rpc/lcc_record_listing_check'));
     assert.equal(rpcCalls.length, 0, 'dry-run must not invoke the RPC');
   });
+
+  it('listings query uses an OR filter that includes NULL verification_due_at', async () => {
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      const target = String(url);
+      const method = opts.method || 'GET';
+      calls.push({ url: target, method });
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch: ${method} ${target}`);
+    };
+
+    const handler = await loadHandler();
+    await handler(
+      {
+        method: 'GET',
+        query: { _route: 'auto-scrape-listings', domain: 'gov' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      },
+      mockRes()
+    );
+
+    const listingsCall = calls.find((c) => c.url.includes('/rest/v1/available_listings?listing_status=eq.active'));
+    assert.ok(listingsCall, 'expected listings fetch');
+    // The new filter is: or=(verification_due_at.is.null,and(...gte...,...lte...))
+    assert.ok(
+      listingsCall.url.includes('or=(verification_due_at.is.null'),
+      `expected NULL-inclusive OR filter in URL: ${listingsCall.url}`
+    );
+    // The window bounds (gte cutoff, lte now) must be inside the AND group.
+    assert.ok(
+      listingsCall.url.includes('and(verification_due_at.gte.'),
+      `expected AND-grouped non-NULL window in URL: ${listingsCall.url}`
+    );
+    assert.ok(
+      listingsCall.url.includes('verification_due_at.lte.'),
+      `expected upper bound in URL: ${listingsCall.url}`
+    );
+    // The old flat-filter form must be gone — those would silently exclude NULLs.
+    assert.ok(
+      !listingsCall.url.includes('&verification_due_at=lte.'),
+      `flat lte filter must be removed (it excluded NULLs): ${listingsCall.url}`
+    );
+    assert.ok(
+      !listingsCall.url.includes('&verification_due_at=gte.'),
+      `flat gte filter must be removed (it excluded NULLs): ${listingsCall.url}`
+    );
+  });
+
+  it('processes a listing with NULL verification_due_at as if due now', async () => {
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      const target = String(url);
+      const method = opts.method || 'GET';
+      calls.push({ url: target, method, body: opts.body });
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      // The bug case: listing with NULL verification_due_at. Cron should
+      // pick it up via the new OR filter, then process it normally.
+      if (target.includes('/rest/v1/available_listings?listing_status=eq.active')) {
+        return jsonResponse([{
+          listing_id: 7,
+          property_id: 700,
+          listing_date: '2025-12-01',
+          verification_due_at: null,
+          consecutive_check_failures: 0
+        }]);
+      }
+      if (target.startsWith('https://gov.example.com/rest/v1/sales_transactions')) {
+        return jsonResponse([]); // no sales — should mark still_available
+      }
+      if (target.endsWith('/rest/v1/rpc/lcc_record_listing_check') && method === 'POST') {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${method} ${target}`);
+    };
+
+    const handler = await loadHandler();
+    const res = mockRes();
+    await handler(
+      {
+        method: 'POST',
+        query: { _route: 'auto-scrape-listings', domain: 'gov' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      },
+      res
+    );
+
+    assert.equal(res._status, 200);
+    assert.equal(res._json.scanned, 1);
+    assert.equal(res._json.auto_verified_available, 1);
+    const rpcCall = calls.find((c) => c.url.endsWith('/rest/v1/rpc/lcc_record_listing_check'));
+    assert.ok(rpcCall, 'expected RPC call to fire on the NULL-due listing');
+    const body = JSON.parse(rpcCall.body);
+    assert.equal(body.p_listing_id, 7);
+    assert.equal(body.p_check_result, 'still_available');
+  });
 });

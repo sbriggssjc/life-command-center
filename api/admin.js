@@ -395,10 +395,23 @@ async function handleAutoScrapeListings(req, res) {
       : `listing_status=eq.active`;
     const dateCol = dom === 'dialysis' ? 'listing_date' : 'listing_date';
     const select = `listing_id,property_id,${dateCol},verification_due_at,consecutive_check_failures`;
+    // Listings to verify this tick:
+    //   verification_due_at IS NULL              ← drift recovery (BEFORE-INSERT
+    //                                              trigger missed it, e.g. row
+    //                                              loaded via psql or replication)
+    //   OR (verification_due_at within [cutoff, now])
+    //
+    // The previous version used two flat verification_due_at filters which
+    // excluded NULL rows entirely (PostgREST treats NULL comparisons as not
+    // matching), even though the order clause says nullsfirst — that was the
+    // tell that NULLs were always meant to be in scope. The companion view
+    // v_listings_due_for_verification already uses
+    // (verification_due_at IS NULL OR verification_due_at <= now()).
+    const cutoffEnc = encodeURIComponent(cutoffIso);
+    const nowEnc = encodeURIComponent(new Date().toISOString());
     const path =
       `available_listings?${isActiveFilter}` +
-      `&verification_due_at=lte.${encodeURIComponent(new Date().toISOString())}` +
-      `&verification_due_at=gte.${encodeURIComponent(cutoffIso)}` +
+      `&or=(verification_due_at.is.null,and(verification_due_at.gte.${cutoffEnc},verification_due_at.lte.${nowEnc}))` +
       `&select=${select}` +
       `&order=verification_due_at.asc.nullsfirst&limit=${limit}`;
 
