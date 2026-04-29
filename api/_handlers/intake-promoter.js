@@ -36,6 +36,7 @@ import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName } from '../_shared/entity-link.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
+import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
 
@@ -940,7 +941,9 @@ async function promoteDiaLeaseFromOm(propertyId, snapshot) {
 
   const newLease = {
     property_id:               Number(propertyId),
-    tenant:                    snapshot.tenant_name      || null,
+    // Canonicalize brand variants (DaVita Inc. / DAVITA / Davita Healthcare
+    // Partners → DaVita Kidney Care). See _shared/tenant-canonical.js.
+    tenant:                    canonicalizeTenant(snapshot.tenant_name) || null,
     guarantor:                 snapshot.tenant_guarantor || null,
     lease_start:               commencement,
     lease_expiration:          expiration,

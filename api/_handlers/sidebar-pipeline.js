@@ -27,6 +27,7 @@ import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 // remains in place so the registry still observes every attempted write,
 // but actual UPDATEs are now narrowed to fields the registry approves.
 import { filterByFieldPriority } from '../_shared/field-priority-guard.js';
+import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -5847,7 +5848,11 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
       }
       leaseRecords.push({
         property_id: propertyId,
-        tenant: t.name.trim(),
+        // canonicalizeTenant collapses brand variants (DaVita Inc. /
+        // DAVITA DIALYSIS / Davita Healthcare Partners → DaVita Kidney Care)
+        // so the lease row's tenant column is stable across captures and
+        // same-source provenance conflicts disappear.
+        tenant: canonicalizeTenant(t.name.trim()),
         leased_area: inferredLeasedArea,
         lease_start: leaseStart,
         lease_expiration: leaseExp,
@@ -5878,7 +5883,7 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     const safeFallbackRent = (fallbackAnnualRent && fallbackAnnualRent >= 100) ? fallbackAnnualRent : derivedAnnualRent;
     leaseRecords.push({
       property_id: propertyId,
-      tenant: tenantName.trim(),
+      tenant: canonicalizeTenant(tenantName.trim()),
       leased_area: parseSF(metadata.sf_leased),
       lease_start: fallbackStart,
       lease_expiration: fallbackExp,
