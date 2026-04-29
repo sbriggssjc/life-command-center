@@ -135,8 +135,43 @@ This suggests `lcc_merge_field` is undercovered across the system, not
 just on dia auto-linkers. A larger audit pass would identify which
 JS writers should already be calling it but aren't.
 
+### Audit pass findings (2026-04-29)
+
+A first audit grouped unobserved rules by `(target_table, source)` and
+identified two distinct kinds of unobserved rules:
+
+1. **Sources with no JS writer at all** — `manual_edit`,
+   `lease_document`, `salesforce`, `cms_chain_org`, `recorded_deed`.
+   These are scaffolding for future writers. ~85% of the 503 rows.
+   Each one is its own integration project (manual edits would need
+   an LCC UI hook into `lcc_merge_field`; CMS chain reporting would
+   need the dialysis CMS sync to call out to LCC; etc.).
+
+2. **Active writer that just isn't covered for some fields** — was the
+   case for `om_extraction × dia.properties.{tenant, building_size,
+   land_area, anchor_rent_source}`. The Phase 2.1 instrumentation
+   loop in `intake-promoter.js` had branches for the original
+   2026-04-25 set of fields but never got updated when later patches
+   added those four fields to `promoteDiaPropertyFromOm`. **Fixed in
+   PR #494** along with two registry typos (`dia.properties.land_acres`
+   → `land_area`, missing `anchor_rent_source` rules).
+
+For new fields added to a writer, check the corresponding
+provenance loop. If you're patching a column the writer didn't
+patch before, you need a branch in the provenance call too.
+
+### `matched_property_id` is intentional, not a logical gap
+
+`agency_debt_programs.matched_property_id` and
+`federal_loan_records.matched_property_id` use a column name distinct
+from the standard `property_id` because the linkage is fuzzy /
+confidence-scored rather than a strong FK. The merge function's
+special-case for these two columns is correct — keep it. Don't
+rename them to `property_id`.
+
 ---
 
 *Author: Claude Code (claude/field-source-priority-ramp-plan-PGmsy).
 Migration that registered the 13 rules: LCC PR #484. Migration that
-added v_field_source_priority_unobserved: this PR.*
+added v_field_source_priority_unobserved: PR #490.
+Audit-pass findings + Phase 2.1 coverage fix: PR #494.*
