@@ -593,7 +593,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // Also accept number-range addresses (215-225) which were previously
     // rejected because the regex required digit-then-whitespace.
     const segments = raw.split(/\s+[-–—|]\s+/).map(s => s.trim()).filter(Boolean);
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|trail)\b/i;
+    // Round 76dk: added Expy, Expressway, Trl, Sq, Square, Ter, Terrace, Cv, Cove,
+    // Crk, Creek, Hill, Bnd, Bend, Run. Without Expy, addresses like
+    // "2700 S Central Expy" failed validation, which broke findSplitAddressInLines'
+    // post-combine validation step on a 2026-04 CoStar capture in McKinney TX.
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz)\b/i;
     for (const seg of segments) {
       // Reject pagination patterns like "1 of 2,000 Records"
       if (/^\d+\s+of\s+[\d,]+/i.test(seg)) continue;
