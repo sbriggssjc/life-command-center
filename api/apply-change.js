@@ -157,7 +157,9 @@ export default withErrorHandler(async function handler(req, res) {
     });
   } catch (err) {
     const pending_review = await createPendingReview('needs_review', { stage: 'fetch', message: err.message });
-    logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
+    // Awaited: Vercel Node freezes pending I/O after res.json(), so
+    // fire-and-forget perf logs were being silently dropped.
+    await logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
       status: 'fetch_failed',
       target_table,
       target_source,
@@ -214,7 +216,7 @@ export default withErrorHandler(async function handler(req, res) {
       status: mutationResponse.status,
       detail: errBody.substring(0, 1000)
     });
-    logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
+    await logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
       status: 'mutation_failed',
       status_code: mutationResponse.status,
       target_table,
@@ -258,14 +260,17 @@ export default withErrorHandler(async function handler(req, res) {
       applied_at: new Date().toISOString()
     };
 
-    // Fire-and-forget audit log — don't block the response on this
-    opsQuery('POST', 'data_corrections', correction).catch(err => {
+    // Awaited: this is the audit log of record. Vercel Node terminates
+    // pending I/O after res.json(), so the previous fire-and-forget pattern
+    // was silently dropping a fraction of audit rows. The extra round-trip
+    // (~5-15ms) is the cost of keeping the audit trail complete.
+    await opsQuery('POST', 'data_corrections', correction).catch(err => {
       console.error('[apply-change] Failed to log data_correction:', err);
     });
 
     // --- Resolve linked pending_updates if provided ---
     if (linked_pending_id) {
-      opsQuery('PATCH',
+      await opsQuery('PATCH',
         `pending_updates?id=eq.${encodeURIComponent(linked_pending_id)}&workspace_id=eq.${workspaceId}`,
         { status: 'applied', resolved_at: new Date().toISOString(), resolved_by: actor || user.email }
       ).catch(err => {
@@ -274,7 +279,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
   }
 
-  logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
+  await logPerfMetric(workspaceId, user.id, 'mutation_latency', 'apply-change', Date.now() - startedAt, {
     status: 'ok',
     target_table,
     target_source,

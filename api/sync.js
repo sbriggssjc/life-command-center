@@ -969,7 +969,9 @@ async function handleOutbound(req, res, user, workspaceId) {
           occurred_at: new Date().toISOString()
         });
 
-        logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:outbound', Date.now() - startedAt, {
+        // Awaited: Vercel Node freezes pending I/O after res.json(), so
+        // fire-and-forget perf logs were being silently dropped.
+        await logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:outbound', Date.now() - startedAt, {
           status: 'completed',
           command,
           connector_type: connectorType,
@@ -996,7 +998,7 @@ async function handleOutbound(req, res, user, workspaceId) {
   await completeSyncJob(job.id, 'failed', 0, 1, lastError);
   await logSyncError(job.id, workspaceId, connector.id, null, lastError, payload, true);
   await updateConnectorStatus(connector.id, 'degraded', null, lastError);
-  logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:outbound', Date.now() - startedAt, {
+  await logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:outbound', Date.now() - startedAt, {
     status: 'failed',
     command,
     connector_type: connectorType,
@@ -1086,7 +1088,7 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
           occurred_at: new Date().toISOString()
         });
 
-        logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:complete_sf_task', Date.now() - startedAt, {
+        await logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:complete_sf_task', Date.now() - startedAt, {
           status: 'completed',
           action: taskAction,
           attempts: attempt + 1,
@@ -1117,7 +1119,7 @@ async function handleCompleteSfTask(req, res, user, workspaceId) {
     await logSyncError(job?.id || null, workspaceId, connector.id, sf_contact_id, lastError, payload, true);
     await updateConnectorStatus(connector.id, 'degraded', null, lastError);
   }
-  logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:complete_sf_task', Date.now() - startedAt, {
+  await logPerfMetric(workspaceId, user.id, 'propagation_latency', 'sync:complete_sf_task', Date.now() - startedAt, {
     status: 'failed',
     action: taskAction,
     sync_job_id: job?.id || null,
