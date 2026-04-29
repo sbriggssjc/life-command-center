@@ -1930,14 +1930,21 @@ function _cmsAvgCard(title, value, color) {
  * so the action prompt is correct per signal type.
  */
 
-// Severity styling — keyed by matview severity column
+// Severity styling — keyed by matview severity column (or a synthetic key
+// for provider-change signals, which all have severity='data_quality' but
+// represent BD events rather than data-hygiene cleanup).
 const NPI_SEVERITY_META = {
-  data_error:      { label: 'Likely Typo',      color: '#f87171', bg: 'rgba(248,113,113,0.10)', priority: 1 },
-  data_quality:    { label: 'Needs Review',     color: '#fbbf24', bg: 'rgba(251,191,36,0.10)',  priority: 2 },
-  unresolved:      { label: 'Auto-Pending',     color: '#a78bfa', bg: 'rgba(167,139,250,0.10)', priority: 3 },
-  missing:         { label: 'Look Up NPI',      color: '#22d3ee', bg: 'rgba(34,211,238,0.10)',  priority: 2 },
-  auto_resolvable: { label: 'Auto-Resolved',    color: '#34d399', bg: 'rgba(52,211,153,0.10)',  priority: 5 }
+  provider_change: { label: 'Provider Change', color: '#fb923c', bg: 'rgba(251,146,60,0.10)',  priority: 1 },
+  data_error:      { label: 'Likely Typo',     color: '#f87171', bg: 'rgba(248,113,113,0.10)', priority: 1 },
+  data_quality:    { label: 'Needs Review',    color: '#fbbf24', bg: 'rgba(251,191,36,0.10)',  priority: 2 },
+  unresolved:      { label: 'Auto-Pending',    color: '#a78bfa', bg: 'rgba(167,139,250,0.10)', priority: 3 },
+  missing:         { label: 'Look Up NPI',     color: '#22d3ee', bg: 'rgba(34,211,238,0.10)',  priority: 2 },
+  auto_resolvable: { label: 'Auto-Resolved',   color: '#34d399', bg: 'rgba(52,211,153,0.10)',  priority: 5 }
 };
+
+const NPI_PROVIDER_CHANGE_TYPES = new Set([
+  'npi_deactivated','address_change','name_change','official_change','new_npi'
+]);
 
 function _npiRowKey(row) {
   return (row.clinic_id || '') + '|' + (row.npi || '') + '|' + (row.signal_type || '');
@@ -1945,6 +1952,7 @@ function _npiRowKey(row) {
 
 function _npiSeverityKey(row) {
   if (row.signal_type === 'missing_inventory_npi') return 'missing';
+  if (NPI_PROVIDER_CHANGE_TYPES.has(row.signal_type)) return 'provider_change';
   return row.severity || 'unresolved';
 }
 
@@ -1957,16 +1965,30 @@ function _npiBannerText(rows) {
     return 'No actionable NPI signals — the matview has classified everything as auto-resolved or filtered. Switch the filter to <strong>All</strong> to inspect resolved/dismissed signals.';
   }
   const parts = [];
+  // Provider-change signals (Round 76ed) — highest BD value, surface first
+  if (types.has('npi_deactivated')) {
+    parts.push('<strong>NPI deactivated</strong>: NPPES marked an NPI inactive — likely closure, merger, or operator change. Confirm operating status.');
+  }
+  if (types.has('address_change')) {
+    parts.push('<strong>Address changed</strong>: NPPES practice address moved — usually a relocation or lease event worth a property note.');
+  }
+  if (types.has('name_change')) {
+    parts.push('<strong>Name changed</strong>: org name on NPPES changed — rebrand or ownership transition.');
+  }
+  if (types.has('new_npi')) {
+    parts.push('<strong>New NPI at known address</strong>: a new ESRD NPI was registered at an active clinic that has no NPI link — adopt as that clinic\'s NPI.');
+  }
+  if (types.has('official_change')) {
+    parts.push('<strong>Authorized official changed</strong>: lower-priority governance signal.');
+  }
+  // Data-hygiene signals
   if (types.has('missing_inventory_npi')) {
     parts.push('<strong>Missing NPI</strong>: clinic exists but NPI field is blank — open the row to look up the NPI on the registry by name + address, then patch the clinic record.');
   }
-  if (sevs.has('data_error')) {
+  if (sevs.has('data_error') && types.has('duplicate_inventory_npi')) {
     parts.push('<strong>Likely typo</strong>: same NPI on rows with different names AND addresses — almost certainly a wrong NPI on one row. Open both, decide which is correct, clear the other.');
   }
-  if (sevs.has('data_quality')) {
-    parts.push('<strong>Needs review</strong>: same operator name across multiple addresses sharing one NPI — could be a relocation, a closed sister site, or a data error. Verify and dismiss or fix.');
-  }
-  if (sevs.has('unresolved')) {
+  if (sevs.has('unresolved') && types.has('duplicate_inventory_npi')) {
     parts.push('<strong>Auto-pending</strong>: nightly resolver will assign a primary CCN on next run. Safe to ignore unless you need an immediate fix.');
   }
   return parts.join(' ');
@@ -2041,6 +2063,7 @@ function renderDiaNpi() {
   };
   html += '<div class="pills" style="margin: 16px 0 8px;">';
   html += sevPill('actionable', 'Actionable (default)');
+  html += sevPill('provider_change', 'Provider Changes');
   html += sevPill('data_error', 'Likely Typos');
   html += sevPill('data_quality', 'Multi-Loc Review');
   html += sevPill('missing', 'Missing NPI');
