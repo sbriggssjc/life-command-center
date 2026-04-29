@@ -71,6 +71,9 @@ let diaStalenessData = null;
 let diaStalenessLoading = false;
 let diaRunHealthData = null;
 let diaRunHealthLoading = false;
+// Round 76cx Phase 2: listing verification dashboard digest (single-row view).
+let diaVerificationSummary = null;
+let diaVerificationSummaryLoading = false;
 let diaIntakeQueue = null;
 let diaIntakeLoading = false;
 let diaIntakeIdx = 0;
@@ -1161,6 +1164,13 @@ function renderOnMarketInner() {
   if (!diaAvailListings) {
     return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading listings...</div></div></div>';
   }
+  // Round 76cx Phase 2: kick off lazy load of the verification digest the
+  // first time the on-market dashboard renders. Fire-and-forget; the card
+  // shows "Loading verification digest…" until the data arrives, then a
+  // re-render fills in the counts.
+  if (!diaVerificationSummary && !diaVerificationSummaryLoading) {
+    loadDiaVerificationSummary();
+  }
   const listings = diaAvailListings;
 
   // Filter stale listings — anything listed before 2023 is almost certainly no longer on market
@@ -1208,11 +1218,13 @@ function renderOnMarketInner() {
   h += '</div>';
 
   // Additional row
-  h += '<div class="dia-grid dia-grid-3" style="margin-top:10px">';
+  h += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   const avgAskPrice = withPrice.length > 0 ? '$' + fmtN(Math.round(withPrice.reduce((s,r)=>s+getPrice(r),0)/withPrice.length)) : '—';
   h += infoCard({ title: 'Avg Ask Price', value: avgAskPrice, sub: fmtN(withPrice.length) + ' priced', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Days on Market', value: avgDomVal, sub: fmtN(avgDom.length) + ' with dates', color: 'yellow', tab: 'sales' });
   h += infoCard({ title: 'NM Market Share', value: recentListings.length > 0 ? (nmListings.length/recentListings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
+  // Round 76cx Phase 2: verification status card
+  h += renderListingVerificationCard();
   h += '</div>';
   return h;
 }
@@ -2505,6 +2517,65 @@ async function loadDiaStalenessData() {
   diaStalenessLoading = false;
   if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
   renderDiaTab();
+}
+
+// Round 76cx Phase 2: load the verification summary digest. Single-row
+// view; the dashboard widget renders due_for_verification + overdue +
+// broken-URL counts so the user sees at a glance how many listings need
+// human eyes.
+async function loadDiaVerificationSummary() {
+  if (diaVerificationSummaryLoading) return;
+  diaVerificationSummaryLoading = true;
+  try {
+    const rows = await diaQuery('v_listing_verification_summary', '*', { limit: 1 });
+    diaVerificationSummary = (rows && rows[0]) || null;
+  } catch (e) {
+    console.error('loadDiaVerificationSummary error:', e);
+    diaVerificationSummary = null;
+  }
+  diaVerificationSummaryLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
+  renderDiaTab();
+}
+
+// Round 76cx Phase 2: dashboard card. Renders a compact verification
+// digest. Click → toast for now (Phase 3 wires this to a triage queue
+// view). Color reflects urgency:
+//   blue   — nothing overdue
+//   yellow — some listings due
+//   red    — broken URLs or 90d+ overdue
+function renderListingVerificationCard() {
+  if (!diaVerificationSummary) {
+    return '<div class="dia-info-card" style="padding:14px 16px;color:var(--text3);font-size:11px">Loading verification digest…</div>';
+  }
+  const s = diaVerificationSummary;
+  const due       = Number(s.due_for_verification) || 0;
+  const overdue30 = Number(s.overdue_30d) || 0;
+  const overdue90 = Number(s.overdue_90d) || 0;
+  const broken    = Number(s.broken_url_count) || 0;
+  const recent    = Number(s.verifications_last_7d) || 0;
+  const changes7d = Number(s.recent_status_changes_7d) || 0;
+
+  let color = 'blue';
+  if (overdue90 > 0 || broken > 0) color = 'red';
+  else if (due > 0 || overdue30 > 0) color = 'yellow';
+
+  const title = 'Verification Status';
+  const value = fmtN(due);
+  const sub = `${overdue30} 30d-overdue · ${overdue90} 90d · ${broken} broken-url · ${recent} checks/7d · ${changes7d} status-changes/7d`;
+
+  return `<div class="dia-info-card dia-info-${color}" onclick="showToast('Verification triage queue lands in Round 76cx Phase 3','info')" style="cursor:pointer;padding:14px 16px">
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
+    <div style="font-size:24px;font-weight:700;color:var(--text1);margin-bottom:4px">${value}</div>
+    <div style="font-size:11px;color:var(--text2)">due now · ${escapeHtmlSafe(sub)}</div>
+  </div>`;
+}
+
+// Defensive escapeHtml stub (some dialysis.js builds inline this differently;
+// fallback returns raw string if global escapeHtml is unavailable).
+function escapeHtmlSafe(s) {
+  if (typeof escapeHtml === 'function') return escapeHtml(String(s ?? ''));
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
 /**
