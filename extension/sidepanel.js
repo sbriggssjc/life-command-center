@@ -1254,11 +1254,24 @@ async function loadPropertyTab() {
         // refreshes the asking_price / cap_rate on the listing if they
         // changed since last capture.
         const liveCtx = (await getPageContext()) || ctx || {};
+        // Round 76dw: when on a /for-sale/ URL, also accept sale_price as
+        // the price fallback. Captures from before Round 76dv didn't
+        // populate asking_price (extractor's older "Asking Price"-only
+        // matcher missed CoStar's "For Sale"/"Sale Price"/"Price" labels)
+        // so the auto-create flow couldn't fire even though the page
+        // clearly had a price. The server-side fallback in
+        // upsertDialysisListings only fires on full pipeline runs;
+        // the verify endpoint's auto-create reads the request body
+        // directly, so we mirror the same fallback chain client-side.
+        const onForSaleUrl = /\/detail\/for-sale\//i.test(String(liveCtx.page_url || window.location?.href || ''));
         const cleanPrice = (() => {
-          const raw = liveCtx.asking_price ?? liveCtx.list_price ?? liveCtx.price;
+          const raw = liveCtx.asking_price
+            ?? liveCtx.list_price
+            ?? liveCtx.price
+            ?? (onForSaleUrl ? liveCtx.sale_price : null);
           if (!raw) return null;
           const n = parseFloat(String(raw).replace(/[$,]/g, ''));
-          return Number.isFinite(n) && n > 0 ? n : null;
+          return Number.isFinite(n) && n >= 1000 ? n : null;
         })();
         const cleanCap = (() => {
           const raw = liveCtx.cap_rate ?? liveCtx.asking_cap_rate;
