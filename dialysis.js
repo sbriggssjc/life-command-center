@@ -5889,29 +5889,71 @@ async function saveClinicLeadOutcome(clinicId, status, notes, propertyId) {
  */
 async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source, term, rent, rentSF) {
   try {
+    // research_queue_outcomes only has these columns:
+    //   queue_type, clinic_id, status, notes, selected_property_id,
+    //   selected_candidate_property_ids, source_bucket, source_name,
+    //   assigned_to, assigned_at, root_cause, confidence_*, etc.
+    //
+    // Earlier versions of this function included lease_term, annual_rent,
+    // rent_per_sf, and verification_source — none of which exist on this
+    // table. PostgREST rejected the writes with http_400 ("Could not find
+    // column 'lease_term' on table 'research_queue_outcomes'"). The
+    // Confirm Link path now uses propResLinkFromQueue which builds its
+    // own clean payload, but the Reject path still hit this bug.
+    //
+    // Stripped to the columns that actually exist. Lease-specific fields
+    // (term, rent, rentSF) are still captured — they just go into the
+    // notes field as a structured suffix so we don't lose the info.
     const payload = {
       queue_type: queueType,
-      clinic_id: clinicId,
+      clinic_id: String(clinicId),
       status: status,
-      notes: notes,
-      selected_property_id: propId || null,
-      assigned_at: new Date().toISOString(),
-      verification_source: source || null,
-      lease_term: term || null,
-      annual_rent: rent ? parseFloat(rent) : null,
-      rent_per_sf: rentSF ? parseFloat(rentSF) : null
+      notes: notes || null,
+      selected_property_id: propId ? Number(propId) : null,
+      source_name: source || null,
+      assigned_at: new Date().toISOString()
     };
 
-    const result = await applyChangeWithFallback({
-      proxyBase: '/api/dia-query',
-      table: 'research_queue_outcomes',
-      idColumn: 'clinic_id',
-      idValue: clinicId,
-      matchFilters: [{ column: 'queue_type', value: queueType }],
-      data: payload,
-      source_surface: 'dialysis_research_outcome',
-      propagation_scope: 'research_queue_outcome'
+    // Append lease-specific values into notes if provided (they have no
+    // home on research_queue_outcomes itself).
+    const leaseSuffix = [];
+    if (term) leaseSuffix.push('term: ' + term);
+    if (rent) leaseSuffix.push('annual_rent: ' + rent);
+    if (rentSF) leaseSuffix.push('rent_per_sf: ' + rentSF);
+    if (leaseSuffix.length > 0) {
+      payload.notes = (payload.notes ? payload.notes + ' | ' : '') + leaseSuffix.join(', ');
+    }
+
+    // Try PATCH (existing row) first; fall back to INSERT if no row matched.
+    // research_queue_outcomes has UNIQUE(queue_type, clinic_id) so we can't
+    // double-insert; the bridge's 409 fallback (PR #480) catches the race.
+    const existing = (diaData.researchOutcomes || []).find(function(o) {
+      return o && o.queue_type === queueType && String(o.clinic_id) === String(clinicId);
     });
+
+    let result;
+    if (existing) {
+      result = await applyChangeWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        idValue: String(clinicId),
+        matchFilters: [{ column: 'queue_type', value: queueType }],
+        data: payload,
+        source_surface: 'dialysis_research_outcome',
+        propagation_scope: 'research_queue_outcome'
+      });
+    } else {
+      result = await applyInsertWithFallback({
+        proxyBase: '/api/dia-query',
+        table: 'research_queue_outcomes',
+        idColumn: 'clinic_id',
+        recordIdentifier: String(clinicId),
+        data: payload,
+        source_surface: 'dialysis_research_outcome',
+        propagation_scope: 'research_queue_outcome'
+      });
+    }
 
     if (!result.ok) {
       throw new Error('Failed to save outcome: ' + (result.errors || []).join('; '));
