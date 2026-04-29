@@ -4255,6 +4255,19 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
 
     const loanType = mapLoanType(sale.loan_type);
 
+    // Round 76cu: pull CMBS deal identifiers captured by extension/content/rca.js
+    // (Round 76ct). When the borrower text named a securitization pool —
+    // e.g. "CFCRE 2016-C6" or "GSMS 2014-GC22" — write deal_name + sponsor +
+    // vintage + tranche so v_cmbs_portfolio can group exposure by trust.
+    const cmbsDealName = sale.cmbs_deal_name ? String(sale.cmbs_deal_name).trim().substring(0, 80) : null;
+    const cmbsSponsor  = sale.cmbs_sponsor   ? String(sale.cmbs_sponsor).trim().substring(0, 40)  : null;
+    const cmbsVintage  = Number.isFinite(parseInt(sale.cmbs_vintage, 10)) ? parseInt(sale.cmbs_vintage, 10) : null;
+    const cmbsTranche  = sale.cmbs_tranche   ? String(sale.cmbs_tranche).trim().substring(0, 20)  : null;
+    // Vintage sanity (1990-2100) — guards against the regex matching a year
+    // in unrelated text. A vintage outside that window means the upstream
+    // capture isn't actually a CMBS deal name.
+    const cmbsValid = cmbsDealName && cmbsVintage && cmbsVintage >= 1990 && cmbsVintage <= 2100;
+
     // Government loans table has different column names (no text lender
     // column, term_years instead of loan_term, interest_rate instead of
     // interest_rate_percent), so build a domain-specific payload.
@@ -4268,6 +4281,11 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
       origination_date: originationDatePart,
       maturity_date:    parseDate(sale.maturity_date)?.split('T')[0] || null,
       data_source:      'costar_sidebar',
+      // CMBS enrichment (Round 76cu)
+      cmbs_deal_name:   cmbsValid ? cmbsDealName : null,
+      cmbs_sponsor:     cmbsValid ? cmbsSponsor  : null,
+      cmbs_vintage:     cmbsValid ? cmbsVintage  : null,
+      cmbs_tranche:     cmbsValid ? cmbsTranche  : null,
     }) : stripNulls({
       property_id:           propertyId,
       lender_name:           lenderName,
@@ -4278,6 +4296,11 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
       loan_term:             parseIntSafe(sale.loan_term),
       maturity_date:         parseDate(sale.maturity_date)?.split('T')[0] || null,
       data_source:           'costar_sidebar',
+      // CMBS enrichment (Round 76cu)
+      cmbs_deal_name:        cmbsValid ? cmbsDealName : null,
+      cmbs_sponsor:          cmbsValid ? cmbsSponsor  : null,
+      cmbs_vintage:          cmbsValid ? cmbsVintage  : null,
+      cmbs_tranche:          cmbsValid ? cmbsTranche  : null,
     });
 
     if (matchedLoanId != null) {
