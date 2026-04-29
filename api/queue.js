@@ -141,6 +141,29 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ events: result.data || [], count: result.count, view: 'entity_timeline' });
     }
 
+    case 'data_quality': {
+      // Surfaces v_data_quality_issues + v_data_quality_summary (LCC ops
+      // multi-tenant variant) for the active workspace. The UI panel in
+      // ops.js renders both: summary cards + filtered detail list.
+      // Optional &issue_kind=<kind> narrows the items list.
+      const issueKind = req.query.issue_kind;
+      let issuesPath = `v_data_quality_issues?workspace_id=eq.${workspaceId}`;
+      if (issueKind) issuesPath += `&issue_kind=eq.${pgFilterVal(issueKind)}`;
+      issuesPath += '&order=severity.desc&limit=50';
+
+      const [summaryRes, itemsRes] = await Promise.all([
+        opsQuery('GET',
+          `v_data_quality_summary?workspace_id=eq.${workspaceId}&order=total_severity.desc`,
+          undefined, { countMode: 'none' }),
+        opsQuery('GET', issuesPath, undefined, { countMode: 'none' })
+      ]);
+      return res.status(200).json({
+        view: 'data_quality',
+        summary: summaryRes.data || [],
+        items: itemsRes.data || []
+      });
+    }
+
     case 'counts': {
       // Single-row MV-style read; .count is never consumed.
       const result = await opsQuery('GET', `v_work_counts?workspace_id=eq.${workspaceId}`, undefined, { countMode: 'none' });
@@ -169,7 +192,7 @@ export default withErrorHandler(async function handler(req, res) {
 
     default:
       return res.status(400).json({
-        error: 'Invalid view. Must be one of: my_work, team, inbox, sync_exceptions, research, entity_timeline, counts'
+        error: 'Invalid view. Must be one of: my_work, team, inbox, sync_exceptions, research, entity_timeline, counts, data_quality'
       });
   }
 });

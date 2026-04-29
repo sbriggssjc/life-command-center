@@ -43,6 +43,9 @@ export const GOV_READ_TABLES = new Set([
   'unified_contacts',
   'contact_change_log',
   'contact_merge_queue',
+  // Data quality triage views (mirror of dia)
+  'v_data_quality_summary',
+  'v_data_quality_issues',
 ]);
 
 // Government Supabase — allowed tables for write (POST/PATCH)

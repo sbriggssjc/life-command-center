@@ -1021,6 +1021,13 @@ async function renderDataQualityPage() {
   // dialysis.js as a global).
   html += '<div id="diaDataQualityWidgets"><div class="widget"><div class="widget-title">Domain Data Quality (dialysis)</div><div class="loading"><span class="spinner"></span></div></div></div>';
 
+  // ── Domain DB data quality (government v_data_quality_*) ─────────────────
+  html += '<div id="govDataQualityWidgets"><div class="widget"><div class="widget-title">Domain Data Quality (government)</div><div class="loading"><span class="spinner"></span></div></div></div>';
+
+  // ── Ops DB data quality (LCC ops v_data_quality_*) — multi-tenant, scoped
+  //    to the active workspace. Sources from /api/queue?view=data_quality.
+  html += '<div id="opsDataQualityWidgets"><div class="widget"><div class="widget-title">Ops Data Quality</div><div class="loading"><span class="spinner"></span></div></div></div>';
+
   // ── Provenance conflicts (Phase 3 enforce-mode panel) ────────────────────
   // Hits /api/entities?action=quality_provenance which surfaces
   // v_field_provenance_actionable. Also lazy-loaded.
@@ -1033,6 +1040,18 @@ async function renderDataQualityPage() {
   if (typeof renderDiaDataQualityWidgets === 'function') {
     renderDiaDataQualityWidgets().catch(err => {
       console.error('[renderDiaDataQualityWidgets] failed:', err);
+    });
+  }
+  // Hydrate the gov data quality widget out-of-band.
+  if (typeof renderGovDataQualityWidgets === 'function') {
+    renderGovDataQualityWidgets().catch(err => {
+      console.error('[renderGovDataQualityWidgets] failed:', err);
+    });
+  }
+  // Hydrate the ops DB data quality widget out-of-band.
+  if (typeof renderOpsDataQualityWidgets === 'function') {
+    renderOpsDataQualityWidgets().catch(err => {
+      console.error('[renderOpsDataQualityWidgets] failed:', err);
     });
   }
   // Hydrate the provenance conflicts widget too.
@@ -1309,6 +1328,236 @@ async function opsOpenDiaProperty(propertyId) {
     console.error('opsOpenDiaProperty error:', err);
     showToast('Could not open property: ' + (err?.message || err), 'error');
   }
+}
+
+// ─── Domain (government) data quality — same pattern as the dia panel,
+//     but reads gov v_data_quality_summary / v_data_quality_issues via
+//     govQuery and uses gov-flavored issue_kind labels.
+let _govQualityFilter = 'all';
+async function renderGovDataQualityWidgets() {
+  const host = document.getElementById('govDataQualityWidgets');
+  if (!host) return;
+  if (typeof govQuery !== 'function') {
+    host.innerHTML = '<div class="widget"><div class="widget-title">Domain Data Quality (government)</div><div class="ops-empty">govQuery helper not loaded</div></div>';
+    return;
+  }
+
+  const [summaryRes, issuesRes] = await Promise.all([
+    govQuery('v_data_quality_summary', '*', { order: 'total_severity.desc', limit: 50 }),
+    govQuery(
+      'v_data_quality_issues', '*',
+      _govQualityFilter === 'all'
+        ? { order: 'severity.desc', limit: 50 }
+        : { filter: 'issue_kind=eq.' + encodeURIComponent(_govQualityFilter), order: 'severity.desc', limit: 50 }
+    )
+  ]);
+  const summary = summaryRes?.data || [];
+  const issues  = issuesRes?.data  || [];
+
+  const KIND_LABELS = {
+    duplicate_property_address: 'Duplicate property address',
+    listing_after_sale:         'Listing after sale',
+    orphan_listing:             'Orphan listing (property missing)',
+    lease_no_dates:             'Lease with no dates',
+  };
+  const KIND_HINTS = {
+    duplicate_property_address: 'Same normalized address+state under multiple property_ids — manual merge needed.',
+    listing_after_sale:         'Active listing on a property that already has a sale recorded. Run the listing-close backfill or flip status to Sold.',
+    orphan_listing:             'Property was deleted — listing should be removed or repointed.',
+    lease_no_dates:             'Active lease without commencement_date or expiration_date. Source data missing dates.',
+  };
+
+  let html = '';
+  html += '<div class="widget"><div class="widget-title">Domain Data Quality (government)</div>';
+  if (!summary || summary.length === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">No issues — government data is clean.</div>';
+  } else {
+    html += '<div class="metrics-grid" style="margin-bottom:12px">';
+    for (const row of summary) {
+      const tone = row.worst_severity >= 5 ? 'red' : row.worst_severity >= 3 ? 'yellow' : 'green';
+      const label = KIND_LABELS[row.issue_kind] || row.issue_kind;
+      const sub = `worst severity ${row.worst_severity}`;
+      html += metricCardHTML(label, row.issue_count || 0, sub, tone);
+    }
+    html += '</div>';
+
+    html += '<div class="ops-filters" style="margin-bottom:12px">';
+    html += `<button class="ops-filter ${_govQualityFilter === 'all' ? 'active' : ''}" onclick="_govQualityFilter='all';renderGovDataQualityWidgets()">All issues</button>`;
+    for (const row of summary) {
+      const active = _govQualityFilter === row.issue_kind ? 'active' : '';
+      html += `<button class="ops-filter ${active}" onclick="_govQualityFilter=${jsStringArg(row.issue_kind)};renderGovDataQualityWidgets()">${esc(KIND_LABELS[row.issue_kind] || row.issue_kind)} (${row.issue_count})</button>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (summary && summary.length > 0) {
+    html += '<div class="widget">';
+    const detailTitle = _govQualityFilter === 'all' ? 'Top issues by severity' : (KIND_LABELS[_govQualityFilter] || _govQualityFilter);
+    html += `<div class="widget-title">${esc(detailTitle)}`;
+    if (_govQualityFilter !== 'all' && KIND_HINTS[_govQualityFilter]) {
+      html += `<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">${esc(KIND_HINTS[_govQualityFilter])}</span>`;
+    }
+    html += '</div>';
+
+    if (!issues || issues.length === 0) {
+      html += '<div class="ops-empty">No rows for this filter.</div>';
+    } else {
+      for (const item of issues.slice(0, 50)) {
+        const propLikePid = /^\d+$/.test(String(item.record_id)) ? Number(item.record_id) : null;
+        const sevTone = item.severity >= 5 ? 'pri-high' : item.severity >= 3 ? 'pri-med' : 'pri-low';
+
+        html += `<div class="q-item">
+          <div class="q-item-header">
+            <span class="q-item-title">${esc(item.detail_1 || '(no detail)')}</span>
+            <div class="q-item-badges">
+              <span class="q-badge ${sevTone}">severity ${item.severity ?? '-'}</span>
+              ${item.issue_kind ? `<span class="q-badge">${esc(KIND_LABELS[item.issue_kind] || item.issue_kind)}</span>` : ''}
+            </div>
+          </div>
+          <div class="q-item-meta">
+            ${item.detail_2 ? `<span>${esc(item.detail_2)}</span>` : ''}
+            ${item.detail_3 ? `<span>${esc(item.detail_3)}</span>` : ''}
+            ${item.suggested_action ? `<span style="color:var(--text2);font-style:italic">→ ${esc(item.suggested_action)}</span>` : ''}
+          </div>
+          <div class="q-actions">
+            ${propLikePid != null && item.issue_kind !== 'orphan_listing' ? `<button class="q-action primary" onclick="opsOpenGovProperty(${propLikePid})">Open property ${propLikePid}</button>` : ''}
+            <button class="q-action" onclick="createQualityFollowup(${jsStringArg('Resolve ' + (KIND_LABELS[item.issue_kind] || item.issue_kind) + ' — ' + (item.detail_1 || item.record_id))})">Create Follow-up</button>
+          </div>
+        </div>`;
+      }
+      if (issues.length >= 50) {
+        html += '<div class="q-item-meta" style="padding:8px 12px">Showing first 50. Filter to a kind for the full list within that kind.</div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  host.innerHTML = html;
+}
+
+// Open a government property by ID via the same showDetail() flow.
+async function opsOpenGovProperty(propertyId) {
+  if (!propertyId) return;
+  try {
+    const r = await govQuery('properties', 'property_id,address,city,state,agency',
+      { filter: 'property_id=eq.' + propertyId, limit: 1 });
+    const prop = (r?.data || [])[0];
+    if (!prop) { showToast('Property ' + propertyId + ' not found in government DB', 'error'); return; }
+    if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
+    showDetail({
+      property_id: prop.property_id,
+      address:     prop.address || '',
+      city:        prop.city || '',
+      state:       prop.state || '',
+      tenant:      prop.agency || '',
+    }, 'gov-asset');
+  } catch (err) {
+    console.error('opsOpenGovProperty error:', err);
+    showToast('Could not open property: ' + (err?.message || err), 'error');
+  }
+}
+
+// ─── LCC ops (multi-tenant) data quality — reads
+//     /api/queue?view=data_quality which surfaces the workspace-scoped
+//     v_data_quality_issues view. No domain filter; severity is days-old
+//     for time-based issues.
+let _opsQualityFilter = 'all';
+async function renderOpsDataQualityWidgets() {
+  const host = document.getElementById('opsDataQualityWidgets');
+  if (!host) return;
+  if (!LCC_USER.workspace_id) {
+    host.innerHTML = '<div class="widget"><div class="widget-title">Ops Data Quality</div><div class="ops-empty">No workspace selected.</div></div>';
+    return;
+  }
+
+  const filterParam = _opsQualityFilter === 'all' ? '' : `&issue_kind=${encodeURIComponent(_opsQualityFilter)}`;
+  const res = await opsApi(`/api/queue?view=data_quality${filterParam}`);
+  const summary = res?.summary || [];
+  const issues  = res?.items   || [];
+
+  const KIND_LABELS = {
+    stuck_sync_job:        'Stuck sync job',
+    unresolved_sync_error: 'Unresolved sync error',
+    stuck_research:        'Stuck research task',
+    stale_open_action:     'Stale open action',
+    unassigned_action:     'Unassigned action',
+    orphan_inbox_entity:   'Orphan inbox entity FK',
+    orphan_action_entity:  'Orphan action entity FK',
+    escalation_overdue:    'Escalation overdue',
+  };
+  const KIND_HINTS = {
+    stuck_sync_job:        'Sync job has been pending/running > 24h. Likely hung — check connector and retry/fail manually.',
+    unresolved_sync_error: 'Sync error open > 30 days. Either resolve or mark non-retryable.',
+    stuck_research:        'Research task in_progress > 30 days. Check with assignee or reassign.',
+    stale_open_action:     'Action item not updated in > 90 days. Likely forgotten — close or reassign.',
+    unassigned_action:     'Action item open > 7 days with no assignee. Assign or downgrade visibility.',
+    orphan_inbox_entity:   'Inbox item references a non-existent entity. Set entity_id NULL or relink.',
+    orphan_action_entity:  'Action references a non-existent entity. Set entity_id NULL or relink.',
+    escalation_overdue:    'Escalation open > 14 days. Escalator should follow up or close.',
+  };
+
+  let html = '';
+  html += '<div class="widget"><div class="widget-title">Ops Data Quality</div>';
+  if (!summary || summary.length === 0) {
+    html += '<div class="ops-empty" style="color:var(--green)">No issues — ops data is clean.</div>';
+  } else {
+    html += '<div class="metrics-grid" style="margin-bottom:12px">';
+    for (const row of summary) {
+      const tone = row.worst_severity >= 30 ? 'red' : row.worst_severity >= 7 ? 'yellow' : 'green';
+      const label = KIND_LABELS[row.issue_kind] || row.issue_kind;
+      const sub = `worst severity ${row.worst_severity}`;
+      html += metricCardHTML(label, row.issue_count || 0, sub, tone);
+    }
+    html += '</div>';
+
+    html += '<div class="ops-filters" style="margin-bottom:12px">';
+    html += `<button class="ops-filter ${_opsQualityFilter === 'all' ? 'active' : ''}" onclick="_opsQualityFilter='all';renderOpsDataQualityWidgets()">All issues</button>`;
+    for (const row of summary) {
+      const active = _opsQualityFilter === row.issue_kind ? 'active' : '';
+      html += `<button class="ops-filter ${active}" onclick="_opsQualityFilter=${jsStringArg(row.issue_kind)};renderOpsDataQualityWidgets()">${esc(KIND_LABELS[row.issue_kind] || row.issue_kind)} (${row.issue_count})</button>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (summary && summary.length > 0) {
+    html += '<div class="widget">';
+    const detailTitle = _opsQualityFilter === 'all' ? 'Top issues by severity' : (KIND_LABELS[_opsQualityFilter] || _opsQualityFilter);
+    html += `<div class="widget-title">${esc(detailTitle)}`;
+    if (_opsQualityFilter !== 'all' && KIND_HINTS[_opsQualityFilter]) {
+      html += `<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:8px">${esc(KIND_HINTS[_opsQualityFilter])}</span>`;
+    }
+    html += '</div>';
+
+    if (!issues || issues.length === 0) {
+      html += '<div class="ops-empty">No rows for this filter.</div>';
+    } else {
+      for (const item of issues.slice(0, 50)) {
+        const sevTone = item.severity >= 30 ? 'pri-high' : item.severity >= 7 ? 'pri-med' : 'pri-low';
+        html += `<div class="q-item">
+          <div class="q-item-header">
+            <span class="q-item-title">${esc(item.detail_2 || item.detail_1 || item.record_id)}</span>
+            <div class="q-item-badges">
+              <span class="q-badge ${sevTone}">severity ${item.severity ?? '-'}</span>
+              ${item.issue_kind ? `<span class="q-badge">${esc(KIND_LABELS[item.issue_kind] || item.issue_kind)}</span>` : ''}
+            </div>
+          </div>
+          <div class="q-item-meta">
+            ${item.detail_1 ? `<span>${esc(item.detail_1)}</span>` : ''}
+            ${item.detail_3 ? `<span>${esc(item.detail_3)}</span>` : ''}
+            ${item.suggested_action ? `<span style="color:var(--text2);font-style:italic">→ ${esc(item.suggested_action)}</span>` : ''}
+          </div>
+        </div>`;
+      }
+      if (issues.length >= 50) {
+        html += '<div class="q-item-meta" style="padding:8px 12px">Showing first 50. Filter to a kind for the full list within that kind.</div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  host.innerHTML = html;
 }
 
 async function viewEntity(entityId) {
