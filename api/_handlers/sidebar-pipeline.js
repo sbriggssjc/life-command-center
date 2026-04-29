@@ -5763,12 +5763,24 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
           console.log(`[upsertDomainLeases] inferred leased_area=${rba} for ${t.name} (single-tenant + 100% leased + RBA)`);
         }
       }
+      const leaseStart = parseDate(t.lease_start || metadata.lease_commencement);
+      const leaseExp   = parseDate(t.lease_expiration || metadata.lease_expiration);
+      // Skip dateless placeholder leases. v_data_quality_issues 2026-04-29
+      // showed 36 active leases with no dates, all written by costar_sidebar
+      // in the prior 48h — the writer was happily creating placeholders
+      // when CoStar had a tenant name but no lease dates. A lease without
+      // either date can't drive lifecycle (expiration, supersede, rent
+      // projection) and just pollutes the table.
+      if (!leaseStart && !leaseExp) {
+        console.log(`[upsertDomainLeases] skip dateless tenant=${t.name} on property=${propertyId}`);
+        continue;
+      }
       leaseRecords.push({
         property_id: propertyId,
         tenant: t.name.trim(),
         leased_area: inferredLeasedArea,
-        lease_start: parseDate(t.lease_start || metadata.lease_commencement),
-        lease_expiration: parseDate(t.lease_expiration || metadata.lease_expiration),
+        lease_start: leaseStart,
+        lease_expiration: leaseExp,
         expense_structure: t.lease_type || metadata.expense_structure || metadata.lease_type,
         rent_per_sf: parseCurrency(t.rent_per_sf || metadata.rent_per_sf),
         annual_rent: safeAnnualRent,
@@ -5785,14 +5797,21 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     const tenantName = metadata.tenant_name || metadata.primary_tenant;
     if (!tenantName) return 0;
 
+    const fallbackStart = parseDate(metadata.lease_commencement);
+    const fallbackExp   = parseDate(metadata.lease_expiration);
+    if (!fallbackStart && !fallbackExp) {
+      console.log(`[upsertDomainLeases] skip dateless top-level tenant=${tenantName} on property=${propertyId}`);
+      return 0;
+    }
+
     const fallbackAnnualRent = parseCurrency(metadata.annual_rent);
     const safeFallbackRent = (fallbackAnnualRent && fallbackAnnualRent >= 100) ? fallbackAnnualRent : derivedAnnualRent;
     leaseRecords.push({
       property_id: propertyId,
       tenant: tenantName.trim(),
       leased_area: parseSF(metadata.sf_leased),
-      lease_start: parseDate(metadata.lease_commencement),
-      lease_expiration: parseDate(metadata.lease_expiration),
+      lease_start: fallbackStart,
+      lease_expiration: fallbackExp,
       expense_structure: metadata.expense_structure || metadata.lease_type,
       rent_per_sf: parseCurrency(metadata.rent_per_sf),
       annual_rent: safeFallbackRent,
