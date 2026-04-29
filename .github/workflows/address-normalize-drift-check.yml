@@ -24,6 +24,9 @@ concurrency:
   group: address-normalize-drift-check
   cancel-in-progress: false
 
+permissions:
+  issues: write
+
 jobs:
   check:
     name: Compare normalizer signatures
@@ -69,16 +72,80 @@ jobs:
           echo "md5=$MD5" >> "$GITHUB_OUTPUT"
 
       - name: Compare
+        id: compare
         run: |
           DIA="${{ steps.dia.outputs.md5 }}"
           GOV="${{ steps.gov.outputs.md5 }}"
           echo "Dia: $DIA"
           echo "Gov: $GOV"
+          echo "dia_md5=$DIA" >> "$GITHUB_OUTPUT"
+          echo "gov_md5=$GOV" >> "$GITHUB_OUTPUT"
           if [[ "$DIA" != "$GOV" ]]; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
             echo "::error::Address normalizer DRIFT detected!"
             echo "::error::dia.dia_normalize_address       md5=$DIA"
             echo "::error::gov.normalize_address_txt       md5=$GOV"
             echo "::error::Fix: align both function bodies. See docs/architecture/address_normalization_spec.md"
-            exit 1
+          else
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            echo "OK — both DBs report identical normalizer signature ($DIA)."
           fi
-          echo "OK — both DBs report identical normalizer signature ($DIA)."
+
+      # On drift, ensure there's a tracking issue. If one is already open with
+      # the `address-normalizer-drift` label, add a follow-up comment with
+      # today's md5s so we have a timeline. Otherwise open a fresh issue.
+      # Either way we still fail the job at the end so the run shows red.
+      - name: Open / update drift issue
+        if: steps.compare.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIA: ${{ steps.compare.outputs.dia_md5 }}
+          GOV: ${{ steps.compare.outputs.gov_md5 }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          BODY=$(cat <<EOF
+          The daily Address Normalizer Drift Check detected a mismatch between the
+          two address-normalizer functions. Cross-domain matching depends on
+          byte-equivalent normalization rules, so this is a silent match-quality
+          regression risk until resolved.
+
+          - \`dia.dia_normalize_address\`   md5: \`$DIA\`
+          - \`gov.normalize_address_txt\`   md5: \`$GOV\`
+
+          Spec: [\`docs/architecture/address_normalization_spec.md\`](../blob/main/docs/architecture/address_normalization_spec.md)
+          Run: $RUN_URL
+
+          To resolve: align both function bodies and confirm the next scheduled
+          run (or a manual \`workflow_dispatch\`) reports a single matching md5,
+          then close this issue.
+          EOF
+          )
+
+          # Ensure the label exists (idempotent — first run creates it).
+          if ! gh label list --search address-normalizer-drift --json name --jq '.[].name' | grep -qx address-normalizer-drift; then
+            gh label create address-normalizer-drift \
+              --color B60205 \
+              --description "Auto-opened by drift-check workflow"
+          fi
+
+          EXISTING=$(gh issue list \
+            --label address-normalizer-drift \
+            --state open \
+            --json number,title \
+            --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Found existing drift issue #$EXISTING; appending comment."
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            echo "Opening new drift issue."
+            gh issue create \
+              --title "Address normalizer drift detected ($(date -u +%Y-%m-%d))" \
+              --label address-normalizer-drift \
+              --body "$BODY"
+          fi
+
+      - name: Fail job on drift
+        if: steps.compare.outputs.drift == 'true'
+        run: exit 1
