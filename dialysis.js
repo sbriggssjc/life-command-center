@@ -4944,6 +4944,17 @@ function renderDiaPropertyResearch() {
     filtered = filtered.filter(r => r.review_type === diaPropertyFilter.review_type);
   }
 
+  // Round 76ej: Sort by best_fuzzy_score DESC. The view pre-computes match
+  // scores against candidate properties; processing high-confidence rows
+  // first lets the user drain "click Confirm Link" wins quickly and saves
+  // the genuine-research rows (low score / no candidates) for last.
+  filtered = filtered.slice().sort((a, b) => {
+    const sa = (typeof a.best_fuzzy_score === 'number') ? a.best_fuzzy_score : -1;
+    const sb = (typeof b.best_fuzzy_score === 'number') ? b.best_fuzzy_score : -1;
+    if (sb !== sa) return sb - sa;
+    return (b.total_patients || 0) - (a.total_patients || 0);
+  });
+
   // Operations card — render at the top so it's immediately visible
   if (diaPropertyFilter.selectedIdx !== undefined && filtered[diaPropertyFilter.selectedIdx]) {
     const item = filtered[diaPropertyFilter.selectedIdx];
@@ -4973,6 +4984,7 @@ function renderDiaPropertyResearch() {
     html += '<div style="flex: 1;">Operator</div>';
     html += '<div style="flex: 0.5;">State</div>';
     html += '<div style="flex: 0.7; text-align: right;">Patients</div>';
+    html += '<div style="flex: 0.7;">Match</div>';
     html += '<div style="flex: 1;">Review Type</div>';
     html += '</div>';
 
@@ -4980,12 +4992,29 @@ function renderDiaPropertyResearch() {
       const isSelected = diaPropertyFilter.selectedIdx === idx;
       const isResolved = diaData.researchOutcomes.some(o => o.clinic_id === row.clinic_id && o.queue_type === 'property_review');
       const rowStyle = isSelected ? 'background: rgba(52, 211, 153, 0.1); border-left: 3px solid var(--accent);' : isResolved ? 'background: rgba(52, 211, 153, 0.05); opacity: 0.7;' : '';
+      // Round 76ej: surface the pre-computed fuzzy-match score so the user
+      // can see at a glance which rows are quick "Confirm Link" wins vs.
+      // genuine research tasks. Color-coded: green ≥0.92, yellow ≥0.75,
+      // grey otherwise; "—" when no candidates were found.
+      const score = (typeof row.best_fuzzy_score === 'number') ? row.best_fuzzy_score : null;
+      const candCount = row.fuzzy_candidate_count || 0;
+      let matchCell;
+      if (score == null || candCount === 0) {
+        matchCell = '<span style="font-size:10px;color:var(--text3)">— no match</span>';
+      } else {
+        const pct = Math.round(score * 100);
+        const color = score >= 0.92 ? '#34d399' : score >= 0.75 ? '#fbbf24' : '#9ca3af';
+        const label = score >= 0.92 ? 'Strong' : score >= 0.75 ? 'Likely' : 'Weak';
+        matchCell = '<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;background:' + color + ';color:#0a0a0a">' + label + ' ' + pct + '%</span>'
+          + (candCount > 1 ? ' <span style="font-size:10px;color:var(--text3)">(' + candCount + ')</span>' : '');
+      }
       html += `<div class="table-row clickable-row" style="cursor: pointer; ${rowStyle}" data-prop-idx="${idx}">`;
       html += `<div style="flex: 0.5; color: var(--text2);">${esc(String(row.clinic_id || ''))}</div>`;
       html += `<div style="flex: 2;" class="truncate">${esc(row.facility_name || '')}</div>`;
       html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
       html += `<div style="flex: 0.5;">${esc(row.state || '')}</div>`;
       html += `<div style="flex: 0.7; text-align: right; color: var(--accent);">${fmtN(row.total_patients || 0)}</div>`;
+      html += `<div style="flex: 0.7;">${matchCell}</div>`;
       html += `<div style="flex: 1; color: var(--text2);">${esc(row.review_type || '')}</div>`;
       if (isResolved) {
         html += `<div style="flex: 0.3; text-align: right;"><span style="color:var(--green);font-size:16px" title="Resolved">✓</span></div>`;
@@ -5248,10 +5277,16 @@ function renderDiaLeasePortfolioOverview() {
   const all = diaData.leaseBackfillRows || [];
   const reviewedIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').map(o => o.clinic_id));
 
-  // Group by parent_organization (treating null/empty as 'Independent')
+  // Group by operator identity. parent_organization is sometimes NULL on rows
+  // that DO have an operator_name set (CMS chain_organization data quality
+  // gap). Coalesce to operator_name so the portfolio cards show the real
+  // distribution — e.g., 192 Fresenius rows with NULL chain_organization no
+  // longer get bucketed as "Independent."
   const groups = new Map();
   for (const row of all) {
-    const key = row.parent_organization && row.parent_organization.trim() !== '' ? row.parent_organization : 'Independent';
+    const parent = (row.parent_organization && row.parent_organization.trim()) || '';
+    const operator = (row.operator_name && row.operator_name.trim()) || '';
+    const key = parent || operator || 'Independent';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -5367,9 +5402,14 @@ function renderDiaLeaseResearch() {
   // Per-clinic mode (existing workflow) — wrap with research-progress
   html += '<div class="research-progress" style="margin-bottom: 30px;">';
 
-  // Apply parentOrg filter to the metric counts as well
+  // Apply parentOrg filter using the same coalesce key as renderDiaLeasePortfolioOverview
+  // so clicking a card always re-filters to that exact bucket.
   const scopedRows = diaLeaseFilter.parentOrg
-    ? diaData.leaseBackfillRows.filter(r => (r.parent_organization || 'Independent') === diaLeaseFilter.parentOrg)
+    ? diaData.leaseBackfillRows.filter(r => {
+        const parent = (r.parent_organization && r.parent_organization.trim()) || '';
+        const operator = (r.operator_name && r.operator_name.trim()) || '';
+        return (parent || operator || 'Independent') === diaLeaseFilter.parentOrg;
+      })
     : diaData.leaseBackfillRows;
 
   const total = scopedRows.length;
