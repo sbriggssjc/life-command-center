@@ -5158,7 +5158,7 @@ function renderSuggestedCandidates(item, suggested) {
     html += '<div style="font-size:12px;color:var(--text);font-weight:500;" class="truncate">' + esc(addrLine) + '</div>';
     if (cityState) html += '<div style="font-size:11px;color:var(--text2);">' + esc(cityState) + '</div>';
     html += '</div>';
-    html += '<button class="btn-action ' + (isPrimary ? 'primary' : 'default') + '" style="font-size:11px;padding:5px 12px;white-space:nowrap;" onclick="propResLinkFromQueue(' + clinicId + ',' + c.property_id + ')">' + (isPrimary ? '✓ Confirm Link' : 'Link') + '</button>';
+    html += '<button class="btn-action ' + (isPrimary ? 'primary' : 'default') + '" style="font-size:11px;padding:5px 12px;white-space:nowrap;" onclick="propResLinkFromQueue(\'' + String(clinicId).replace(/\'/g, "\\\'") + '\',' + c.property_id + ')">' + (isPrimary ? '✓ Confirm Link' : 'Link') + '</button>';
     html += '</div>';
   });
 
@@ -5242,18 +5242,28 @@ window.propResLinkFromQueue = async function(clinicId, propertyId) {
       metadata: { clinic_id: clinicId, property_id: propertyId, source: 'one_click_candidate' }
     });
 
-    // Advance to next item in the filtered queue.
+    // Drop the linked clinic out of the in-memory queue so the next
+    // render skips it. Avoid a full loadDiaData() reload — that re-runs
+    // 10+ queries and can take 20s on a slow connection.
+    const cidStr = String(clinicId);
+    diaData.propertyReviewQueue = (diaData.propertyReviewQueue || []).filter(function(r) {
+      return String(r.clinic_id) !== cidStr;
+    });
+
+    // Selection index points into the *filtered* slice, so recompute against
+    // the new filtered length and clamp.
     const filtered = diaData.propertyReviewQueue.filter(function(r) {
       return !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type;
     });
-    const currentIdx = diaPropertyFilter.selectedIdx || 0;
-    if (currentIdx + 1 < filtered.length) {
-      diaPropertyFilter.selectedIdx = currentIdx + 1;
-    } else {
+    if (filtered.length === 0) {
       diaPropertyFilter.selectedIdx = undefined;
+    } else {
+      const targetIdx = (typeof diaPropertyFilter.selectedIdx === 'number')
+        ? diaPropertyFilter.selectedIdx
+        : 0;
+      diaPropertyFilter.selectedIdx = Math.min(targetIdx, filtered.length - 1);
     }
 
-    await loadDiaData();
     renderDiaTab();
   } catch (err) {
     console.error('propResLinkFromQueue error:', err);
