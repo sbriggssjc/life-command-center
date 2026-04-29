@@ -618,7 +618,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // Crk, Creek, Hill, Bnd, Bend, Run. Without Expy, addresses like
     // "2700 S Central Expy" failed validation, which broke findSplitAddressInLines'
     // post-combine validation step on a 2026-04 CoStar capture in McKinney TX.
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz)\b/i;
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pike|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr)\b/i;
     for (const seg of segments) {
       // Reject pagination patterns like "1 of 2,000 Records"
       if (/^\d+\s+of\s+[\d,]+/i.test(seg)) continue;
@@ -648,7 +648,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   }
 
   function findSplitAddressInLines(lines) {
-    const STREET_RE = /^\d+(?:-\d+)?\s+[A-Za-z][\w&'.\- ]{2,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)\b\.?/i;
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+)\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     // Round 76di: widened the lookahead from 4 to 20 lines. CoStar's
     // property summary puts stat cards (RBA, AC Lot, Built, Tenancy,
@@ -658,10 +658,28 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // first city/state/zip-pattern match anywhere in the page; there's
     // no second address on a single-property summary that could create
     // a false pairing.
+    // Round 76ds: section-context guard. The Public Record sub-tab puts
+    // the OWNER's mailing address in the body — "2 Claridge Dr #8ne /
+    // Verona, NJ 07044" appeared just below the page heading on
+    // 5 Route 45 / Mannington NJ. The split-line walker found that
+    // before any property-address line and combined them, overwriting
+    // the real subject property address. Reject streetLines that fall
+    // inside an Owner / Mailing / Buyer / Seller / Borrower / Originator
+    // address sub-block. Heuristic: scan back ≤6 lines for a section
+    // label; if found, skip this streetLine.
+    const SECTION_LABEL_RE = /^(mailing\s+address|buyer\s+address|seller\s+address|owner(?:'s)?\s+address|borrower\s+address|originator\s+address|contact\s+details|recorded\s+owner\s+mailing)$/i;
+    function isInsideForeignAddressSection(idx) {
+      const lookback = Math.max(0, idx - 6);
+      for (let k = idx - 1; k >= lookback; k--) {
+        if (SECTION_LABEL_RE.test(lines[k] || '')) return true;
+      }
+      return false;
+    }
     for (let i = 0; i < lines.length; i++) {
       const street = lines[i];
       if (!street || street.length > 120) continue;
       if (!STREET_RE.test(street)) continue;
+      if (isInsideForeignAddressSection(i)) continue;
       for (let j = i + 1; j < Math.min(i + 25, lines.length); j++) {
         const cityLine = lines[j];
         if (!cityLine || !CITY_RE.test(cityLine)) continue;
