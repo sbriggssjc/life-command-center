@@ -1973,19 +1973,40 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
     // 1. Property fields — direct from entity + metadata (what CoStar
     //    actually advertised before the writer applied any cleaning).
     if (propertyId) {
-      const sizeKey = domain === 'government' ? 'rba' : 'building_size';
-      const propValues = {
-        address:         entity.address    || metadata.address    || null,
-        city:            entity.city       || metadata.city       || null,
-        state:           entity.state      || metadata.state      || null,
-        zip_code:        entity.zip        || metadata.zip        || null,
-        tenant:          metadata.tenant_name || metadata.primary_tenant || null,
-        year_built:      metadata.year_built  || null,
-        [sizeKey]:       metadata.sf_total || metadata.building_sf || null,
-        lot_sf:          metadata.lot_sf || null,
-        land_acres:      metadata.land_acres || null,
-        parcel_number:   metadata.parcel_number || metadata.apn || null,
+      // Property schema differs by domain. dia has tenant / building_size /
+      // land_area / lot_sf / parcel_number / anchor_rent_* / lease_commencement.
+      // gov has rba / land_acres / lease_commencement (NO tenant, lot_sf,
+      // parcel_number, building_size, land_area, anchor_rent_*). Sending
+      // dia field names to gov (and vice-versa) lands provenance on
+      // nonexistent columns. Same fix pattern as PR #498 (gov listings)
+      // and PR #500 (gov contacts). The actual upsertDomainProperty
+      // already handles the field-name split correctly.
+      const sharedPropFields = {
+        address:    entity.address || metadata.address || null,
+        city:       entity.city    || metadata.city    || null,
+        state:      entity.state   || metadata.state   || null,
+        zip_code:   entity.zip     || metadata.zip     || null,
+        year_built: metadata.year_built || null,
       };
+      const propValues = domain === 'government'
+        ? {
+            ...sharedPropFields,
+            rba:                metadata.sf_total || metadata.building_sf || null,
+            land_acres:         metadata.land_acres || null,
+            lease_commencement: parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+          }
+        : {
+            ...sharedPropFields,
+            tenant:             metadata.tenant_name || metadata.primary_tenant || null,
+            building_size:      metadata.sf_total || metadata.building_sf || null,
+            lot_sf:             metadata.lot_sf || null,
+            land_area:          metadata.land_acres || null,   // dia column is land_area; metadata.land_acres is the input field name
+            parcel_number:      metadata.parcel_number || metadata.apn || null,
+            anchor_rent:        parseCurrency(metadata.anchor_rent),
+            anchor_rent_date:   parseDate(metadata.anchor_rent_date)?.split('T')[0] || null,
+            anchor_rent_source: metadata.anchor_rent_source || null,
+            lease_commencement: parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+          };
       await recordCoStarFieldsProvenance(
         { ...provCtx, targetTable: `${tablePrefix}.properties`, recordPk: propertyId },
         propValues
@@ -6041,6 +6062,8 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
           lease_start:       cleaned.lease_start,
           lease_expiration:  cleaned.lease_expiration,
           expense_structure: cleaned.expense_structure,
+          renewal_options:   cleaned.renewal_options,
+          guarantor:         cleaned.guarantor,
         });
       } else {
         // ── Same term or partial update → PATCH existing lease ──
@@ -6098,6 +6121,8 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
           lease_start:       patchData.lease_start,
           lease_expiration:  patchData.lease_expiration,
           expense_structure: patchData.expense_structure,
+          renewal_options:   patchData.renewal_options,
+          guarantor:         patchData.guarantor,
         });
       }
     } else {
@@ -6128,6 +6153,8 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
         lease_start:       cleaned.lease_start,
         lease_expiration:  cleaned.lease_expiration,
         expense_structure: cleaned.expense_structure,
+        renewal_options:   cleaned.renewal_options,
+        guarantor:         cleaned.guarantor,
       });
     }
 
