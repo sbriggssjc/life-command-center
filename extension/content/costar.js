@@ -616,12 +616,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   function findSplitAddressInLines(lines) {
     const STREET_RE = /^\d+(?:-\d+)?\s+[A-Za-z][\w&'.\- ]{2,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Sq|Square|Ter|Terrace|Loop)\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
+    // Round 76di: widened the lookahead from 4 to 20 lines. CoStar's
+    // property summary puts stat cards (RBA, AC Lot, Built, Tenancy,
+    // Class, Submarket leasing data, etc.) between the street line and
+    // the city/state/zip line — typically 8-15 lines deep. The first
+    // street-pattern match on a property page is always paired with the
+    // first city/state/zip-pattern match anywhere in the page; there's
+    // no second address on a single-property summary that could create
+    // a false pairing.
     for (let i = 0; i < lines.length; i++) {
       const street = lines[i];
       if (!street || street.length > 120) continue;
       if (!STREET_RE.test(street)) continue;
-      // Look ahead up to 4 lines for a city/state/zip line.
-      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+      for (let j = i + 1; j < Math.min(i + 25, lines.length); j++) {
         const cityLine = lines[j];
         if (!cityLine || !CITY_RE.test(cityLine)) continue;
         const combined = `${street}, ${cityLine}`;
