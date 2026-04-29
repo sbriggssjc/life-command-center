@@ -784,7 +784,10 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // captures from /detail/for-sale/<id>/property left metadata.asking_price
       // empty, which made upsertDialysisListings early-exit and never create
       // an available_listings row (5 Route 45 / Mannington NJ, 2026-04-29).
-      const isForSaleUrl = /\/detail\/for-sale\//i.test(url);
+      // Round 76dx: this function takes pageUrl, not url — referencing
+      // the wrong identifier threw ReferenceError, killing extractFields()
+      // and leaving the sidebar in empty state on /for-sale/ pages.
+      const isForSaleUrl = /\/detail\/for-sale\//i.test(pageUrl || '');
       const askingLabelRe = isForSaleUrl
         ? /^(asking\s+price|for\s+sale|sale\s+price|price)$/i
         : /^asking\s+price$/i;
