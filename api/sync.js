@@ -178,10 +178,9 @@ export default withErrorHandler(async function handler(req, res) {
   // ---- GET endpoints ----
   if (req.method === 'GET') {
     if (action === 'health') return await handleHealth(req, res, user, workspaceId);
-    if (action === 'jobs') return await handleJobs(req, res, user, workspaceId);
     if (action === 'isolation_check') return await handleIsolationCheck(req, res, user, workspaceId);
     if (action === 'flagged_emails') return await handleFlaggedEmails(req, res, user, workspaceId);
-    return res.status(400).json({ error: 'Invalid GET action. Use: health, jobs, isolation_check, flagged_emails' });
+    return res.status(400).json({ error: 'Invalid GET action. Use: health, isolation_check, flagged_emails' });
   }
 
   // ---- POST endpoints ----

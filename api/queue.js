@@ -442,9 +442,11 @@ async function v2GetPerfDashboard(req, user, workspaceId) {
 
   if (section === 'ai') {
     const aiCfg = getAiConfig();
+    // Aggregates rows.* — count header is unused.
     const aiMetrics = await opsQuery(
       'GET',
-      `perf_metrics?workspace_id=eq.${workspaceId}&metric_type=eq.ai_call&select=endpoint,duration_ms,metadata,created_at&order=created_at.desc&limit=200`
+      `perf_metrics?workspace_id=eq.${workspaceId}&metric_type=eq.ai_call&select=endpoint,duration_ms,metadata,created_at&order=created_at.desc&limit=200`,
+      undefined, { countMode: 'none' }
     );
     const rows = aiMetrics.data || [];
 

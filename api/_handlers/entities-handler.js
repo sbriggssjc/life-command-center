@@ -261,7 +261,9 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       }
       path += '&limit=50&order=name';
 
-      const result = await opsQuery('GET', path);
+      // Search results — countMode='estimated' is fine for the surfaced count
+      // and skips the second COUNT(*) trip.
+      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
       return res.status(200).json({ entities: result.data || [], count: result.count });
     }
 
@@ -418,7 +420,8 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     const safeOrder = /^[a-zA-Z0-9_.,]+$/.test(rawOrder) ? rawOrder : 'created_at.desc';
     path += `&limit=${perPage}&offset=${offset}&order=${safeOrder}`;
 
-    const result = await opsQuery('GET', path);
+    // Paginated entity list — countMode='estimated' for parity with v2 queue.
+    const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
     return res.status(200).json({
       entities: result.data || [],
       count: result.count,

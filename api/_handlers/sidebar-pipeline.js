@@ -3343,6 +3343,54 @@ async function backfillListingSaleIdForListing(domain, { listingId, propertyId, 
 }
 
 /**
+ * Choose which government available_listings row a sales_transactions sale
+ * should close. Returns the listing whose listing_date is closest in time to
+ * the sale_date and within a 3-year window on either side; ties are broken
+ * in favor of the listing on-or-before the sale date (the listing that
+ * "produced" the sale). Returns null when no candidate falls inside the
+ * window — caller logs `skipped=no_match_in_3yr_window` and leaves the
+ * listings alone for human review.
+ *
+ * The 3-year window prevents one stale listing from being closed by an
+ * unrelated sale years later. The dialysis branch closes ALL active listings
+ * unconditionally because the dialysis dataset is small and curated; gov is
+ * larger and messier, so the rule is more conservative.
+ *
+ * @param {Array<{listing_id: number|string, listing_date: string|null}>} rows
+ *   Candidate active listings for the property.
+ * @param {string} saleDate ISO YYYY-MM-DD date of the sale.
+ * @returns {{listing_id, listing_date}|null}
+ */
+const PICK_CLOSEST_WINDOW_DAYS = 3 * 365 + 1; // 3 years + leap-year cushion
+export function pickClosestListing(rows, saleDate) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const saleMs = Date.parse(saleDate);
+  if (!Number.isFinite(saleMs)) return null;
+
+  const windowMs = PICK_CLOSEST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  let best = null;
+  let bestDist = Infinity;
+  let bestSign = 1; // +1 = listing_date AFTER sale_date, -1 = on-or-before
+
+  for (const row of rows) {
+    const listingMs = row?.listing_date ? Date.parse(row.listing_date) : NaN;
+    if (!Number.isFinite(listingMs)) continue;
+    const diff = listingMs - saleMs;
+    const dist = Math.abs(diff);
+    if (dist > windowMs) continue;
+    const sign = diff <= 0 ? -1 : 1;
+    // Smaller distance wins. On exact tie, prefer the listing on-or-before
+    // (sign = -1) — that's the listing the sale most likely closed.
+    if (dist < bestDist || (dist === bestDist && sign < bestSign)) {
+      best = row;
+      bestDist = dist;
+      bestSign = sign;
+    }
+  }
+  return best;
+}
+
+/**
  * After a sales_transactions row is written for a property, close any
  * available_listings rows still flagged as active/Active for the same
  * property. Applies to both dialysis and government domains, using each
@@ -3417,7 +3465,7 @@ async function closeActiveListingsOnSale(domain, propertyId, saleDate, soldPrice
         `&listing_status=eq.Active&select=listing_id,listing_date&limit=100`
       );
       if (!lookup.ok || !Array.isArray(lookup.data) || !lookup.data.length) return 0;
-      const target = pickClosestListing(lookup.data);
+      const target = pickClosestListing(lookup.data, datePart);
       if (!target) {
         console.log(
           `[listing-close] domain=government property_id=${propertyId} ` +
