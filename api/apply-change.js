@@ -12,6 +12,7 @@ import {
 } from './_shared/allowlist.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { recalculateSaleCapRates } from './_shared/rent-projection.js';
+import { recordFieldWrites } from './_shared/field-priority-guard.js';
 
 // Fields on the dialysis `properties` table whose write implies every
 // historical sale on that property must have its calculated_cap_rate
@@ -250,6 +251,38 @@ export default withErrorHandler(async function handler(req, res) {
     const body = await mutationResponse.text();
     updatedRows = body ? JSON.parse(body) : [];
   } catch { /* representation parse failure is non-fatal */ }
+
+  // --- Record field-level provenance (Phase 2.x manual_edit coverage) ---
+  // Until now, UI-driven edits via this bridge bypassed lcc_merge_field
+  // entirely. That left ~75 manual_edit rules across dia + gov dormant in
+  // v_field_source_priority_unobserved and prevented strict-mode rules
+  // (where manual is priority 1) from ever observing real human writes.
+  // Source='manual_edit', confidence=1.0, source_run_id is the actor +
+  // applied_at so reviewers can trace which UI session set a field.
+  // Best-effort fire-and-forget: never blocks the response.
+  const provRecordPk = mutationMode === 'patch'
+    ? String(record_identifier)
+    : (Array.isArray(updatedRows) && updatedRows[0]
+        ? String(updatedRows[0][col] || updatedRows[0].id || updatedRows[0].lease_id || '')
+        : null);
+  if (provRecordPk) {
+    const qualifiedTable = `${target_source}.${target_table}`;
+    const targetDatabase = target_source === 'gov' ? 'gov_db' : 'dia_db';
+    const sourceRunId = `apply-change:${user.id || 'anon'}:${Date.now()}`;
+    recordFieldWrites({
+      targetDb:     targetDatabase,
+      targetTable:  qualifiedTable,
+      recordPk:     provRecordPk,
+      source:       'manual_edit',
+      sourceRunId,
+      workspaceId,
+      confidence:   1.0,
+      fields:       changed_fields,
+    }).catch(err => {
+      // Never block on provenance recording.
+      console.warn('[apply-change] field-provenance record failed:', err?.message);
+    });
+  }
 
   // --- Log audit record (data_corrections) in ops database ---
   // Use isOpsConfigured() to check without sending a response
