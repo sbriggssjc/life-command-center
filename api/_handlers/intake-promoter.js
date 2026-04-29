@@ -2044,16 +2044,30 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       );
     }
 
-    // 2. Broker contact fields (the email is the identity column we treat as the field key)
+    // 2. Broker contact fields. Schema differs by domain — dia.contacts uses
+    //    contact_email / contact_name / contact_phone; gov.contacts uses
+    //    email / name / phone. The actual INSERT row already branches on
+    //    isGov; mirror that here or provenance lands against columns that
+    //    don't exist on the target table.
     if (contactResult?.ok && contactResult.contact_id) {
+      const contactValues = match.domain === 'government'
+        ? {
+            email:    snapshot.listing_broker_email || null,
+            name:     snapshot.listing_broker || null,
+            company:  snapshot.listing_firm || null,
+            title:    'Listing Broker',
+          }
+        : {
+            contact_email: snapshot.listing_broker_email || null,
+            contact_name:  snapshot.listing_broker || null,
+            company:       snapshot.listing_firm || null,
+            title:         'Listing Broker',
+            role:          'broker',
+          };
+
       await recordOmFieldsProvenance(
         { ...provCtx, targetTable: `${tablePrefix}.contacts`, recordPk: contactResult.contact_id },
-        {
-          contact_email: snapshot.listing_broker_email || null,
-          contact_name:  snapshot.listing_broker || null,
-          company:       snapshot.listing_firm || null,
-          title:         'Listing Broker',
-        }
+        contactValues
       );
     }
 
