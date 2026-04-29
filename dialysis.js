@@ -31,6 +31,8 @@ const DIA_CMS_PAGE_SIZE = 50;
 let diaCmsSelectedIdx = undefined; // selected row in CMS table
 let diaNpiFilter = null; // filter by signal_type
 let diaNpiSelectedIdx = undefined; // selected row in NPI table
+let diaNpiSeverityFilter = 'actionable'; // 'actionable' (default) | 'all' | 'data_error' | 'data_quality' | 'auto_resolvable' | 'unresolved'
+let diaNpiSelectedIds = new Set(); // bulk-select state, keyed by clinic_id
 let diaSalesView = 'comps'; // 'comps' | 'available'
 let diaSalesComps = null;   // lazy-loaded from sales_transactions + properties + leases
 let diaAvailListings = null; // lazy-loaded from available_listings (on-market only)
@@ -841,6 +843,9 @@ function renderDiaOverview() {
   const addedCount = diaData.inventorySummary.added?.clinic_count || 0;
   const removedCount = diaData.inventorySummary.removed?.clinic_count || 0;
   const npiSignalCount = Object.values(diaData.npiSummary).reduce((s,r) => s + (r.signal_count||0), 0);
+  // Round 76eb: actionable = total minus auto_resolvable (which the matview hides by default)
+  const npiAutoResolvable = Object.values(diaData.npiSummary).reduce((s,r) => s + (r.auto_resolvable_count||0), 0);
+  const npiActionableCount = Math.max(0, npiSignalCount - npiAutoResolvable);
   const propQueueLen = diaData.propertyReviewQueue?.length || 0;
   const leaseBackfillLen = diaData.leaseBackfillRows?.length || 0;
   const researchDone = diaData.researchOutcomes?.length || 0;
@@ -873,12 +878,12 @@ function renderDiaOverview() {
   // ═══════════════════════════════════════════════
   const diaHighlights = [];
 
-  // Highlight 1: NPI signals need review
-  if (npiSignalCount > 0) {
+  // Highlight 1: NPI signals need review (only counts actionable, not auto-resolved)
+  if (npiActionableCount > 0) {
     diaHighlights.push({
       icon: '📡', color: '#fb923c', urgency: 'warning',
-      title: npiSignalCount + ' NPI signal' + (npiSignalCount > 1 ? 's' : '') + ' need review',
-      detail: 'Provider changes detected — potential ownership transitions or closures',
+      title: npiActionableCount + ' NPI signal' + (npiActionableCount > 1 ? 's' : '') + ' need review',
+      detail: 'Clinics with missing or duplicate NPIs — fix data quality issues that block ownership matching',
       action: 'Review Signals', tab: 'npi'
     });
   }
@@ -962,7 +967,7 @@ function renderDiaOverview() {
   html += '<div id="diaOverviewPatientMetrics">' + renderPatientMetricsInner() + '</div>';
   html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   html += infoCard({ title: 'Inventory Changes', value: fmtN(addedCount + removedCount), sub: '+' + fmtN(addedCount) + ' added · -' + fmtN(removedCount) + ' removed', color: addedCount > removedCount ? 'green' : 'red', tab: 'changes' });
-  html += infoCard({ title: 'NPI Signals', value: fmtN(npiSignalCount), sub: 'provider changes detected', color: 'orange', tab: 'npi' });
+  html += infoCard({ title: 'NPI Signals', value: fmtN(npiActionableCount), sub: npiAutoResolvable > 0 ? fmtN(npiAutoResolvable) + ' auto-resolved · ' + fmtN(npiActionableCount) + ' need review' : 'need human review', color: 'orange', tab: 'npi' });
   html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name && diaData.moversUp[0].facility_name !== 'null' ? diaData.moversUp[0].facility_name : diaData.moversUp[0].clinic_name || diaData.moversUp[0].address || 'Unknown Clinic').substring(0,30) : 'no data', color: 'green', tab: 'changes' });
   html += '</div>';
 
@@ -1861,156 +1866,250 @@ function _cmsAvgCard(title, value, color) {
 // ============================================================================
 
 /**
- * Render NPI Intelligence tab
+ * Render NPI Intelligence tab — Round 76eb
+ *
+ * The matview now classifies each duplicate-NPI signal by severity. Same-
+ * physical-clinic duplicates with a clear primary CCN are auto-resolved
+ * nightly and hidden from the default view (severity='auto_resolvable').
+ * The default 'actionable' filter shows: data_error (likely typos),
+ * data_quality (multi-loc operators sharing NPI), unresolved (no primary
+ * picked yet), and all missing-NPI rows.
+ *
+ * UX: side drawer (right) instead of below-table panel; bulk-select +
+ * bulk-flag/dismiss; signal-reason text comes from the matview row itself
+ * so the action prompt is correct per signal type.
  */
+
+// Severity styling — keyed by matview severity column
+const NPI_SEVERITY_META = {
+  data_error:      { label: 'Likely Typo',      color: '#f87171', bg: 'rgba(248,113,113,0.10)', priority: 1 },
+  data_quality:    { label: 'Needs Review',     color: '#fbbf24', bg: 'rgba(251,191,36,0.10)',  priority: 2 },
+  unresolved:      { label: 'Auto-Pending',     color: '#a78bfa', bg: 'rgba(167,139,250,0.10)', priority: 3 },
+  missing:         { label: 'Look Up NPI',      color: '#22d3ee', bg: 'rgba(34,211,238,0.10)',  priority: 2 },
+  auto_resolvable: { label: 'Auto-Resolved',    color: '#34d399', bg: 'rgba(52,211,153,0.10)',  priority: 5 }
+};
+
+function _npiRowKey(row) {
+  return (row.clinic_id || '') + '|' + (row.npi || '') + '|' + (row.signal_type || '');
+}
+
+function _npiSeverityKey(row) {
+  if (row.signal_type === 'missing_inventory_npi') return 'missing';
+  return row.severity || 'unresolved';
+}
+
+function _npiBannerText(rows) {
+  // Adapt the action guidance to what's actually in the visible set.
+  const types = new Set(rows.map(r => r.signal_type));
+  const sevs  = new Set(rows.map(_npiSeverityKey));
+
+  if (rows.length === 0) {
+    return 'No actionable NPI signals — the matview has classified everything as auto-resolved or filtered. Switch the filter to <strong>All</strong> to inspect resolved/dismissed signals.';
+  }
+  const parts = [];
+  if (types.has('missing_inventory_npi')) {
+    parts.push('<strong>Missing NPI</strong>: clinic exists but NPI field is blank — open the row to look up the NPI on the registry by name + address, then patch the clinic record.');
+  }
+  if (sevs.has('data_error')) {
+    parts.push('<strong>Likely typo</strong>: same NPI on rows with different names AND addresses — almost certainly a wrong NPI on one row. Open both, decide which is correct, clear the other.');
+  }
+  if (sevs.has('data_quality')) {
+    parts.push('<strong>Needs review</strong>: same operator name across multiple addresses sharing one NPI — could be a relocation, a closed sister site, or a data error. Verify and dismiss or fix.');
+  }
+  if (sevs.has('unresolved')) {
+    parts.push('<strong>Auto-pending</strong>: nightly resolver will assign a primary CCN on next run. Safe to ignore unless you need an immediate fix.');
+  }
+  return parts.join(' ');
+}
+
 function renderDiaNpi() {
   let html = '<div class="biz-section">';
 
-  // === Action guidance banner ===
-  html += '<div style="padding:10px 14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;display:flex;align-items:center;gap:10px;">';
-  html += '<div style="font-size:13px;color:var(--text);line-height:1.4"><strong>NPI Intelligence Signals</strong> — Review provider-level changes detected from NPI registry data. <strong>Flag</strong> signals that warrant ownership or lease research. <strong>Dismiss</strong> signals that are routine or irrelevant. Click any row to view full property details.</div>';
-  html += '</div>';
+  // ─── Build the working set with severity normalization ───────────────
+  const allSignals = (diaData.npiSignals || []).map(r => ({
+    ...r,
+    _sev: _npiSeverityKey(r),
+    _key: _npiRowKey(r)
+  }));
 
-  // Signal summary metrics
-  html += '<div class="gov-metrics">';
-  
-  let totalSignals = 0;
-  const signalTypes = {};
-
-  // Use pre-aggregated summary (not truncated by PostgREST row limit)
-  if (diaData.npiSummary && Object.keys(diaData.npiSummary).length > 0) {
-    Object.entries(diaData.npiSummary).forEach(([type, row]) => {
-      const cnt = row.signal_count || 0;
-      signalTypes[type] = cnt;
-      totalSignals += cnt;
-    });
-  } else {
-    diaData.npiSignals.forEach(row => {
-      totalSignals++;
-      const type = row.signal_type || 'unknown';
-      signalTypes[type] = (signalTypes[type] || 0) + 1;
-    });
+  // Filter by severity bucket (default 'actionable' = everything except auto_resolvable)
+  let visible = allSignals;
+  if (diaNpiSeverityFilter === 'actionable') {
+    visible = allSignals.filter(r => r._sev !== 'auto_resolvable');
+  } else if (diaNpiSeverityFilter !== 'all') {
+    visible = allSignals.filter(r => r._sev === diaNpiSeverityFilter);
   }
-  
-  html += metricHTML('Total Signals', fmtN(totalSignals), 'NPI intelligence signals', '');
-  html += metricHTML('Signal Types', fmtN(Object.keys(signalTypes).length), 'different categories', '');
-  
-  Object.entries(signalTypes).slice(0, 2).forEach(([type, count]) => {
-    html += metricHTML(cleanLabel(type) || 'Unknown', fmtN(count), 'signals', '');
-  });
-  
-  html += '</div>';
-  
-  // Filter pills by signal type
-  html += '<div class="pills" style="margin: 20px 0;">';
-  html += '<button class="pill active" data-filter="all">All</button>';
-  Object.keys(signalTypes).forEach(type => {
-    const active = diaNpiFilter === type ? ' active' : '';
-    html += `<button class="pill${active}" data-filter="${type}">${cleanLabel(type) || 'Unknown'}</button>`;
-  });
-  html += '</div>';
-  
-  // Signals table
-  html += '<div class="table-wrapper">';
-  html += '<div class="data-table">';
-  
-  let filtered = diaData.npiSignals;
+  // Then by signal_type pill (if user picked one)
   if (diaNpiFilter && diaNpiFilter !== 'all') {
-    filtered = filtered.filter(r => r.signal_type === diaNpiFilter);
+    visible = visible.filter(r => r.signal_type === diaNpiFilter);
   }
-  
-  if (filtered.length === 0) {
-    html += '<div class="table-empty">No signals</div>';
-  } else {
-    // Header
-    html += '<div class="table-row" style="font-weight: 600; border-bottom: 1px solid var(--border);">';
-    html += '<div style="flex: 1.5;">Signal Type</div>';
-    html += '<div style="flex: 2;">Facility</div>';
-    html += '<div style="flex: 1;">City</div>';
-    html += '<div style="flex: 1;">State</div>';
-    html += '<div style="flex: 1;">Operator</div>';
-    html += '<div style="flex: 1; text-align: right;">Patients</div>';
-    html += '<div style="flex: 1.0; text-align: center;">Actions</div>';
+  // Sort: priority asc, then patients desc
+  visible.sort((a, b) => {
+    const pa = a.signal_priority || 5;
+    const pb = b.signal_priority || 5;
+    if (pa !== pb) return pa - pb;
+    return (b.latest_total_patients || 0) - (a.latest_total_patients || 0);
+  });
+
+  // ─── Severity-aware action banner ────────────────────────────────────
+  html += '<div style="padding:12px 16px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:16px;">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:var(--text)">NPI Intelligence Signals</div>';
+  html += '<div style="font-size:12px;color:var(--text2);line-height:1.5">' + _npiBannerText(visible) + '</div>';
+  html += '</div>';
+
+  // ─── Severity-bucket counts (from matview summary view) ──────────────
+  const summary = diaData.npiSummary || {};
+  const totalAll = Object.values(summary).reduce((s, r) => s + (r.signal_count || 0), 0);
+  const autoCnt  = Object.values(summary).reduce((s, r) => s + (r.auto_resolvable_count || 0), 0);
+  const errCnt   = Object.values(summary).reduce((s, r) => s + (r.data_error_count || 0), 0);
+  const dqCnt    = Object.values(summary).reduce((s, r) => s + (r.data_quality_count || 0), 0);
+  const missCnt  = (summary.missing_inventory_npi && summary.missing_inventory_npi.signal_count) || 0;
+  const actionableCnt = totalAll - autoCnt;
+
+  html += '<div class="gov-metrics">';
+  html += metricHTML('Actionable', fmtN(actionableCnt), 'need human review', '');
+  html += metricHTML('Likely Typos', fmtN(errCnt), 'wrong NPI somewhere', '');
+  html += metricHTML('Multi-Loc Review', fmtN(dqCnt), 'same operator, diff addr', '');
+  html += metricHTML('Missing NPI', fmtN(missCnt), 'clinic record, no NPI', '');
+  html += metricHTML('Auto-Resolved', fmtN(autoCnt), 'hidden by default', '');
+  html += '</div>';
+
+  // ─── Severity filter pills (primary control) ─────────────────────────
+  const sevPill = (key, label) => {
+    const active = diaNpiSeverityFilter === key ? ' active' : '';
+    return `<button class="pill${active}" data-sev-filter="${key}">${label}</button>`;
+  };
+  html += '<div class="pills" style="margin: 16px 0 8px;">';
+  html += sevPill('actionable', 'Actionable (default)');
+  html += sevPill('data_error', 'Likely Typos');
+  html += sevPill('data_quality', 'Multi-Loc Review');
+  html += sevPill('missing', 'Missing NPI');
+  html += sevPill('unresolved', 'Auto-Pending');
+  html += sevPill('auto_resolvable', 'Auto-Resolved');
+  html += sevPill('all', 'All');
+  html += '</div>';
+
+  // ─── Bulk action bar (visible when rows are selected) ────────────────
+  if (diaNpiSelectedIds.size > 0) {
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:8px;background:rgba(251,191,36,0.08);border-radius:6px;border:1px solid #fbbf24;">';
+    html += '<span style="font-size:12px;font-weight:600;color:var(--text)">' + diaNpiSelectedIds.size + ' selected</span>';
+    html += '<button class="btn-action" id="npi-bulk-flag" style="font-size:11px;padding:4px 10px;border:1px solid var(--accent);border-radius:5px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag all for research</button>';
+    html += '<button class="btn-action" id="npi-bulk-dismiss" style="font-size:11px;padding:4px 10px;border:1px solid #f87171;border-radius:5px;background:rgba(248,113,113,0.1);color:#f87171;cursor:pointer;font-weight:600">Dismiss all</button>';
+    html += '<button id="npi-bulk-clear" style="font-size:11px;padding:4px 10px;margin-left:auto;border:1px solid var(--border);border-radius:5px;background:var(--s2);color:var(--text2);cursor:pointer">Clear selection</button>';
     html += '</div>';
-    
-    filtered.slice(0, 500).forEach((row, idx) => {
-      const signalColor = row.signal_type === 'npi_changed' ? 'var(--accent)' : 'var(--text2)';
+  }
+
+  // ─── Two-column layout: table (left) + drawer (right) ────────────────
+  const drawerOpen = diaNpiSelectedIdx !== undefined && visible[diaNpiSelectedIdx];
+  html += '<div style="display:grid;grid-template-columns:' + (drawerOpen ? '1fr 380px' : '1fr') + ';gap:12px;align-items:flex-start">';
+
+  // === LEFT: signals table ===
+  html += '<div class="table-wrapper" style="min-width:0">';
+  html += '<div class="data-table">';
+
+  if (visible.length === 0) {
+    html += '<div class="table-empty">No signals match the current filter</div>';
+  } else {
+    const allSelected = visible.length > 0 && visible.every(r => diaNpiSelectedIds.has(r._key));
+    html += '<div class="table-row" style="font-weight: 600; border-bottom: 1px solid var(--border);">';
+    html += `<div style="flex: 0 0 32px"><input type="checkbox" id="npi-select-all" ${allSelected ? 'checked' : ''} title="Select visible"></div>`;
+    html += '<div style="flex: 1.4;">Severity</div>';
+    html += '<div style="flex: 2.2;">Facility</div>';
+    html += '<div style="flex: 1;">City</div>';
+    html += '<div style="flex: 0 0 40px;">St</div>';
+    html += '<div style="flex: 1.5;">Operator</div>';
+    html += '<div style="flex: 0 0 70px; text-align: right;">Pts</div>';
+    html += '<div style="flex: 0 0 90px; text-align: center;">NPI</div>';
+    html += '</div>';
+
+    visible.slice(0, 500).forEach((row, idx) => {
+      const meta = NPI_SEVERITY_META[row._sev] || NPI_SEVERITY_META.unresolved;
       const isSelected = diaNpiSelectedIdx === idx;
+      const isChecked = diaNpiSelectedIds.has(row._key);
 
       html += `<div class="table-row clickable-row" data-npi-row-idx="${idx}" style="cursor:pointer;${isSelected ? 'background:rgba(251,191,36,0.1);border-left:3px solid #fbbf24;' : ''}">`;
-      html += `<div style="flex: 1.5; color: ${signalColor};">${esc(cleanLabel(row.signal_type || ''))}</div>`;
-      html += `<div style="flex: 2;" class="truncate">${esc(norm(row.facility_name) || '')}</div>`;
+      html += `<div style="flex: 0 0 32px" onclick="event.stopPropagation();"><input type="checkbox" class="npi-row-cb" data-row-key="${esc(row._key)}" ${isChecked ? 'checked' : ''}></div>`;
+      html += `<div style="flex: 1.4;"><span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${meta.bg};color:${meta.color};font-size:10px;font-weight:700">${meta.label}</span></div>`;
+      html += `<div style="flex: 2.2;" class="truncate">${esc(norm(row.facility_name) || '')}${row.cluster_size > 1 ? ` <span style="color:var(--text3);font-size:10px">(×${row.cluster_size})</span>` : ''}</div>`;
       html += `<div style="flex: 1;">${esc(norm(row.city) || '')}</div>`;
-      html += `<div style="flex: 1;">${esc(row.state || '')}</div>`;
-      html += `<div style="flex: 1;">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : ''}</div>`;
-      html += `<div style="flex: 1; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
-      html += `<div style="flex: 1.0; text-align: center; display: flex; gap: 3px; justify-content: center;" onclick="event.stopPropagation();">`;
-      html += `<button class="npi-flag-btn" data-npi-id="${esc(row.npi || row.clinic_id || row.id || '')}" data-npi-name="${esc(row.facility_name || '')}" style="font-size:9px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text2);cursor:pointer;" title="Flag for research">Flag</button>`;
-      html += `<button class="npi-dismiss-btn" data-npi-id="${esc(row.npi || row.clinic_id || row.id || '')}" style="font-size:9px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--s3);color:var(--text3);cursor:pointer;" title="Dismiss signal">✕</button>`;
-      html += `<button class="gov-row-action" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Ownership")' title="View owner & contacts">📞</button>`;
-      html += `<button class="gov-row-action accent" onclick='showDetail(${safeJSON(row)}, "dia-clinic", "Intel")' title="Research & intel">🔍</button>`;
-      html += `</div>`;
+      html += `<div style="flex: 0 0 40px;">${esc(row.state || '')}</div>`;
+      html += `<div style="flex: 1.5;" class="truncate">${row.operator_name ? entityLink(row.operator_name, 'operator', null) : '<span style="color:var(--text3)">—</span>'}</div>`;
+      html += `<div style="flex: 0 0 70px; text-align: right; color: var(--accent);">${fmtN(row.latest_total_patients || 0)}</div>`;
+      html += `<div style="flex: 0 0 90px; text-align: center; font-family: monospace; font-size: 11px; color: var(--text2);">${esc(row.npi || '—')}</div>`;
       html += '</div>';
     });
+    if (visible.length > 500) {
+      html += `<div style="padding:8px 14px;font-size:11px;color:var(--text3);text-align:center">Showing first 500 of ${fmtN(visible.length)} — narrow with severity filter to see the rest</div>`;
+    }
   }
-  
-  html += '</div>';
-  html += '</div>';
+  html += '</div></div>';
 
-  // === Inline context card for selected NPI signal ===
-  const npiFiltered = diaNpiFilter ? diaData.npiSignals.filter(r => r.signal_type === diaNpiFilter) : diaData.npiSignals;
-  if (diaNpiSelectedIdx !== undefined && npiFiltered[diaNpiSelectedIdx]) {
-    const sel = npiFiltered[diaNpiSelectedIdx];
-    const signalExplanations = {
-      'npi_changed': 'The NPI (National Provider Identifier) for this clinic has changed, which may indicate a change in operating entity, ownership transition, or administrative restructuring.',
-      'npi_deactivated': 'This clinic\'s NPI has been deactivated, which may signal closure, merger, or regulatory action. Verify current operating status.',
-      'new_npi': 'A new NPI has been registered at or near this facility\'s address. This could indicate a new operator, rebranding, or ownership change.',
-      'address_change': 'The registered address for this NPI has changed. Verify if the clinic relocated or if this is an administrative update.',
-      'taxonomy_change': 'The provider taxonomy code changed, which may indicate a shift in services offered (e.g., adding home dialysis).',
-      'name_change': 'The organization name associated with this NPI changed. This often signals ownership transition or rebranding.',
-    };
-    const sigExplain = signalExplanations[sel.signal_type] || 'An NPI registry change was detected for this clinic. Review the details and determine if research or pipeline action is needed.';
+  // === RIGHT: side drawer (only when row selected) ===
+  if (drawerOpen) {
+    const sel = visible[diaNpiSelectedIdx];
+    const meta = NPI_SEVERITY_META[sel._sev] || NPI_SEVERITY_META.unresolved;
+    const npiId = sel.npi || sel.clinic_id || '';
+    const searchQ = (sel.facility_name || '') + ' ' + (sel.city || '') + ' ' + (sel.state || '') + ' NPI ' + (sel.npi || '');
 
-    html += '<div style="margin-top:16px;border:1px solid #fbbf24;border-radius:12px;padding:16px 20px;background:var(--s1)">';
+    html += '<div style="position:sticky;top:12px;border:1px solid ' + meta.color + ';border-radius:12px;padding:14px 16px;background:var(--s1);max-height:calc(100vh - 80px);overflow-y:auto">';
+    // Header + close
     html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
-    html += '<div>';
-    html += '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text)">' + esc(norm(sel.facility_name) || 'Unknown') + '</h3>';
+    html += '<div style="min-width:0;flex:1">';
+    html += '<div style="display:inline-block;padding:2px 8px;border-radius:10px;background:' + meta.bg + ';color:' + meta.color + ';font-size:10px;font-weight:700;margin-bottom:4px">' + meta.label + '</div>';
+    html += '<h3 style="margin:0;font-size:14px;font-weight:700;color:var(--text);overflow-wrap:anywhere">' + esc(norm(sel.facility_name) || 'Unknown') + '</h3>';
     html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc((sel.city || '') + (sel.state ? ', ' + sel.state : '')) + '</div>';
     html += '</div>';
-    html += '<button style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);cursor:pointer" onclick="diaNpiSelectedIdx=undefined;renderDiaTab()">Close</button>';
+    html += '<button id="npi-drawer-close" style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text2);cursor:pointer;flex-shrink:0;margin-left:8px">Close</button>';
     html += '</div>';
-    // Signal explanation
-    html += '<div style="padding:10px 14px;background:rgba(251,191,36,0.08);border-radius:8px;border-left:3px solid #fbbf24;margin-bottom:12px;">';
-    html += '<div style="font-weight:700;font-size:12px;margin-bottom:4px;color:var(--text)">Signal: ' + esc(cleanLabel(sel.signal_type || '')) + '</div>';
-    html += '<div style="font-size:12px;color:var(--text);line-height:1.4;">' + esc(sigExplain) + '</div>';
+
+    // Why this signal — pulled from matview signal_reason column
+    html += '<div style="padding:10px 12px;background:' + meta.bg + ';border-radius:8px;border-left:3px solid ' + meta.color + ';margin-bottom:12px;">';
+    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin-bottom:4px">Why you\'re seeing this</div>';
+    html += '<div style="font-size:12px;color:var(--text);line-height:1.5">' + esc(sel.signal_reason || '') + '</div>';
     html += '</div>';
+
     // Context grid
-    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;font-size:12px">';
-    const _nv = (lbl, val) => '<div style="background:var(--s2);padding:8px;border-radius:6px"><div style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">' + lbl + '</div><div style="font-weight:600;color:var(--text)">' + val + '</div></div>';
+    const _nv = (lbl, val) => '<div style="background:var(--s2);padding:8px;border-radius:6px"><div style="color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">' + lbl + '</div><div style="font-weight:600;color:var(--text);font-size:12px;overflow-wrap:anywhere">' + val + '</div></div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px">';
     html += _nv('Operator', esc(sel.operator_name || '—'));
     html += _nv('Patients', fmtN(sel.latest_total_patients || 0));
     html += _nv('NPI', esc(String(sel.npi || '—')));
-    html += _nv('Clinic ID', esc(String(sel.clinic_id || sel.id || '—')));
-    html += _nv('State', esc(sel.state || '—'));
-    html += _nv('Signal Date', sel.signal_date ? new Date(sel.signal_date).toLocaleDateString() : '—');
+    html += _nv('Clinic ID', esc(String(sel.clinic_id || '—')));
+    if (sel.cluster_size > 1) {
+      html += _nv('Cluster Size', fmtN(sel.cluster_size) + ' rows');
+      html += _nv('Same Address?', sel.same_address_in_cluster ? 'Yes' : 'No');
+    }
+    if (sel.last_seen_date) html += _nv('Last Seen', new Date(sel.last_seen_date).toLocaleDateString());
+    if (sel.cluster_winner_medicare_id && sel.cluster_winner_medicare_id !== sel.clinic_id) {
+      html += _nv('Winner CCN', esc(String(sel.cluster_winner_medicare_id)));
+    }
     html += '</div>';
-    // Actions
-    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-    const npiSearchQ = (sel.facility_name || '') + ' ' + (sel.city || '') + ' ' + (sel.state || '') + ' NPI ' + (sel.npi || '');
-    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(npiSearchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">Google Search</a>';
-    html += '<a href="https://npiregistry.cms.hhs.gov/provider-view/' + encodeURIComponent(sel.npi || '') + '" target="_blank" rel="noopener" style="font-size:11px;padding:5px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;cursor:pointer">NPI Registry</a>';
-    html += '<button class="btn-action default" style="font-size:11px;padding:5px 12px;" onclick=\'showDetail(' + safeJSON(sel) + ',"dia-clinic")\'>Open Full Detail</button>';
-    html += '<button class="npi-flag-btn" data-npi-id="' + esc(sel.npi || sel.clinic_id || sel.id || '') + '" data-npi-name="' + esc(sel.facility_name || '') + '" style="font-size:11px;padding:5px 12px;border:1px solid var(--accent);border-radius:6px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag for Research</button>';
-    html += '<button class="npi-dismiss-btn" data-npi-id="' + esc(sel.npi || sel.clinic_id || sel.id || '') + '" style="font-size:11px;padding:5px 12px;border:1px solid #f87171;border-radius:6px;background:rgba(248,113,113,0.1);color:#f87171;cursor:pointer;font-weight:600">Dismiss Signal</button>';
+
+    // Actions — stacked vertically in the drawer
+    html += '<div style="display:flex;flex-direction:column;gap:6px">';
+    html += '<a href="https://npiregistry.cms.hhs.gov/provider-view/' + encodeURIComponent(sel.npi || '') + '" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;text-align:center">Open in NPI Registry ↗</a>';
+    html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none;text-align:center">Google search ↗</a>';
+    html += '<button class="btn-action default" style="font-size:11px;padding:6px 12px;" onclick=\'showDetail(' + safeJSON(sel) + ',"dia-clinic")\'>Open full clinic detail</button>';
+    html += '<button class="npi-flag-btn" data-npi-id="' + esc(npiId) + '" data-npi-name="' + esc(sel.facility_name || '') + '" style="font-size:11px;padding:6px 12px;border:1px solid var(--accent);border-radius:6px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag for Research</button>';
+    html += '<button class="npi-dismiss-btn" data-npi-id="' + esc(npiId) + '" style="font-size:11px;padding:6px 12px;border:1px solid #f87171;border-radius:6px;background:rgba(248,113,113,0.1);color:#f87171;cursor:pointer;font-weight:600">Dismiss Signal</button>';
     html += '</div>';
     html += '</div>';
   }
 
-  html += '</div>';
+  html += '</div>';  // end grid
+  html += '</div>';  // end biz-section
 
-  // Attach filter handlers
+  // ─── Event handlers ─────────────────────────────────────────────────
   setTimeout(() => {
-    // NPI row clicks — show inline context card
+    // Severity pill
+    document.querySelectorAll('[data-sev-filter]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        diaNpiSeverityFilter = e.currentTarget.dataset.sevFilter;
+        diaNpiSelectedIdx = undefined;
+        renderDiaTab();
+      });
+    });
+    // Row click → drawer
     document.querySelectorAll('[data-npi-row-idx]').forEach(el => {
       el.addEventListener('click', () => {
         const idx = parseInt(el.dataset.npiRowIdx, 10);
@@ -2018,22 +2117,75 @@ function renderDiaNpi() {
         renderDiaTab();
       });
     });
-    document.querySelectorAll('.pills .pill').forEach(btn => {
-      btn.addEventListener('click', e => {
-        const filter = e.target.dataset.filter;
-        diaNpiFilter = filter === 'all' ? null : filter;
-        diaNpiSelectedIdx = undefined;
+    // Drawer close
+    const closeBtn = document.getElementById('npi-drawer-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => { diaNpiSelectedIdx = undefined; renderDiaTab(); });
+
+    // Per-row checkbox
+    document.querySelectorAll('.npi-row-cb').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const k = e.target.dataset.rowKey;
+        if (e.target.checked) diaNpiSelectedIds.add(k); else diaNpiSelectedIds.delete(k);
         renderDiaTab();
       });
     });
-    // NPI Flag buttons
+    // Select all
+    const selAll = document.getElementById('npi-select-all');
+    if (selAll) selAll.addEventListener('change', e => {
+      if (e.target.checked) visible.forEach(r => diaNpiSelectedIds.add(r._key));
+      else visible.forEach(r => diaNpiSelectedIds.delete(r._key));
+      renderDiaTab();
+    });
+    // Bulk clear
+    const clr = document.getElementById('npi-bulk-clear');
+    if (clr) clr.addEventListener('click', () => { diaNpiSelectedIds.clear(); renderDiaTab(); });
+
+    // Bulk flag / dismiss
+    const bulkAct = async (kind) => {
+      const ids = Array.from(diaNpiSelectedIds);
+      if (ids.length === 0) return;
+      const confirmMsg = `${kind === 'flag' ? 'Flag' : 'Dismiss'} ${ids.length} selected signal${ids.length > 1 ? 's' : ''}?`;
+      if (!confirm(confirmMsg)) return;
+      let ok = 0, fail = 0;
+      for (const k of ids) {
+        const row = allSignals.find(r => r._key === k);
+        if (!row) continue;
+        const npiId = row.npi || row.clinic_id || '';
+        try {
+          await applyInsertWithFallback({
+            proxyBase: '/api/dia-query',
+            table: 'research_queue_outcomes',
+            data: {
+              medicare_id: npiId,
+              outcome: kind === 'flag' ? 'flagged_for_review' : 'dismissed',
+              notes: (kind === 'flag' ? 'Bulk flagged' : 'Bulk dismissed') + ' from NPI signals tab',
+              created_at: new Date().toISOString()
+            },
+            source_surface: 'dia_npi_bulk_' + kind
+          });
+          if (kind === 'dismiss') {
+            const i = diaData.npiSignals.findIndex(s => _npiRowKey(s) === k);
+            if (i >= 0) diaData.npiSignals.splice(i, 1);
+          }
+          ok++;
+        } catch(e) { fail++; }
+      }
+      diaNpiSelectedIds.clear();
+      showToast(`${ok} ${kind === 'flag' ? 'flagged' : 'dismissed'}` + (fail ? `, ${fail} failed` : ''), fail ? 'warn' : 'success');
+      renderDiaTab();
+    };
+    const bf = document.getElementById('npi-bulk-flag');
+    if (bf) bf.addEventListener('click', () => bulkAct('flag'));
+    const bd = document.getElementById('npi-bulk-dismiss');
+    if (bd) bd.addEventListener('click', () => bulkAct('dismiss'));
+
+    // Single-row Flag / Dismiss (in drawer)
     document.querySelectorAll('.npi-flag-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const npiId = btn.dataset.npiId;
         const npiName = btn.dataset.npiName;
         if (!npiId) return;
-        btn.disabled = true;
-        btn.textContent = '...';
+        btn.disabled = true; btn.textContent = '...';
         try {
           await applyInsertWithFallback({
             proxyBase: '/api/dia-query',
@@ -2046,24 +2198,20 @@ function renderDiaNpi() {
             },
             source_surface: 'dia_npi_flag'
           });
-          btn.textContent = '✓';
-          btn.style.color = 'var(--success)';
-          btn.style.borderColor = 'var(--success)';
           showToast('Flagged ' + (npiName || npiId) + ' for review', 'success');
+          diaNpiSelectedIdx = undefined;
+          renderDiaTab();
         } catch(e) {
-          btn.disabled = false;
-          btn.textContent = 'Flag';
+          btn.disabled = false; btn.textContent = 'Flag for Research';
           showToast('Flag failed: ' + e.message, 'error');
         }
       });
     });
-    // NPI Dismiss buttons
     document.querySelectorAll('.npi-dismiss-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const npiId = btn.dataset.npiId;
         if (!npiId) return;
-        btn.disabled = true;
-        btn.textContent = '...';
+        btn.disabled = true; btn.textContent = '...';
         try {
           await applyInsertWithFallback({
             proxyBase: '/api/dia-query',
@@ -2076,14 +2224,13 @@ function renderDiaNpi() {
             },
             source_surface: 'dia_npi_dismiss'
           });
-          // Remove from the in-memory list
           const idx = diaData.npiSignals.findIndex(s => (s.npi || s.clinic_id || s.id || '') === npiId);
           if (idx >= 0) diaData.npiSignals.splice(idx, 1);
           showToast('Signal dismissed', 'success');
+          diaNpiSelectedIdx = undefined;
           renderDiaTab();
         } catch(e) {
-          btn.disabled = false;
-          btn.textContent = '✕';
+          btn.disabled = false; btn.textContent = 'Dismiss Signal';
           showToast('Dismiss failed: ' + e.message, 'error');
         }
       });
