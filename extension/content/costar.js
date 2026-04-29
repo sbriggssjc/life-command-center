@@ -611,22 +611,19 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   }
 
   function findAddressInLines(lines) {
+    // Round 76dl: try the split-line combiner FIRST. Returns the full
+    // "Street, City, ST ZIP" form which is better for display + matching
+    // than the bare street that the single-line loop would return.
+    // Fall back to single-line scanning if no split match exists.
+    const split = findSplitAddressInLines(lines);
+    if (split) return split;
+
     for (const line of lines) {
       if (line.length > 120 || line.length < 5) continue;
       const parsed = parseAddress(line);
       if (parsed) return parsed;
     }
-    // Round 76dh: CoStar's React DOM splits the address across two non-
-    // adjacent lines on the property summary page — e.g.:
-    //   line N:   "2700 S Central Expy"
-    //   line N+1: "Medical Office - Allen/McKinney Submarket"   ← label
-    //   line N+2: "McKinney, TX 75072"
-    // No single line contains the full address, so the loop above misses
-    // it. Walk the lines: when we find a street-style line (starts with
-    // a number + word), look ahead up to 4 lines for a "City, ST 12345"
-    // line and combine them. Validate via parseAddress so we don't pair
-    // unrelated chunks.
-    return findSplitAddressInLines(lines);
+    return null;
   }
 
   function findSplitAddressInLines(lines) {
