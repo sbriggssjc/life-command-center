@@ -84,6 +84,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'consolidate-property': return handleConsolidateProperty(req, res);
     case 'npi-lookup':           return handleNpiLookupProxy(req, res);
     case 'merge-log-reconcile': return handleMergeLogReconcile(req, res);
+    case 'auto-scrape-listings': return handleAutoScrapeListings(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -307,6 +308,182 @@ async function handleMergeLogReconcile(req, res) {
     return 200;
   })();
 
+  return res.status(httpStatus).json(result);
+}
+
+// ============================================================================
+// AUTO-SCRAPE LISTINGS (Round 76cx Phase 4b, 2026-04-29)
+// ============================================================================
+//
+// Cron-triggered listing-verification sweeper. Every N hours:
+//   1. Pull active dia + gov listings whose verification_due_at <= now()
+//   2. For each, decide a check_result via cheap heuristics:
+//        - SOLD if a sales_transactions row exists for the same property_id
+//          with sale_date >= listing_date AND sale_date <= now()
+//          (closes the listing the moment the deed records — far more
+//          reliable than waiting for a manual "mark as sold" click)
+//        - STILL_AVAILABLE otherwise — defers a real availability check to
+//          the next cron tick or to the user's next sidebar/manual action.
+//          We deliberately don't HEAD-fetch the listing_url here: that
+//          opens the door to user-agent / bot blocking, JS-rendered SPA
+//          false-404s, and rate-limiting incidents that would silently
+//          mark thousands of healthy listings as 'unreachable'. Phase 4c
+//          can wire URL probing in once we have a more conservative pass.
+//   3. Call public.lcc_record_listing_check via PostgREST RPC for each.
+//
+// Routing:
+//   GET  /api/admin?_route=auto-scrape-listings           — dry-run, returns counts
+//   POST /api/admin?_route=auto-scrape-listings           — actually records checks
+//
+// Query params:
+//   ?domain=dia|gov|both   (default both)
+//   ?limit=50              (cap listings processed per call — keeps each
+//                           cron tick under Vercel's 60s function timeout)
+//   ?max_age_days=14       (don't auto-verify listings whose verification
+//                           is more than N days overdue — those need
+//                           manual research, not a stale cron tick)
+//
+// Cron: pg_cron job (`lcc-auto-scrape-listings`, every 6h) POSTs to this
+// endpoint via lcc_cron_post() so freshly overdue listings get verified
+// within the same business day. The user can still click Verify still
+// available / Mark off market on the sidebar at any point — those manual
+// methods take precedence over this auto-scrape since they share the
+// same lcc_record_listing_check function.
+//
+async function handleAutoScrapeListings(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const domainParam = String(req.query.domain || 'both').toLowerCase();
+  if (!['dia', 'gov', 'both'].includes(domainParam)) {
+    return res.status(400).json({ error: 'domain must be dia, gov, or both' });
+  }
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)));
+  const maxAgeDays = Math.min(60, Math.max(1, parseInt(req.query.max_age_days || '14', 10)));
+  const dryRun = req.method === 'GET';
+
+  const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
+  const result = {
+    mode: dryRun ? 'dry_run' : 'apply',
+    scanned: 0,
+    auto_marked_sold: 0,
+    auto_verified_available: 0,
+    by_domain: {},
+  };
+
+  const cutoffIso = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
+
+  for (const target of targets) {
+    const dom = target === 'dia' ? 'dialysis' : 'government';
+    const summary = {
+      scanned: 0,
+      sold: 0,
+      verified_available: 0,
+      skipped_too_stale: 0,
+      errors: [],
+    };
+
+    // 1. Pull overdue active listings, picking the columns we need to make
+    //    the sold/available decision.
+    const isActiveFilter = dom === 'dialysis'
+      ? `is_active=eq.true`
+      : `listing_status=eq.active`;
+    const dateCol = dom === 'dialysis' ? 'listing_date' : 'listing_date';
+    const select = `listing_id,property_id,${dateCol},verification_due_at,consecutive_check_failures`;
+    const path =
+      `available_listings?${isActiveFilter}` +
+      `&verification_due_at=lte.${encodeURIComponent(new Date().toISOString())}` +
+      `&verification_due_at=gte.${encodeURIComponent(cutoffIso)}` +
+      `&select=${select}` +
+      `&order=verification_due_at.asc.nullsfirst&limit=${limit}`;
+
+    const listingsRes = await domainQuery(dom, 'GET', path);
+    if (!listingsRes.ok) {
+      summary.errors.push({ stage: 'list', status: listingsRes.status, detail: listingsRes.data });
+      result.by_domain[dom] = summary;
+      continue;
+    }
+    const listings = Array.isArray(listingsRes.data) ? listingsRes.data : [];
+    summary.scanned = listings.length;
+    result.scanned += listings.length;
+
+    if (listings.length === 0) {
+      result.by_domain[dom] = summary;
+      continue;
+    }
+
+    // 2. Per-listing sale-window check. Reasonable property-level filter:
+    //    one sales_transactions GET per listing. Fewer round trips than a
+    //    bulk-and-merge query, and lets us treat each listing's outcome
+    //    independently if a sale only matches one of multiple listings.
+    for (const l of listings) {
+      try {
+        let checkResult = 'still_available';
+        let offMarketReason = null;
+        let notes = 'auto-scrape: no recent sale, deferred';
+
+        if (l.property_id && l[dateCol]) {
+          const salePath =
+            `sales_transactions?property_id=eq.${Number(l.property_id)}` +
+            `&sale_date=gte.${encodeURIComponent(l[dateCol])}` +
+            `&select=sale_id,sale_date,sold_price&limit=1`;
+          const saleRes = await domainQuery(dom, 'GET', salePath);
+          if (saleRes.ok && Array.isArray(saleRes.data) && saleRes.data.length > 0) {
+            const sale = saleRes.data[0];
+            checkResult = 'sold';
+            offMarketReason = 'sold';
+            notes = `auto-scrape: matched sales_transactions sale_id=${sale.sale_id} on ${sale.sale_date}`;
+          }
+        }
+
+        if (dryRun) {
+          if (checkResult === 'sold') summary.sold += 1;
+          else summary.verified_available += 1;
+          continue;
+        }
+
+        const rpcRes = await domainQuery(dom, 'POST', 'rpc/lcc_record_listing_check', {
+          p_listing_id: l.listing_id,
+          p_method: 'auto_scrape',
+          p_check_result: checkResult,
+          p_asking_price: null,
+          p_cap_rate: null,
+          p_source_url: null,
+          p_off_market_reason: offMarketReason,
+          p_notes: notes,
+          p_verified_by: user.id || null,
+        });
+        if (!rpcRes.ok) {
+          summary.errors.push({
+            stage: 'rpc', listing_id: l.listing_id,
+            status: rpcRes.status, detail: rpcRes.data,
+          });
+          continue;
+        }
+        if (checkResult === 'sold') {
+          summary.sold += 1;
+          result.auto_marked_sold += 1;
+        } else {
+          summary.verified_available += 1;
+          result.auto_verified_available += 1;
+        }
+      } catch (err) {
+        summary.errors.push({ stage: 'process', listing_id: l.listing_id, message: err?.message });
+      }
+    }
+
+    result.by_domain[dom] = summary;
+  }
+
+  const totalErrs = Object.values(result.by_domain)
+    .reduce((acc, s) => acc + (s.errors?.length || 0), 0);
+  const httpStatus =
+    (totalErrs > 0 && result.auto_marked_sold + result.auto_verified_available === 0) ? 502 :
+    (totalErrs > 0) ? 207 : 200;
   return res.status(httpStatus).json(result);
 }
 

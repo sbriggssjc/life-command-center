@@ -27,7 +27,7 @@ data-proxy, daily-briefing, diagnostics absorbed into admin.js + Supabase Edge F
 - Intake functions consolidated into intake.js
 - admin.js: workspaces, members, flags, connectors, diagnostics (config/diag/treasury), edge proxies (data-query, daily-briefing)
 - Supabase Edge Functions: data-query (gov/dia PostgREST proxy), daily-briefing (snapshot orchestration) on LCC Opps project
-- pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2)
+- pg_cron on LCC Opps: scheduled jobs — `refresh_work_counts` (5min), nightly preassemble/cross-domain-match, daily briefing, weekly report, history cleanup, `lcc-cleanup-orphan-om-uploads` (storage hygiene), `matcher-accuracy-rollup`, `lcc-merge-log-reconcile` (15min — patches LCC entity backrefs after dia/gov property merges, Round 76ee Phase 2), `lcc-auto-scrape-listings` (every 6h — sweeps overdue active listings, auto-marks Sold via sales_transactions match, Round 76cx Phase 4b)
 - `lcc_cron_post()` helper reads API key from Supabase Vault, POSTs via pg_net to Vercel or Edge endpoints
 - All rewrites defined in vercel.json — order matters (specific before catch-all)
 
