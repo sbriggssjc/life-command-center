@@ -28,11 +28,24 @@ function opsPerf(label) {
       opsPerfLog.push({ label, dur, ts: Date.now() });
       if (opsPerfLog.length > 200) opsPerfLog.shift();
       if (dur > 500) console.warn(`[ops perf] ${label}: ${dur}ms`);
-      // Report to server (fire-and-forget)
+      // Report to server (fire-and-forget). sendBeacon can't attach auth
+      // headers, so the receiver treats this as anonymous ingest and reads
+      // workspace_id / user_id from the body. Sent as application/json so the
+      // server's body parser hands it back as an object.
       if (LCC_USER.workspace_id && dur > 100) {
-        navigator.sendBeacon?.('/api/queue-v2?view=_perf', JSON.stringify({
-          metric_type: 'page_load', endpoint: label, duration_ms: dur
-        }));
+        try {
+          const payload = JSON.stringify({
+            metric_type: label.startsWith('render:') ? 'client_render' : 'page_load',
+            endpoint: label,
+            duration_ms: dur,
+            workspace_id: LCC_USER.workspace_id,
+            user_id: LCC_USER.id || null
+          });
+          const blob = new Blob([payload], { type: 'application/json' });
+          navigator.sendBeacon?.('/api/queue-v2?view=_perf', blob);
+        } catch (e) {
+          // Beacons are best-effort; never let telemetry break the UI.
+        }
       }
       return dur;
     }

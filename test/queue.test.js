@@ -186,4 +186,172 @@ describe('queue/inbox handler verification', () => {
     assert.ok(calls.some((call) => call.url.endsWith('/rest/v1/action_items') && call.method === 'POST'));
     assert.ok(calls.some((call) => call.url.endsWith('/rest/v1/activity_events') && call.method === 'POST'));
   });
+
+  describe('_perf beacon (anonymous client telemetry)', () => {
+    const validWs = '11111111-1111-1111-1111-111111111111';
+    const validUser = '22222222-2222-2222-2222-222222222222';
+
+    it('persists a render:my_work beacon to perf_metrics without requiring auth', async () => {
+      const calls = [];
+      global.fetch = async (url, opts = {}) => {
+        const method = opts.method || 'GET';
+        const target = String(url);
+        calls.push({ url: target, method, body: opts.body });
+        if (target.endsWith('/rest/v1/perf_metrics') && method === 'POST') {
+          return jsonResponse([{ id: 1 }], true, 201);
+        }
+        throw new Error(`Unexpected fetch: ${method} ${target}`);
+      };
+
+      const handler = await loadHandler();
+      // Note: no Authorization or X-LCC-Key headers — this is the sendBeacon path.
+      const req = {
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: {
+          metric_type: 'client_render',
+          endpoint: 'render:my_work',
+          duration_ms: 742,
+          workspace_id: validWs,
+          user_id: validUser
+        }
+      };
+      const res = mockRes();
+      await handler(req, res);
+
+      assert.equal(res._status, 204);
+      const insert = calls.find((c) => c.url.endsWith('/rest/v1/perf_metrics') && c.method === 'POST');
+      assert.ok(insert, 'expected a perf_metrics insert');
+      const row = JSON.parse(insert.body);
+      assert.equal(row.metric_type, 'client_render');
+      assert.equal(row.endpoint, 'render:my_work');
+      assert.equal(row.duration_ms, 742);
+      assert.equal(row.workspace_id, validWs);
+      assert.equal(row.user_id, validUser);
+    });
+
+    it('parses a string body (sendBeacon text/plain fallback)', async () => {
+      const calls = [];
+      global.fetch = async (url, opts = {}) => {
+        calls.push({ url: String(url), method: opts.method || 'GET', body: opts.body });
+        return jsonResponse([{ id: 1 }], true, 201);
+      };
+      const handler = await loadHandler();
+      const req = {
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: JSON.stringify({
+          metric_type: 'page_load',
+          endpoint: 'api:view=work_counts',
+          duration_ms: 332,
+          workspace_id: validWs
+        })
+      };
+      const res = mockRes();
+      await handler(req, res);
+
+      assert.equal(res._status, 204);
+      const insert = calls.find((c) => c.url.endsWith('/rest/v1/perf_metrics'));
+      assert.ok(insert, 'expected a perf_metrics insert');
+      assert.equal(JSON.parse(insert.body).endpoint, 'api:view=work_counts');
+    });
+
+    it('rejects unknown metric_type without inserting', async () => {
+      const calls = [];
+      global.fetch = async (url, opts = {}) => {
+        calls.push({ url: String(url), method: opts.method || 'GET' });
+        return jsonResponse([], true, 201);
+      };
+      const handler = await loadHandler();
+      const req = {
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: { metric_type: 'evil', endpoint: 'render:my_work', duration_ms: 100 }
+      };
+      const res = mockRes();
+      await handler(req, res);
+      assert.equal(res._status, 204);
+      assert.equal(calls.length, 0, 'should not have hit Supabase');
+    });
+
+    it('clamps duration_ms and rejects non-printable endpoint', async () => {
+      let inserted = null;
+      global.fetch = async (url, opts = {}) => {
+        if (String(url).endsWith('/rest/v1/perf_metrics')) {
+          inserted = JSON.parse(opts.body);
+        }
+        return jsonResponse([{ id: 1 }], true, 201);
+      };
+      const handler = await loadHandler();
+
+      // duration well over the 60s cap should clamp
+      const r1 = mockRes();
+      await handler({
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: { metric_type: 'page_load', endpoint: 'render:metrics', duration_ms: 999999, workspace_id: validWs }
+      }, r1);
+      assert.equal(r1._status, 204);
+      assert.equal(inserted.duration_ms, 60000);
+
+      // Non-printable endpoint should be dropped before insert
+      inserted = null;
+      const r2 = mockRes();
+      await handler({
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: { metric_type: 'page_load', endpoint: 'bad\x01endpoint', duration_ms: 50, workspace_id: validWs }
+      }, r2);
+      assert.equal(r2._status, 204);
+      assert.equal(inserted, null, 'expected no insert for non-printable endpoint');
+    });
+
+    it('drops malformed UUIDs but still records the metric anonymously', async () => {
+      let inserted = null;
+      global.fetch = async (url, opts = {}) => {
+        if (String(url).endsWith('/rest/v1/perf_metrics')) inserted = JSON.parse(opts.body);
+        return jsonResponse([{ id: 1 }], true, 201);
+      };
+      const handler = await loadHandler();
+      const res = mockRes();
+      await handler({
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: {
+          metric_type: 'client_render',
+          endpoint: 'render:metrics',
+          duration_ms: 401,
+          workspace_id: 'not-a-uuid',
+          user_id: 'also-not-a-uuid'
+        }
+      }, res);
+      assert.equal(res._status, 204);
+      assert.ok(inserted, 'expected an insert');
+      assert.equal(inserted.workspace_id, null);
+      assert.equal(inserted.user_id, null);
+    });
+
+    it('returns 204 silently when ops DB is not configured', async () => {
+      delete process.env.OPS_SUPABASE_URL;
+      delete process.env.OPS_SUPABASE_KEY;
+      let calledFetch = false;
+      global.fetch = async () => { calledFetch = true; return jsonResponse([], true, 201); };
+      const handler = await loadHandler();
+      const res = mockRes();
+      await handler({
+        method: 'POST',
+        query: { _version: 'v2', view: '_perf' },
+        headers: {},
+        body: { metric_type: 'page_load', endpoint: 'render:my_work', duration_ms: 100 }
+      }, res);
+      assert.equal(res._status, 204);
+      assert.equal(calledFetch, false, 'should not hit Supabase when ops creds missing');
+    });
+  });
 });
