@@ -1183,6 +1183,7 @@ let govResearchSection = 'research'; // 'research' | 'pipeline_ops'
 let govPendingUpdates = null;
 let govPendingUpdatesLoading = false;
 let govPendingUpdatesIdx = 0;
+let govPendingAutoResolved = null;
 let govPendingFilter = 'all'; // reason filter
 let govFinOverrideRec = null;
 let govPipelineRuns = null;
@@ -4580,6 +4581,19 @@ window.loadGovPendingUpdates = async function() {
     });
     govPendingUpdates = result.data || [];
     govPendingUpdatesRefreshedAt = new Date();
+
+    // Also fetch recently auto-resolved items so the trends strip can
+    // show the system's silent work (orphan sweeps, etc).
+    try {
+      const cutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+      const auto = await govQuery('pending_updates',
+        'id,reason,resolved_by,resolved_at,table_name', {
+          filter: 'status=eq.auto_resolved&resolved_at=gte.' + cutoff,
+          order: 'resolved_at.desc',
+          limit: 500
+        });
+      govPendingAutoResolved = auto.data || [];
+    } catch (_) { govPendingAutoResolved = []; }
   } catch(e) {
     console.error('loadGovPendingUpdates exception:', e);
     govPendingUpdates = [];
@@ -4681,6 +4695,28 @@ function renderGovPendingUpdates() {
     <div class="header-title">Pending Updates</div>
     <div class="header-subtitle">${totalPending} updates awaiting review${govPendingUpdatesRefreshedAt ? ' <span style="font-weight:400;opacity:0.7">(refreshed ' + govPendingUpdatesRefreshedAt.toLocaleTimeString() + ')</span>' : ''}</div>
   </div>`;
+
+  // Auto-resolve trends — small inline strip showing what the system has
+  // cleared automatically. Reads govPendingAutoResolved (loaded alongside
+  // pending updates).
+  if (typeof govPendingAutoResolved !== 'undefined' && govPendingAutoResolved && govPendingAutoResolved.length > 0) {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const recent = govPendingAutoResolved.filter(o => (o.resolved_at || '') >= sevenDaysAgo);
+    const bySolver = {};
+    recent.forEach(o => {
+      const k = o.resolved_by || 'unknown';
+      bySolver[k] = (bySolver[k] || 0) + 1;
+    });
+    const total7d = recent.length;
+    if (total7d > 0) {
+      const breakdown = Object.keys(bySolver).sort((a,b) => bySolver[b]-bySolver[a])
+        .map(k => bySolver[k] + ' ' + k).join(' &middot; ');
+      html += '<div style="margin-bottom:12px;padding:8px 12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.25);border-radius:6px;font-size:12px;color:var(--text2);">';
+      html += '<span style="font-size:11px;color:#22c55e;font-weight:600;letter-spacing:0.5px;">AUTO-RESOLVED (7d)</span>';
+      html += ' &middot; ' + total7d + ' items cleared without manual review &middot; ' + breakdown;
+      html += '</div>';
+    }
+  }
 
   if (!govPendingUpdates || govPendingUpdates.length === 0) {
     html += '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-title">All caught up!</div><div class="empty-desc">No pending updates to review</div></div>';
