@@ -45,5 +45,12 @@ values
 
   ('gov.available_listings', 'asking_price_psf', 'manual_edit',     1,  'record_only', null),
   ('gov.available_listings', 'asking_price_psf', 'om_extraction',   30, 'record_only', 'OM price per square foot — preferred over computed.'),
-  ('gov.available_listings', 'asking_price_psf', 'costar_sidebar',  60, 'record_only', null)
+  ('gov.available_listings', 'asking_price_psf', 'costar_sidebar',  60, 'record_only', null),
+
+  -- listing_date exists on both schemas but only dia had rules registered.
+  -- buildGovListingRow sets listing_date from OM-inferred metadata, and the
+  -- sidebar capture also writes it.
+  ('gov.available_listings', 'listing_date',     'manual_edit',     1,  'record_only', null),
+  ('gov.available_listings', 'listing_date',     'om_extraction',   30, 'record_only', 'OM-supplied listing date or inferred from lease metadata.'),
+  ('gov.available_listings', 'listing_date',     'costar_sidebar',  60, 'record_only', null)
 on conflict (target_table, field_name, source) do nothing;

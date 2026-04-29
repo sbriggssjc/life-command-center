@@ -2025,6 +2025,7 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
             asking_price_psf: askPpsf,
             listing_broker:   snapshot.listing_broker || null,
             broker_email:     snapshot.listing_broker_email || null,
+            listing_date:     snapshot.listing_date ?? null,
           }
         : {
             initial_price:    snapshot.asking_price ?? null,
