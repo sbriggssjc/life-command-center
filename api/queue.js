@@ -199,7 +199,10 @@ async function handleV2(req, res, user, workspaceId) {
     res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=30');
   }
 
-  logPerfMetric(workspaceId, user.id, 'api_latency', `/api/queue-v2?view=${view}`, duration, {
+  // Awaited so the metric lands before the function freezes. Vercel Node
+  // functions terminate pending I/O after res.json(), so fire-and-forget
+  // would silently lose a fraction of perf samples.
+  await logPerfMetric(workspaceId, user.id, 'api_latency', `/api/queue-v2?view=${view}`, duration, {
     item_count: result.items?.length || 0,
     page: req.query.page || 1
   });
