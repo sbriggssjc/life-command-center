@@ -1000,6 +1000,43 @@ async function promoteDiaLeaseFromOm(propertyId, snapshot) {
     insertPayload,
     { Prefer: 'return=representation' }
   );
+
+  // 409 race fallback: leases has UNIQUE(property_id, tenant_id, lease_start,
+  // lease_expiration) — if a parallel writer (sidebar capture, another OM
+  // promote, manual entry) inserted the same lease between our pre-insert
+  // dedup check and this POST, we hit 409. Treat it as "already there",
+  // PATCH the existing matching row with our latest values, and continue.
+  // Mirrors the apply-change.js bridge-level fallback (PR #480) for the
+  // direct-domainQuery path the OM promoter uses.
+  if (!insertRes.ok && insertRes.status === 409) {
+    const tenantId = newLease.tenant_id;
+    const start = newLease.lease_start;
+    const expiration = newLease.lease_expiration;
+    if (start && expiration) {
+      const filter = `property_id=eq.${Number(propertyId)}` +
+        `&lease_start=eq.${encodeURIComponent(start)}` +
+        `&lease_expiration=eq.${encodeURIComponent(expiration)}` +
+        (tenantId
+          ? `&tenant_id=eq.${encodeURIComponent(tenantId)}`
+          : `&tenant_id=is.null`);
+      const patchRes = await domainQuery(
+        'dialysis', 'PATCH', `leases?${filter}`, insertPayload,
+        { Prefer: 'return=representation' }
+      );
+      if (patchRes.ok) {
+        const patched = Array.isArray(patchRes.data) ? patchRes.data[0] : patchRes.data;
+        return {
+          ok: true,
+          lease_id: patched?.lease_id || null,
+          action: 'patched_existing_after_409',
+          deactivated_expired: 0, overlapping_active: 0
+        };
+      }
+    }
+    return { ok: false, skipped: 'insert_409_then_patch_failed',
+             status: insertRes.status, detail: insertRes.data };
+  }
+
   if (!insertRes.ok) {
     return { ok: false, skipped: 'insert_failed', status: insertRes.status, detail: insertRes.data };
   }
