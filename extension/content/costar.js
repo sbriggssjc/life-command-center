@@ -90,10 +90,22 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     if (!address) {
       lines = getPageLines();
       address = findAddressInLines(lines);
+      // Round 76dj diagnostic: log when the address-finder runs and
+      // what it returns, so we can see in the page console whether the
+      // split-line fallback is firing at all on the live page.
+      console.log('[LCC CoStar] findAddressInLines →', address, '(of', lines.length, 'lines)');
     }
 
     if (!address) {
       address = parseAddress(document.title);
+      if (address) console.log('[LCC CoStar] parseAddress(title) →', address);
+    }
+
+    if (!address) {
+      console.log('[LCC CoStar] address still null. title=', document.title, 'firstNumLines=',
+        (lines || []).filter(l => /^\d/.test(l)).slice(0, 3));
+    } else {
+      console.log('[LCC CoStar] resolved address:', address);
     }
 
     const identifier = address || document.title || url;
