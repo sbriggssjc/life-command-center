@@ -236,6 +236,89 @@ describe('queue/inbox handler verification', () => {
     });
   });
 
+  describe('v1 view=data_quality', () => {
+    it('returns summary + items from v_data_quality_summary / v_data_quality_issues', async () => {
+      const calls = [];
+      global.fetch = async (url, opts = {}) => {
+        const method = opts.method || 'GET';
+        const target = String(url);
+        calls.push({ url: target, method });
+
+        if (target.includes('/rest/v1/users?')) {
+          return jsonResponse([{
+            id: 'user-1',
+            email: 'dev@example.com',
+            display_name: 'Dev User',
+            workspace_memberships: [{ workspace_id: 'ws-1', role: 'operator', workspaces: { name: 'WS', slug: 'ws' } }]
+          }]);
+        }
+        if (target.includes('/rest/v1/v_data_quality_summary?workspace_id=eq.ws-1')) {
+          return jsonResponse([
+            { workspace_id: 'ws-1', issue_kind: 'stuck_sync_job',  issue_count: 2, total_severity: 50, worst_severity: 30 },
+            { workspace_id: 'ws-1', issue_kind: 'stale_open_action', issue_count: 5, total_severity: 600, worst_severity: 180 }
+          ]);
+        }
+        if (target.includes('/rest/v1/v_data_quality_issues?workspace_id=eq.ws-1')) {
+          return jsonResponse([
+            { workspace_id: 'ws-1', issue_kind: 'stuck_sync_job', record_id: 'job-1', detail_1: 'running', severity: 30, suggested_action: 'retry' }
+          ]);
+        }
+        throw new Error(`Unexpected fetch: ${method} ${target}`);
+      };
+
+      const handler = await loadHandler();
+      const req = {
+        method: 'GET',
+        query: { view: 'data_quality' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      };
+      const res = mockRes();
+      await handler(req, res);
+
+      assert.equal(res._status, 200);
+      assert.equal(res._json.view, 'data_quality');
+      assert.equal(res._json.summary.length, 2);
+      assert.equal(res._json.items.length, 1);
+      assert.equal(res._json.items[0].issue_kind, 'stuck_sync_job');
+    });
+
+    it('passes through issue_kind filter to the items query', async () => {
+      const calls = [];
+      global.fetch = async (url, opts = {}) => {
+        const method = opts.method || 'GET';
+        const target = String(url);
+        calls.push({ url: target, method });
+
+        if (target.includes('/rest/v1/users?')) {
+          return jsonResponse([{
+            id: 'user-1',
+            email: 'dev@example.com',
+            display_name: 'Dev User',
+            workspace_memberships: [{ workspace_id: 'ws-1', role: 'operator', workspaces: { name: 'WS', slug: 'ws' } }]
+          }]);
+        }
+        if (target.includes('/rest/v1/v_data_quality_summary')) return jsonResponse([]);
+        if (target.includes('/rest/v1/v_data_quality_issues')) return jsonResponse([]);
+        throw new Error(`Unexpected fetch: ${method} ${target}`);
+      };
+
+      const handler = await loadHandler();
+      const req = {
+        method: 'GET',
+        query: { view: 'data_quality', issue_kind: 'stuck_sync_job' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      };
+      const res = mockRes();
+      await handler(req, res);
+
+      assert.equal(res._status, 200);
+      const issuesCall = calls.find((c) => c.url.includes('/rest/v1/v_data_quality_issues'));
+      assert.ok(issuesCall, 'expected an issues fetch');
+      assert.ok(issuesCall.url.includes('issue_kind=eq.stuck_sync_job'),
+        'issue_kind filter should be in URL');
+    });
+  });
+
   describe('_perf beacon (anonymous client telemetry)', () => {
     const validWs = '11111111-1111-1111-1111-111111111111';
     const validUser = '22222222-2222-2222-2222-222222222222';
