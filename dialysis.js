@@ -423,7 +423,7 @@ async function loadDiaData() {
       diaQuery('v_npi_inventory_signals', '*', { limit: 5000 }).catch(function() { return []; }),
       diaQuery('v_clinic_property_link_review_queue', '*', { limit: 200 }).catch(function() { return []; }),
       diaQuery('v_clinic_lease_backfill_candidates', '*', { limit: 1000 }).catch(function() { return []; }),
-      diaQuery('research_queue_outcomes', 'clinic_id,queue_type,status,assigned_to,assigned_at,created_at', { limit: 2000 }).catch(function() { return []; }),
+      diaQuery('research_queue_outcomes', 'outcome_id,clinic_id,queue_type,status,assigned_to,assigned_at,created_at,source_name,selected_property_id,notes', { limit: 2000 }).catch(function() { return []; }),
       diaQuery('v_ingestion_reconciliation', '*', { limit: 1 }).catch(function() { return []; }),
       // Team touchpoints — query DIA Supabase directly so all team members are included
       diaQuery('salesforce_activities', 'assigned_to,activity_date,company_name', {
@@ -3920,6 +3920,10 @@ function renderDiaPropertyResearch() {
 
   html += '</div>';
 
+  // Recently auto-linked audit panel (collapsible). Surfaces silent
+  // auto-link decisions so they can be spot-checked.
+  html += renderDiaAutoLinkAuditPanel();
+
   // Keyboard shortcuts hint
   html += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:6px 10px;background:var(--s2);border-radius:6px;font-size:11px;color:var(--text3);align-items:center;">';
   html += '<span><kbd style="padding:2px 6px;background:var(--s3);border:1px solid var(--border);border-radius:3px;font-size:10px;font-family:monospace;">S</kbd> Save</span>';
@@ -5361,6 +5365,84 @@ window.diaClStepNav = function(idx) {
  * Each chip links to a property in one click; high-confidence candidates
  * (score >= 0.92) are highlighted as a primary action.
  */
+var diaAutoLinkAuditExpanded = false;
+function renderDiaAutoLinkAuditPanel() {
+  // Filter the cached outcomes for auto-link sources, last 14 days, top 50.
+  const cutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+  const autoLinkSources = ['auto_link_exact_singleton','auto_link_high_confidence','auto_link_orphan_property','auto_stub_from_clinic'];
+  const recent = (diaData.researchOutcomes || [])
+    .filter(o => o.queue_type === 'property_review'
+      && autoLinkSources.indexOf(o.source_name) !== -1
+      && (o.created_at || '') >= cutoff)
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .slice(0, 50);
+
+  if (recent.length === 0) {
+    return '';  // Don't show the panel if nothing recent
+  }
+
+  // Group counts for the header
+  const bySource = {};
+  recent.forEach(o => { bySource[o.source_name] = (bySource[o.source_name] || 0) + 1; });
+  const sourceLabel = function(s) {
+    return s === 'auto_link_exact_singleton' ? 'exact'
+         : s === 'auto_link_high_confidence' ? 'fuzzy'
+         : s === 'auto_link_orphan_property' ? 'orphan'
+         : s === 'auto_stub_from_clinic' ? 'stub' : s;
+  };
+  const headerCounts = Object.keys(bySource)
+    .sort((a, b) => bySource[b] - bySource[a])
+    .map(s => bySource[s] + ' ' + sourceLabel(s)).join(' · ');
+
+  let html = '<div style="margin-bottom:16px;background:rgba(99,102,241,0.05);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:10px 14px;">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="diaAutoLinkAuditExpanded=!diaAutoLinkAuditExpanded;renderDiaTab();">';
+  html += '<div style="font-size:12px;color:var(--text);font-weight:600;">';
+  html += '<span style="font-size:11px;color:#6366f1;letter-spacing:0.5px;">RECENTLY AUTO-LINKED</span>';
+  html += ' &middot; <span style="color:var(--text2);font-weight:400;">' + recent.length + ' in last 14 days (' + esc(headerCounts) + ')</span>';
+  html += '</div>';
+  html += '<button class="btn-action default" style="font-size:11px;padding:3px 10px;">' + (diaAutoLinkAuditExpanded ? '▲ Hide' : '▼ Show details') + '</button>';
+  html += '</div>';
+
+  if (diaAutoLinkAuditExpanded) {
+    html += '<div style="margin-top:10px;max-height:280px;overflow-y:auto;border-top:1px solid var(--border);padding-top:8px;">';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Spot-check the system\'s silent decisions. To revert one, copy the SQL command.</div>';
+    recent.forEach(o => {
+      const tag = sourceLabel(o.source_name);
+      const tagColor = o.source_name === 'auto_link_exact_singleton' ? '#34d399'
+                     : o.source_name === 'auto_link_high_confidence' ? '#fbbf24'
+                     : o.source_name === 'auto_link_orphan_property' ? '#60a5fa'
+                     : '#a78bfa';
+      const when = (o.created_at || '').slice(0, 16).replace('T', ' ');
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;margin-bottom:4px;background:var(--s2);border-radius:5px;font-size:11px;">';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<span style="display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:' + tagColor + ';color:#0a0a0a;margin-right:6px;">' + esc(tag.toUpperCase()) + '</span>';
+      html += '<span style="color:var(--text3);">' + esc(when) + '</span>';
+      html += ' &middot; clinic ' + esc(String(o.clinic_id)) + ' &rarr; property #' + esc(String(o.selected_property_id || '?'));
+      if (o.notes) html += '<div style="font-size:10px;color:var(--text3);margin-top:1px;" class="truncate">' + esc(o.notes) + '</div>';
+      html += '</div>';
+      html += '<button class="btn-action default" style="font-size:10px;padding:2px 8px;white-space:nowrap;" onclick="diaAutoLinkAuditCopyRevert(\'' + esc(String(o.clinic_id)) + '\')">Copy revert</button>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+window.diaAutoLinkAuditCopyRevert = function(clinicId) {
+  const sql = "SELECT public.revert_property_link_outcome('" + String(clinicId).replace(/'/g, "''") + "');";
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(sql).then(
+      () => showToast('Revert SQL copied to clipboard', 'success'),
+      () => showToast(sql, 'info')
+    );
+  } else {
+    // Fallback for non-secure contexts
+    showToast(sql, 'info');
+  }
+};
+
 function renderSuggestedCandidates(item, suggested) {
   const top = suggested.slice(0, 5);
   const best = top[0];
