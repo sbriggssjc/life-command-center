@@ -805,6 +805,28 @@ async function loadPropertyTab(opts) {
       <div>Routed to <strong>${escapeHtml(curLabel)}</strong>, but the primary tenant looks like <strong>${escapeHtml(sugLabel)}</strong>.</div>
       <div style="margin-top:4px;font-style:italic;color:#9C6500;">Primary tenant signal: "${escapeHtml((mismatch.primary_tenant_text || '').substring(0, 80))}"</div>
     </div>`;
+  } else {
+    // Round 76cr-Phase 2b (Round 76em, 2026-04-29): capture-time domain
+    // mismatch warning. The post-save banner above only fires for entities
+    // that already went through the server-side classifier. For unmatched
+    // captures (matched=false) and even matched-but-correctly-classified
+    // captures where the live page just-now changed tenants, run a small
+    // client-side heuristic against the live ctx so the user gets warned
+    // BEFORE clicking Save Property to LCC. Cheaper than a full classifier
+    // and catches the obvious cases that account for ~95% of the
+    // misclassification queue (VA hospitals, GSA leases, post offices,
+    // courthouses, IRS, SSA, etc. mistakenly captured into dialysis).
+    const captureWarning = detectCaptureDomainMismatch(ctx, domain);
+    if (captureWarning) {
+      const sugLabel = DOMAIN_LABELS[captureWarning.suggested_domain] || captureWarning.suggested_domain;
+      const curLabel = DOMAIN_LABELS[domain] || domain || 'this domain';
+      html += `<div class="domain-mismatch-banner" style="background:#FFF7E6;border:1px solid #F5A623;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px;color:#7A4F01;">
+        <div style="font-weight:700;margin-bottom:4px;">⚠ Check before saving — possible wrong domain</div>
+        <div>You're capturing into <strong>${escapeHtml(curLabel)}</strong>, but the tenant looks like <strong>${escapeHtml(sugLabel)}</strong>.</div>
+        <div style="margin-top:4px;font-style:italic;color:#9C6500;">Tenant: "${escapeHtml((captureWarning.tenant_text || '').substring(0, 80))}" · Matched: <code>${escapeHtml(captureWarning.matched_pattern)}</code></div>
+        <div style="margin-top:6px;font-size:11px;color:#7A4F01;">If this is correct, save anyway — the warning won't block. If you should be on the ${escapeHtml(sugLabel)} side, switch tabs or capture from the right channel.</div>
+      </div>`;
+    }
   }
 
   // ── SECTION 1: Existing LCC data (shown first when matched) ───────
@@ -1835,6 +1857,100 @@ function wirePropertyActions(ctx, lccEntity) {
       }
     });
   }
+}
+
+// Round 76cr-Phase 2b / Round 76em (2026-04-29): capture-time domain
+// misclassification detector. Runs client-side against the live page
+// context so the user gets a heads-up BEFORE clicking Save Property to LCC.
+// Only fires the warning when the SUGGESTED domain differs from the
+// CURRENT domain — never warns when the user is already on the right side.
+//
+// Returns { suggested_domain, tenant_text, matched_pattern } or null.
+//
+// Pattern packs are intentionally narrow — false positives are worse here
+// than false negatives (a missed warning is just business as usual; a
+// false alarm trains the user to ignore the banner). Patterns target
+// strong, common government tenants and dialysis operators that account
+// for the bulk of past misroutes.
+function detectCaptureDomainMismatch(ctx, currentDomain) {
+  if (!ctx) return null;
+  // Pull every reasonably-tenanty signal from the live ctx into one
+  // lower-cased haystack. tenants[].name covers single + multi-tenant
+  // captures; primary_tenant / tenant_name covers the headline slot.
+  const haystackParts = [
+    ctx.primary_tenant,
+    ctx.tenant_name,
+    ctx.tenant,
+    ctx.tenant_guarantor,
+    ctx.guarantor,
+    ...(Array.isArray(ctx.tenants) ? ctx.tenants.map(t => t && t.name) : []),
+  ].filter(Boolean).map(s => String(s));
+  if (haystackParts.length === 0) return null;
+  const haystack = haystackParts.join(' | ').toLowerCase();
+
+  // Strong government-tenant signals. Anchored with word boundaries so
+  // common words ("federal" inside "Federal Reserve" CRE buyer text)
+  // don't false-trigger.
+  const GOV_PATTERNS = [
+    /\bveterans\s+affairs\b/i,
+    /\bva\s+(?:medical\s+center|clinic|hospital|outpatient)\b/i,
+    /\bdepartment\s+of\s+(?:veterans|defense|state|justice|treasury|labor|energy|interior|education|agriculture|transportation|homeland|commerce)/i,
+    /\bgeneral\s+services\s+admin/i,
+    /\bgsa\s+(?:lease|tenant)?\b/i,
+    /\bsocial\s+security\s+admin/i,
+    /\bssa\s+field\s+office/i,
+    /\binternal\s+revenue\s+service\b/i,
+    /\birs\s+(?:office|service\s+center)/i,
+    /\bunited\s+states\s+(?:postal|government|attorney)/i,
+    /\bus\s+postal\s+service\b/i,
+    /\bus(?:ps)?\s+post\s+office/i,
+    /\bfederal\s+(?:bureau|courthouse|building|courthouse)/i,
+    /\bfbi\s+(?:field\s+office|building)/i,
+    /\b(?:dod|dod\s+contract|department\s+of\s+defense)\b/i,
+    /\b(?:army|navy|air\s+force|marine\s+corps|coast\s+guard)\s+(?:recruiting|reserve)/i,
+    /\bnational\s+(?:archives|guard)/i,
+    /\bcourthouse\b.*\b(?:federal|us|united\s+states)\b/i,
+    /\bstate\s+of\s+[a-z]{4,}.*\b(?:dmv|department|agency)/i,
+  ];
+
+  // Strong dialysis signals — the user is on a gov capture path but the
+  // tenant is clearly a dialysis operator. Inverse case.
+  const DIA_PATTERNS = [
+    /\bdavita\b/i,
+    /\bfresenius\s+(?:medical|kidney)/i,
+    /\bfmc\s+(?:hillsboro|kidney|dialysis)/i,
+    /\bbio[- ]?medical\s+applications/i,
+    /\bus\s+renal\s+care\b/i,
+    /\bsatellite\s+(?:healthcare|dialysis)/i,
+    /\bdialyze\s+direct\b/i,
+    /\bnephrology\s+associates\b/i,
+    /\bdaVita|fresenius|us\s+renal/i,
+  ];
+
+  if (currentDomain === 'dialysis' || currentDomain === 'dia') {
+    for (const re of GOV_PATTERNS) {
+      const match = haystack.match(re);
+      if (match) {
+        return {
+          suggested_domain: 'government',
+          tenant_text: haystackParts[0] || haystack.substring(0, 80),
+          matched_pattern: match[0],
+        };
+      }
+    }
+  } else if (currentDomain === 'government' || currentDomain === 'gov') {
+    for (const re of DIA_PATTERNS) {
+      const match = haystack.match(re);
+      if (match) {
+        return {
+          suggested_domain: 'dialysis',
+          tenant_text: haystackParts[0] || haystack.substring(0, 80),
+          matched_pattern: match[0],
+        };
+      }
+    }
+  }
+  return null;
 }
 
 function extractSourceFields(ctx) {
