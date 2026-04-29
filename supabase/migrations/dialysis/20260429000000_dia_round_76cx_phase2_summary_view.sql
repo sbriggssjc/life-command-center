@@ -78,7 +78,7 @@ SELECT
   al.is_active,
   al.listing_url,
   al.url,
-  COALESCE(al.last_price, al.asking_price) AS asking_price,
+  al.last_price AS asking_price,
   COALESCE(al.current_cap_rate, al.cap_rate) AS cap_rate,
   al.last_verified_at,
   al.verification_due_at,

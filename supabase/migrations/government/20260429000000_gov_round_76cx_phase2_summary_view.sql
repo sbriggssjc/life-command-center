@@ -71,7 +71,7 @@ SELECT
   al.listing_date,
   al.off_market_date,
   al.listing_status,
-  al.listing_url,
+  al.source_url AS listing_url,
   al.asking_price,
   al.asking_cap_rate AS cap_rate,
   al.last_verified_at,
