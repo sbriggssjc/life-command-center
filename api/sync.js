@@ -1181,25 +1181,28 @@ async function handleRetry(req, res, user, workspaceId) {
 // ============================================================================
 
 async function handleHealth(req, res, user, workspaceId) {
-  // Connector statuses
-  const connectors = await opsQuery('GET',
-    `connector_accounts?workspace_id=eq.${workspaceId}&select=id,user_id,connector_type,execution_method,display_name,status,last_sync_at,last_error,external_user_id&order=connector_type,display_name`
-  );
-
-  // Recent sync jobs (last 24h)
-  const recentJobs = await opsQuery('GET',
-    `sync_jobs?workspace_id=eq.${workspaceId}&created_at=gte.${new Date(Date.now() - 86400000).toISOString()}&select=id,connector_account_id,status,direction,entity_type,records_processed,records_failed,correlation_id,started_at,completed_at&order=created_at.desc&limit=50`
-  );
-
-  // Unresolved errors
-  const unresolvedErrors = await opsQuery('GET',
-    `sync_errors?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=id,connector_account_id,error_code,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`
-  );
-
-  const openSfTasks = await opsQuery('GET',
-    `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.sf_task&status=in.(new,triaged)&select=id&limit=1`,
-    { count: 'exact' }
-  );
+  // The four reads are independent — parallelize. Sequential awaits were
+  // costing ~3x the round-trip time on a 300ms-target endpoint.
+  // openSfTasks only consumes .count, so countMode='exact' is required;
+  // the others read .data and don't need the count header.
+  const [connectors, recentJobs, unresolvedErrors, openSfTasks] = await Promise.all([
+    opsQuery('GET',
+      `connector_accounts?workspace_id=eq.${workspaceId}&select=id,user_id,connector_type,execution_method,display_name,status,last_sync_at,last_error,external_user_id&order=connector_type,display_name`,
+      undefined, { countMode: 'none' }
+    ),
+    opsQuery('GET',
+      `sync_jobs?workspace_id=eq.${workspaceId}&created_at=gte.${new Date(Date.now() - 86400000).toISOString()}&select=id,connector_account_id,status,direction,entity_type,records_processed,records_failed,correlation_id,started_at,completed_at&order=created_at.desc&limit=50`,
+      undefined, { countMode: 'none' }
+    ),
+    opsQuery('GET',
+      `sync_errors?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=id,connector_account_id,error_code,error_message,is_retryable,retry_count,created_at&order=created_at.desc&limit=25`,
+      undefined, { countMode: 'none' }
+    ),
+    opsQuery('GET',
+      `inbox_items?workspace_id=eq.${workspaceId}&source_type=eq.sf_task&status=in.(new,triaged)&select=id&limit=1`,
+      undefined, { countMode: 'exact' }
+    )
+  ]);
 
   const connectorList = connectors.data || [];
   const recentJobList = recentJobs.data || [];
@@ -1877,7 +1880,13 @@ async function handleRcmBackfill(req, res) {
               }
             }
           } catch (sfErr) {
-            // Non-fatal — continue processing
+            // Non-fatal — continue processing the rest of the batch, but
+            // make the failure visible. Previously this catch swallowed the
+            // error with no log, so RCM->SF match failures were invisible.
+            console.warn(
+              `[sync/rcm-backfill] SF match attempt failed for lead_id=${lead.lead_id} email=${email}:`,
+              sfErr?.message || sfErr
+            );
           }
         }
 
