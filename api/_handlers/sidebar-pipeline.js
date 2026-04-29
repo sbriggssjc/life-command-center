@@ -1310,6 +1310,52 @@ const CONTACT_COLS = {
   government: { id: 'contact_id', name: 'name',         email: 'email',         phone: 'phone',         role: 'contact_type' },
 };
 
+// Junk-name filter for contact_name. Mirrors the isJunkTenant() pattern
+// used by upsertDomainLeases. The CoStar sidebar's contact extraction
+// occasionally produces firm names, section labels, or narrative text
+// where a person name belongs. Audit 2026-04-29 surfaced 213 same-source
+// "conflicts" against dia.contacts.contact_name in 2 days, including
+// "Marcus & Millichap", "Public REIT", "Fund Name", and even narrative
+// sentences like "This transaction was a sale leaseback."
+//
+// Returning true drops the contact entirely — a real person broker on
+// the same listing usually arrives as a separate contact entry with
+// proper name+email and gets written; the firm/junk row would only
+// pollute contacts and burn a contact_id.
+//
+// Keep regex anchored ^...$ for label class so legitimate names
+// containing those tokens aren't false-positived (e.g. "John Hess"
+// is fine; bare "Vice Chairman" is not).
+function isJunkContactName(name) {
+  if (typeof name !== 'string') return true;
+  const trimmed = name.trim();
+  if (trimmed.length < 3 || trimmed.length > 80) return true;
+
+  // Class A: firm-name suffix patterns. Real person names don't end with these.
+  const firmSuffixRe = /\b(LLC|L\.L\.C\.?|Inc\.?|Corp\.?|Corporation|Companies?|Co\.|Realty,?|Real Estate|Realtors?|Properties|Property|Partners|Investments?|Capital|Holdings?|Advisors?|Management|Brokerage|Brokers|Commercial|Services|Solutions|REIT|Fund(s)?( [IVX]+| [0-9]+)?)\b/i;
+  if (firmSuffixRe.test(trimmed)) return true;
+
+  // Class B: well-known brokerage / firm brand markers.
+  const firmBrandRe = /(\bMarcus & Millichap\b|\bCBRE\b|\bJLL\b|\bNewmark\b|\bCushman\b|\bColliers\b|\bAvison Young\b|\bBerkadia\b|\bEastdil\b|\bWalker & Dunlop\b|\bMatthews Real Estate\b|\bHorvath & Tremblay\b|\bKW Commercial\b)/i;
+  if (firmBrandRe.test(trimmed)) return true;
+
+  // Class C: pipe-separated firm names ("Colliers | Virginia").
+  if (/\|/.test(trimmed)) return true;
+
+  // Class D: section labels and UI noise (anchored).
+  const labelRe = /^(Fund Name|Owner Name|Listing Broker|Buyer Broker|Seller Broker|View More|View Less|Per SF|Public REIT|Equity Funds?|Vice Chairman|Senior Associate|Senior Director|Senior Vice President|Director|Principal|Managing Director|Executive Vice President)$/i;
+  if (labelRe.test(trimmed)) return true;
+
+  // Class E: narrative sentences (5+ words ending with period, OR
+  // narrative-opener phrases). Person names don't have terminal periods
+  // except for middle initials and titles ("Sarah J. Lee" stays fine —
+  // initials aren't followed by another sentence-final period).
+  if (trimmed.split(/\s+/).length >= 6 && /\.$/.test(trimmed)) return true;
+  if (/^(This transaction|The seller|The buyer|This listing|The property|This property|This sale)/i.test(trimmed)) return true;
+
+  return false;
+}
+
 // ── Upsert document links from CoStar "Documents" section ─────────────
 
 async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
@@ -1436,7 +1482,22 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
       });
     }
   }
-  const writable = people.filter(c => c.name_quality !== 'first_only');
+  // Drop contacts whose name looks like a firm, section label, or
+  // narrative text rather than a person. See isJunkContactName()
+  // header comment for the audit that motivated this filter.
+  const droppedJunk = [];
+  const writable = people.filter(c => {
+    if (c.name_quality === 'first_only') return false;
+    if (isJunkContactName(c.name)) {
+      droppedJunk.push(c.name);
+      return false;
+    }
+    return true;
+  });
+  if (droppedJunk.length > 0) {
+    console.log(`[upsertSidebarContacts] dropped ${droppedJunk.length} junk-name contact(s) for ${domain} property=${propertyId}:`,
+      droppedJunk.slice(0, 5).join(' | '));
+  }
 
   for (const person of writable) {
     const email   = person.email || null;
@@ -1483,11 +1544,16 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             `contacts?${col.id}=eq.${existingId}`, filteredPatch,
             'upsertSidebarContacts:personUpdate'
           );
-          collectContactProv(existingId, {
-            [col.name]: person.name.trim(),
-            [col.email]: email, [col.phone]: phone, company,
-            [col.role]: role,
-          });
+          // Provenance must mirror what was actually patched. The PATCH
+          // path doesn't touch the name column (matched-by-email rows
+          // already have an authoritative name), so don't claim we
+          // attempted a name write — that produced 213 phantom
+          // "conflicts" in the 2026-04-29 audit before this fix.
+          const provFields = {};
+          if ('email' in filteredPatch || col.email in filteredPatch) provFields[col.email] = email;
+          if ('phone' in filteredPatch || col.phone in filteredPatch) provFields[col.phone] = phone;
+          if ('company' in filteredPatch) provFields.company = company;
+          collectContactProv(existingId, provFields);
         } else {
           const row = {
             [col.name]:  person.name.trim(),
@@ -1502,6 +1568,7 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           if (r.ok) {
             count++;
             const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+            // INSERT path actually wrote name + role — record those.
             collectContactProv(inserted?.[col.id], {
               [col.name]: person.name.trim(),
               [col.email]: email, [col.phone]: phone, company,
@@ -1528,11 +1595,14 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           `contacts?${col.id}=eq.${existingId}`, patch,
           'upsertSidebarContacts:personUpdate'
         );
-        collectContactProv(existingId, {
-          [col.name]: person.name.trim(),
-          [col.email]: email, [col.phone]: phone, company,
-          [col.role]: roleStr,
-        });
+        // Same as the gov branch: dia PATCH path doesn't touch the name
+        // column on existing rows. Don't fabricate name-write provenance.
+        const provFields = {};
+        if (email) provFields[col.email] = email;
+        if (phone) provFields[col.phone] = phone;
+        if (company) provFields.company = company;
+        if (roleStr) provFields[col.role] = roleStr;
+        collectContactProv(existingId, provFields);
       } else {
         const row = {
           [col.name]:  person.name.trim(),
