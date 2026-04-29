@@ -12,7 +12,7 @@ let diaCharts = {};
 let diaResearchMode = 'quarantine'; // pipeline order: quarantine → unmatched → clarification → property → lease → clinic_leads → staleness → run_health
 let diaResearchIdx = 0;
 let diaPropertyFilter = { review_type: null, state: null, selectedIdx: undefined };
-let diaLeaseFilter = { priority: null, selectedIdx: undefined };
+let diaLeaseFilter = { priority: null, selectedIdx: undefined, parentOrg: null, hideReviewed: false, viewMode: 'portfolio' };
 let diaLeaseBackfillStep = 0; // step counter for 5-step lease backfill workflow
 let diaClinicLeadFilter = { category: null, tier: null, state: null, selectedIdx: undefined, hideResolved: true };
 let diaClinicLeadStep = 0; // step counter for 5-step clinic lead workflow
@@ -33,6 +33,9 @@ let diaNpiFilter = null; // filter by signal_type
 let diaNpiSelectedIdx = undefined; // selected row in NPI table
 let diaNpiSeverityFilter = 'actionable'; // (legacy "All Signals" mode filter)
 let diaNpiSelectedIds = new Set(); // bulk-select state, keyed by clinic_id
+// Round 76eg: Inventory Changes tab — added/removed clinic BD card feed
+let diaInventoryFilter = 'all';         // 'all' | 'added' | 'removed'
+let diaInventoryDismissed = new Set();  // session-only dismiss state, keyed by clinic_id
 // Round 76ef: 3-mode UI — BD events default, Cleanup queue for hygiene, All Signals = legacy
 let diaNpiMode = 'bd';                  // 'bd' | 'cleanup' | 'all'
 let diaNpiCleanupSubMode = 'missing';   // 'missing' | 'duplicate'
@@ -578,6 +581,9 @@ function renderDiaTab() {
         inner.innerHTML = renderDiaChanges();
       }
       break;
+    case 'inventory':
+      inner.innerHTML = renderDiaInventoryChanges();
+      break;
     case 'npi':
       inner.innerHTML = renderDiaNpi();
       break;
@@ -631,6 +637,10 @@ function goToDiaTab(tabName, preFilter) {
   if (preFilter && tabName === 'changes') {
     diaCmsSearch = preFilter;
     diaCmsPage = 0;
+  }
+  // Inventory Changes tab supports pre-filter by change_type ('added' / 'removed')
+  if (preFilter && tabName === 'inventory') {
+    diaInventoryFilter = preFilter;
   }
   currentDiaTab = tabName;
   if (typeof window.syncDomainTabGroup === 'function') {
@@ -971,7 +981,7 @@ function renderDiaOverview() {
       icon: '🚨', color: '#f87171', urgency: 'urgent',
       title: removedCount + ' clinic' + (removedCount > 1 ? 's' : '') + ' removed from CMS inventory',
       detail: 'Potential closures — check for acquisition or disposition opportunities',
-      action: 'View Changes', tab: 'changes'
+      action: 'Review closures', tab: 'inventory', preFilter: 'removed'
     });
   }
 
@@ -981,7 +991,7 @@ function renderDiaOverview() {
       icon: '🆕', color: '#34d399', urgency: 'info',
       title: addedCount + ' new clinic' + (addedCount > 1 ? 's' : '') + ' added to CMS inventory',
       detail: 'New facilities — may need property linking and operator research',
-      action: 'View New Clinics', tab: 'changes', preFilter: 'added'
+      action: 'Review new clinics', tab: 'inventory', preFilter: 'added'
     });
   }
 
@@ -2633,6 +2643,220 @@ function _wireNpiFlagDismissButtons() {
 //                     - Duplicate cluster: side-by-side compare vs NPPES truth
 // "All Signals"   — legacy table view of the full matview output. Power-user.
 // ──────────────────────────────────────────────────────────────────────────
+
+// ============================================================================
+// INVENTORY CHANGES TAB — Round 76eg
+//
+// CMS publishes a fresh inventory snapshot quarterly. v_clinic_inventory_latest_diff
+// flags clinics that appeared (added) or disappeared (removed) since the prior
+// snapshot. Each is BD-actionable:
+//   • added   → potential new lease tenant; possibly already on a fresh lease
+//                we could backfill from CoStar/county records
+//   • removed → potential closure or operator change; touch the property to
+//                check if it's coming to market
+//
+// The old "tab=changes preFilter=added" UX dumped the user on a 7,000-row CMS
+// data table with a search box pre-filled. This tab replaces that with a
+// focused card feed of just the 31 inventory changes, each with one-click
+// research actions.
+// ============================================================================
+
+const INVENTORY_META = {
+  added:   { icon: '🆕', color: '#34d399', label: 'New CMS Clinic',  bg: 'rgba(52,211,153,0.10)' },
+  removed: { icon: '🚪', color: '#f87171', label: 'Dropped from CMS', bg: 'rgba(248,113,113,0.10)' },
+};
+
+function renderDiaInventoryChanges() {
+  const all = (diaData.inventoryChanges || []).filter(r => !diaInventoryDismissed.has(r.clinic_id));
+  const added = all.filter(r => r.change_type === 'added');
+  const removed = all.filter(r => r.change_type === 'removed');
+
+  let html = '<div class="biz-section">';
+
+  // ─── Banner ──────────────────────────────────────────────────────────
+  html += '<div style="padding:12px 16px;background:rgba(52,211,153,0.08);border-radius:8px;border-left:3px solid var(--accent);margin-bottom:14px;">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:var(--text)">CMS Inventory Changes</div>';
+  html += '<div style="font-size:12px;color:var(--text2);line-height:1.5">Clinics that appeared in or dropped from the latest CMS Dialysis Compare snapshot. <strong>New clinics</strong> are potential lease prospects — confirm property linkage and backfill ownership data. <strong>Closures</strong> are potential disposition opportunities — confirm operating status and check property records for transactions.</div>';
+  html += '</div>';
+
+  // ─── Mode pills ──────────────────────────────────────────────────────
+  const filterBtn = (key, label, count) => {
+    const active = diaInventoryFilter === key;
+    const badge = `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${active ? 'rgba(255,255,255,0.25)' : 'var(--s3)'};color:${active ? '#fff' : 'var(--text2)'};margin-left:4px">${fmtN(count)}</span>`;
+    return `<button data-inv-filter="${key}" style="font-size:12px;font-weight:600;padding:6px 12px;border-radius:6px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};background:${active ? 'var(--accent)' : 'var(--s2)'};color:${active ? '#000' : 'var(--text2)'};cursor:pointer">${label}${badge}</button>`;
+  };
+  html += '<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center">';
+  html += filterBtn('all', 'All', added.length + removed.length);
+  html += filterBtn('added', 'New clinics', added.length);
+  html += filterBtn('removed', 'Closures', removed.length);
+  html += '</div>';
+
+  // ─── Filter + sort ───────────────────────────────────────────────────
+  let visible = all;
+  if (diaInventoryFilter === 'added') visible = added;
+  else if (diaInventoryFilter === 'removed') visible = removed;
+  visible = visible.slice().sort((a, b) => {
+    // Big clinics first (by patients), then by chairs, then by certification date
+    const pa = a.latest_total_patients || a.prior_total_patients || 0;
+    const pb = b.latest_total_patients || b.prior_total_patients || 0;
+    if (pa !== pb) return pb - pa;
+    return (b.number_of_chairs || 0) - (a.number_of_chairs || 0);
+  });
+
+  if (visible.length === 0) {
+    html += '<div style="padding:48px;text-align:center;color:var(--text3);background:var(--s2);border-radius:8px">';
+    html += '<div style="font-size:32px;margin-bottom:8px">📋</div>';
+    html += '<div style="font-size:14px;font-weight:600;color:var(--text2)">No inventory changes detected</div>';
+    html += '<div style="font-size:12px;margin-top:4px">CMS publishes new snapshots quarterly — check back after the next refresh.</div>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  // ─── Card list ───────────────────────────────────────────────────────
+  html += '<div style="display:flex;flex-direction:column;gap:10px">';
+  for (const row of visible.slice(0, 200)) {
+    html += _renderInventoryChangeCard(row);
+  }
+  html += '</div>';
+
+  if (visible.length > 200) {
+    html += `<div style="padding:8px;font-size:11px;color:var(--text3);text-align:center">Showing first 200 of ${fmtN(visible.length)} — narrow with the filter pills above</div>`;
+  }
+
+  html += '</div>'; // biz-section
+
+  // ─── Wire handlers ───────────────────────────────────────────────────
+  setTimeout(() => {
+    document.querySelectorAll('[data-inv-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        diaInventoryFilter = btn.dataset.invFilter;
+        renderDiaTab();
+      });
+    });
+    _wireInventoryActionButtons();
+  }, 0);
+
+  return html;
+}
+
+function _renderInventoryChangeCard(row) {
+  const meta = INVENTORY_META[row.change_type] || { icon: '•', color: 'var(--text2)', label: row.change_type, bg: 'var(--s2)' };
+  const isAdded = row.change_type === 'added';
+  const facilityName = norm(row.facility_name) || 'Unknown';
+  const addrLine = (row.address || '') + (row.city ? ', ' + row.city : '') + (row.state ? ' ' + row.state : '');
+  const patientCount = isAdded ? row.latest_total_patients : row.prior_total_patients;
+  const chairs = row.number_of_chairs;
+  const dateLabel = isAdded ? 'CMS-certified' : 'Last seen';
+  const dateValue = isAdded
+    ? (row.certification_date ? new Date(row.certification_date).toLocaleDateString() : '—')
+    : (row.prior_snapshot_date ? new Date(row.prior_snapshot_date).toLocaleDateString() : '—');
+
+  // BD priority hint: large clinic + independent operator = highest BD value
+  const isBigOpportunity = (patientCount || 0) >= 50 && (row.operator_name === 'Independent' || row.parent_organization === null);
+
+  let html = '';
+  html += '<div style="border:1px solid var(--border);border-left:3px solid ' + meta.color + ';border-radius:10px;padding:14px 16px;background:var(--s1)">';
+
+  // Top row: icon + identity
+  html += '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:10px">';
+  html += '<div style="font-size:24px;flex-shrink:0;line-height:1">' + meta.icon + '</div>';
+  html += '<div style="flex:1;min-width:0">';
+  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px">';
+  html += '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;padding:2px 8px;border-radius:8px;background:' + meta.bg + ';color:' + meta.color + '">' + meta.label + '</span>';
+  if (isBigOpportunity) {
+    html += '<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;padding:2px 8px;border-radius:8px;background:rgba(251,191,36,0.15);color:#fbbf24">★ High BD value</span>';
+  }
+  html += '</div>';
+  html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:var(--text);overflow-wrap:anywhere">' + esc(facilityName) + '</h4>';
+  html += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc(addrLine) + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Stats grid
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;font-size:11px">';
+  const _fact = (lbl, val) => '<div style="background:var(--s2);padding:6px 8px;border-radius:5px"><div style="color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:1px">' + lbl + '</div><div style="font-weight:600;color:var(--text);overflow-wrap:anywhere">' + val + '</div></div>';
+  html += _fact('Operator', esc(row.operator_name || row.parent_organization || 'Independent'));
+  html += _fact('Patients', patientCount != null ? fmtN(patientCount) : '—');
+  html += _fact('Chairs', chairs != null ? fmtN(chairs) : '—');
+  html += _fact(dateLabel, dateValue);
+  html += '</div>';
+
+  // Row identifiers (CCN, NPI)
+  html += '<div style="font-size:10px;color:var(--text3);margin-bottom:10px;font-family:monospace">CCN ' + esc(row.clinic_id) + (row.medicare_npi ? ' · NPI ' + esc(row.medicare_npi) : ' · No NPI') + '</div>';
+
+  // Actions
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  html += '<button class="btn-action default" style="font-size:11px;padding:6px 12px" onclick=\'showDetail(' + safeJSON(row) + ',"dia-clinic")\'>Open property research</button>';
+  if (row.medicare_npi) {
+    html += '<a href="https://npiregistry.cms.hhs.gov/provider-view/' + encodeURIComponent(row.medicare_npi) + '" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">NPPES ↗</a>';
+  }
+  const searchQ = (row.facility_name || '') + ' ' + (row.city || '') + ' ' + (row.state || '') + (isAdded ? ' lease' : ' closure');
+  html += '<a href="https://www.google.com/search?q=' + encodeURIComponent(searchQ.trim()) + '" target="_blank" rel="noopener" style="font-size:11px;padding:6px 12px;border-radius:6px;background:var(--s2);border:1px solid var(--border);color:var(--text2);text-decoration:none">Google ↗</a>';
+  html += '<button class="inv-flag-btn" data-clinic-id="' + esc(row.clinic_id) + '" data-name="' + esc(facilityName) + '" data-change="' + esc(row.change_type) + '" style="font-size:11px;padding:6px 12px;border:1px solid var(--accent);border-radius:6px;background:rgba(52,211,153,0.1);color:var(--accent);cursor:pointer;font-weight:600">Flag for research</button>';
+  html += '<button class="inv-dismiss-btn" data-clinic-id="' + esc(row.clinic_id) + '" style="font-size:11px;padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text3);cursor:pointer;margin-left:auto">Dismiss</button>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function _wireInventoryActionButtons() {
+  document.querySelectorAll('.inv-flag-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const clinicId = btn.dataset.clinicId;
+      const name = btn.dataset.name;
+      const change = btn.dataset.change;
+      if (!clinicId) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'research_queue_outcomes',
+          data: {
+            medicare_id: clinicId,
+            outcome: 'flagged_for_review',
+            notes: 'Flagged from Inventory Changes tab — ' + change,
+            created_at: new Date().toISOString()
+          },
+          source_surface: 'dia_inventory_flag'
+        });
+        diaInventoryDismissed.add(clinicId);
+        showToast('Flagged ' + (name || clinicId), 'success');
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Flag for research';
+        showToast('Flag failed: ' + e.message, 'error');
+      }
+    });
+  });
+
+  document.querySelectorAll('.inv-dismiss-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const clinicId = btn.dataset.clinicId;
+      if (!clinicId) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await applyInsertWithFallback({
+          proxyBase: '/api/dia-query',
+          table: 'research_queue_outcomes',
+          data: {
+            medicare_id: clinicId,
+            outcome: 'dismissed',
+            notes: 'Dismissed from Inventory Changes tab',
+            created_at: new Date().toISOString()
+          },
+          source_surface: 'dia_inventory_dismiss'
+        });
+        diaInventoryDismissed.add(clinicId);
+        renderDiaTab();
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Dismiss';
+        showToast('Dismiss failed: ' + e.message, 'error');
+      }
+    });
+  });
+}
 
 function renderDiaNpi() {
   const allSignals = (diaData.npiSignals || []).map(r => ({
@@ -5011,28 +5235,162 @@ function renderDiaPropertyCard(item) {
 }
 
 
+// ──────────────────────────────────────────────────────────────────────────
+// Lease Backfill — Portfolio Overview (Round 76eh)
+//
+// Buckets the 4,381-row backfill queue by parent_organization. Each card
+// shows the operator's totals (clinics, patients, high-risk, large clinics)
+// and one click drills into the per-clinic queue scoped to that operator.
+// Drains 64% of the queue into 4 named institutional cards (Fresenius,
+// DaVita, USRC, DCI) so the user is no longer scrolling 4K rows.
+// ──────────────────────────────────────────────────────────────────────────
+function renderDiaLeasePortfolioOverview() {
+  const all = diaData.leaseBackfillRows || [];
+  const reviewedIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').map(o => o.clinic_id));
+
+  // Group by parent_organization (treating null/empty as 'Independent')
+  const groups = new Map();
+  for (const row of all) {
+    const key = row.parent_organization && row.parent_organization.trim() !== '' ? row.parent_organization : 'Independent';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  // Sort groups by row count desc; surface portfolios with most volume first
+  const sortedGroups = Array.from(groups.entries())
+    .map(([name, rows]) => {
+      const pending = rows.filter(r => !reviewedIds.has(r.clinic_id));
+      return {
+        name,
+        total: rows.length,
+        pending: pending.length,
+        verified: rows.length - pending.length,
+        highRisk: rows.filter(r => r.closure_watch_level === 'high').length,
+        largeClinic: rows.filter(r => r.total_patients > 100).length,
+        totalPatients: rows.reduce((s, r) => s + (r.total_patients || 0), 0),
+        states: new Set(rows.map(r => r.state).filter(Boolean)).size,
+      };
+    })
+    .sort((a, b) => b.pending - a.pending);
+
+  let html = '';
+
+  // Banner — explain the operator-portfolio framing
+  html += '<div style="padding:12px 16px;background:rgba(96,165,250,0.08);border-radius:8px;border-left:3px solid #60a5fa;margin-bottom:14px;">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:var(--text)">Lease Backfill by Operator Portfolio</div>';
+  html += '<div style="font-size:12px;color:var(--text2);line-height:1.5">' + fmtN(all.length) + ' clinics with linked properties but no lease record. Most are clustered in 4-5 institutional operators — drain them one portfolio at a time. Click any operator to scope the per-clinic research queue to just that portfolio.</div>';
+  html += '</div>';
+
+  // Portfolio cards
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">';
+  for (const g of sortedGroups) {
+    const isInstitutional = g.total >= 100;
+    const isIndependent = g.name === 'Independent';
+    html += '<div style="border:1px solid var(--border);border-left:3px solid ' + (isInstitutional ? '#60a5fa' : isIndependent ? '#a78bfa' : '#fbbf24') + ';border-radius:10px;padding:14px 16px;background:var(--s1);cursor:pointer" data-lease-portfolio="' + esc(g.name) + '">';
+    // Header
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">';
+    html += '<div style="min-width:0;flex:1">';
+    html += '<h4 style="margin:0;font-size:14px;font-weight:700;color:var(--text);overflow-wrap:anywhere">' + esc(g.name) + '</h4>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + fmtN(g.states) + ' states · ' + fmtN(g.totalPatients) + ' total patients</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;flex-shrink:0">';
+    html += '<div style="font-size:22px;font-weight:800;color:var(--text);line-height:1">' + fmtN(g.pending) + '</div>';
+    html += '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">pending</div>';
+    html += '</div>';
+    html += '</div>';
+
+    // Mini stats
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;margin-bottom:10px">';
+    const _stat = (lbl, val, color) => '<div style="background:var(--s2);padding:6px 8px;border-radius:5px"><div style="color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:0.5px">' + lbl + '</div><div style="font-weight:700;color:' + (color || 'var(--text)') + ';font-size:13px;margin-top:1px">' + val + '</div></div>';
+    html += _stat('High risk', fmtN(g.highRisk), g.highRisk > 0 ? '#f87171' : 'var(--text2)');
+    html += _stat('100+ pts', fmtN(g.largeClinic), g.largeClinic > 0 ? '#fbbf24' : 'var(--text2)');
+    html += _stat('Verified', fmtN(g.verified), g.verified > 0 ? 'var(--accent)' : 'var(--text2)');
+    html += '</div>';
+
+    // CTA
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text2)">';
+    html += '<span>Click to research →</span>';
+    html += '<span style="color:var(--text3)">' + (isInstitutional ? 'Institutional operator' : isIndependent ? 'Multiple independent operators' : 'Mid-sized operator') + '</span>';
+    html += '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  return html;
+}
+
 function renderDiaLeaseResearch() {
-  let html = '<div class="research-progress" style="margin-bottom: 30px;">';
-  
-  const total = diaData.leaseBackfillRows.length;
+  let html = '';
+
+  // Round 76eh: Portfolio-first view. The 4,381-row queue is mostly clustered
+  // in 4 institutional operators (Fresenius/DaVita/USRC/DCI = 64% of rows).
+  // Default landing is a per-operator overview so the user can drain one
+  // portfolio at a time instead of scrolling a single 4K-row list.
+  // Toggle to Per-Clinic mode preserves the existing one-at-a-time workflow.
+
+  // View-mode toggle
+  const modeBtn = (key, label) => {
+    const active = (diaLeaseFilter.viewMode || 'portfolio') === key;
+    return `<button data-lease-view="${key}" style="font-size:12px;font-weight:600;padding:6px 14px;border-radius:6px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};background:${active ? 'var(--accent)' : 'var(--s2)'};color:${active ? '#000' : 'var(--text2)'};cursor:pointer">${label}</button>`;
+  };
+  html += '<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center;justify-content:space-between">';
+  html += '<div style="display:flex;gap:6px">';
+  html += modeBtn('portfolio', 'Portfolio overview');
+  html += modeBtn('clinic', 'Per-clinic queue');
+  html += '</div>';
+  if (diaLeaseFilter.parentOrg) {
+    html += '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)">';
+    html += '<span>Filtered to: <strong style="color:var(--text)">' + esc(diaLeaseFilter.parentOrg) + '</strong></span>';
+    html += '<button onclick="diaLeaseFilter.parentOrg=null;diaLeaseFilter.selectedIdx=undefined;renderDiaTab()" style="font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--s2);color:var(--text2);cursor:pointer">Clear filter</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Portfolio mode renders + early-returns
+  if ((diaLeaseFilter.viewMode || 'portfolio') === 'portfolio' && !diaLeaseFilter.parentOrg) {
+    html += renderDiaLeasePortfolioOverview();
+    setTimeout(() => {
+      document.querySelectorAll('[data-lease-view]').forEach(btn => {
+        btn.addEventListener('click', () => { diaLeaseFilter.viewMode = btn.dataset.leaseView; diaLeaseFilter.selectedIdx = undefined; renderDiaTab(); });
+      });
+      document.querySelectorAll('[data-lease-portfolio]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          diaLeaseFilter.parentOrg = btn.dataset.leasePortfolio === '__null__' ? null : btn.dataset.leasePortfolio;
+          diaLeaseFilter.viewMode = 'clinic';
+          diaLeaseFilter.selectedIdx = undefined;
+          renderDiaTab();
+        });
+      });
+    }, 0);
+    return html;
+  }
+
+  // Per-clinic mode (existing workflow) — wrap with research-progress
+  html += '<div class="research-progress" style="margin-bottom: 30px;">';
+
+  // Apply parentOrg filter to the metric counts as well
+  const scopedRows = diaLeaseFilter.parentOrg
+    ? diaData.leaseBackfillRows.filter(r => (r.parent_organization || 'Independent') === diaLeaseFilter.parentOrg)
+    : diaData.leaseBackfillRows;
+
+  const total = scopedRows.length;
   const verified = diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill' && o.status === 'verified_lease').length;
   const pct = total > 0 ? Math.round((verified / total) * 100) : 0;
-  
+
   html += `<div class="progress-text">${verified} of ${total} verified (${pct}%)</div>`;
   html += `<div class="progress-bar"><div style="width: ${pct}%; background: #34d399;"></div></div>`;
   html += '</div>';
   
-  // Summary metrics
+  // Summary metrics — scoped to current parentOrg filter when active
   html += '<div class="gov-metrics" style="margin-bottom: 30px;">';
-  
-  const pending = diaData.leaseBackfillRows.length;
-  const highRisk = diaData.leaseBackfillRows.filter(r => r.closure_watch_level === 'high').length;
-  const largeClinic = diaData.leaseBackfillRows.filter(r => r.total_patients > 100).length;
-  
+
+  const pending = scopedRows.length;
+  const highRisk = scopedRows.filter(r => r.closure_watch_level === 'high').length;
+  const largeClinic = scopedRows.filter(r => r.total_patients > 100).length;
+
   html += metricHTML('Pending Backfill', fmtN(pending), 'lease candidates', '');
   html += metricHTML('High Risk', fmtN(highRisk), 'closure watch', '');
   html += metricHTML('Large Clinics', fmtN(largeClinic), '100+ patients', '');
-  html += metricHTML('Avg Patients', fmtN(Math.round(diaData.leaseBackfillRows.reduce((s, r) => s + (r.total_patients || 0), 0) / Math.max(pending, 1))), 'per clinic', '');
+  html += metricHTML('Avg Patients', fmtN(Math.round(scopedRows.reduce((s, r) => s + (r.total_patients || 0), 0) / Math.max(pending, 1))), 'per clinic', '');
 
   html += '</div>';
 
@@ -5064,7 +5422,7 @@ function renderDiaLeaseResearch() {
   html += '<div class="table-wrapper" style="margin-bottom: 20px;">';
   html += '<div class="data-table">';
 
-  let filtered = diaData.leaseBackfillRows;
+  let filtered = scopedRows;
   if (diaLeaseFilter.hideReviewed) {
     const reviewedLeaseIds = new Set(diaData.researchOutcomes.filter(o => o.queue_type === 'lease_backfill').map(o => o.clinic_id));
     filtered = filtered.filter(r => !reviewedLeaseIds.has(r.clinic_id));
@@ -5128,6 +5486,13 @@ function renderDiaLeaseResearch() {
 
   // Attach handlers
   setTimeout(() => {
+    document.querySelectorAll('[data-lease-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        diaLeaseFilter.viewMode = btn.dataset.leaseView;
+        diaLeaseFilter.selectedIdx = undefined;
+        renderDiaTab();
+      });
+    });
     document.querySelectorAll('[data-filter-priority]').forEach(btn => {
       btn.addEventListener('click', e => {
         diaLeaseFilter.priority = e.target.dataset.filterPriority === 'all' ? null : e.target.dataset.filterPriority;
@@ -6682,31 +7047,55 @@ async function saveDiaOutcome(queueType, clinicId, status, propId, notes, source
       metadata: { queue_type: queueType, clinic_id: clinicId, status: status, property_id: propId, notes: notes, source: source, lease_term: term, annual_rent: rent, rent_per_sf: rentSF }
     });
 
-    // Auto-advance to next item or mark queue as complete
+    // Drop the resolved clinic from the in-memory queue so the next render
+    // skips it. The MV refresh happens on the 1-min cron; in the meantime
+    // the local pop gives an instant queue-advance UX. Avoid loadDiaData() —
+    // that re-runs 10+ Promise.all queries (~20s on slow connections).
+    // (Same pattern as propResLinkFromQueue — see PR #469.)
+    const cidStr = String(clinicId);
     if (queueType === 'property_review') {
-      const filtered = diaData.propertyReviewQueue.filter(r => !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type);
-      const currentIdx = diaPropertyFilter.selectedIdx || 0;
-      if (currentIdx + 1 < filtered.length) {
-        diaPropertyFilter.selectedIdx = currentIdx + 1;
-        showToast('Outcome saved — advancing to next item', 'success');
-      } else {
+      diaData.propertyReviewQueue = (diaData.propertyReviewQueue || []).filter(function(r) {
+        return String(r.clinic_id) !== cidStr;
+      });
+      const filtered = diaData.propertyReviewQueue.filter(function(r) {
+        return !diaPropertyFilter.review_type || r.review_type === diaPropertyFilter.review_type;
+      });
+      if (filtered.length === 0) {
         diaPropertyFilter.selectedIdx = undefined;
         showToast('Outcome saved — queue complete!', 'success');
+      } else {
+        const target = (typeof diaPropertyFilter.selectedIdx === 'number')
+          ? diaPropertyFilter.selectedIdx : 0;
+        diaPropertyFilter.selectedIdx = Math.min(target, filtered.length - 1);
+        showToast('Outcome saved — advancing to next item', 'success');
       }
     } else {
-      const filtered = diaData.leaseBackfillRows.filter(r => !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority);
-      const currentIdx = diaLeaseFilter.selectedIdx || 0;
-      if (currentIdx + 1 < filtered.length) {
-        diaLeaseFilter.selectedIdx = currentIdx + 1;
-        showToast('Outcome saved — advancing to next item', 'success');
-      } else {
+      diaData.leaseBackfillRows = (diaData.leaseBackfillRows || []).filter(function(r) {
+        return String(r.clinic_id) !== cidStr;
+      });
+      const filtered = diaData.leaseBackfillRows.filter(function(r) {
+        return !diaLeaseFilter.priority || r.lease_backfill_priority === diaLeaseFilter.priority;
+      });
+      if (filtered.length === 0) {
         diaLeaseFilter.selectedIdx = undefined;
         showToast('Outcome saved — queue complete!', 'success');
+      } else {
+        const target = (typeof diaLeaseFilter.selectedIdx === 'number')
+          ? diaLeaseFilter.selectedIdx : 0;
+        diaLeaseFilter.selectedIdx = Math.min(target, filtered.length - 1);
+        showToast('Outcome saved — advancing to next item', 'success');
       }
     }
 
-    // Reload data and re-render to advance to next record
-    await loadDiaData();
+    // Refresh outcomes cache so the audit panel picks up the new row, then
+    // re-render. Both cheap; no full data reload.
+    try {
+      const fresh = await diaQuery('research_queue_outcomes',
+        'outcome_id,clinic_id,queue_type,status,assigned_to,assigned_at,created_at,source_name,selected_property_id,notes',
+        { limit: 2000 });
+      diaData.researchOutcomes = fresh || [];
+    } catch (_) { /* non-fatal */ }
+
     renderDiaTab();
     return true;
   } catch (err) {
@@ -9864,6 +10253,7 @@ window.propResCreate = async function(sourceTable, sourceIdCol, sourceIdVal) {
 };
 
 window.renderDiaChanges = renderDiaChanges;
+window.renderDiaInventoryChanges = renderDiaInventoryChanges;
 window.renderDiaNpi = renderDiaNpi;
 window.renderDiaResearch = renderDiaResearch;
 window.renderDiaActivity = renderDiaActivity;
