@@ -89,15 +89,23 @@ export async function shouldWriteField({
 
   let res;
   try {
+    // lcc_merge_field's parameter names use the `p_*` prefix (verified in
+    // production via pg_proc.proname='lcc_merge_field'). PostgREST RPC arg
+    // matching is by exact name, so prior `_*` keys silently 404'd —
+    // `shouldWriteField` was returning {decision:'no_rule', ...} via the
+    // catch path on every call, meaning strict-mode gates were no-ops in
+    // production. Re-keying restores the contract.
     res = await opsQuery('POST', 'rpc/lcc_merge_field', {
-      _target_database: targetDb,
-      _target_table:    targetTable,
-      _record_pk_value: String(recordPk ?? ''),
-      _field_name:      fieldName,
-      _value:           value == null ? null : String(value),
-      _source:          source,
-      _source_run_id:   sourceRunId || null,
-      _confidence:      confidence == null ? null : Number(confidence),
+      p_workspace_id:    null,
+      p_target_database: targetDb,
+      p_target_table:    targetTable,
+      p_record_pk:       String(recordPk ?? ''),
+      p_field_name:      fieldName,
+      p_value:           value == null ? null : value,
+      p_source:          source,
+      p_source_run_id:   sourceRunId || null,
+      p_confidence:      confidence == null ? null : Number(confidence),
+      p_recorded_by:     null,
     });
   } catch (err) {
     // Fail open — never block a write because of a registry RPC error.
@@ -111,8 +119,11 @@ export async function shouldWriteField({
              reason: 'RPC non-ok — failing open' };
   }
 
-  const result = res.data;
-  // result shape: { decision, enforce_mode, current_source, current_priority, ... }
+  // lcc_merge_field returns SETOF record (TABLE), so PostgREST sends an
+  // array. Unwrap the first row.
+  const result = Array.isArray(res.data) ? res.data[0] : res.data;
+  // result shape: { provenance_id, decision, decision_reason, current_value,
+  //                 current_source, current_priority, new_priority, enforce_mode }
   const decision    = result?.decision   || 'no_rule';
   const enforceMode = result?.enforce_mode || 'no_rule';
   const currentSrc  = result?.current_source || null;
@@ -180,14 +191,16 @@ export async function recordFieldWrites({
     if (value === undefined) continue;  // null is a meaningful manual write (clear field)
     promises.push(
       opsQuery('POST', 'rpc/lcc_merge_field', {
-        _target_database: targetDb,
-        _target_table:    targetTable,
-        _record_pk_value: String(recordPk),
-        _field_name:      fieldName,
-        _value:           value == null ? null : String(value),
-        _source:          source,
-        _source_run_id:   sourceRunId || null,
-        _confidence:      conf,
+        p_workspace_id:    workspaceId || null,
+        p_target_database: targetDb,
+        p_target_table:    targetTable,
+        p_record_pk:       String(recordPk),
+        p_field_name:      fieldName,
+        p_value:           value == null ? null : value,
+        p_source:          source,
+        p_source_run_id:   sourceRunId || null,
+        p_confidence:      conf,
+        p_recorded_by:     null,
       })
         .then(res => { res?.ok ? recorded++ : failed++; })
         .catch(() => { failed++; })

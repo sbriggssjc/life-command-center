@@ -2223,26 +2223,32 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     const runId      = o.source_run_id ? `${source}:${o.source_run_id}` : `replay:${o.id}`;
 
     // Two writes per outcome: properties.medicare_id and
-    // medicare_clinics.property_id.
+    // medicare_clinics.property_id. lcc_merge_field's parameter prefix
+    // is `p_*` (verified against pg_proc); PostgREST RPC matches arg
+    // names exactly so the prefix matters.
     merges.push({
-      _target_database: 'dia_db',
-      _target_table:    'dia.properties',
-      _record_pk_value: String(o.selected_property_id),
-      _field_name:      'medicare_id',
-      _value:           String(o.clinic_id),
-      _source:          source,
-      _source_run_id:   runId,
-      _confidence:      confidence,
+      p_workspace_id:    null,
+      p_target_database: 'dia_db',
+      p_target_table:    'dia.properties',
+      p_record_pk:       String(o.selected_property_id),
+      p_field_name:      'medicare_id',
+      p_value:           o.clinic_id,
+      p_source:          source,
+      p_source_run_id:   runId,
+      p_confidence:      confidence,
+      p_recorded_by:     null,
     });
     merges.push({
-      _target_database: 'dia_db',
-      _target_table:    'dia.medicare_clinics',
-      _record_pk_value: String(o.clinic_id),
-      _field_name:      'property_id',
-      _value:           String(o.selected_property_id),
-      _source:          source,
-      _source_run_id:   runId,
-      _confidence:      confidence,
+      p_workspace_id:    null,
+      p_target_database: 'dia_db',
+      p_target_table:    'dia.medicare_clinics',
+      p_record_pk:       String(o.clinic_id),
+      p_field_name:      'property_id',
+      p_value:           o.selected_property_id,
+      p_source:          source,
+      p_source_run_id:   runId,
+      p_confidence:      confidence,
+      p_recorded_by:     null,
     });
     results.by_source[source] = (results.by_source[source] || 0) + 1;
   }
@@ -2258,16 +2264,22 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     });
   }
 
-  // 4. Fire the merges. Best-effort: a single failure doesn't block the
-  // rest of the batch, but we count failures and surface them.
-  for (const args of merges) {
-    try {
-      const r = await opsQuery('POST', 'rpc/lcc_merge_field', args);
-      if (r.ok) results.replayed++;
-      else      results.failed++;
-    } catch {
-      results.failed++;
-    }
+  // 4. Fire the merges in parallel batches. Best-effort: a single failure
+  // doesn't block the batch. Vercel hobby has a 10s wall budget; sequential
+  // dispatch of 400 RPC calls (200 outcomes × 2 fields) at 20-50ms each
+  // would be 8-20s, risking timeout. Parallel via Promise.allSettled keeps
+  // wall time bounded by the slowest call (typically <500ms).
+  const settled = await Promise.allSettled(
+    merges.map(args =>
+      opsQuery('POST', 'rpc/lcc_merge_field', args)
+        .then(r => (r?.ok ? 'replayed' : 'failed'))
+        .catch(() => 'failed')
+    )
+  );
+  for (const r of settled) {
+    const value = r.status === 'fulfilled' ? r.value : 'failed';
+    if (value === 'replayed') results.replayed++;
+    else                       results.failed++;
   }
 
   // 5. Advance watermark only if the entire batch dispatched (replayed +
