@@ -1,0 +1,33 @@
+-- ============================================================================
+-- Migration: drop unused verification views (dia)
+--
+-- Target: dialysis Supabase (DIA_SUPABASE_URL)
+--
+-- Two views from Round 76cx Phase 1 / Phase 2 had no consumers in the
+-- application code (verified across api/, ops.js, app.js, dialysis.js,
+-- gov.js, detail.js as of branch claude/fix-api-performance-target-Tjq5t):
+--
+--   - v_listings_due_for_verification (Phase 1)
+--       Was meant to be the triage queue of overdue listings. The
+--       lcc-auto-scrape-listings cron runs the equivalent query directly
+--       against available_listings (now NULL-aware after admin.js's
+--       OR-filter rewrite in 452b4af), so the view is functionally dead.
+--
+--   - v_listing_verification_detail (Phase 2)
+--       Per-listing detail view intended for a property-detail panel
+--       that was never wired up. detail.js / dialysis.js read directly
+--       from available_listings + properties; nothing reads this view.
+--
+-- Kept (do NOT drop):
+--   - v_listing_verification_summary
+--       Single-row dashboard digest. dialysis.js:loadDiaVerificationSummary
+--       reads it; renderListingVerificationCard renders the result.
+--
+-- Re-running this migration is safe (DROP VIEW IF EXISTS).
+-- If a future panel needs the dropped views, recreate from the original
+-- 20260428540000_dia_round_76cx_listing_verification_schema.sql and
+-- 20260429000000_dia_round_76cx_phase2_summary_view.sql definitions.
+-- ============================================================================
+
+DROP VIEW IF EXISTS public.v_listings_due_for_verification;
+DROP VIEW IF EXISTS public.v_listing_verification_detail;
