@@ -6135,6 +6135,62 @@ let govSalesSort = { col: null, dir: 'desc' };
 let govFilteredSalesData = [];
 const GOV_SALES_PAGE_SIZE = 50;
 
+// Round 76cx Phase 2 (gov parity): listing verification dashboard digest.
+// Single-row view; renders alongside the Available-listings metrics so the
+// user sees due/overdue counts at a glance. Mirrors the dia equivalent in
+// dialysis.js — same view shape, same card layout.
+let govVerificationSummary = null;
+let govVerificationSummaryLoading = false;
+
+async function loadGovVerificationSummary() {
+  if (govVerificationSummaryLoading) return;
+  govVerificationSummaryLoading = true;
+  try {
+    const res = await govQuery('v_listing_verification_summary', '*', { limit: 1 });
+    govVerificationSummary = ((res && res.data) || [])[0] || null;
+  } catch (e) {
+    console.error('loadGovVerificationSummary error:', e);
+    govVerificationSummary = null;
+  }
+  govVerificationSummaryLoading = false;
+  // Re-render the gov sales view if we're still on it. This is a fire-and-
+  // forget refresh; if the user already navigated away, we just leave the
+  // data in memory for next visit.
+  if (govSalesView === 'available' && document.getElementById('bizPageInner')) {
+    renderGovSales();
+  }
+}
+
+// Compact verification status card. Color reflects urgency:
+//   blue   — nothing overdue
+//   yellow — some listings due
+//   red    — broken URLs or 90d+ overdue
+function renderGovListingVerificationCard() {
+  if (!govVerificationSummary) {
+    return metricHTML('Verification Status', '…', 'Loading verification digest', 'blue');
+  }
+  const s = govVerificationSummary;
+  const due       = Number(s.due_for_verification) || 0;
+  const overdue30 = Number(s.overdue_30d) || 0;
+  const overdue90 = Number(s.overdue_90d) || 0;
+  const broken    = Number(s.broken_url_count) || 0;
+  const recent    = Number(s.verifications_last_7d) || 0;
+  const changes7d = Number(s.recent_status_changes_7d) || 0;
+
+  let color = 'blue';
+  if (overdue90 > 0 || broken > 0) color = 'red';
+  else if (due > 0 || overdue30 > 0) color = 'yellow';
+
+  const sub =
+    overdue30 + ' 30d-overdue · ' +
+    overdue90 + ' 90d · ' +
+    broken    + ' broken-url · ' +
+    recent    + ' checks/7d · ' +
+    changes7d + ' status-changes/7d';
+
+  return metricHTML('Verification Status', fmtN(due), sub, color);
+}
+
 window.govSalesSortBy = function(col) {
   if (govSalesSort.col === col) {
     govSalesSort.dir = govSalesSort.dir === 'desc' ? 'asc' : 'desc';
@@ -6335,6 +6391,12 @@ async function renderGovSales() {
     const avgDom = filtered.filter(r => r.dom > 0);
     const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s, r) => s + r.dom, 0) / avgDom.length) : '—';
     html += metricHTML('Avg DOM', avgDomVal, avgDom.length + ' with dates', 'yellow');
+    // Round 76cx Phase 2 (gov parity): verification status card. Lazy-loaded
+    // on first available-tab render; re-renders fill in the counts.
+    if (govVerificationSummary === null && !govVerificationSummaryLoading) {
+      loadGovVerificationSummary();
+    }
+    html += renderGovListingVerificationCard();
   }
   html += '</div>';
 
