@@ -396,6 +396,17 @@ async function handleAutoScrapeListings(req, res) {
       : `listing_status=eq.active`;
     const dateCol = dom === 'dialysis' ? 'listing_date' : 'listing_date';
     const select = `listing_id,property_id,${dateCol},verification_due_at,consecutive_check_failures`;
+
+    // gov.available_listings has an exclude_from_listing_metrics flag for
+    // listings that shouldn't influence dashboard counts — e.g. test rows,
+    // soft-deletes, or known-bad campaigns. The gov v_available_listings
+    // and v_listing_verification_summary views all filter on this; the
+    // cron should too, otherwise it auto-touches rows the rest of the
+    // system intentionally ignores. Dia doesn't have this column.
+    const excludeFilter = dom === 'government'
+      ? `&exclude_from_listing_metrics=not.is.true`
+      : '';
+
     // Listings to verify this tick:
     //   verification_due_at IS NULL              ← drift recovery (BEFORE-INSERT
     //                                              trigger missed it, e.g. row
@@ -412,6 +423,7 @@ async function handleAutoScrapeListings(req, res) {
     const nowEnc = encodeURIComponent(new Date().toISOString());
     const path =
       `available_listings?${isActiveFilter}` +
+      excludeFilter +
       `&or=(verification_due_at.is.null,and(verification_due_at.gte.${cutoffEnc},verification_due_at.lte.${nowEnc}))` +
       `&select=${select}` +
       `&order=verification_due_at.asc.nullsfirst&limit=${limit}`;
