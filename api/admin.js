@@ -2186,15 +2186,16 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     ? Number(wmRes.data[0].last_outcome_id || 0)
     : 0;
 
-  // 2. Pull the next batch of outcomes from dia.
+  // 2. Pull the next batch of outcomes from dia. PK column is `outcome_id`
+  // on dia.research_queue_outcomes (not `id` — verified against live schema).
   const outcomeRes = await domainQuery(
     'dialysis',
     'GET',
     `research_queue_outcomes?queue_type=eq.property_review` +
     `&status=eq.approved_link` +
-    `&id=gt.${lastOutcomeId}` +
-    `&order=id.asc&limit=${limit}` +
-    `&select=id,clinic_id,selected_property_id,source_name,source_run_id,assigned_at`
+    `&outcome_id=gt.${lastOutcomeId}` +
+    `&order=outcome_id.asc&limit=${limit}` +
+    `&select=outcome_id,clinic_id,selected_property_id,source_name,source_run_id,assigned_at`
   );
   if (!outcomeRes.ok) {
     return res.status(502).json({ error: 'dia outcome fetch failed', detail: outcomeRes.data });
@@ -2220,7 +2221,7 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     if (!o.clinic_id || !o.selected_property_id || !o.source_name) continue;
     const source     = o.source_name;
     const confidence = source === 'manual_verify' ? 1.0 : 0.85;
-    const runId      = o.source_run_id ? `${source}:${o.source_run_id}` : `replay:${o.id}`;
+    const runId      = o.source_run_id ? `${source}:${o.source_run_id}` : `replay:${o.outcome_id}`;
 
     // Two writes per outcome: properties.medicare_id and
     // medicare_clinics.property_id. lcc_merge_field's parameter prefix
@@ -2257,7 +2258,7 @@ async function handleDiaLinkProvenanceReplay(req, res) {
     return res.status(200).json({
       mode:    'dry_run',
       from_id: lastOutcomeId,
-      to_id:   outcomes[outcomes.length - 1].id,
+      to_id:   outcomes[outcomes.length - 1].outcome_id,
       outcomes: outcomes.length,
       merge_calls_planned: merges.length,
       by_source: results.by_source,
@@ -2285,7 +2286,7 @@ async function handleDiaLinkProvenanceReplay(req, res) {
   // 5. Advance watermark only if the entire batch dispatched (replayed +
   // failed equals merges.length — both are terminal states; failures stay
   // failed but the watermark moves so we don't replay them forever).
-  const newWatermark = outcomes[outcomes.length - 1].id;
+  const newWatermark = outcomes[outcomes.length - 1].outcome_id;
   await opsQuery(
     'PATCH',
     'dia_link_provenance_watermark?singleton=eq.true',
