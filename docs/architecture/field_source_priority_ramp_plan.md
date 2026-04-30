@@ -129,16 +129,43 @@ GROUP BY enforce_mode;
 
 ### Active strict rules (as of 2026-04-29)
 
+> **Phase-5 regression note.** Through the end of 2026-04-29 the
+> JS-side strict-mode gate (`shouldWriteField` / `filterByFieldPriority`
+> in `api/_shared/field-priority-guard.js`) was a silent no-op: it
+> called `lcc_merge_field` with `_*`-prefixed RPC keys but the SQL
+> function's parameters use `p_*`. PostgREST returned 404 on every
+> call, the catch handler returned `{decision: 'no_rule', write: true}`,
+> and writers proceeded regardless of the rule's `enforce_mode`.
+> **Provenance audit was correct** (the separate inline
+> `recordFieldProvenance` callers in `sidebar-pipeline.js` +
+> `intake-promoter.js` use `p_*` and recorded 200+ skip / conflict
+> rows correctly), but **strict mode itself never blocked any
+> writes**. Fixed in PR #519 alongside the FU6 replay's same-shape
+> bug. Skip / conflict counts in the table below are the registry's
+> *attempted-write* counts; they were **logged, not blocked**.
+
 | target_table | field | source | observed behavior |
 |---|---|---|---|
-| `dia.contacts` | `contact_email` | `costar_sidebar` | 205 skips, 17 conflicts blocked over 2 days |
-| `dia.leases` | `expense_structure` | `costar_sidebar` | 66 skips, 8 conflicts blocked |
+| `dia.contacts` | `contact_email` | `costar_sidebar` | 205 skips, 17 conflicts logged over 2 days (would-have-been blocked) |
+| `dia.leases` | `expense_structure` | `costar_sidebar` | 66 skips, 8 conflicts logged |
 | `dia.leases` | `lease_expiration` | `costar_sidebar` | 69 skips, 0 conflicts |
-| `dia.leases` | `lease_start` | `costar_sidebar` | 61 skips, 3 conflicts blocked |
+| `dia.leases` | `lease_start` | `costar_sidebar` | 61 skips, 3 conflicts logged |
 | `dia.leases` | `leased_area` | `costar_sidebar` | (active) |
 | `dia.leases` | `rent_per_sf` | `costar_sidebar` | (active) |
 
-The 28 conflicts blocked across these 6 rules in 2 days is real data-loss prevention — without strict mode, costar_sidebar would have overwritten higher-trust values from OM extraction or manual edits.
+**Now that PR #519 is deployed, those 6 rules actually block writes.**
+Implications:
+
+- The next CoStar refresh that tries to overwrite an OM-confirmed
+  `lease_start` / `lease_expiration` / `expense_structure` /
+  `leased_area` / `rent_per_sf` value will be silently dropped at
+  the field level. The sidebar continues writing the rest of the
+  fields. Refresh telemetry stays unchanged in the LCC UI; only the
+  newly-blocked column stays at its prior (higher-trust) value.
+- If any of these 6 rules turn out to over-block in practice
+  (e.g. costar refreshes that *should* be allowed because the
+  prior value was stale or wrong), demote the rule from `strict`
+  back to `warn` rather than tweaking the priority numbers.
 
 ## Logical gap captured
 
