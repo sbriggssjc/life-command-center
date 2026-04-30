@@ -1217,18 +1217,20 @@ async function renderDiaDataQualityWidgets() {
 
   // Pretty-name each issue_kind so the cards stay scannable.
   const KIND_LABELS = {
-    duplicate_property_address: 'Duplicate property address',
-    multi_active_lease:         'Multi-active lease (one property, multiple active leases)',
-    listing_after_sale:         'Listing after sale',
-    orphan_listing:             'Orphan listing (property missing)',
-    lease_no_dates:             'Lease with no dates',
+    duplicate_property_address:         'Duplicate property address',
+    multi_active_lease:                 'Multi-active lease (one property, multiple active leases)',
+    listing_after_sale:                 'Listing after sale',
+    orphan_listing:                     'Orphan listing (property missing)',
+    lease_no_dates:                     'Lease with no dates',
+    listing_active_no_verification_due: 'Active listing missing verification_due_at',
   };
   const KIND_HINTS = {
-    duplicate_property_address: 'Auto-merge cron handles 5/min. Remaining are placeholder addresses needing manual review.',
-    multi_active_lease:         'Auto-supersede only resolves cleanly disjoint terms — these have overlapping or unclear chains.',
-    listing_after_sale:         'Closed-on-sale trigger missed; flip status to Sold.',
-    orphan_listing:             'Property was deleted — listing should be removed or repointed.',
-    lease_no_dates:             'Active lease without lease_start or lease_expiration. Source data missing dates.',
+    duplicate_property_address:         'Auto-merge cron handles 5/min. Remaining are placeholder addresses needing manual review.',
+    multi_active_lease:                 'Auto-supersede only resolves cleanly disjoint terms — these have overlapping or unclear chains.',
+    listing_after_sale:                 'Closed-on-sale trigger missed; flip status to Sold.',
+    orphan_listing:                     'Property was deleted — listing should be removed or repointed.',
+    lease_no_dates:                     'Active lease without lease_start or lease_expiration. Source data missing dates.',
+    listing_active_no_verification_due: 'BEFORE-INSERT trigger drift. Cron auto-picks these up; spike means trigger or replication path needs review.',
   };
 
   let html = '';
@@ -1355,16 +1357,18 @@ async function renderGovDataQualityWidgets() {
   const issues  = issuesRes?.data  || [];
 
   const KIND_LABELS = {
-    duplicate_property_address: 'Duplicate property address',
-    listing_after_sale:         'Listing after sale',
-    orphan_listing:             'Orphan listing (property missing)',
-    lease_no_dates:             'Lease with no dates',
+    duplicate_property_address:         'Duplicate property address',
+    listing_after_sale:                 'Listing after sale',
+    orphan_listing:                     'Orphan listing (property missing)',
+    lease_no_dates:                     'Lease with no dates',
+    listing_active_no_verification_due: 'Active listing missing verification_due_at',
   };
   const KIND_HINTS = {
-    duplicate_property_address: 'Same normalized address+state under multiple property_ids — manual merge needed.',
-    listing_after_sale:         'Active listing on a property that already has a sale recorded. Run the listing-close backfill or flip status to Sold.',
-    orphan_listing:             'Property was deleted — listing should be removed or repointed.',
-    lease_no_dates:             'Active lease without commencement_date or expiration_date. Source data missing dates.',
+    duplicate_property_address:         'Same normalized address+state under multiple property_ids — manual merge needed.',
+    listing_after_sale:                 'Active listing on a property that already has a sale recorded. Run the listing-close backfill or flip status to Sold.',
+    orphan_listing:                     'Property was deleted — listing should be removed or repointed.',
+    lease_no_dates:                     'Active lease without commencement_date or expiration_date. Source data missing dates.',
+    listing_active_no_verification_due: 'BEFORE-INSERT trigger drift. Cron auto-picks these up; spike means trigger or replication path needs review.',
   };
 
   let html = '';
