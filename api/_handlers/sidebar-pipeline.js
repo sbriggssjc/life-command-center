@@ -1989,12 +1989,37 @@ async function propagateToDomainDbDirect(domain, entity, metadata) {
         zip_code:   entity.zip     || metadata.zip     || null,
         year_built: metadata.year_built || null,
       };
+      // Mirror buildGovListingRow / upsertDomainProperty's gov branch on the
+      // sidebar-pipeline side: gov.properties has many lease + financial
+      // columns the dia branch doesn't (gross_rent, gross_rent_psf,
+      // lease_expiration, renewal_options, sf_leased, agency, etc.) plus
+      // sale-mirror columns (latest_deed_date, latest_sale_price). The
+      // writer populates all of them; provenance covered only the first 8.
+      // 15 additional fields registered in migration 20260429460000.
+      const govLatestSale = (Array.isArray(metadata.sales_history) ? metadata.sales_history : [])
+        .filter(s => s && s.sale_date)
+        .sort((a, b) => new Date(b.sale_date).getTime() - new Date(a.sale_date).getTime())[0];
       const propValues = domain === 'government'
         ? {
             ...sharedPropFields,
-            rba:                metadata.sf_total || metadata.building_sf || null,
-            land_acres:         metadata.land_acres || null,
-            lease_commencement: parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+            rba:                 metadata.sf_total || metadata.building_sf || null,
+            land_acres:          metadata.land_acres || null,
+            lease_commencement:  parseDate(metadata.lease_commencement)?.split('T')[0] || null,
+            year_renovated:      metadata.year_renovated || null,
+            county:              metadata.county || entity.county || null,
+            building_type:       metadata.property_type || null,
+            gov_occupancy_pct:   metadata.occupancy != null ? Number(metadata.occupancy) : null,
+            assessed_value:      parseCurrency(metadata.assessed_value),
+            gross_rent:          parseCurrency(metadata.annual_rent),
+            gross_rent_psf:      parseCurrency(metadata.rent_per_sf),
+            lease_expiration:    parseDate(metadata.lease_expiration)?.split('T')[0] || null,
+            renewal_options:     metadata.renewal_options || null,
+            rent_escalations:    metadata.rent_escalations || null,
+            sf_leased:           metadata.sf_leased != null ? Number(metadata.sf_leased) : null,
+            agency:              metadata.tenant_name || metadata.primary_tenant || null,
+            agency_full_name:    metadata.tenant_name || metadata.primary_tenant || null,
+            latest_deed_date:    govLatestSale ? (parseDate(govLatestSale.sale_date)?.split('T')[0] || null) : null,
+            latest_sale_price:   govLatestSale ? parseCurrency(govLatestSale.sale_price) : null,
           }
         : {
             ...sharedPropFields,
