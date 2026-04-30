@@ -400,4 +400,78 @@ describe('admin /_route=auto-scrape-listings', () => {
     assert.equal(body.p_listing_id, 7);
     assert.equal(body.p_check_result, 'still_available');
   });
+
+  it('gov listings query applies exclude_from_listing_metrics filter', async () => {
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      const target = String(url);
+      calls.push({ url: target, method: opts.method || 'GET' });
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      if (target.includes('/rest/v1/available_listings')) {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    };
+
+    const handler = await loadHandler();
+    await handler(
+      {
+        method: 'GET',
+        query: { _route: 'auto-scrape-listings', domain: 'gov' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      },
+      mockRes()
+    );
+
+    const listingsCall = calls.find((c) =>
+      c.url.startsWith('https://gov.example.com/rest/v1/available_listings'));
+    assert.ok(listingsCall, 'expected gov listings fetch');
+    assert.ok(
+      listingsCall.url.includes('exclude_from_listing_metrics=not.is.true'),
+      `gov query must filter out exclude_from_listing_metrics=true rows: ${listingsCall.url}`
+    );
+  });
+
+  it('dia listings query does NOT apply exclude_from_listing_metrics filter (column does not exist)', async () => {
+    const calls = [];
+    global.fetch = async (url, opts = {}) => {
+      const target = String(url);
+      calls.push({ url: target, method: opts.method || 'GET' });
+
+      if (target.includes('/rest/v1/users?')) {
+        return jsonResponse([{
+          id: 'user-1', email: 'dev@example.com', display_name: 'Dev User',
+          workspace_memberships: [{ workspace_id: 'ws-1', role: 'owner', workspaces: { name: 'WS', slug: 'ws' } }]
+        }]);
+      }
+      if (target.includes('/rest/v1/available_listings')) {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    };
+
+    const handler = await loadHandler();
+    await handler(
+      {
+        method: 'GET',
+        query: { _route: 'auto-scrape-listings', domain: 'dia' },
+        headers: { 'x-lcc-user-id': 'user-1', 'x-lcc-workspace': 'ws-1' }
+      },
+      mockRes()
+    );
+
+    const listingsCall = calls.find((c) =>
+      c.url.startsWith('https://dia.example.com/rest/v1/available_listings'));
+    assert.ok(listingsCall, 'expected dia listings fetch');
+    assert.ok(
+      !listingsCall.url.includes('exclude_from_listing_metrics'),
+      `dia query must NOT include the gov-only flag — schema mismatch: ${listingsCall.url}`
+    );
+  });
 });
