@@ -3771,6 +3771,13 @@ function renderListingVerificationCard() {
   const broken    = Number(s.broken_url_count) || 0;
   const recent    = Number(s.verifications_last_7d) || 0;
   const changes7d = Number(s.recent_status_changes_7d) || 0;
+  // Round 76et-E breakout. Falls back to the monolithic 'recent' count
+  // when running against a database that hasn't applied the migration yet.
+  const evidence7d = (s.evidence_verifications_7d != null) ? Number(s.evidence_verifications_7d) : null;
+  const cronOnly7d = (s.cron_timer_advances_7d   != null) ? Number(s.cron_timer_advances_7d)   : null;
+  const checks7dPart = (evidence7d != null && cronOnly7d != null)
+    ? `${evidence7d} evidence/7d · ${cronOnly7d} cron-only/7d`
+    : `${recent} checks/7d`;
 
   let color = 'blue';
   if (overdue90 > 0 || broken > 0) color = 'red';
@@ -3778,7 +3785,7 @@ function renderListingVerificationCard() {
 
   const title = 'Verification Status';
   const value = fmtN(due);
-  const sub = `${overdue30} 30d-overdue · ${overdue90} 90d · ${broken} broken-url · ${recent} checks/7d · ${changes7d} status-changes/7d`;
+  const sub = `${overdue30} 30d-overdue · ${overdue90} 90d · ${broken} broken-url · ${checks7dPart} · ${changes7d} status-changes/7d`;
 
   // Round 76et-B (2026-04-29): Phase 3 + 3b + 4b all shipped. The card was
   // pointing users at a "lands later" toast for a feature that already exists.
