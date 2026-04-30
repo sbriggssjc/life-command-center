@@ -1424,11 +1424,48 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
   // ── Helper: find existing contact by email then by name ──────────────
   async function findExisting(email, normName, roleFilter) {
     if (email) {
+      // Email is the most authoritative key. Verify the matching row's
+      // name is consistent with the incoming name before claiming it's
+      // the same contact. The 2026-04-30 audit found 254 dia.contacts
+      // rows where the existing row's surname is absent from the
+      // existing row's email — a strong signal that prior runs
+      // collapsed distinct people sharing a firm-pool email
+      // (info@firm.com, listings@brokerage.com, etc.) into one row
+      // because email-fallback dedupe didn't check name affinity.
       const r = await domainQuery(domain, 'GET',
-        `contacts?${col.email}=eq.${encodeURIComponent(email)}&select=${col.id}&limit=1`
+        `contacts?${col.email}=eq.${encodeURIComponent(email)}` +
+        `&select=${col.id},${col.name}&limit=1`
       );
-      if (r.ok && r.data?.length) return r.data[0][col.id];
+      if (r.ok && r.data?.length) {
+        const candidate = r.data[0];
+        const existingName = (candidate[col.name] || '').toLowerCase().trim();
+        // Exact match: same person, reuse the row.
+        if (existingName === normName) return candidate[col.id];
+        // No name on existing row: safe to claim (prior run had only email).
+        if (!existingName) return candidate[col.id];
+        // Surname overlap: pick the longest token >= 3 chars from each
+        // name; if any exact match, treat as same person.
+        const incomingTokens = normName.split(/\s+/).filter(t => t.length >= 3);
+        const existingTokens = existingName.split(/\s+/).filter(t => t.length >= 3);
+        const sharedToken = incomingTokens.some(t => existingTokens.includes(t));
+        if (sharedToken) return candidate[col.id];
+        // Distinct-people-on-firm-pool-email pattern: do NOT claim the
+        // existing row. INSERT a fresh contact instead so each person
+        // keeps their identity (the constraint that prevented duplicate
+        // INSERTs on (email) without role differentiation needs the
+        // non-null property_id-based or role-based unique key — we
+        // already partition by role on the gov branch via the loop
+        // outside this helper).
+        // Returning null falls through to the name+role lookup below.
+      }
     }
+    // Name-only fallback (or post-email-mismatch): require a role
+    // filter when available to keep distinct deals' brokers separate.
+    // When no role filter is supplied we keep the prior behavior of
+    // matching purely by name — the dia branch caller handles this
+    // since dia.contacts uses a free-text 'role' column. Same risk
+    // class as before but bounded to dia, where the fuzzy upsert
+    // pattern is still net-positive.
     const nameQ = roleFilter
       ? `contacts?${col.name}=ilike.${encodeURIComponent(normName)}&${col.role}=eq.${roleFilter}&select=${col.id}&limit=1`
       : `contacts?${col.name}=ilike.${encodeURIComponent(normName)}&select=${col.id}&limit=1`;
