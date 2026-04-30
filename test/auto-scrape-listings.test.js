@@ -193,7 +193,7 @@ describe('admin /_route=auto-scrape-listings', () => {
     assert.match(JSON.parse(rpcCall.body).p_notes, /sale_id=after/);
   });
 
-  it('returns still_available when no sale falls inside the window', async () => {
+  it('returns inferred_active when no sale falls inside the window (audit-honest no-evidence path)', async () => {
     const calls = [];
     global.fetch = async (url, opts = {}) => {
       const target = String(url);
@@ -241,8 +241,12 @@ describe('admin /_route=auto-scrape-listings', () => {
     const rpcCall = calls.find((c) => c.url.endsWith('/rest/v1/rpc/lcc_record_listing_check'));
     assert.ok(rpcCall);
     const body = JSON.parse(rpcCall.body);
-    assert.equal(body.p_check_result, 'still_available');
+    // Use 'inferred_active' (Round 76et-C) — narrower attestation than
+    // 'still_available' since the cron only checked sales evidence, not
+    // the listing's URL.
+    assert.equal(body.p_check_result, 'inferred_active');
     assert.equal(body.p_off_market_reason, null);
+    assert.match(body.p_notes, /no sale evidence/i);
   });
 
   it('GET (dry-run) does not call the RPC', async () => {
@@ -372,7 +376,7 @@ describe('admin /_route=auto-scrape-listings', () => {
         }]);
       }
       if (target.startsWith('https://gov.example.com/rest/v1/sales_transactions')) {
-        return jsonResponse([]); // no sales — should mark still_available
+        return jsonResponse([]); // no sales — should mark inferred_active
       }
       if (target.endsWith('/rest/v1/rpc/lcc_record_listing_check') && method === 'POST') {
         return jsonResponse({ ok: true });
@@ -398,7 +402,7 @@ describe('admin /_route=auto-scrape-listings', () => {
     assert.ok(rpcCall, 'expected RPC call to fire on the NULL-due listing');
     const body = JSON.parse(rpcCall.body);
     assert.equal(body.p_listing_id, 7);
-    assert.equal(body.p_check_result, 'still_available');
+    assert.equal(body.p_check_result, 'inferred_active');
   });
 
   it('gov listings query applies exclude_from_listing_metrics filter', async () => {

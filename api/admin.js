@@ -456,9 +456,16 @@ async function handleAutoScrapeListings(req, res) {
     //    listing comes due for verification.
     for (const l of listings) {
       try {
-        let checkResult = 'still_available';
+        // Default outcome: cron found no sale evidence in the property's
+        // ±3-year window, so we record an audit-honest 'inferred_active'
+        // — advances the verification timer but doesn't claim a URL was
+        // scraped or attest to listing_status. Round 76et-C added this
+        // value to the lvh_check_result_check constraint and updated
+        // lcc_record_listing_check to handle it as a narrow timer
+        // advance.
+        let checkResult = 'inferred_active';
         let offMarketReason = null;
-        let notes = 'auto-scrape: no recent sale, deferred';
+        let notes = 'auto-scrape: no sale evidence in 3y window, timer advanced';
 
         if (l.property_id && l[dateCol]) {
           const listingMs = Date.parse(l[dateCol]);
