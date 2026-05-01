@@ -6141,6 +6141,11 @@ const GOV_SALES_PAGE_SIZE = 50;
 // dialysis.js — same view shape, same card layout.
 let govVerificationSummary = null;
 let govVerificationSummaryLoading = false;
+// Round 76et-F: drill-down panel for recent gov verification rows. Same
+// shape as the dia equivalent in dialysis.js.
+let govRecentVerifications = null;
+let govRecentVerificationsLoading = false;
+let govRecentVerificationsFilter = 'all';
 
 async function loadGovVerificationSummary() {
   if (govVerificationSummaryLoading) return;
@@ -6196,6 +6201,95 @@ function renderGovListingVerificationCard() {
     changes7d + ' status-changes/7d';
 
   return metricHTML('Verification Status', fmtN(due), sub, color);
+}
+
+// Round 76et-F: drill-down for the gov verification summary card. Mirror
+// of the dia equivalent in dialysis.js. Pulls last ~50 rows from
+// listing_verification_history (7d window, ordered desc), renders a
+// filterable list (All | Evidence | Cron-only) below the metrics row.
+async function loadRecentGovVerifications() {
+  if (govRecentVerificationsLoading) return;
+  govRecentVerificationsLoading = true;
+  try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const res = await govQuery(
+      'listing_verification_history',
+      'id,listing_id,verified_at,method,check_result,notes,source_url',
+      { filter: 'verified_at=gte.' + sevenDaysAgo, order: 'verified_at.desc', limit: 50 }
+    );
+    govRecentVerifications = (res && res.data) || [];
+  } catch (e) {
+    console.error('loadRecentGovVerifications error:', e);
+    govRecentVerifications = [];
+  }
+  govRecentVerificationsLoading = false;
+  if (govSalesView === 'available' && document.getElementById('bizPageInner')) {
+    renderGovSales();
+  }
+}
+
+window.setGovRecentVerificationsFilter = function (f) {
+  if (f !== 'all' && f !== 'evidence' && f !== 'cron') return;
+  govRecentVerificationsFilter = f;
+  if (typeof renderGovSales === 'function') renderGovSales();
+};
+
+function _govFmtTimeAgo(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  return d + 'd ago';
+}
+
+function renderRecentGovVerificationsPanel() {
+  if (govRecentVerifications === null) {
+    return '<div style="margin-top:14px;padding:14px 16px;border:1px solid var(--border);border-radius:8px;color:var(--text3);font-size:11px">Loading recent verifications…</div>';
+  }
+  const all = govRecentVerifications;
+  const filter = govRecentVerificationsFilter;
+  const isCron = (r) => r.method === 'auto_scrape' && r.check_result === 'inferred_active';
+  const evidenceLen = all.filter(r => !isCron(r)).length;
+  const cronLen     = all.filter(isCron).length;
+  const filtered = filter === 'all'      ? all
+                 : filter === 'cron'     ? all.filter(isCron)
+                 :                          all.filter(r => !isCron(r));
+
+  let h = '<div style="margin-top:14px;padding:14px 16px;border:1px solid var(--border);border-radius:8px;background:var(--s2)">';
+  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
+  h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3)">Recent Verifications (7d)</div>';
+  h += '<div style="flex:1"></div>';
+  h += '<button class="ops-filter ' + (filter === 'all'      ? 'active' : '') + '" onclick="setGovRecentVerificationsFilter(\'all\')">All ('      + all.length + ')</button>';
+  h += '<button class="ops-filter ' + (filter === 'evidence' ? 'active' : '') + '" onclick="setGovRecentVerificationsFilter(\'evidence\')">Evidence (' + evidenceLen + ')</button>';
+  h += '<button class="ops-filter ' + (filter === 'cron'     ? 'active' : '') + '" onclick="setGovRecentVerificationsFilter(\'cron\')">Cron-only ('  + cronLen + ')</button>';
+  h += '</div>';
+
+  if (filtered.length === 0) {
+    h += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No rows for this filter.</div>';
+  } else {
+    h += '<div style="max-height:280px;overflow-y:auto">';
+    for (const r of filtered.slice(0, 50)) {
+      const ago = _govFmtTimeAgo(r.verified_at);
+      const noteSnip = String(r.notes || '').substring(0, 80);
+      const url = r.source_url ? '<a href="' + esc(r.source_url) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">↗</a>' : '';
+      h += '<div style="display:grid;grid-template-columns:80px 110px 130px 220px 1fr 20px;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;align-items:center">';
+      h += '<span style="color:var(--text3)">' + esc(ago) + '</span>';
+      h += '<span class="q-badge">' + esc(String(r.method || '')) + '</span>';
+      h += '<span class="q-badge">' + esc(String(r.check_result || '')) + '</span>';
+      h += '<span style="font-family:monospace;color:var(--text2);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(String(r.listing_id || '')) + '">' + esc(String(r.listing_id || '')) + '</span>';
+      h += '<span style="color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(noteSnip) + '">' + esc(noteSnip) + '</span>';
+      h += '<span>' + url + '</span>';
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
 }
 
 window.govSalesSortBy = function(col) {
@@ -6404,8 +6498,18 @@ async function renderGovSales() {
       loadGovVerificationSummary();
     }
     html += renderGovListingVerificationCard();
+    // Round 76et-F: also kick off the recent-verifications drill-down load.
+    if (govRecentVerifications === null && !govRecentVerificationsLoading) {
+      loadRecentGovVerifications();
+    }
   }
   html += '</div>';
+
+  // Round 76et-F: drill-down panel for the verification card. Only on the
+  // Available sub-tab; Sales Comps doesn't have a verification surface.
+  if (!isComps) {
+    html += renderRecentGovVerificationsPanel();
+  }
 
   // Search bar
   html += '<div style="margin: 16px 0; display: flex; gap: 8px; align-items: center;">';

@@ -95,6 +95,11 @@ let diaRunHealthLoading = false;
 // Round 76cx Phase 2: listing verification dashboard digest (single-row view).
 let diaVerificationSummary = null;
 let diaVerificationSummaryLoading = false;
+// Round 76et-F: drill-down panel for recent verification rows. Filterable
+// by 'all' | 'evidence' | 'cron' to match the breakout in the summary card.
+let diaRecentVerifications = null;
+let diaRecentVerificationsLoading = false;
+let diaRecentVerificationsFilter = 'all';
 let diaIntakeQueue = null;
 let diaIntakeLoading = false;
 let diaIntakeIdx = 0;
@@ -1270,6 +1275,11 @@ function renderOnMarketInner() {
   if (!diaVerificationSummary && !diaVerificationSummaryLoading) {
     loadDiaVerificationSummary();
   }
+  // Round 76et-F: same lazy-load pattern for the recent verifications
+  // drill-down panel rendered below the metrics row.
+  if (diaRecentVerifications === null && !diaRecentVerificationsLoading) {
+    loadRecentDiaVerifications();
+  }
   const listings = diaAvailListings;
 
   // Filter stale listings — anything listed before 2023 is almost certainly no longer on market
@@ -1325,6 +1335,8 @@ function renderOnMarketInner() {
   // Round 76cx Phase 2: verification status card
   h += renderListingVerificationCard();
   h += '</div>';
+  // Round 76et-F: drill-down panel below the metrics row.
+  h += renderRecentDiaVerificationsPanel();
   return h;
 }
 
@@ -3800,6 +3812,94 @@ function renderListingVerificationCard() {
     <div style="font-size:24px;font-weight:700;color:var(--text1);margin-bottom:4px">${value}</div>
     <div style="font-size:11px;color:var(--text2)">due now · ${escapeHtmlSafe(sub)}</div>
   </div>`;
+}
+
+// Round 76et-F: drill-down for the verification summary card. Pulls the
+// last ~50 listing_verification_history rows (7d window, ordered desc) and
+// renders a filterable list. Closes the loop between the summary numbers
+// and the actual evidence trail without requiring a SQL view migration.
+async function loadRecentDiaVerifications() {
+  if (diaRecentVerificationsLoading) return;
+  diaRecentVerificationsLoading = true;
+  try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const rows = await diaQuery(
+      'listing_verification_history',
+      'id,listing_id,verified_at,method,check_result,notes,source_url',
+      { filter: 'verified_at=gte.' + sevenDaysAgo, order: 'verified_at.desc', limit: 50 }
+    );
+    diaRecentVerifications = Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    console.error('loadRecentDiaVerifications error:', e);
+    diaRecentVerifications = [];
+  }
+  diaRecentVerificationsLoading = false;
+  if (typeof currentBizTab !== 'undefined' && currentBizTab !== 'dialysis') return;
+  renderDiaTab();
+}
+
+window.setDiaRecentVerificationsFilter = function (f) {
+  if (f !== 'all' && f !== 'evidence' && f !== 'cron') return;
+  diaRecentVerificationsFilter = f;
+  renderDiaTab();
+};
+
+function _diaFmtTimeAgo(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  return d + 'd ago';
+}
+
+function renderRecentDiaVerificationsPanel() {
+  if (diaRecentVerifications === null) {
+    return '<div class="dia-info-card" style="margin-top:14px;padding:14px 16px;color:var(--text3);font-size:11px">Loading recent verifications…</div>';
+  }
+  const all = diaRecentVerifications;
+  const filter = diaRecentVerificationsFilter;
+  const isCron = (r) => r.method === 'auto_scrape' && r.check_result === 'inferred_active';
+  const evidenceLen = all.filter(r => !isCron(r)).length;
+  const cronLen     = all.filter(isCron).length;
+  const filtered = filter === 'all'      ? all
+                 : filter === 'cron'     ? all.filter(isCron)
+                 :                          all.filter(r => !isCron(r));
+
+  let h = '<div class="dia-info-card" style="margin-top:14px;padding:14px 16px">';
+  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
+  h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3)">Recent Verifications (7d)</div>';
+  h += '<div style="flex:1"></div>';
+  h += '<button class="ops-filter ' + (filter === 'all'      ? 'active' : '') + '" onclick="setDiaRecentVerificationsFilter(\'all\')">All ('      + all.length + ')</button>';
+  h += '<button class="ops-filter ' + (filter === 'evidence' ? 'active' : '') + '" onclick="setDiaRecentVerificationsFilter(\'evidence\')">Evidence (' + evidenceLen + ')</button>';
+  h += '<button class="ops-filter ' + (filter === 'cron'     ? 'active' : '') + '" onclick="setDiaRecentVerificationsFilter(\'cron\')">Cron-only ('  + cronLen + ')</button>';
+  h += '</div>';
+
+  if (filtered.length === 0) {
+    h += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No rows for this filter.</div>';
+  } else {
+    h += '<div style="max-height:280px;overflow-y:auto">';
+    for (const r of filtered.slice(0, 50)) {
+      const ago = _diaFmtTimeAgo(r.verified_at);
+      const noteSnip = String(r.notes || '').substring(0, 80);
+      const url = r.source_url ? '<a href="' + escapeHtmlSafe(r.source_url) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">↗</a>' : '';
+      h += '<div style="display:grid;grid-template-columns:80px 110px 110px 80px 1fr 20px;gap:10px;padding:6px 0;border-bottom:1px solid var(--s2);font-size:12px;align-items:center">';
+      h += '<span style="color:var(--text3)">' + escapeHtmlSafe(ago) + '</span>';
+      h += '<span class="q-badge">' + escapeHtmlSafe(String(r.method || '')) + '</span>';
+      h += '<span class="q-badge">' + escapeHtmlSafe(String(r.check_result || '')) + '</span>';
+      h += '<span style="font-family:monospace;color:var(--text2);font-size:11px">#' + escapeHtmlSafe(String(r.listing_id || '')) + '</span>';
+      h += '<span style="color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtmlSafe(noteSnip) + '">' + escapeHtmlSafe(noteSnip) + '</span>';
+      h += '<span>' + url + '</span>';
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
 }
 
 // Defensive escapeHtml stub (some dialysis.js builds inline this differently;
