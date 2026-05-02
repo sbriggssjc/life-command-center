@@ -295,6 +295,23 @@ function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').repl
 // Safe JSON for embedding in HTML onclick attributes — escapes <, >, &, ', "
 function safeJSON(obj) { return JSON.stringify(obj).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;').replace(/"/g,'&quot;'); }
 
+// Normalize the return shape of diaQuery and govQuery. dia returns the bare
+// row array; gov returns {data, count}. detail.js / ops.js / dialysis.js /
+// gov.js have all been special-casing this — getRows() is the canonical
+// way for new consumers to ignore which helper they're reading from.
+//
+//   const rows = getRows(await diaQuery(table, sel, params));
+//   const rows = getRows(await govQuery(table, sel, params));
+//
+// Returns [] for null / undefined / unrecognized shapes (defensive, never
+// throws). Existing call sites that already special-case the shapes are
+// left as-is — converting all ~200 of them is a separate, riskier project.
+function getRows(res) {
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray(res.data)) return res.data;
+  return [];
+}
+
 // Safe URL for href attributes — blocks javascript: and data: schemes
 function safeHref(url) { if (!url) return '#'; const lower = url.trim().toLowerCase(); if (lower.startsWith('http://') || lower.startsWith('https://')) return esc(url); return '#'; }
 
