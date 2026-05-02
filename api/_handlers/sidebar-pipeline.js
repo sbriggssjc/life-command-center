@@ -1327,6 +1327,32 @@ const CONTACT_COLS = {
 // Keep regex anchored ^...$ for label class so legitimate names
 // containing those tokens aren't false-positived (e.g. "John Hess"
 // is fine; bare "Vice Chairman" is not).
+
+// Strip "<Role> Contacts" section-label prefix that the CoStar
+// extractor sometimes glues onto person names: e.g.
+//   "Buyer ContactsAlexandria Foster(619) 295-6565 (p)"
+//   "Buyer ContactsBrendan Bush"
+//   "Owner ContactsDidier P. Hakizimana"
+// Audit on 2026-04-30 found 28 contacts and 12 sales_transactions rows
+// with this pattern. Fix is two-fold: this function cleans incoming
+// names before they're written, and migration 20260430050000 (Dialysis
+// repo) cleaned the historical rows.
+//
+// Returns the cleaned name. If the string starts with one of the
+// section-label prefixes we strip both the prefix AND the trailing
+// phone "(NNN) NNN-NNNN (p)". Otherwise the input is returned
+// unchanged. Trims whitespace either way.
+function stripContactLabelPrefix(name) {
+  if (typeof name !== 'string') return name;
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  if (!/^(Buyer|Seller|Owner|Listing( Broker)?) Contacts/i.test(trimmed)) return trimmed;
+  return trimmed
+    .replace(/^(Buyer|Seller|Owner|Listing( Broker)?) Contacts\s*/i, '')
+    .replace(/\s*\(\d{3}\)\s*\d{3}-\d{4}\s*\(p\)\s*$/, '')
+    .trim();
+}
+
 function isJunkContactName(name) {
   if (typeof name !== 'string') return true;
   const trimmed = name.trim();
@@ -1520,6 +1546,16 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
       });
     }
   }
+  // Strip "<Role> Contacts" section-label prefix in-place before the
+  // junk-name filter runs. Captures cases like
+  // "Buyer ContactsAlexandria Foster(619) 295-6565 (p)" → "Alexandria Foster".
+  for (const c of people) {
+    if (c && typeof c.name === 'string') {
+      const cleaned = stripContactLabelPrefix(c.name);
+      if (cleaned !== c.name) c.name = cleaned;
+    }
+  }
+
   // Drop contacts whose name looks like a firm, section label, or
   // narrative text rather than a person. See isJunkContactName()
   // header comment for the audit that motivated this filter.
