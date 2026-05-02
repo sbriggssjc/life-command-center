@@ -1444,9 +1444,10 @@ async function renderGovDataQualityWidgets() {
 async function opsOpenGovProperty(propertyId) {
   if (!propertyId) return;
   try {
-    const r = await govQuery('properties', 'property_id,address,city,state,agency',
-      { filter: 'property_id=eq.' + propertyId, limit: 1 });
-    const prop = (r?.data || [])[0];
+    // getRows() normalizes diaQuery/govQuery's divergent return shapes
+    // (see app.js).
+    const prop = getRows(await govQuery('properties', 'property_id,address,city,state,agency',
+      { filter: 'property_id=eq.' + propertyId, limit: 1 }))[0];
     if (!prop) { showToast('Property ' + propertyId + ' not found in government DB', 'error'); return; }
     if (typeof showDetail !== 'function') { showToast('Detail panel unavailable', 'error'); return; }
     showDetail({

@@ -3755,8 +3755,10 @@ async function loadDiaVerificationSummary() {
   if (diaVerificationSummaryLoading) return;
   diaVerificationSummaryLoading = true;
   try {
-    const rows = await diaQuery('v_listing_verification_summary', '*', { limit: 1 });
-    diaVerificationSummary = (rows && rows[0]) || null;
+    // getRows() normalizes diaQuery/govQuery's divergent return shapes
+    // (see app.js). Defensive against null, plain array, or {data}.
+    const rows = getRows(await diaQuery('v_listing_verification_summary', '*', { limit: 1 }));
+    diaVerificationSummary = rows[0] || null;
   } catch (e) {
     console.error('loadDiaVerificationSummary error:', e);
     diaVerificationSummary = null;
@@ -3823,12 +3825,13 @@ async function loadRecentDiaVerifications() {
   diaRecentVerificationsLoading = true;
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    const rows = await diaQuery(
+    // getRows() normalizes diaQuery/govQuery's divergent return shapes
+    // (see app.js).
+    diaRecentVerifications = getRows(await diaQuery(
       'listing_verification_history',
       'id,listing_id,verified_at,method,check_result,notes,source_url',
       { filter: 'verified_at=gte.' + sevenDaysAgo, order: 'verified_at.desc', limit: 50 }
-    );
-    diaRecentVerifications = Array.isArray(rows) ? rows : [];
+    ));
   } catch (e) {
     console.error('loadRecentDiaVerifications error:', e);
     diaRecentVerifications = [];

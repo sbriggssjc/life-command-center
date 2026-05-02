@@ -6151,8 +6151,10 @@ async function loadGovVerificationSummary() {
   if (govVerificationSummaryLoading) return;
   govVerificationSummaryLoading = true;
   try {
-    const res = await govQuery('v_listing_verification_summary', '*', { limit: 1 });
-    govVerificationSummary = ((res && res.data) || [])[0] || null;
+    // getRows() normalizes diaQuery/govQuery's divergent return shapes
+    // (see app.js).
+    const rows = getRows(await govQuery('v_listing_verification_summary', '*', { limit: 1 }));
+    govVerificationSummary = rows[0] || null;
   } catch (e) {
     console.error('loadGovVerificationSummary error:', e);
     govVerificationSummary = null;
@@ -6212,12 +6214,13 @@ async function loadRecentGovVerifications() {
   govRecentVerificationsLoading = true;
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    const res = await govQuery(
+    // getRows() normalizes diaQuery/govQuery's divergent return shapes
+    // (see app.js).
+    govRecentVerifications = getRows(await govQuery(
       'listing_verification_history',
       'id,listing_id,verified_at,method,check_result,notes,source_url',
       { filter: 'verified_at=gte.' + sevenDaysAgo, order: 'verified_at.desc', limit: 50 }
-    );
-    govRecentVerifications = (res && res.data) || [];
+    ));
   } catch (e) {
     console.error('loadRecentGovVerifications error:', e);
     govRecentVerifications = [];
