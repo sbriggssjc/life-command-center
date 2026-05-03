@@ -1,0 +1,97 @@
+{
+  "$schema_version": "1.0.0",
+  "_doc": "Northmarq capital markets brand tokens. Reverse-engineered from xl/theme/theme1.xml of Copy Government Master Document.xlsx (2024-Q2 deliverable, the canonical brand-compliant workbook). Apply these tokens to every cm_* chart and Excel export.",
+  "_source": {
+    "file": "Copy Government Master Document.xlsx",
+    "extracted_at": "2026-04-29",
+    "extracted_by": "claude/capital-markets-phase-0",
+    "method": "Parsed xl/theme/theme1.xml clrScheme + sample chart srgbClr palette"
+  },
+
+  "palette": {
+    "nm_navy":        { "hex": "#003DA5", "role": "Primary. Series 1, axes, chart titles, KPI numbers. Equivalent to Office accent1/dk2 in the gov template." },
+    "nm_sky":         { "hex": "#62B5E5", "role": "Accent. Series 2 (often overlay line on bar charts), hyperlinks, hover/active states." },
+    "nm_pale":        { "hex": "#E0E8F4", "role": "Fill. Area-chart background, table zebra-stripes, secondary card backgrounds. (Office accent4 in the gov template.)" },
+    "nm_blue_mid":    { "hex": "#265AB2", "role": "Series 3, secondary emphasis, callouts. (Office accent3.)" },
+    "nm_axis":        { "hex": "#6A748C", "role": "Axis tick labels, axis lines, secondary chart text. Used directly in gov chart1.xml as the axis color." },
+    "nm_text":        { "hex": "#191919", "role": "Body text, chart titles, table headers. (Office dk1.)" },
+    "nm_text_muted":  { "hex": "#666666", "role": "Annotation text, footnote source attribution. (Office accent2 / mid-gray.)" },
+    "nm_bg":          { "hex": "#FFFFFF", "role": "Page/chart background." },
+    "nm_bg_alt":      { "hex": "#E7E6E6", "role": "Card divider, table border, panel backgrounds." }
+  },
+
+  "series_palette": [
+    "#003DA5",
+    "#62B5E5",
+    "#265AB2",
+    "#E0E8F4",
+    "#6A748C",
+    "#000000"
+  ],
+  "series_palette_note": "Use in this order. Slot 0 = primary metric (e.g., NM volume), slot 1 = comparison overlay (e.g., market avg cap rate line), slot 2 = secondary breakdown, slot 3 = fill/area, slot 4 = baseline reference. After slot 5 cycle back through with reduced opacity.",
+
+  "fonts": {
+    "title_family":  "Calibri Light",
+    "title_weight":  600,
+    "body_family":   "Calibri",
+    "body_weight":   400,
+    "fallback_stack": "'Calibri Light', 'Calibri', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif",
+    "monospace_family": "JetBrains Mono",
+    "_note": "Excel exports must use Calibri Light/Calibri to match the existing master workbooks; LCC web charts may use the same plus the 'Outfit' webfont already loaded by index.html for headings. Excel charts use Calibri Light at 14pt for chart titles, Calibri at 9pt for axis labels (matches gov master)."
+  },
+
+  "type_scale": {
+    "chart_title":   { "size_pt": 14, "weight": 600, "color": "nm_text" },
+    "axis_title":    { "size_pt": 10, "weight": 600, "color": "nm_axis" },
+    "axis_label":    { "size_pt":  9, "weight": 400, "color": "nm_axis" },
+    "data_label":    { "size_pt":  9, "weight": 400, "color": "nm_text" },
+    "legend":        { "size_pt":  9, "weight": 400, "color": "nm_text" },
+    "footnote":      { "size_pt":  8, "weight": 400, "color": "nm_text_muted" }
+  },
+
+  "axis_formats": {
+    "currency_dollars":      "\"$\"#,##0",
+    "currency_millions":     "\"$\"#,##0,,\"M\"",
+    "currency_billions":     "\"$\"#,##0,,,\"B\"",
+    "currency_per_sf":       "\"$\"#,##0.00",
+    "percent_basis_points":  "0.00%",
+    "percent_one_decimal":   "0.0%",
+    "percent_zero_decimal":  "0%",
+    "integer_count":         "#,##0",
+    "year_quarter":          "\"Q\"q \\'yy",
+    "year":                  "yyyy",
+    "_note": "These are Excel number-format codes. The web renderer translates them to d3-format via cm_format_xlsx_to_d3()."
+  },
+
+  "chart_layout": {
+    "title_position":      "above",
+    "legend_position":     "bottom",
+    "legend_align":        "center",
+    "gridlines_x":         false,
+    "gridlines_y":         true,
+    "gridline_color":      "#E7E6E6",
+    "gridline_dash":       null,
+    "border_color":        "#E7E6E6",
+    "border_weight_pt":    0.5,
+    "background":          "nm_bg"
+  },
+
+  "export_dimensions": {
+    "web_card":      { "width_px": 720, "height_px": 420, "_note": "Standard LCC dashboard card." },
+    "indesign_full": { "width_px": 1800, "height_px": 1080, "dpi": 300, "_note": "Marketing PDF full-page chart, paste into InDesign at 100%." },
+    "indesign_half": { "width_px": 1800, "height_px": 540, "dpi": 300, "_note": "Marketing PDF half-page chart." },
+    "email_inline":  { "width_px": 600, "height_px": 360, "_note": "Outlook attach-chart helper, fits standard email column width." },
+    "thumbnail":     { "width_px": 240, "height_px": 140, "_note": "LCC report card thumbnail." }
+  },
+
+  "deprecated_palettes": {
+    "office_blue_default": {
+      "hex_set": ["#5B9BD5", "#ED7D31", "#A5A5A5", "#FFC000", "#4472C4", "#70AD47"],
+      "_note": "Default Office 2016+ palette. Found in Dialysis Comp Work MASTER.xlsx and ST Market.xlsx — these workbooks are OFF-BRAND and need to be migrated to the nm_* palette in Phase 1."
+    },
+    "office_classic": {
+      "hex_set": ["#4F81BD", "#C0504D", "#9BBB59", "#8064A2", "#4BACC6", "#F79646"],
+      "_note": "Office 2010 default. Present in some themeOverride files. Also off-brand."
+    }
+  }
+}

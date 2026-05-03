@@ -1,0 +1,421 @@
+{
+  "$schema_version": "1.0.0",
+  "_doc": "Canonical Capital Markets chart catalog. The 3 master workbooks (gov, dialysis, ST Market) contain 98 chart objects total, but they collapse to ~28 unique templates. Each template is rendered once per (vertical, subspecialty?) combination. This file defines the stable chart_template_id contract for SQL views, web charts, Excel exports, and Copilot attach-chart.",
+  "_source_inventory": {
+    "Copy Government Master Document.xlsx": {
+      "total_charts": 32,
+      "sheets_with_charts": {
+        "All Charts": 18,
+        "SSA Charts": 10,
+        "Rent Survey": 2,
+        "Competition": 2
+      }
+    },
+    "Dialysis Comp Work MASTER.xlsx": {
+      "total_charts": 37,
+      "sheets_with_charts": {
+        "Available Comps": 1,
+        "Core Cap Chart": 1,
+        "Charts": 23,
+        "Market Size": 8,
+        "Sheet1": 1,
+        "Rent Survey": 1,
+        "Competition": 2
+      }
+    },
+    "ST Market.xlsx": {
+      "total_charts": 29,
+      "sheets_with_charts": {
+        "Index": 2,
+        "Vol": 5,
+        "Count": 11,
+        "Buyers": 4,
+        "Spreads": 2,
+        "Prediction": 2,
+        "Value Prop": 3
+      }
+    }
+  },
+
+  "verticals": {
+    "gov":            { "label": "Government-Leased",        "supabase_project": "GovernmentProject", "active": true,  "deliverable_pdf": "state-of-gov-leased-2024-q2.pdf" },
+    "dialysis":       { "label": "Dialysis",                  "supabase_project": "DialysisProject",   "active": true,  "deliverable_pdf": "dialysis-market-filter-2025-q4.pdf" },
+    "national_st":    { "label": "National Single-Tenant",   "supabase_project": "lcc_opps",           "active": true,  "data_origin": "rca_imports",          "_note": "Cross-product national context. Sourced from RCA TrendTracker exports (Office, Medical, Industrial, Retail). Matches ST Market.xlsx." },
+    "childcare":      { "label": "Childcare (planned)",       "supabase_project": "tbd",                "active": false, "_note": "Future vertical. Schema templated but not provisioned." },
+    "urgent_care":    { "label": "Urgent Care (planned)",     "supabase_project": "tbd",                "active": false },
+    "medical_nnn":    { "label": "Medical Net Lease (planned)", "supabase_project": "tbd",              "active": false }
+  },
+
+  "subspecialties": {
+    "_doc": "Subspecialty filters share the umbrella vertical's data and chart templates but apply a row-level filter on a discriminator column (e.g., tenant_agency). Used for clickbait mini-reports.",
+    "gov_ssa":   { "vertical": "gov", "filter_dim": "tenant_agency", "filter_value": "SSA", "label": "SSA-Tenanted Properties", "source_proof": "Copy Government Master Document.xlsx 'SSA Charts' tab" },
+    "gov_va":    { "vertical": "gov", "filter_dim": "tenant_agency", "filter_value": "VA",  "label": "VA-Tenanted Properties",  "active": false },
+    "gov_irs":   { "vertical": "gov", "filter_dim": "tenant_agency", "filter_value": "IRS", "label": "IRS-Tenanted Properties", "active": false },
+    "dia_davita":      { "vertical": "dialysis", "filter_dim": "operator_parent", "filter_value": "DaVita",    "label": "DaVita-Operated", "active": false },
+    "dia_fresenius":   { "vertical": "dialysis", "filter_dim": "operator_parent", "filter_value": "Fresenius", "label": "Fresenius-Operated", "active": false },
+    "dia_independent": { "vertical": "dialysis", "filter_dim": "operator_parent", "filter_value": "Independent", "label": "Independent Operators", "active": false }
+  },
+
+  "chart_templates": [
+    {
+      "id": "volume_ttm_by_quarter",
+      "name": "Sales Volume — TTM by Quarter",
+      "chart_type": "AreaChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "volume_dollars",
+      "x_axis": "quarter_end",
+      "y_axis": "ttm_volume_dollars",
+      "y_format": "currency_billions",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/All Charts/AreaChart#0", "DIA/Charts/AreaChart#0", "STM/Vol/AreaChart#0-4"],
+      "view_name": "cm_{vertical}_volume_ttm_q",
+      "phase": 1
+    },
+    {
+      "id": "transaction_count_ttm",
+      "name": "Transaction Count — TTM by Quarter",
+      "chart_type": "BarChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "deal_count",
+      "x_axis": "quarter_end",
+      "y_axis": "ttm_count",
+      "y_format": "integer_count",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/All Charts/BarChart#0", "DIA/Charts/BarChart#0", "STM/Count/BarChart#0-2"],
+      "view_name": "cm_{vertical}_count_ttm_q",
+      "phase": 1
+    },
+    {
+      "id": "cap_rate_ttm_by_quarter",
+      "name": "Cap Rate — TTM Weighted Avg by Quarter",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "cap_rate",
+      "x_axis": "quarter_end",
+      "y_axis": "ttm_weighted_cap_rate",
+      "y_format": "percent_basis_points",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/All Charts/LineChart#0", "DIA/Charts/LineChart#0", "STM/Vol (cap series)"],
+      "view_name": "cm_{vertical}_cap_ttm_q",
+      "phase": 1
+    },
+    {
+      "id": "cap_rate_top_bottom_quartile",
+      "name": "Cap Rate — Top vs Bottom Quartile",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "cap_rate_quartile",
+      "x_axis": "quarter_end",
+      "y_axis_series": ["top_quartile", "median", "bottom_quartile"],
+      "y_format": "percent_basis_points",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["STM/Vol/AreaChart with quartile bands"],
+      "view_name": "cm_{vertical}_cap_quartile_q",
+      "phase": 1
+    },
+    {
+      "id": "cap_rate_yoy_change",
+      "name": "Cap Rate — YoY Change",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "cap_rate_change",
+      "y_format": "percent_basis_points",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": false,
+      "source_charts": ["DIA/Charts/LineChart 'Y-O-Y Change (%)'", "DIA/Charts/LineChart 'Moving Average'"],
+      "view_name": "cm_{vertical}_cap_yoy_q",
+      "phase": 2
+    },
+    {
+      "id": "cap_rate_by_credit",
+      "name": "Cap Rate by Credit Tier",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly_by_dim",
+      "metric_focus": "cap_rate",
+      "dim": "credit_tier",
+      "applies_to_verticals": ["dialysis", "gov"],
+      "subspecialty_friendly": false,
+      "source_charts": ["DIA/Charts/LineChart 'Cap by Credit'"],
+      "view_name": "cm_{vertical}_cap_by_credit_q",
+      "phase": 2,
+      "_notes": "For gov, 'credit_tier' = federal/state/local. For dialysis, = investment-grade operator vs not."
+    },
+    {
+      "id": "ppsf_box_quarterly",
+      "name": "Price/SF — Quarterly Box (high/low/avg)",
+      "chart_type": "StockChart",
+      "data_shape": "time_series_quarterly_ohlc",
+      "metric_focus": "price_per_sf",
+      "y_format": "currency_per_sf",
+      "applies_to_verticals": ["national_st", "gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["STM/Count/StockChart Industrial PPSF", "Medical PPSF", "Office PPSF", "Retail PPSF"],
+      "view_name": "cm_{vertical}_ppsf_box_q",
+      "phase": 2
+    },
+    {
+      "id": "rent_psf_box_quarterly",
+      "name": "Rent/SF — Quarterly Box (high/low/avg)",
+      "chart_type": "StockChart",
+      "data_shape": "time_series_quarterly_ohlc",
+      "metric_focus": "rent_per_sf",
+      "y_format": "currency_per_sf",
+      "applies_to_verticals": ["national_st", "gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["STM/Count/StockChart Industrial Rent/SF", "Medical Rent/SF", "Office Rent/SF", "Retail Rent/SF"],
+      "view_name": "cm_{vertical}_rent_box_q",
+      "phase": 2
+    },
+    {
+      "id": "rent_survey_yearly",
+      "name": "Rent Survey — Annual by Year-Built / Lease-Term",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_yearly_by_dim",
+      "metric_focus": "rent_per_sf",
+      "applies_to_verticals": ["gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/Rent Survey/LineChart", "GOV/Rent Survey/BarChart", "DIA/Rent Survey/LineChart"],
+      "view_name": "cm_{vertical}_rent_survey_y",
+      "phase": 1
+    },
+    {
+      "id": "avg_deal_size",
+      "name": "Average Deal Size — TTM by Quarter",
+      "chart_type": "BarChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "avg_deal_size",
+      "y_format": "currency_millions",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["STM/Count (Q,R,S columns: Avg O+M+I, Ind, Ret)", "DIA/Charts/BarChart"],
+      "view_name": "cm_{vertical}_avg_deal_q",
+      "phase": 1
+    },
+    {
+      "id": "market_share_pie_ttm",
+      "name": "Market Share Pie — TTM Sold + On Market",
+      "chart_type": "PieChart",
+      "data_shape": "categorical",
+      "metric_focus": "market_share_ttm",
+      "applies_to_verticals": ["gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/Competition/PieChart 'Market Share -' & 'Market Share - Firm TTM'", "DIA/Competition/PieChart 'Market Share - Sold TTM' & 'Market Share - On Market'"],
+      "view_name": "cm_{vertical}_market_share_pie",
+      "phase": 1
+    },
+    {
+      "id": "buyer_class_pct_by_year",
+      "name": "Buyer Class % of Volume — Annual",
+      "chart_type": "BarChart",
+      "data_shape": "stacked_bar_yearly",
+      "metric_focus": "buyer_class_share",
+      "dim": "buyer_class",
+      "dim_values": ["Private", "Public/REIT", "Cross-Border", "Institutional"],
+      "applies_to_verticals": ["national_st", "gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["STM/Buyers/BarChart#0-3"],
+      "view_name": "cm_{vertical}_buyer_share_y",
+      "phase": 2
+    },
+    {
+      "id": "top_buyers_table",
+      "name": "Top Buyers (TTM)",
+      "chart_type": "DataTable",
+      "data_shape": "ranked_list",
+      "metric_focus": "buyer_volume",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/Top Buyers (raw data)", "DIA/Top Buyers (raw data)"],
+      "view_name": "cm_{vertical}_top_buyers",
+      "phase": 1,
+      "_notes": "Table not chart in source — but rendered as a chart card on the LCC page."
+    },
+    {
+      "id": "top_sellers_table",
+      "name": "Top Sellers (TTM)",
+      "chart_type": "DataTable",
+      "data_shape": "ranked_list",
+      "metric_focus": "seller_volume",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/Top Sellers (raw data)", "DIA/Top Sellers (raw data)"],
+      "view_name": "cm_{vertical}_top_sellers",
+      "phase": 1
+    },
+    {
+      "id": "nm_vs_market_cap",
+      "name": "Northmarq vs Market — Avg Cap Rate (TTM)",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly_dual",
+      "metric_focus": "cap_rate_attribution",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": false,
+      "source_charts": ["STM/Value Prop/LineChart#0-1", "STM/Value Prop/BarChart"],
+      "view_name": "cm_{vertical}_nm_vs_market_q",
+      "phase": 1,
+      "_notes": "Depends on is_northmarq_brokered flag (resolves SJC + Northmarq + future producers)."
+    },
+    {
+      "id": "nm_share_of_market",
+      "name": "Northmarq Share of Market Volume — Annual",
+      "chart_type": "BarChart",
+      "data_shape": "time_series_yearly",
+      "metric_focus": "nm_volume_share",
+      "y_format": "percent_one_decimal",
+      "applies_to_verticals": ["gov", "dialysis", "national_st"],
+      "subspecialty_friendly": false,
+      "source_charts": ["STM/Buyers/S column 'O&I Average'"],
+      "view_name": "cm_{vertical}_nm_share_y",
+      "phase": 2
+    },
+    {
+      "id": "fed_funds_vs_treasury",
+      "name": "Fed Funds Rate vs 10Y Treasury Yield",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly_dual",
+      "metric_focus": "rates",
+      "y_format": "percent_one_decimal",
+      "applies_to_verticals": ["national_st", "gov", "dialysis"],
+      "subspecialty_friendly": false,
+      "source_charts": ["STM/Spreads/LineChart"],
+      "view_name": "cm_macro_rates_q",
+      "phase": 2,
+      "_notes": "Cross-vertical macro context. Lives in lcc_opps, not domain-specific."
+    },
+    {
+      "id": "net_lease_spread",
+      "name": "Net Lease Spread (Cap - 10Y Treasury)",
+      "chart_type": "AreaChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "spread",
+      "y_format": "percent_basis_points",
+      "applies_to_verticals": ["national_st", "gov", "dialysis"],
+      "subspecialty_friendly": false,
+      "source_charts": ["STM/Spreads/AreaChart"],
+      "view_name": "cm_macro_spread_q",
+      "phase": 2
+    },
+    {
+      "id": "predicted_cap_rate",
+      "name": "Predicted Cap Rate (regression vs 10Y)",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly_with_forecast",
+      "metric_focus": "cap_forecast",
+      "y_format": "percent_basis_points",
+      "applies_to_verticals": ["national_st", "gov", "dialysis"],
+      "subspecialty_friendly": false,
+      "source_charts": ["STM/Prediction/LineChart", "STM/Prediction/AreaChart"],
+      "view_name": "cm_{vertical}_cap_forecast_q",
+      "phase": 3,
+      "_notes": "Regression-based forecast. Depends on cm_macro_rates_q being populated. Defer to Phase 3."
+    },
+    {
+      "id": "index_yoy_change",
+      "name": "Index YoY Change — Net Lease vs Components",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly_indexed",
+      "metric_focus": "index",
+      "applies_to_verticals": ["national_st"],
+      "subspecialty_friendly": false,
+      "source_charts": ["STM/Index/BarChart", "STM/Index/LineChart"],
+      "view_name": "cm_natl_st_index_q",
+      "phase": 3
+    },
+    {
+      "id": "available_listings_count",
+      "name": "Available Listings Count",
+      "chart_type": "BarChart",
+      "data_shape": "time_series_quarterly",
+      "metric_focus": "active_listings",
+      "applies_to_verticals": ["gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/Inventory (raw data)", "DIA/Available Comps/ScatterChart", "DIA/Charts/DoughnutChart#0-1"],
+      "view_name": "cm_{vertical}_listings_q",
+      "phase": 2
+    },
+    {
+      "id": "available_cap_rate_scatter",
+      "name": "Available Listings — Cap Rate vs Term Scatter",
+      "chart_type": "ScatterChart",
+      "data_shape": "scatter_xy",
+      "metric_focus": "cap_vs_term",
+      "x_axis": "lease_term_remaining",
+      "y_axis": "asking_cap_rate",
+      "applies_to_verticals": ["dialysis", "gov"],
+      "subspecialty_friendly": true,
+      "source_charts": ["DIA/Available Comps/ScatterChart", "DIA/Core Cap Chart/ScatterChart 'Core Dialysis'", "DIA/Sheet1/ScatterChart"],
+      "view_name": "cm_{vertical}_available_scatter",
+      "phase": 2
+    },
+    {
+      "id": "market_size_operator_count",
+      "name": "Operator Market Size — Properties by Operator",
+      "chart_type": "BarChart",
+      "data_shape": "categorical_ranked",
+      "metric_focus": "operator_count",
+      "applies_to_verticals": ["dialysis"],
+      "subspecialty_friendly": false,
+      "source_charts": ["DIA/Market Size/BarChart#0-7", "DIA/Market Size/PieChart"],
+      "view_name": "cm_dialysis_operator_size",
+      "phase": 2,
+      "_notes": "Dialysis-specific (operator concentration matters more there). Could mirror for gov as 'agency_size'."
+    },
+    {
+      "id": "dom_price_adjustments",
+      "name": "Days on Market & Price Adjustments",
+      "chart_type": "BarChart",
+      "data_shape": "categorical",
+      "metric_focus": "dom",
+      "applies_to_verticals": ["dialysis", "gov"],
+      "subspecialty_friendly": true,
+      "source_charts": ["DIA/Market Size/BarChart 'DOM & Price Adjustments'"],
+      "view_name": "cm_{vertical}_dom_price_adj",
+      "phase": 2
+    }
+  ],
+
+  "phases": {
+    "phase_0": {
+      "label": "Foundation (this phase)",
+      "deliverables": [
+        "Brand tokens",
+        "Chart catalog",
+        "Architecture doc",
+        "Schema migrations drafted (3 repos)",
+        "API stubs",
+        "Branch hygiene + initial commits"
+      ]
+    },
+    "phase_1": {
+      "label": "MVP slice — gov, single-chart end-to-end",
+      "deliverables": [
+        "Gov cm_* tables populated",
+        "First chart (volume_ttm_by_quarter) with view + Excel export + LCC card",
+        "RCA upload form for national_st",
+        "is_northmarq_brokered backfill"
+      ]
+    },
+    "phase_2": {
+      "label": "Full chart matrix per vertical",
+      "deliverables": [
+        "All Phase 1 + Phase 2 chart templates rendered",
+        "Editorial CMS (fork-prior-quarter)",
+        "Workbook export matching master template",
+        "Chart PNG export for InDesign"
+      ]
+    },
+    "phase_3": {
+      "label": "Forecasting + index + Copilot integration",
+      "deliverables": [
+        "Predicted cap rate model",
+        "National ST index",
+        "Copilot tool: cm_get_stat() + cm_attach_chart()",
+        "Editorial AI assist (QoQ delta bullet generator)"
+      ]
+    }
+  }
+}
