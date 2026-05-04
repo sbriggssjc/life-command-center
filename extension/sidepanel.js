@@ -2305,15 +2305,18 @@ async function wireStageListingButton(ctx) {
       const file = ev.target.files?.[0];
       if (!file) return;
 
-      // 4 MB hard limit — Vercel inline POST cap is ~4.5 MB after the
-      // base64 wrapper (33% size inflation). Larger OMs need Path C
-      // upload (storage_path), which the document-card flow on
-      // CoStar uses; for the manual sidebar drop we keep things simple.
-      const MAX_BYTES = 4 * 1024 * 1024;
+      // Round 76ej.g (2026-05-04): cap raised to ~95 MB. Background's
+      // STAGE_PDF_BYTES_TO_LCC now uploads through prepare-upload →
+      // Supabase Storage → stage-om(storage_path) (Path C), which has
+      // a 100 MB bucket limit instead of Vercel's ~4.5 MB body cap.
+      // Cap a hair under 100 MB to leave room for base64 inflation in
+      // the chrome.runtime message envelope and any service-worker
+      // memory headroom.
+      const MAX_BYTES = 95 * 1024 * 1024;
       if (file.size > MAX_BYTES) {
         if (uploadStatus) {
           uploadStatus.style.color = 'var(--red, #dc2626)';
-          uploadStatus.textContent = `Too large (${(file.size / 1024 / 1024).toFixed(1)} MB > 4 MB cap). Email the OM to the LCC inbox or split it.`;
+          uploadStatus.textContent = `Too large (${(file.size / 1024 / 1024).toFixed(1)} MB > 95 MB cap). Email the OM to the LCC inbox.`;
         }
         return;
       }

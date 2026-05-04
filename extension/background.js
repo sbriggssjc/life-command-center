@@ -1013,22 +1013,35 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   }
 
   if (msg.type === 'STAGE_PDF_BYTES_TO_LCC') {
-    // Round 76ej.f (2026-05-04): inline-base64 PDF stage path. Used by
-    // the sidebar's "Upload OM PDF" file input — when the user
-    // downloads the OM from a gated source (CREXi NDA modal,
-    // Marcus & Millichap deal room, etc.) and drops the file into the
-    // sidebar, we already have the bytes locally. Skip the URL fetch
-    // (Path C / A / B in STAGE_PDF_TO_LCC) and POST straight to
-    // /api/intake/stage-om as inline_data. Subject to Vercel's
-    // ~4.5 MB body cap; OMs above that should use Path C upload via
-    // the document-card flow on supported sites.
+    // Manual OM PDF upload — sidebar reads file → base64 → here.
+    // Round 76ej.g (2026-05-04): switched to Path C first (storage upload
+    // → stage-om{storage_path}) so 6-50 MB OMs land cleanly. Path B
+    // (inline base64 POST) was capping out at Vercel's ~4.5 MB body
+    // limit, which rejected most real OM PDFs.
+    //   Path C: prepare-upload → client PUT to Supabase Storage → POST
+    //           stage-om({storage_path}). 100 MB bucket limit, no
+    //           Vercel body cap.
+    //   Path B (fallback): inline POST stage-om({bytes_base64}). Used
+    //           only if Path C fails (prepare-upload misconfigured,
+    //           transient storage error, etc.) AND the file is small
+    //           enough not to blow Vercel's request limit.
     (async () => {
+      const trail = [];
       try {
         const base64 = String(msg.base64 || '');
         if (!base64 || base64.length < 100) {
           respond({ ok: false, error: 'empty_pdf', body: { error: 'empty_pdf', detail: 'Uploaded PDF was empty.' } });
           return;
         }
+
+        // Decode base64 → Uint8Array for the storage PUT body. The
+        // sidebar already encoded; we re-encode to bytes here so we
+        // don't have to round-trip an ArrayBuffer through chrome
+        // .runtime.sendMessage (which has flaky binary support).
+        const binary = atob(base64);
+        const bytes  = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        const sizeBytes = bytes.byteLength;
 
         const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
         const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
@@ -1038,14 +1051,110 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
         };
 
-        const fileName = (msg.fileName && msg.fileName.trim())
-          || `om-${Date.now()}.pdf`;
+        const fileName = (msg.fileName && msg.fileName.trim()) || `om-${Date.now()}.pdf`;
         const mimeType = msg.mimeType || 'application/pdf';
         const intent   = msg.intent
           || `Uploaded OM PDF from ${msg.hostname || 'browser'}`;
         const seedTags = ['sidebar_intake', 'manual_upload', msg.hostname || 'browser']
           .filter(Boolean);
 
+        const seedDataPayload = {
+          tags: seedTags,
+          doctype: 'om',
+          source_url: msg.sourceUrl || null,
+          ...(msg.seedData || {}),
+        };
+
+        // ── Path C: prepare-upload → PUT → stage-om(storage_path) ──
+        try {
+          const prepRes = await fetch(`${host}/api/intake/prepare-upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...apiHeaders },
+            body: JSON.stringify({
+              file_name:      fileName,
+              mime_type:      mimeType,
+              intake_channel: 'sidebar',
+            }),
+          });
+          const prepText = await prepRes.text();
+          let prepBody = null;
+          try { prepBody = JSON.parse(prepText); } catch { /* non-json */ }
+
+          if (!prepRes.ok || !prepBody?.ok || !prepBody.upload_url || !prepBody.storage_path) {
+            trail.push({
+              path:   'prepare_upload',
+              status: prepRes.status,
+              detail: prepBody?.error || prepBody?.detail || prepText.slice(0, 200),
+            });
+            throw new Error(`prepare-upload refused (HTTP ${prepRes.status})`);
+          }
+
+          // Wrap as Blob — MV3 service workers send Content-Length: 0
+          // for bare ArrayBuffer/Uint8Array bodies on PUT. See
+          // https://bugs.chromium.org/p/chromium/issues/detail?id=1141986
+          const putBody = new Blob([bytes], { type: mimeType });
+          const putRes = await fetch(prepBody.upload_url, {
+            method: prepBody.upload_method || 'PUT',
+            headers: {
+              'Content-Type': mimeType,
+              ...(prepBody.upload_headers || {}),
+            },
+            body: putBody,
+          });
+          if (!putRes.ok) {
+            const putErrText = await putRes.text().catch(() => '');
+            trail.push({
+              path:       'storage_put',
+              status:     putRes.status,
+              detail:     putErrText.slice(0, 200),
+              body_bytes: putBody.size,
+            });
+            throw new Error(`storage PUT failed (HTTP ${putRes.status})`);
+          }
+
+          const stageRes = await fetch(`${host}/api/intake/stage-om`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...apiHeaders },
+            body: JSON.stringify({
+              intake_source:  'copilot',
+              intake_channel: 'sidebar',
+              intent,
+              artifacts: {
+                primary_document: {
+                  storage_path: prepBody.storage_path,
+                  file_name:    fileName,
+                  mime_type:    mimeType,
+                },
+              },
+              seed_data: seedDataPayload,
+            }),
+          });
+          const stageText = await stageRes.text();
+          let stageBody = null;
+          try { stageBody = JSON.parse(stageText); } catch { /* non-json */ }
+
+          if (stageRes.ok && stageBody?.ok) {
+            respond({
+              ok:        true,
+              status:    stageRes.status,
+              body:      stageBody,
+              sizeBytes,
+              fileName,
+              path:      'prepare_upload',
+            });
+            return;
+          }
+          trail.push({
+            path:   'stage_om_ref',
+            status: stageRes.status,
+            detail: stageBody?.error || stageBody?.detail || stageText.slice(0, 200),
+          });
+          throw new Error('stage-om (storage_path) refused');
+        } catch (pcErr) {
+          console.warn('[STAGE_PDF_BYTES_TO_LCC] Path C failed, falling back to inline POST', pcErr.message, trail);
+        }
+
+        // ── Path B (fallback): direct inline POST. Vercel ~4.5 MB cap.
         const stageUrl = `${host}/api/intake/stage-om`;
         const postRes = await fetch(stageUrl, {
           method: 'POST',
@@ -1061,15 +1170,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
                 mime_type:    mimeType,
               },
             },
-            seed_data: {
-              tags: seedTags,
-              // Tell the promoter explicitly that this is OM-grade so
-              // the not_a_listing_doc guard doesn't reject it when the
-              // AI under-classifies the document_type field.
-              doctype: 'om',
-              source_url: msg.sourceUrl || null,
-              ...(msg.seedData || {}),
-            },
+            seed_data: seedDataPayload,
           }),
         });
         const rawBody = await postRes.text();
@@ -1087,14 +1188,17 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             detail: parseErr
               ? `Server returned ${postRes.status}. First 200b: ${rawBody.slice(0, 200).replace(/\s+/g, ' ')}`
               : rawBody.slice(0, 200),
+            trail,
           },
           fileName,
+          sizeBytes,
+          path: 'inline_post',
         });
       } catch (err) {
         respond({
           ok: false,
           error: err.message,
-          body: { error: 'stage_pdf_bytes_threw', detail: err.message },
+          body: { error: 'stage_pdf_bytes_threw', detail: err.message, trail },
         });
       }
     })();
