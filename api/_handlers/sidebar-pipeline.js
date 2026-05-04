@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix } from '../_shared/entity-link.js';
 import { opsQuery } from '../_shared/ops-db.js';
 import { writeSignal } from '../_shared/signals.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
@@ -2296,7 +2296,19 @@ async function linkDialysisMedicareIdInline(propertyId, entity) {
 }
 
 async function upsertDomainProperty(domain, entity, metadata) {
-  const address = entity.address || metadata.address;
+  // Strip CoStar/LoopNet listing-status prefixes ("For Sale | ",
+  // "For Lease | ", "Reduced | ", …) off the incoming address before any
+  // lookup or write. Without this guard, the prefixed form becomes the
+  // properties.address value and creates a duplicate property for every
+  // re-capture of an active listing — and the consolidate UI then can't
+  // match it to the canonical row because dia_normalize_address /
+  // gov_normalize_address don't strip the prefix either.
+  const rawAddress = entity.address || metadata.address;
+  const address = stripListingStatusPrefix(rawAddress);
+  if (address && address !== rawAddress) {
+    if (entity.address) entity.address = address;
+    if (metadata.address) metadata.address = address;
+  }
   if (!address) return null;
 
   // Round 76y (2026-04-27): trust the matcher's authoritative property_id

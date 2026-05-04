@@ -109,6 +109,24 @@
   // Extraction helpers
   // ==========================================================================
 
+  // Strip LoopNet listing-status prefixes ("For Sale | ",
+  // "For Lease | ", "Reduced | ", …) off a candidate address. LoopNet
+  // listing tiles render addresses as "For Sale | 1164 Route 130 North";
+  // without this strip the prefixed string flows through to
+  // properties.address and creates a duplicate row that the consolidate
+  // UI can't merge.
+  function stripListingStatusPrefix(s) {
+    if (!s) return s;
+    const PREFIX_RE = /^\s*(for\s+sale|for\s+lease|for\s+rent|sale|sold|lease|rent|new\s+listing|reduced|price\s+reduced|just\s+listed|coming\s+soon|under\s+contract|off\s+market|new\s+price)\s*[|\-–—:]\s*/i;
+    let out = String(s);
+    for (let i = 0; i < 3; i++) {
+      const next = out.replace(PREFIX_RE, '');
+      if (next === out) break;
+      out = next;
+    }
+    return out;
+  }
+
   /** 1. ADDRESS — street address only, not the full h1 block */
   function extractAddress() {
     // Try specific address element first
@@ -117,14 +135,14 @@
       document.querySelector('.listing-hero-address') ||
       document.querySelector('[class*="listingAddress"]') ||
       document.querySelector('[class*="listing-address"]');
-    if (addrEl) return addrEl.textContent.trim();
+    if (addrEl) return stripListingStatusPrefix(addrEl.textContent.trim());
 
     // Fall back: get h1 text but take only the line that looks like
     // a street address (starts with a number or known street pattern)
     const h1 = document.querySelector('h1');
     if (!h1) return null;
     const lines = h1.textContent.split('\n')
-      .map(l => l.trim()).filter(Boolean);
+      .map(l => stripListingStatusPrefix(l.trim())).filter(Boolean);
     // Street address = line starting with a number
     const streetLine = lines.find(l => /^\d+\s+\w/.test(l));
     if (streetLine) return streetLine;

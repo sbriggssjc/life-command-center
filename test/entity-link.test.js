@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureEntityLink, normalizeCanonicalName } from '../api/_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripListingStatusPrefix } from '../api/_shared/entity-link.js';
 
 const originalFetch = global.fetch;
 
@@ -31,6 +31,27 @@ describe('entity-link helper', () => {
 
   it('normalizes canonical names', () => {
     assert.equal(normalizeCanonicalName('Acme Holdings, LLC'), 'acme holdings');
+  });
+
+  it('strips CoStar/LoopNet listing-status prefixes from addresses', () => {
+    assert.equal(stripListingStatusPrefix('For Sale | 1164 Route 130 North'), '1164 Route 130 North');
+    assert.equal(stripListingStatusPrefix('For Lease — 802 N John Young Pky'), '802 N John Young Pky');
+    assert.equal(stripListingStatusPrefix('Reduced: 99 Main St'), '99 Main St');
+    assert.equal(stripListingStatusPrefix('For Sale | New Listing | 99 Main St'), '99 Main St');
+    assert.equal(stripListingStatusPrefix('1164 Route 130 North'), '1164 Route 130 North');
+    assert.equal(stripListingStatusPrefix(null), null);
+    assert.equal(stripListingStatusPrefix(''), '');
+  });
+
+  it('normalizeAddress collapses prefixed and bare forms to the same key', () => {
+    assert.equal(
+      normalizeAddress('For Sale | 1164 Route 130 North, Burlington, NJ'),
+      normalizeAddress('1164 Route 130 North')
+    );
+    assert.equal(
+      normalizeAddress('Reduced - 175 Righter Road'),
+      normalizeAddress('175 Righter Rd')
+    );
   });
 
   it('creates a canonical entity and external identity when none exists', async () => {

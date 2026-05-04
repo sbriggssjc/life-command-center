@@ -683,8 +683,27 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     }
   }
 
+  // Strip CoStar listing-status prefixes ("For Sale | ", "For Lease | ",
+  // "Reduced | ", "New Listing | ", …) off a candidate address. CoStar's
+  // For Sale tab heading reads "For Sale | 1164 Route 130 North"; the
+  // pipe-segment splitter below handles the simple form, but this strip
+  // also catches "For Sale - 1164 …" / "Reduced: 1164 …" delimiter
+  // variants and stacked prefixes like "For Sale | New Listing | 1164 …".
+  function stripListingStatusPrefix(s) {
+    if (!s) return s;
+    const PREFIX_RE = /^\s*(for\s+sale|for\s+lease|for\s+rent|sale|sold|lease|rent|new\s+listing|reduced|price\s+reduced|just\s+listed|coming\s+soon|under\s+contract|off\s+market|new\s+price)\s*[|\-–—:]\s*/i;
+    let out = String(s);
+    for (let i = 0; i < 3; i++) {
+      const next = out.replace(PREFIX_RE, '');
+      if (next === out) break;
+      out = next;
+    }
+    return out;
+  }
+
   function parseAddress(raw) {
     if (!raw || raw.length < 3) return null;
+    raw = stripListingStatusPrefix(raw);
     // Round 76cg: try ALL segments after splitting on pipe/em-dash/en-dash/
     // hyphen-with-spaces - not just the first. CoStar tab titles are
     // formatted as 'Properties | 215-225 S Allison Ave' so the first
