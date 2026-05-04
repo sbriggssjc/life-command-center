@@ -221,20 +221,12 @@ so subsequent attaches are zero-render.
 
 ### 11.1 Gov master workbook BN-column data corruption
 
-The `Copy Government Master Document.xlsx` workbook has 6+ cells in column BN with date-formatted serial values that exceed Excel's maximum valid date (2,958,465 = 9999-12-31):
+**Root cause identified.** The BN column lives on the `FRPP-Leased` tab (NOT `All Charts` as initially suspected). Its header is `Estimated Net Present Value`. Two distinct problems:
 
-```
-Cell BN47   serial 4,244,718.346
-Cell BN415  serial 3,041,518.065
-Cell BN430  serial 13,485,129.07
-Cell BN435  serial 668,283,739.7    ← especially anomalous
-Cell BN452  serial 25,432,711.61
-Cell BN495  serial 15,401,009.24
-```
+1. **Format mismatch.** Cells in BN are formatted with a *date* number-format instead of *currency*. The underlying values are dollar amounts but Excel (and openpyxl) renders them as dates. Small NPVs like $87 render as `1900-03-28`; large NPVs like $1.93M render as `7194-04-23`. The earlier observation of date serials 3M–668M was openpyxl interpreting the cached numeric values as Excel-date serials.
+2. **Broken formula chain.** Cells `BN47`, `BN415`, `BN430` etc. contain `#VALUE!`. The formula references column BM (`=BM*something`), and BM has empty cells in those rows because the upstream FRPP-occupancy or treasury feed dropped data. Scott's intuition matched.
 
-**Hypothesis** (matches Scott's intuition): a formula in an upstream input column (likely 10Y Treasury yield or Fed Funds Rate) returned `0` or `#DIV/0!` for one period, and a downstream formula `BN_n = BN_{n-1} + (some_delta / divisor)` exploded when `divisor` was near-zero. The BN_435 value of ~668M is consistent with a divisor that briefly went to ~$1e-7 and got compounded.
-
-**Phase 1 fix:** Identify the formula in BN, find the upstream input column, add a NULLIF guard so a missing input feed produces `NULL` instead of cascading an explosion. The data feed itself (treasury yields) needs to be sourced from `cm_macro_rates_q` once we have it.
+**Phase 1 fix:** Don't try to repair the spreadsheet. The "Estimated NPV" column is a derived metric that should live in SQL: `cm_gov_npv_q(period_end, lease_id, npv_dollars)` computed from `cm_macro_rates_q.treasury_10y_yield` × the gov lease cashflow stream. Once that view exists, the workbook BN column becomes a pull from SQL and both issues vanish (correct format + no #VALUE! cascade because SQL returns NULL on missing inputs instead of erroring).
 
 ### 11.2 Off-brand workbooks
 

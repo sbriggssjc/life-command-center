@@ -139,10 +139,25 @@
       "dim": "credit_tier",
       "applies_to_verticals": ["dialysis", "gov"],
       "subspecialty_friendly": false,
-      "source_charts": ["DIA/Charts/LineChart 'Cap by Credit'"],
+      "source_charts": ["DIA/Charts/LineChart 'Cap by Credit'", "GOV/All Charts cols W,X,Y (Federal Cap, State Cap, Municipal Cap)"],
       "view_name": "cm_{vertical}_cap_by_credit_q",
       "phase": 2,
-      "_notes": "For gov, 'credit_tier' = federal/state/local. For dialysis, = investment-grade operator vs not."
+      "_notes": "For gov, dim_values = ['Federal','State','Municipal'] sourced from gov_leases.tenant_class. For dialysis, dim_values = ['Investment Grade','Non-IG','Independent'] sourced from operator_credit_rating."
+    },
+    {
+      "id": "cap_rate_by_lease_term",
+      "name": "Cap Rate by Remaining Lease Term",
+      "chart_type": "LineChart",
+      "data_shape": "time_series_quarterly_by_dim",
+      "metric_focus": "cap_rate",
+      "dim": "lease_term_bucket",
+      "dim_values": ["10+ Year", "6-10 Year", "Less than 5 Year"],
+      "applies_to_verticals": ["gov", "dialysis"],
+      "subspecialty_friendly": true,
+      "source_charts": ["GOV/All Charts cols O,P,Q (10+ Year Cap, 6 to 10 Year Cap, Less than 5 Year Cap)"],
+      "view_name": "cm_{vertical}_cap_by_term_q",
+      "phase": 1,
+      "_notes": "Gov has this directly in the master workbook as 3 buckets keyed off lease_expiration - sale_date. Dialysis can mirror once we lock the bucketing convention."
     },
     {
       "id": "ppsf_box_quarterly",
